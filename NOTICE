@@ -1,0 +1,51 @@
+Isomorphic
+Copyright 2026 Isomorphic
+
+This program is free software: you can redistribute it and/or modify it under the
+terms of the GNU Affero General Public License, version 3 only, as published by the
+Free Software Foundation.
+
+This program is distributed in the hope that it will be useful, but WITHOUT ANY
+WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A
+PARTICULAR PURPOSE. See the GNU Affero General Public License for more details.
+
+You should have received a copy of the GNU Affero General Public License along with
+this program, in the file LICENSE. If not, see <https://www.gnu.org/licenses/>.
+
+SPDX-License-Identifier: AGPL-3.0-only
+
+See docs/licensing.md for a plain-language explanation of what the AGPL asks of you,
+what it does not reach (your knowledge base, and any MCP client), and how commercial
+licensing works for organizations that cannot accept copyleft.
+
+NETWORK USE
+-----------
+AGPL section 13: if you modify this program and let others interact with your modified
+version over a network, you must offer those users the Corresponding Source of your
+modified version. Running it unmodified obliges you nothing.
+
+TRADEMARKS
+----------
+"Isomorphic" and the Isomorphic logo are trademarks of Isomorphic. The license grants no
+trademark rights beyond identifying the origin of the software. If you run your own
+instance, please give it your own name.
+
+THIRD-PARTY SOFTWARE
+--------------------
+This product depends on third-party open source software. Dependencies and their licenses
+are declared in package.json and resolved in pnpm-lock.yaml; run `pnpm licenses list` for
+the current inventory. All are permissive (MIT, ISC, BSD, Apache-2.0) and compatible with
+AGPL-3.0. Notable components include:
+
+  - @modelcontextprotocol/sdk and @modelcontextprotocol/ext-apps (MIT)
+  - @cloudflare/workers-oauth-provider, wrangler (MIT / Apache-2.0)
+  - @auth/core and @auth/d1-adapter (ISC)
+  - octokit and @octokit/auth-app (MIT)
+  - hono (MIT)
+  - preact (MIT)
+  - the ProseMirror packages (MIT)
+  - zod (MIT)
+  - tailwindcss (MIT)
+
+The Open Knowledge Format specification that this project targets is published by Google
+Cloud Platform under the Apache License, Version 2.0.

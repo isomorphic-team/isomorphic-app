@@ -1,0 +1,26 @@
+{
+	"compilerOptions": {
+		"target": "ES2022",
+		"module": "ESNext",
+		"moduleResolution": "bundler",
+		"lib": ["ES2023"],
+		"types": ["node"],
+		"strict": true,
+		"esModuleInterop": true,
+		"forceConsistentCasingInFileNames": true,
+		"resolveJsonModule": true,
+		"skipLibCheck": true,
+		"noEmit": true,
+		"allowImportingTsExtensions": true,
+		"verbatimModuleSyntax": true
+	},
+	"include": [
+		"src/bootstrap.ts",
+		"src/manifest.ts",
+		"src/persist.ts",
+		"scripts/gen-brain-template.ts",
+		"scripts/onboard-org.ts",
+		"scripts/setup-config.ts",
+		"src/lib/**/*.ts"
+	]
+}

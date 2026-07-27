@@ -1,0 +1,193 @@
+name: Deploy Worker
+
+# Auto-deploy the MCP Worker to Cloudflare on every push to main. The Worker's
+# runtime secrets (GitHub App creds, Auth.js/Resend keys, MCP_BEARER_TOKEN, …) are
+# NOT touched by `wrangler deploy` — they were set once via `wrangler secret put`
+# and persist across deploys. CI only needs a CLOUDFLARE_API_TOKEN to authenticate.
+#
+# Setup (one time):
+#   1. Create a USER API token: Cloudflare dashboard → My Profile → API Tokens →
+#      Create Token → "Edit Cloudflare Workers" template, then ADD one row:
+#      Account → D1 → Edit. Scope it to the account that owns this Worker.
+#
+#      D1 Edit is NOT in the Workers template and you must add it. The migration
+#      step below runs BEFORE the deploy step, so a token without it fails there
+#      and main silently stops shipping, with the reason buried in a job log.
+#
+#      Use a USER token, not an account-owned one. Account-owned tokens have no
+#      User scope, so they cannot carry `User → Memberships → Read`, which
+#      wrangler calls /memberships to resolve the target account. That fails with
+#      "Unable to authenticate request [code: 10001]"
+#      (cloudflare/workers-sdk#9129, filed against 4.14.1 and closed without a
+#      confirmed fix). Account-owned tokens are the better shape in principle
+#      because they outlive a person; retest before switching, and note that they
+#      do NOT solve account ownership if the Cloudflare account itself is personal.
+#
+#   2. gh secret set CLOUDFLARE_API_TOKEN --env production
+#      Environment scope, not repository scope: that is what keeps the token
+#      unreachable from any workflow other than this gated job.
+#   3. Only if the token can reach more than one account:
+#      gh secret set CLOUDFLARE_ACCOUNT_ID --env production
+#   4. Record this deployment's identity as repository VARIABLES (not secrets — none
+#      of these are secret, and keeping them visible makes a misconfigured deploy
+#      diagnosable). `pnpm setup:config --print-ci` prints the exact commands from
+#      your local .dev.vars:
+#        gh variable set WORKER_NAME CF_OAUTH_KV_ID CF_OAUTH_KV_PREVIEW_ID \
+#                        CF_D1_DATABASE_ID D1_DATABASE_NAME PUBLIC_BASE_URL \
+#                        AUTH_MODE IDENTITY_MODE AUTO_PROVISION AUTH_EMAIL_FROM \
+#                        APP_SLUG
+#
+# Step 4 exists because wrangler.jsonc is generated and gitignored — it holds one
+# deployment's identity (Worker name, public URL, Cloudflare resource ids) and so is
+# not committed. This job regenerates it from the variables above before deploying.
+# Without them the job skips with a warning rather than deploying a Worker named
+# after the template defaults.
+#
+# THE `production` ENVIRONMENT GATE
+# ---------------------------------
+# This job runs in the `production` environment, which is what stands between a
+# merged pull request and a live deploy. It does three things:
+#
+#   1. Required reviewers — the job waits in "Waiting" until a maintainer approves
+#      it. Merging stays automatic; shipping does not. This is the point of the
+#      gate: with outside contributions, a merge you want to re-read should not be
+#      in production before you have finished re-reading it.
+#   2. Secret scoping — once CLOUDFLARE_API_TOKEN lives in this environment rather
+#      than at repository level, no other workflow can reach it, including one
+#      added by a pull request. Environment secrets take precedence over repository
+#      secrets, so moving it is a drop-in.
+#   3. Deployment branch policy — deployments are restricted to protected branches,
+#      so a `workflow_dispatch` from a random branch cannot ship.
+#
+# Environment protection rules are FREE on public repositories and unavailable on
+# private ones regardless of plan (the API rejects a required-reviewer rule with a
+# billing error). So the reviewer rule gets added when the repo goes public:
+#
+#   gh api -X PUT repos/isomorphic-team/isomorphic-app/environments/production \
+#     --input - <<JSON
+#   { "wait_timer": 0, "prevent_self_review": false,
+#     "reviewers": [{"type":"User","id":$(gh api users/isomorphic-12 --jq .id)}],
+#     "deployment_branch_policy": {"protected_branches": true,
+#                                  "custom_branch_policies": false} }
+#   JSON
+#
+# `prevent_self_review` must stay false while there is one maintainer, or nobody
+# can ever approve a deploy. Flip it when there are two. Full reasoning and the
+# rest of the hardening checklist: docs/ops/repo-protection.md
+
+on:
+  push:
+    branches: [main]
+    # Docs-only changes don't affect the Worker or the app bundle.
+    paths-ignore:
+      - '**/*.md'
+      - 'docs/**'
+      - 'LICENSE'
+      - 'NOTICE'
+  workflow_dispatch: {}
+
+concurrency:
+  group: deploy-worker
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  # Lets the run show up under the repo's Deployments, so there is a history of
+  # what shipped and who approved it.
+  deployments: write
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    # The gate. See the note at the top of this file. `url` makes the deployed
+    # origin a clickable link on the run and in the Deployments tab; it reads the
+    # same variable the Worker is configured with, so the two cannot drift.
+    environment:
+      name: production
+      url: ${{ vars.PUBLIC_BASE_URL }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.33.2
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      # Regenerate the codegen'd artifacts so the deployed bundle always matches
+      # source, even if a commit forgot to run `pnpm gen:app` / `pnpm gen:templates`.
+      - run: pnpm gen:templates
+      - run: pnpm gen:app
+
+      # Gate the deploy on a clean typecheck across all three tsconfigs.
+      - run: pnpm typecheck
+
+      # Skip (green) rather than fail if this repo hasn't been wired up yet. Both the
+      # Cloudflare token and the deployment-identity variables are required; deploying
+      # with the template defaults would publish a Worker named "isomorphic-mcp"
+      # pointing at resource ids that don't exist.
+      - name: Check deploy configuration
+        id: guard
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CF_OAUTH_KV_ID: ${{ vars.CF_OAUTH_KV_ID }}
+          CF_D1_DATABASE_ID: ${{ vars.CF_D1_DATABASE_ID }}
+        run: |
+          ready=true
+          if [ -z "$CLOUDFLARE_API_TOKEN" ]; then
+            echo "::warning::CLOUDFLARE_API_TOKEN is not set — skipping deploy. Add it in Settings → Secrets and variables → Actions → Secrets."
+            ready=false
+          fi
+          if [ -z "$CF_OAUTH_KV_ID" ] || [ -z "$CF_D1_DATABASE_ID" ]; then
+            echo "::warning::CF_OAUTH_KV_ID / CF_D1_DATABASE_ID are not set as repository variables — skipping deploy. Run 'pnpm setup:config --print-ci' locally for the exact commands, or see the setup notes at the top of this workflow."
+            ready=false
+          fi
+          echo "ready=$ready" >> "$GITHUB_OUTPUT"
+
+      # wrangler.jsonc is generated, not committed. Build it from this repo's
+      # variables so the deployed Worker carries this deployment's identity.
+      # Unset variables fall back to the template defaults in scripts/setup-config.ts,
+      # which is why the guard above insists on the two resource ids.
+      - name: Generate wrangler.jsonc for this deployment
+        if: steps.guard.outputs.ready == 'true'
+        env:
+          WORKER_NAME: ${{ vars.WORKER_NAME }}
+          AUTH_MODE: ${{ vars.AUTH_MODE }}
+          IDENTITY_MODE: ${{ vars.IDENTITY_MODE }}
+          PUBLIC_BASE_URL: ${{ vars.PUBLIC_BASE_URL }}
+          AUTH_EMAIL_FROM: ${{ vars.AUTH_EMAIL_FROM }}
+          AUTO_PROVISION: ${{ vars.AUTO_PROVISION }}
+          # GitHub rejects repository variables named GITHUB_*, so the CI-facing
+          # name is APP_SLUG. setup-config maps it back. See scripts/setup-config.ts.
+          APP_SLUG: ${{ vars.APP_SLUG }}
+          D1_DATABASE_NAME: ${{ vars.D1_DATABASE_NAME }}
+          CF_D1_DATABASE_ID: ${{ vars.CF_D1_DATABASE_ID }}
+          CF_OAUTH_KV_ID: ${{ vars.CF_OAUTH_KV_ID }}
+          CF_OAUTH_KV_PREVIEW_ID: ${{ vars.CF_OAUTH_KV_PREVIEW_ID }}
+        run: pnpm setup:config --force
+
+      # Apply pending D1 migrations BEFORE deploying the code that depends on them
+      # (schema-first). Idempotent: wrangler tracks applied migrations in the
+      # d1_migrations table, so only new ones run. Migrations must be backward-
+      # compatible with the still-running old code for the deploy window (additive;
+      # renames/drops need expand-then-contract). The token needs D1 edit permission.
+      # If this step fails, the deploy below is skipped (main stays on the old code).
+      - name: Apply D1 migrations (prod)
+        if: steps.guard.outputs.ready == 'true'
+        run: pnpm exec wrangler d1 migrations apply "${D1_DATABASE_NAME:-platform-db}" --remote
+        env:
+          D1_DATABASE_NAME: ${{ vars.D1_DATABASE_NAME }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+
+      - name: Deploy to Cloudflare
+        if: steps.guard.outputs.ready == 'true'
+        run: pnpm worker:deploy
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}

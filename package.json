@@ -1,0 +1,90 @@
+{
+	"name": "isomorphic-app",
+	"private": true,
+	"version": "0.0.1",
+	"description": "Isomorphic: a GitHub-backed team knowledge base that Claude can search, read, edit over MCP, and render in-client as an MCP App.",
+	"license": "AGPL-3.0-only",
+	"homepage": "https://github.com/isomorphic-team/isomorphic-app",
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/isomorphic-team/isomorphic-app.git"
+	},
+	"bugs": {
+		"url": "https://github.com/isomorphic-team/isomorphic-app/issues"
+	},
+	"type": "module",
+	"packageManager": "pnpm@10.33.2",
+	"scripts": {
+		"setup:config": "tsx scripts/setup-config.ts",
+		"bootstrap": "tsx src/bootstrap.ts",
+		"onboard-org": "tsx scripts/onboard-org.ts",
+		"gen:templates": "tsx scripts/gen-brain-template.ts",
+		"worker:dev": "wrangler dev",
+		"worker:deploy": "wrangler deploy",
+		"worker:types": "wrangler types",
+		"db:migrate": "wrangler d1 migrations apply platform-db --local",
+		"db:migrate:list": "wrangler d1 migrations list platform-db --local",
+		"db:migrate:new": "wrangler d1 migrations create platform-db",
+		"typecheck": "tsc -p tsconfig.node.json --noEmit && tsc -p tsconfig.worker.json --noEmit && tsc -p tsconfig.app.json --noEmit",
+		"format": "prettier --write .",
+		"gen:app": "tsx scripts/gen-app.ts",
+		"app:dev": "tsx scripts/app-dev.ts",
+		"test": "pnpm test:roundtrip && pnpm test:views && pnpm test:import && pnpm test:tools && pnpm test:patch && pnpm test:structure && pnpm test:index && pnpm test:policy",
+		"test:roundtrip": "tsx scripts/roundtrip-check.ts",
+		"test:views": "tsx scripts/test-views.ts",
+		"test:import": "tsx scripts/test-import.ts",
+		"test:tools": "tsx scripts/test-tools.ts",
+		"test:patch": "tsx scripts/test-page-patch.ts",
+		"test:structure": "tsx scripts/test-structure.ts",
+		"test:index": "tsx scripts/test-index.ts",
+		"test:policy": "tsx scripts/test-policy.ts"
+	},
+	"dependencies": {
+		"@auth/core": "^0.34.3",
+		"@auth/d1-adapter": "^1.11.2",
+		"@cloudflare/workers-oauth-provider": "^0.4.0",
+		"@hono/node-server": "^1.13.7",
+		"@modelcontextprotocol/ext-apps": "^1.7.4",
+		"@modelcontextprotocol/sdk": "1.29.0",
+		"@octokit/auth-app": "^7.1.5",
+		"hono": "^4.6.14",
+		"octokit": "^4.0.3",
+		"open": "^10.1.0",
+		"zod": "^3.24.1"
+	},
+	"devDependencies": {
+		"@cloudflare/workers-types": "^4.20260101.0",
+		"@tailwindcss/cli": "^4.3.2",
+		"@types/markdown-it": "^14.1.2",
+		"@types/node": "^24.0.0",
+		"class-variance-authority": "^0.7.1",
+		"clsx": "^2.1.1",
+		"esbuild": "^0.28.1",
+		"lucide-preact": "^1.23.0",
+		"markdown-it": "^14.3.0",
+		"marked": "^18.0.5",
+		"preact": "^10.29.5",
+		"prettier": "^3.8.1",
+		"prosemirror-commands": "^1.7.1",
+		"prosemirror-history": "^1.5.0",
+		"prosemirror-inputrules": "^1.5.1",
+		"prosemirror-keymap": "^1.2.3",
+		"prosemirror-markdown": "^1.13.5",
+		"prosemirror-model": "^1.25.10",
+		"prosemirror-schema-list": "^1.5.1",
+		"prosemirror-state": "^1.4.4",
+		"prosemirror-tables": "^1.8.5",
+		"prosemirror-view": "^1.42.0",
+		"tailwind-merge": "^3.6.0",
+		"tailwindcss": "^4.3.2",
+		"tsx": "^4.19.2",
+		"typescript": "^6.0.2",
+		"wrangler": "^4.85.0"
+	},
+	"pnpm": {
+		"onlyBuiltDependencies": [
+			"esbuild",
+			"workerd"
+		]
+	}
+}

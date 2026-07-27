@@ -1,0 +1,11 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Security vulnerability
+    url: https://github.com/isomorphic-team/isomorphic-app/security/advisories/new
+    about: Report privately. Never open a public issue for a security problem.
+  - name: Question or idea
+    url: https://github.com/isomorphic-team/isomorphic-app/discussions
+    about: Ask how something works, or float an idea before writing code.
+  - name: Licensing or commercial use
+    url: mailto:legal@isomorphic.sh
+    about: Embedding Isomorphic in a proprietary product you sell, or a CLA countersignature.

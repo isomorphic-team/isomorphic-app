@@ -1,0 +1,109 @@
+<!doctype html>
+<html>
+	<head>
+		<meta charset="utf-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1" />
+		<title>Isomorphic Brain — local host preview</title>
+		<style>
+			:root {
+				color-scheme: light dark;
+				--host-bg: #0e0e11;
+				--host-fg: #d8d8de;
+				--host-muted: #86868f;
+				--host-border: #2a2a30;
+			}
+			@media (prefers-color-scheme: light) {
+				:root {
+					--host-bg: #f3f3f5;
+					--host-fg: #26262b;
+					--host-muted: #6b6b73;
+					--host-border: #dcdce0;
+				}
+			}
+			* {
+				box-sizing: border-box;
+			}
+			html,
+			body {
+				margin: 0;
+				height: 100%;
+			}
+			body {
+				display: flex;
+				flex-direction: column;
+				height: 100vh;
+				background: var(--host-bg);
+				color: var(--host-fg);
+				font:
+					13px/1.5 ui-sans-serif,
+					system-ui,
+					-apple-system,
+					sans-serif;
+			}
+			.hostbar {
+				display: flex;
+				align-items: center;
+				gap: 14px;
+				padding: 8px 14px;
+				border-bottom: 1px solid var(--host-border);
+				flex-shrink: 0;
+			}
+			.hostbar .tag {
+				font-weight: 700;
+				letter-spacing: 0.02em;
+			}
+			.hostbar .dim {
+				color: var(--host-muted);
+			}
+			.hostbar select {
+				background: transparent;
+				color: var(--host-fg);
+				border: 1px solid var(--host-border);
+				border-radius: 6px;
+				padding: 3px 8px;
+				font: inherit;
+			}
+			.hostbar .spacer {
+				flex: 1;
+			}
+			/* The frame area mimics a chat host's message column: centered, bounded. */
+			.stage {
+				flex: 1;
+				min-height: 0;
+				display: flex;
+				justify-content: center;
+				padding: 18px;
+				overflow: auto;
+			}
+			#frame-slot {
+				width: 100%;
+				max-width: 820px;
+				height: 100%;
+				border: 1px solid var(--host-border);
+				border-radius: 12px;
+				overflow: hidden;
+				background: var(--host-bg);
+				box-shadow: 0 6px 30px rgba(0, 0, 0, 0.18);
+			}
+		</style>
+	</head>
+	<body>
+		<div class="hostbar">
+			<span class="tag">🖥️ Local Host</span>
+			<span class="dim"
+				>driving the real <code>ui://isomorphic-mind/brain-app.html</code> via AppBridge</span
+			>
+			<span class="spacer"></span>
+			<label class="dim">open&nbsp;<select id="page-select"></select></label>
+			<span id="status" class="dim">connecting…</span>
+		</div>
+		<div class="stage">
+			<div id="frame-slot"></div>
+		</div>
+		<!-- esbuild live reload (pnpm app:dev) -->
+		<script>
+			new EventSource('/esbuild').addEventListener('change', () => location.reload());
+		</script>
+		<script src="./bundle.js"></script>
+	</body>
+</html>

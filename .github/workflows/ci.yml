@@ -1,0 +1,90 @@
+name: CI
+
+# Validate every PR the same way the deploy validates main: regenerate the codegen'd
+# artifacts, verify the committed bundle is in sync with source, typecheck all three
+# tsconfigs, and run the golden tests. This runs `on: pull_request`, so the results
+# appear as CHECKS on the PR — previously the only workflow was deploy.yml (push to
+# main), which runs after merge and so can't gate a PR.
+#
+# FORK-SAFE BY DESIGN: every step here is offline and needs NO secrets, so a pull
+# request from a contributor's fork gets the same green-or-red signal a maintainer's
+# branch does. Do not add a step that requires a token — put it in deploy.yml instead.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.33.2
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      # wrangler.jsonc is generated and gitignored (it holds one deployment's
+      # identity). The default profile writes placeholder Cloudflare resource ids,
+      # which is exactly right here: the migration check below runs against
+      # Miniflare and never contacts Cloudflare, so CI needs no credentials.
+      - run: pnpm setup:config
+
+      # Regenerate the codegen'd artifacts from source (app/ and brain-template/).
+      - run: pnpm gen:templates
+      - run: pnpm gen:app
+
+      # The committed generated files must match a fresh regen — catches a PR that
+      # edited app/ or brain-template/ but forgot to run `pnpm gen:app` / `gen:templates`.
+      - name: Generated artifacts in sync with source
+        run: |
+          git diff --exit-code -- \
+            src/lib/app-bundle.generated.ts \
+            src/lib/brain-template.generated.ts \
+          || { echo "::error::Generated files are stale — run 'pnpm gen:app' and 'pnpm gen:templates' and commit the result."; exit 1; }
+
+      # Gate on a clean typecheck across all three tsconfigs (node/worker/app).
+      - run: pnpm typecheck
+
+      # All eight pure golden tests (no network, no secrets — safe on fork PRs).
+      # These were not all wired up here; test:roundtrip was running alone while
+      # five more existed, and the content-index regression that motivated
+      # test:index would have been caught by none of them. Listed individually
+      # rather than via `pnpm test` so a failure names itself in the job log.
+      # ADDING A TEST: add it here AND to the `test` script in package.json, or it
+      # runs in exactly one of the two places and nobody notices which.
+      - run: pnpm test:roundtrip
+      - run: pnpm test:views
+      - run: pnpm test:import
+      - run: pnpm test:tools
+      - run: pnpm test:patch
+      - run: pnpm test:structure
+      - run: pnpm test:index
+      - run: pnpm test:policy
+
+      # Formatting is checked, not applied — a PR that reformats unrelated files is
+      # noise, and `--check` tells the contributor exactly what to run.
+      - name: Prettier formatting
+        run: pnpm exec prettier --check .
+
+      # Validate the D1 migrations apply cleanly against a fresh LOCAL database
+      # (offline — no Cloudflare token, never touches prod). Catches malformed
+      # migration SQL on the PR, before it can reach the deploy's --remote apply.
+      - name: D1 migrations apply cleanly (local)
+        run: pnpm exec wrangler d1 migrations apply platform-db --local

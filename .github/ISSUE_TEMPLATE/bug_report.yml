@@ -1,0 +1,82 @@
+name: Bug report
+description: Something behaves incorrectly.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting. If this is a **security** problem, close this and use
+        [private reporting](https://github.com/isomorphic-team/isomorphic-app/security/advisories/new)
+        instead.
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Which part
+      description: Best guess is fine.
+      options:
+        - MCP tools (read/search/graph)
+        - MCP tools (write/librarian)
+        - In-client app UI (viewer, editor, graph, tree)
+        - Derived views (okf-view)
+        - OKF parsing / markdown round-trip
+        - Bulk import (sync_records)
+        - Auth, orgs, roles, or members
+        - Bootstrap / setup / self-hosting
+        - Content index (D1)
+        - Not sure
+    validations:
+      required: true
+
+  - type: dropdown
+    id: deployment
+    attributes:
+      label: Where are you running it
+      options:
+        - Hosted (mcp.isomorphic.sh)
+        - Self-hosted on my own Cloudflare account
+        - Local development (pnpm worker:dev or pnpm app:dev)
+    validations:
+      required: true
+
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you expected, what you got instead.
+    validations:
+      required: true
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      description: |
+        Be as concrete as you can. For a tool bug, the tool name and arguments. For a
+        markdown or view bug, the smallest page content that triggers it, in a fenced block.
+      placeholder: |
+        1. write_page with path "wiki/foo/index.md" and content "..."
+        2. read_page the same path
+        3. the okf-view snapshot is missing a row
+    validations:
+      required: true
+
+  - type: textarea
+    id: content
+    attributes:
+      label: Page content or tool output, if relevant
+      description: |
+        Redact anything private. A minimal reproduction usually beats a real page.
+      render: markdown
+
+  - type: input
+    id: client
+    attributes:
+      label: MCP client and version
+      placeholder: Claude Desktop 1.x / Claude Code / MCP Inspector
+
+  - type: textarea
+    id: extra
+    attributes:
+      label: Anything else
+      description: Console errors, Worker logs, a commit sha, a hunch about the cause.

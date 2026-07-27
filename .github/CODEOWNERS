@@ -1,0 +1,84 @@
+# Code owners.
+#
+# GitHub has no per-path WRITE permission, so this is not an access-control list.
+# Outside contributors never have write access at all: they fork, and they open a
+# pull request. What this file does is make a maintainer's review REQUIRED before a
+# pull request touching a listed path can merge, when "Require review from Code
+# Owners" is on for `main`. That is the path-scoped control, applied at review time
+# rather than at push time.
+#
+# The paths below are ordered least to most sensitive. Later matches win, so the
+# more specific entries at the bottom are the ones that actually bind.
+#
+# Keep this in sync with the branch ruleset. Setup and reasoning:
+# repo-protection.md
+
+# Default owner for everything not matched below.
+*                                   @isomorphic-12
+
+# ---------------------------------------------------------------------------
+# Supply chain. A dependency change is the highest-leverage way to compromise a
+# deployment, and `pnpm install --frozen-lockfile` in CI means a lockfile edit
+# is load-bearing. Never merge one of these on a skim.
+# ---------------------------------------------------------------------------
+/package.json                       @isomorphic-12
+/pnpm-lock.yaml                     @isomorphic-12
+
+# ---------------------------------------------------------------------------
+# CI and release. A workflow change can exfiltrate secrets or alter what gets
+# deployed. `.github/workflows/cla.yml` uses `pull_request_target`, which runs in
+# the BASE repo's context: it deliberately does not check out pull-request code,
+# and a change that adds such a checkout is a privilege escalation, not a
+# refactor.
+# ---------------------------------------------------------------------------
+/.github/                           @isomorphic-12
+/.github/workflows/                 @isomorphic-12
+
+# ---------------------------------------------------------------------------
+# Deployment identity and schema. wrangler.template.jsonc plus
+# scripts/setup-config.ts decide what every deployment, including the hosted
+# one, is configured as. Migrations run against the production database before
+# the code that depends on them ships.
+# ---------------------------------------------------------------------------
+/wrangler.template.jsonc            @isomorphic-12
+/scripts/setup-config.ts            @isomorphic-12
+/migrations/                        @isomorphic-12
+/src/db/                            @isomorphic-12
+
+# ---------------------------------------------------------------------------
+# Auth, tenancy, and authorization. A bug here crosses brains or escalates a
+# role. This is the code where "looks right" is not good enough.
+# ---------------------------------------------------------------------------
+/src/auth/                          @isomorphic-12
+/src/oauth/                         @isomorphic-12
+/src/lib/orgs.ts                    @isomorphic-12
+/src/lib/tenants.ts                 @isomorphic-12
+/src/lib/identity.ts                @isomorphic-12
+/src/lib/provision.ts               @isomorphic-12
+/src/lib/org-connect.ts             @isomorphic-12
+/src/lib/github.ts                  @isomorphic-12
+/src/tools/members.ts               @isomorphic-12
+/src/tools/org-onboarding.ts        @isomorphic-12
+/src/tools/custom.ts                @isomorphic-12
+/src/lib/custom-tools.ts            @isomorphic-12
+
+# ---------------------------------------------------------------------------
+# Generated artifacts. These are committed AND compiled into the Worker, so a
+# hand-edit is a way to ship code that is not in any reviewed source file. CI
+# regenerates and diffs them, which catches this, so a pull request that edits a
+# generated file directly is the signal to look harder rather than to merge.
+# ---------------------------------------------------------------------------
+/src/lib/app-bundle.generated.ts    @isomorphic-12
+/src/lib/brain-template.generated.ts @isomorphic-12
+
+# ---------------------------------------------------------------------------
+# Licensing and governance. Changing these changes the deal, for us and for
+# every contributor who already signed the CLA under the old terms.
+# ---------------------------------------------------------------------------
+/LICENSE                            @isomorphic-12
+/NOTICE                             @isomorphic-12
+/CLA.md                             @isomorphic-12
+/GOVERNANCE.md                      @isomorphic-12
+/SECURITY.md                        @isomorphic-12
+/docs/licensing.md                  @isomorphic-12
+/docs/design/open-source-boundary.md @isomorphic-12

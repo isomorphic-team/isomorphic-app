@@ -1,0 +1,34 @@
+node_modules
+
+# Env
+.dev.vars
+.env
+.env.*
+!.env.example
+!.dev.vars.example
+
+# Wrangler local cache
+.wrangler/
+
+# Generated from wrangler.template.jsonc by `pnpm setup:config`. Holds ONE
+# deployment's identity (Worker name, public URL, Cloudflare KV/D1 resource ids),
+# which is per-deployment rather than per-repository — so it is generated rather
+# than committed. Edit wrangler.template.jsonc, or your own .dev.vars.
+wrangler.jsonc
+
+# TypeScript incremental build info
+*.tsbuildinfo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+app/.tailwind.out.css
+.preview-build/
+dev/bundle.js
+
+# Local operational scripts with real infra/customer data (not for the public repo).
+# Root-anchored so it does NOT match the tracked docs/ops/ directory.
+/ops/

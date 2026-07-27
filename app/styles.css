@@ -1,0 +1,277 @@
+/* Tailwind v4 entry for the Brain MCP App. Generated to a single CSS string at
+   build time (scripts/gen-app.ts) and inlined into the ui:// resource — the
+   iframe CSP blocks external stylesheets, so nothing here can be a URL import. */
+@import 'tailwindcss';
+
+/* Scan the app sources for utility classes. */
+@source './**/*.{ts,tsx}';
+
+/* Design tokens. Raw values live as CSS custom properties so (a) prefers-color-scheme
+   and (b) the MCP host's own theme variables (applyHostStyleVariables) can both drive
+   them at runtime. @theme inline maps Tailwind color utilities straight onto the vars,
+   so `bg-bg` / `text-fg` react to either signal without a rebuild. */
+:root {
+	--c-bg: #ffffff;
+	--c-fg: #1a1a1a;
+	--c-muted: #6b6b6b;
+	--c-border: #e4e4e4;
+	--c-accent: #4f46e5;
+	--c-chip: #f0f0f4;
+	--c-code: #f6f6f8;
+	color-scheme: light dark;
+}
+@media (prefers-color-scheme: dark) {
+	:root {
+		--c-bg: #1d1d20;
+		--c-fg: #ececef;
+		--c-muted: #9b9ba3;
+		--c-border: #37373d;
+		--c-accent: #8b85f4;
+		--c-chip: #2a2a30;
+		--c-code: #26262b;
+	}
+}
+/* Host theme wins when it stamps the document (applyDocumentTheme). */
+:root[data-theme='light'] {
+	--c-bg: #ffffff;
+	--c-fg: #1a1a1a;
+	--c-muted: #6b6b6b;
+	--c-border: #e4e4e4;
+	--c-accent: #4f46e5;
+	--c-chip: #f0f0f4;
+	--c-code: #f6f6f8;
+}
+:root[data-theme='dark'] {
+	--c-bg: #1d1d20;
+	--c-fg: #ececef;
+	--c-muted: #9b9ba3;
+	--c-border: #37373d;
+	--c-accent: #8b85f4;
+	--c-chip: #2a2a30;
+	--c-code: #26262b;
+}
+
+@theme inline {
+	--color-bg: var(--c-bg);
+	--color-fg: var(--c-fg);
+	--color-muted: var(--c-muted);
+	--color-border: var(--c-border);
+	--color-accent: var(--c-accent);
+	--color-chip: var(--c-chip);
+	--color-code: var(--c-code);
+}
+
+/* Prose defaults for rendered markdown (the viewer). Kept as plain CSS rather than
+   @apply so the bundle doesn't depend on Tailwind's typography plugin. */
+.prose h1 {
+	font-size: 1.6em;
+	font-weight: 700;
+	line-height: 1.25;
+	margin: 0.4em 0 0.3em;
+}
+.prose h2 {
+	font-size: 1.25em;
+	font-weight: 700;
+	line-height: 1.3;
+	margin: 1.2em 0 0.4em;
+}
+.prose h3 {
+	font-size: 1.05em;
+	font-weight: 600;
+	margin: 1em 0 0.3em;
+}
+.prose p {
+	margin: 0.7em 0;
+}
+.prose ul,
+.prose ol {
+	margin: 0.6em 0;
+	padding-left: 1.4em;
+}
+/* Tailwind Preflight strips list markers (list-style: none); restore them for prose. */
+.prose ul {
+	list-style: disc outside;
+}
+.prose ol {
+	list-style: decimal outside;
+}
+.prose ul ul {
+	list-style-type: circle;
+}
+.prose ul ul ul {
+	list-style-type: square;
+}
+.prose li {
+	margin: 0.2em 0;
+}
+/* The editor wraps each list item's text in a <p> (task items nest it under
+   .task-content). Strip that paragraph's block margin so list items stay tight,
+   matching the tight lists the serializer now writes. Editor-only; the viewer's
+   tight lists have no inner <p>, and its loose lists keep their intended spacing. */
+.ProseMirror li p {
+	margin: 0;
+}
+/* Task lists (GFM checkboxes) render on two surfaces with different DOM:
+     - editor: a nodeView, `li.task-item[data-checked] > input + .task-content`
+     - viewer (marked): a bare `li > input[type=checkbox][disabled] + text`
+   The `[disabled]` attr (viewer boxes are disabled, editor boxes interactive) cleanly
+   tells the two apart, which matters because their nested-list structure differs. */
+
+/* Editor: lay the checkbox beside the block-content hole. */
+.ProseMirror li.task-item {
+	list-style: none;
+	display: flex;
+	align-items: baseline;
+	gap: 0.4em;
+}
+.ProseMirror li.task-item > .task-content {
+	flex: 1;
+}
+
+/* Viewer: the checkbox flows inline before the text; nested sub-lists drop below. */
+.prose li:has(> input[type='checkbox'][disabled]) {
+	list-style: none;
+}
+.prose input[type='checkbox'][disabled] {
+	margin-right: 0.4em;
+}
+
+/* Shared checkbox look. Zero the UA's default checkbox margins so the gap to the text
+   is exactly 0.4em on both surfaces (flex `gap` in the editor, `margin-right` in the
+   viewer) rather than 0.4em plus the browser's built-in checkbox margin. */
+.prose input[type='checkbox'] {
+	flex: none;
+	margin: 0;
+	accent-color: var(--c-accent);
+}
+.prose input[type='checkbox']:not([disabled]) {
+	cursor: pointer;
+}
+
+/* Checked → strike + mute the item's OWN line (Google-Docs style). The editor strikes
+   the item paragraph; the viewer strikes the <li> but restores nested sub-lists — whose
+   items keep their own checked state — by giving them an independent decoration box so
+   the parent's line-through can't bleed into them. */
+.ProseMirror li.task-item[data-checked='true'] > .task-content > p {
+	text-decoration: line-through;
+	color: var(--c-muted);
+}
+.prose li:has(> input[type='checkbox'][disabled]:checked) {
+	text-decoration: line-through;
+	color: var(--c-muted);
+}
+.prose li:has(> input[type='checkbox'][disabled]:checked) > ul,
+.prose li:has(> input[type='checkbox'][disabled]:checked) > ol {
+	display: inline-block;
+	width: 100%;
+	text-decoration: none;
+	color: var(--c-fg);
+}
+.prose a {
+	color: var(--c-accent);
+	text-decoration: none;
+}
+.prose a:hover {
+	text-decoration: underline;
+}
+.prose a.wikilink {
+	background: var(--c-chip);
+	border-radius: 4px;
+	padding: 0 4px;
+}
+.prose code {
+	background: var(--c-code);
+	border-radius: 4px;
+	padding: 1px 5px;
+	font-size: 0.9em;
+}
+.prose pre {
+	background: var(--c-code);
+	border-radius: 8px;
+	padding: 12px;
+	overflow-x: auto;
+}
+.prose pre code {
+	background: none;
+	padding: 0;
+}
+.prose blockquote {
+	border-left: 3px solid var(--c-border);
+	margin-left: 0;
+	padding-left: 14px;
+	color: var(--c-muted);
+}
+.prose table {
+	border-collapse: collapse;
+	display: block;
+	overflow-x: auto;
+}
+.prose th,
+.prose td {
+	border: 1px solid var(--c-border);
+	padding: 4px 10px;
+}
+
+/* ProseMirror editing surface (base rules from prosemirror-view, inlined). */
+.ProseMirror {
+	position: relative;
+	word-wrap: break-word;
+	white-space: pre-wrap;
+	white-space: break-spaces;
+	font-variant-ligatures: none;
+	font-feature-settings: 'liga' 0;
+}
+.ProseMirror pre {
+	white-space: pre-wrap;
+}
+.ProseMirror-hideselection *::selection {
+	background: transparent;
+}
+.ProseMirror [draggable][contenteditable='false'] {
+	user-select: none;
+}
+.ProseMirror:focus {
+	outline: none;
+}
+
+/* prosemirror-tables (base rules inlined). */
+.ProseMirror table {
+	border-collapse: collapse;
+	table-layout: fixed;
+	width: 100%;
+	overflow: hidden;
+	margin: 0.7em 0;
+}
+.ProseMirror td,
+.ProseMirror th {
+	position: relative;
+	box-sizing: border-box;
+	vertical-align: top;
+	border: 1px solid var(--c-border);
+	padding: 4px 8px;
+}
+.ProseMirror th {
+	font-weight: 600;
+	background: var(--c-chip);
+}
+.ProseMirror .selectedCell::after {
+	content: '';
+	position: absolute;
+	inset: 0;
+	z-index: 2;
+	background: color-mix(in srgb, var(--c-accent) 18%, transparent);
+	pointer-events: none;
+}
+.ProseMirror .column-resize-handle {
+	position: absolute;
+	right: -2px;
+	top: 0;
+	bottom: 0;
+	width: 4px;
+	z-index: 20;
+	background: var(--c-accent);
+	pointer-events: none;
+}
+.ProseMirror.resize-cursor {
+	cursor: col-resize;
+}

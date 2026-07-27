@@ -1,0 +1,20 @@
+// Editor / IntelliSense config — permissive, includes both runtimes.
+// CI typecheck uses tsconfig.node.json + tsconfig.worker.json (see package.json).
+{
+	"compilerOptions": {
+		"target": "ES2022",
+		"module": "ESNext",
+		"moduleResolution": "bundler",
+		"lib": ["ES2023"],
+		"types": ["node", "@cloudflare/workers-types"],
+		"strict": true,
+		"esModuleInterop": true,
+		"forceConsistentCasingInFileNames": true,
+		"resolveJsonModule": true,
+		"skipLibCheck": true,
+		"noEmit": true,
+		"allowImportingTsExtensions": true,
+		"verbatimModuleSyntax": true
+	},
+	"include": ["src/**/*.ts"]
+}

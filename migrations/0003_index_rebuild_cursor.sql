@@ -1,0 +1,21 @@
+-- 0003_index_rebuild_cursor — make the content index's derived-row rebuild
+-- RESUMABLE, so a large brain can no longer wedge itself out of every read.
+--
+-- Background. `brain_index_meta.schema_version` (added in 0002) makes a brain
+-- lazily rebuild its derived rows — the page title and the queryable frontmatter
+-- fields — from content already stored in brain_pages whenever
+-- INDEX_SCHEMA_VERSION moves. That rebuild ran WHOLE-BRAIN, inline, on the read
+-- that noticed the bump, and schema_version was only written after it finished.
+-- On a ~3,000-page brain that is ~13,000 D1 statements in one request: it
+-- exceeded the host's 60s tool timeout, so the meta row was never written, so
+-- the NEXT read started over. Every read of that brain timed out, permanently.
+--
+-- Fix: the rebuild now walks pages in path order, a bounded slice per request,
+-- recording how far it got here. schema_version advances only when the walk
+-- finishes, so progress is durable and each read moves it forward instead of
+-- restarting it.
+--
+-- NULL / '' means "not mid-rebuild". Additive and backward-compatible: the
+-- currently deployed code selects named columns and ignores this one.
+
+ALTER TABLE brain_index_meta ADD COLUMN rebuild_cursor TEXT;

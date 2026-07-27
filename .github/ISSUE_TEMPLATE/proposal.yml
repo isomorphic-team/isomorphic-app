@@ -1,0 +1,78 @@
+name: Proposal
+description: A change with a design decision in it. Open this before writing the code.
+labels: [proposal]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this for anything where we might disagree about the shape: a new MCP tool, a
+        change to the Open Knowledge Format, a schema migration, a new dependency, or a
+        change to what gets written into a brain repo.
+
+        Bug fixes and documentation do not need a proposal. Just send the pull request.
+
+        We will answer honestly and quickly, including "no, and here is why", so you do not
+        spend a weekend on something we will not merge.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: |
+        What is hard or impossible today? Concrete beats abstract. If you hit this while
+        actually using a brain, describe what you were doing.
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What you propose
+      description: The change, at whatever level of detail you have.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: surface
+    attributes:
+      label: Does this add to the tool surface
+      description: |
+        Every MCP tool costs context in every conversation, for every user. The surface was
+        cut from 42 tools to 30 on purpose. New tools are possible but the bar is high, and
+        an argument for a new one should say why it cannot be an argument on an existing tool.
+      options:
+        - 'No: internal change, no new tool'
+        - 'No: adds an argument to an existing tool'
+        - 'Yes: adds a new MCP tool'
+    validations:
+      required: true
+
+  - type: dropdown
+    id: format
+    attributes:
+      label: Does this change the Open Knowledge Format contract
+      description: |
+        OKF is what every brain is written in, including brains edited entirely outside this
+        codebase. A format change has to keep working for every existing brain.
+      options:
+        - No
+        - 'Yes: additive, old brains keep working unchanged'
+        - 'Yes: breaking, existing brains would need migrating'
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives you considered
+      description: Including doing nothing. What is the cost of not doing this?
+
+  - type: checkboxes
+    id: read
+    attributes:
+      label: Homework
+      options:
+        - label: I read the relevant section of CLAUDE.md and this does not contradict a documented invariant (or it does, and I say why below).
+          required: true
+        - label: I am willing to implement this myself if it is accepted.
+          required: false

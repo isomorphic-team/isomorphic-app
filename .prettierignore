@@ -1,0 +1,18 @@
+pnpm-lock.yaml
+
+# Build output and local scratch. `pnpm format` writes and CI runs
+# `prettier --check .`, so anything not committed has to be listed here or the
+# two disagree depending on what happens to be on someone's disk. Prettier does
+# not read .gitignore.
+.wrangler/
+.claude/
+.preview-build/
+dev/bundle.js
+app/.tailwind.out.css
+wrangler.jsonc
+
+# Verbatim by law. LICENSE is the canonical GNU AGPL-3.0 text and CODE_OF_CONDUCT.md is
+# the canonical Contributor Covenant; reflowing either makes a diff against the
+# upstream source that a reader cannot dismiss at a glance.
+LICENSE
+CODE_OF_CONDUCT.md

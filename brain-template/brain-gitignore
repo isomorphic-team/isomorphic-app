@@ -1,0 +1,11 @@
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor
+.obsidian/
+.vscode/
+
+# Local-only working files
+*.tmp
+*.bak

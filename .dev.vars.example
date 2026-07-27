@@ -1,0 +1,86 @@
+# Copy to `.dev.vars` and fill in. Never commit `.dev.vars` — it is gitignored.
+#
+# One file, two consumers. Wrangler loads it for `pnpm worker:dev`, and the Node side
+# (`pnpm bootstrap`, `pnpm setup:config`, the e2e scripts) reads it via
+# `loadDevVarsIntoEnv()`. That is why it carries Wrangler's filename.
+#
+# Most keys here are written FOR you by `pnpm bootstrap`. Start there rather than
+# filling this in by hand. See docs/self-hosting.md.
+
+# ======================================================================
+# GitHub App identity — written by `pnpm bootstrap` (manifest exchange)
+# ======================================================================
+GITHUB_APP_ID=
+GITHUB_APP_SLUG=
+GITHUB_APP_CLIENT_ID=
+GITHUB_APP_CLIENT_SECRET=
+GITHUB_APP_WEBHOOK_SECRET=
+# PEM private key, base64-encoded so it round-trips through env vars cleanly.
+# GitHub issues PKCS#1; bootstrap converts to PKCS#8 before writing, because Workers
+# cannot do that conversion at runtime. Do not hand-edit this value.
+GITHUB_APP_PRIVATE_KEY_BASE64=
+
+# ======================================================================
+# Where brains live — written by `pnpm bootstrap` (install callback)
+# ======================================================================
+# The org the App is installed on, plus that installation's id. Required for
+# AUTH_MODE=oauth: the Worker mints a per-tenant installation token from these.
+PLATFORM_ORG=
+PLATFORM_INSTALLATION_ID=
+
+# Single-tenant (AUTH_MODE=static) only: the one brain repo to serve, and the one
+# installation to reach it with. Ignored in oauth mode, which resolves both per request.
+GITHUB_APP_INSTALLATION_ID=
+BRAIN_REPO_OWNER=
+BRAIN_REPO_NAME=
+
+# ======================================================================
+# Auth
+# ======================================================================
+# AUTH_MODE=static: the single shared bearer token clients send in the Authorization
+# header. One person, one token, no roles. Generate with: openssl rand -hex 32
+MCP_BEARER_TOKEN=
+
+# AUTH_MODE=oauth + IDENTITY_MODE=authjs: email magic-link sign-in via Auth.js.
+# AUTH_SECRET signs sessions (openssl rand -hex 32). Magic-link stays inert until
+# AUTH_RESEND_KEY is set, so you can develop the OAuth flow with no email provider.
+AUTH_SECRET=
+AUTH_RESEND_KEY=
+
+# ======================================================================
+# Deployment identity — consumed by `pnpm setup:config` to generate wrangler.jsonc
+# ======================================================================
+# wrangler.jsonc is generated and gitignored, because it holds ONE deployment's
+# identity rather than something shared by everyone who deploys this repo. These are
+# the values it is generated from. Every one has a working local default, so you can
+# leave this whole block empty until you deploy.
+#
+# `pnpm setup:config --help` documents each one. `--provision` creates the Cloudflare
+# KV namespace and D1 database and fills in their ids. `--print-ci` prints the
+# `gh variable set` commands that give a GitHub Actions deploy the same settings.
+
+# Cloudflare Worker name. Must be unique within your account.
+WORKER_NAME=
+
+# "static" (one bearer token) or "oauth" (multi-tenant orgs, roles, members).
+AUTH_MODE=
+
+# oauth mode only: "github" (users need a GitHub account) or "authjs" (email / SSO).
+IDENTITY_MODE=
+
+# Public origin of the deployed Worker. Leave empty for local development.
+PUBLIC_BASE_URL=
+
+# Magic-link From address (authjs mode). The domain must be verified with Resend.
+AUTH_EMAIL_FROM=
+
+# "true" creates a brain on a user's first request; "false" is invite-only.
+AUTO_PROVISION=
+
+# Cloudflare resource ids. Leave empty for local development: the generated config
+# gets placeholder ids, and Miniflare simulates KV and D1 on disk without ever
+# resolving them against Cloudflare. They only have to be real in order to deploy.
+D1_DATABASE_NAME=
+CF_D1_DATABASE_ID=
+CF_OAUTH_KV_ID=
+CF_OAUTH_KV_PREVIEW_ID=

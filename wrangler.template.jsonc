@@ -1,0 +1,111 @@
+{
+	// ======================================================================
+	// TEMPLATE. Do not edit `wrangler.jsonc` directly — it is GENERATED from
+	// this file and is gitignored, so your deployment's identity (Worker name,
+	// public URL, Cloudflare resource ids) never lands in the repository.
+	//
+	//   pnpm setup:config                 # local development, no Cloudflare account needed
+	//   pnpm setup:config --provision     # create the KV namespace + D1 database, then fill in the ids
+	//
+	// Every double-underscore-wrapped token below is substituted by
+	// `scripts/setup-config.ts` from an environment variable or a default. Run
+	// `pnpm setup:config --help` for the full list, and see
+	// `docs/self-hosting.md` for a walkthrough.
+	//
+	// Editing this file changes what every deployment gets. Editing your own
+	// `.dev.vars` (or your CI secrets) changes only yours.
+	// ======================================================================
+	"$schema": "node_modules/wrangler/config-schema.json",
+	"name": "__WORKER_NAME__",
+	"main": "src/worker.ts",
+	"compatibility_date": "2026-04-26",
+	"compatibility_flags": ["nodejs_compat"],
+	// ----------------------------------------------------------------------
+	// A custom domain is bound via the Cloudflare DASHBOARD (independent of
+	// this file), NOT via a `routes` block here. A `routes` entry with
+	// `custom_domain: true` makes `wrangler dev` rewrite request.url's host,
+	// which breaks the OAuth provider's host-based routing — so a routes block
+	// here forces a comment-out dance on every local run. Keeping the binding
+	// in the dashboard lets `wrangler dev` hit localhost:8787 with no edits.
+	// Don't re-add a routes block.
+	"observability": {
+		"enabled": true
+	},
+	// The workers.dev URL is a useful fallback hostname while DNS for a custom
+	// domain propagates. Disable it once your custom domain is the canonical
+	// entry point.
+	"workers_dev": true,
+	"preview_urls": true,
+	// The MCP transport is stateless (per-request server + web-standard transport
+	// in src/worker.ts) — no Durable Object. The legacy IsomorphicMindMcp DO class
+	// is deleted by the v2 migration; v1 stays as history (DO migrations are
+	// append-only, so neither entry may be removed).
+	"migrations": [
+		{ "tag": "v1", "new_sqlite_classes": ["IsomorphicMindMcp"] },
+		{ "tag": "v2", "deleted_classes": ["IsomorphicMindMcp"] }
+	],
+	"vars": {
+		// `static` is the single-bearer-token path: one person, one token, no
+		// identity, no roles, nothing to configure. It is the right starting
+		// point for a personal self-hosted instance.
+		// `oauth` activates `workers-oauth-provider` and the full multi-tenant
+		// org/role model, and needs the extra setup in docs/self-hosting.md.
+		"AUTH_MODE": "__AUTH_MODE__",
+		// Upstream identity for OAuth `/authorize` (ignored when AUTH_MODE=static).
+		// `github` uses GitHub OAuth, so every user needs a GitHub account.
+		// `authjs` uses Auth.js (email magic-link / SSO) so members never do; it
+		// additionally needs AUTH_SECRET + AUTH_RESEND_KEY + AUTH_EMAIL_FROM via
+		// `wrangler secret put` (prod) or `.dev.vars` (local).
+		// See docs/design/org-roles-permissions.md.
+		"IDENTITY_MODE": "__IDENTITY_MODE__",
+		// Magic-link From address (authjs mode). The sending domain must be
+		// verified with your email provider (DKIM/SPF), or delivery is limited to
+		// the provider account's own address.
+		"AUTH_EMAIL_FROM": "__AUTH_EMAIL_FROM__",
+		// Public origin of the deployed Worker. The connected-accounts tools build
+		// the /link/start identity-verification URL from it, and a tool has no
+		// request URL to infer it from.
+		"PUBLIC_BASE_URL": "__PUBLIC_BASE_URL__",
+		// Auto-provision a brain on a user's first authenticated MCP request, so
+		// readers and creators never install the GitHub App or see GitHub.
+		// Requires PLATFORM_ORG + PLATFORM_INSTALLATION_ID (recorded by
+		// `pnpm bootstrap` when the admin installs the App on the platform org).
+		// "false" makes the instance invite-only: an unknown user gets
+		// NoTenantError instead of a freshly minted brain.
+		"AUTO_PROVISION": "__AUTO_PROVISION__",
+		// Your GitHub App's URL slug (github.com/apps/<slug>), written by
+		// `pnpm bootstrap`. Used to build the install URL for the self-serve
+		// connect_github_org flow (customer-owned orgs). Public and stable, so it
+		// ships inline on deploy rather than as a secret. Leave empty if you are
+		// not using that flow.
+		"GITHUB_APP_SLUG": "__GITHUB_APP_SLUG__"
+		// PLATFORM_ORG and PLATFORM_INSTALLATION_ID are deliberately NOT here.
+		// They are per-deployment values written to `.dev.vars` by bootstrap
+		// (local) and uploaded with `wrangler secret put` (prod). The installation
+		// id is not secret, but keeping the pair with the App credentials is
+		// simpler than splitting them across two mechanisms.
+	},
+	// OAuth provider state: registered DCR clients, grants, access and refresh
+	// tokens, plus pending-auth nonces during the upstream identity round-trip.
+	// Only read when AUTH_MODE=oauth, but the binding must exist either way.
+	"kv_namespaces": [
+		{
+			"binding": "OAUTH_KV",
+			"id": "__OAUTH_KV_ID__",
+			"preview_id": "__OAUTH_KV_PREVIEW_ID__"
+		}
+	],
+	// Schema is managed by the wrangler D1 migrations framework — files in
+	// `migrations/`, applied with `pnpm db:migrate` (local) and by CI on deploy
+	// (see .github/workflows/deploy.yml). `src/db/*.sql` are kept as
+	// human-readable reference; `migrations/0001_init.sql` is the canonical
+	// baseline. Add a change with `pnpm db:migrate:new <name>`.
+	"d1_databases": [
+		{
+			"binding": "PLATFORM_DB",
+			"database_name": "__D1_DATABASE_NAME__",
+			"database_id": "__D1_DATABASE_ID__",
+			"migrations_dir": "migrations"
+		}
+	]
+}
