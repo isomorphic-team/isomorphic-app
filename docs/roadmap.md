@@ -567,3 +567,5 @@ host applies its own inline cap + scroll for very tall content. Fullscreen/pip k
 `INLINE_MAX_PX`, top-aligned), so `pnpm app:dev ?mode=inline` faithfully previews
 it. Verified via the AppBridge harness: short tree fits exactly; a long page caps
 and scrolls internally.
+
+<!-- CLA smoke test. This branch and PR are disposable. -->
