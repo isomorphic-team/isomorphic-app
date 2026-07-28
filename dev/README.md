@@ -27,6 +27,9 @@ Edit anything in `app/` (or `src/lib/wiki.ts`) and the browser live-reloads:
 | `/#edit`                                              | the editor for the default page |
 | `/#edit=wiki/playbooks/brand-voice.md`                | edit a specific page (tables)   |
 | `/?mode=pip` (or `?mode=inline` / `?mode=fullscreen`) | force a display mode            |
+| `/#brains`                                            | the brain switcher / list       |
+| `/#members`                                           | the org roster                  |
+| `/#access`                                            | the per-brain sharing panel     |
 
 ### Derived-views demo (okf-view)
 
@@ -59,6 +62,27 @@ semantics end to end:
   page when you click the folder (tree AND breadcrumb). Hover a note-less
   folder (e.g. `concepts`) → the file icon creates one, pre-seeded with a
   directory view.
+
+### Brain sharing demo (per-brain access)
+
+`/#access` opens the sharing panel for the active brain, and the **Share** control
+on each row of `/#brains` opens it for that one. The harness runs the REAL access
+rule (`effectiveBrainRole` from `src/lib/orgs.ts`) over its fixtures, so what you
+see resolves exactly like prod. The three fixture brains cover the whole rule:
+
+- **Personal** is private and mine. Katherine is an org **Editor** shared in
+  **read-only**, which is the case per-brain roles exist for; Grace holds no grant
+  at all and is there via the **org-admin floor**; Devon cannot see the brain.
+  Share, change a level, or revoke and the panel refreshes in place.
+- **Acme** is org-visible, so every member is listed at their own org role and no
+  row is individually removable (there is no grant to remove: narrow the brain to
+  private first).
+- **Northwind** is a client brain shared with me **read-only**. Its Share control
+  is absent, because sharing needs admin ON THE BRAIN and my role there is viewer:
+  the brain-vs-org role split, visible.
+
+Note `via`: a row can be admitted by a grant, by org visibility, or by the
+org-admin floor, and only a `grant` row is editable.
 
 ## What's real vs. faked
 

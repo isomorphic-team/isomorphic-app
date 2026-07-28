@@ -20,6 +20,9 @@ import { BRAIN_APP_HTML } from '../src/lib/app-bundle.generated.ts';
 import { slugify, resolveRelative, parseFrontmatter } from '../src/lib/wiki.ts';
 import { DEFAULT_BRAIN_CONFIG, isContentPath } from '../src/lib/brain-policy.ts';
 import { renderViews, stripSnapshots, hasViews, type ViewContext } from '../src/lib/views.ts';
+// The REAL per-brain access rule (pure, no D1) so the sharing preview resolves
+// exactly like prod: org visibility + explicit grants + the org-admin floor.
+import { effectiveBrainRole, roleLabel, type Role } from '../src/lib/orgs.ts';
 import PAGES from './fixtures.json';
 
 // Per-brain content. Previously a single shared `pages` map backed every brain, so
@@ -226,14 +229,18 @@ let brainsFixture = [
 		label: 'Personal',
 		role: 'Owner',
 		orgId: 'org-personal',
-		orgLabel: 'Personal'
+		orgLabel: 'Personal',
+		orgRole: 'owner' as PreviewRole,
+		visibility: 'private'
 	},
 	{
 		id: 'acme-co/acme-wiki',
 		label: 'Acme wiki',
 		role: 'Admin',
 		orgId: 'org-acme',
-		orgLabel: 'Acme'
+		orgLabel: 'Acme',
+		orgRole: 'admin' as PreviewRole,
+		visibility: 'org'
 	},
 	{
 		id: 'acme-co/acme-handbook',
@@ -247,9 +254,25 @@ let brainsFixture = [
 		label: 'Northwind',
 		role: 'Viewer',
 		orgId: 'org-northwind',
-		orgLabel: 'Northwind'
+		orgLabel: 'Northwind',
+		orgRole: 'viewer' as PreviewRole,
+		visibility: 'private'
 	}
 ];
+// Explicit per-brain grants (`brain_memberships`), keyed brain id -> user id.
+// The three brains together cover every path through effectiveBrainRole:
+//   Personal   private, mine. Katherine (an org EDITOR) is shared in read-only,
+//              which is the case per-brain roles exist for; Grace appears with no
+//              grant at all, via the org-admin floor; Devon cannot see it.
+//   Acme       org-visible, so every member is in at their own org role.
+//   Northwind  a client brain someone shared with ME read-only: the Share control
+//              disappears, because sharing needs admin ON THE BRAIN and my org
+//              role there is only viewer.
+let brainGrants: Record<string, Record<string, PreviewRole>> = {
+	'your-org/personal-wiki': { 'u-me': 'admin', 'u-mira': 'viewer' },
+	'acme-co/acme-wiki': {},
+	'northwind/northwind-wiki': { 'u-me': 'viewer' }
+};
 // Repos the "installation" can see that aren't brains yet — the connect_brain picker.
 let connectableRepos = [
 	{ id: 'acme-co/content-dist', owner: 'acme-co', repo: 'content-dist' },
@@ -264,16 +287,72 @@ const activePages = () => pagesFor(activeBrainId);
 // Preview: the Acme brain is "connected but not configured"; clicking Set up opens a
 // (simulated, protected-repo) configure PR, flipping the row to "Review PR".
 const pendingConfigPr = new Map<string, string>();
+// My effective role on one brain, through the real rule.
+function myBrainRole(b: (typeof brainsFixture)[number]): Role | null {
+	return effectiveBrainRole({
+		visibility: b.visibility,
+		orgRole: b.orgRole,
+		grant: brainGrants[b.id]?.[ME.user_id] ?? null
+	});
+}
 function brainRows() {
-	return brainsFixture.map((b) => ({
-		...b,
-		active: b.id === activeBrainId,
-		canManage: b.role === 'Owner' || b.role === 'Admin',
-		// One row, not the whole Acme group — this previews the not-configured state,
-		// and every row wearing it would read as an org-level problem.
-		needsConfig: b.id === 'acme-co/acme-wiki',
-		configPrUrl: pendingConfigPr.get(b.id)
-	}));
+	return brainsFixture.map((b) => {
+		const role = myBrainRole(b) ?? 'viewer';
+		return {
+			...b,
+			role: roleLabel(role),
+			active: b.id === activeBrainId,
+			// Org scope disconnects; brain scope shares. Deliberately different tests.
+			canManage: b.orgRole === 'owner' || b.orgRole === 'admin',
+			canShare: role === 'admin' || role === 'owner',
+			// One row, not the whole Acme group — this previews the not-configured state,
+			// and every row wearing it would read as an org-level problem.
+			needsConfig: b.id === 'acme-co/acme-wiki',
+			configPrUrl: pendingConfigPr.get(b.id)
+		};
+	});
+}
+
+// The sharing panel's payload for one brain: every org member the rule admits,
+// labelled with HOW they got in. Mirrors listBrainAccess in src/lib/orgs.ts.
+function accessResult(brainId: string, msg: string): CallToolResult {
+	const b = brainsFixture.find((x) => x.id === brainId) ?? brainsFixture[0];
+	const grants = brainGrants[b.id] ?? {};
+	const access = orgMembers
+		.map((m) => {
+			const grant = grants[m.user_id] ?? null;
+			const role = effectiveBrainRole({ visibility: b.visibility, orgRole: m.role, grant });
+			if (!role) return null;
+			return {
+				user_id: m.user_id,
+				email: m.email,
+				name: m.name,
+				role,
+				via: grant ? 'grant' : b.visibility !== 'private' ? 'org' : 'org-admin',
+				granted_at: grant ? '2026-06-01T00:00:00Z' : undefined
+			};
+		})
+		.filter(Boolean);
+	return {
+		content: [{ type: 'text', text: msg }],
+		structuredContent: {
+			view: 'brain-access',
+			access,
+			visibility: b.visibility,
+			activeBrain: brainMeta(b.id),
+			me: { user_id: ME.user_id, role: myBrainRole(b) ?? 'viewer', orgRole: b.orgRole }
+		}
+	};
+}
+// Resolve a `brain` arg the way the server's matchBrain does (id, then label
+// substring), so the Share control can target a non-active brain from the list.
+function resolveBrainArg(arg: unknown): string | undefined {
+	const q = String(arg ?? '')
+		.trim()
+		.toLowerCase();
+	if (!q) return undefined;
+	return brainsFixture.find((b) => b.id.toLowerCase() === q || b.label.toLowerCase().includes(q))
+		?.id;
 }
 function brainsResult(msg: string, withView: boolean): CallToolResult {
 	const sc: Record<string, unknown> = { brains: brainRows(), active: activeBrainId };
@@ -680,6 +759,44 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
 				wasMember ? `Removed ${args?.email}.` : `Revoked invite for ${args?.email}.`
 			);
 		}
+		case 'brain_access': {
+			const id = resolveBrainArg(args?.brain) ?? activeBrainId;
+			const b = brainsFixture.find((x) => x.id === id);
+			return accessResult(id, `Access for ${b?.label ?? id}.`);
+		}
+		case 'share_brain': {
+			const id = resolveBrainArg(args?.brain) ?? activeBrainId;
+			const b = brainsFixture.find((x) => x.id === id);
+			if (!b) return errText(`No brain matching "${args?.brain}".`);
+			if (!(myBrainRole(b) === 'admin' || myBrainRole(b) === 'owner'))
+				return errText(`You need admin access on ${b.label} to change who can reach it.`);
+			const notes: string[] = [];
+			const visibility = args?.visibility ? String(args.visibility) : undefined;
+			if (visibility && visibility !== b.visibility) {
+				b.visibility = visibility;
+				notes.push(
+					visibility === 'org'
+						? `"${b.label}" is now visible to everyone in the organization.`
+						: `"${b.label}" is now private.`
+				);
+			}
+			const email = args?.email ? String(args.email).trim() : '';
+			if (email) {
+				const m = orgMembers.find((x) => x.email.toLowerCase() === email.toLowerCase());
+				if (!m) return errText(`${email} isn't a member of this organization.`);
+				brainGrants[b.id] ??= {};
+				const access = String(args?.access ?? 'editor');
+				if (access === 'none') {
+					if (m.user_id === ME.user_id) return errText("You can't revoke your own access.");
+					delete brainGrants[b.id][m.user_id];
+					notes.push(`Removed ${m.email} from "${b.label}".`);
+				} else {
+					brainGrants[b.id][m.user_id] = access as PreviewRole;
+					notes.push(`${m.email} is now ${roleLabel(access as Role)} on "${b.label}".`);
+				}
+			}
+			return accessResult(b.id, notes.join(' ') || 'Nothing changed.');
+		}
 		case 'brains':
 			return brainsResult(`${brainsFixture.length} brains.`, true);
 		case 'switch_brain': {
@@ -706,8 +823,19 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
 			for (let n = 2; brainsFixture.some((b) => b.id === id); n++) id = `your-org/${slug}-${n}`;
 			brainsFixture = [
 				...brainsFixture,
-				{ id, label: display, role: 'Owner', orgId: 'org-personal', orgLabel: 'Personal' }
+				{
+					id,
+					label: display,
+					role: 'Owner',
+					orgId: 'org-personal',
+					orgLabel: 'Personal',
+					orgRole: 'owner' as PreviewRole,
+					// Private by default, with an admin grant for the creator (mirrors
+					// create_brain in src/tools/brains.ts).
+					visibility: 'private'
+				}
 			];
+			brainGrants[id] = { [ME.user_id]: 'admin' };
 			pagesFor(id); // empty content map for the new brain
 			activeBrainId = id;
 			openPath = '';
@@ -941,6 +1069,8 @@ const membersMode = hashMode === 'members';
 const brainsMode = hashMode === 'brains';
 const settingsMode = hashMode === 'settings';
 const connectedMode = hashMode === 'connected';
+// `#access` previews the per-brain sharing panel for the active brain.
+const accessMode = hashMode === 'access';
 const browseEmptyMode = hashMode === 'browse-empty';
 // `#nobrains` previews the first-touch "create your first brain" state: start with an
 // empty brain set so the brains lookup routes the app to the create form.
@@ -964,17 +1094,19 @@ bridge.oninitialized = async () => {
 	// announce the input, then deliver the result (sendToolInput once, then sendToolResult).
 	const mode = brainsMode
 		? 'brains'
-		: membersMode
-			? 'members'
-			: graphMode
-				? 'graph'
-				: activityMode
-					? 'activity'
-					: browseMode
-						? 'browse'
-						: editMode
-							? 'edit'
-							: 'page';
+		: accessMode
+			? 'access'
+			: membersMode
+				? 'members'
+				: graphMode
+					? 'graph'
+					: activityMode
+						? 'activity'
+						: browseMode
+							? 'browse'
+							: editMode
+								? 'edit'
+								: 'page';
 	bridge.sendToolInput({
 		arguments:
 			browseMode ||
@@ -982,6 +1114,7 @@ bridge.oninitialized = async () => {
 			graphMode ||
 			membersMode ||
 			brainsMode ||
+			accessMode ||
 			settingsMode ||
 			connectedMode ||
 			browseEmptyMode ||
@@ -1019,6 +1152,8 @@ bridge.oninitialized = async () => {
 		bridge.sendToolResult(await handleTool('brains', {}));
 	} else if (membersMode) {
 		bridge.sendToolResult(await handleTool('members', {}));
+	} else if (accessMode) {
+		bridge.sendToolResult(await handleTool('brain_access', {}));
 	} else if (graphMode) {
 		bridge.sendToolResult(await handleTool('view_graph', {}));
 	} else if (activityMode) {
