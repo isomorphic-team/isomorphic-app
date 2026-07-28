@@ -4,76 +4,75 @@
 edit, and render as an interactive app inside the conversation.**
 
 Your knowledge is markdown in a git repo you own. Isomorphic is the layer that lets an LLM
-maintain it well: a Model Context Protocol server with a librarian's toolkit, a content index
-that makes reads fast at any size, computed views that never go stale, and an in-client
-viewer and WYSIWYG editor so a non-technical teammate never sees GitHub at all.
+maintain it: a Model Context Protocol server with a librarian's toolkit, a content index that
+keeps reads fast at any size, computed views, and an in-client viewer and WYSIWYG editor so a
+non-technical teammate never has to open GitHub.
 
 [Licensing](docs/licensing.md) · [Self-hosting](docs/self-hosting.md) ·
 [Contributing](CONTRIBUTING.md) · [Architecture](CLAUDE.md) · [Roadmap](docs/roadmap.md)
 
-> **Open source, [AGPL-3.0-only](LICENSE).** Read it, run it, fork it, deploy it for your own
-> company, sell services around it. If you modify it and let others use your version over a
-> network, share your changes. Your knowledge base is your own data and the license does not
-> touch it. See [`docs/licensing.md`](docs/licensing.md) for what that means in practice, and
-> for commercial licensing if the AGPL does not work for you.
+> Open source under [AGPL-3.0-only](LICENSE). Run it, fork it, deploy it for your own company,
+> sell services around it. If you modify it and let others use your version over a network,
+> you owe those users your changes. Your knowledge base is your data and the license does not
+> reach it. [`docs/licensing.md`](docs/licensing.md) has the detail, including commercial
+> licensing if the AGPL does not work for you.
 
 ---
 
 ## Why this exists
 
-Team knowledge rots because writing it down is a separate job from doing the work. LLMs are
-good at that separate job, and terrible at doing it into a database they cannot see the shape
-of.
+Writing knowledge down is a separate job from doing the work, which is why it does not get
+done. LLMs are good at that separate job and bad at doing it into a database whose shape they
+cannot see.
 
-So the substrate is deliberately boring: **one markdown file per concept, in a normal git
-repository**, in the
+So the substrate is one markdown file per concept, in a normal git repository, in the
 [Open Knowledge Format](https://github.com/GoogleCloudPlatform/knowledge-catalog/blob/main/okf/SPEC.md).
-You can read it on github.com, edit it in Obsidian, grep it, diff it, and review a change in
-a pull request. If you stop using Isomorphic tomorrow you still have everything, in a format
-that outlives us.
+You can read it on github.com, edit it in Obsidian, grep it, diff it, and review a change in a
+pull request. If you stop using Isomorphic tomorrow you still have everything.
 
-What Isomorphic adds is everything that makes an LLM a competent librarian rather than an
-enthusiastic one: tools that repoint every inbound link when a page moves, edits that cannot
-half-apply, a validator that catches twelve concepts crammed into one page, and views that
-recompute instead of drifting.
+Isomorphic supplies what an LLM otherwise gets wrong: tools that repoint every inbound link
+when a page moves, edits that cannot half-apply, a validator that catches twelve concepts
+crammed into one page, and views that recompute instead of drifting.
 
 ## What it does
 
-**Reads that scale.** `search_pages`, `find_inbound_links`, `view_graph`, and `validate`
-query a derived index in D1, not GitHub. The old live-scan path capped out around 40 pages
-and cost hundreds of milliseconds; the index is one or two local statements and is unbounded.
-It is a cache and never the source of truth: every read compares the branch HEAD to the
-indexed commit first, so a page edited on github.com, by another agent, or by a merged pull
-request is never served stale. No webhook required.
+**Reads that scale.** `search_pages`, `find_inbound_links`, `view_graph`, and `validate` query
+a derived index in D1 rather than GitHub. The earlier live-scan path capped out around 40 pages
+and cost hundreds of milliseconds; an index query is one or two local statements and is
+unbounded. The index is a cache, never the source of truth: every read compares the branch HEAD
+to the indexed commit first, so a page edited on github.com, by another agent, or by a merged
+pull request is never served stale. No webhook required.
 
 **Writes that do not lose your work.** `write_page` takes exact find-and-replace edits or an
-append, so an agent changes a paragraph without rewriting the page. An anchor that matches
-zero times or several times aborts the whole call, so a batch is never half-applied.
-`move_page` repoints every inbound link, in both markdown and wikilink syntax, in the same
-commit. `delete_page` tells you what still points at what you are removing. Writes to a
-protected brain open a pull request instead of committing.
+append, so an agent changes a paragraph without rewriting the page. An anchor that matches zero
+times or several times aborts the whole call, so a batch is never half-applied. `move_page`
+repoints every inbound link, in both markdown and wikilink syntax, in the same commit.
+`delete_page` reports what still points at what you are removing. Writes to a protected brain
+open a pull request instead of committing.
 
-**Views that compute.** A fenced ` ```okf-view ` block declares a listing, a table, or a
-count, derived from backlinks or from the pages under a prefix, filtered and grouped by
-frontmatter. Executing consumers always compute it live. A cached snapshot is written into the
-file so that github.com and any other plain-markdown reader still sees a real table, and it is
-explicitly allowed to go stale, because the thing that reads it cannot compute.
+**Views that compute.** A fenced ` ```okf-view ` block declares a listing, a table, or a count,
+derived from backlinks or from the pages under a prefix, filtered and grouped by frontmatter.
+Executing consumers always compute it live. A cached snapshot is written into the file so that
+github.com and other plain-markdown readers still see a real table; it is allowed to go stale,
+because whatever reads it cannot compute.
 
 **An app, not a wall of text.** The viewer, editor, file tree, link graph, activity feed, and
-member roster render inside Claude as an [MCP App](https://modelcontextprotocol.io/extensions/apps/overview).
-The editor is ProseMirror with a markdown round-trip golden test, so what it writes back is
-the markdown you would have written by hand.
+member roster render inside Claude as an
+[MCP App](https://modelcontextprotocol.io/extensions/apps/overview). The editor is ProseMirror
+with a markdown round-trip golden test, so what it writes back is the markdown you would have
+written by hand.
 
 **Tools your brain defines.** Any page under a `tools/` folder becomes an MCP tool in Claude's
 tool list, declared in a small fenced block. Three read-only kinds: return an instruction
 payload, run one whitelisted read, or render one view. Arguments are interpolated as data and
-never evaluated, and a brain-authored tool can never exceed its caller's access. Written
+never evaluated, and a brain-authored tool cannot exceed its caller's access. These are written
 conversationally, which means Claude authoring Claude's own future tools.
 
 **Multi-tenant when you need it.** Orgs, roles (`viewer < editor < admin < owner`), a member
 roster with email invitations, several brains per person, and magic-link sign-in so teammates
-never need a GitHub account. All of it is in this repository and all of it is configuration,
-not a hosted-only tier. See [the open-source boundary](docs/design/open-source-boundary.md).
+never need a GitHub account. All of it is in this repository and all of it is configuration
+rather than a hosted-only tier. See
+[the open-source boundary](docs/design/open-source-boundary.md).
 
 **Non-destructive bulk import.** `sync_records` upserts from a spreadsheet or CRM without
 clobbering human edits: only declared source-owned fields are written, deletions are proposed
@@ -89,10 +88,10 @@ cd isomorphic-app
 pnpm install
 pnpm setup:config       # generate wrangler.jsonc for local development
 pnpm test               # eight golden tests, offline
-pnpm app:dev            # http://localhost:5175 — the real app UI over fixtures
+pnpm app:dev            # http://localhost:5175, the real app UI over fixtures
 ```
 
-To run it for real against your own GitHub org, see
+To run it against your own GitHub org, see
 [**docs/self-hosting.md**](docs/self-hosting.md). The short version is `pnpm bootstrap`, which
 registers a GitHub App from a manifest and scaffolds your first brain repository in one atomic
 commit, in about three clicks.
@@ -117,18 +116,18 @@ your-brain/
 ├── AGENTS.md            # the contract agents read (see brain-template/AGENTS.md)
 ├── .isomorphic.json     # which paths are content, which are immutable source, where the log is
 ├── source/              # immutable source material
-└── wiki/                # editable content — arbitrary folders, no fixed entity types
+└── wiki/                # editable content, arbitrary folders, no fixed entity types
     └── log.md           # tool-maintained changelog
 ```
 
 There is no entity taxonomy. Folders are whatever you want, because the brains this serves
 belong to different companies who organize differently. `type:` in frontmatter is a free-form
-string, required by OKF, and used to make the "is this a concept or a record" question
-unavoidable. A folder containing `index.md` **is** that page, which is how directory notes work.
+string, required by OKF, and used to force the "is this a concept or a record" question. A
+folder containing `index.md` **is** that page, which is how directory notes work.
 
-[**`CLAUDE.md`**](CLAUDE.md) is the real architecture document. It is long and it is current,
-because coding agents read it, and it explains why each design is what it is (including the
-failures that produced the rule). Read the relevant section before changing something.
+[**`CLAUDE.md`**](CLAUDE.md) is the architecture document. Maintainers keep it current because
+coding agents read it, and it explains why each design is what it is, including the failures
+that produced the rule. Read the relevant section before changing something.
 [`docs/references.md`](docs/references.md) lists the authoritative external sources, which move
 faster than any model's training data.
 
@@ -154,28 +153,26 @@ never touch a real brain.
 
 ## Contributing
 
-Outside contributions are wanted. [`CONTRIBUTING.md`](CONTRIBUTING.md) tells you how to get a
-change merged without asking anyone first: how to get it running, the three invariants that
-will bite you, what we will and will not merge, and why. Contributors sign a
-[CLA](CLA.md), which is one bot comment and does not take your copyright.
+Contributions are welcome. [`CONTRIBUTING.md`](CONTRIBUTING.md) covers how to get it running,
+the three invariants that will bite you, and what we will and will not merge. Contributors sign
+a [CLA](CLA.md), which is one bot comment and does not take your copyright.
 
-[`docs/roadmap.md`](docs/roadmap.md) is the actual roadmap, not a marketing version of one.
-[`GOVERNANCE.md`](GOVERNANCE.md) says who decides what.
+[`docs/roadmap.md`](docs/roadmap.md) is what is planned. [`GOVERNANCE.md`](GOVERNANCE.md) says
+who decides what.
 
-Found a security problem? [`SECURITY.md`](SECURITY.md), and please do not open a public issue.
+Found a security problem? [`SECURITY.md`](SECURITY.md). Please do not open a public issue.
 
 ## License
 
 [GNU AGPL-3.0-only](LICENSE), an [OSI-approved](https://opensource.org/licenses) open source
-license. Self-host freely with no obligations. Modify it and let others use your version over
-a network, and you owe those users your source. Your brain is your data and the license does
-not reach it; neither does it reach MCP clients, which talk to the server over a protocol
-rather than linking against it.
+license. Self-host freely with no obligations. Modify it and let others use your version over a
+network, and you owe those users your source. Your brain is your data and the license does not
+reach it; neither does it reach MCP clients, which talk to the server over a protocol rather
+than linking against it.
 
-Plain-language walkthrough, what the AGPL does and does not require, and why we chose it over
-Apache, FSL, and BSL: [`docs/licensing.md`](docs/licensing.md).
+What the AGPL does and does not require, and why we chose it over Apache, FSL, and BSL:
+[`docs/licensing.md`](docs/licensing.md).
 
-Contributors sign a [CLA](CLA.md) so we can also offer Isomorphic commercially to
-organizations that cannot ship copyleft. In exchange the CLA binds us to keep every
-contribution under an OSI-approved license, permanently. If the AGPL does not work for you,
-**legal@isomorphic.sh**. We would rather sell you a license than have you guess.
+Contributors sign a [CLA](CLA.md) so we can also offer Isomorphic commercially to organizations
+that cannot ship copyleft. In exchange the CLA binds us to keep every contribution under an
+OSI-approved license, permanently. If the AGPL does not work for you, **legal@isomorphic.sh**.

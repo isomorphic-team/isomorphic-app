@@ -33,11 +33,10 @@ rejected it. Three reasons, in order of how much they mattered:
 - **It corrupts the roadmap.** Once a paid tier exists as a separate codebase, every design
   question acquires a second axis: not "is this the right shape" but "which side of the wall
   does this go on". Multi-brain support, roles, and the member roster are all things a
-  self-hoster with a team genuinely needs, and all things a naive open-core split would have
-  put behind the wall. The result is a public product deliberately kept mediocre.
-- **It makes contribution feel like unpaid labor for a product you cannot fully use.** A
-  contributor who fixes the index and then cannot use the feature it enables has learned
-  something about the deal.
+  self-hoster with a team needs, and all things a naive open-core split would have put behind
+  the wall. The result is a public product kept incomplete on purpose.
+- **It makes contribution unpaid work on a product you cannot fully run.** A contributor fixes
+  the index and then cannot use the feature it enables.
 - **It splits the test surface.** Two configurations, and the one most people run is the one
   we exercise least.
 
@@ -48,7 +47,7 @@ See [`docs/licensing.md`](../licensing.md) for the license reasoning.
 AGPL section 13 also turns the invariant at the bottom of this document into a legal
 obligation rather than only a promise: because the hosted service runs unmodified `main` from
 a public repository, there is nothing extra to disclose. A private hosted-only patch would
-create a disclosure duty, which is a useful thing to have standing behind the rule.
+create a disclosure duty.
 
 ## What "platform-izing" means here, then
 
@@ -64,7 +63,7 @@ already built and already public:
 
 A self-hoster can turn every one of those on. Most will not want to, and will run
 `AUTH_MODE=static` with one brain, which is why that path stays supported and documented
-first. But the multi-tenant path is not a hosted-only capability; it is a configuration.
+first. The multi-tenant path is a configuration, not a hosted-only capability.
 
 So "platform-izing" is a business activity: sales, support, compliance, uptime, billing, and
 the accounts and infrastructure behind them. None of it needs to live in this repository, and
@@ -77,8 +76,7 @@ than a drift:
 
 - **Billing and subscription management.** Not in this repository. It touches a payment
   processor and our own accounts, and a self-hoster has no use for it. This is the one clean
-  example of something that is genuinely hosted-only, and note that it is infrastructure
-  rather than product capability.
+  example of something hosted-only, and it is infrastructure rather than product capability.
 - **Usage metering and analytics.** Not in this repository, and not in the Worker. No
   telemetry, no phone-home, no anonymous usage beacon, in either the hosted build or yours.
   We can measure our own deployment from our own logs.
@@ -87,8 +85,7 @@ than a drift:
   bundle ours into the subscription. That is the pattern to reuse: the capability is public,
   the credential is the product.
 - **Enterprise SSO / SAML.** In this repository. It is a provider slot in the Auth.js config,
-  and putting it behind a wall would be the textbook open-core mistake this document exists to
-  prevent.
+  and putting it behind a wall is the open-core mistake this document exists to prevent.
 - **Our own operational runbooks and infrastructure state.** Not in this repository. Generic
   runbooks are (`docs/ops/`); anything naming a real customer, account, or resource is not.
   The `/ops/` directory is gitignored for exactly this.
@@ -98,7 +95,6 @@ than a drift:
 **The hosted service is deployed from `main`, with no patches.** If we ever need a change that
 only makes sense for the hosted deployment, it goes in as configuration or it does not go in.
 
-That is not a promise of goodwill, it is a structural constraint: the moment a private patch
-exists, the reasoning above stops being true, and everyone can tell. Keeping it means
-occasionally solving a problem more generally than we strictly need to, which is the price of
-the deal and is usually the better design anyway.
+This is a structural constraint rather than a promise of goodwill: the moment a private patch
+exists, the reasoning above stops being true. Keeping the invariant means occasionally solving
+a problem more generally than we strictly need to, which is usually the better design anyway.

@@ -15,7 +15,7 @@ Typo and docs-only fixes need no signature.
 
 <!--
 The non-obvious constraint you hit, the approach you rejected, the thing you are unsure
-about. This is the most useful section. "Nothing" is a fine answer.
+about. "Nothing" is a fine answer.
 -->
 
 ## Checklist
