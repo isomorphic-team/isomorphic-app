@@ -8,8 +8,9 @@ maintain it: a Model Context Protocol server with a librarian's toolkit, a conte
 keeps reads fast at any size, computed views, and an in-client viewer and WYSIWYG editor so a
 non-technical teammate never has to open GitHub.
 
-[Licensing](docs/licensing.md) · [Self-hosting](docs/self-hosting.md) ·
-[Contributing](CONTRIBUTING.md) · [Architecture](CLAUDE.md) · [Roadmap](docs/roadmap.md)
+[Getting started](docs/getting-started.md) · [Self-hosting](docs/self-hosting.md) ·
+[Licensing](docs/licensing.md) · [Contributing](CONTRIBUTING.md) ·
+[Architecture](CLAUDE.md) · [Roadmap](docs/roadmap.md)
 
 > Open source under [AGPL-3.0-only](LICENSE). Run it, fork it, deploy it for your own company,
 > sell services around it. If you modify it and let others use your version over a network,
@@ -78,7 +79,22 @@ rather than a hosted-only tier. See
 clobbering human edits: only declared source-owned fields are written, deletions are proposed
 rather than applied, and a page a human deleted is never silently resurrected.
 
-## Try it in five minutes
+## Use it
+
+Add it to Claude as a custom connector. **Settings → Connectors → Add custom connector**,
+and paste the MCP endpoint of an Isomorphic server. For the hosted service run by
+Isomorphic:
+
+```
+https://mcp.isomorphic.sh/mcp
+```
+
+No client ID, no client secret, and no GitHub account. Claude registers itself and sends you
+through an email magic link, then you ask it to create your first brain.
+[**docs/getting-started.md**](docs/getting-started.md) has the full walkthrough, the same
+steps against your own deployment, other MCP hosts, and what to check when it does not work.
+
+## Run it locally in five minutes
 
 No accounts, no Cloudflare, no GitHub App:
 
@@ -91,7 +107,7 @@ pnpm test               # eight golden tests, offline
 pnpm app:dev            # http://localhost:5175, the real app UI over fixtures
 ```
 
-To run it against your own GitHub org, see
+To run a server against your own GitHub org, see
 [**docs/self-hosting.md**](docs/self-hosting.md). The short version is `pnpm bootstrap`, which
 registers a GitHub App from a manifest and scaffolds your first brain repository in one atomic
 commit, in about three clicks.

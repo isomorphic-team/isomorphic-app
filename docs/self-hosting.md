@@ -142,7 +142,7 @@ pnpm worker:dev
 
 Connect an MCP client to `http://localhost:8787/mcp` with
 `Authorization: Bearer <MCP_BEARER_TOKEN>`. Confirm with `whoami` and `list_pages` before
-you deploy anything.
+you deploy anything. [`getting-started.md`](getting-started.md) covers connecting each host.
 
 ### 2c. Provision Cloudflare resources and deploy
 
@@ -177,7 +177,9 @@ pnpm exec wrangler d1 migrations apply platform-db --remote
 pnpm worker:deploy
 ```
 
-Your MCP endpoint is `https://<worker>/mcp`. If you put it on a custom domain, bind the
+Your MCP endpoint is `https://<worker>/mcp`. Hand that URL to your users;
+[`getting-started.md`](getting-started.md) is the page to point them at. If you put it on a
+custom domain, bind the
 domain in the **Cloudflare dashboard**, not with a `routes` block in the config. A `routes`
 entry with `custom_domain: true` makes `wrangler dev` rewrite the request host, which breaks
 the OAuth provider's host-based routing and forces a comment-out dance on every local run.
