@@ -11,8 +11,8 @@ body:
 
         Bug fixes and documentation do not need a proposal. Just send the pull request.
 
-        We will answer honestly and quickly, including "no, and here is why", so you do not
-        spend a weekend on something we will not merge.
+        We will answer quickly, including "no, and here is why", so you do not spend a
+        weekend on something we will not merge.
 
   - type: textarea
     id: problem

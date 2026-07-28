@@ -1,14 +1,13 @@
 # Self-hosting Isomorphic
 
 You can run the whole thing yourself. Isomorphic is open source under
-[AGPL-3.0-only](../LICENSE): there is no seat cap, no license key, and no code path that
-phones home. Running a stock build obliges you nothing. The one obligation appears if you
-**modify** it and let others use your version over a network, in which case those users are
-entitled to your modified source. See [`docs/licensing.md`](licensing.md) for the detail,
-including what the copyleft does not reach (your brain content, and any MCP client).
+[AGPL-3.0-only](../LICENSE): no seat cap, no license key, no code path that phones home.
+Running a stock build obliges you nothing. The obligation appears if you **modify** it and let
+others use your version over a network, in which case those users are entitled to your
+modified source. See [`docs/licensing.md`](licensing.md) for the detail, including what the
+copyleft does not reach (your brain content, and any MCP client).
 
-This guide has three paths. Pick the smallest one that does what you need, because each
-step up costs real setup time.
+This guide has three paths. Pick the smallest one that does what you need.
 
 | Path                            | Who it is for                                             | You need                                       | Time     |
 | ------------------------------- | --------------------------------------------------------- | ---------------------------------------------- | -------- |
@@ -16,8 +15,7 @@ step up costs real setup time.
 | **2. Single-tenant deployment** | One person or one small team, one brain, one shared token | The above, plus GitHub org, plus Cloudflare    | ~30 min  |
 | **3. Multi-tenant deployment**  | Many people, several brains, roles, email sign-in         | The above, plus a domain and an email provider | ~2 hours |
 
-Everything in path 1 works with no accounts at all. That is deliberate: most contribution
-and most evaluation should not require you to give anyone a credit card.
+Everything in path 1 works with no accounts at all.
 
 ---
 
@@ -25,9 +23,9 @@ and most evaluation should not require you to give anyone a credit card.
 
 Two programs from one `src/`:
 
-- **The MCP Worker** (`src/worker.ts`), a Cloudflare Worker. It is the product: it serves
-  MCP tools to Claude and serves the in-client app UI. Uses D1 for a derived content index
-  and, in multi-tenant mode, for orgs and members. Uses KV for OAuth state.
+- **The MCP Worker** (`src/worker.ts`), a Cloudflare Worker. It serves MCP tools to Claude and
+  serves the in-client app UI. Uses D1 for a derived content index and, in multi-tenant mode,
+  for orgs and members. Uses KV for OAuth state.
 - **The bootstrap server** (`src/bootstrap.ts`), a Node script you run once. It registers a
   GitHub App for you and scaffolds your first brain repo, then you never run it again.
 
@@ -35,9 +33,8 @@ And one thing you own that is not code:
 
 - **A brain**, which is an ordinary GitHub repository full of markdown. Your knowledge lives
   there, in [Open Knowledge Format](https://github.com/GoogleCloudPlatform/knowledge-catalog/blob/main/okf/SPEC.md),
-  readable and editable without any of this software. That is the point: if you stop using
-  Isomorphic, you still have a git repo full of markdown, which is the same thing you had
-  before, only better organized.
+  readable and editable without any of this software. If you stop using Isomorphic, you still
+  have a git repo full of markdown.
 
 Cloudflare is currently the only supported deploy target. Workers, D1, and KV are used
 directly rather than through an abstraction layer, so porting to another runtime is real
@@ -58,8 +55,8 @@ pnpm test               # eight golden tests, offline, should be green
 You now have two useful things:
 
 ```sh
-pnpm app:dev            # http://localhost:5175 — the real app UI over stub fixtures
-pnpm worker:dev         # http://localhost:8787 — the MCP server (needs credentials, below)
+pnpm app:dev            # http://localhost:5175, the real app UI over stub fixtures
+pnpm worker:dev         # http://localhost:8787, the MCP server (needs credentials, below)
 ```
 
 `pnpm app:dev` needs no credentials at all. It renders the actual `ui://` bytes the Worker
@@ -89,9 +86,8 @@ have to be real in order to deploy.
 ## Path 2: single-tenant deployment
 
 One brain, one shared bearer token, no accounts, no roles. Whoever holds the token can read
-and write. This is the honest description: it is not an access-control model, it is a
-password on a door. It is genuinely fine for one person or a handful of trusted people, and
-it is far less to set up than path 3.
+and write. This is a password on a door rather than an access-control model. It is fine for
+one person or a handful of trusted people, and it is far less setup than path 3.
 
 ### 2a. Create the GitHub App and your first brain
 
@@ -205,7 +201,7 @@ Without them the job skips with a warning rather than deploying something miscon
 
 Orgs, roles (`viewer < editor < admin < owner`), a member roster with invitations, several
 brains per person, and email sign-in so nobody needs a GitHub account. This is the mode the
-hosted service runs in, and it is the same code.
+hosted service runs in, on the same code.
 
 Do path 2 first and confirm it works. Then:
 
@@ -215,7 +211,7 @@ Do path 2 first and confirm it works. Then:
 which defeats much of the point if your users are not engineers.
 
 `IDENTITY_MODE=authjs` uses Auth.js with an email magic link, so members never touch GitHub.
-This is what you probably want. Two honest caveats, both from running it:
+This is usually what you want. Two caveats, both from running it:
 
 - Magic links are weaker than a redirect-based provider. Email prefetchers can consume a
   link, and cross-browser flows are fragile. A redirect-based OIDC provider (Google, your
@@ -328,7 +324,7 @@ custom tool after it reconnects. Editing an existing tool's body takes effect im
 ## Getting help
 
 Open a [discussion](https://github.com/isomorphic-team/isomorphic-app/discussions) for
-questions, or an issue for a reproducible bug. Self-hosting problems are on topic, and a
-question that turns out to be a gap in this page is a useful bug report about this page.
+questions, or an issue for a reproducible bug. Self-hosting problems are on topic, and a gap
+in this page is worth reporting as one.
 
 For anything security-related, see [`SECURITY.md`](../SECURITY.md) instead.

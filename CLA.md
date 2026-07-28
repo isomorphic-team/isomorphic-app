@@ -4,11 +4,11 @@ Version 1.0, effective 2026-07-27.
 
 Thank you for contributing to Isomorphic. This agreement records the terms under which you
 contribute, so that we can distribute your work as part of the project and also offer it
-under commercial terms alongside the AGPL. It is deliberately short, and it is the same
-agreement for everyone, including the people who maintain the project.
+under commercial terms alongside the AGPL. It is the same agreement for everyone, including
+the people who maintain the project.
 
-You keep the copyright in your contribution. You are not assigning anything. And section 6
-binds us to keep your work under an OSI-approved open source license, permanently.
+You keep the copyright in your contribution. You are not assigning anything. Section 6 binds
+us to keep your work under an OSI-approved open source license, permanently.
 
 By signing this agreement, you agree to the following for any past and future Contributions
 you submit to this project.
@@ -34,8 +34,8 @@ non-exclusive, no-charge, royalty-free, irrevocable copyright license to reprodu
 derivative works of, publicly display, publicly perform, sublicense, and distribute your
 Contribution and such derivative works.
 
-This grant is broad on purpose: it is what lets us include your Contribution in a release
-that we also sell a commercial license to. See section 6 for the limit we accept in return.
+This grant is broad on purpose: it is what lets us include your Contribution in a release we
+also sell a commercial license to. Section 6 is the limit we accept in return.
 
 ## 3. Patent license you grant us
 
@@ -74,13 +74,12 @@ warranties of any kind, except as stated above.
 
 ## 6. What we commit to in return
 
-Section 2 is broad, and the reason is worth stating plainly rather than burying: it lets us
-offer the Project under terms **other than** the AGPL, including commercial licenses to
-organizations that cannot ship copyleft code. Without it, one outside contribution would make
-that impossible for the whole codebase.
+Section 2 is broad because it lets us offer the Project under terms **other than** the AGPL,
+including commercial licenses to organizations that cannot ship copyleft code. Without it, one
+outside contribution would make that impossible for the whole codebase.
 
-That is a real asymmetry. We can license your contribution commercially; you cannot license
-ours. Here is what binds us in exchange:
+This is an asymmetry: we can license your contribution commercially and you cannot license
+ours. What binds us in exchange:
 
 1. **Your Contribution stays open source, permanently.** We will keep it available under
    GNU AGPL-3.0 or another license approved by the
@@ -93,9 +92,6 @@ ours. Here is what binds us in exchange:
    instead of it.
 3. **We will credit you.** Your commits stay in the history under your name, and we will not
    rewrite authorship.
-
-Commitment 1 is the one that matters. It means the worst case for you is that Isomorphic
-stays open source and somebody else also paid for it.
 
 ## 7. Miscellaneous
 
@@ -115,6 +111,10 @@ Open a pull request. A bot will comment with a link and a sentence to reply with
 and you are signed for every future contribution. Corporate contributors whose legal team
 needs a countersigned copy should email **legal@isomorphic.sh** before opening the pull
 request, and we will handle it out of band rather than blocking your PR.
+
+Signatures are recorded publicly, on the `cla-signatures` branch of this repository: your
+GitHub username, your GitHub user id, the pull request number, and a timestamp. Nothing beyond
+what is already visible on your signing comment.
 
 If you object to the CLA, say so in the issue instead of the pull request. Small
 documentation fixes and typo corrections do not require a signature, and we will merge those
