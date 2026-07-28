@@ -54,6 +54,61 @@ export function roleAtLeast(actual: Role, required: Role): boolean {
 	return ROLE_RANK[actual] >= ROLE_RANK[required];
 }
 
+// The higher of two roles. Access resolution is additive: a grant may only ever
+// RAISE what another rule already gave you (see effectiveBrainRole).
+function maxRole(a: Role, b: Role): Role {
+	return ROLE_RANK[a] >= ROLE_RANK[b] ? a : b;
+}
+
+// ---------- brain-scope access (the per-brain permission rule) ----------
+//
+// Two roles, two scopes, deliberately separate:
+//   • ORG role:   invite/remove members, set roles, connect the GitHub org,
+//                create brains, connect/disconnect brains. (`memberships`)
+//   • BRAIN role: read, write, move/delete pages, configure, share.
+//                  (`brain_memberships` + the brain's own `visibility`)
+//
+// THIS is the single rule deciding whether a caller can reach a brain at all and
+// at what role. It is pure so `pnpm test:access` can pin every case; every query
+// below resolves rows in SQL and then runs them through here, rather than
+// spreading the policy across a WHERE clause.
+//
+// Three independent sources of access, and the effective role is the HIGHEST any
+// of them grants (never the lowest: a share must not be able to demote you):
+//
+//   1. visibility='org'          → your org role, for every member of the org.
+//   2. an explicit grant         → that grant's role, whatever the visibility.
+//   3. org admin/owner           → your org role, floored at admin, ALWAYS.
+//
+// (3) is the deliberate admin override. It is honest rather than generous: an org
+// owner controls the GitHub org that physically holds the repo and can read it
+// directly, so hiding a brain from them in our UI would be theater. It also stops
+// a brain orphaning when the only person granted access leaves.
+//
+// Returns null when none of the three applies: the caller cannot see this brain
+// and it must not appear in any listing.
+export function effectiveBrainRole(input: {
+	visibility: string;
+	orgRole: Role;
+	grant?: Role | null;
+}): Role | null {
+	const { visibility, orgRole, grant } = input;
+	let role: Role | null = null;
+	// (1) An 'org'-visible brain is reachable by every member at their org role.
+	// Anything other than 'private' is treated as org-visible, so an unrecognized
+	// future value fails OPEN to today's behavior rather than locking a brain out.
+	if (visibility !== 'private') role = orgRole;
+	// (2) An explicit per-brain grant.
+	if (grant) role = role ? maxRole(role, grant) : grant;
+	// (3) Org admin/owner floor.
+	if (roleAtLeast(orgRole, 'admin')) role = role ? maxRole(role, orgRole) : orgRole;
+	return role;
+}
+
+// The roles assignable through the brain-sharing surface. 'owner' is excluded on
+// purpose (see the note on brain_memberships): ownership is an org concept.
+export const ASSIGNABLE_BRAIN_ROLES: Role[] = ['viewer', 'editor', 'admin'];
+
 // Options threaded from a tool handler into context resolution. `requires` is the
 // minimum role the tool needs; resolution throws if the caller ranks below it.
 // `brain` selects WHICH brain to act on (a fuzzy handle/label/id) — when omitted,
@@ -64,7 +119,17 @@ export function roleAtLeast(actual: Role, required: Role): boolean {
 // the same brain. Left off for pure data tools, so a one-shot `brain:` read stays
 // one-shot and doesn't move the working brain.
 export interface TenantOpts {
+	// Minimum BRAIN role: content actions (read, write, move/delete, configure,
+	// share). Resolved by effectiveBrainRole against the target brain.
 	requires?: Role;
+	// Minimum ORG role: org-scope actions reached through a brain-scoped call
+	// (member management, connect/disconnect a brain). Kept separate from
+	// `requires` because the two scopes genuinely diverge: an org Admin may hold
+	// only viewer on a brain shared with them, and an org Editor may hold admin on
+	// a brain they created. Gating org actions on the brain role (which is what
+	// happened before per-brain access existed, when they were the same number)
+	// would let a brain admin manage the whole org roster.
+	requiresOrg?: Role;
 	brain?: string;
 	sticky?: boolean;
 }
@@ -336,12 +401,53 @@ export async function getMembershipWithOrg(
 	return { role: role as Role, org: org as unknown as Org };
 }
 
-// The org's default brain — the oldest one, until multi-brain selection lands.
-export async function getDefaultBrain(db: D1Database, orgId: string): Promise<Brain | null> {
+// The org's oldest brain, IGNORING access. Only safe where the caller has already
+// established that the viewer may see it: today that is nowhere in the request
+// path. Kept for org-level bookkeeping ("does this org hold any brain at all?"),
+// which is how the provisioning error messages tell "no brain yet" apart from
+// "brains exist but none are shared with you". Use getDefaultBrainForUser to pick
+// a brain to PUT SOMEONE IN.
+export async function getAnyBrainInOrg(db: D1Database, orgId: string): Promise<Brain | null> {
 	return await db
 		.prepare(`SELECT * FROM brains WHERE org_id = ?1 ORDER BY created_at ASC, brain_id ASC LIMIT 1`)
 		.bind(orgId)
 		.first<Brain>();
+}
+
+// The oldest brain in an org that THIS user can actually reach: the brain a
+// freshly provisioned or freshly invited member lands on. Access runs through the
+// same pure rule as listAccessibleBrains, so a private brain nobody shared can
+// never be handed to someone as their default. Returns null when the org holds no
+// brain, or holds only brains this user cannot see.
+export async function getDefaultBrainForUser(
+	db: D1Database,
+	orgId: string,
+	userId: string,
+	orgRole: Role
+): Promise<Brain | null> {
+	const { results } = await db
+		.prepare(
+			`SELECT b.*, bm.role AS grant_role
+			   FROM brains b
+			   LEFT JOIN brain_memberships bm
+			          ON bm.brain_id = b.brain_id AND bm.user_id = ?2
+			  WHERE b.org_id = ?1
+			  ORDER BY b.created_at ASC, b.brain_id ASC`
+		)
+		.bind(orgId, userId)
+		.all<Brain & { grant_role: string | null }>();
+	for (const row of results ?? []) {
+		const role = effectiveBrainRole({
+			visibility: row.visibility,
+			orgRole,
+			grant: row.grant_role as Role | null
+		});
+		if (role) {
+			const { grant_role: _drop, ...brain } = row;
+			return brain as Brain;
+		}
+	}
+	return null;
 }
 
 export async function createOrg(
@@ -611,6 +717,164 @@ export async function revokeInvite(db: D1Database, orgId: string, inviteId: stri
 		.run();
 }
 
+// ---------- brain access grants (the per-brain sharing surface) ----------
+//
+// Data access only: src/tools/brain-access.ts authorizes (brain admin+) and
+// enforces the guardrails. Mirrors the member-management block above, one scope
+// down: those functions move `memberships` (the ORG role), these move
+// `brain_memberships` (the BRAIN role).
+
+// One row on a brain's access list: the person, plus how they get in. `via`
+// distinguishes an explicit grant from access inherited via org visibility or the
+// org-admin floor, so the UI can show "everyone in the org" without pretending
+// those people were individually shared with, and so it can hide a Remove button
+// that would do nothing.
+export interface BrainAccessEntry {
+	user_id: string;
+	email: string;
+	name: string | null;
+	role: Role;
+	via: 'grant' | 'org' | 'org-admin';
+	granted_at?: string;
+}
+
+// Everyone who can reach a brain, and at what role. Walks every org member (that
+// is the candidate pool: a brain can only be shared inside its own org) plus
+// their grant, and admits them through the same pure rule the read path uses.
+export async function listBrainAccess(
+	db: D1Database,
+	brainId: string,
+	orgId: string,
+	visibility: string
+): Promise<BrainAccessEntry[]> {
+	const { results } = await db
+		.prepare(
+			`SELECT u.user_id AS user_id, u.email AS email, u.name AS name,
+			        m.role AS org_role, bm.role AS grant_role, bm.granted_at AS granted_at
+			   FROM memberships m
+			   JOIN app_users u ON u.user_id = m.user_id
+			   LEFT JOIN brain_memberships bm
+			          ON bm.brain_id = ?1 AND bm.user_id = m.user_id
+			  WHERE m.org_id = ?2
+			  ORDER BY
+			    CASE m.role WHEN 'owner' THEN 0 WHEN 'admin' THEN 1
+			                WHEN 'editor' THEN 2 ELSE 3 END,
+			    m.added_at ASC`
+		)
+		.bind(brainId, orgId)
+		.all<{
+			user_id: string;
+			email: string;
+			name: string | null;
+			org_role: string;
+			grant_role: string | null;
+			granted_at: string | null;
+		}>();
+	const out: BrainAccessEntry[] = [];
+	for (const r of results ?? []) {
+		const orgRole = r.org_role as Role;
+		const grant = r.grant_role as Role | null;
+		const role = effectiveBrainRole({ visibility, orgRole, grant });
+		if (!role) continue;
+		const via: BrainAccessEntry['via'] = grant
+			? 'grant'
+			: visibility !== 'private'
+				? 'org'
+				: 'org-admin';
+		out.push({
+			user_id: r.user_id,
+			email: r.email,
+			name: r.name,
+			role,
+			via,
+			granted_at: r.granted_at ?? undefined
+		});
+	}
+	return out;
+}
+
+// The explicit grant a user holds on a brain, or null. Used to tell "already
+// shared, change the role" apart from "not shared yet".
+export async function getBrainGrant(
+	db: D1Database,
+	brainId: string,
+	userId: string
+): Promise<Role | null> {
+	const row = await db
+		.prepare(`SELECT role FROM brain_memberships WHERE brain_id = ?1 AND user_id = ?2`)
+		.bind(brainId, userId)
+		.first<{ role: string }>();
+	return row ? (row.role as Role) : null;
+}
+
+// Grant or re-grant one user access to one brain (upsert, so re-sharing at a new
+// role is the same call).
+export async function setBrainGrant(
+	db: D1Database,
+	g: { brain_id: string; user_id: string; role: Role; granted_by?: string | null }
+): Promise<void> {
+	await db
+		.prepare(
+			`INSERT INTO brain_memberships (brain_id, user_id, role, granted_by)
+			 VALUES (?1, ?2, ?3, ?4)
+			 ON CONFLICT(brain_id, user_id) DO UPDATE SET
+			   role = excluded.role,
+			   granted_by = excluded.granted_by,
+			   granted_at = datetime('now')`
+		)
+		.bind(g.brain_id, g.user_id, g.role, g.granted_by ?? null)
+		.run();
+}
+
+export async function removeBrainGrant(
+	db: D1Database,
+	brainId: string,
+	userId: string
+): Promise<void> {
+	await db
+		.prepare(`DELETE FROM brain_memberships WHERE brain_id = ?1 AND user_id = ?2`)
+		.bind(brainId, userId)
+		.run();
+}
+
+// Flip a brain between 'private' (grants + org admins only) and 'org' (every
+// member of the owning org). Existing grants are LEFT IN PLACE: going org-visible
+// and back must not silently drop who you had shared it with.
+export async function setBrainVisibility(
+	db: D1Database,
+	brainId: string,
+	visibility: 'org' | 'private'
+): Promise<void> {
+	await db
+		.prepare(`UPDATE brains SET visibility = ?2 WHERE brain_id = ?1`)
+		.bind(brainId, visibility)
+		.run();
+}
+
+// Drop every grant on a brain: called when the brain is disconnected, so its
+// rows don't outlive it and re-attach if the same repo is adopted again later.
+export async function deleteBrainGrants(db: D1Database, brainId: string): Promise<void> {
+	await db.prepare(`DELETE FROM brain_memberships WHERE brain_id = ?1`).bind(brainId).run();
+}
+
+// Drop every grant a user holds on brains belonging to one org: called when they
+// are removed from that org, so revoking membership actually revokes access
+// rather than leaving per-brain grants that would still let them in.
+export async function deleteUserBrainGrantsInOrg(
+	db: D1Database,
+	orgId: string,
+	userId: string
+): Promise<void> {
+	await db
+		.prepare(
+			`DELETE FROM brain_memberships
+			  WHERE user_id = ?2
+			    AND brain_id IN (SELECT brain_id FROM brains WHERE org_id = ?1)`
+		)
+		.bind(orgId, userId)
+		.run();
+}
+
 // ---------- accessible brains (multi-brain selection) ----------
 //
 // The set of brains one PERSON can reach. Deliberately takes a SET of user_ids so
@@ -631,7 +895,16 @@ export interface AccessibleBrain {
 	repo_owner: string;
 	repo_name: string;
 	name?: string | null; // user-given display name (brains.name); NULL = derive from repo
+	// The caller's role ON THIS BRAIN (effectiveBrainRole): what read/write/
+	// configure/share gate on. NOT the same as `org_role`.
 	role: Role;
+	// The caller's role in this brain's ORG: what member management, brain
+	// creation, and connect/disconnect gate on. Carried alongside `role` because
+	// the two scopes diverge: you can be an org Admin holding only viewer on a
+	// brain someone shared with you read-only, or an org Editor holding admin on
+	// a brain you created.
+	org_role: Role;
+	visibility: string; // 'org' | 'private'
 }
 
 // A human label for a brain — what the switcher shows and what fuzzy `brain` matches
@@ -679,6 +952,12 @@ export function brainLabelQualified(b: AccessibleBrain): string {
 // All brains the given users can reach, deduped by canonical id (keeping the highest
 // role when the same brain is reachable via multiple memberships), suspended orgs
 // excluded, oldest-brain-first so [0] is the natural default (matches getDefaultBrain).
+//
+// Access is decided by effectiveBrainRole, NOT by this query: the SQL widens to
+// "every brain in every org you belong to, plus whatever grant you hold", and each
+// row is then admitted or dropped by the pure rule. Keeping the policy out of the
+// WHERE clause is what lets `pnpm test:access` pin it exhaustively: a filter
+// expressed twice (here and in getAccessibleBrain) is a filter that will disagree.
 export async function listAccessibleBrains(
 	db: D1Database,
 	userIds: string[]
@@ -688,11 +967,15 @@ export async function listAccessibleBrains(
 	const { results } = await db
 		.prepare(
 			`SELECT b.brain_id AS brain_id, b.repo_owner AS repo_owner, b.repo_name AS repo_name,
-			        b.name AS name, b.org_id AS org_id, o.name AS org_name, o.model AS org_model,
-			        o.installation_id AS installation_id, m.role AS role, b.created_at AS created_at
+			        b.name AS name, b.visibility AS visibility, b.org_id AS org_id,
+			        o.name AS org_name, o.model AS org_model,
+			        o.installation_id AS installation_id, m.role AS org_role,
+			        bm.role AS grant_role, b.created_at AS created_at
 			   FROM memberships m
 			   JOIN orgs o   ON o.org_id = m.org_id
 			   JOIN brains b ON b.org_id = o.org_id
+			   LEFT JOIN brain_memberships bm
+			          ON bm.brain_id = b.brain_id AND bm.user_id = m.user_id
 			  WHERE m.user_id IN (${placeholders})
 			    AND o.suspended_at IS NULL
 			  ORDER BY b.created_at ASC, b.brain_id ASC`
@@ -703,21 +986,30 @@ export async function listAccessibleBrains(
 			repo_owner: string;
 			repo_name: string;
 			name: string | null;
+			visibility: string;
 			org_id: string;
 			org_name: string;
 			org_model: string;
 			installation_id: number;
-			role: string;
+			org_role: string;
+			grant_role: string | null;
 		}>();
 
 	const byId = new Map<string, AccessibleBrain>();
 	for (const r of results ?? []) {
 		const id = `${r.repo_owner}/${r.repo_name}`;
-		const role = r.role as Role;
+		const orgRole = r.org_role as Role;
+		const role = effectiveBrainRole({
+			visibility: r.visibility,
+			orgRole,
+			grant: r.grant_role as Role | null
+		});
+		if (!role) continue; // private brain, no grant, not an org admin: invisible.
 		const existing = byId.get(id);
 		if (existing) {
-			// Same brain via two memberships — keep the more privileged role.
+			// Same brain reached via two linked identities: keep the higher of each.
 			if (roleAtLeast(role, existing.role)) existing.role = role;
+			if (roleAtLeast(orgRole, existing.org_role)) existing.org_role = orgRole;
 			continue;
 		}
 		byId.set(id, {
@@ -730,7 +1022,9 @@ export async function listAccessibleBrains(
 			repo_owner: r.repo_owner,
 			repo_name: r.repo_name,
 			name: r.name,
-			role
+			role,
+			org_role: orgRole,
+			visibility: r.visibility
 		});
 	}
 	return [...byId.values()];

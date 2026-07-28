@@ -21,7 +21,8 @@ import { getTenantByUserId, upsertTenant, type Tenant } from './tenants.ts';
 import {
 	upsertAppUser,
 	getMembershipWithOrg,
-	getDefaultBrain,
+	getAnyBrainInOrg,
+	getDefaultBrainForUser,
 	createOrg,
 	addMembership,
 	getPendingInviteByEmail,
@@ -180,7 +181,12 @@ export async function provisionOrgForUser(input: ProvisionOrgInput): Promise<Org
 	// Idempotent short-circuit: user already has an org with a brain.
 	const existing = await getMembershipWithOrg(db, user.user_id);
 	if (existing) {
-		const brain = await getDefaultBrain(db, existing.org.org_id);
+		const brain = await getDefaultBrainForUser(
+			db,
+			existing.org.org_id,
+			user.user_id,
+			existing.role
+		);
 		if (brain) return { org: existing.org, brain, role: existing.role };
 	}
 
@@ -204,12 +210,21 @@ export async function provisionOrgForUser(input: ProvisionOrgInput): Promise<Org
 			});
 			await acceptInvite(db, invite.invite_id);
 			const membership = await getMembershipWithOrg(db, user.user_id);
-			const brain = membership ? await getDefaultBrain(db, membership.org.org_id) : null;
+			const brain = membership
+				? await getDefaultBrainForUser(db, membership.org.org_id, user.user_id, membership.role)
+				: null;
 			if (membership && brain) return { org: membership.org, brain, role: membership.role };
-			// The invited org exists but has no brain yet. Minting a platform brain
-			// under a customer org would be wrong, so surface a clear error instead.
+			// No brain to land in. Minting a platform brain under a customer org would
+			// be wrong, so surface a clear error, but say WHICH problem it is. Since
+			// brains are private by default, "the org has no brain at all" and "the org
+			// has brains and none are shared with you" need different fixes from the
+			// admin, and telling an admin to "finish setup" on an org that is already
+			// set up sends them looking in the wrong place.
+			const orgHasAnyBrain = membership ? await getAnyBrainInOrg(db, membership.org.org_id) : null;
 			throw new Error(
-				'You were invited to an organization, but it has no brain configured yet. Ask your admin to finish setup.'
+				orgHasAnyBrain
+					? 'You were invited to an organization, but none of its brains have been shared with you yet. Ask your admin to share one (they can run share_brain, or use the Share panel on the brain).'
+					: 'You were invited to an organization, but it has no brain configured yet. Ask your admin to finish setup.'
 			);
 		}
 	}
@@ -218,7 +233,7 @@ export async function provisionOrgForUser(input: ProvisionOrgInput): Promise<Org
 	// otherwise mint a fresh platform-model org with the user as owner. NO brain is
 	// created here — as of Phase 8 (brain-creation-and-init) brains are stood up
 	// EXPLICITLY (create_brain / the Add-a-brain flow), never auto-provisioned. First
-	// touch lands the user in their empty personal org; getDefaultBrain returns null
+	// touch lands the user in their empty personal org; getDefaultBrainForUser returns null
 	// until they create one, and callers render the "create your first brain" state.
 	const orgId = existing?.org.org_id ?? crypto.randomUUID();
 	if (!existing) {
@@ -238,6 +253,8 @@ export async function provisionOrgForUser(input: ProvisionOrgInput): Promise<Org
 	if (!membership) {
 		throw new Error(`Provisioned org ${orgId} for ${user.email} but membership did not persist.`);
 	}
-	const brain = await getDefaultBrain(db, orgId); // null until a brain is created
+	// null until a brain is created: and, for a pre-existing org, null also when
+	// every brain in it is private and none has been shared with this user.
+	const brain = await getDefaultBrainForUser(db, orgId, user.user_id, membership.role);
 	return { org: membership.org, brain, role: membership.role };
 }

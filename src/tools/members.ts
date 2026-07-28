@@ -36,6 +36,7 @@ import {
 	addMembership,
 	setMemberRole,
 	removeMembership,
+	deleteUserBrainGrantsInOrg,
 	createInvitation,
 	revokeInvite,
 	roleAtLeast,
@@ -79,7 +80,7 @@ async function roster(ctx: BrainContext, orgId: string, actorUserId: string) {
 		view: 'members' as const,
 		members,
 		invites,
-		me: { user_id: actorUserId, role: ctx.role },
+		me: { user_id: actorUserId, role: ctx.orgRole },
 		activeBrain: ctx.activeBrain
 	};
 }
@@ -148,14 +149,14 @@ export function registerMemberTools(
 			}
 		},
 		async ({ email, role, brain }) => {
-			const ctx = await getContext({ requires: 'admin', brain });
+			const ctx = await getContext({ requiresOrg: 'admin', brain });
 			const { orgId, actorUserId } = requireOrg(ctx);
 			const emailTrim = email.trim();
 			if (!emailTrim || !emailTrim.includes('@'))
 				return fail(`"${email}" is not a valid email address.`);
 			const target: Role = role ?? 'editor';
-			if (!roleAtLeast(ctx.role, target)) {
-				return fail(`You can't grant a role higher than your own (${roleLabel(ctx.role)}).`);
+			if (!roleAtLeast(ctx.orgRole, target)) {
+				return fail(`You can't grant a role higher than your own (${roleLabel(ctx.orgRole)}).`);
 			}
 
 			const existing = await getAppUserByEmail(ctx.db, emailTrim);
@@ -217,12 +218,12 @@ export function registerMemberTools(
 			}
 		},
 		async ({ email, role, brain }) => {
-			const ctx = await getContext({ requires: 'admin', brain });
+			const ctx = await getContext({ requiresOrg: 'admin', brain });
 			const { orgId, actorUserId } = requireOrg(ctx);
 			const next = parseRole(role);
 			if (!next || next === 'owner') return fail(`"${role}" is not an assignable role.`);
-			if (!roleAtLeast(ctx.role, next)) {
-				return fail(`You can't grant a role higher than your own (${roleLabel(ctx.role)}).`);
+			if (!roleAtLeast(ctx.orgRole, next)) {
+				return fail(`You can't grant a role higher than your own (${roleLabel(ctx.orgRole)}).`);
 			}
 
 			const user = await getAppUserByEmail(ctx.db, email.trim());
@@ -259,7 +260,7 @@ export function registerMemberTools(
 			}
 		},
 		async ({ email, brain }) => {
-			const ctx = await getContext({ requires: 'admin', brain });
+			const ctx = await getContext({ requiresOrg: 'admin', brain });
 			const { orgId, actorUserId } = requireOrg(ctx);
 			const emailTrim = email.trim();
 			const user = await getAppUserByEmail(ctx.db, emailTrim);
@@ -268,7 +269,11 @@ export function registerMemberTools(
 			if (user && current) {
 				if (user.user_id === actorUserId) return fail("You can't remove yourself.");
 				if (current === 'owner') return fail("The owner can't be removed.");
+				// Membership AND every per-brain grant they hold in this org. Leaving the
+				// grants behind would make removal a no-op for any brain they had been
+				// shared individually; they would still resolve access to it.
 				await removeMembership(ctx.db, orgId, user.user_id);
+				await deleteUserBrainGrantsInOrg(ctx.db, orgId, user.user_id);
 				const sc = await roster(ctx, orgId, actorUserId);
 				return {
 					content: [

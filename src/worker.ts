@@ -64,6 +64,7 @@ import { registerLibrarianTools } from './tools/librarian.ts';
 import { registerImportTools } from './tools/importer.ts';
 import { registerBrainApp } from './tools/apps.ts';
 import { registerMemberTools } from './tools/members.ts';
+import { registerBrainAccessTools } from './tools/brain-access.ts';
 import { registerConnectedAccountTools } from './tools/connected-accounts.ts';
 import { registerBrainTools } from './tools/brains.ts';
 import { registerOrgOnboardingTools } from './tools/org-onboarding.ts';
@@ -181,9 +182,16 @@ class NoBrainError extends Error {
 interface TenantContext {
 	octokit: Awaited<ReturnType<typeof installationOctokit>>;
 	repoArgs: { owner: string; repo: string };
-	// The caller's role in the resolved org. Read tools ignore it; write tools
-	// gate on it. The GitHub/static legacy paths report 'owner' (full access).
+	// The caller's role ON THE RESOLVED BRAIN (effectiveBrainRole: an explicit
+	// grant, org visibility, or the org-admin floor: whichever is highest). Read
+	// tools ignore it; write/configure/share tools gate on it. The GitHub/static
+	// legacy paths report 'owner' (full access).
 	role: Role;
+	// The caller's role in the resolved brain's ORG. Distinct from `role`: org
+	// membership governs managing people and adding/removing brains, brain access
+	// governs the content. Tools that manage the ORG must gate on this one
+	// (TenantOpts.requiresOrg), or a brain admin could edit the org roster.
+	orgRole: Role;
 	// The resolved org's id + the acting user's id — set only on the product-native
 	// (authjs) path, where an org table row exists. The member-management tools need
 	// them to scope the roster and enforce self-guards; undefined on the legacy
@@ -220,7 +228,8 @@ When to reach for it:
 - OPEN THE VIEWER, don't just paste text. Whenever the user wants to look at, explore, or "see" a page, and whenever you cite or reference a specific brain page in an answer, call view_page(path) for that page (or browse_brain for the whole brain). These render the page inside Claude in the Isomorphic app so the user can click through it — far better than a wall of pasted markdown. Treat "I mentioned this page" as a cue to open it.
 - Use read_page (not view_page) only when YOU need the raw content to reason over it; use view_page when the goal is for the USER to see it.
 - For "what changed", "who edited this", or reviewing recent activity, call view_activity — it opens an audit feed of recent changes (who / what / when); pass a path for one page's history.
-- For anything about MEMBERS / the team / who has access / roles / invites, call members. It opens the interactive roster inline (with invite + role controls for admins) and also returns the roster as data, so use it both when the user wants to see or manage people and when YOU need the roster to reason over (e.g. before a role change).
+- For anything about MEMBERS / the team / the organization's people / org roles / invites, call members. It opens the interactive roster inline (with invite + role controls for admins) and also returns the roster as data, so use it both when the user wants to see or manage people and when YOU need the roster to reason over (e.g. before a role change).
+- ACCESS IS PER BRAIN, and it is a DIFFERENT question from org membership. A new brain is PRIVATE to whoever created it: being in the organization does not mean you can open it. So for "who can see / who has access to / who is this brain shared with", call brain_access (it opens the sharing panel inline and returns the list as data); to share one, change what someone can do in it, revoke them, or make it private vs visible to the whole organization, call share_brain. Use members + set_member_role for someone's ORGANIZATION role, and brain_access + share_brain for access to a PARTICULAR brain. Sharing only works for people already in the organization, so invite_member first if they have no account.
 - The user may have MULTIPLE brains (personal, team, client). Tools act on the ACTIVE brain by default; call brains to show/switch them, switch_brain to change the active one, or pass \`brain\` to any tool (a name/handle like "acme" or "team wiki") to target a different brain. Opening a brain in the app — view_page / browse_brain / edit_page on a \`brain\` — makes it the ACTIVE brain (the user is now looking at it, and the in-client viewer follows it), so subsequent bare calls stay on it. A one-shot data read (read_page / search_pages with \`brain\`) does NOT change the active brain. If a request could mean a different brain than the active one, target it with \`brain\` or ask which brain. An org admin can adopt another repo as a brain with connect_brain (call it with no repo to see the eligible repos) and remove one with disconnect_brain.
 - FOLDER NOTES: a folder's overview page must be named \`index.md\` (\`README.md\` is also accepted on older vaults). A page at \`<folder>/index.md\` IS the folder: the app opens it when you click the folder, and okf-view directory listings link folders through it. Any other name (\`overview.md\`, \`vendors.md\`, \`about.md\`) is just a loose page sitting next to its siblings. So when you create a folder of related pages, or the user asks for an overview/index/landing page for a folder, write \`<folder>/index.md\`; and when you find an overview-shaped page under some other name, offer to move_page it to \`index.md\`.
 - ONE PAGE = ONE CONCEPT. These brains follow the Open Knowledge Format: anything other pages should be able to link to — a person, vendor, system, event series, project, decision — is its own \`.md\` file with a \`type:\` in its frontmatter. When you are about to write a list of named things as headings or bullets inside one page, stop and write a page per thing instead, then link to them from the parent. A folder note (\`index.md\`) LISTS what is in its folder; it never holds the folder's content inline. The tell that you got this wrong: a reader cannot link to the thing you just wrote, and search cannot return it as a result.
@@ -360,6 +369,7 @@ class McpSession {
 					opts?.brain
 				);
 				assertRole(ctx.role, opts?.requires);
+				assertRole(ctx.orgRole, opts?.requiresOrg);
 				this.maybeStick(ctx.activeBrain.id, opts);
 				return ctx;
 			}
@@ -386,6 +396,7 @@ class McpSession {
 				if (brains.length > 0) {
 					const ctx = await this.resolveProductContext(linked.user_id, linked.email, opts?.brain);
 					assertRole(ctx.role, opts?.requires);
+					assertRole(ctx.orgRole, opts?.requiresOrg);
 					this.maybeStick(ctx.activeBrain.id, opts);
 					return ctx;
 				}
@@ -399,7 +410,10 @@ class McpSession {
 					`Tenant ${ghUserId} is suspended (App uninstalled or permissions revoked). Re-install to continue.`
 				);
 			}
+			// Single-tenant legacy identity: one human, one brain, no org model: so
+			// both scopes report 'owner'.
 			assertRole('owner', opts?.requires);
+			assertRole('owner', opts?.requiresOrg);
 			const octokit = await installationOctokit(appCreds(env), tenant.installation_id);
 			const repoArgs = { owner: tenant.brain_owner, repo: tenant.brain_repo };
 			// GitHub identity: attribute to their account via GitHub's canonical
@@ -413,6 +427,7 @@ class McpSession {
 				octokit,
 				repoArgs,
 				role: 'owner',
+				orgRole: 'owner',
 				config: await this.loadConfig(octokit, repoArgs),
 				author,
 				db: env.PLATFORM_DB,
@@ -432,12 +447,14 @@ class McpSession {
 			);
 		}
 		assertRole('owner', opts?.requires);
+		assertRole('owner', opts?.requiresOrg);
 		const octokit = await installationOctokit(appCreds(env), Number(installationId));
 		const repoArgs = { owner, repo };
 		return {
 			octokit,
 			repoArgs,
 			role: 'owner',
+			orgRole: 'owner',
 			config: await this.loadConfig(octokit, repoArgs),
 			db: env.PLATFORM_DB,
 			brainId: `${repoArgs.owner}/${repoArgs.repo}`,
@@ -469,6 +486,10 @@ class McpSession {
 				throw new Error(`Org ${p.org.org_id} is suspended. Contact your admin.`);
 			}
 			if (!p.brain) throw new NoBrainError();
+			// provisionOrgForUser only ever hands back a brain this user can reach
+			// (getDefaultBrainForUser applies the same rule), so the effective brain
+			// role here is their org role: there is no grant on a brain they just
+			// arrived at, and an unreachable one would have come back null.
 			target = {
 				id: `${p.brain.repo_owner}/${p.brain.repo_name}`,
 				brain_id: p.brain.brain_id,
@@ -479,7 +500,9 @@ class McpSession {
 				repo_owner: p.brain.repo_owner,
 				repo_name: p.brain.repo_name,
 				name: p.brain.name,
-				role: p.role
+				role: p.role,
+				org_role: p.role,
+				visibility: p.brain.visibility
 			};
 		} else {
 			if (brainArg) {
@@ -518,6 +541,7 @@ class McpSession {
 			octokit,
 			repoArgs,
 			role: target.role,
+			orgRole: target.org_role,
 			orgId: target.org_id,
 			actorUserId: userId,
 			config: await this.loadConfig(octokit, repoArgs),
@@ -885,6 +909,11 @@ class McpSession {
 		// mutations require admin+, with owner as the lockout-proof anchor. See
 		// src/tools/members.ts.
 		registerMemberTools(server, (opts) => this.tenantContext(opts));
+
+		// ---------- brain sharing (per-brain access) ----------
+		// The brain-scope sibling of the member tools: members moves the ORG roster,
+		// these move who can reach ONE brain. See src/tools/brain-access.ts.
+		registerBrainAccessTools(server, (opts) => this.tenantContext(opts));
 
 		// ---------- connected accounts (identity linking) ----------
 		// The per-person "Your settings → Connected accounts" surface: connected_accounts

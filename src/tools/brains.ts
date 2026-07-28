@@ -28,6 +28,8 @@ import {
 	roleAtLeast,
 	createBrain,
 	deleteBrain,
+	deleteBrainGrants,
+	setBrainGrant,
 	getBrainByRepo
 } from '../lib/orgs.ts';
 import { createAndScaffoldBrain } from '../lib/scaffold-core.ts';
@@ -51,7 +53,9 @@ interface BrainRow {
 	label: string;
 	role: string;
 	active: boolean;
-	canManage: boolean; // caller is admin+ in this brain's org (can disconnect it)
+	canManage: boolean; // caller is admin+ in this brain's ORG (can disconnect it)
+	canShare: boolean; // caller is admin+ ON THIS BRAIN (can change who reaches it)
+	visibility: string; // 'org' | 'private': drives the shared/private badge
 	orgId: string; // so the UI can group brains by org and target adds per-org
 	orgLabel: string;
 	needsConfig?: boolean; // adopted repo with no content under its roots — offer "Set up"
@@ -64,7 +68,12 @@ function brainRows(brains: AccessibleBrain[], activeId: string | undefined): Bra
 		label: brainLabel(b),
 		role: roleLabel(b.role),
 		active: b.id === activeId,
-		canManage: roleAtLeast(b.role, 'admin'),
+		// Two different powers, two different scopes: disconnecting a brain removes
+		// it from the ORG (org admin), sharing it changes who reaches its content
+		// (brain admin). Someone can hold either without the other.
+		canManage: roleAtLeast(b.org_role, 'admin'),
+		canShare: roleAtLeast(b.role, 'admin'),
+		visibility: b.visibility,
 		orgId: b.org_id,
 		orgLabel: orgDisplay(b)
 	}));
@@ -223,7 +232,7 @@ export function registerBrainTools(
 		{
 			title: 'Create a new brain',
 			description:
-				'Create a NEW, empty knowledge base ("brain") with a name the user chooses, and switch to it. Use whenever the user wants to START a new brain / knowledge base / wiki — including their very first one. This SCAFFOLDS a fresh repo; it is different from connect_brain (which adopts an existing GitHub repo). Any editor can create a brain.',
+				'Create a NEW, empty knowledge base ("brain") with a name the user chooses, and switch to it. Use whenever the user wants to START a new brain / knowledge base / wiki, including their very first one. This SCAFFOLDS a fresh repo; it is different from connect_brain (which adopts an existing GitHub repo). Any editor can create a brain. The new brain is PRIVATE to its creator: use share_brain afterwards to give teammates access, or to make it visible to the whole organization.',
 			inputSchema: {
 				name: z
 					.string()
@@ -267,21 +276,41 @@ export function registerBrainTools(
 				}
 			}
 
+			// PRIVATE BY DEFAULT. A brain you just made is yours until you share it,
+			// in a shared org, defaulting to org-visible published everyone's drafts to
+			// the whole team the moment they were created. The creator gets an explicit
+			// admin grant in the same breath, because in a personal org they are the
+			// only member and would otherwise be relying on the org-admin floor alone;
+			// the explicit row is also what makes them show on the brain's Share list.
+			const newBrainId = brainIdFor(created.owner, created.name);
 			await createBrain(ctx.db, {
-				brain_id: brainIdFor(created.owner, created.name),
+				brain_id: newBrainId,
 				org_id: ctx.org.org_id,
 				repo_owner: created.owner,
 				repo_name: created.name,
 				name: display,
-				created_by: ctx.actorUserId
-				// visibility left at the 'org' default — per-brain access is a later phase.
+				created_by: ctx.actorUserId,
+				visibility: 'private'
 			});
+			if (ctx.actorUserId) {
+				await setBrainGrant(ctx.db, {
+					brain_id: newBrainId,
+					user_id: ctx.actorUserId,
+					role: 'admin',
+					granted_by: ctx.actorUserId
+				});
+			}
 
 			const id = `${created.owner}/${created.name}`;
 			setActiveBrain(id); // land the caller in the new brain
 			const rows = brainRows(await listBrains(), id);
 			return {
-				content: [{ type: 'text' as const, text: `Created "${display}" and switched to it.` }],
+				content: [
+					{
+						type: 'text' as const,
+						text: `Created "${display}" and switched to it. It's private to you: share it with share_brain, or make it visible to your whole organization.`
+					}
+				],
 				structuredContent: {
 					view: 'brains',
 					brains: rows,
@@ -328,7 +357,10 @@ export function registerBrainTools(
 			}
 		},
 		async ({ repo, brain, name: displayName }) => {
-			const ctx = await getContext({ requires: 'admin', brain });
+			// ORG-scope: adopting a repo adds a brain to the organization, so it gates
+			// on the org role. Gating on the brain role would let someone who was
+			// merely shared a brain as admin add repos to the whole org.
+			const ctx = await getContext({ requiresOrg: 'admin', brain });
 			if (!ctx.orgId) return fail('Brain management is only available for organization accounts.');
 
 			// No repo → list the connectable candidates (repos the org's installation can
@@ -375,12 +407,19 @@ export function registerBrainTools(
 				);
 			}
 
+			// Org-visible, unlike create_brain's private default, and deliberately so.
+			// Adopting an existing repo is an ADMIN act on a repo the organization
+			// already owns: the intent is "this org repo is now a brain for the team",
+			// not "here is my private scratch space". Narrow it afterwards with
+			// share_brain if it should not be org-wide.
 			await createBrain(ctx.db, {
 				brain_id: brainIdFor(owner, name),
 				org_id: ctx.orgId,
 				repo_owner: owner,
 				repo_name: name,
-				name: displayName?.trim() || null
+				name: displayName?.trim() || null,
+				created_by: ctx.actorUserId,
+				visibility: 'org'
 			});
 
 			// Guard: an adopted repo whose content isn't under the default layout would
@@ -521,12 +560,17 @@ export function registerBrainTools(
 				);
 			}
 			const target = m.brain;
-			if (!roleAtLeast(target.role, 'admin')) {
-				return fail(`You need admin access to disconnect ${brainLabel(target)}.`);
+			// ORG-scope, like connect_brain: removing a brain from the org is an org
+			// admin's call, not something brain-admin-by-share confers.
+			if (!roleAtLeast(target.org_role, 'admin')) {
+				return fail(`You need organization admin access to disconnect ${brainLabel(target)}.`);
 			}
 			if (all.filter((b) => b.org_id === target.org_id).length <= 1) {
 				return fail(`Can’t disconnect the organization’s only brain.`);
 			}
+			// Drop the access grants with the brain, or they outlive it and silently
+			// re-attach if the same repo is adopted again later under the same id.
+			await deleteBrainGrants(ctx.db, target.brain_id);
 			await deleteBrain(ctx.db, target.brain_id);
 			// If we removed the active brain, fall the active pointer back to a survivor.
 			if (target.id === ctx.activeBrain.id) {

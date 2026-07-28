@@ -85,6 +85,7 @@ const getContext = async () => ({
 	octokit,
 	repoArgs,
 	role: 'owner' as const,
+	orgRole: 'owner' as const,
 	config: await loadBrainConfig(octokit, repoArgs),
 	author: undefined,
 	db,

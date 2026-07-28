@@ -82,6 +82,11 @@ So: `workers-oauth-provider` stays the token issuer to Claude; Auth.js becomes t
 
 Four roles. Membership is **product-managed** (admin invites by email) — it can _not_ be derived from GitHub org membership, because members aren't GitHub users.
 
+The table below is the **org** role. As of phase 9 the content rows (read / contribute /
+destructive wiki ops) are governed by a separate **brain** role, which an org role only feeds into
+when a brain is org-visible or the caller is an org admin, see
+[`brain-level-permissions.md`](./brain-level-permissions.md).
+
 | Capability                                                                                         | owner | admin | member | viewer |
 | -------------------------------------------------------------------------------------------------- | :---: | :---: | :----: | :----: |
 | Read tools (`whoami`, `list_pages`, `read_page`, `search_pages`, `find_inbound_links`, `validate`) |   ✓   |   ✓   |   ✓    |   ✓    |
@@ -188,13 +193,21 @@ Integrations and **brain** management stay out of the tool authz map for now. **
 8. **Brain creation & initialization.** Explicit, named brain creation (any editor); no
    auto-provisioning (first touch = empty personal org + "create your first brain"); decouple
    session context from an auto-created brain. Access model unchanged in this slice; per-brain
-   membership/access is a deferred follow-up. Spec: [`brain-creation-and-init.md`](./brain-creation-and-init.md).
+   membership/access was the deferred follow-up (phase 9). Spec: [`brain-creation-and-init.md`](./brain-creation-and-init.md).
+9. **Brain-level permissions.** ✅ **Built.** `brain_memberships` as the access authority,
+   new brains **private by default** (existing ones grandfathered at `visibility='org'`),
+   `visibility` enforced, and the **brain role split from the org role**: org membership
+   governs managing people and adding/removing brains, brain access governs the content.
+   One pure rule (`effectiveBrainRole`) decides both whether you can reach a brain and at
+   what role; `pnpm test:access` pins it. Surface: `brain_access` + `share_brain`, and a
+   sharing panel mirroring the member roster. Spec:
+   [`brain-level-permissions.md`](./brain-level-permissions.md).
 
 ## Open decisions
 
 - **First identity provider:** magic-link (lowest setup) vs Google/OIDC (smoother in the connector popup). Leaning magic-link for MVP with the provider list kept open.
 - **Buy vs build later:** stay on Auth.js + providers, or adopt a B2B IdP (WorkOS/Clerk/Stytch) when SAML SSO becomes a sales requirement. Auth.js abstracts identity enough to defer this.
-- **Per-brain ACL vs org-wide:** still `visibility='org'` (all members see all org brains). Explicit named brain creation + init decoupling lands first ([`brain-creation-and-init.md`](./brain-creation-and-init.md)); per-brain membership / private-by-default is the deferred follow-up.
+- ~~**Per-brain ACL vs org-wide.**~~ **Resolved / built**: `brain_memberships` is the access authority, new brains are private by default, and brain roles are a separate axis from org roles. See [`brain-level-permissions.md`](./brain-level-permissions.md).
 - **Destructive-op gating:** members or admin-only for `delete_page`/`move_page`.
 - **How the admin's GitHub identity links to their product account:** GitHub as an Auth.js _linked account_ on the owner's user (account-linking), vs a separate "connect GitHub" step storing the installation without a GitHub _login_ on the user. Leaning the latter — GitHub is storage config, not identity.
 - **`@auth/d1-adapter` stability risk:** pin versions; if it drifts, a thin custom D1 adapter is small.

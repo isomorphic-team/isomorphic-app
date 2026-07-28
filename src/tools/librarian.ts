@@ -79,11 +79,18 @@ const brainArg = z
 export interface BrainContext {
 	octokit: Octokit;
 	repoArgs: RepoRef;
-	// The caller's role in the resolved org (viewer < editor < admin < owner). Read
-	// tools ignore it; write tools gate on it; the member-management tools read it to
-	// authorize roster changes. The legacy github/static single-tenant paths report
-	// 'owner'.
+	// The caller's role ON THIS BRAIN (viewer < editor < admin), resolved by
+	// effectiveBrainRole from an explicit share, the brain's org visibility, or the
+	// org-admin floor. Read tools ignore it; write/configure/share tools gate on it.
+	// The legacy github/static single-tenant paths report 'owner'.
 	role: Role;
+	// The caller's role in this brain's ORG (viewer < editor < admin < owner).
+	// Separate from `role` on purpose: org membership governs managing people and
+	// adding/removing brains, brain access governs the content. The
+	// member-management tools authorize roster changes on THIS one: gating them on
+	// `role` would let someone who was merely shared a brain as admin edit the org
+	// roster. Legacy single-tenant paths report 'owner'.
+	orgRole: Role;
 	// The resolved org's id + the acting user's id, present only on the product-native
 	// (authjs) path. The member-management tools need these to scope roster queries and
 	// enforce self-guards; they're undefined on the legacy single-tenant paths, which

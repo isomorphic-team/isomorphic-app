@@ -8,6 +8,7 @@ import {
 	brainsViewFromSc,
 	openBrains,
 	openAddBrain,
+	openBrainAccess,
 	manageableOrgs
 } from '../core/actions.ts';
 import { toast, askConfirm } from '../core/toast.tsx';
@@ -87,6 +88,7 @@ function BrainsView({ brains, active }: { brains: BrainRow[]; active: string }) 
 											)}
 											<span class="block text-xs text-muted">
 												{b.role}
+												{b.visibility === 'private' ? ' · private' : ''}
 												{b.configPrUrl
 													? ' · setup pending review'
 													: b.needsConfig
@@ -121,6 +123,18 @@ function BrainsView({ brains, active }: { brains: BrainRow[]; active: string }) 
 												Set up
 											</Button>
 										))}
+									{b.canShare && !b.needsConfig && (
+										<Button
+											variant="ghost"
+											size="sm"
+											disabled={busy}
+											title={`Manage who can access ${b.label}`}
+											onClick={() => openBrainAccess(b.id)}
+											class="ml-1"
+										>
+											Share
+										</Button>
+									)}
 									{b.canManage && (
 										<Button
 											variant="ghost"
