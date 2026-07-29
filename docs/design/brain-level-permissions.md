@@ -87,7 +87,13 @@ you can't revoke your own access.
 
 UI: `app/views/BrainAccessView.tsx`, reached from a **Share** control in the brains list (gated on
 `canShare`, the brain role, distinct from `canManage`, the org role that gates disconnect). The
-list also badges private brains.
+list also badges private brains. Adding someone opens `app/views/ShareBrainView.tsx`, a pushed
+flow off the panel's header, which is the brain-scope twin of `InviteMemberView`: the two are
+deliberately the same screen one scope apart, because "add to the org" and "add to this brain"
+are exactly the pair a user is liable to confuse. `BRAIN_ROLE_BLURB` (in
+`app/components/RoleSelect.tsx`, beside the org-scoped `ROLE_BLURB`) is why the role names can
+be shared while their descriptions are not: a brain admin can share one brain, an org admin can
+manage the roster.
 
 ## Cleanup paths
 

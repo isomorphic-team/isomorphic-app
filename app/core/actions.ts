@@ -370,6 +370,11 @@ function brainAccessViewFromSc(sc: Record<string, unknown>): View {
 		kind: 'brain-access',
 		access: Array.isArray(sc.access) ? (sc.access as BrainAccessEntry[]) : [],
 		visibility: typeof sc.visibility === 'string' ? sc.visibility : 'org',
+		// Carried so the panel and its share flow keep acting on the brain the user
+		// opened, not on whatever happens to be active: the Share control in the
+		// brains list can target a brain that is not the current one, and `brain` has
+		// to ride on every subsequent call for it to stay there.
+		brainId: String(active.id ?? ''),
 		brainLabel: String(active.label ?? 'this brain'),
 		me: {
 			user_id: String(me.user_id ?? ''),
@@ -402,6 +407,23 @@ async function openBrainAccess(brain?: string) {
 // pushing a history entry (mirrors refreshMembers).
 function refreshBrainAccess(sc: Record<string, unknown>) {
 	show(brainAccessViewFromSc(sc), { push: false });
+}
+
+// Share this brain with someone new. A pushed flow rather than a row on the panel,
+// for the same reason inviting is: every add-shaped action in the app opens one
+// (app/ui/Flow.tsx), and the extra room is what lets the picked level say what it
+// actually grants.
+function openShareBrain(brainId: string, brainLabel: string) {
+	show({ kind: 'share-brain', brainId, brainLabel });
+}
+
+// Leave the share flow for the refreshed panel, the new person already on it. Same
+// stack discipline as finishInvite: a completed flow must not sit in history, or
+// Back re-opens a form for something already done.
+function finishShareBrain(sc: Record<string, unknown>) {
+	const fresh = brainAccessViewFromSc(sc);
+	dropStale('brain-access');
+	show(fresh, { push: false });
 }
 
 async function fetchPage(path: string): Promise<string> {
@@ -778,6 +800,8 @@ export {
 	brainAccessViewFromSc,
 	openBrainAccess,
 	refreshBrainAccess,
+	openShareBrain,
+	finishShareBrain,
 	fetchPage,
 	fetchPageList,
 	navigateTo,

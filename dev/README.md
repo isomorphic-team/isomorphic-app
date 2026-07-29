@@ -73,7 +73,8 @@ see resolves exactly like prod. The three fixture brains cover the whole rule:
 - **Personal** is private and mine. Katherine is an org **Editor** shared in
   **read-only**, which is the case per-brain roles exist for; Grace holds no grant
   at all and is there via the **org-admin floor**; Devon cannot see the brain.
-  Share, change a level, or revoke and the panel refreshes in place.
+  Change a level or revoke and the panel refreshes in place; the header's **Share**
+  action opens the add flow (`ShareBrainView`), the brain-scope twin of Invite.
 - **Acme** is org-visible, so every member is listed at their own org role and no
   row is individually removable (there is no grant to remove: narrow the brain to
   private first).
