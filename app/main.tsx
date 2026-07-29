@@ -21,6 +21,7 @@ import {
 	version,
 	currentView,
 	show,
+	goBack,
 	brainList,
 	activeBrain
 } from './core/store.ts';
@@ -58,8 +59,7 @@ import {
 	GearIcon,
 	BrainGlyph,
 	ChevronDownIcon,
-	PlusIcon,
-	EyeIcon
+	PlusIcon
 } from './core/icons.tsx';
 import { Button } from './ui/index.ts';
 // The Body dispatch table is codegenned from app/views/*.tsx (see scripts/gen-app.ts).
@@ -284,11 +284,34 @@ const CrumbSep = () => <span class="mx-1 shrink-0 text-muted opacity-50">/</span
 // dead ends, since the top-left control is the brain switcher, not a way back. Views
 // with a lit control of their own in the bar (graph) skip the label and render the bare
 // HomeCrumb instead; the control already says where you are.
-function DestinationCrumb({ children }: { children: ComponentChildren }) {
+// `parent` adds one clickable crumb between home and the destination, for a view
+// that was PUSHED from another (⌂ / Brains / Add a brain). A pushed flow needs a way
+// back to the thing that opened it, not just a way home, and the crumb is where a
+// user looks for it — so the flow's own body carries Back/Cancel for the step and
+// this carries the way out.
+function DestinationCrumb({
+	parent,
+	children
+}: {
+	parent?: { label: string; onClick: () => void };
+	children: ComponentChildren;
+}) {
 	return (
 		<nav class="flex min-w-0 items-center">
 			<HomeCrumb />
 			<CrumbSep />
+			{parent && (
+				<>
+					<button
+						type="button"
+						onClick={parent.onClick}
+						class="shrink-0 text-muted hover:text-fg hover:underline"
+					>
+						{parent.label}
+					</button>
+					<CrumbSep />
+				</>
+			)}
 			<span class="min-w-0 truncate">{children}</span>
 		</nav>
 	);
@@ -347,6 +370,21 @@ function Breadcrumb({ view }: { view: View }) {
 		return (
 			<DestinationCrumb>
 				<span class="text-fg">Your settings</span>
+			</DestinationCrumb>
+		);
+	// The two brain-standing-up flows. Both are pushed views (the card is already a
+	// bounded box, so a flow that needs room takes the whole card rather than floating
+	// a dialog inside it), and both hang off the brains list they were opened from.
+	if (view.kind === 'add-brain')
+		return (
+			<DestinationCrumb parent={{ label: 'Brains', onClick: () => goBack(openBrains) }}>
+				<span class="text-fg">Add a brain</span>
+			</DestinationCrumb>
+		);
+	if (view.kind === 'create-brain')
+		return (
+			<DestinationCrumb>
+				<span class="text-fg">{view.first ? 'Create your first brain' : 'New brain'}</span>
 			</DestinationCrumb>
 		);
 	const path = 'path' in view ? (view as { path: string }).path : null;

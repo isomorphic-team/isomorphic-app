@@ -17,6 +17,7 @@ import type {
 	MemberSelf,
 	MemberRole,
 	BrainRow,
+	OrgTarget,
 	ConnectedAccount,
 	Identity,
 	BrowseData
@@ -25,6 +26,7 @@ import { app, callTool, firstText } from './host.ts';
 import { FOLDER_NOTE_NAMES } from './util.ts';
 import {
 	show,
+	history,
 	currentView,
 	brainArgs,
 	browseCache,
@@ -216,6 +218,45 @@ function isNoBrain(s: string): boolean {
 // "create another brain" to "create your first brain".
 function openCreateBrain() {
 	show({ kind: 'create-brain', first: (brainList?.length ?? 0) === 0 });
+}
+
+// The orgs a caller can add a brain to: deduped from the brains they already admin.
+// Derived from the brains list rather than the ACTIVE brain, so sitting in a brain
+// you only view doesn't hide an org you own. Shared by the brains view's action gate
+// and by the add-brain flow itself, which must agree on "can you add" or the header
+// offers a button that opens an empty picker.
+function manageableOrgs(brains: BrainRow[]): OrgTarget[] {
+	const out: OrgTarget[] = [];
+	const seen = new Set<string>();
+	for (const b of brains) {
+		if (!b.canManage || !b.orgId || seen.has(b.orgId)) continue;
+		seen.add(b.orgId);
+		out.push({ orgId: b.orgId, orgLabel: b.orgLabel ?? b.label, brainId: b.id });
+	}
+	return out;
+}
+
+// Open the "add an existing repo as a brain" flow as its own view.
+//
+// It is a pushed VIEW rather than an inline row because it picks from two lists whose
+// lengths we don't control (orgs, then that org's connectable repos). See AddRow.tsx
+// for where that line is drawn.
+function openAddBrain(orgs: OrgTarget[]) {
+	show({ kind: 'add-brain', orgs });
+}
+
+// Leave the add-brain flow for the brain it just connected.
+//
+// A COMPLETED flow does not belong in the back stack: pressing Back from the new
+// brain should show the brains list with the new brain in it, not re-open the picker
+// that would offer to connect the repo a second time. So the stale brains list that
+// opened the flow is dropped and replaced by the refreshed one from this result,
+// which switchBrain then pushes on its way out.
+function finishAddBrain(sc: Record<string, unknown>, connectedId: string) {
+	const fresh = brainsViewFromSc(sc);
+	if (history[history.length - 1]?.kind === 'brains') history.pop();
+	show(fresh, { push: false });
+	switchBrain(connectedId);
 }
 
 // Create a new named brain, then land on its (empty) file tree. The tool scaffolds a
@@ -635,6 +676,9 @@ export {
 	isNoBrain,
 	openCreateBrain,
 	submitCreateBrain,
+	manageableOrgs,
+	openAddBrain,
+	finishAddBrain,
 	openBrains,
 	membersViewFromSc,
 	fetchPage,

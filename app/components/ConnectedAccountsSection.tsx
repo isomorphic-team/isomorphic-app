@@ -22,7 +22,15 @@ function ConnectedAccountsSection({ initial }: { initial: ConnectedAccount[] }) 
 	const [connecting, setConnecting] = useState(false);
 	useAddAction(() => setConnecting(true));
 
-	async function startLink(onDone?: () => void) {
+	// Dismiss the composer, whichever step it is on. Clearing the URL matters: the
+	// composer decides which step to render from it, so a stale one would re-open on
+	// step two the next time Connect is pressed.
+	function dismiss() {
+		setConnecting(false);
+		setLinkUrl(null);
+	}
+
+	async function startLink() {
 		if (busy) return;
 		setBusy(true);
 		const res = await callTool('link_identity', email.trim() ? { email: email.trim() } : {});
@@ -30,9 +38,8 @@ function ConnectedAccountsSection({ initial }: { initial: ConnectedAccount[] }) 
 		if (res.isError) return toast(firstText(res), true);
 		const sc = (res.structuredContent ?? {}) as { link?: { url?: string } };
 		if (sc.link?.url) {
-			setLinkUrl(sc.link.url);
+			setLinkUrl(sc.link.url); // advances the composer to step two, in place
 			setEmail('');
-			onDone?.();
 		} else {
 			toast(firstText(res));
 		}
@@ -60,47 +67,56 @@ function ConnectedAccountsSection({ initial }: { initial: ConnectedAccount[] }) 
 
 	return (
 		<div>
-			{linkUrl && (
-				<div class="mb-4 rounded-md border border-border bg-chip px-3 py-2.5 text-sm">
-					<div class="text-fg">Open this link and sign in as the account you want to connect:</div>
-					<Button
-						variant="link"
-						onClick={() => app.openLink({ url: linkUrl })}
-						class="mt-1 block break-all text-left"
-					>
-						{linkUrl}
-					</Button>
-					<div class="mt-1 text-xs text-muted">Expires in 1 hour · single use</div>
-				</div>
-			)}
-
 			<List>
 				{/* Same trigger, same position, same dismissal as Members and the file
-				    tree. The verb stays "Connect" from the row through to the button. */}
-				<AddRow open={connecting} onClose={() => setConnecting(false)}>
-					{({ close }) => (
-						<form
-							class="flex items-center gap-2"
-							onSubmit={(e) => {
-								e.preventDefault();
-								startLink(close);
-							}}
-						>
-							<Input
-								// eslint-disable-next-line
-								autofocus
-								type="email"
-								required
-								value={email}
-								onInput={(e) => setEmail((e.target as HTMLInputElement).value)}
-								placeholder="name@example.com"
-								class="min-w-0 flex-1"
-							/>
-							<Button type="submit" disabled={busy || !email.trim()}>
-								Connect
-							</Button>
-						</form>
-					)}
+				    tree. The verb stays "Connect" from the row through to the button.
+				    Linking is really TWO steps — name the account, then go sign in as it —
+				    and step two replaces step one IN PLACE. It used to render as a banner
+				    above the list instead, so submitting the form made it vanish and the
+				    answer appear somewhere else on the screen. */}
+				<AddRow open={connecting} onClose={dismiss}>
+					{({ close }) =>
+						linkUrl ? (
+							<div class="rounded-md border border-border bg-chip px-3 py-2.5 text-sm">
+								<div class="text-fg">
+									Open this link and sign in as the account you want to connect:
+								</div>
+								<Button
+									variant="link"
+									onClick={() => app.openLink({ url: linkUrl })}
+									class="mt-1 block break-all text-left"
+								>
+									{linkUrl}
+								</Button>
+								<div class="mt-1 text-xs text-muted">Expires in 1 hour · single use</div>
+								<Button variant="ghost" size="xs" onClick={close} class="mt-1.5">
+									Done
+								</Button>
+							</div>
+						) : (
+							<form
+								class="flex items-center gap-2"
+								onSubmit={(e) => {
+									e.preventDefault();
+									startLink();
+								}}
+							>
+								<Input
+									// eslint-disable-next-line
+									autofocus
+									type="email"
+									required
+									value={email}
+									onInput={(e) => setEmail((e.target as HTMLInputElement).value)}
+									placeholder="name@example.com"
+									class="min-w-0 flex-1"
+								/>
+								<Button type="submit" disabled={busy || !email.trim()}>
+									Connect
+								</Button>
+							</form>
+						)
+					}
 				</AddRow>
 				{emails.map((a) => (
 					<ListRow key={a.user_id}>

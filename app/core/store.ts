@@ -93,11 +93,35 @@ function bump() {
 	listeners.forEach((l) => l());
 }
 
+// Transient views are never recorded: you can't go "back to Loading…", and an error
+// view's own Retry is its way out. Everything else is a real place the user was.
+const HISTORY_LIMIT = 50;
+
 function show(v: View, { push = true } = {}) {
-	if (push && currentView.kind !== 'loading' && currentView.kind !== 'error')
+	if (push && currentView.kind !== 'loading' && currentView.kind !== 'error') {
 		history.push(currentView);
+		if (history.length > HISTORY_LIMIT) history.shift();
+	}
 	currentView = v;
 	bump();
+}
+
+// Return to whatever pushed the current view.
+//
+// `show()` has recorded every push since the app started, but until now NOTHING read
+// the stack — so a pushed flow had no way home except an unrelated destination
+// (create-brain's Cancel called openBrowse() and landed you on the file tree rather
+// than the brains list you came from). The breadcrumb answers "where am I"; this
+// answers "undo the step that got me here", which is what a flow needs to be
+// cancelable.
+//
+// `fallback` runs when the stack is empty (a flow entered directly from a tool
+// result). It's a callback rather than a default destination because this module is
+// the lowest runtime layer and must not import actions.
+function goBack(fallback?: () => void): void {
+	const prev = history.pop();
+	if (prev) show(prev, { push: false });
+	else fallback?.();
 }
 
 // Editable = the Worker's own isContentPath verdict against the delivered policy —
@@ -140,5 +164,6 @@ export {
 	subscribeStore,
 	bump,
 	show,
+	goBack,
 	isEditablePath
 };

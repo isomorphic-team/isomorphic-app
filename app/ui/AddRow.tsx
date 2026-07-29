@@ -22,9 +22,22 @@
 // still right for destructive confirmations (see askConfirm), where blocking IS the
 // point; they are wrong for an additive one-field form.
 //
-// Complexity scales inside the composer, never in the trigger: Connect is one field,
-// Invite is a field plus a role, Add-a-brain is a two-step org then repo picker. All
-// three are opened the same way and dismissed the same way.
+// WHICH ADD GOES WHERE. The card is a bounded box in the conversation, which is
+// structurally what a dialog is — so the thing that plays a dialog's role here is a
+// PUSHED VIEW, not an overlay. It takes the whole card (the space a dialog wanted)
+// and inherits the breadcrumb, goBack(), and the action slot, so it needs no focus
+// trap, no scrim, and no height clamping. The split:
+//
+//   * INLINE ROW (this file) — one commit, at most a couple of known controls, and a
+//     result that just lands in the list. Invite (email + role) and Connect (an
+//     email) qualify, as does the file tree's create/rename row.
+//   * ITS OWN VIEW — the user picks from a list whose length we don't control, or
+//     there is more than one step. AddBrainView (org, then that org's repos) and
+//     CreateBrainView are both this.
+//
+// Step two, when a composer has one, replaces step one IN PLACE rather than rendering
+// elsewhere on the screen: see ConnectedAccountsSection, where the verification link
+// used to appear as a banner above the list the moment the form disappeared.
 import type { ComponentChildren } from 'preact';
 import { useEffect, useRef } from 'preact/hooks';
 import { addCtl, bump } from '../core/store.ts';

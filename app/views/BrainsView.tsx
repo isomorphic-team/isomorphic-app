@@ -2,42 +2,29 @@ import { useState } from 'preact/hooks';
 import type { BrainRow } from '../core/types.ts';
 import { app, callTool, firstText } from '../core/host.ts';
 import { show } from '../core/store.ts';
-import { openCreateBrain, switchBrain, brainsViewFromSc, openBrains } from '../core/actions.ts';
+import {
+	openCreateBrain,
+	switchBrain,
+	brainsViewFromSc,
+	openBrains,
+	openAddBrain,
+	manageableOrgs
+} from '../core/actions.ts';
 import { toast, askConfirm } from '../core/toast.tsx';
 import { BrainGlyph, CloseIcon } from '../core/icons.tsx';
 import { defineView } from '../core/view-registry.ts';
-import { addCtl } from '../core/store.ts';
-import { Button, List, ListRow, listRowTitle, AddRow, useAddAction } from '../ui/index.ts';
-import { eyebrow } from '../ui/typography.ts';
+import { Button, List, ListRow, listRowTitle } from '../ui/index.ts';
 
 // The brains list (bi-modal counterpart to the header switcher): every brain the user
 // can reach, with role, the active one marked. Selecting one switches to it. Wherever
-// the user is an org admin they get an "Add a brain" flow (independent of which brain is
-// active — you pick which org to add to) and a disconnect ✕ on the brains they manage.
+// the user is an org admin they get an "Add brain" action in the header and a
+// disconnect ✕ on the brains they manage.
+//
+// Adding opens its OWN view (AddBrainView) rather than an inline composer, because it
+// picks from two lists of unknown length. This screen therefore holds no add state at
+// all — see app/ui/AddRow.tsx for which actions go inline and which get a view.
 function BrainsView({ brains, active }: { brains: BrainRow[]; active: string }) {
 	const [busy, setBusy] = useState(false);
-	const [adding, setAdding] = useState(false);
-	// Which org the add targets: a representative brain id in that org + its label.
-	const [target, setTarget] = useState<{ brainId: string; orgLabel: string } | null>(null);
-	const [repos, setRepos] = useState<{ id: string; owner: string; repo: string }[] | null>(null);
-
-	// Orgs the caller can add brains to — deduped from the manageable brains. Available
-	// regardless of the active brain, so a viewer-brain being active doesn't hide "Add".
-	const manageableOrgs: { orgId: string; orgLabel: string; brainId: string }[] = [];
-	const seenOrg = new Set<string>();
-	for (const b of brains) {
-		if (b.canManage && b.orgId && !seenOrg.has(b.orgId)) {
-			seenOrg.add(b.orgId);
-			manageableOrgs.push({ orgId: b.orgId, orgLabel: b.orgLabel ?? b.label, brainId: b.id });
-		}
-	}
-	const canAdd = manageableOrgs.length > 0;
-
-	function cancelAdd() {
-		setAdding(false);
-		setTarget(null);
-		setRepos(null);
-	}
 
 	async function run(tool: string, args: Record<string, unknown>) {
 		if (busy) return;
@@ -46,15 +33,7 @@ function BrainsView({ brains, active }: { brains: BrainRow[]; active: string }) 
 		setBusy(false);
 		if (res.isError) return toast(firstText(res), true);
 		toast(firstText(res));
-		cancelAdd();
 		const sc = (res.structuredContent ?? {}) as Record<string, unknown>;
-		// After connecting, land on the new brain's file tree — if its content isn't
-		// configured, that view surfaces the Auto-configure button right where they are.
-		if (tool === 'connect_brain' && typeof sc.connectedId === 'string') {
-			brainsViewFromSc(sc); // refresh the cached list so the switch sees the new brain
-			switchBrain(sc.connectedId);
-			return;
-		}
 		// Disconnect / configure change per-brain setup status — re-fetch the list (it
 		// recomputes needsConfig) rather than reuse the mutation's rows, which lack it.
 		if (tool === 'disconnect_brain' || tool === 'configure_brain') {
@@ -63,29 +42,6 @@ function BrainsView({ brains, active }: { brains: BrainRow[]; active: string }) 
 		}
 		show(brainsViewFromSc(sc), { push: false });
 	}
-
-	// Load the connectable repos for a chosen org (targeted by a brain in that org).
-	async function chooseOrg(o: { orgLabel: string; brainId: string }) {
-		setTarget({ brainId: o.brainId, orgLabel: o.orgLabel });
-		setRepos(null);
-		// No `repo` arg → connect_brain returns the connectable candidates instead of adopting.
-		const res = await callTool('connect_brain', { brain: o.brainId });
-		if (res.isError) return toast(firstText(res), true);
-		const sc = (res.structuredContent ?? {}) as {
-			repos?: { id: string; owner: string; repo: string }[];
-		};
-		setRepos(sc.repos ?? []);
-	}
-
-	function startAdd() {
-		setAdding(true);
-		setRepos(null);
-		// One admin org → skip the chooser; several → let the user pick.
-		if (manageableOrgs.length === 1) chooseOrg(manageableOrgs[0]);
-		else setTarget(null);
-	}
-
-	useAddAction(startAdd);
 
 	return (
 		<div>
@@ -98,75 +54,6 @@ function BrainsView({ brains, active }: { brains: BrainRow[]; active: string }) 
 				</div>
 			) : (
 				<List>
-					{/* Same trigger and position as Members and Connected accounts. What
-					    unfolds is bigger (org then repo), which is exactly where the extra
-					    complexity belongs: in the reveal, never in the trigger. */}
-					{canAdd && (
-						<AddRow open={adding} onClose={cancelAdd}>
-							{() => (
-								<div class="rounded-md border border-border p-2">
-									{!target ? (
-										// Choose which org to add to (only shown with 2+ admin orgs).
-										<>
-											<div class={`px-1 pb-1 ${eyebrow}`}>Add to which organization?</div>
-											<ul class="flex flex-col">
-												{manageableOrgs.map((o) => (
-													<li key={o.orgId}>
-														<Button
-															variant="row"
-															onClick={() => chooseOrg(o)}
-															class="px-1.5 py-1.5"
-														>
-															<span class="text-muted">
-																<BrainGlyph />
-															</span>
-															<span class="truncate">{o.orgLabel}</span>
-														</Button>
-													</li>
-												))}
-											</ul>
-										</>
-									) : (
-										// Pick a repo to adopt into the chosen org.
-										<>
-											<div class={`px-1 pb-1 ${eyebrow}`}>Add a repo to {target.orgLabel}</div>
-											{repos === null ? (
-												<div class="px-1 py-2 text-sm text-muted">Loading repos…</div>
-											) : repos.length === 0 ? (
-												<div class="px-1 py-2 text-sm text-muted">
-													No unconnected repos in this org’s installation. Add the repo to the
-													Isomorphic App installation on GitHub first.
-												</div>
-											) : (
-												<ul class="flex flex-col">
-													{repos.map((r) => (
-														<li key={r.id}>
-															<Button
-																variant="row"
-																disabled={busy}
-																onClick={() =>
-																	run('connect_brain', { repo: r.id, brain: target.brainId })
-																}
-																class="px-1.5 py-1.5"
-															>
-																<span class="text-muted">
-																	<BrainGlyph />
-																</span>
-																<span class="truncate">{r.id}</span>
-															</Button>
-														</li>
-													))}
-												</ul>
-											)}
-										</>
-									)}
-									<Button variant="ghost" size="xs" onClick={cancelAdd} class="mt-1">
-										Cancel
-									</Button>
-								</div>
-							)}
-						</AddRow>
-					)}
 					{brains.map((b) => (
 						<ListRow key={b.id} class="gap-0 py-0">
 							<div class="flex min-w-0 flex-1 items-center gap-2 py-1.5">
@@ -263,9 +150,19 @@ declare module '../core/view-registry.ts' {
 }
 
 export default defineView('brains', (v) => <BrainsView brains={v.brains} active={v.active} />, {
-	// Mirrors `canAdd` inside the component: you can add a brain to any org you admin.
-	actions: (v) =>
-		addCtl.bound && v.brains.some((b) => b.canManage)
-			? [{ key: 'add-brain', label: 'Add brain', title: 'Add a brain', onClick: addCtl.start }]
-			: []
+	// Gated on the same derivation the flow itself uses, so the header can never offer
+	// an Add that opens an empty org picker.
+	actions: (v) => {
+		const orgs = manageableOrgs(v.brains);
+		return orgs.length
+			? [
+					{
+						key: 'add-brain',
+						label: 'Add brain',
+						title: 'Connect an existing repo as a brain',
+						onClick: () => openAddBrain(orgs)
+					}
+				]
+			: [];
+	}
 });

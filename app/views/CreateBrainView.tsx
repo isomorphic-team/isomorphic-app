@@ -1,5 +1,6 @@
 import { useState } from 'preact/hooks';
 import { submitCreateBrain, openBrowse } from '../core/actions.ts';
+import { goBack } from '../core/store.ts';
 import { BrainGlyph } from '../core/icons.tsx';
 import { defineView } from '../core/view-registry.ts';
 import { Button, Input } from '../ui/index.ts';
@@ -41,7 +42,16 @@ function CreateBrainView({ first }: { first: boolean }) {
 			/>
 			<div class="mt-3 flex justify-center gap-2">
 				{!first && (
-					<Button variant="outline" onClick={() => openBrowse()} disabled={busy} class="text-sm">
+					// Back to whatever opened this (the brains list, the switcher's "New
+					// brain"), falling back to the file tree only when there is no history.
+					// This used to always call openBrowse(), so cancelling out of the form
+					// landed you somewhere you had never been.
+					<Button
+						variant="outline"
+						onClick={() => goBack(() => openBrowse())}
+						disabled={busy}
+						class="text-sm"
+					>
 						Cancel
 					</Button>
 				)}

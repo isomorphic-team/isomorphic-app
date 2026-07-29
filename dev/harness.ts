@@ -247,7 +247,10 @@ let connectableRepos = [
 		owner: 'acme-co',
 		repo: 'acme-handbook'
 	},
-	{ id: 'acme-co/content-dist', owner: 'acme-co', repo: 'content-dist' }
+	{ id: 'acme-co/content-dist', owner: 'acme-co', repo: 'content-dist' },
+	// Under the personal org, so the picker's step 1 (choose an org) has two live
+	// branches rather than one that dead-ends in the empty state.
+	{ id: 'your-org/notes-archive', owner: 'your-org', repo: 'notes-archive' }
 ];
 let activeBrainId = brainsFixture[0].id;
 // The active brain's content — used by the host chrome (initial render + page selector),
@@ -719,13 +722,30 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
 				structuredContent: { repos: connectableRepos }
 			};
 		case 'connect_brain': {
-			const r = String(args?.repo ?? '');
-			const hit = connectableRepos.find((x) => x.id === r || x.repo === r);
-			const id = hit?.id ?? r;
-			const label = (hit?.repo ?? r).replace(/[-_]+/g, ' ');
 			const org =
 				brainsFixture.find((b) => b.id === String(args?.brain ?? activeBrainId)) ??
 				brainsFixture[0];
+			// An org owns the repos under its GitHub owner (brain ids are `owner/repo`),
+			// so the picker is scoped the way the real installation would be.
+			const owner = org.id.split('/')[0];
+			const candidates = connectableRepos.filter((x) => x.owner === owner);
+			// NO `repo` ARG → return the connectable candidates instead of adopting. This
+			// branch was missing, so the add-a-brain picker's first call fell through to
+			// the adopt path below with an empty repo id and created a junk brain.
+			if (!args?.repo)
+				return {
+					content: [
+						{
+							type: 'text',
+							text: `${candidates.length} connectable repo${candidates.length === 1 ? '' : 's'} in ${org.orgLabel}.`
+						}
+					],
+					structuredContent: { repos: candidates }
+				};
+			const r = String(args.repo);
+			const hit = connectableRepos.find((x) => x.id === r || x.repo === r);
+			const id = hit?.id ?? r;
+			const label = (hit?.repo ?? r).replace(/[-_]+/g, ' ');
 			brainsFixture = [
 				...brainsFixture,
 				{ id, label, role: 'Admin', orgId: org.orgId, orgLabel: org.orgLabel }
