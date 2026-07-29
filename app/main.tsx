@@ -244,15 +244,23 @@ function Header({ view }: { view: View }) {
 					    these act on the brain you are already in (search it, re-draw it as a
 					    graph) rather than naming a place. Graph stays lit while you're in it.
 					    Both are hidden while editing — leaving mid-edit would abandon it, the
-					    same reason the ⋯ menu drops its nav rows. */}
+					    same reason the ⋯ menu drops its nav rows.
+
+					    This button SURVIVED the crumb picker gaining a Graph row, because on a
+					    page it is not the same action: it passes the page's path, and view_graph
+					    with a path returns the subgraph around it. "This page's neighbours" is
+					    not something a list of destinations can express — and a page's trail ends
+					    in a path crumb, so it has no destination picker to express it in. The
+					    title says which of the two you are getting; a control whose meaning
+					    changes with context has to say so. */}
 					{!editing && (
 						<>
 							<SearchBox />
 							<Button
 								variant="ghost"
 								size="icon"
-								title="Graph view"
-								aria-label="Graph view"
+								title={view.kind === 'page' ? 'Show this page in the graph' : 'Graph view'}
+								aria-label={view.kind === 'page' ? 'Show this page in the graph' : 'Graph view'}
 								onClick={() => openGraph(view.kind === 'page' ? view.path : undefined)}
 								class={view.kind === 'graph' ? 'text-accent' : undefined}
 							>
