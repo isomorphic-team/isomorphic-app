@@ -1,12 +1,26 @@
 // The inline composer for "add a thing to this list", and the hook that publishes
 // its trigger to the header.
 //
-// The split matters, and it is the file tree's, not an invention: the TRIGGER lives
-// in the header's action slot (always visible, never scrolls away, and the one place
-// the bar's own rule says "what you can do here" belongs), while the COMPOSER opens
-// INLINE, at the end of the list, where the new item will actually land. An earlier
-// version of this file put the trigger in the body too, which quietly gave the app
-// two trigger patterns where the tree already had one.
+// The split is the file tree's, not an invention: the TRIGGER lives in the header's
+// action slot (always visible, never scrolls away, and the one place the bar's own
+// rule says "what you can do here" belongs), while the COMPOSER opens INLINE. An
+// earlier version put the trigger in the body too, which quietly gave the app two
+// trigger patterns where the tree already had one.
+//
+// The composer opens at the TOP of its list, directly under the header. It was
+// briefly at the bottom, on the theory that a composer should sit where the new item
+// lands — but once the trigger moved to the header that put cause and effect at
+// opposite ends of a scrolling list, and for Members it was not even true (an invite
+// lands in "Pending invites", a different section). The tree has always inserted its
+// root-level add row at the top for the same reason.
+//
+// NOT a modal, deliberately. `position: fixed` resolves against the IFRAME, not
+// Claude's window, so in the default `inline` display mode a dialog is a box inside a
+// short box: it covers the very list it is adding to and has almost no room. The app
+// already learned this once — OverflowMenu has to clamp its dropdown to
+// `window.innerHeight` because "a short card clips the lower menu items". Modals are
+// still right for destructive confirmations (see askConfirm), where blocking IS the
+// point; they are wrong for an additive one-field form.
 //
 // Complexity scales inside the composer, never in the trigger: Connect is one field,
 // Invite is a field plus a role, Add-a-brain is a two-step org then repo picker. All

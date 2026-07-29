@@ -39,7 +39,6 @@ function MembersView({
 	const [inviteEmail, setInviteEmail] = useState('');
 	const [inviteRole, setInviteRole] = useState<MemberRole>('editor');
 	const [inviting, setInviting] = useState(false);
-	// The trigger lives in the header's action slot; this only opens the composer.
 	useAddAction(() => setInviting(true));
 
 	// Run a member mutation, refresh the roster from its result, toast the outcome.
@@ -57,6 +56,41 @@ function MembersView({
 	return (
 		<div>
 			<List>
+				{/* The composer opens where the invited person will land, rather than in a
+				    permanently-docked form above a roster you are usually just reading. */}
+				{canManage && (
+					<AddRow open={inviting} onClose={() => setInviting(false)}>
+						{({ close }) => (
+							<form
+								class="flex items-center gap-2"
+								onSubmit={(e) => {
+									e.preventDefault();
+									const email = inviteEmail.trim();
+									if (!email) return;
+									run('invite_member', { email, role: inviteRole }, () => {
+										setInviteEmail('');
+										close();
+									});
+								}}
+							>
+								<Input
+									// eslint-disable-next-line
+									autofocus
+									type="email"
+									required
+									value={inviteEmail}
+									onInput={(e) => setInviteEmail((e.target as HTMLInputElement).value)}
+									placeholder="name@example.com"
+									class="min-w-0 flex-1"
+								/>
+								<RoleSelect value={inviteRole} disabled={busy} onChange={(r) => setInviteRole(r)} />
+								<Button type="submit" disabled={busy || !inviteEmail.trim()}>
+									Invite
+								</Button>
+							</form>
+						)}
+					</AddRow>
+				)}
 				{members.map((m) => {
 					const isSelf = m.user_id === me.user_id;
 					// Admins can edit anyone except the owner and themselves.
@@ -108,41 +142,6 @@ function MembersView({
 						</ListRow>
 					);
 				})}
-				{/* The composer opens where the invited person will land, rather than in a
-				    permanently-docked form above a roster you are usually just reading. */}
-				{canManage && (
-					<AddRow open={inviting} onClose={() => setInviting(false)}>
-						{({ close }) => (
-							<form
-								class="flex items-center gap-2"
-								onSubmit={(e) => {
-									e.preventDefault();
-									const email = inviteEmail.trim();
-									if (!email) return;
-									run('invite_member', { email, role: inviteRole }, () => {
-										setInviteEmail('');
-										close();
-									});
-								}}
-							>
-								<Input
-									// eslint-disable-next-line
-									autofocus
-									type="email"
-									required
-									value={inviteEmail}
-									onInput={(e) => setInviteEmail((e.target as HTMLInputElement).value)}
-									placeholder="name@example.com"
-									class="min-w-0 flex-1"
-								/>
-								<RoleSelect value={inviteRole} disabled={busy} onChange={(r) => setInviteRole(r)} />
-								<Button type="submit" disabled={busy || !inviteEmail.trim()}>
-									Invite
-								</Button>
-							</form>
-						)}
-					</AddRow>
-				)}
 			</List>
 
 			{invites.length > 0 && (

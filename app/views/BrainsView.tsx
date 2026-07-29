@@ -85,6 +85,8 @@ function BrainsView({ brains, active }: { brains: BrainRow[]; active: string }) 
 		else setTarget(null);
 	}
 
+	useAddAction(startAdd);
+
 	return (
 		<div>
 			{brains.length === 0 ? (
@@ -96,6 +98,75 @@ function BrainsView({ brains, active }: { brains: BrainRow[]; active: string }) 
 				</div>
 			) : (
 				<List>
+					{/* Same trigger and position as Members and Connected accounts. What
+					    unfolds is bigger (org then repo), which is exactly where the extra
+					    complexity belongs: in the reveal, never in the trigger. */}
+					{canAdd && (
+						<AddRow open={adding} onClose={cancelAdd}>
+							{() => (
+								<div class="rounded-md border border-border p-2">
+									{!target ? (
+										// Choose which org to add to (only shown with 2+ admin orgs).
+										<>
+											<div class={`px-1 pb-1 ${eyebrow}`}>Add to which organization?</div>
+											<ul class="flex flex-col">
+												{manageableOrgs.map((o) => (
+													<li key={o.orgId}>
+														<Button
+															variant="row"
+															onClick={() => chooseOrg(o)}
+															class="px-1.5 py-1.5"
+														>
+															<span class="text-muted">
+																<BrainGlyph />
+															</span>
+															<span class="truncate">{o.orgLabel}</span>
+														</Button>
+													</li>
+												))}
+											</ul>
+										</>
+									) : (
+										// Pick a repo to adopt into the chosen org.
+										<>
+											<div class={`px-1 pb-1 ${eyebrow}`}>Add a repo to {target.orgLabel}</div>
+											{repos === null ? (
+												<div class="px-1 py-2 text-sm text-muted">Loading repos…</div>
+											) : repos.length === 0 ? (
+												<div class="px-1 py-2 text-sm text-muted">
+													No unconnected repos in this org’s installation. Add the repo to the
+													Isomorphic App installation on GitHub first.
+												</div>
+											) : (
+												<ul class="flex flex-col">
+													{repos.map((r) => (
+														<li key={r.id}>
+															<Button
+																variant="row"
+																disabled={busy}
+																onClick={() =>
+																	run('connect_brain', { repo: r.id, brain: target.brainId })
+																}
+																class="px-1.5 py-1.5"
+															>
+																<span class="text-muted">
+																	<BrainGlyph />
+																</span>
+																<span class="truncate">{r.id}</span>
+															</Button>
+														</li>
+													))}
+												</ul>
+											)}
+										</>
+									)}
+									<Button variant="ghost" size="xs" onClick={cancelAdd} class="mt-1">
+										Cancel
+									</Button>
+								</div>
+							)}
+						</AddRow>
+					)}
 					{brains.map((b) => (
 						<ListRow key={b.id} class="gap-0 py-0">
 							<div class="flex min-w-0 flex-1 items-center gap-2 py-1.5">
@@ -177,75 +248,6 @@ function BrainsView({ brains, active }: { brains: BrainRow[]; active: string }) 
 							)}
 						</ListRow>
 					))}
-					{/* Same trigger and position as Members and Connected accounts. What
-					    unfolds is bigger (org then repo), which is exactly where the extra
-					    complexity belongs: in the reveal, never in the trigger. */}
-					{canAdd && (
-						<AddRow open={adding} onClose={cancelAdd}>
-							{() => (
-								<div class="rounded-md border border-border p-2">
-									{!target ? (
-										// Choose which org to add to (only shown with 2+ admin orgs).
-										<>
-											<div class={`px-1 pb-1 ${eyebrow}`}>Add to which organization?</div>
-											<ul class="flex flex-col">
-												{manageableOrgs.map((o) => (
-													<li key={o.orgId}>
-														<Button
-															variant="row"
-															onClick={() => chooseOrg(o)}
-															class="px-1.5 py-1.5"
-														>
-															<span class="text-muted">
-																<BrainGlyph />
-															</span>
-															<span class="truncate">{o.orgLabel}</span>
-														</Button>
-													</li>
-												))}
-											</ul>
-										</>
-									) : (
-										// Pick a repo to adopt into the chosen org.
-										<>
-											<div class={`px-1 pb-1 ${eyebrow}`}>Add a repo to {target.orgLabel}</div>
-											{repos === null ? (
-												<div class="px-1 py-2 text-sm text-muted">Loading repos…</div>
-											) : repos.length === 0 ? (
-												<div class="px-1 py-2 text-sm text-muted">
-													No unconnected repos in this org’s installation. Add the repo to the
-													Isomorphic App installation on GitHub first.
-												</div>
-											) : (
-												<ul class="flex flex-col">
-													{repos.map((r) => (
-														<li key={r.id}>
-															<Button
-																variant="row"
-																disabled={busy}
-																onClick={() =>
-																	run('connect_brain', { repo: r.id, brain: target.brainId })
-																}
-																class="px-1.5 py-1.5"
-															>
-																<span class="text-muted">
-																	<BrainGlyph />
-																</span>
-																<span class="truncate">{r.id}</span>
-															</Button>
-														</li>
-													))}
-												</ul>
-											)}
-										</>
-									)}
-									<Button variant="ghost" size="xs" onClick={cancelAdd} class="mt-1">
-										Cancel
-									</Button>
-								</div>
-							)}
-						</AddRow>
-					)}
 				</List>
 			)}
 		</div>

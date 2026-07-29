@@ -75,6 +75,33 @@ function ConnectedAccountsSection({ initial }: { initial: ConnectedAccount[] }) 
 			)}
 
 			<List>
+				{/* Same trigger, same position, same dismissal as Members and the file
+				    tree. The verb stays "Connect" from the row through to the button. */}
+				<AddRow open={connecting} onClose={() => setConnecting(false)}>
+					{({ close }) => (
+						<form
+							class="flex items-center gap-2"
+							onSubmit={(e) => {
+								e.preventDefault();
+								startLink(close);
+							}}
+						>
+							<Input
+								// eslint-disable-next-line
+								autofocus
+								type="email"
+								required
+								value={email}
+								onInput={(e) => setEmail((e.target as HTMLInputElement).value)}
+								placeholder="name@example.com"
+								class="min-w-0 flex-1"
+							/>
+							<Button type="submit" disabled={busy || !email.trim()}>
+								Connect
+							</Button>
+						</form>
+					)}
+				</AddRow>
 				{emails.map((a) => (
 					<ListRow key={a.user_id}>
 						<InitialsAvatar name={a.name || a.email || '?'} />
@@ -130,33 +157,6 @@ function ConnectedAccountsSection({ initial }: { initial: ConnectedAccount[] }) 
 						</Button>
 					</ListRow>
 				))}
-				{/* Same trigger, same position, same dismissal as Members and the file
-				    tree. The verb stays "Connect" from the row through to the button. */}
-				<AddRow open={connecting} onClose={() => setConnecting(false)}>
-					{({ close }) => (
-						<form
-							class="flex items-center gap-2"
-							onSubmit={(e) => {
-								e.preventDefault();
-								startLink(close);
-							}}
-						>
-							<Input
-								// eslint-disable-next-line
-								autofocus
-								type="email"
-								required
-								value={email}
-								onInput={(e) => setEmail((e.target as HTMLInputElement).value)}
-								placeholder="name@example.com"
-								class="min-w-0 flex-1"
-							/>
-							<Button type="submit" disabled={busy || !email.trim()}>
-								Connect
-							</Button>
-						</form>
-					)}
-				</AddRow>
 			</List>
 		</div>
 	);
