@@ -638,24 +638,42 @@ export interface AccessibleBrain {
 // against. Personal (platform-model) orgs are auto-named with the owner's email, which
 // reads badly, so those fall back to "Personal"; when an org holds more than one brain
 // the repo name is appended to disambiguate.
-export function brainLabel(b: AccessibleBrain, multipleInOrg = false): string {
-	// A user-given name wins outright — it's the whole point of naming a brain.
+export function brainLabel(b: AccessibleBrain): string {
+	// ONE RULE: a brain is called what it is named, and an unnamed one is called after
+	// its repo. Nothing else — no org prefix when an org holds several, no borrowing the
+	// org's name when it holds one, no "Personal" for a platform org.
+	//
+	// Those three special cases all compensated for the same missing capability rather
+	// than for anything about brains: three of the four ways a brain is created cannot
+	// set a name at all (connect_brain, the operator seed, scripts/onboard-org), so the
+	// label had to invent one. Inventing it here made the name depend on how many
+	// siblings a brain had, which meant adopting a second brain silently RENAMED the
+	// first. Surfaces that show brains side by side group them under an org heading
+	// (app/core/util groupBrainsByOrg), which is where org belongs.
 	const named = b.name?.trim();
 	if (named) return named;
-	const humanRepo = b.repo_name
-		.replace(/^brain-/, '')
-		.replace(/[-_]+/g, ' ')
-		.trim();
-	let base = b.org_name?.trim();
-	if (!base || base.includes('@')) base = b.org_model === 'platform' ? 'Personal' : humanRepo;
-	// A solo brain IS its org as far as the user is concerned, so it takes the org's
-	// name — that is what keeps a personal brain reading "Personal" rather than
-	// "jhansing". Where an org holds several, each takes its own repo-derived name and
-	// the ORG IS NOT PREPENDED: the surfaces that list brains group them under an org
-	// heading (app/core/util groupBrainsByOrg), so a prefix would say it a second time,
-	// once per row. Nothing else shows a label beside another org's, so nothing else
-	// needs the qualifier.
-	return multipleInOrg ? humanRepo || base : base;
+	return (
+		b.repo_name
+			.replace(/^brain-/, '')
+			.replace(/[-_]+/g, ' ')
+			.trim() || b.repo_name
+	);
+}
+
+// How an org is named to a human. Lived in tools/brains.ts, where only the switcher
+// rows could reach it; both consumers of a qualified label need it.
+export function orgDisplay(b: AccessibleBrain): string {
+	if (b.org_model === 'platform') return 'Personal';
+	return b.org_name?.trim() || b.repo_owner;
+}
+
+// A label with its org named. For the one place brains are listed side by side with no
+// heading to group them: the "which of these did you mean" error. Labels are now the
+// brain's own name, so two orgs can hold a "wiki" — and a disambiguation list reading
+// "wiki, wiki" is worse than no list at all. Everywhere else the org is a heading
+// (groupBrainsByOrg) or context the user already has.
+export function brainLabelQualified(b: AccessibleBrain): string {
+	return `${brainLabel(b)} (${orgDisplay(b)})`;
 }
 
 // All brains the given users can reach, deduped by canonical id (keeping the highest
@@ -730,9 +748,8 @@ export function matchBrain(
 	if (!q) return {};
 	const exact = brains.find((b) => b.id.toLowerCase() === q || b.repo_name.toLowerCase() === q);
 	if (exact) return { brain: exact };
-	const multi = countByOrg(brains);
 	const subs = brains.filter((b) => {
-		const label = brainLabel(b, (multi.get(b.org_id) ?? 0) > 1).toLowerCase();
+		const label = brainLabel(b).toLowerCase();
 		// org_name is matched EXPLICITLY rather than incidentally. It used to ride along
 		// inside the label of any brain in a multi-brain org ("Beckers Healthcare — ed
 		// brain"), so `brain: "beckers"` resolved by accident of formatting; dropping the
@@ -749,11 +766,4 @@ export function matchBrain(
 	if (subs.length === 1) return { brain: subs[0] };
 	if (subs.length > 1) return { candidates: subs };
 	return {};
-}
-
-// How many brains each org contributes — lets label rendering disambiguate.
-export function countByOrg(brains: AccessibleBrain[]): Map<string, number> {
-	const m = new Map<string, number>();
-	for (const b of brains) m.set(b.org_id, (m.get(b.org_id) ?? 0) + 1);
-	return m;
 }

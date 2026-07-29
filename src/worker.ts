@@ -47,7 +47,7 @@ import {
 	getMembershipWithOrg,
 	matchBrain,
 	brainLabel,
-	countByOrg,
+	brainLabelQualified,
 	type AccessibleBrain,
 	type Org,
 	type OrgScope,
@@ -460,7 +460,6 @@ class McpSession {
 		const brains = await listAccessibleBrains(env.PLATFORM_DB, await this.personUserIds(userId));
 
 		let target: AccessibleBrain;
-		let multipleInOrg = false;
 		if (brains.length === 0) {
 			// First touch: ensure the personal org exists (org-only — no brain is
 			// auto-created anymore). If it has no brain yet, signal the "create a brain"
@@ -483,13 +482,10 @@ class McpSession {
 				role: p.role
 			};
 		} else {
-			const counts = countByOrg(brains);
 			if (brainArg) {
 				const m = matchBrain(brains, brainArg);
 				if (!m.brain) {
-					const names = (m.candidates ?? brains).map((b) =>
-						brainLabel(b, (counts.get(b.org_id) ?? 0) > 1)
-					);
+					const names = (m.candidates ?? brains).map(brainLabelQualified);
 					throw new Error(
 						m.candidates
 							? `"${brainArg}" matches multiple brains: ${names.join(', ')}. Be more specific.`
@@ -504,7 +500,6 @@ class McpSession {
 					: undefined;
 				target = active ?? brains[0];
 			}
-			multipleInOrg = (counts.get(target.org_id) ?? 0) > 1;
 		}
 
 		const octokit = await installationOctokit(appCreds(env), target.installation_id);
@@ -529,7 +524,7 @@ class McpSession {
 			author,
 			db: env.PLATFORM_DB,
 			brainId: target.id,
-			activeBrain: { id: target.id, label: brainLabel(target, multipleInOrg) }
+			activeBrain: { id: target.id, label: brainLabel(target) }
 		};
 	}
 
