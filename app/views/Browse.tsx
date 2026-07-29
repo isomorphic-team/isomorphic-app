@@ -33,7 +33,10 @@ import {
 	NewNoteIcon,
 	NewFolderIcon,
 	MoreIcon,
-	LockIcon
+	LockIcon,
+	SortIcon,
+	ExpandCollapseIcon,
+	EyeIcon
 } from '../core/icons.tsx';
 
 // Shared handle to the live file tree so the nav header can host its toolbar while
@@ -823,12 +826,60 @@ declare module '../core/view-registry.ts' {
 	}
 }
 
-export default defineView('browse', (v) => (
-	<FileTree
-		paths={v.paths}
-		titleByPath={v.titleByPath}
-		hidden={v.hidden}
-		needsConfig={v.needsConfig}
-		focus={v.focus}
-	/>
-));
+export default defineView(
+	'browse',
+	(v) => (
+		<FileTree
+			paths={v.paths}
+			titleByPath={v.titleByPath}
+			hidden={v.hidden}
+			needsConfig={v.needsConfig}
+			focus={v.focus}
+		/>
+	),
+	{
+		// Icon-only here, unlike the list screens' text labels: these are frequent and
+		// their glyphs are conventional on a file tree. `bound` gates them so they show
+		// only while a tree is actually mounted.
+		actions: () =>
+			!treeCtl.bound || !treeCtl.canManage
+				? []
+				: [
+						{
+							key: 'new-note',
+							icon: <NewNoteIcon />,
+							title: 'New note',
+							onClick: () => treeCtl.newNote()
+						},
+						{
+							key: 'new-folder',
+							icon: <NewFolderIcon />,
+							title: 'New folder',
+							onClick: () => treeCtl.newFolder()
+						},
+						{
+							key: 'sort',
+							icon: <SortIcon desc={treeCtl.sortDesc} />,
+							title: treeCtl.sortDesc ? 'Sort Z → A' : 'Sort A → Z',
+							onClick: () => treeCtl.toggleSort()
+						},
+						{
+							key: 'expand',
+							icon: <ExpandCollapseIcon expanded={treeCtl.allExpanded} />,
+							title: treeCtl.allExpanded ? 'Collapse all' : 'Expand all',
+							onClick: () => treeCtl.toggleExpandAll()
+						},
+						...(treeCtl.hasHidden
+							? [
+									{
+										key: 'hidden',
+										icon: <EyeIcon off={!treeCtl.showHidden} />,
+										title: treeCtl.showHidden ? 'Hide hidden files' : 'Show hidden files',
+										active: treeCtl.showHidden,
+										onClick: () => treeCtl.toggleHidden()
+									}
+								]
+							: [])
+					]
+	}
+);

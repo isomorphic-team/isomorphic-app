@@ -2,6 +2,7 @@ import type { Identity, ConnectedAccount } from '../core/types.ts';
 import { InitialsAvatar, LinkIcon } from '../core/icons.tsx';
 import { ConnectedAccountsSection } from '../components/ConnectedAccountsSection.tsx';
 import { defineView } from '../core/view-registry.ts';
+import { addCtl } from '../core/store.ts';
 import { eyebrow } from '../ui/typography.ts';
 
 // The user's own settings. Today it's the signed-in identity card; it's the extensible
@@ -57,6 +58,21 @@ declare module '../core/view-registry.ts' {
 	}
 }
 
-export default defineView('settings', (v) => (
-	<SettingsView identity={v.identity} accounts={v.accounts} />
-));
+export default defineView(
+	'settings',
+	(v) => <SettingsView identity={v.identity} accounts={v.accounts} />,
+	{
+		// Linking one of your OWN accounts needs no admin gate — see ConnectedAccountsSection.
+		actions: () =>
+			addCtl.bound
+				? [
+						{
+							key: 'connect',
+							label: 'Connect',
+							title: 'Connect another account',
+							onClick: addCtl.start
+						}
+					]
+				: []
+	}
+);

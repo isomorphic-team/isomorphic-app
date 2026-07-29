@@ -422,4 +422,16 @@ declare module '../core/view-registry.ts' {
 	}
 }
 
-export default defineView('edit', (v) => <EditView state={v} />);
+export default defineView('edit', (v) => <EditView state={v} />, {
+	// Save is the one affirmative action, so it is the one `primary` in the bar.
+	actions: () => [
+		{
+			key: 'save',
+			label: editCtl.saving ? 'Saving…' : 'Save',
+			primary: true,
+			disabled: editCtl.saving,
+			onClick: () => editCtl.save()
+		},
+		{ key: 'cancel', label: 'Cancel', onClick: () => editCtl.cancel() }
+	]
+});

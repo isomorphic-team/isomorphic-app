@@ -3,8 +3,8 @@ import { parseFrontmatter, type Frontmatter } from '../../src/lib/wiki.ts';
 import { displayFromSnapshots } from '../../src/lib/view-directives.ts';
 import type { Backref } from '../core/types.ts';
 import { callTool } from '../core/host.ts';
-import { brainArgs } from '../core/store.ts';
-import { navigateTo, renderMarkdown, onProseClick } from '../core/actions.ts';
+import { brainArgs, isEditablePath } from '../core/store.ts';
+import { navigateTo, renderMarkdown, onProseClick, openEditor } from '../core/actions.ts';
 import { defineView } from '../core/view-registry.ts';
 import { eyebrow } from '../ui/typography.ts';
 
@@ -187,4 +187,11 @@ declare module '../core/view-registry.ts' {
 	}
 }
 
-export default defineView('page', (v) => <PageView path={v.path} markdown={v.markdown} />);
+export default defineView('page', (v) => <PageView path={v.path} markdown={v.markdown} />, {
+	// Same policy verdict the Worker's write tools use, so the app can never offer an
+	// Edit that a write would reject.
+	actions: (v) =>
+		isEditablePath(v.path)
+			? [{ key: 'edit', label: 'Edit', onClick: () => openEditor(v.path) }]
+			: []
+});

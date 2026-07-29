@@ -1,89 +1,66 @@
-// "Add a thing to this list", as one flow.
+// The inline composer for "add a thing to this list", and the hook that publishes
+// its trigger to the header.
 //
-// Three screens each invented their own: Members and Connected accounts pinned an
-// always-visible form ABOVE the list, Manage brains put a boxed button BELOW it that
-// toggled a panel. The file tree already had the good version (Browse.tsx), and this
-// generalises it:
+// The split matters, and it is the file tree's, not an invention: the TRIGGER lives
+// in the header's action slot (always visible, never scrolls away, and the one place
+// the bar's own rule says "what you can do here" belongs), while the COMPOSER opens
+// INLINE, at the end of the list, where the new item will actually land. An earlier
+// version of this file put the trigger in the body too, which quietly gave the app
+// two trigger patterns where the tree already had one.
 //
-//   * The composer opens WHERE THE RESULT WILL LAND — the trigger row is replaced in
-//     place — so there is no "where did it go" moment after committing.
-//   * Nothing permanent on screen while reading, which is the common case. You open
-//     Members to see who is there far more often than to invite someone.
-//   * Escape cancels, from anywhere inside the composer.
-//
-// The trigger and its position are identical across all three screens; only what
-// unfolds differs (one field / field + role / a two-step picker). Complexity belongs
-// inside the reveal, never in the trigger.
+// Complexity scales inside the composer, never in the trigger: Connect is one field,
+// Invite is a field plus a role, Add-a-brain is a two-step org then repo picker. All
+// three are opened the same way and dismissed the same way.
 import type { ComponentChildren } from 'preact';
-import { useState } from 'preact/hooks';
-import { Button } from './Button.tsx';
+import { useEffect, useRef } from 'preact/hooks';
+import { addCtl, bump } from '../core/store.ts';
 import { cn } from './cn.ts';
 
+/**
+ * Publish this view's "add" action to the header for as long as the view is mounted.
+ * The callback is held behind a ref so a view can pass a fresh closure on every
+ * render without re-registering (and re-bumping) each time.
+ */
+export function useAddAction(start: () => void): void {
+	const ref = useRef(start);
+	ref.current = start;
+	useEffect(() => {
+		addCtl.bound = true;
+		addCtl.start = () => ref.current();
+		bump(); // the header renders its action list from this
+		return () => {
+			addCtl.bound = false;
+			addCtl.start = () => {};
+			bump();
+		};
+	}, []);
+}
+
 export type AddRowProps = {
-	/** The action, as a verb phrase: "Invite member". Reused verbatim on the trigger. */
-	label: string;
-	/** The composer. Gets `close` so its cancel/commit paths can dismiss the row. */
+	/** Whether the composer is showing. Owned by the view, opened from the header. */
+	open: boolean;
+	/** Dismiss. Called on Escape, and passed to the composer for its own cancel path. */
+	onClose: () => void;
 	children: (api: { close: () => void }) => ComponentChildren;
-	/**
-	 * Controlled open state. Omit for the common case (AddRow owns it); pass it when
-	 * the composer has state of its own to reset on close, as Manage brains does.
-	 */
-	open?: boolean;
-	onOpenChange?: (open: boolean) => void;
-	/**
-	 * Render the trigger as a filled primary button rather than a quiet list row.
-	 * For empty states: a muted row at the bottom of nothing is the wrong emphasis
-	 * when adding is the only thing left to do.
-	 */
-	promoted?: boolean;
 	class?: string;
 };
 
-export function AddRow({
-	label,
-	children,
-	open: openProp,
-	onOpenChange,
-	promoted,
-	class: cls
-}: AddRowProps) {
-	const [selfOpen, setSelfOpen] = useState(false);
-	const open = openProp ?? selfOpen;
-	const set = (v: boolean) => {
-		if (openProp === undefined) setSelfOpen(v);
-		onOpenChange?.(v);
-	};
-	const close = () => set(false);
-
-	if (!open) {
-		return (
-			<li class={cls}>
-				<Button
-					variant={promoted ? 'primary' : 'row'}
-					onClick={() => set(true)}
-					class={promoted ? 'mt-3' : 'gap-1.5 py-1.5 text-muted hover:text-fg'}
-				>
-					<span aria-hidden="true">＋</span>
-					{label}
-				</Button>
-			</li>
-		);
-	}
-
+export function AddRow({ open, onClose, children, class: cls }: AddRowProps) {
+	if (!open) return null;
 	return (
 		<li
 			class={cn('py-1.5', cls)}
-			// Escape anywhere in the composer dismisses it, matching the tree's inline
-			// rename/create row. stopPropagation so it does not also close a surrounding
-			// menu or the host's own overlay.
+			// Escape anywhere inside dismisses, matching the tree's inline create/rename
+			// row. stopPropagation so it does not also close a surrounding menu or the
+			// host's own overlay on the way out.
 			onKeyDown={(e) => {
 				if (e.key === 'Escape') {
 					e.stopPropagation();
-					close();
+					onClose();
 				}
 			}}
 		>
-			{children({ close })}
+			{children({ close: onClose })}
 		</li>
 	);
 }

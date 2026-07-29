@@ -14,13 +14,13 @@ import type { ComponentChildren } from 'preact';
 import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks';
 import { useSyncExternalStore } from 'preact/compat';
 import type { View } from './core/types.ts';
+import type { ViewAction } from './core/view-registry.ts';
 import { isFolderNoteName } from './core/util.ts';
 import {
 	subscribeStore,
 	version,
 	currentView,
 	show,
-	isEditablePath,
 	brainList,
 	activeBrain
 } from './core/store.ts';
@@ -38,7 +38,6 @@ import {
 	openBrowse,
 	openFolder,
 	openGraph,
-	openEditor,
 	openActivity,
 	openMembers,
 	openBrains,
@@ -60,20 +59,13 @@ import {
 	BrainGlyph,
 	ChevronDownIcon,
 	PlusIcon,
-	NewNoteIcon,
-	NewFolderIcon,
-	SortIcon,
-	ExpandCollapseIcon,
 	EyeIcon
 } from './core/icons.tsx';
 import { Button } from './ui/index.ts';
 // The Body dispatch table is codegenned from app/views/*.tsx (see scripts/gen-app.ts).
-import { renderView } from './views/registry.generated.ts';
+import { renderView, viewActions } from './views/registry.generated.ts';
 // Chrome still binds the editor's save/cancel + toolbar directly.
 import { EditorToolbar, editCtl } from './views/EditView.tsx';
-// The file tree publishes its toolbar handlers here (mirrors editCtl); the header
-// renders them contextually while browsing.
-import { treeCtl } from './views/Browse.tsx';
 import { eyebrow } from './ui/typography.ts';
 
 // ---------- host wiring ----------
@@ -470,69 +462,43 @@ function BrainSwitcher() {
 	);
 }
 
-// The file-tree action toolbar, hosted in the nav header while browsing (bound via
-// treeCtl, mirroring how the editor toolbar binds via editCtl). Subtle icon buttons
-// that read as part of the chrome — new note, new folder, sort, expand/collapse-all,
-// and (only when there are hidden files) a show-hidden toggle.
-function FileTreeToolbar() {
-	if (!treeCtl.bound || !treeCtl.canManage) return null;
-	const active = (on: boolean) =>
-		`rounded p-1 transition-colors hover:bg-chip ${on ? 'text-accent' : 'text-muted hover:text-fg'}`;
+// One entry in the header's action slot. Views declare these (see ViewAction in
+// core/view-registry.ts); the header no longer knows which view it is rendering for.
+//
+// Icon-only vs text is the view's call, and the two are not interchangeable: a bare
+// glyph works for the tree's frequent, conventional actions and does not work for
+// "invite a person to your organization". Icon actions therefore REQUIRE a title,
+// which doubles as the accessible name.
+function HeaderAction({ action }: { action: ViewAction }) {
+	if (action.icon)
+		return (
+			<Button
+				variant="ghost"
+				size="icon"
+				title={action.title}
+				aria-label={action.title}
+				disabled={action.disabled}
+				onClick={action.onClick}
+				class={action.active ? 'text-accent' : undefined}
+			>
+				{action.icon}
+			</Button>
+		);
 	return (
-		<>
-			<Button
-				variant="ghost"
-				size="icon"
-				title="New note"
-				aria-label="New note"
-				onClick={() => treeCtl.newNote()}
-			>
-				<NewNoteIcon />
-			</Button>
-			<Button
-				variant="ghost"
-				size="icon"
-				title="New folder"
-				aria-label="New folder"
-				onClick={() => treeCtl.newFolder()}
-			>
-				<NewFolderIcon />
-			</Button>
-			<Button
-				variant="ghost"
-				size="icon"
-				title={treeCtl.sortDesc ? 'Sort Z → A' : 'Sort A → Z'}
-				aria-label={treeCtl.sortDesc ? 'Sort Z → A' : 'Sort A → Z'}
-				onClick={() => treeCtl.toggleSort()}
-			>
-				<SortIcon desc={treeCtl.sortDesc} />
-			</Button>
-			<Button
-				variant="ghost"
-				size="icon"
-				title={treeCtl.allExpanded ? 'Collapse all' : 'Expand all'}
-				aria-label={treeCtl.allExpanded ? 'Collapse all' : 'Expand all'}
-				onClick={() => treeCtl.toggleExpandAll()}
-			>
-				<ExpandCollapseIcon expanded={treeCtl.allExpanded} />
-			</Button>
-			{treeCtl.hasHidden && (
-				<button
-					type="button"
-					title={treeCtl.showHidden ? 'Hide hidden files' : 'Show hidden files'}
-					onClick={() => treeCtl.toggleHidden()}
-					class={active(treeCtl.showHidden)}
-				>
-					<EyeIcon off={!treeCtl.showHidden} />
-				</button>
-			)}
-		</>
+		<Button
+			variant={action.primary ? 'subtle' : 'ghost'}
+			size="sm"
+			title={action.title}
+			disabled={action.disabled}
+			onClick={action.onClick}
+		>
+			{action.label}
+		</Button>
 	);
 }
 
 function Header({ view }: { view: View }) {
 	const editing = view.kind === 'edit';
-	const canEdit = view.kind === 'page' && isEditablePath(view.path);
 	// In edit mode the navbar hosts the formatting toolbar (a second flush row) and a
 	// subtle Save/Cancel — so editing feels integrated with the top chrome, not boxed.
 	return (
@@ -593,40 +559,13 @@ function Header({ view }: { view: View }) {
 				)}
 				<Breadcrumb view={view} />
 				<span class="ml-auto flex shrink-0 items-center gap-0.5">
-					{editing ? (
-						<>
-							<button
-								type="button"
-								onClick={() => editCtl.save()}
-								disabled={editCtl.saving}
-								class="rounded px-2.5 py-1 font-medium text-accent transition-colors hover:bg-chip disabled:opacity-60"
-							>
-								{editCtl.saving ? 'Saving…' : 'Save'}
-							</button>
-							<button
-								type="button"
-								onClick={() => editCtl.cancel()}
-								class="rounded px-2 py-1 text-muted transition-colors hover:bg-chip hover:text-fg"
-							>
-								Cancel
-							</button>
-							<OverflowMenu editing />
-						</>
-					) : (
-						<>
-							{view.kind === 'browse' && <FileTreeToolbar />}
-							{canEdit && (
-								<button
-									type="button"
-									onClick={() => openEditor((view as { path: string }).path)}
-									class="rounded px-2 py-1 text-muted transition-colors hover:bg-chip hover:text-fg"
-								>
-									Edit
-								</button>
-							)}
-							<OverflowMenu editing={false} />
-						</>
-					)}
+					{/* "What you can do HERE" — supplied by the current view, not switched on
+					    here. Five views used to have an empty slot and had to put their primary
+					    action in the body instead; declaring actions per view is what closed that. */}
+					{viewActions(view).map((a) => (
+						<HeaderAction key={a.key} action={a} />
+					))}
+					<OverflowMenu editing={editing} />
 				</span>
 			</div>
 			{/* The formatting toolbar slides in / out as you enter / leave edit (grid-rows

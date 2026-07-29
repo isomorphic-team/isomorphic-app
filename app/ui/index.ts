@@ -9,7 +9,7 @@
 export { cn } from './cn.ts';
 export { Button, type ButtonProps } from './Button.tsx';
 export { List, ListRow, listRowTitle, type ListRowProps } from './List.tsx';
-export { AddRow, type AddRowProps } from './AddRow.tsx';
+export { AddRow, useAddAction, type AddRowProps } from './AddRow.tsx';
 export { eyebrow, viewTitle } from './typography.ts';
 export { Input, Select, type InputProps, type SelectProps } from './Input.tsx';
 export { Toolbar, ToolbarButton, ToolbarSeparator, type ToolbarButtonProps } from './Toolbar.tsx';

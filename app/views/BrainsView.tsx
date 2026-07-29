@@ -6,7 +6,8 @@ import { openCreateBrain, switchBrain, brainsViewFromSc, openBrains } from '../c
 import { toast, askConfirm } from '../core/toast.tsx';
 import { BrainGlyph, CloseIcon } from '../core/icons.tsx';
 import { defineView } from '../core/view-registry.ts';
-import { Button, List, ListRow, listRowTitle, AddRow } from '../ui/index.ts';
+import { addCtl } from '../core/store.ts';
+import { Button, List, ListRow, listRowTitle, AddRow, useAddAction } from '../ui/index.ts';
 import { eyebrow } from '../ui/typography.ts';
 
 // The brains list (bi-modal counterpart to the header switcher): every brain the user
@@ -180,11 +181,7 @@ function BrainsView({ brains, active }: { brains: BrainRow[]; active: string }) 
 					    unfolds is bigger (org then repo), which is exactly where the extra
 					    complexity belongs: in the reveal, never in the trigger. */}
 					{canAdd && (
-						<AddRow
-							label="Add a brain"
-							open={adding}
-							onOpenChange={(o) => (o ? startAdd() : cancelAdd())}
-						>
+						<AddRow open={adding} onClose={cancelAdd}>
 							{() => (
 								<div class="rounded-md border border-border p-2">
 									{!target ? (
@@ -263,4 +260,10 @@ declare module '../core/view-registry.ts' {
 	}
 }
 
-export default defineView('brains', (v) => <BrainsView brains={v.brains} active={v.active} />);
+export default defineView('brains', (v) => <BrainsView brains={v.brains} active={v.active} />, {
+	// Mirrors `canAdd` inside the component: you can add a brain to any org you admin.
+	actions: (v) =>
+		addCtl.bound && v.brains.some((b) => b.canManage)
+			? [{ key: 'add-brain', label: 'Add brain', title: 'Add a brain', onClick: addCtl.start }]
+			: []
+});

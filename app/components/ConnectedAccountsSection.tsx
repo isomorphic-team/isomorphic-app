@@ -6,7 +6,7 @@ import { app, callTool, firstText } from '../core/host.ts';
 import { parseAccounts } from '../core/actions.ts';
 import { toast, askConfirm } from '../core/toast.tsx';
 import { InitialsAvatar, CloseIcon, GithubIcon } from '../core/icons.tsx';
-import { Button, Input, List, ListRow, AddRow } from '../ui/index.ts';
+import { Button, Input, List, ListRow, AddRow, useAddAction } from '../ui/index.ts';
 
 // The person's linked identities, rendered inline in Your settings: email logins +
 // GitHub accounts. Anyone can link another of THEIR own accounts (verified by signing
@@ -19,6 +19,8 @@ function ConnectedAccountsSection({ initial }: { initial: ConnectedAccount[] }) 
 	const [busy, setBusy] = useState(false);
 	const [email, setEmail] = useState('');
 	const [linkUrl, setLinkUrl] = useState<string | null>(null);
+	const [connecting, setConnecting] = useState(false);
+	useAddAction(() => setConnecting(true));
 
 	async function startLink(onDone?: () => void) {
 		if (busy) return;
@@ -130,7 +132,7 @@ function ConnectedAccountsSection({ initial }: { initial: ConnectedAccount[] }) 
 				))}
 				{/* Same trigger, same position, same dismissal as Members and the file
 				    tree. The verb stays "Connect" from the row through to the button. */}
-				<AddRow label="Connect another email">
+				<AddRow open={connecting} onClose={() => setConnecting(false)}>
 					{({ close }) => (
 						<form
 							class="flex items-center gap-2"

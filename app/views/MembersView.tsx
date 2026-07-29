@@ -8,7 +8,8 @@ import { toast } from '../core/toast.tsx';
 import { relativeTime } from '../core/util.ts';
 import { InitialsAvatar, CloseIcon } from '../core/icons.tsx';
 import { defineView } from '../core/view-registry.ts';
-import { Button, Input, Select, List, ListRow, AddRow } from '../ui/index.ts';
+import { addCtl } from '../core/store.ts';
+import { Button, Input, Select, List, ListRow, AddRow, useAddAction } from '../ui/index.ts';
 import { eyebrow } from '../ui/typography.ts';
 
 const ROLE_LABEL: Record<MemberRole, string> = {
@@ -37,6 +38,9 @@ function MembersView({
 	const [busy, setBusy] = useState(false);
 	const [inviteEmail, setInviteEmail] = useState('');
 	const [inviteRole, setInviteRole] = useState<MemberRole>('editor');
+	const [inviting, setInviting] = useState(false);
+	// The trigger lives in the header's action slot; this only opens the composer.
+	useAddAction(() => setInviting(true));
 
 	// Run a member mutation, refresh the roster from its result, toast the outcome.
 	async function run(tool: string, args: Record<string, unknown>, onOk?: () => void) {
@@ -107,7 +111,7 @@ function MembersView({
 				{/* The composer opens where the invited person will land, rather than in a
 				    permanently-docked form above a roster you are usually just reading. */}
 				{canManage && (
-					<AddRow label="Invite member">
+					<AddRow open={inviting} onClose={() => setInviting(false)}>
 						{({ close }) => (
 							<form
 								class="flex items-center gap-2"
@@ -219,6 +223,15 @@ declare module '../core/view-registry.ts' {
 	}
 }
 
-export default defineView('members', (v) => (
-	<MembersView members={v.members} invites={v.invites} me={v.me} />
-));
+export default defineView(
+	'members',
+	(v) => <MembersView members={v.members} invites={v.invites} me={v.me} />,
+	{
+		// Gated on the viewer's role here rather than inside the component: the actions
+		// function gets the view's props, so a viewer never sees an Invite they cannot use.
+		actions: (v) =>
+			addCtl.bound && (v.me.role === 'admin' || v.me.role === 'owner')
+				? [{ key: 'invite', label: 'Invite', title: 'Invite a member', onClick: addCtl.start }]
+				: []
+	}
+);

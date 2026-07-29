@@ -107,7 +107,19 @@ function isEditablePath(path: string): boolean {
 	return isContentPath(path, brainPolicy);
 }
 
+// The list screens' "add" action, published to the header's action slot.
+//
+// Deliberately ONE shared handle rather than a membersCtl / brainsCtl / settingsCtl
+// each: only one view is mounted at a time, so one slot is sufficient, and three
+// near-identical handles is how the duplication that this whole series of passes has
+// been unwinding gets started. (treeCtl and editCtl stay separate because they carry
+// real per-view STATE — sort order, expansion, saving — not just a callback.)
+// (The `useAddAction` hook that binds this lives in app/ui/AddRow.tsx — this module
+// is the lowest runtime layer and deliberately imports no Preact.)
+const addCtl: { bound: boolean; start: () => void } = { bound: false, start: () => {} };
+
 export {
+	addCtl,
 	history,
 	browseCache,
 	setBrowseCache,
