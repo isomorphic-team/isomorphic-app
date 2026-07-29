@@ -3,7 +3,6 @@ import type { BrainRow } from '../core/types.ts';
 import { app, callTool, firstText } from '../core/host.ts';
 import { show } from '../core/store.ts';
 import {
-	openCreateBrain,
 	switchBrain,
 	brainsViewFromSc,
 	openBrains,
@@ -48,7 +47,7 @@ function BrainsView({ brains, active }: { brains: BrainRow[]; active: string }) 
 			{brains.length === 0 ? (
 				<div class="mt-16 text-center">
 					<p class="text-muted">No brains yet.</p>
-					<Button onClick={openCreateBrain} class="mt-3">
+					<Button onClick={() => openAddBrain()} class="mt-3">
 						Create your first brain
 					</Button>
 				</div>
@@ -150,19 +149,16 @@ declare module '../core/view-registry.ts' {
 }
 
 export default defineView('brains', (v) => <BrainsView brains={v.brains} active={v.active} />, {
-	// Gated on the same derivation the flow itself uses, so the header can never offer
-	// an Add that opens an empty org picker.
-	actions: (v) => {
-		const orgs = manageableOrgs(v.brains);
-		return orgs.length
-			? [
-					{
-						key: 'add-brain',
-						label: 'Add brain',
-						title: 'Connect an existing repo as a brain',
-						onClick: () => openAddBrain(orgs)
-					}
-				]
-			: [];
-	}
+	// Unconditional: creating a brain is always available (the switcher has always
+	// offered it to everyone), and connecting is the OTHER source inside the same
+	// flow rather than a separate action to gate. The flow drops its source chooser
+	// by itself when there is no org to connect to.
+	actions: (v) => [
+		{
+			key: 'add-brain',
+			label: 'Add brain',
+			title: 'Create a new brain, or connect an existing repo',
+			onClick: () => openAddBrain({ orgs: manageableOrgs(v.brains), first: false })
+		}
+	]
 });

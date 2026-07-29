@@ -109,9 +109,9 @@ function show(v: View, { push = true } = {}) {
 // Return to whatever pushed the current view.
 //
 // `show()` has recorded every push since the app started, but until now NOTHING read
-// the stack — so a pushed flow had no way home except an unrelated destination
-// (create-brain's Cancel called openBrowse() and landed you on the file tree rather
-// than the brains list you came from). The breadcrumb answers "where am I"; this
+// the stack — so a pushed flow had no way home except an unrelated destination (the
+// create-a-brain form's Cancel called openBrowse() and landed you on the file tree
+// rather than the brains list you came from). The breadcrumb answers "where am I"; this
 // answers "undo the step that got me here", which is what a flow needs to be
 // cancelable.
 //
@@ -122,6 +122,13 @@ function goBack(fallback?: () => void): void {
 	const prev = history.pop();
 	if (prev) show(prev, { push: false });
 	else fallback?.();
+}
+
+// Where Back would actually land, for chrome that NAMES the destination. A crumb
+// reading "Brains" on a screen whose Back goes somewhere else is worse than no crumb,
+// and a flow reachable from several places (add-brain) can't know statically.
+function backKind(): View['kind'] | null {
+	return history.at(-1)?.kind ?? null;
 }
 
 // Editable = the Worker's own isContentPath verdict against the delivered policy —
@@ -161,5 +168,6 @@ export {
 	bump,
 	show,
 	goBack,
+	backKind,
 	isEditablePath
 };

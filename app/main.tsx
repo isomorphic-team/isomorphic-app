@@ -22,6 +22,7 @@ import {
 	currentView,
 	show,
 	goBack,
+	backKind,
 	brainList,
 	activeBrain
 } from './core/store.ts';
@@ -43,7 +44,7 @@ import {
 	openMembers,
 	openBrains,
 	openSettings,
-	openCreateBrain,
+	openAddBrain,
 	switchBrain,
 	runSearch
 } from './core/actions.ts';
@@ -376,10 +377,20 @@ function Breadcrumb({ view }: { view: View }) {
 	// that needs room takes the whole card rather than floating a dialog inside it —
 	// app/ui/Flow.tsx) and hangs off the screen it was opened from, so the crumb is
 	// the way back out as well as the statement of where you are.
+	// The parent crumb is conditional: add-brain is reachable three ways (the brains
+	// list, the switcher, the no-brains empty state), so it is shown only when Back
+	// actually goes to the brains list. A crumb must never name a destination its own
+	// click would not reach.
 	if (view.kind === 'add-brain')
 		return (
-			<DestinationCrumb parent={{ label: 'Brains', onClick: () => goBack(openBrains) }}>
-				<span class="text-fg">Add a brain</span>
+			<DestinationCrumb
+				parent={
+					backKind() === 'brains'
+						? { label: 'Brains', onClick: () => goBack(openBrains) }
+						: undefined
+				}
+			>
+				<span class="text-fg">{view.first ? 'Create your first brain' : 'Add a brain'}</span>
 			</DestinationCrumb>
 		);
 	if (view.kind === 'invite-member')
@@ -392,15 +403,6 @@ function Breadcrumb({ view }: { view: View }) {
 		return (
 			<DestinationCrumb parent={{ label: 'Your settings', onClick: () => goBack(openSettings) }}>
 				<span class="text-fg">Connect an account</span>
-			</DestinationCrumb>
-		);
-	// create-brain has no parent crumb: it is reachable from the brains list, the
-	// switcher's "New brain", and the no-brains empty state, so naming one would be
-	// wrong two times out of three. Its Cancel button still goes back correctly.
-	if (view.kind === 'create-brain')
-		return (
-			<DestinationCrumb>
-				<span class="text-fg">{view.first ? 'Create your first brain' : 'New brain'}</span>
 			</DestinationCrumb>
 		);
 	const path = 'path' in view ? (view as { path: string }).path : null;
@@ -503,12 +505,12 @@ function BrainSwitcher() {
 						type="button"
 						onClick={() => {
 							setOpen(false);
-							openCreateBrain();
+							openAddBrain();
 						}}
 						class="flex w-full items-center gap-2.5 px-3 py-1.5 text-left text-sm text-muted hover:bg-chip hover:text-fg"
 					>
 						<span class="shrink-0 text-[15px] leading-none">＋</span>
-						<span class="min-w-0 flex-1 truncate">New brain</span>
+						<span class="min-w-0 flex-1 truncate">Add a brain</span>
 					</button>
 				</div>
 			)}
@@ -561,18 +563,18 @@ function Header({ view }: { view: View }) {
 			    which have slightly different intrinsic heights — can't nudge the header up/down. */}
 			<div class="flex h-9 items-center gap-1.5 px-2.5 text-sm">
 				{/* Top-left is brain-aware: with ≥1 brain it's the brain switcher (which lists
-				    brains, opens the active brain's files, and offers "New brain"); with zero
-				    brains it's a New-brain button; before the list loads it's plain Files.
-				    The New-brain branch also requires that no brain is currently open: offering
+				    brains, opens the active brain's files, and offers "Add a brain"); with zero
+				    brains it's an Add-a-brain button; before the list loads it's plain Files.
+				    That branch also requires that no brain is currently open: offering
 				    "create your first brain" to someone reading a page in one is always wrong, so
 				    a brain on screen outranks an empty list however the list got that way. */}
 				{brainList && brainList.length === 0 && !activeBrain ? (
 					<Button
 						variant="ghost"
 						size="icon"
-						title="Create a brain"
-						aria-label="Create a brain"
-						onClick={openCreateBrain}
+						title="Add a brain"
+						aria-label="Add a brain"
+						onClick={() => openAddBrain()}
 					>
 						<PlusIcon />
 					</Button>
