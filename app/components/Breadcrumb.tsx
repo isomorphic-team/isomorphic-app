@@ -45,6 +45,7 @@ import {
 	FolderIcon,
 	FileIcon,
 	ArrowLeftIcon,
+	ListIcon,
 	HistoryIcon,
 	GraphIcon,
 	PeopleIcon,
@@ -354,6 +355,12 @@ type Destination = { key: string; label: string; icon: ComponentChildren; open: 
 
 function brainDestinations(): Destination[] {
 	return [
+		// Files leads, and belongs here even though the brain crumb's own label already
+		// opens it. The brain crumb is doing two jobs — it is the ROOT of the trail and it
+		// is the file-tree VIEW — and only the first of those is visible from a picker. A
+		// list that offers Graph and Members while silently omitting the tree is claiming
+		// to be the views of this brain and isn't one of them.
+		{ key: 'files', label: 'Files', icon: <ListIcon />, open: () => openBrowse() },
 		{ key: 'activity', label: 'Recent changes', icon: <HistoryIcon />, open: () => openActivity() },
 		{ key: 'graph', label: 'Graph', icon: <GraphIcon />, open: () => openGraph() },
 		{ key: 'members', label: 'Members', icon: <PeopleIcon />, open: openMembers }

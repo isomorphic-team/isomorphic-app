@@ -77,6 +77,14 @@ const LinkIcon = () => (
 	</svg>
 );
 
+const ListIcon = () => (
+	<svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true">
+		<path
+			fill="currentColor"
+			d="M2 3h2v2H2zM6 3.5h8v1H6zM2 7h2v2H2zM6 7.5h8v1H6zM2 11h2v2H2zM6 11.5h8v1H6z"
+		/>
+	</svg>
+);
 const SearchIcon = () => (
 	<svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true">
 		<circle cx="7" cy="7" r="4.25" fill="none" stroke="currentColor" stroke-width="1.5" />
@@ -321,6 +329,7 @@ export {
 	CloseIcon,
 	GithubIcon,
 	LinkIcon,
+	ListIcon,
 	SearchIcon,
 	HistoryIcon,
 	GraphIcon,
