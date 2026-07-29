@@ -147,14 +147,30 @@ function GraphView({
 			x: (sx - view.panX) / view.k,
 			y: (sy - view.panY) / view.k
 		});
-		// The view transform that frames the current node bounds with a margin.
+		// What the camera frames. Normally every node; with a `focus`, that node and its
+		// direct neighbours — which is what view_graph's own description promises ("center
+		// and highlight one page and its neighbors") and what the header's graph button
+		// means on a page. Without this, focus only tinted one dot accent inside the whole
+		// brain laid out identically, so opening the graph FROM a page was
+		// indistinguishable from opening it cold.
+		const framed = (() => {
+			const near = focus ? neighbors.get(focus) : null;
+			if (!near) return sim;
+			const subset = sim.filter((n) => n.id === focus || near.has(n.id));
+			// A page with no links would frame a single point and zoom to the cap. Falling
+			// back to the whole graph shows it sitting alone at the edge, which is the more
+			// useful answer to "where does this page sit".
+			return subset.length > 1 ? subset : sim;
+		})();
+
+		// The view transform that frames `framed`'s bounds with a margin.
 		function computeFit(): { k: number; panX: number; panY: number } | null {
-			if (!sim.length || W <= 0 || H <= 0) return null;
+			if (!framed.length || W <= 0 || H <= 0) return null;
 			let minX = Infinity,
 				minY = Infinity,
 				maxX = -Infinity,
 				maxY = -Infinity;
-			for (const n of sim) {
+			for (const n of framed) {
 				minX = Math.min(minX, n.x);
 				minY = Math.min(minY, n.y);
 				maxX = Math.max(maxX, n.x);
