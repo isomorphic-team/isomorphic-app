@@ -50,7 +50,7 @@ export interface ViewDef<K extends keyof ViewProps = keyof ViewProps> {
 // `actions` both receive the correctly-narrowed View member for that kind.
 //
 // `actions` is called on every header render, so it may read live state off the
-// module-level control handles (treeCtl, editCtl, addCtl) — those already bump()
+// module-level control handles (treeCtl, editCtl) — those already bump()
 // the store when they change, which is what re-renders the header.
 export function defineView<K extends keyof ViewProps>(
 	kind: K,

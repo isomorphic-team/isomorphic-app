@@ -131,19 +131,15 @@ function isEditablePath(path: string): boolean {
 	return isContentPath(path, brainPolicy);
 }
 
-// The list screens' "add" action, published to the header's action slot.
-//
-// Deliberately ONE shared handle rather than a membersCtl / brainsCtl / settingsCtl
-// each: only one view is mounted at a time, so one slot is sufficient, and three
-// near-identical handles is how the duplication that this whole series of passes has
-// been unwinding gets started. (treeCtl and editCtl stay separate because they carry
-// real per-view STATE — sort order, expansion, saving — not just a callback.)
-// (The `useAddAction` hook that binds this lives in app/ui/AddRow.tsx — this module
-// is the lowest runtime layer and deliberately imports no Preact.)
-const addCtl: { bound: boolean; start: () => void } = { bound: false, start: () => {} };
+// (There used to be an `addCtl` handle here, so a list screen could publish its
+// inline composer's open() to the header. Add-shaped actions are pushed VIEWS now —
+// see app/ui/Flow.tsx — so the header just calls the opener directly and nothing has
+// to be registered at mount time. That registration was also a failure mode: a view
+// that imported the binding hook and forgot to CALL it typechecked clean and simply
+// rendered no button. `noUnusedLocals` now catches that shape, but not needing the
+// handle at all is better.)
 
 export {
-	addCtl,
 	history,
 	browseCache,
 	setBrowseCache,

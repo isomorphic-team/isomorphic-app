@@ -7,15 +7,14 @@ import { openBrains, finishAddBrain } from '../core/actions.ts';
 import { toast } from '../core/toast.tsx';
 import { BrainGlyph } from '../core/icons.tsx';
 import { defineView } from '../core/view-registry.ts';
-import { Button, List, ListRow, listRowTitle } from '../ui/index.ts';
-import { viewTitle } from '../ui/typography.ts';
+import { Button, List, ListRow, listRowTitle, Flow, FlowNote } from '../ui/index.ts';
 
 // Adopt an existing GitHub repo as a brain: pick the org, then pick the repo.
 //
 // A whole VIEW rather than the inline composer its sibling actions use, because it
 // picks from two lists whose lengths we don't control. The card is already a bounded
 // box in the conversation, so the thing that plays a dialog's role here is a pushed
-// view, not an overlay — see app/ui/AddRow.tsx for the rule and CreateBrainView for
+// view, not an overlay — see app/ui/Flow.tsx for the rule and CreateBrainView for
 // the other half of the pair (this adopts a repo; that scaffolds a new one).
 //
 // The step lives in component state rather than in the View object: it is form state,
@@ -71,20 +70,21 @@ function AddBrainView({ orgs }: { orgs: OrgTarget[] }) {
 	const leave = () => (canStepBack ? setTarget(null) : goBack(openBrains));
 
 	return (
-		<div class="mx-auto mt-10 max-w-md px-4">
-			<div class="text-center">
-				<div class="mb-3 flex justify-center text-muted">
-					<BrainGlyph />
-				</div>
-				<h2 class={viewTitle}>Add a brain</h2>
-				<p class="mx-auto mt-1 max-w-xs text-sm text-muted">
-					{target
-						? `Choose a repo in ${target.orgLabel}. Its contents stay where they are.`
-						: 'Connect a GitHub repo you already have. Choose where it belongs.'}
-				</p>
-			</div>
-
-			<div class="mt-5">
+		<Flow
+			icon={<BrainGlyph />}
+			title="Add a brain"
+			subtitle={
+				target
+					? `Choose a repo in ${target.orgLabel}. Its contents stay where they are.`
+					: 'Connect a GitHub repo you already have. Choose where it belongs.'
+			}
+			footer={
+				<Button variant="outline" onClick={leave} disabled={busy} class="text-sm">
+					{canStepBack ? 'Back' : 'Cancel'}
+				</Button>
+			}
+		>
+			<>
 				{!target ? (
 					<PickList>
 						{orgs.map((o) => (
@@ -92,19 +92,19 @@ function AddBrainView({ orgs }: { orgs: OrgTarget[] }) {
 						))}
 					</PickList>
 				) : error ? (
-					<Note>
+					<FlowNote>
 						{error}{' '}
 						<Button variant="link" onClick={() => setAttempt((n) => n + 1)}>
 							Try again
 						</Button>
-					</Note>
+					</FlowNote>
 				) : repos === null ? (
-					<Note>Loading repos…</Note>
+					<FlowNote>Loading repos…</FlowNote>
 				) : repos.length === 0 ? (
-					<Note>
+					<FlowNote>
 						No unconnected repos in {target.orgLabel}. Add the repo to the Isomorphic App
 						installation on GitHub first, then come back.
-					</Note>
+					</FlowNote>
 				) : (
 					<PickList>
 						{repos.map((r) => (
@@ -112,14 +112,8 @@ function AddBrainView({ orgs }: { orgs: OrgTarget[] }) {
 						))}
 					</PickList>
 				)}
-			</div>
-
-			<div class="mt-4 flex justify-center">
-				<Button variant="outline" onClick={leave} disabled={busy} class="text-sm">
-					{canStepBack ? 'Back' : 'Cancel'}
-				</Button>
-			</div>
-		</div>
+			</>
+		</Flow>
 	);
 }
 
@@ -147,12 +141,6 @@ function PickRow({
 				{label}
 			</Button>
 		</ListRow>
-	);
-}
-
-function Note({ children }: { children: ComponentChildren }) {
-	return (
-		<div class="rounded-md border border-border px-3 py-2.5 text-sm text-muted">{children}</div>
 	);
 }
 

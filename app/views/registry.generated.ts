@@ -5,10 +5,12 @@ import ActivityView from './ActivityView.tsx';
 import AddBrainView from './AddBrainView.tsx';
 import BrainsView from './BrainsView.tsx';
 import Browse from './Browse.tsx';
+import ConnectAccountView from './ConnectAccountView.tsx';
 import CreateBrainView from './CreateBrainView.tsx';
 import EditView from './EditView.tsx';
 import ErrorView from './ErrorView.tsx';
 import GraphView from './GraphView.tsx';
+import InviteMemberView from './InviteMemberView.tsx';
 import LoadingView from './LoadingView.tsx';
 import MembersView from './MembersView.tsx';
 import PageView from './PageView.tsx';
@@ -20,10 +22,12 @@ const VIEW_DEFS = [
 	AddBrainView,
 	BrainsView,
 	Browse,
+	ConnectAccountView,
 	CreateBrainView,
 	EditView,
 	ErrorView,
 	GraphView,
+	InviteMemberView,
 	LoadingView,
 	MembersView,
 	PageView,

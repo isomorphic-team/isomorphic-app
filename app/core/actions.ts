@@ -236,13 +236,28 @@ function manageableOrgs(brains: BrainRow[]): OrgTarget[] {
 	return out;
 }
 
-// Open the "add an existing repo as a brain" flow as its own view.
+// ---------- flows ----------
 //
-// It is a pushed VIEW rather than an inline row because it picks from two lists whose
-// lengths we don't control (orgs, then that org's connectable repos). See AddRow.tsx
-// for where that line is drawn.
+// Every add-shaped action in the app opens as its own PUSHED VIEW: add a brain,
+// create a brain, invite a member, connect an account. The card is already a bounded
+// box in the conversation, so a flow that needs room takes the whole card rather than
+// floating a dialog inside it — the reasoning, and the shared shell, are in
+// app/ui/Flow.tsx. Openers are grouped here because they are the entry points, and a
+// header action calls one directly (there is no composer to register at mount time).
+//
+// Each flow exits through goBack(), falling back to the screen it belongs to when
+// there is no history (a flow reached straight from a tool result).
+
 function openAddBrain(orgs: OrgTarget[]) {
 	show({ kind: 'add-brain', orgs });
+}
+
+function openInviteMember() {
+	show({ kind: 'invite-member' });
+}
+
+function openConnectAccount() {
+	show({ kind: 'connect-account' });
 }
 
 // Leave the add-brain flow for the brain it just connected.
@@ -254,9 +269,26 @@ function openAddBrain(orgs: OrgTarget[]) {
 // which switchBrain then pushes on its way out.
 function finishAddBrain(sc: Record<string, unknown>, connectedId: string) {
 	const fresh = brainsViewFromSc(sc);
-	if (history[history.length - 1]?.kind === 'brains') history.pop();
+	dropStale('brains');
 	show(fresh, { push: false });
 	switchBrain(connectedId);
+}
+
+// Leave the invite flow for the roster, with the new invite already on it (the
+// mutation returns the fresh roster). Same stack discipline as finishAddBrain: a
+// completed flow must not sit in history, or Back re-opens a form for something the
+// user has already done.
+function finishInvite(sc: Record<string, unknown>) {
+	const fresh = membersViewFromSc(sc);
+	dropStale('members');
+	show(fresh, { push: false });
+}
+
+// Drop the entry a flow was opened from, when it is the screen the flow's own result
+// supersedes. Guarded on kind so an unexpected stack (a flow reached some other way)
+// is left alone rather than silently eating someone else's history entry.
+function dropStale(kind: View['kind']) {
+	if (history[history.length - 1]?.kind === kind) history.pop();
 }
 
 // Create a new named brain, then land on its (empty) file tree. The tool scaffolds a
@@ -679,6 +711,9 @@ export {
 	manageableOrgs,
 	openAddBrain,
 	finishAddBrain,
+	openInviteMember,
+	finishInvite,
+	openConnectAccount,
 	openBrains,
 	membersViewFromSc,
 	fetchPage,

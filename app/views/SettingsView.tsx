@@ -2,7 +2,7 @@ import type { Identity, ConnectedAccount } from '../core/types.ts';
 import { InitialsAvatar, LinkIcon } from '../core/icons.tsx';
 import { ConnectedAccountsSection } from '../components/ConnectedAccountsSection.tsx';
 import { defineView } from '../core/view-registry.ts';
-import { addCtl } from '../core/store.ts';
+import { openConnectAccount } from '../core/actions.ts';
 import { eyebrow } from '../ui/typography.ts';
 
 // The user's own settings. Today it's the signed-in identity card; it's the extensible
@@ -63,16 +63,14 @@ export default defineView(
 	(v) => <SettingsView identity={v.identity} accounts={v.accounts} />,
 	{
 		// Linking one of your OWN accounts needs no admin gate — see ConnectedAccountsSection.
-		actions: () =>
-			addCtl.bound
-				? [
-						{
-							key: 'connect',
-							label: 'Connect',
-							title: 'Connect another account',
-							onClick: addCtl.start
-						}
-					]
-				: []
+		// Unconditional: this screen is always yours, so the action is always available.
+		actions: () => [
+			{
+				key: 'connect',
+				label: 'Connect',
+				title: 'Connect another account',
+				onClick: openConnectAccount
+			}
+		]
 	}
 );

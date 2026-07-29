@@ -22,7 +22,7 @@ import { Button, List, ListRow, listRowTitle } from '../ui/index.ts';
 //
 // Adding opens its OWN view (AddBrainView) rather than an inline composer, because it
 // picks from two lists of unknown length. This screen therefore holds no add state at
-// all — see app/ui/AddRow.tsx for which actions go inline and which get a view.
+// all — see app/ui/Flow.tsx, where every add-shaped action in the app now lands.
 function BrainsView({ brains, active }: { brains: BrainRow[]; active: string }) {
 	const [busy, setBusy] = useState(false);
 

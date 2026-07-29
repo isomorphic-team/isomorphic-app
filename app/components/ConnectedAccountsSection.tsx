@@ -1,49 +1,26 @@
-// ---------- connected accounts view ----------
+// ---------- connected accounts ----------
 
 import { useState } from 'preact/hooks';
 import type { ConnectedAccount } from '../core/types.ts';
-import { app, callTool, firstText } from '../core/host.ts';
+import { callTool, firstText } from '../core/host.ts';
 import { parseAccounts } from '../core/actions.ts';
 import { toast, askConfirm } from '../core/toast.tsx';
 import { InitialsAvatar, CloseIcon, GithubIcon } from '../core/icons.tsx';
-import { Button, Input, List, ListRow, AddRow, useAddAction } from '../ui/index.ts';
+import { Button, List, ListRow } from '../ui/index.ts';
 
 // The person's linked identities, rendered inline in Your settings: email logins +
-// GitHub accounts. Anyone can link another of THEIR own accounts (verified by signing
-// in as it), so there's no admin gate. Linking returns a verification URL (not a
-// roster), surfaced as a callout the user opens; unlinking updates the list in place.
+// GitHub accounts. Unlinking updates the list in place.
+//
+// Connecting is NOT here: it is a header action opening its own view
+// (ConnectAccountView), because linking is two steps and the second one is a link the
+// user has to go act on. See app/ui/Flow.tsx. Anyone can link another of THEIR own
+// accounts (verified by signing in as it), so there is no admin gate on that action.
+//
 // Owns its `accounts` state (seeded from props) so unlink refreshes without rebuilding
 // the whole settings view.
 function ConnectedAccountsSection({ initial }: { initial: ConnectedAccount[] }) {
 	const [accounts, setAccounts] = useState(initial);
 	const [busy, setBusy] = useState(false);
-	const [email, setEmail] = useState('');
-	const [linkUrl, setLinkUrl] = useState<string | null>(null);
-	const [connecting, setConnecting] = useState(false);
-	useAddAction(() => setConnecting(true));
-
-	// Dismiss the composer, whichever step it is on. Clearing the URL matters: the
-	// composer decides which step to render from it, so a stale one would re-open on
-	// step two the next time Connect is pressed.
-	function dismiss() {
-		setConnecting(false);
-		setLinkUrl(null);
-	}
-
-	async function startLink() {
-		if (busy) return;
-		setBusy(true);
-		const res = await callTool('link_identity', email.trim() ? { email: email.trim() } : {});
-		setBusy(false);
-		if (res.isError) return toast(firstText(res), true);
-		const sc = (res.structuredContent ?? {}) as { link?: { url?: string } };
-		if (sc.link?.url) {
-			setLinkUrl(sc.link.url); // advances the composer to step two, in place
-			setEmail('');
-		} else {
-			toast(firstText(res));
-		}
-	}
 
 	async function unlink(args: Record<string, unknown>, label: string) {
 		if (busy) return;
@@ -68,56 +45,6 @@ function ConnectedAccountsSection({ initial }: { initial: ConnectedAccount[] }) 
 	return (
 		<div>
 			<List>
-				{/* Same trigger, same position, same dismissal as Members and the file
-				    tree. The verb stays "Connect" from the row through to the button.
-				    Linking is really TWO steps — name the account, then go sign in as it —
-				    and step two replaces step one IN PLACE. It used to render as a banner
-				    above the list instead, so submitting the form made it vanish and the
-				    answer appear somewhere else on the screen. */}
-				<AddRow open={connecting} onClose={dismiss}>
-					{({ close }) =>
-						linkUrl ? (
-							<div class="rounded-md border border-border bg-chip px-3 py-2.5 text-sm">
-								<div class="text-fg">
-									Open this link and sign in as the account you want to connect:
-								</div>
-								<Button
-									variant="link"
-									onClick={() => app.openLink({ url: linkUrl })}
-									class="mt-1 block break-all text-left"
-								>
-									{linkUrl}
-								</Button>
-								<div class="mt-1 text-xs text-muted">Expires in 1 hour · single use</div>
-								<Button variant="ghost" size="xs" onClick={close} class="mt-1.5">
-									Done
-								</Button>
-							</div>
-						) : (
-							<form
-								class="flex items-center gap-2"
-								onSubmit={(e) => {
-									e.preventDefault();
-									startLink();
-								}}
-							>
-								<Input
-									// eslint-disable-next-line
-									autofocus
-									type="email"
-									required
-									value={email}
-									onInput={(e) => setEmail((e.target as HTMLInputElement).value)}
-									placeholder="name@example.com"
-									class="min-w-0 flex-1"
-								/>
-								<Button type="submit" disabled={busy || !email.trim()}>
-									Connect
-								</Button>
-							</form>
-						)
-					}
-				</AddRow>
 				{emails.map((a) => (
 					<ListRow key={a.user_id}>
 						<InitialsAvatar name={a.name || a.email || '?'} />

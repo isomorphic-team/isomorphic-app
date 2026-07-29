@@ -372,15 +372,31 @@ function Breadcrumb({ view }: { view: View }) {
 				<span class="text-fg">Your settings</span>
 			</DestinationCrumb>
 		);
-	// The two brain-standing-up flows. Both are pushed views (the card is already a
-	// bounded box, so a flow that needs room takes the whole card rather than floating
-	// a dialog inside it), and both hang off the brains list they were opened from.
+	// The flows. Each is a pushed view (the card is already a bounded box, so a flow
+	// that needs room takes the whole card rather than floating a dialog inside it —
+	// app/ui/Flow.tsx) and hangs off the screen it was opened from, so the crumb is
+	// the way back out as well as the statement of where you are.
 	if (view.kind === 'add-brain')
 		return (
 			<DestinationCrumb parent={{ label: 'Brains', onClick: () => goBack(openBrains) }}>
 				<span class="text-fg">Add a brain</span>
 			</DestinationCrumb>
 		);
+	if (view.kind === 'invite-member')
+		return (
+			<DestinationCrumb parent={{ label: 'Members', onClick: () => goBack(openMembers) }}>
+				<span class="text-fg">Invite</span>
+			</DestinationCrumb>
+		);
+	if (view.kind === 'connect-account')
+		return (
+			<DestinationCrumb parent={{ label: 'Your settings', onClick: () => goBack(openSettings) }}>
+				<span class="text-fg">Connect an account</span>
+			</DestinationCrumb>
+		);
+	// create-brain has no parent crumb: it is reachable from the brains list, the
+	// switcher's "New brain", and the no-brains empty state, so naming one would be
+	// wrong two times out of three. Its Cancel button still goes back correctly.
 	if (view.kind === 'create-brain')
 		return (
 			<DestinationCrumb>
