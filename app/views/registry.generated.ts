@@ -3,6 +3,7 @@ import type { VNode } from 'preact';
 import type { View, ViewAction } from '../core/view-registry.ts';
 import ActivityView from './ActivityView.tsx';
 import AddBrainView from './AddBrainView.tsx';
+import BrainAccessView from './BrainAccessView.tsx';
 import BrainsView from './BrainsView.tsx';
 import Browse from './Browse.tsx';
 import ConnectAccountView from './ConnectAccountView.tsx';
@@ -15,10 +16,12 @@ import MembersView from './MembersView.tsx';
 import PageView from './PageView.tsx';
 import SearchView from './SearchView.tsx';
 import SettingsView from './SettingsView.tsx';
+import ShareBrainView from './ShareBrainView.tsx';
 
 const VIEW_DEFS = [
 	ActivityView,
 	AddBrainView,
+	BrainAccessView,
 	BrainsView,
 	Browse,
 	ConnectAccountView,
@@ -30,7 +33,8 @@ const VIEW_DEFS = [
 	MembersView,
 	PageView,
 	SearchView,
-	SettingsView
+	SettingsView,
+	ShareBrainView
 ] as const;
 
 // Compile-time exhaustiveness: every View kind must have exactly one renderer.

@@ -96,7 +96,9 @@ export interface BrainRow {
 	label: string;
 	role: string;
 	active: boolean;
-	canManage?: boolean; // caller is admin+ in this brain's org
+	canManage?: boolean; // caller is admin+ in this brain's ORG (can disconnect it)
+	canShare?: boolean; // caller is admin+ ON THIS BRAIN (can change who reaches it)
+	visibility?: string; // 'org' | 'private': drives the Private badge
 	orgId?: string; // so the UI can target adds per-org, independent of the active brain
 	orgLabel?: string;
 	needsConfig?: boolean; // adopted repo with no content under its roots — offer "Set up"
@@ -118,6 +120,28 @@ export interface ConnectableRepo {
 	id: string;
 	owner: string;
 	repo: string;
+}
+
+// Per-brain access payload (see src/tools/brain-access.ts). The brain-scope
+// sibling of the org roster above: `role` here is the caller's role ON THIS BRAIN,
+// and `via` says how they got it: an explicit share, the brain being visible to
+// the whole org, or the org-admin floor. The UI uses `via` to label the row and to
+// hide a Remove button that would do nothing (you cannot un-share someone who
+// reaches the brain because it is org-visible).
+export interface BrainAccessEntry {
+	user_id: string;
+	email: string;
+	name: string | null;
+	role: MemberRole;
+	via: 'grant' | 'org' | 'org-admin';
+	granted_at?: string;
+}
+// The caller, in both scopes at once: the panel gates sharing controls on the
+// BRAIN role and shows org context from the org role.
+export interface BrainAccessSelf {
+	user_id: string;
+	role: MemberRole;
+	orgRole: MemberRole;
 }
 
 // One entry in the "Connected accounts" roster (see src/tools/connected-accounts.ts):

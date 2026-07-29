@@ -15,6 +15,8 @@ import type {
 	Member,
 	Invite,
 	MemberSelf,
+	BrainAccessEntry,
+	BrainAccessSelf,
 	MemberRole,
 	BrainRow,
 	OrgTarget,
@@ -114,6 +116,7 @@ function handleToolResult(result: CallToolResult) {
 			{ push: false }
 		);
 	else if (view === 'members') show(membersViewFromSc(sc), { push: false });
+	else if (view === 'brain-access') show(brainAccessViewFromSc(sc), { push: false });
 	else if (view === 'brains') {
 		const bv = brainsViewFromSc(sc);
 		// Zero brains (e.g. view_brains on a fresh account) → the create-your-first-brain
@@ -356,6 +359,71 @@ function membersViewFromSc(sc: Record<string, unknown>): View {
 		invites: Array.isArray(sc.invites) ? (sc.invites as Invite[]) : [],
 		me: { user_id: String(me.user_id ?? ''), role: (me.role as MemberRole) ?? 'viewer' }
 	};
+}
+
+// Build a brain-access View from a tool result's structuredContent (brain_access
+// and every share_brain mutation return the fresh access list).
+function brainAccessViewFromSc(sc: Record<string, unknown>): View {
+	const me = (sc.me ?? {}) as Partial<BrainAccessSelf>;
+	const active = (sc.activeBrain ?? {}) as { id?: string; label?: string };
+	return {
+		kind: 'brain-access',
+		access: Array.isArray(sc.access) ? (sc.access as BrainAccessEntry[]) : [],
+		visibility: typeof sc.visibility === 'string' ? sc.visibility : 'org',
+		// Carried so the panel and its share flow keep acting on the brain the user
+		// opened, not on whatever happens to be active: the Share control in the
+		// brains list can target a brain that is not the current one, and `brain` has
+		// to ride on every subsequent call for it to stay there.
+		brainId: String(active.id ?? ''),
+		brainLabel: String(active.label ?? 'this brain'),
+		me: {
+			user_id: String(me.user_id ?? ''),
+			role: (me.role as MemberSelf['role']) ?? 'viewer',
+			orgRole: (me.orgRole as MemberSelf['role']) ?? 'viewer'
+		}
+	};
+}
+
+// Open the sharing panel for a brain: who can reach it, and at what level.
+// `brain` targets a specific one (the Share control in the brains list); omitted,
+// it acts on the active brain.
+async function openBrainAccess(brain?: string) {
+	show({ kind: 'loading', label: 'Loading sharing…' });
+	try {
+		const result = await callTool('brain_access', brain ? { brain } : {});
+		if (result.isError) throw new Error(firstText(result));
+		show(brainAccessViewFromSc((result.structuredContent ?? {}) as Record<string, unknown>));
+	} catch (e) {
+		show({
+			kind: 'error',
+			headline: "Couldn't load sharing.",
+			detail: String(e),
+			retry: () => openBrainAccess(brain)
+		});
+	}
+}
+
+// Re-render the sharing panel in place from a mutation's structuredContent, without
+// pushing a history entry (mirrors refreshMembers).
+function refreshBrainAccess(sc: Record<string, unknown>) {
+	show(brainAccessViewFromSc(sc), { push: false });
+}
+
+// Share this brain with someone new. A pushed flow rather than a row on the panel,
+// for the same reason inviting is: every add-shaped action in the app opens one
+// (app/ui/Flow.tsx), and the extra room is what lets the picked level say what it
+// actually grants.
+function openShareBrain(brainId: string, brainLabel: string) {
+	show({ kind: 'share-brain', brainId, brainLabel });
+}
+
+// Leave the share flow for the refreshed panel, the new person already on it. Same
+// stack discipline as finishInvite: a completed flow must not sit in history, or
+// Back re-opens a form for something already done.
+function finishShareBrain(sc: Record<string, unknown>) {
+	const fresh = brainAccessViewFromSc(sc);
+	dropStale('brain-access');
+	show(fresh, { push: false });
 }
 
 async function fetchPage(path: string): Promise<string> {
@@ -729,6 +797,11 @@ export {
 	openConnectAccount,
 	openBrains,
 	membersViewFromSc,
+	brainAccessViewFromSc,
+	openBrainAccess,
+	refreshBrainAccess,
+	openShareBrain,
+	finishShareBrain,
 	fetchPage,
 	fetchPageList,
 	navigateTo,

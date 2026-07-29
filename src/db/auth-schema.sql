@@ -67,10 +67,27 @@ CREATE TABLE IF NOT EXISTS brains (
   repo_name  TEXT NOT NULL,              -- immutable slug (the GitHub repo name)
   name       TEXT,                       -- human display name (user-given); NULL = derive from repo
   created_by TEXT,                       -- app_users.user_id of the creator (audit)
-  visibility TEXT NOT NULL DEFAULT 'org',     -- 'org' (all members) | 'private' | future ACL
+  visibility TEXT NOT NULL DEFAULT 'org',     -- 'org' (every org member) | 'private' (grants only)
   created_at TEXT NOT NULL DEFAULT (datetime('now')),
   UNIQUE (repo_owner, repo_name)
 );
+
+-- Per-brain access grants: the access authority for a 'private' brain, and an
+-- additive override on an 'org' one. Separate from `memberships`: that is the
+-- ORG role (manage members, create/connect brains), this is the BRAIN role
+-- (read, write, configure, share). effectiveBrainRole() in src/lib/orgs.ts is
+-- the single resolution rule. 'owner' is not a brain role: an org owner/admin
+-- floors to admin on every brain in the org instead.
+CREATE TABLE IF NOT EXISTS brain_memberships (
+  brain_id   TEXT NOT NULL REFERENCES brains(brain_id),
+  user_id    TEXT NOT NULL REFERENCES app_users(user_id),
+  role       TEXT NOT NULL,                  -- viewer | editor | admin
+  granted_by TEXT,                           -- app_users.user_id (audit)
+  granted_at TEXT NOT NULL DEFAULT (datetime('now')),
+  PRIMARY KEY (brain_id, user_id)
+);
+
+CREATE INDEX IF NOT EXISTS brain_memberships_user_idx ON brain_memberships (user_id);
 
 -- Pending email invitations (accepted → membership row).
 CREATE TABLE IF NOT EXISTS invitations (

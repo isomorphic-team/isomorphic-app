@@ -30,6 +30,7 @@ import {
 	openGraph,
 	openActivity,
 	openMembers,
+	openBrainAccess,
 	openBrains,
 	openSettings,
 	runSearch
@@ -40,6 +41,7 @@ import {
 	HistoryIcon,
 	GraphIcon,
 	PeopleIcon,
+	ShareIcon,
 	MoreIcon,
 	GearIcon,
 	BrainGlyph
@@ -88,11 +90,14 @@ function OverflowMenu({ editing }: { editing: boolean }) {
 				};
 				return (
 					<>
-						{/* GROUPED BY SCOPE, the same two groups the breadcrumb uses. Recent changes
-						    and Members are views of THIS BRAIN and change when you switch brains;
-						    Manage brains and Your settings are views of YOUR ACCOUNT and do not.
-						    Ungrouped, this read as one flat list of five unrelated places, which is
-						    what made Members look like a property of whichever brain you were in.
+						{/* GROUPED BY SCOPE, the same three groups the breadcrumb uses. Recent
+						    changes and Sharing are views of THIS BRAIN and change when you switch
+						    brains. Members is a view of the ORGANIZATION: every brain in one org
+						    shows the same roster, so it moved out of "This brain", where it was the
+						    one row that failed the test the group is named for. Manage brains and
+						    Your settings are views of YOUR ACCOUNT and change with neither.
+						    Ungrouped, this read as one flat list of unrelated places, which is what
+						    made Members look like a property of whichever brain you were in.
 						    Graph is not here: it has its own lit control in the bar, and a row would
 						    be a second way to say the same thing. */}
 						{!editing && (
@@ -104,6 +109,17 @@ function OverflowMenu({ editing }: { editing: boolean }) {
 									</span>
 									<span class="flex-1">Recent changes</span>
 								</MenuRow>
+								{/* Ungated: brain_access is read-only and open to anyone who can reach
+								    the brain, so unlike Manage brains below there is no role to check.
+								    Members is the org's people, this is who reaches THIS brain. */}
+								<MenuRow onClick={go(() => openBrainAccess())}>
+									<span class="w-4 text-muted">
+										<ShareIcon />
+									</span>
+									<span class="flex-1">Sharing</span>
+								</MenuRow>
+								<MenuSeparator />
+								<div class={`px-3 pb-0.5 pt-1 ${eyebrow}`}>Organization</div>
 								<MenuRow onClick={go(openMembers)}>
 									<span class="w-4 text-muted">
 										<PeopleIcon />

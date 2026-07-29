@@ -111,14 +111,17 @@ These land **together** (removing auto-provision is what _creates_ the no-brain 
 2. **Decouple context.** org-scope vs brain-scope resolution; brain-scope tools handle "no brain".
 3. **Kill auto-provision.** First touch creates org-only; wire the empty state end-to-end.
 
-## Deferred — per-brain access (next phase)
+## Per-brain access: ✅ BUILT (the follow-up phase)
 
-Explicitly _not_ built here; captured so the direction is on record. When we do it: a
-`brain_memberships(brain_id, user_id, role)` table as the access authority, new brains
-**private by default**, `visibility` enforced (`private` = members only; `org` = share with the
-whole org), per-brain roles, and a brain-scoped sharing/roster UI (mirroring `members.ts`). That
-phase also retires the shared-org co-mingling remnants. **Interim behavior until then:** new
-brains follow the org-visibility model — fine for solo/personal orgs, org-visible in shared orgs.
+Deferred out of this slice and shipped as its own, exactly as scoped:
+`brain_memberships(brain_id, user_id, role)` is the access authority, new brains are **private by
+default**, `visibility` is enforced, brain roles are separate from org roles, and there is a
+brain-scoped sharing UI mirroring `members.ts`. Spec:
+[`brain-level-permissions.md`](./brain-level-permissions.md).
+
+The interim behavior described above (new brains org-visible) no longer applies to newly created
+brains. Every brain that existed before that change keeps `visibility='org'` and behaves exactly
+as it did: the change is not retroactive.
 
 ## Risks / notes
 
