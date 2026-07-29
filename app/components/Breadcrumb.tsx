@@ -29,6 +29,8 @@ import { browseCache, brainList, activeBrain, goBack, backKind } from '../core/s
 import {
 	openBrowse,
 	openFolder,
+	openActivity,
+	openGraph,
 	openBrains,
 	openMembers,
 	openSettings,
@@ -37,7 +39,16 @@ import {
 	fetchPaths,
 	switchBrain
 } from '../core/actions.ts';
-import { BrainGlyph, ChevronDownIcon, FolderIcon, FileIcon } from '../core/icons.tsx';
+import {
+	BrainGlyph,
+	ChevronDownIcon,
+	FolderIcon,
+	FileIcon,
+	HistoryIcon,
+	GraphIcon,
+	PeopleIcon,
+	GearIcon
+} from '../core/icons.tsx';
 import { Menu, MenuRow, MenuSeparator, MenuNote, type MenuTriggerProps } from '../ui/Menu.tsx';
 
 // Wider than the 4px it was, because a crumb is no longer just a word: it is a label
@@ -323,20 +334,111 @@ function PathCrumb({
 	);
 }
 
+// The destinations: the places that are NOT a path but still live one level under the
+// brain. They are siblings of each other in exactly the sense a folder's contents are,
+// which is what lets a destination crumb carry the same picker a path crumb does — the
+// trail answers "what else is at this level" identically wherever you are standing.
+//
+// This deliberately overlaps the ⋯ menu. The two answer different questions (⋯ is what
+// you can DO, the trail is where you can BE) and the overlap is the point: from a page
+// the trail's tail is a page, so ⋯ stays the only way in.
+function destinations(): {
+	key: string;
+	label: string;
+	icon: ComponentChildren;
+	open: () => void;
+}[] {
+	return [
+		{
+			key: 'activity',
+			label: 'Recent changes',
+			icon: <HistoryIcon />,
+			open: () => openActivity()
+		},
+		{ key: 'graph', label: 'Graph', icon: <GraphIcon />, open: () => openGraph() },
+		{ key: 'members', label: 'Members', icon: <PeopleIcon />, open: openMembers },
+		// Same gate as the ⋯ menu's row: brain management is for admins of at least one
+		// org. A picker must never offer a destination its click would be refused.
+		...(brainList?.some((b) => b.canManage)
+			? [
+					{
+						key: 'brains',
+						label: 'Manage brains',
+						icon: <BrainGlyph />,
+						open: openBrains
+					}
+				]
+			: []),
+		{ key: 'settings', label: 'Your settings', icon: <GearIcon />, open: openSettings }
+	];
+}
+
+// A destination crumb: its label, plus the picker of its siblings. `current` marks the
+// row you are on — and an unrecognised key (Search, which is a query rather than a
+// standing place) simply marks nothing, which is honest: the list still answers where
+// else you could go.
+function DestinationPicker({
+	current,
+	last,
+	children
+}: {
+	current: string;
+	last?: boolean;
+	children: ComponentChildren;
+}) {
+	return (
+		<Menu
+			label="Places in this brain"
+			class={last ? 'min-w-0 shrink' : 'shrink-0'}
+			trigger={({ props, open }) => (
+				<span class="group flex min-w-0 items-center">
+					{children}
+					<CrumbChevron props={props} open={open} title="What else is in this brain" />
+				</span>
+			)}
+		>
+			{(close) =>
+				destinations().map((d) => {
+					const here = d.key === current;
+					return (
+						<MenuRow
+							key={d.key}
+							onClick={() => {
+								close();
+								d.open();
+							}}
+						>
+							<span class={`w-4 ${here ? 'text-accent' : 'text-muted'}`}>{d.icon}</span>
+							<span class={`min-w-0 flex-1 truncate ${here ? 'text-accent' : ''}`}>{d.label}</span>
+							{here && <span class="shrink-0 text-accent">✓</span>}
+						</MenuRow>
+					);
+				})
+			}
+		</Menu>
+	);
+}
+
 // A destination that has no path (Search, Members, Recent changes, …) still hangs off
 // the brain crumb:
 //
-//   🧠 Team brain / Members · 4 people
+//   🧠 Team brain / Members ⌄ · 4 people
 //
 // so leaving it is the same one click as anywhere else. `parent` adds one clickable
 // crumb between the brain and the destination, for a view that was PUSHED from another
-// (🧠 / Brains / Add a brain): a pushed flow needs a way back to the thing that opened
-// it, not just a way home, and the crumb is where a user looks for it.
+// (🧠 / Manage brains / Add a brain): a pushed flow needs a way back to the thing that
+// opened it, not just a way home, and the crumb is where a user looks for it.
+//
+// `current` is omitted for a step INSIDE a flow (Invite, Connect an account). That is
+// not an exception to "every crumb is a picker" but the rule applying: a flow step has
+// no siblings to offer, and its parent crumb — which does — carries the picker.
 function DestinationCrumb({
 	parent,
+	current,
 	children
 }: {
-	parent?: { label: string; onClick: () => void };
+	parent?: { key: string; label: string; onClick: () => void };
+	current?: string;
 	children: ComponentChildren;
 }) {
 	return (
@@ -345,17 +447,25 @@ function DestinationCrumb({
 			<CrumbSep />
 			{parent && (
 				<>
-					<button
-						type="button"
-						onClick={parent.onClick}
-						class="shrink-0 text-muted hover:text-fg hover:underline"
-					>
-						{parent.label}
-					</button>
+					<DestinationPicker current={parent.key}>
+						<button
+							type="button"
+							onClick={parent.onClick}
+							class="truncate rounded text-muted outline-none transition-colors hover:text-fg hover:underline focus-visible:ring-2 focus-visible:ring-accent"
+						>
+							{parent.label}
+						</button>
+					</DestinationPicker>
 					<CrumbSep />
 				</>
 			)}
-			<span class="min-w-0 truncate">{children}</span>
+			{current === undefined ? (
+				<span class="min-w-0 truncate">{children}</span>
+			) : (
+				<DestinationPicker current={current} last>
+					<span class="min-w-0 truncate">{children}</span>
+				</DestinationPicker>
+			)}
 		</nav>
 	);
 }
@@ -369,23 +479,32 @@ function DestinationCrumb({
 export function Breadcrumb({ view }: { view: View }) {
 	if (view.kind === 'search')
 		return (
-			<DestinationCrumb>
+			<DestinationCrumb current="search">
 				<span class="text-muted">Search · “{view.query}”</span>
 			</DestinationCrumb>
 		);
 	if (view.kind === 'activity')
 		return (
-			<DestinationCrumb>
-				<span class="text-muted">Recent changes{view.scopePath ? ` · ${view.scopePath}` : ''}</span>
+			<DestinationCrumb current="activity">
+				<span class="text-fg">Recent changes</span>
+				{view.scopePath && <span class="text-muted"> · {view.scopePath}</span>}
 			</DestinationCrumb>
 		);
-	// Graph gets NO label: its control in the bar is lit while you're in it, so a
-	// "Graph" crumb would say the same thing twice. The page/link tally likewise lives
-	// in the canvas's own corner. That leaves just the way back.
-	if (view.kind === 'graph') return <BrainCrumb />;
+	// Graph used to render as a bare brain crumb with nothing after it, on the grounds
+	// that its control sat lit in the bar right beside the trail and would have said the
+	// same thing twice. That control now lives at the far right, and a labelled crumb is
+	// what makes graph a PLACE like the others — one with siblings you can pick from —
+	// rather than the one view whose trail trails off. The page/link tally still lives in
+	// the canvas's own corner.
+	if (view.kind === 'graph')
+		return (
+			<DestinationCrumb current="graph">
+				<span class="text-fg">Graph</span>
+			</DestinationCrumb>
+		);
 	if (view.kind === 'members')
 		return (
-			<DestinationCrumb>
+			<DestinationCrumb current="members">
 				<span class="text-fg">Members</span>
 				<span class="text-muted">
 					{' · '}
@@ -396,14 +515,14 @@ export function Breadcrumb({ view }: { view: View }) {
 		);
 	if (view.kind === 'brains')
 		return (
-			<DestinationCrumb>
-				<span class="text-fg">Brains</span>
+			<DestinationCrumb current="brains">
+				<span class="text-fg">Manage brains</span>
 				<span class="text-muted"> · {view.brains.length}</span>
 			</DestinationCrumb>
 		);
 	if (view.kind === 'settings')
 		return (
-			<DestinationCrumb>
+			<DestinationCrumb current="settings">
 				<span class="text-fg">Your settings</span>
 			</DestinationCrumb>
 		);
@@ -420,7 +539,7 @@ export function Breadcrumb({ view }: { view: View }) {
 			<DestinationCrumb
 				parent={
 					backKind() === 'brains'
-						? { label: 'Brains', onClick: () => goBack(openBrains) }
+						? { key: 'brains', label: 'Manage brains', onClick: () => goBack(openBrains) }
 						: undefined
 				}
 			>
@@ -429,13 +548,17 @@ export function Breadcrumb({ view }: { view: View }) {
 		);
 	if (view.kind === 'invite-member')
 		return (
-			<DestinationCrumb parent={{ label: 'Members', onClick: () => goBack(openMembers) }}>
+			<DestinationCrumb
+				parent={{ key: 'members', label: 'Members', onClick: () => goBack(openMembers) }}
+			>
 				<span class="text-fg">Invite</span>
 			</DestinationCrumb>
 		);
 	if (view.kind === 'connect-account')
 		return (
-			<DestinationCrumb parent={{ label: 'Your settings', onClick: () => goBack(openSettings) }}>
+			<DestinationCrumb
+				parent={{ key: 'settings', label: 'Your settings', onClick: () => goBack(openSettings) }}
+			>
 				<span class="text-fg">Connect an account</span>
 			</DestinationCrumb>
 		);
