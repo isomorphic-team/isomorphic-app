@@ -493,12 +493,19 @@ function DestinationCrumb({
 	parent,
 	current,
 	root = 'brain',
+	rootInert,
 	children
 }: {
 	parent?: { key: string; label: string; onClick: () => void };
 	current?: string;
 	/** See THE SCOPE TEST above. `account` screens sit beside the brain, not inside it. */
 	root?: 'brain' | 'account';
+	/**
+	 * Kill the brain crumb's link. Only Files needs it: the brain crumb's label opens
+	 * the file tree, so on the file tree it would be a crumb that navigates to the view
+	 * you are already reading.
+	 */
+	rootInert?: boolean;
 	children: ComponentChildren;
 }) {
 	return (
@@ -507,7 +514,7 @@ function DestinationCrumb({
 				<BackCrumb />
 			) : (
 				<>
-					<BrainCrumb />
+					<BrainCrumb inert={rootInert} />
 					<CrumbSep />
 				</>
 			)}
@@ -625,8 +632,19 @@ export function Breadcrumb({ view }: { view: View }) {
 			</DestinationCrumb>
 		);
 	const path = 'path' in view ? (view as { path: string }).path : null;
-	// The file tree IS home — the brain crumb is the current location.
-	if (!path) return <BrainCrumb inert />;
+	// The file tree is a VIEW of the brain, so it says so — and being named is what lets
+	// it be selected. It used to render as the bare brain crumb on the reasoning that the
+	// tree IS home, which left the one screen you are on most often as the only one whose
+	// trail never said where you were, and the only brain-scope screen with no way to
+	// reach its siblings. The brain crumb goes inert here rather than the tail: it is the
+	// brain crumb's label that opens the tree, so it is the one that would be the
+	// self-link.
+	if (!path)
+		return (
+			<DestinationCrumb current="files" rootInert>
+				<span class="text-fg">Files</span>
+			</DestinationCrumb>
+		);
 	let segs = path.split('/').filter(Boolean);
 	// A folder note collapses into its folder crumb (never a self-link tail).
 	if (isFolderNoteName(segs[segs.length - 1])) segs = segs.slice(0, -1);
