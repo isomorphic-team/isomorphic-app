@@ -8,7 +8,7 @@ import { toast } from '../core/toast.tsx';
 import { relativeTime } from '../core/util.ts';
 import { InitialsAvatar, CloseIcon } from '../core/icons.tsx';
 import { defineView } from '../core/view-registry.ts';
-import { Button, Input, Select, List, ListRow } from '../ui/index.ts';
+import { Button, Input, Select, List, ListRow, AddRow } from '../ui/index.ts';
 import { eyebrow } from '../ui/typography.ts';
 
 const ROLE_LABEL: Record<MemberRole, string> = {
@@ -52,31 +52,6 @@ function MembersView({
 
 	return (
 		<div>
-			{canManage && (
-				<form
-					class="mb-4 flex items-center gap-2"
-					onSubmit={(e) => {
-						e.preventDefault();
-						const email = inviteEmail.trim();
-						if (!email) return;
-						run('invite_member', { email, role: inviteRole }, () => setInviteEmail(''));
-					}}
-				>
-					<Input
-						type="email"
-						required
-						value={inviteEmail}
-						onInput={(e) => setInviteEmail((e.target as HTMLInputElement).value)}
-						placeholder="Invite by email"
-						class="min-w-0 flex-1"
-					/>
-					<RoleSelect value={inviteRole} disabled={busy} onChange={(r) => setInviteRole(r)} />
-					<Button type="submit" disabled={busy || !inviteEmail.trim()}>
-						Invite
-					</Button>
-				</form>
-			)}
-
 			<List>
 				{members.map((m) => {
 					const isSelf = m.user_id === me.user_id;
@@ -129,6 +104,41 @@ function MembersView({
 						</ListRow>
 					);
 				})}
+				{/* The composer opens where the invited person will land, rather than in a
+				    permanently-docked form above a roster you are usually just reading. */}
+				{canManage && (
+					<AddRow label="Invite member">
+						{({ close }) => (
+							<form
+								class="flex items-center gap-2"
+								onSubmit={(e) => {
+									e.preventDefault();
+									const email = inviteEmail.trim();
+									if (!email) return;
+									run('invite_member', { email, role: inviteRole }, () => {
+										setInviteEmail('');
+										close();
+									});
+								}}
+							>
+								<Input
+									// eslint-disable-next-line
+									autofocus
+									type="email"
+									required
+									value={inviteEmail}
+									onInput={(e) => setInviteEmail((e.target as HTMLInputElement).value)}
+									placeholder="name@example.com"
+									class="min-w-0 flex-1"
+								/>
+								<RoleSelect value={inviteRole} disabled={busy} onChange={(r) => setInviteRole(r)} />
+								<Button type="submit" disabled={busy || !inviteEmail.trim()}>
+									Invite
+								</Button>
+							</form>
+						)}
+					</AddRow>
+				)}
 			</List>
 
 			{invites.length > 0 && (

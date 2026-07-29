@@ -6,7 +6,7 @@ import { app, callTool, firstText } from '../core/host.ts';
 import { parseAccounts } from '../core/actions.ts';
 import { toast, askConfirm } from '../core/toast.tsx';
 import { InitialsAvatar, CloseIcon, GithubIcon } from '../core/icons.tsx';
-import { Button, Input, List, ListRow } from '../ui/index.ts';
+import { Button, Input, List, ListRow, AddRow } from '../ui/index.ts';
 
 // The person's linked identities, rendered inline in Your settings: email logins +
 // GitHub accounts. Anyone can link another of THEIR own accounts (verified by signing
@@ -20,7 +20,7 @@ function ConnectedAccountsSection({ initial }: { initial: ConnectedAccount[] }) 
 	const [email, setEmail] = useState('');
 	const [linkUrl, setLinkUrl] = useState<string | null>(null);
 
-	async function startLink() {
+	async function startLink(onDone?: () => void) {
 		if (busy) return;
 		setBusy(true);
 		const res = await callTool('link_identity', email.trim() ? { email: email.trim() } : {});
@@ -30,6 +30,7 @@ function ConnectedAccountsSection({ initial }: { initial: ConnectedAccount[] }) 
 		if (sc.link?.url) {
 			setLinkUrl(sc.link.url);
 			setEmail('');
+			onDone?.();
 		} else {
 			toast(firstText(res));
 		}
@@ -57,25 +58,6 @@ function ConnectedAccountsSection({ initial }: { initial: ConnectedAccount[] }) 
 
 	return (
 		<div>
-			<form
-				class="mb-3 flex items-center gap-2"
-				onSubmit={(e) => {
-					e.preventDefault();
-					startLink();
-				}}
-			>
-				<Input
-					type="email"
-					value={email}
-					onInput={(e) => setEmail((e.target as HTMLInputElement).value)}
-					placeholder="Connect another email"
-					class="min-w-0 flex-1"
-				/>
-				<Button type="submit" disabled={busy}>
-					Connect
-				</Button>
-			</form>
-
 			{linkUrl && (
 				<div class="mb-4 rounded-md border border-border bg-chip px-3 py-2.5 text-sm">
 					<div class="text-fg">Open this link and sign in as the account you want to connect:</div>
@@ -146,6 +128,33 @@ function ConnectedAccountsSection({ initial }: { initial: ConnectedAccount[] }) 
 						</Button>
 					</ListRow>
 				))}
+				{/* Same trigger, same position, same dismissal as Members and the file
+				    tree. The verb stays "Connect" from the row through to the button. */}
+				<AddRow label="Connect another email">
+					{({ close }) => (
+						<form
+							class="flex items-center gap-2"
+							onSubmit={(e) => {
+								e.preventDefault();
+								startLink(close);
+							}}
+						>
+							<Input
+								// eslint-disable-next-line
+								autofocus
+								type="email"
+								required
+								value={email}
+								onInput={(e) => setEmail((e.target as HTMLInputElement).value)}
+								placeholder="name@example.com"
+								class="min-w-0 flex-1"
+							/>
+							<Button type="submit" disabled={busy || !email.trim()}>
+								Connect
+							</Button>
+						</form>
+					)}
+				</AddRow>
 			</List>
 		</div>
 	);
