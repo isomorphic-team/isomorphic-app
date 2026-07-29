@@ -52,6 +52,7 @@ import {
 	GearIcon
 } from '../core/icons.tsx';
 import { Menu, MenuRow, MenuSeparator, MenuNote, type MenuTriggerProps } from '../ui/Menu.tsx';
+import { crumbCurrent, crumbLink, crumbInert, crumbMeta } from '../ui/typography.ts';
 
 // Wider than the 4px it was, because a crumb is no longer just a word: it is a label
 // and its picker, and those have to read as ONE unit. At the old spacing the chevron
@@ -213,7 +214,7 @@ function BrainCrumb({ inert }: { inert?: boolean }) {
 	);
 	const name = (close?: () => void) =>
 		inert ? (
-			<span class="min-w-0 truncate font-medium text-fg" title={label}>
+			<span class={`min-w-0 truncate ${crumbInert}`} title={label}>
 				{label}
 			</span>
 		) : (
@@ -224,7 +225,7 @@ function BrainCrumb({ inert }: { inert?: boolean }) {
 					close?.();
 					openBrowse();
 				}}
-				class="min-w-0 truncate rounded font-medium text-muted outline-none transition-colors hover:text-fg focus-visible:ring-2 focus-visible:ring-accent"
+				class={`min-w-0 truncate ${crumbLink}`}
 			>
 				{label}
 			</button>
@@ -316,7 +317,7 @@ function PathCrumb({
 			trigger={({ props, open, close }) => (
 				<span class="group flex min-w-0 items-center">
 					{last ? (
-						<span class="truncate text-fg">{label}</span>
+						<span class={`truncate ${crumbCurrent}`}>{label}</span>
 					) : (
 						<button
 							type="button"
@@ -324,7 +325,7 @@ function PathCrumb({
 								close();
 								openFolder(path);
 							}}
-							class="truncate rounded text-muted outline-none transition-colors hover:text-fg hover:underline focus-visible:ring-2 focus-visible:ring-accent"
+							class={`truncate ${crumbLink}`}
 						>
 							{label}
 						</button>
@@ -527,11 +528,7 @@ function DestinationCrumb({
 			{parent && (
 				<>
 					<DestinationPicker scope={root} current={parent.key}>
-						<button
-							type="button"
-							onClick={parent.onClick}
-							class="truncate rounded text-muted outline-none transition-colors hover:text-fg hover:underline focus-visible:ring-2 focus-visible:ring-accent"
-						>
+						<button type="button" onClick={parent.onClick} class={`truncate ${crumbLink}`}>
 							{parent.label}
 						</button>
 					</DestinationPicker>
@@ -559,14 +556,15 @@ export function Breadcrumb({ view }: { view: View }) {
 	if (view.kind === 'search')
 		return (
 			<DestinationCrumb current="search">
-				<span class="text-muted">Search · “{view.query}”</span>
+				<span class={crumbCurrent}>Search</span>
+				<span class={crumbMeta}> · “{view.query}”</span>
 			</DestinationCrumb>
 		);
 	if (view.kind === 'activity')
 		return (
 			<DestinationCrumb current="activity">
-				<span class="text-fg">Recent changes</span>
-				{view.scopePath && <span class="text-muted"> · {view.scopePath}</span>}
+				<span class={crumbCurrent}>Recent changes</span>
+				{view.scopePath && <span class={crumbMeta}> · {view.scopePath}</span>}
 			</DestinationCrumb>
 		);
 	// Graph used to render as a bare brain crumb with nothing after it, on the grounds
@@ -578,25 +576,25 @@ export function Breadcrumb({ view }: { view: View }) {
 	if (view.kind === 'graph')
 		return (
 			<DestinationCrumb current="graph">
-				<span class="text-fg">Graph</span>
+				<span class={crumbCurrent}>Graph</span>
 			</DestinationCrumb>
 		);
 	if (view.kind === 'members')
 		return (
 			<DestinationCrumb current="members">
-				<span class="text-fg">Members</span>
+				<span class={crumbCurrent}>Members</span>
 			</DestinationCrumb>
 		);
 	if (view.kind === 'brains')
 		return (
 			<DestinationCrumb current="brains" root="account">
-				<span class="text-fg">Manage brains</span>
+				<span class={crumbCurrent}>Manage brains</span>
 			</DestinationCrumb>
 		);
 	if (view.kind === 'settings')
 		return (
 			<DestinationCrumb current="settings" root="account">
-				<span class="text-fg">Your settings</span>
+				<span class={crumbCurrent}>Your settings</span>
 			</DestinationCrumb>
 		);
 	// The flows. Each is a pushed view (the card is already a bounded box, so a flow
@@ -617,7 +615,7 @@ export function Breadcrumb({ view }: { view: View }) {
 						: undefined
 				}
 			>
-				<span class="text-fg">{view.first ? 'Create your first brain' : 'Add a brain'}</span>
+				<span class={crumbCurrent}>{view.first ? 'Create your first brain' : 'Add a brain'}</span>
 			</DestinationCrumb>
 		);
 	if (view.kind === 'invite-member')
@@ -625,7 +623,7 @@ export function Breadcrumb({ view }: { view: View }) {
 			<DestinationCrumb
 				parent={{ key: 'members', label: 'Members', onClick: () => goBack(openMembers) }}
 			>
-				<span class="text-fg">Invite</span>
+				<span class={crumbCurrent}>Invite</span>
 			</DestinationCrumb>
 		);
 	if (view.kind === 'connect-account')
@@ -634,7 +632,7 @@ export function Breadcrumb({ view }: { view: View }) {
 				root="account"
 				parent={{ key: 'settings', label: 'Your settings', onClick: () => goBack(openSettings) }}
 			>
-				<span class="text-fg">Connect an account</span>
+				<span class={crumbCurrent}>Connect an account</span>
 			</DestinationCrumb>
 		);
 	const path = 'path' in view ? (view as { path: string }).path : null;
@@ -648,7 +646,7 @@ export function Breadcrumb({ view }: { view: View }) {
 	if (!path)
 		return (
 			<DestinationCrumb current="files" rootInert>
-				<span class="text-fg">Files</span>
+				<span class={crumbCurrent}>Files</span>
 			</DestinationCrumb>
 		);
 	let segs = path.split('/').filter(Boolean);

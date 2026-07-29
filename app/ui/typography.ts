@@ -22,3 +22,36 @@ export const eyebrow = 'text-xs font-medium uppercase tracking-wide text-muted';
  * its own headings through `.prose`, so this is chrome only.
  */
 export const viewTitle = 'text-base font-semibold text-fg';
+
+// ---------- the trail ----------
+//
+// The breadcrumb has FOUR type roles and no others. They were ad-hoc strings, and had
+// drifted exactly the way the eyebrow above did: the brain crumb was font-medium while
+// every other crumb was normal weight, the Search crumb rendered its own name muted
+// while Members rendered it in fg (so one read as active and the other as disabled),
+// and the ancestor-link recipe existed three times — twice identical, once without the
+// hover underline.
+//
+// The rule these encode: a crumb's WEIGHT never varies, and its COLOUR says one thing
+// only — fg is where you are, muted is everything else. The root is distinguished by
+// its glyph, not by being heavier. A new nav state picks one of these four; if none
+// fits, the role is missing and belongs here rather than inline.
+
+/** Where you are. The end of the trail, or a destination's own name. Never a link. */
+export const crumbCurrent = 'text-fg';
+
+/** A crumb above you, clickable. */
+export const crumbLink =
+	'rounded text-muted outline-none transition-colors hover:text-fg hover:underline focus-visible:ring-2 focus-visible:ring-accent';
+
+/**
+ * A crumb that names a place but must not link — the brain crumb on the file tree,
+ * whose label would open the view you are already reading.
+ */
+export const crumbInert = 'text-muted';
+
+/**
+ * The identity suffix after a destination's name: which search, which page's history.
+ * Never a count — see NO TALLIES in components/Breadcrumb.
+ */
+export const crumbMeta = 'text-muted';
