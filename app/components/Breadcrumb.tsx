@@ -40,7 +40,12 @@ import {
 import { BrainGlyph, ChevronDownIcon, FolderIcon, FileIcon } from '../core/icons.tsx';
 import { Menu, MenuRow, MenuSeparator, MenuNote, type MenuTriggerProps } from '../ui/Menu.tsx';
 
-const CrumbSep = () => <span class="mx-1 shrink-0 text-muted opacity-50">/</span>;
+// Wider than the 4px it was, because a crumb is no longer just a word: it is a label
+// and its picker, and those have to read as ONE unit. At the old spacing the chevron
+// sat as far from its own label as from the next slash, so the eye grouped it with the
+// separator. The rule the trail follows now: tight INSIDE a crumb (the chevron's
+// ml-0.5), loose BETWEEN crumbs (here).
+const CrumbSep = () => <span class="mx-2 shrink-0 text-muted opacity-50">/</span>;
 
 // The picker's affordance. Always rendered, but held at 40% until the crumb is hovered
 // or its menu is open: a chevron per segment is a lot of furniture for a 36px bar, and
@@ -178,8 +183,12 @@ function SiblingRows({
 function BrainCrumb({ inert }: { inert?: boolean }) {
 	const rows = brainList;
 	const label = activeBrain?.label ?? (rows && rows.length === 0 ? 'No brain' : 'Files');
+	// The glyph carries its own trailing space rather than the row carrying a `gap`:
+	// a gap would apply to the CHEVRON too, on top of the ml-0.5 every crumb's chevron
+	// already has, and the brain crumb would sit its picker 4× further from its label
+	// than the path crumbs do.
 	const glyph = (
-		<span class="shrink-0 text-muted">
+		<span class="mr-1.5 shrink-0 text-muted">
 			<BrainGlyph />
 		</span>
 	);
@@ -203,7 +212,7 @@ function BrainCrumb({ inert }: { inert?: boolean }) {
 		);
 	if (!rows)
 		return (
-			<span class="flex min-w-0 max-w-[44vw] shrink items-center gap-1.5">
+			<span class="flex min-w-0 max-w-[44vw] shrink items-center">
 				{glyph}
 				{name()}
 			</span>
@@ -214,7 +223,7 @@ function BrainCrumb({ inert }: { inert?: boolean }) {
 			class="min-w-0 max-w-[44vw] shrink"
 			panelClass="min-w-[210px]"
 			trigger={({ props, open, close }) => (
-				<span class="group flex min-w-0 items-center gap-1.5">
+				<span class="group flex min-w-0 items-center">
 					{glyph}
 					{name(close)}
 					<CrumbChevron props={props} open={open} title="Switch brain" />
