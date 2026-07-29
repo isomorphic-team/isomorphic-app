@@ -44,6 +44,7 @@ import {
 	ChevronDownIcon,
 	FolderIcon,
 	FileIcon,
+	ArrowLeftIcon,
 	HistoryIcon,
 	GraphIcon,
 	PeopleIcon,
@@ -419,10 +420,47 @@ function DestinationPicker({
 	);
 }
 
+// THE SCOPE TEST: does switching brains change what this screen shows?
+//
+// Yes for Members (a different org, a different roster), Recent changes, Graph and
+// Search — those are views OF a brain and belong under the brain crumb. No for Manage
+// brains and Your settings: the same list, the same identity, whichever brain happens
+// to be active. Hanging those off a brain crumb claimed a containment that is not
+// there, and read as "these people belong to this brain".
+//
+// So they get no parent crumb, because they have no parent to name — they sit beside
+// the brain, not inside it. What they get instead is a way back, and that is history
+// rather than location, so it is an ARROW and not a crumb. Anything that looks like a
+// crumb has to behave like one (name a place, offer its siblings); a back arrow
+// promises neither, and so can honestly go wherever you came from.
+function BackCrumb() {
+	// Nothing behind you and no brain to fall back into — the very first run, sitting on
+	// "Create your first brain". A back arrow there would land on the tree, fail for want
+	// of a brain, and bounce you to this same screen.
+	if (!backKind() && !activeBrain) return null;
+	return (
+		<button
+			type="button"
+			title="Back"
+			aria-label="Back"
+			onClick={() => goBack(() => openBrowse())}
+			class="mr-2 shrink-0 rounded p-0.5 text-muted outline-none transition-colors hover:bg-chip hover:text-fg focus-visible:ring-2 focus-visible:ring-accent"
+		>
+			<ArrowLeftIcon />
+		</button>
+	);
+}
+
+// NO TALLIES. A crumb names a place; it does not report on it. "Members · 4 people ·
+// 1 invited" and "Manage brains · 3" were counts of what the view below was already
+// showing in full, which is the screen telling you something it is simultaneously
+// showing you. What stays after the · is only ever IDENTITY — which search, which
+// page's history — because that distinguishes one instance of a view from another.
+//
 // A destination that has no path (Search, Members, Recent changes, …) still hangs off
 // the brain crumb:
 //
-//   🧠 Team brain / Members ⌄ · 4 people
+//   🧠 Team brain / Members ⌄
 //
 // so leaving it is the same one click as anywhere else. `parent` adds one clickable
 // crumb between the brain and the destination, for a view that was PUSHED from another
@@ -435,16 +473,25 @@ function DestinationPicker({
 function DestinationCrumb({
 	parent,
 	current,
+	root = 'brain',
 	children
 }: {
 	parent?: { key: string; label: string; onClick: () => void };
 	current?: string;
+	/** See THE SCOPE TEST above. `account` screens sit beside the brain, not inside it. */
+	root?: 'brain' | 'account';
 	children: ComponentChildren;
 }) {
 	return (
 		<nav class="flex min-w-0 items-center">
-			<BrainCrumb />
-			<CrumbSep />
+			{root === 'account' ? (
+				<BackCrumb />
+			) : (
+				<>
+					<BrainCrumb />
+					<CrumbSep />
+				</>
+			)}
 			{parent && (
 				<>
 					<DestinationPicker current={parent.key}>
@@ -506,23 +553,17 @@ export function Breadcrumb({ view }: { view: View }) {
 		return (
 			<DestinationCrumb current="members">
 				<span class="text-fg">Members</span>
-				<span class="text-muted">
-					{' · '}
-					{view.members.length} {view.members.length === 1 ? 'person' : 'people'}
-					{view.invites.length ? ` · ${view.invites.length} invited` : ''}
-				</span>
 			</DestinationCrumb>
 		);
 	if (view.kind === 'brains')
 		return (
-			<DestinationCrumb current="brains">
+			<DestinationCrumb current="brains" root="account">
 				<span class="text-fg">Manage brains</span>
-				<span class="text-muted"> · {view.brains.length}</span>
 			</DestinationCrumb>
 		);
 	if (view.kind === 'settings')
 		return (
-			<DestinationCrumb current="settings">
+			<DestinationCrumb current="settings" root="account">
 				<span class="text-fg">Your settings</span>
 			</DestinationCrumb>
 		);
@@ -537,6 +578,7 @@ export function Breadcrumb({ view }: { view: View }) {
 	if (view.kind === 'add-brain')
 		return (
 			<DestinationCrumb
+				root="account"
 				parent={
 					backKind() === 'brains'
 						? { key: 'brains', label: 'Manage brains', onClick: () => goBack(openBrains) }
@@ -557,6 +599,7 @@ export function Breadcrumb({ view }: { view: View }) {
 	if (view.kind === 'connect-account')
 		return (
 			<DestinationCrumb
+				root="account"
 				parent={{ key: 'settings', label: 'Your settings', onClick: () => goBack(openSettings) }}
 			>
 				<span class="text-fg">Connect an account</span>

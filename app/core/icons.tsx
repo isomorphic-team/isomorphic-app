@@ -165,6 +165,21 @@ const BrainGlyph = () => (
 		/>
 	</svg>
 );
+// The way OUT of a screen that is not a place in the trail (Your settings, Manage
+// brains). Deliberately an arrow and not a crumb: those screens have no parent to
+// name, so this is history, and it must not look like location.
+const ArrowLeftIcon = () => (
+	<svg viewBox="0 0 16 16" width="13" height="13" class="shrink-0" aria-hidden="true">
+		<path
+			fill="none"
+			stroke="currentColor"
+			stroke-width="1.6"
+			stroke-linecap="round"
+			stroke-linejoin="round"
+			d="M9.5 3.5L5 8l4.5 4.5"
+		/>
+	</svg>
+);
 const ChevronDownIcon = () => (
 	<svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true">
 		<path
@@ -314,6 +329,7 @@ export {
 	GearIcon,
 	BrainGlyph,
 	ChevronDownIcon,
+	ArrowLeftIcon,
 	PlusIcon,
 	NewNoteIcon,
 	NewFolderIcon,
