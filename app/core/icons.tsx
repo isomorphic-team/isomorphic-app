@@ -77,14 +77,6 @@ const LinkIcon = () => (
 	</svg>
 );
 
-const ListIcon = () => (
-	<svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true">
-		<path
-			fill="currentColor"
-			d="M2 3h2v2H2zM6 3.5h8v1H6zM2 7h2v2H2zM6 7.5h8v1H6zM2 11h2v2H2zM6 11.5h8v1H6z"
-		/>
-	</svg>
-);
 const SearchIcon = () => (
 	<svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true">
 		<circle cx="7" cy="7" r="4.25" fill="none" stroke="currentColor" stroke-width="1.5" />
@@ -131,17 +123,6 @@ const PeopleIcon = () => (
 			stroke-width="1.4"
 			stroke-linecap="round"
 			d="M10.6 3.1a2.2 2.2 0 010 4.1M11.6 9.7c1.6.3 2.8 1.4 2.8 3.3"
-		/>
-	</svg>
-);
-const HomeIcon = () => (
-	<svg viewBox="0 0 16 16" width="13" height="13" class="shrink-0" aria-hidden="true">
-		<path
-			fill="none"
-			stroke="currentColor"
-			stroke-width="1.5"
-			stroke-linejoin="round"
-			d="M2.5 7.5L8 2.5l5.5 5v5.5a1 1 0 01-1 1h-2.75V10h-3.5v4H3.5a1 1 0 01-1-1z"
 		/>
 	</svg>
 );
@@ -325,12 +306,10 @@ export {
 	CloseIcon,
 	GithubIcon,
 	LinkIcon,
-	ListIcon,
 	SearchIcon,
 	HistoryIcon,
 	GraphIcon,
 	PeopleIcon,
-	HomeIcon,
 	MoreIcon,
 	GearIcon,
 	BrainGlyph,
