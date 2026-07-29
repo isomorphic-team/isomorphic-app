@@ -61,6 +61,48 @@
 	--color-code: var(--c-code);
 }
 
+/* The chrome's type scale. Five steps, and every one of them is used.
+
+   Before this the app had NINE distinct sizes inside a 6px range, with four
+   different values between 12 and 14px (12, 12.5, 13, 13.5). Steps that small are
+   below the threshold where a reader perceives hierarchy, so they read as noise
+   rather than structure: the same role rendered a half-pixel apart in two views,
+   which is exactly the kind of thing that feels off without being nameable.
+
+   Tailwind's own names are REDEFINED rather than supplemented, so `text-sm` and
+   `text-xs` (the two that were already carrying most of the app) keep working and
+   simply snap onto the scale. Sizes only: the paired `--text-*--line-height`
+   theme values are deliberately left at Tailwind's defaults, since changing them
+   would move every row height in the app as a side effect. */
+@theme {
+	--text-2xs: 10px; /* glyph initials inside an 18px circle */
+	--text-2xs--line-height: 1;
+	--text-xs: 12px; /* meta: timestamps, roles, captions, eyebrow labels */
+	--text-sm: 13.5px; /* DEFAULT UI text; deliberately equals the body base below */
+	--text-base: 15px; /* chrome titles (a view headline, not page content) */
+}
+
+/* Base type scale for the CHROME (nav, file tree, list screens).
+   Nothing set this before, so any element that did not opt into a size class fell
+   through to the user agent's 16px — which is why the list screens rendered their
+   row titles ~19% larger than the file tree's explicit text-[13.5px] and read as a
+   different component family. This is the single fix that keeps them in step.
+
+   Set on `body`, deliberately NOT on `html`: Tailwind's text-sm/text-xs are `rem`
+   units resolved against the ROOT element, so moving the root would silently rescale
+   every explicit size class in the app too. Moving body only affects what inherits. */
+body {
+	font-size: 13.5px;
+}
+
+/* …and the reading surfaces are pinned back, since they are content rather than
+   chrome and their `em`-based heading scale is anchored to this value. Without
+   these two lines the base change above would shrink every rendered page. */
+.prose,
+.ProseMirror {
+	font-size: 1rem;
+}
+
 /* Prose defaults for rendered markdown (the viewer). Kept as plain CSS rather than
    @apply so the bundle doesn't depend on Tailwind's typography plugin. */
 .prose h1 {

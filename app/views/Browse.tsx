@@ -23,6 +23,7 @@ import {
 import { navigateTo, refreshBrowse } from '../core/actions.ts';
 import { FOLDER_NOTE_NAMES } from '../core/util.ts';
 import { toast, askConfirm } from '../core/toast.tsx';
+import { Button } from '../ui/index.ts';
 import {
 	ChevronIcon,
 	FolderIcon,
@@ -32,7 +33,10 @@ import {
 	NewNoteIcon,
 	NewFolderIcon,
 	MoreIcon,
-	LockIcon
+	LockIcon,
+	SortIcon,
+	ExpandCollapseIcon,
+	EyeIcon
 } from '../core/icons.tsx';
 
 // Shared handle to the live file tree so the nav header can host its toolbar while
@@ -175,7 +179,7 @@ function AddInput({
 					if (e.key === 'Escape') cancel();
 				}}
 				onBlur={() => !value.trim() && cancel()}
-				class="flex-1 rounded border border-accent bg-bg px-1 py-0.5 text-[13.5px] text-fg outline-none"
+				class="flex-1 rounded border border-accent bg-bg px-1 py-0.5 text-sm text-fg outline-none"
 			/>
 		</div>
 	);
@@ -215,19 +219,19 @@ function RowMenu({
 			{open && (
 				<div class="absolute top-full right-0 z-30 mt-0.5 min-w-[168px] overflow-hidden rounded-md border border-border bg-bg py-1 shadow-lg">
 					{items.map((it) => (
-						<button
-							type="button"
+						<Button
+							variant="row"
 							onClick={(e) => {
 								e.stopPropagation();
 								it.onClick();
 							}}
-							class={`flex w-full items-center gap-2.5 px-3 py-1.5 text-left text-[13px] hover:bg-chip ${
+							class={`gap-2.5 rounded-none px-3 py-1.5 text-sm ${
 								it.danger ? 'text-[#d33]' : 'text-fg'
 							}`}
 						>
 							{it.icon && <span class="w-4 text-muted">{it.icon}</span>}
 							<span class="flex-1">{it.label}</span>
-						</button>
+						</Button>
 					))}
 				</div>
 			)}
@@ -270,7 +274,7 @@ function TreeItem({
 						if (e.key === 'Escape') actions.cancelRename();
 					}}
 					onBlur={() => actions.cancelRename()}
-					class="flex-1 rounded border border-accent bg-bg px-1 py-0.5 text-[13.5px] text-fg outline-none"
+					class="flex-1 rounded border border-accent bg-bg px-1 py-0.5 text-sm text-fg outline-none"
 				/>
 			</div>
 		);
@@ -341,7 +345,7 @@ function TreeItem({
 								toggle(node.path);
 							}
 						}}
-						class={`flex min-w-0 flex-1 items-center gap-1.5 py-1 pl-1.5 text-left text-[13.5px] ${folderPage ? 'hover:text-accent' : ''}`}
+						class={`flex min-w-0 flex-1 items-center gap-1.5 py-1 pl-1.5 text-left text-sm ${folderPage ? 'hover:text-accent' : ''}`}
 					>
 						<span class={`truncate ${dim ? 'text-muted' : ''}`}>{node.name}</span>
 						{!editable && <LockIcon />}
@@ -439,7 +443,7 @@ function TreeItem({
 			<button
 				type="button"
 				onClick={() => isPage && navigateTo(node.path)}
-				class={`flex min-w-0 flex-1 items-center gap-1.5 py-1 pl-1.5 text-left text-[13.5px] ${isPage ? 'hover:text-accent' : 'cursor-default'}`}
+				class={`flex min-w-0 flex-1 items-center gap-1.5 py-1 pl-1.5 text-left text-sm ${isPage ? 'hover:text-accent' : 'cursor-default'}`}
 			>
 				<span class={`truncate ${dim ? 'text-muted' : ''}`}>
 					{titleByPath[node.path] ?? node.name.replace(/\.md$/, '')}
@@ -771,14 +775,9 @@ function FileTree({
 					Its content isn’t under the default layout, so no pages show. Point Isomorphic at the repo
 					to index it.
 				</p>
-				<button
-					type="button"
-					disabled={configuring}
-					onClick={runConfigure}
-					class="mt-3 rounded-md bg-accent px-3.5 py-1.5 text-sm font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-60"
-				>
+				<Button disabled={configuring} onClick={runConfigure} class="mt-3">
 					{configuring ? 'Configuring…' : 'Auto-configure'}
-				</button>
+				</Button>
 			</div>
 		);
 	}
@@ -827,12 +826,60 @@ declare module '../core/view-registry.ts' {
 	}
 }
 
-export default defineView('browse', (v) => (
-	<FileTree
-		paths={v.paths}
-		titleByPath={v.titleByPath}
-		hidden={v.hidden}
-		needsConfig={v.needsConfig}
-		focus={v.focus}
-	/>
-));
+export default defineView(
+	'browse',
+	(v) => (
+		<FileTree
+			paths={v.paths}
+			titleByPath={v.titleByPath}
+			hidden={v.hidden}
+			needsConfig={v.needsConfig}
+			focus={v.focus}
+		/>
+	),
+	{
+		// Icon-only here, unlike the list screens' text labels: these are frequent and
+		// their glyphs are conventional on a file tree. `bound` gates them so they show
+		// only while a tree is actually mounted.
+		actions: () =>
+			!treeCtl.bound || !treeCtl.canManage
+				? []
+				: [
+						{
+							key: 'new-note',
+							icon: <NewNoteIcon />,
+							title: 'New note',
+							onClick: () => treeCtl.newNote()
+						},
+						{
+							key: 'new-folder',
+							icon: <NewFolderIcon />,
+							title: 'New folder',
+							onClick: () => treeCtl.newFolder()
+						},
+						{
+							key: 'sort',
+							icon: <SortIcon desc={treeCtl.sortDesc} />,
+							title: treeCtl.sortDesc ? 'Sort Z → A' : 'Sort A → Z',
+							onClick: () => treeCtl.toggleSort()
+						},
+						{
+							key: 'expand',
+							icon: <ExpandCollapseIcon expanded={treeCtl.allExpanded} />,
+							title: treeCtl.allExpanded ? 'Collapse all' : 'Expand all',
+							onClick: () => treeCtl.toggleExpandAll()
+						},
+						...(treeCtl.hasHidden
+							? [
+									{
+										key: 'hidden',
+										icon: <EyeIcon off={!treeCtl.showHidden} />,
+										title: treeCtl.showHidden ? 'Hide hidden files' : 'Show hidden files',
+										active: treeCtl.showHidden,
+										onClick: () => treeCtl.toggleHidden()
+									}
+								]
+							: [])
+					]
+	}
+);

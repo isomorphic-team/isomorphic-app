@@ -95,7 +95,7 @@ function Toast() {
 	if (!state.show) return null;
 	return (
 		<div
-			class={`fixed right-3.5 bottom-3 max-w-[70vw] rounded-lg border bg-chip px-3 py-1.5 text-[12.5px] ${
+			class={`fixed right-3.5 bottom-3 max-w-[70vw] rounded-lg border bg-chip px-3 py-1.5 text-sm ${
 				state.error ? 'border-[#d33] text-[#d33]' : 'border-border text-fg'
 			}`}
 		>

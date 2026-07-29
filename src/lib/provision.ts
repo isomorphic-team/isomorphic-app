@@ -217,7 +217,7 @@ export async function provisionOrgForUser(input: ProvisionOrgInput): Promise<Org
 	// Reuse the existing org if the user already had a membership (brain missing);
 	// otherwise mint a fresh platform-model org with the user as owner. NO brain is
 	// created here — as of Phase 8 (brain-creation-and-init) brains are stood up
-	// EXPLICITLY (create_brain / the New brain button), never auto-provisioned. First
+	// EXPLICITLY (create_brain / the Add-a-brain flow), never auto-provisioned. First
 	// touch lands the user in their empty personal org; getDefaultBrain returns null
 	// until they create one, and callers render the "create your first brain" state.
 	const orgId = existing?.org.org_id ?? crypto.randomUUID();

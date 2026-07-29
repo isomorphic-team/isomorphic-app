@@ -1,27 +1,24 @@
 // ---------- members view ----------
 
 import { useState } from 'preact/hooks';
-import type { Member, Invite, MemberSelf, MemberRole } from '../core/types.ts';
+import type { Member, Invite, MemberSelf } from '../core/types.ts';
 import { callTool, firstText } from '../core/host.ts';
-import { refreshMembers } from '../core/actions.ts';
+import { refreshMembers, openInviteMember } from '../core/actions.ts';
 import { toast } from '../core/toast.tsx';
 import { relativeTime } from '../core/util.ts';
 import { InitialsAvatar, CloseIcon } from '../core/icons.tsx';
+import { RoleSelect, ROLE_LABEL } from '../components/RoleSelect.tsx';
 import { defineView } from '../core/view-registry.ts';
-
-const ROLE_LABEL: Record<MemberRole, string> = {
-	viewer: 'Viewer',
-	editor: 'Editor',
-	admin: 'Admin',
-	owner: 'Owner'
-};
-// The roles an admin can assign in the UI (owner is never offered — see members.ts).
-const ASSIGNABLE_ROLES: MemberRole[] = ['viewer', 'editor', 'admin'];
+import { Button, List, ListRow } from '../ui/index.ts';
+import { eyebrow } from '../ui/typography.ts';
 
 // Org roster: who's in the org, their role, and pending invites. Any member sees
-// the list; admins get inline role dropdowns, a remove control, and an invite box.
-// Non-admins see plain role text — the presence/absence of controls IS the signal
-// that you can manage (show, don't tell), so there's no explanatory copy.
+// the list; admins get inline role dropdowns and a remove control. Non-admins see
+// plain role text — the presence/absence of controls IS the signal that you can
+// manage (show, don't tell), so there's no explanatory copy.
+//
+// Inviting is a header action that opens its own view (InviteMemberView), not a
+// composer in this list. See app/ui/Flow.tsx.
 function MembersView({
 	members,
 	invites,
@@ -33,62 +30,27 @@ function MembersView({
 }) {
 	const canManage = me.role === 'admin' || me.role === 'owner';
 	const [busy, setBusy] = useState(false);
-	const [inviteEmail, setInviteEmail] = useState('');
-	const [inviteRole, setInviteRole] = useState<MemberRole>('editor');
 
 	// Run a member mutation, refresh the roster from its result, toast the outcome.
-	async function run(tool: string, args: Record<string, unknown>, onOk?: () => void) {
+	async function run(tool: string, args: Record<string, unknown>) {
 		if (busy) return;
 		setBusy(true);
 		const res = await callTool(tool, args);
 		setBusy(false);
 		if (res.isError) return toast(firstText(res), true);
-		onOk?.();
 		toast(firstText(res));
 		refreshMembers((res.structuredContent ?? {}) as Record<string, unknown>);
 	}
 
 	return (
 		<div>
-			{canManage && (
-				<form
-					class="mb-4 flex items-center gap-2"
-					onSubmit={(e) => {
-						e.preventDefault();
-						const email = inviteEmail.trim();
-						if (!email) return;
-						run('invite_member', { email, role: inviteRole }, () => setInviteEmail(''));
-					}}
-				>
-					<input
-						type="email"
-						required
-						value={inviteEmail}
-						onInput={(e) => setInviteEmail((e.target as HTMLInputElement).value)}
-						placeholder="Invite by email"
-						class="min-w-0 flex-1 rounded-md border border-border bg-transparent px-2.5 py-1.5 text-sm text-fg outline-none placeholder:text-muted focus:border-accent"
-					/>
-					<RoleSelect value={inviteRole} disabled={busy} onChange={(r) => setInviteRole(r)} />
-					<button
-						type="submit"
-						disabled={busy || !inviteEmail.trim()}
-						class="shrink-0 rounded-md bg-accent px-3 py-1.5 text-sm font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-50"
-					>
-						Invite
-					</button>
-				</form>
-			)}
-
-			<ul class="flex flex-col">
+			<List>
 				{members.map((m) => {
 					const isSelf = m.user_id === me.user_id;
 					// Admins can edit anyone except the owner and themselves.
 					const editable = canManage && !isSelf && m.role !== 'owner';
 					return (
-						<li
-							key={m.user_id}
-							class="flex items-center gap-3 border-b border-border py-2.5 last:border-b-0"
-						>
+						<ListRow key={m.user_id}>
 							<InitialsAvatar name={m.name || m.email} />
 							<div class="min-w-0 flex-1">
 								<div class="flex items-baseline gap-2">
@@ -120,34 +82,30 @@ function MembersView({
 								</span>
 							)}
 							{editable && (
-								<button
-									type="button"
+								<Button
+									variant="ghost"
+									size="icon"
 									disabled={busy}
 									title={`Remove ${m.email}`}
+									aria-label={`Remove ${m.email}`}
 									onClick={() => run('remove_member', { email: m.email })}
-									class="shrink-0 rounded p-1 text-muted transition-colors hover:bg-chip hover:text-fg disabled:opacity-50"
 								>
 									<CloseIcon />
-								</button>
+								</Button>
 							)}
-						</li>
+						</ListRow>
 					);
 				})}
-			</ul>
+			</List>
 
 			{invites.length > 0 && (
 				<div class="mt-6">
-					<div class="mb-1.5 text-xs font-medium uppercase tracking-wide text-muted">
-						Pending invites
-					</div>
-					<ul class="flex flex-col">
+					<div class={`mb-1.5 ${eyebrow}`}>Pending invites</div>
+					<List>
 						{invites.map((inv) => (
-							<li
-								key={inv.invite_id}
-								class="flex items-center gap-3 border-b border-border py-2.5 last:border-b-0"
-							>
+							<ListRow key={inv.invite_id}>
 								<span
-									class="flex h-6 w-6 shrink-0 items-center justify-center rounded-full border border-dashed border-border text-[11px] text-muted"
+									class="flex h-[18px] w-[18px] shrink-0 items-center justify-center rounded-full border border-dashed border-border text-2xs text-muted"
 									aria-hidden="true"
 								>
 									@
@@ -162,53 +120,27 @@ function MembersView({
 								</div>
 								<span class="shrink-0 text-sm text-muted">{ROLE_LABEL[inv.role]}</span>
 								{canManage && (
-									<button
-										type="button"
+									<Button
+										variant="ghost"
+										size="icon"
 										disabled={busy}
 										title={`Revoke invite for ${inv.email}`}
+										aria-label={`Revoke invite for ${inv.email}`}
 										onClick={() => run('remove_member', { email: inv.email })}
-										class="shrink-0 rounded p-1 text-muted transition-colors hover:bg-chip hover:text-fg disabled:opacity-50"
 									>
 										<CloseIcon />
-									</button>
+									</Button>
 								)}
-							</li>
+							</ListRow>
 						))}
-					</ul>
+					</List>
 				</div>
 			)}
 		</div>
 	);
 }
 
-// Compact role picker used for both inviting and changing a role. Native <select>
-// so it's keyboard/host accessible; styled to sit quietly in the row.
-function RoleSelect({
-	value,
-	disabled,
-	onChange
-}: {
-	value: MemberRole;
-	disabled?: boolean;
-	onChange: (r: MemberRole) => void;
-}) {
-	return (
-		<select
-			value={value}
-			disabled={disabled}
-			onChange={(e) => onChange((e.target as HTMLSelectElement).value as MemberRole)}
-			class="shrink-0 cursor-pointer rounded-md border border-border bg-transparent py-1 pl-2 pr-1 text-sm text-fg outline-none focus:border-accent disabled:opacity-50"
-		>
-			{ASSIGNABLE_ROLES.map((r) => (
-				<option key={r} value={r}>
-					{ROLE_LABEL[r]}
-				</option>
-			))}
-		</select>
-	);
-}
-
-export { MembersView, RoleSelect, ROLE_LABEL, ASSIGNABLE_ROLES };
+export { MembersView };
 
 declare module '../core/view-registry.ts' {
 	interface ViewProps {
@@ -216,6 +148,22 @@ declare module '../core/view-registry.ts' {
 	}
 }
 
-export default defineView('members', (v) => (
-	<MembersView members={v.members} invites={v.invites} me={v.me} />
-));
+export default defineView(
+	'members',
+	(v) => <MembersView members={v.members} invites={v.invites} me={v.me} />,
+	{
+		// Gated on the viewer's role here rather than inside the component: the actions
+		// function gets the view's props, so a viewer never sees an Invite they cannot use.
+		actions: (v) =>
+			v.me.role === 'admin' || v.me.role === 'owner'
+				? [
+						{
+							key: 'invite',
+							label: 'Invite',
+							title: 'Invite a member',
+							onClick: openInviteMember
+						}
+					]
+				: []
+	}
+);

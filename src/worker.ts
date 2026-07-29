@@ -172,7 +172,7 @@ function repoArgs(env: Env) {
 class NoBrainError extends Error {
 	constructor() {
 		super(
-			"You don't have a brain yet. Create one with the New brain button, or ask me to create a brain (e.g. “create a brain called Personal”)."
+			"You don't have a brain yet. Create one with the Add a brain button, or ask me to create a brain (e.g. “create a brain called Personal”)."
 		);
 		this.name = 'NoBrainError';
 	}

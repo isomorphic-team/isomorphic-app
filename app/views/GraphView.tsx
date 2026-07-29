@@ -305,9 +305,7 @@ function GraphView({
 		// ---- interaction ----
 		let dragNode: SimNode | null = null;
 		let panning = false;
-		let downX = 0,
-			downY = 0,
-			movedSince = 0;
+		let movedSince = 0;
 		let lastX = 0,
 			lastY = 0;
 		const pickNode = (sx: number, sy: number): SimNode | null => {
@@ -333,8 +331,6 @@ function GraphView({
 
 		function onDown(e: PointerEvent) {
 			const p = localPos(e);
-			downX = p.x;
-			downY = p.y;
 			movedSince = 0;
 			lastX = p.x;
 			lastY = p.y;
@@ -459,8 +455,7 @@ function GraphView({
 		}
 
 		const ro = new ResizeObserver(() => {
-			const prevW = W,
-				prevH = H;
+			const prevW = W;
 			resize();
 			if (prevW === 0 && W > 0) fit(); // first real size — frame whatever's on screen now
 			draw();
@@ -522,7 +517,7 @@ function GraphView({
 				style={{ height: tall ? '72vh' : '420px' }}
 			>
 				<canvas ref={canvasRef} class="block h-full w-full touch-none" />
-				<span class="pointer-events-none absolute right-1 bottom-1 text-[11px] text-muted tabular-nums select-none">
+				<span class="pointer-events-none absolute right-1 bottom-1 text-xs text-muted tabular-nums select-none">
 					{nodes.length} pages · {links.length} links
 				</span>
 			</div>

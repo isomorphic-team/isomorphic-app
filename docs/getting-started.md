@@ -53,7 +53,7 @@ On the hosted service, signing in for the first time gives you your own organiza
 automatically, with no invitation needed. You will not have a brain yet, so the first tool
 call you make replies:
 
-> You don't have a brain yet. Create one with the New brain button, or ask me to create a
+> You don't have a brain yet. Create one with the Add a brain button, or ask me to create a
 > brain (e.g. "create a brain called Personal").
 
 Either works. Asking Claude to "create a brain called Personal" runs `create_brain`, which

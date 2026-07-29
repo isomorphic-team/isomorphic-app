@@ -14,13 +14,15 @@ import type { ComponentChildren } from 'preact';
 import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks';
 import { useSyncExternalStore } from 'preact/compat';
 import type { View } from './core/types.ts';
+import type { ViewAction } from './core/view-registry.ts';
 import { isFolderNoteName } from './core/util.ts';
 import {
 	subscribeStore,
 	version,
 	currentView,
 	show,
-	isEditablePath,
+	goBack,
+	backKind,
 	brainList,
 	activeBrain
 } from './core/store.ts';
@@ -38,18 +40,16 @@ import {
 	openBrowse,
 	openFolder,
 	openGraph,
-	openEditor,
 	openActivity,
 	openMembers,
 	openBrains,
 	openSettings,
-	openCreateBrain,
+	openAddBrain,
 	switchBrain,
 	runSearch
 } from './core/actions.ts';
 import { toast, Toast, ConfirmDialog } from './core/toast.tsx';
 import {
-	iconBtn,
 	ListIcon,
 	SearchIcon,
 	HistoryIcon,
@@ -60,20 +60,14 @@ import {
 	GearIcon,
 	BrainGlyph,
 	ChevronDownIcon,
-	PlusIcon,
-	NewNoteIcon,
-	NewFolderIcon,
-	SortIcon,
-	ExpandCollapseIcon,
-	EyeIcon
+	PlusIcon
 } from './core/icons.tsx';
+import { Button } from './ui/index.ts';
 // The Body dispatch table is codegenned from app/views/*.tsx (see scripts/gen-app.ts).
-import { renderView } from './views/registry.generated.ts';
+import { renderView, viewActions } from './views/registry.generated.ts';
 // Chrome still binds the editor's save/cancel + toolbar directly.
 import { EditorToolbar, editCtl } from './views/EditView.tsx';
-// The file tree publishes its toolbar handlers here (mirrors editCtl); the header
-// renders them contextually while browsing.
-import { treeCtl } from './views/Browse.tsx';
+import { eyebrow } from './ui/typography.ts';
 
 // ---------- host wiring ----------
 
@@ -135,13 +129,17 @@ function OverflowMenu({ editing }: { editing: boolean }) {
 		close();
 		fn();
 	};
-	const rowClass =
-		'flex w-full items-center gap-2.5 px-3 py-1.5 text-left text-[13px] text-fg hover:bg-chip';
 	return (
 		<div ref={ref} class="relative">
-			<button type="button" title="More" onClick={() => setOpen((o) => !o)} class={iconBtn}>
+			<Button
+				variant="ghost"
+				size="icon"
+				title="More"
+				aria-label="More"
+				onClick={() => setOpen((o) => !o)}
+			>
 				<MoreIcon />
-			</button>
+			</Button>
 			{open && (
 				<div
 					style={maxH ? { maxHeight: `${maxH}px` } : undefined}
@@ -149,60 +147,74 @@ function OverflowMenu({ editing }: { editing: boolean }) {
 				>
 					{!editing && (
 						<>
-							<button type="button" onClick={go(() => openActivity())} class={rowClass}>
+							<Button
+								variant="row"
+								class="gap-2.5 rounded-none px-3 py-1.5 text-sm"
+								onClick={go(() => openActivity())}
+							>
 								<span class="w-4 text-muted">
 									<HistoryIcon />
 								</span>
 								<span class="flex-1">Recent changes</span>
-							</button>
-							<button type="button" onClick={go(openMembers)} class={rowClass}>
+							</Button>
+							<Button
+								variant="row"
+								class="gap-2.5 rounded-none px-3 py-1.5 text-sm"
+								onClick={go(openMembers)}
+							>
 								<span class="w-4 text-muted">
 									<PeopleIcon />
 								</span>
 								<span class="flex-1">Members</span>
-							</button>
+							</Button>
 							{/* Brain management (add/remove) lives here — the switcher top-left is
 							    switch-only. Shown when the user is admin of at least one brain's org. */}
 							{brainList?.some((b) => b.canManage) && (
-								<button type="button" onClick={go(openBrains)} class={rowClass}>
+								<Button
+									variant="row"
+									class="gap-2.5 rounded-none px-3 py-1.5 text-sm"
+									onClick={go(openBrains)}
+								>
 									<span class="w-4 text-muted">
 										<BrainGlyph />
 									</span>
 									<span class="flex-1">Manage brains</span>
-								</button>
+								</Button>
 							)}
 						</>
 					)}
 					{hasDisplay && (
 						<>
 							{!editing && <div class="my-1 border-t border-border" />}
-							<div class="px-3 pb-0.5 pt-1 text-[11px] font-medium uppercase tracking-wide text-muted">
-								Display
-							</div>
+							<div class={`px-3 pb-0.5 pt-1 ${eyebrow}`}>Display</div>
 							{modes.map((m) => (
-								<button
-									type="button"
+								<Button
+									variant="row"
 									onClick={go(() => setDisplayMode(m))}
-									class={`flex w-full items-center gap-2.5 px-3 py-1.5 text-left text-[13px] hover:bg-chip ${
+									class={`gap-2.5 rounded-none px-3 py-1.5 text-sm ${
 										m === displayMode ? 'text-accent' : 'text-fg'
 									}`}
 								>
 									<span class="w-4 text-center">{MODE_ICON[m]}</span>
 									<span class="flex-1">{MODE_LABEL[m]}</span>
 									{m === displayMode && <span>✓</span>}
-								</button>
+								</Button>
 							))}
 						</>
 					)}
 					{!editing && (
 						<>
 							<div class="my-1 border-t border-border" />
-							<button type="button" onClick={go(openSettings)} class={rowClass}>
+							<Button
+								variant="row"
+								class="gap-2.5 rounded-none px-3 py-1.5 text-sm"
+								onClick={go(openSettings)}
+							>
 								<span class="w-4 text-muted">
 									<GearIcon />
 								</span>
 								<span class="flex-1">Your settings</span>
-							</button>
+							</Button>
 						</>
 					)}
 				</div>
@@ -219,9 +231,15 @@ function SearchBox() {
 	}, [open]);
 	if (!open)
 		return (
-			<button type="button" title="Search" onClick={() => setOpen(true)} class={iconBtn}>
+			<Button
+				variant="ghost"
+				size="icon"
+				title="Search"
+				aria-label="Search"
+				onClick={() => setOpen(true)}
+			>
 				<SearchIcon />
-			</button>
+			</Button>
 		);
 	return (
 		<input
@@ -233,7 +251,7 @@ function SearchBox() {
 				if (e.key === 'Escape') setOpen(false);
 			}}
 			onBlur={(e) => !(e.target as HTMLInputElement).value && setOpen(false)}
-			class="w-44 rounded-md bg-chip px-2 py-1 text-[13px] text-fg outline-none"
+			class="w-44 rounded-md bg-chip px-2 py-1 text-sm text-fg outline-none"
 		/>
 	);
 }
@@ -267,11 +285,34 @@ const CrumbSep = () => <span class="mx-1 shrink-0 text-muted opacity-50">/</span
 // dead ends, since the top-left control is the brain switcher, not a way back. Views
 // with a lit control of their own in the bar (graph) skip the label and render the bare
 // HomeCrumb instead; the control already says where you are.
-function DestinationCrumb({ children }: { children: ComponentChildren }) {
+// `parent` adds one clickable crumb between home and the destination, for a view
+// that was PUSHED from another (⌂ / Brains / Add a brain). A pushed flow needs a way
+// back to the thing that opened it, not just a way home, and the crumb is where a
+// user looks for it — so the flow's own body carries Back/Cancel for the step and
+// this carries the way out.
+function DestinationCrumb({
+	parent,
+	children
+}: {
+	parent?: { label: string; onClick: () => void };
+	children: ComponentChildren;
+}) {
 	return (
 		<nav class="flex min-w-0 items-center">
 			<HomeCrumb />
 			<CrumbSep />
+			{parent && (
+				<>
+					<button
+						type="button"
+						onClick={parent.onClick}
+						class="shrink-0 text-muted hover:text-fg hover:underline"
+					>
+						{parent.label}
+					</button>
+					<CrumbSep />
+				</>
+			)}
 			<span class="min-w-0 truncate">{children}</span>
 		</nav>
 	);
@@ -330,6 +371,38 @@ function Breadcrumb({ view }: { view: View }) {
 		return (
 			<DestinationCrumb>
 				<span class="text-fg">Your settings</span>
+			</DestinationCrumb>
+		);
+	// The flows. Each is a pushed view (the card is already a bounded box, so a flow
+	// that needs room takes the whole card rather than floating a dialog inside it —
+	// app/ui/Flow.tsx) and hangs off the screen it was opened from, so the crumb is
+	// the way back out as well as the statement of where you are.
+	// The parent crumb is conditional: add-brain is reachable three ways (the brains
+	// list, the switcher, the no-brains empty state), so it is shown only when Back
+	// actually goes to the brains list. A crumb must never name a destination its own
+	// click would not reach.
+	if (view.kind === 'add-brain')
+		return (
+			<DestinationCrumb
+				parent={
+					backKind() === 'brains'
+						? { label: 'Brains', onClick: () => goBack(openBrains) }
+						: undefined
+				}
+			>
+				<span class="text-fg">{view.first ? 'Create your first brain' : 'Add a brain'}</span>
+			</DestinationCrumb>
+		);
+	if (view.kind === 'invite-member')
+		return (
+			<DestinationCrumb parent={{ label: 'Members', onClick: () => goBack(openMembers) }}>
+				<span class="text-fg">Invite</span>
+			</DestinationCrumb>
+		);
+	if (view.kind === 'connect-account')
+		return (
+			<DestinationCrumb parent={{ label: 'Your settings', onClick: () => goBack(openSettings) }}>
+				<span class="text-fg">Connect an account</span>
 			</DestinationCrumb>
 		);
 	const path = 'path' in view ? (view as { path: string }).path : null;
@@ -410,7 +483,7 @@ function BrainSwitcher() {
 								setOpen(false);
 								switchBrain(b.id);
 							}}
-							class="flex w-full items-center gap-2.5 px-3 py-1.5 text-left text-[13px] hover:bg-chip"
+							class="flex w-full items-center gap-2.5 px-3 py-1.5 text-left text-sm hover:bg-chip"
 						>
 							<span class={b.active ? 'text-accent' : 'text-muted'}>
 								<BrainGlyph />
@@ -419,7 +492,7 @@ function BrainSwitcher() {
 								<span class="block truncate text-fg" title={b.label}>
 									{b.label}
 								</span>
-								<span class="block text-[11px] text-muted">
+								<span class="block text-xs text-muted">
 									{b.role}
 									{b.configPrUrl ? ' · setup pending' : b.needsConfig ? ' · not configured' : ''}
 								</span>
@@ -432,12 +505,12 @@ function BrainSwitcher() {
 						type="button"
 						onClick={() => {
 							setOpen(false);
-							openCreateBrain();
+							openAddBrain();
 						}}
-						class="flex w-full items-center gap-2.5 px-3 py-1.5 text-left text-[13px] text-muted hover:bg-chip hover:text-fg"
+						class="flex w-full items-center gap-2.5 px-3 py-1.5 text-left text-sm text-muted hover:bg-chip hover:text-fg"
 					>
 						<span class="shrink-0 text-[15px] leading-none">＋</span>
-						<span class="min-w-0 flex-1 truncate">New brain</span>
+						<span class="min-w-0 flex-1 truncate">Add a brain</span>
 					</button>
 				</div>
 			)}
@@ -445,88 +518,78 @@ function BrainSwitcher() {
 	);
 }
 
-// The file-tree action toolbar, hosted in the nav header while browsing (bound via
-// treeCtl, mirroring how the editor toolbar binds via editCtl). Subtle icon buttons
-// that read as part of the chrome — new note, new folder, sort, expand/collapse-all,
-// and (only when there are hidden files) a show-hidden toggle.
-function FileTreeToolbar() {
-	if (!treeCtl.bound || !treeCtl.canManage) return null;
-	const active = (on: boolean) =>
-		`rounded p-1 transition-colors hover:bg-chip ${on ? 'text-accent' : 'text-muted hover:text-fg'}`;
+// One entry in the header's action slot. Views declare these (see ViewAction in
+// core/view-registry.ts); the header no longer knows which view it is rendering for.
+//
+// Icon-only vs text is the view's call, and the two are not interchangeable: a bare
+// glyph works for the tree's frequent, conventional actions and does not work for
+// "invite a person to your organization". Icon actions therefore REQUIRE a title,
+// which doubles as the accessible name.
+function HeaderAction({ action }: { action: ViewAction }) {
+	if (action.icon)
+		return (
+			<Button
+				variant="ghost"
+				size="icon"
+				title={action.title}
+				aria-label={action.title}
+				disabled={action.disabled}
+				onClick={action.onClick}
+				class={action.active ? 'text-accent' : undefined}
+			>
+				{action.icon}
+			</Button>
+		);
 	return (
-		<>
-			<button type="button" title="New note" onClick={() => treeCtl.newNote()} class={iconBtn}>
-				<NewNoteIcon />
-			</button>
-			<button type="button" title="New folder" onClick={() => treeCtl.newFolder()} class={iconBtn}>
-				<NewFolderIcon />
-			</button>
-			<button
-				type="button"
-				title={treeCtl.sortDesc ? 'Sort Z → A' : 'Sort A → Z'}
-				onClick={() => treeCtl.toggleSort()}
-				class={iconBtn}
-			>
-				<SortIcon desc={treeCtl.sortDesc} />
-			</button>
-			<button
-				type="button"
-				title={treeCtl.allExpanded ? 'Collapse all' : 'Expand all'}
-				onClick={() => treeCtl.toggleExpandAll()}
-				class={iconBtn}
-			>
-				<ExpandCollapseIcon expanded={treeCtl.allExpanded} />
-			</button>
-			{treeCtl.hasHidden && (
-				<button
-					type="button"
-					title={treeCtl.showHidden ? 'Hide hidden files' : 'Show hidden files'}
-					onClick={() => treeCtl.toggleHidden()}
-					class={active(treeCtl.showHidden)}
-				>
-					<EyeIcon off={!treeCtl.showHidden} />
-				</button>
-			)}
-		</>
+		<Button
+			variant={action.primary ? 'subtle' : 'ghost'}
+			size="sm"
+			title={action.title}
+			disabled={action.disabled}
+			onClick={action.onClick}
+		>
+			{action.label}
+		</Button>
 	);
 }
 
 function Header({ view }: { view: View }) {
 	const editing = view.kind === 'edit';
-	const canEdit = view.kind === 'page' && isEditablePath(view.path);
 	// In edit mode the navbar hosts the formatting toolbar (a second flush row) and a
 	// subtle Save/Cancel — so editing feels integrated with the top chrome, not boxed.
 	return (
 		<header class="sticky top-0 z-10 bg-bg/90 backdrop-blur">
 			{/* Fixed row height (not padding-driven) so toggling the search icon ↔ input —
 			    which have slightly different intrinsic heights — can't nudge the header up/down. */}
-			<div class="flex h-9 items-center gap-1.5 px-2.5 text-[13px]">
+			<div class="flex h-9 items-center gap-1.5 px-2.5 text-sm">
 				{/* Top-left is brain-aware: with ≥1 brain it's the brain switcher (which lists
-				    brains, opens the active brain's files, and offers "New brain"); with zero
-				    brains it's a New-brain button; before the list loads it's plain Files.
-				    The New-brain branch also requires that no brain is currently open: offering
+				    brains, opens the active brain's files, and offers "Add a brain"); with zero
+				    brains it's an Add-a-brain button; before the list loads it's plain Files.
+				    That branch also requires that no brain is currently open: offering
 				    "create your first brain" to someone reading a page in one is always wrong, so
 				    a brain on screen outranks an empty list however the list got that way. */}
 				{brainList && brainList.length === 0 && !activeBrain ? (
-					<button
-						type="button"
-						title="Create a brain"
-						onClick={openCreateBrain}
-						class={`${iconBtn} shrink-0`}
+					<Button
+						variant="ghost"
+						size="icon"
+						title="Add a brain"
+						aria-label="Add a brain"
+						onClick={() => openAddBrain()}
 					>
 						<PlusIcon />
-					</button>
+					</Button>
 				) : brainList && brainList.length >= 1 ? (
 					<BrainSwitcher />
 				) : (
-					<button
-						type="button"
+					<Button
+						variant="ghost"
+						size="icon"
 						title="Files"
+						aria-label="Files"
 						onClick={() => openBrowse()}
-						class={`${iconBtn} shrink-0`}
 					>
 						<ListIcon />
-					</button>
+					</Button>
 				)}
 				{/* Search and Graph sit with the brain switcher — all three are "get somewhere" —
 				    not stranded among the secondary actions on the right. The rule the bar follows:
@@ -552,40 +615,13 @@ function Header({ view }: { view: View }) {
 				)}
 				<Breadcrumb view={view} />
 				<span class="ml-auto flex shrink-0 items-center gap-0.5">
-					{editing ? (
-						<>
-							<button
-								type="button"
-								onClick={() => editCtl.save()}
-								disabled={editCtl.saving}
-								class="rounded px-2.5 py-1 font-medium text-accent transition-colors hover:bg-chip disabled:opacity-60"
-							>
-								{editCtl.saving ? 'Saving…' : 'Save'}
-							</button>
-							<button
-								type="button"
-								onClick={() => editCtl.cancel()}
-								class="rounded px-2 py-1 text-muted transition-colors hover:bg-chip hover:text-fg"
-							>
-								Cancel
-							</button>
-							<OverflowMenu editing />
-						</>
-					) : (
-						<>
-							{view.kind === 'browse' && <FileTreeToolbar />}
-							{canEdit && (
-								<button
-									type="button"
-									onClick={() => openEditor((view as { path: string }).path)}
-									class="rounded px-2 py-1 text-muted transition-colors hover:bg-chip hover:text-fg"
-								>
-									Edit
-								</button>
-							)}
-							<OverflowMenu editing={false} />
-						</>
-					)}
+					{/* "What you can do HERE" — supplied by the current view, not switched on
+					    here. Five views used to have an empty slot and had to put their primary
+					    action in the body instead; declaring actions per view is what closed that. */}
+					{viewActions(view).map((a) => (
+						<HeaderAction key={a.key} action={a} />
+					))}
+					<OverflowMenu editing={editing} />
 				</span>
 			</div>
 			{/* The formatting toolbar slides in / out as you enter / leave edit (grid-rows

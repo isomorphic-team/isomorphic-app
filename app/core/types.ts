@@ -103,6 +103,23 @@ export interface BrainRow {
 	configPrUrl?: string; // a configure PR is pending (protected repo) — show "Review PR"
 }
 
+// An org the caller can add a brain to. `brainId` is any brain they already have in
+// that org: brain-scope tools resolve the org from the brain, so it's how a call
+// targets an org the caller isn't currently sitting in.
+export interface OrgTarget {
+	orgId: string;
+	orgLabel: string;
+	brainId: string;
+}
+
+// A repo the org's installation can see that isn't a brain yet (connect_brain's
+// picker, returned when the call omits `repo`).
+export interface ConnectableRepo {
+	id: string;
+	owner: string;
+	repo: string;
+}
+
 // One entry in the "Connected accounts" roster (see src/tools/connected-accounts.ts):
 // either a linked email identity or a linked GitHub account.
 export interface ConnectedAccount {

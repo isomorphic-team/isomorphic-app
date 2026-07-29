@@ -17,6 +17,7 @@ import type {
 	MemberSelf,
 	MemberRole,
 	BrainRow,
+	OrgTarget,
 	ConnectedAccount,
 	Identity,
 	BrowseData
@@ -25,6 +26,7 @@ import { app, callTool, firstText } from './host.ts';
 import { FOLDER_NOTE_NAMES } from './util.ts';
 import {
 	show,
+	history,
 	currentView,
 	brainArgs,
 	browseCache,
@@ -48,7 +50,7 @@ function handleToolResult(result: CallToolResult) {
 		// A brain-scope tool opened against a user with no brain yet → offer to create one.
 		if (isNoBrain(detail)) {
 			void ensureBrainList();
-			openCreateBrain();
+			openAddBrain();
 			return;
 		}
 		show({
@@ -117,7 +119,7 @@ function handleToolResult(result: CallToolResult) {
 		// Zero brains (e.g. view_brains on a fresh account) → the create-your-first-brain
 		// state instead of an empty list.
 		if (bv.kind === 'brains' && bv.brains.length === 0)
-			show({ kind: 'create-brain', first: true }, { push: false });
+			show({ kind: 'add-brain', orgs: [], first: true }, { push: false });
 		else show(bv, { push: false });
 	}
 	// Settings and the connected-accounts widget resolve to the SAME page — the
@@ -212,10 +214,91 @@ function isNoBrain(s: string): boolean {
 	return /don.?t have a brain yet/i.test(s);
 }
 
-// Open the "create a brain" form. `first` (no brains yet) tunes the copy from
-// "create another brain" to "create your first brain".
-function openCreateBrain() {
-	show({ kind: 'create-brain', first: (brainList?.length ?? 0) === 0 });
+// The orgs a caller can add a brain to: deduped from the brains they already admin.
+// Derived from the brains list rather than the ACTIVE brain, so sitting in a brain
+// you only view doesn't hide an org you own. Shared by the brains view's action gate
+// and by the add-brain flow itself, which must agree on "can you add" or the header
+// offers a button that opens an empty picker.
+function manageableOrgs(brains: BrainRow[]): OrgTarget[] {
+	const out: OrgTarget[] = [];
+	const seen = new Set<string>();
+	for (const b of brains) {
+		if (!b.canManage || !b.orgId || seen.has(b.orgId)) continue;
+		seen.add(b.orgId);
+		out.push({ orgId: b.orgId, orgLabel: b.orgLabel ?? b.label, brainId: b.id });
+	}
+	return out;
+}
+
+// ---------- flows ----------
+//
+// Every add-shaped action in the app opens as its own PUSHED VIEW: add a brain,
+// create a brain, invite a member, connect an account. The card is already a bounded
+// box in the conversation, so a flow that needs room takes the whole card rather than
+// floating a dialog inside it — the reasoning, and the shared shell, are in
+// app/ui/Flow.tsx. Openers are grouped here because they are the entry points, and a
+// header action calls one directly (there is no composer to register at mount time).
+//
+// Each flow exits through goBack(), falling back to the screen it belongs to when
+// there is no history (a flow reached straight from a tool result).
+
+// The ONE entry point for getting a brain into this workspace, whichever source it
+// comes from. There used to be two (openCreateBrain from the switcher and the empty
+// state, openAddBrain from the brains list), which is what put "New brain" and "Add a
+// brain" in front of the user as if they were different intents.
+//
+// Both arguments are derived when omitted, so every call site is just openAddBrain().
+// `first` (no brains yet) tunes the copy and drops the source chooser: there is
+// nothing to connect to before you have a brain to resolve an org from.
+function openAddBrain(opts: { orgs?: OrgTarget[]; first?: boolean } = {}) {
+	show({
+		kind: 'add-brain',
+		orgs: opts.orgs ?? manageableOrgs(brainList ?? []),
+		first: opts.first ?? (brainList?.length ?? 0) === 0
+	});
+}
+
+function openInviteMember() {
+	show({ kind: 'invite-member' });
+}
+
+function openConnectAccount() {
+	show({ kind: 'connect-account' });
+}
+
+// Leave the add-brain flow for the brain it just connected.
+//
+// A COMPLETED flow does not belong in the back stack: pressing Back from the new
+// brain should show the brains list with the new brain in it, not re-open the picker
+// that would offer to connect the repo a second time. So the stale brains list that
+// opened the flow is dropped and replaced by the refreshed one from this result,
+// which switchBrain then pushes on its way out.
+function finishAddBrain(sc: Record<string, unknown>, connectedId: string) {
+	const fresh = brainsViewFromSc(sc);
+	dropStale('brains');
+	show(fresh, { push: false });
+	switchBrain(connectedId);
+}
+
+// Leave the invite flow for the roster, with the new invite already on it (the
+// mutation returns the fresh roster). Same stack discipline as finishAddBrain: a
+// completed flow must not sit in history, or Back re-opens a form for something the
+// user has already done.
+function finishInvite(sc: Record<string, unknown>) {
+	const fresh = membersViewFromSc(sc);
+	dropStale('members');
+	show(fresh, { push: false });
+}
+
+// A completed flow must not sit in the back stack, and the screen it was opened from
+// is usually STALE the moment it finishes (a brain added, an invite sent). Both
+// helpers touch only the TOP of the stack and only when it is the expected screen, so
+// a flow reached some other way never eats someone else's history entry.
+function dropStale(kind: View['kind']) {
+	if (history.at(-1)?.kind === kind) history.pop();
+}
+function refreshStale(kind: View['kind'], fresh: View) {
+	if (history.at(-1)?.kind === kind) history[history.length - 1] = fresh;
 }
 
 // Create a new named brain, then land on its (empty) file tree. The tool scaffolds a
@@ -224,11 +307,15 @@ function openCreateBrain() {
 async function submitCreateBrain(name: string) {
 	const trimmed = name.trim();
 	if (!trimmed) return;
-	show({ kind: 'loading', label: 'Creating brain…' });
+	// push:false — a completed flow must not enter the back stack, so the screen that
+	// opened it stays on top and Back from the new brain lands there, not on a form
+	// offering to create the brain that now exists.
+	show({ kind: 'loading', label: 'Creating brain…' }, { push: false });
 	try {
 		const res = await callTool('create_brain', { name: trimmed });
 		if (res.isError) throw new Error(firstText(res));
-		brainsViewFromSc((res.structuredContent ?? {}) as Record<string, unknown>);
+		const fresh = brainsViewFromSc((res.structuredContent ?? {}) as Record<string, unknown>);
+		refreshStale('brains', fresh); // ...and if that screen was the brains list, it is now stale
 		setBrowseCache(null);
 		resetPolicy();
 		openBrowse();
@@ -237,7 +324,7 @@ async function submitCreateBrain(name: string) {
 			kind: 'error',
 			headline: "Couldn't create the brain.",
 			detail: String(e),
-			retry: openCreateBrain
+			retry: () => openAddBrain()
 		});
 	}
 }
@@ -288,7 +375,7 @@ async function navigateTo(path: string) {
 	try {
 		show({ kind: 'page', path, markdown: await fetchPage(path) });
 	} catch (e) {
-		if (isNoBrain(String(e))) return openCreateBrain();
+		if (isNoBrain(String(e))) return openAddBrain();
 		show({
 			kind: 'error',
 			headline: `Couldn't load ${path}`,
@@ -362,7 +449,7 @@ async function openBrowse(focus?: string) {
 	try {
 		show({ kind: 'browse', ...(await fetchPaths()), focus });
 	} catch (e) {
-		if (isNoBrain(String(e))) return openCreateBrain();
+		if (isNoBrain(String(e))) return openAddBrain();
 		show({
 			kind: 'error',
 			headline: "Couldn't load the file tree.",
@@ -633,8 +720,13 @@ export {
 	ensureBrainList,
 	switchBrain,
 	isNoBrain,
-	openCreateBrain,
 	submitCreateBrain,
+	manageableOrgs,
+	openAddBrain,
+	finishAddBrain,
+	openInviteMember,
+	finishInvite,
+	openConnectAccount,
 	openBrains,
 	membersViewFromSc,
 	fetchPage,

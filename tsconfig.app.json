@@ -5,6 +5,12 @@
 		"moduleResolution": "bundler",
 		"lib": ["ES2023", "DOM", "DOM.Iterable"],
 		"strict": true,
+		// An imported-but-never-called symbol is how "Add brain" silently vanished from
+		// the header: BrainsView imported useAddAction and never invoked it, so the
+		// action gate stayed empty and everything typechecked clean. In a UI where a
+		// missing call means a missing CONTROL rather than a crash, this is the only
+		// automated thing standing between that mistake and a user finding it.
+		"noUnusedLocals": true,
 		"esModuleInterop": true,
 		"forceConsistentCasingInFileNames": true,
 		"resolveJsonModule": true,

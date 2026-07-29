@@ -1,7 +1,7 @@
-// Presentational icon components + the shared iconBtn class string + the InitialsAvatar.
+// Presentational icon components + the InitialsAvatar.
+// (The shared `iconBtn` class string lived here until the UI primitives landed; it is
+// now `<Button variant="ghost" size="icon">` in app/ui/Button.tsx.)
 // Pure SVG/markup with no dependencies, so any view or the chrome can pull from here.
-
-const iconBtn = 'rounded p-1 text-muted transition-colors hover:bg-chip hover:text-fg';
 
 const ChevronIcon = ({ open }: { open: boolean }) => (
 	<svg
@@ -296,13 +296,19 @@ function PlusIcon() {
 // can't load; initials keep attribution legible without a network fetch.
 function InitialsAvatar({ name }: { name: string }) {
 	const initial = (name.trim()[0] ?? '?').toUpperCase();
-	// Hue from the name so each person gets a consistent color.
-	let h = 0;
-	for (const ch of name) h = (h * 31 + ch.charCodeAt(0)) % 360;
+	// Sits at the left edge of every list row, exactly where the file tree puts a
+	// 15px muted outline glyph — so it has to carry comparable weight. It used to be
+	// a 24px disc filled at hsl(name 45% 45%) with white semibold text, which made it
+	// the most saturated element in an app that otherwise spends colour only on the
+	// single accent. Now it matches the tree's glyphs: tree-sized, chip-filled, muted.
+	//
+	// The name-derived hue is gone rather than dimmed: any fixed lightness that reads
+	// on the light chip (#f0f0f4) is too close in tone on the dark one (#2a2a30), and
+	// the row already spells out the name next to the letter, so the colour was
+	// carrying almost no information. To bring it back, tint `color` from a hash here.
 	return (
 		<span
-			class="flex h-6 w-6 shrink-0 select-none items-center justify-center rounded-full text-[11px] font-semibold text-white"
-			style={`background: hsl(${h} 45% 45%)`}
+			class="flex h-[18px] w-[18px] shrink-0 select-none items-center justify-center rounded-full bg-chip text-2xs font-semibold text-muted"
 			aria-hidden="true"
 		>
 			{initial}
@@ -311,7 +317,6 @@ function InitialsAvatar({ name }: { name: string }) {
 }
 
 export {
-	iconBtn,
 	ChevronIcon,
 	FolderIcon,
 	FileIcon,

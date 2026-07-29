@@ -1,5 +1,6 @@
 import { openBrowse } from '../core/actions.ts';
 import { defineView } from '../core/view-registry.ts';
+import { viewTitle } from '../ui/typography.ts';
 
 function ErrorView({
 	headline,
@@ -12,12 +13,12 @@ function ErrorView({
 }) {
 	return (
 		<div class="mt-10 text-center text-muted">
-			<p class="font-bold text-fg">{headline}</p>
+			<p class={viewTitle}>{headline}</p>
 			{detail && <p class="mt-1 text-sm">{detail}</p>}
 			<button
 				type="button"
 				onClick={() => (retry ? retry() : openBrowse())}
-				class="mt-3 cursor-pointer rounded-md border border-border px-3.5 py-1.5 text-[13px] text-fg"
+				class="mt-3 cursor-pointer rounded-md border border-border px-3.5 py-1.5 text-sm text-fg"
 			>
 				{retry ? 'Retry' : 'Browse files'}
 			</button>
