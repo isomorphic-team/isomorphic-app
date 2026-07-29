@@ -7,6 +7,7 @@ import { toast, askConfirm } from '../core/toast.tsx';
 import { BrainGlyph, CloseIcon } from '../core/icons.tsx';
 import { defineView } from '../core/view-registry.ts';
 import { Button, List, ListRow, listRowTitle } from '../ui/index.ts';
+import { eyebrow } from '../ui/typography.ts';
 
 // The brains list (bi-modal counterpart to the header switcher): every brain the user
 // can reach, with role, the active one marked. Selecting one switches to it. Wherever
@@ -88,7 +89,7 @@ function BrainsView({ brains, active }: { brains: BrainRow[]; active: string }) 
 			{brains.length === 0 ? (
 				<div class="mt-16 text-center">
 					<p class="text-muted">No brains yet.</p>
-					<Button onClick={openCreateBrain} class="mt-3 text-[13px]">
+					<Button onClick={openCreateBrain} class="mt-3">
 						Create your first brain
 					</Button>
 				</div>
@@ -189,9 +190,7 @@ function BrainsView({ brains, active }: { brains: BrainRow[]; active: string }) 
 							{!target ? (
 								// Choose which org to add to (only shown with 2+ admin orgs).
 								<>
-									<div class="px-1 pb-1 text-xs font-medium uppercase tracking-wide text-muted">
-										Add to which organization?
-									</div>
+									<div class={`px-1 pb-1 ${eyebrow}`}>Add to which organization?</div>
 									<ul class="flex flex-col">
 										{manageableOrgs.map((o) => (
 											<li key={o.orgId}>
@@ -208,9 +207,7 @@ function BrainsView({ brains, active }: { brains: BrainRow[]; active: string }) 
 							) : (
 								// Pick a repo to adopt into the chosen org.
 								<>
-									<div class="px-1 pb-1 text-xs font-medium uppercase tracking-wide text-muted">
-										Add a repo to {target.orgLabel}
-									</div>
+									<div class={`px-1 pb-1 ${eyebrow}`}>Add a repo to {target.orgLabel}</div>
 									{repos === null ? (
 										<div class="px-1 py-2 text-sm text-muted">Loading repos…</div>
 									) : repos.length === 0 ? (

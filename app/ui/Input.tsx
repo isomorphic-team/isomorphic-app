@@ -13,7 +13,7 @@ const control = cva(
 		variants: {
 			size: {
 				md: 'px-2.5 py-1.5 text-sm',
-				sm: 'px-2 py-1 text-[13px]'
+				sm: 'px-2 py-1 text-sm'
 			}
 		},
 		defaultVariants: { size: 'md' }

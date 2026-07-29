@@ -3,6 +3,7 @@ import { submitCreateBrain, openBrowse } from '../core/actions.ts';
 import { BrainGlyph } from '../core/icons.tsx';
 import { defineView } from '../core/view-registry.ts';
 import { Button, Input } from '../ui/index.ts';
+import { viewTitle } from '../ui/typography.ts';
 
 // Create-a-brain form + empty state. Shown when the user has no brain yet ("create your
 // first brain") or picks "New brain" from the switcher. Scaffolds a fresh named brain and
@@ -21,9 +22,7 @@ function CreateBrainView({ first }: { first: boolean }) {
 			<div class="mb-3 flex justify-center text-muted">
 				<BrainGlyph />
 			</div>
-			<h2 class="text-base font-semibold text-fg">
-				{first ? 'Create your first brain' : 'Create a new brain'}
-			</h2>
+			<h2 class={viewTitle}>{first ? 'Create your first brain' : 'Create a new brain'}</h2>
 			<p class="mx-auto mt-1 max-w-xs text-sm text-muted">
 				{first
 					? 'A brain is a knowledge base Claude reads and maintains for you. Name it to get started.'
@@ -42,16 +41,11 @@ function CreateBrainView({ first }: { first: boolean }) {
 			/>
 			<div class="mt-3 flex justify-center gap-2">
 				{!first && (
-					<Button
-						variant="outline"
-						onClick={() => openBrowse()}
-						disabled={busy}
-						class="text-[13px]"
-					>
+					<Button variant="outline" onClick={() => openBrowse()} disabled={busy} class="text-sm">
 						Cancel
 					</Button>
 				)}
-				<Button onClick={submit} disabled={busy || !name.trim()} class="text-[13px]">
+				<Button onClick={submit} disabled={busy || !name.trim()} class="text-sm">
 					{busy ? 'Creating…' : 'Create brain'}
 				</Button>
 			</div>

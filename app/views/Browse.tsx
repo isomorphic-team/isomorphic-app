@@ -176,7 +176,7 @@ function AddInput({
 					if (e.key === 'Escape') cancel();
 				}}
 				onBlur={() => !value.trim() && cancel()}
-				class="flex-1 rounded border border-accent bg-bg px-1 py-0.5 text-[13.5px] text-fg outline-none"
+				class="flex-1 rounded border border-accent bg-bg px-1 py-0.5 text-sm text-fg outline-none"
 			/>
 		</div>
 	);
@@ -222,7 +222,7 @@ function RowMenu({
 								e.stopPropagation();
 								it.onClick();
 							}}
-							class={`gap-2.5 rounded-none px-3 py-1.5 text-[13px] ${
+							class={`gap-2.5 rounded-none px-3 py-1.5 text-sm ${
 								it.danger ? 'text-[#d33]' : 'text-fg'
 							}`}
 						>
@@ -271,7 +271,7 @@ function TreeItem({
 						if (e.key === 'Escape') actions.cancelRename();
 					}}
 					onBlur={() => actions.cancelRename()}
-					class="flex-1 rounded border border-accent bg-bg px-1 py-0.5 text-[13.5px] text-fg outline-none"
+					class="flex-1 rounded border border-accent bg-bg px-1 py-0.5 text-sm text-fg outline-none"
 				/>
 			</div>
 		);
@@ -342,7 +342,7 @@ function TreeItem({
 								toggle(node.path);
 							}
 						}}
-						class={`flex min-w-0 flex-1 items-center gap-1.5 py-1 pl-1.5 text-left text-[13.5px] ${folderPage ? 'hover:text-accent' : ''}`}
+						class={`flex min-w-0 flex-1 items-center gap-1.5 py-1 pl-1.5 text-left text-sm ${folderPage ? 'hover:text-accent' : ''}`}
 					>
 						<span class={`truncate ${dim ? 'text-muted' : ''}`}>{node.name}</span>
 						{!editable && <LockIcon />}
@@ -440,7 +440,7 @@ function TreeItem({
 			<button
 				type="button"
 				onClick={() => isPage && navigateTo(node.path)}
-				class={`flex min-w-0 flex-1 items-center gap-1.5 py-1 pl-1.5 text-left text-[13.5px] ${isPage ? 'hover:text-accent' : 'cursor-default'}`}
+				class={`flex min-w-0 flex-1 items-center gap-1.5 py-1 pl-1.5 text-left text-sm ${isPage ? 'hover:text-accent' : 'cursor-default'}`}
 			>
 				<span class={`truncate ${dim ? 'text-muted' : ''}`}>
 					{titleByPath[node.path] ?? node.name.replace(/\.md$/, '')}

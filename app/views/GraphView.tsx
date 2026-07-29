@@ -522,7 +522,7 @@ function GraphView({
 				style={{ height: tall ? '72vh' : '420px' }}
 			>
 				<canvas ref={canvasRef} class="block h-full w-full touch-none" />
-				<span class="pointer-events-none absolute right-1 bottom-1 text-[11px] text-muted tabular-nums select-none">
+				<span class="pointer-events-none absolute right-1 bottom-1 text-xs text-muted tabular-nums select-none">
 					{nodes.length} pages · {links.length} links
 				</span>
 			</div>

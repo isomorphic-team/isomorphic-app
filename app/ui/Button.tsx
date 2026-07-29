@@ -2,7 +2,7 @@
 //
 // Derived from what the views were already doing rather than invented: before this
 // existed there were four near-identical "primary" strings that had drifted apart on
-// padding (px-3 vs px-3.5), type scale (text-sm vs text-[13px]), disabled opacity
+// padding (px-3 vs px-3.5), type scale (text-sm vs text-sm), disabled opacity
 // (50 vs 60), and whether they carried a transition at all. The variants below are
 // the union of those, normalized to one value each.
 //
@@ -37,7 +37,7 @@ const button = cva(
 			},
 			size: {
 				md: 'px-3.5 py-1.5 text-sm',
-				sm: 'px-2.5 py-1 text-[13px]',
+				sm: 'px-2.5 py-1 text-sm',
 				xs: 'px-1.5 py-1 text-xs',
 				/** Square, for a single glyph. Needs an aria-label at the call site. */
 				icon: 'rounded p-1'

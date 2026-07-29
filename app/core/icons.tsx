@@ -308,7 +308,7 @@ function InitialsAvatar({ name }: { name: string }) {
 	// carrying almost no information. To bring it back, tint `color` from a hash here.
 	return (
 		<span
-			class="flex h-[18px] w-[18px] shrink-0 select-none items-center justify-center rounded-full bg-chip text-[10px] font-semibold text-muted"
+			class="flex h-[18px] w-[18px] shrink-0 select-none items-center justify-center rounded-full bg-chip text-2xs font-semibold text-muted"
 			aria-hidden="true"
 		>
 			{initial}

@@ -2,6 +2,7 @@ import type { Identity, ConnectedAccount } from '../core/types.ts';
 import { InitialsAvatar, LinkIcon } from '../core/icons.tsx';
 import { ConnectedAccountsSection } from '../components/ConnectedAccountsSection.tsx';
 import { defineView } from '../core/view-registry.ts';
+import { eyebrow } from '../ui/typography.ts';
 
 // The user's own settings. Today it's the signed-in identity card; it's the extensible
 // slot where future personal rows (Connected accounts, notifications, Org settings) land.
@@ -32,7 +33,7 @@ function SettingsView({
 				</div>
 			</div>
 			<div class="mt-5">
-				<div class="mb-1 flex items-center gap-1.5 text-xs font-medium uppercase tracking-wide text-muted">
+				<div class={`mb-1 flex items-center gap-1.5 ${eyebrow}`}>
 					<LinkIcon />
 					Connected accounts
 				</div>

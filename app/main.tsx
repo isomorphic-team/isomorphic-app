@@ -74,6 +74,7 @@ import { EditorToolbar, editCtl } from './views/EditView.tsx';
 // The file tree publishes its toolbar handlers here (mirrors editCtl); the header
 // renders them contextually while browsing.
 import { treeCtl } from './views/Browse.tsx';
+import { eyebrow } from './ui/typography.ts';
 
 // ---------- host wiring ----------
 
@@ -155,7 +156,7 @@ function OverflowMenu({ editing }: { editing: boolean }) {
 						<>
 							<Button
 								variant="row"
-								class="gap-2.5 rounded-none px-3 py-1.5 text-[13px]"
+								class="gap-2.5 rounded-none px-3 py-1.5 text-sm"
 								onClick={go(() => openActivity())}
 							>
 								<span class="w-4 text-muted">
@@ -165,7 +166,7 @@ function OverflowMenu({ editing }: { editing: boolean }) {
 							</Button>
 							<Button
 								variant="row"
-								class="gap-2.5 rounded-none px-3 py-1.5 text-[13px]"
+								class="gap-2.5 rounded-none px-3 py-1.5 text-sm"
 								onClick={go(openMembers)}
 							>
 								<span class="w-4 text-muted">
@@ -178,7 +179,7 @@ function OverflowMenu({ editing }: { editing: boolean }) {
 							{brainList?.some((b) => b.canManage) && (
 								<Button
 									variant="row"
-									class="gap-2.5 rounded-none px-3 py-1.5 text-[13px]"
+									class="gap-2.5 rounded-none px-3 py-1.5 text-sm"
 									onClick={go(openBrains)}
 								>
 									<span class="w-4 text-muted">
@@ -192,14 +193,12 @@ function OverflowMenu({ editing }: { editing: boolean }) {
 					{hasDisplay && (
 						<>
 							{!editing && <div class="my-1 border-t border-border" />}
-							<div class="px-3 pb-0.5 pt-1 text-[11px] font-medium uppercase tracking-wide text-muted">
-								Display
-							</div>
+							<div class={`px-3 pb-0.5 pt-1 ${eyebrow}`}>Display</div>
 							{modes.map((m) => (
 								<Button
 									variant="row"
 									onClick={go(() => setDisplayMode(m))}
-									class={`gap-2.5 rounded-none px-3 py-1.5 text-[13px] ${
+									class={`gap-2.5 rounded-none px-3 py-1.5 text-sm ${
 										m === displayMode ? 'text-accent' : 'text-fg'
 									}`}
 								>
@@ -215,7 +214,7 @@ function OverflowMenu({ editing }: { editing: boolean }) {
 							<div class="my-1 border-t border-border" />
 							<Button
 								variant="row"
-								class="gap-2.5 rounded-none px-3 py-1.5 text-[13px]"
+								class="gap-2.5 rounded-none px-3 py-1.5 text-sm"
 								onClick={go(openSettings)}
 							>
 								<span class="w-4 text-muted">
@@ -259,7 +258,7 @@ function SearchBox() {
 				if (e.key === 'Escape') setOpen(false);
 			}}
 			onBlur={(e) => !(e.target as HTMLInputElement).value && setOpen(false)}
-			class="w-44 rounded-md bg-chip px-2 py-1 text-[13px] text-fg outline-none"
+			class="w-44 rounded-md bg-chip px-2 py-1 text-sm text-fg outline-none"
 		/>
 	);
 }
@@ -436,7 +435,7 @@ function BrainSwitcher() {
 								setOpen(false);
 								switchBrain(b.id);
 							}}
-							class="flex w-full items-center gap-2.5 px-3 py-1.5 text-left text-[13px] hover:bg-chip"
+							class="flex w-full items-center gap-2.5 px-3 py-1.5 text-left text-sm hover:bg-chip"
 						>
 							<span class={b.active ? 'text-accent' : 'text-muted'}>
 								<BrainGlyph />
@@ -445,7 +444,7 @@ function BrainSwitcher() {
 								<span class="block truncate text-fg" title={b.label}>
 									{b.label}
 								</span>
-								<span class="block text-[11px] text-muted">
+								<span class="block text-xs text-muted">
 									{b.role}
 									{b.configPrUrl ? ' · setup pending' : b.needsConfig ? ' · not configured' : ''}
 								</span>
@@ -460,7 +459,7 @@ function BrainSwitcher() {
 							setOpen(false);
 							openCreateBrain();
 						}}
-						class="flex w-full items-center gap-2.5 px-3 py-1.5 text-left text-[13px] text-muted hover:bg-chip hover:text-fg"
+						class="flex w-full items-center gap-2.5 px-3 py-1.5 text-left text-sm text-muted hover:bg-chip hover:text-fg"
 					>
 						<span class="shrink-0 text-[15px] leading-none">＋</span>
 						<span class="min-w-0 flex-1 truncate">New brain</span>
@@ -540,7 +539,7 @@ function Header({ view }: { view: View }) {
 		<header class="sticky top-0 z-10 bg-bg/90 backdrop-blur">
 			{/* Fixed row height (not padding-driven) so toggling the search icon ↔ input —
 			    which have slightly different intrinsic heights — can't nudge the header up/down. */}
-			<div class="flex h-9 items-center gap-1.5 px-2.5 text-[13px]">
+			<div class="flex h-9 items-center gap-1.5 px-2.5 text-sm">
 				{/* Top-left is brain-aware: with ≥1 brain it's the brain switcher (which lists
 				    brains, opens the active brain's files, and offers "New brain"); with zero
 				    brains it's a New-brain button; before the list loads it's plain Files.

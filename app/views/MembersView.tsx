@@ -9,6 +9,7 @@ import { relativeTime } from '../core/util.ts';
 import { InitialsAvatar, CloseIcon } from '../core/icons.tsx';
 import { defineView } from '../core/view-registry.ts';
 import { Button, Input, Select, List, ListRow } from '../ui/index.ts';
+import { eyebrow } from '../ui/typography.ts';
 
 const ROLE_LABEL: Record<MemberRole, string> = {
 	viewer: 'Viewer',
@@ -132,14 +133,12 @@ function MembersView({
 
 			{invites.length > 0 && (
 				<div class="mt-6">
-					<div class="mb-1.5 text-xs font-medium uppercase tracking-wide text-muted">
-						Pending invites
-					</div>
+					<div class={`mb-1.5 ${eyebrow}`}>Pending invites</div>
 					<List>
 						{invites.map((inv) => (
 							<ListRow key={inv.invite_id}>
 								<span
-									class="flex h-[18px] w-[18px] shrink-0 items-center justify-center rounded-full border border-dashed border-border text-[10px] text-muted"
+									class="flex h-[18px] w-[18px] shrink-0 items-center justify-center rounded-full border border-dashed border-border text-2xs text-muted"
 									aria-hidden="true"
 								>
 									@

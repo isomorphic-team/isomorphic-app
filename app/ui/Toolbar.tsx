@@ -99,7 +99,7 @@ export function Toolbar({
 }
 
 const toolbarButton = cva(
-	'min-w-7 rounded px-1.5 py-1 text-[13px] leading-none outline-none transition-colors hover:bg-chip focus-visible:ring-2 focus-visible:ring-accent disabled:opacity-50',
+	'min-w-7 rounded px-1.5 py-1 text-sm leading-none outline-none transition-colors hover:bg-chip focus-visible:ring-2 focus-visible:ring-accent disabled:opacity-50',
 	{
 		variants: { pressed: { true: 'bg-chip text-accent', false: 'text-fg' } },
 		defaultVariants: { pressed: false }

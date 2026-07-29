@@ -6,6 +6,7 @@ import { callTool } from '../core/host.ts';
 import { brainArgs } from '../core/store.ts';
 import { navigateTo, renderMarkdown, onProseClick } from '../core/actions.ts';
 import { defineView } from '../core/view-registry.ts';
+import { eyebrow } from '../ui/typography.ts';
 
 // Turn a frontmatter key into a readable label: "created_at" → "Created at".
 function humanizeKey(key: string): string {
@@ -79,7 +80,7 @@ function PageProperties({ fm }: { fm: Frontmatter | null }) {
 		<dl class="mb-5 grid grid-cols-[minmax(0,max-content)_1fr] gap-x-4 gap-y-1.5 border-b border-border pb-4 text-sm">
 			{rows.map((r) => (
 				<div key={r.key} class="contents">
-					<dt class="pt-px text-xs font-medium uppercase tracking-wide text-muted">{r.label}</dt>
+					<dt class={`pt-px ${eyebrow}`}>{r.label}</dt>
 					<dd class="min-w-0 break-words text-fg">{r.value}</dd>
 				</div>
 			))}
@@ -125,7 +126,7 @@ function LinkedReferences({ path }: { path: string }) {
 
 	return (
 		<section class="mt-8 border-t border-border pt-4">
-			<h2 class="mb-2.5 text-xs font-semibold uppercase tracking-wide text-muted">
+			<h2 class={`mb-2.5 ${eyebrow}`}>
 				Linked references{state.refs.length ? ` · ${state.refs.length}` : ''}
 			</h2>
 			{state.refs.length === 0 ? (
