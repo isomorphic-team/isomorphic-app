@@ -6,6 +6,7 @@ import { openCreateBrain, switchBrain, brainsViewFromSc, openBrains } from '../c
 import { toast, askConfirm } from '../core/toast.tsx';
 import { BrainGlyph, CloseIcon } from '../core/icons.tsx';
 import { defineView } from '../core/view-registry.ts';
+import { Button } from '../ui/index.ts';
 
 // The brains list (bi-modal counterpart to the header switcher): every brain the user
 // can reach, with role, the active one marked. Selecting one switches to it. Wherever
@@ -87,13 +88,9 @@ function BrainsView({ brains, active }: { brains: BrainRow[]; active: string }) 
 			{brains.length === 0 ? (
 				<div class="mt-16 text-center">
 					<p class="text-muted">No brains yet.</p>
-					<button
-						type="button"
-						onClick={openCreateBrain}
-						class="mt-3 rounded-md bg-accent px-3.5 py-1.5 text-[13px] font-medium text-white"
-					>
+					<Button onClick={openCreateBrain} class="mt-3 text-[13px]">
 						Create your first brain
-					</button>
+					</Button>
 				</div>
 			) : (
 				<ul class="flex flex-col">
@@ -111,14 +108,14 @@ function BrainsView({ brains, active }: { brains: BrainRow[]; active: string }) 
 											{b.label}
 										</span>
 									) : (
-										<button
-											type="button"
+										<Button
+											variant="link"
 											onClick={() => switchBrain(b.id)}
 											title={b.id === active ? `Open ${b.label}` : `Switch to ${b.label}`}
-											class="block max-w-full truncate border-none bg-transparent p-0 text-left font-medium text-fg hover:underline focus-visible:underline"
+											class="block max-w-full truncate text-left font-medium text-fg focus-visible:underline"
 										>
 											{b.label}
-										</button>
+										</Button>
 									)}
 									<span class="block text-xs text-muted">
 										{b.role}
@@ -137,30 +134,32 @@ function BrainsView({ brains, active }: { brains: BrainRow[]; active: string }) 
 								(b.configPrUrl ? (
 									// A configure PR is open (protected repo) — link to it instead of
 									// opening another. Merging it makes the pages appear automatically.
-									<button
-										type="button"
+									<Button
+										variant="link"
 										title="Review the setup pull request"
 										onClick={() => app.openLink({ url: b.configPrUrl! })}
-										class="mr-1 shrink-0 border-none bg-transparent p-0 text-sm text-accent hover:underline"
+										class="mr-1"
 									>
 										Review PR ↗
-									</button>
+									</Button>
 								) : (
-									<button
-										type="button"
+									<Button
+										variant="link"
 										disabled={busy}
 										title={`Set up ${b.label} so its pages appear`}
 										onClick={() => run('configure_brain', { brain: b.id })}
-										class="mr-1 shrink-0 border-none bg-transparent p-0 text-sm text-accent hover:underline disabled:opacity-50"
+										class="mr-1"
 									>
 										Set up
-									</button>
+									</Button>
 								))}
 							{b.canManage && (
-								<button
-									type="button"
+								<Button
+									variant="ghost"
+									size="icon"
 									disabled={busy}
 									title={`Disconnect ${b.label}`}
+									aria-label={`Disconnect ${b.label}`}
 									onClick={async () => {
 										const ok = await askConfirm({
 											title: 'Disconnect brain?',
@@ -169,10 +168,10 @@ function BrainsView({ brains, active }: { brains: BrainRow[]; active: string }) 
 										});
 										if (ok) run('disconnect_brain', { brain: b.id });
 									}}
-									class="ml-1 shrink-0 rounded p-1 text-muted transition-colors hover:bg-chip hover:text-fg disabled:opacity-50"
+									class="ml-1"
 								>
 									<CloseIcon />
-								</button>
+								</Button>
 							)}
 						</li>
 					))}
@@ -182,13 +181,9 @@ function BrainsView({ brains, active }: { brains: BrainRow[]; active: string }) 
 			{canAdd && (
 				<div class="mt-4">
 					{!adding ? (
-						<button
-							type="button"
-							onClick={startAdd}
-							class="rounded-md border border-border px-3 py-1.5 text-sm text-fg transition-colors hover:bg-chip"
-						>
+						<Button variant="outline" onClick={startAdd}>
 							＋ Add a brain
-						</button>
+						</Button>
 					) : (
 						<div class="rounded-md border border-border p-2">
 							{!target ? (
@@ -200,16 +195,12 @@ function BrainsView({ brains, active }: { brains: BrainRow[]; active: string }) 
 									<ul class="flex flex-col">
 										{manageableOrgs.map((o) => (
 											<li key={o.orgId}>
-												<button
-													type="button"
-													onClick={() => chooseOrg(o)}
-													class="flex w-full items-center gap-2 rounded px-1.5 py-1.5 text-left text-sm text-fg hover:bg-chip"
-												>
+												<Button variant="row" onClick={() => chooseOrg(o)} class="px-1.5 py-1.5">
 													<span class="text-muted">
 														<BrainGlyph />
 													</span>
 													<span class="truncate">{o.orgLabel}</span>
-												</button>
+												</Button>
 											</li>
 										))}
 									</ul>
@@ -231,32 +222,28 @@ function BrainsView({ brains, active }: { brains: BrainRow[]; active: string }) 
 										<ul class="flex flex-col">
 											{repos.map((r) => (
 												<li key={r.id}>
-													<button
-														type="button"
+													<Button
+														variant="row"
 														disabled={busy}
 														onClick={() =>
 															run('connect_brain', { repo: r.id, brain: target.brainId })
 														}
-														class="flex w-full items-center gap-2 rounded px-1.5 py-1.5 text-left text-sm text-fg hover:bg-chip disabled:opacity-50"
+														class="px-1.5 py-1.5"
 													>
 														<span class="text-muted">
 															<BrainGlyph />
 														</span>
 														<span class="truncate">{r.id}</span>
-													</button>
+													</Button>
 												</li>
 											))}
 										</ul>
 									)}
 								</>
 							)}
-							<button
-								type="button"
-								onClick={cancelAdd}
-								class="mt-1 px-1.5 py-1 text-xs text-muted hover:text-fg"
-							>
+							<Button variant="ghost" size="xs" onClick={cancelAdd} class="mt-1">
 								Cancel
-							</button>
+							</Button>
 						</div>
 					)}
 				</div>

@@ -2,6 +2,7 @@ import { useState } from 'preact/hooks';
 import { submitCreateBrain, openBrowse } from '../core/actions.ts';
 import { BrainGlyph } from '../core/icons.tsx';
 import { defineView } from '../core/view-registry.ts';
+import { Button, Input } from '../ui/index.ts';
 
 // Create-a-brain form + empty state. Shown when the user has no brain yet ("create your
 // first brain") or picks "New brain" from the switcher. Scaffolds a fresh named brain and
@@ -28,7 +29,7 @@ function CreateBrainView({ first }: { first: boolean }) {
 					? 'A brain is a knowledge base Claude reads and maintains for you. Name it to get started.'
 					: 'Give your new knowledge base a name.'}
 			</p>
-			<input
+			<Input
 				type="text"
 				// eslint-disable-next-line
 				autofocus
@@ -37,27 +38,22 @@ function CreateBrainView({ first }: { first: boolean }) {
 				disabled={busy}
 				onInput={(e) => setName((e.target as HTMLInputElement).value)}
 				onKeyDown={(e) => e.key === 'Enter' && submit()}
-				class="mt-4 w-full rounded-md border border-border bg-bg px-3 py-2 text-sm text-fg outline-none focus:border-accent"
+				class="mt-4 w-full bg-bg px-3 py-2"
 			/>
 			<div class="mt-3 flex justify-center gap-2">
 				{!first && (
-					<button
-						type="button"
+					<Button
+						variant="outline"
 						onClick={() => openBrowse()}
 						disabled={busy}
-						class="rounded-md border border-border px-3.5 py-1.5 text-[13px] text-fg hover:bg-chip"
+						class="text-[13px]"
 					>
 						Cancel
-					</button>
+					</Button>
 				)}
-				<button
-					type="button"
-					onClick={submit}
-					disabled={busy || !name.trim()}
-					class="rounded-md bg-accent px-3.5 py-1.5 text-[13px] font-medium text-white disabled:opacity-50"
-				>
+				<Button onClick={submit} disabled={busy || !name.trim()} class="text-[13px]">
 					{busy ? 'Creating…' : 'Create brain'}
-				</button>
+				</Button>
 			</div>
 		</div>
 	);

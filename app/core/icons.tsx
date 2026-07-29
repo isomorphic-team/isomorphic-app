@@ -1,7 +1,7 @@
-// Presentational icon components + the shared iconBtn class string + the InitialsAvatar.
+// Presentational icon components + the InitialsAvatar.
+// (The shared `iconBtn` class string lived here until the UI primitives landed; it is
+// now `<Button variant="ghost" size="icon">` in app/ui/Button.tsx.)
 // Pure SVG/markup with no dependencies, so any view or the chrome can pull from here.
-
-const iconBtn = 'rounded p-1 text-muted transition-colors hover:bg-chip hover:text-fg';
 
 const ChevronIcon = ({ open }: { open: boolean }) => (
 	<svg
@@ -311,7 +311,6 @@ function InitialsAvatar({ name }: { name: string }) {
 }
 
 export {
-	iconBtn,
 	ChevronIcon,
 	FolderIcon,
 	FileIcon,

@@ -8,6 +8,7 @@ import { toast } from '../core/toast.tsx';
 import { relativeTime } from '../core/util.ts';
 import { InitialsAvatar, CloseIcon } from '../core/icons.tsx';
 import { defineView } from '../core/view-registry.ts';
+import { Button, Input, Select } from '../ui/index.ts';
 
 const ROLE_LABEL: Record<MemberRole, string> = {
 	viewer: 'Viewer',
@@ -60,22 +61,18 @@ function MembersView({
 						run('invite_member', { email, role: inviteRole }, () => setInviteEmail(''));
 					}}
 				>
-					<input
+					<Input
 						type="email"
 						required
 						value={inviteEmail}
 						onInput={(e) => setInviteEmail((e.target as HTMLInputElement).value)}
 						placeholder="Invite by email"
-						class="min-w-0 flex-1 rounded-md border border-border bg-transparent px-2.5 py-1.5 text-sm text-fg outline-none placeholder:text-muted focus:border-accent"
+						class="min-w-0 flex-1"
 					/>
 					<RoleSelect value={inviteRole} disabled={busy} onChange={(r) => setInviteRole(r)} />
-					<button
-						type="submit"
-						disabled={busy || !inviteEmail.trim()}
-						class="shrink-0 rounded-md bg-accent px-3 py-1.5 text-sm font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-50"
-					>
+					<Button type="submit" disabled={busy || !inviteEmail.trim()}>
 						Invite
-					</button>
+					</Button>
 				</form>
 			)}
 
@@ -120,15 +117,16 @@ function MembersView({
 								</span>
 							)}
 							{editable && (
-								<button
-									type="button"
+								<Button
+									variant="ghost"
+									size="icon"
 									disabled={busy}
 									title={`Remove ${m.email}`}
+									aria-label={`Remove ${m.email}`}
 									onClick={() => run('remove_member', { email: m.email })}
-									class="shrink-0 rounded p-1 text-muted transition-colors hover:bg-chip hover:text-fg disabled:opacity-50"
 								>
 									<CloseIcon />
-								</button>
+								</Button>
 							)}
 						</li>
 					);
@@ -193,18 +191,19 @@ function RoleSelect({
 	onChange: (r: MemberRole) => void;
 }) {
 	return (
-		<select
+		<Select
 			value={value}
 			disabled={disabled}
+			aria-label="Role"
 			onChange={(e) => onChange((e.target as HTMLSelectElement).value as MemberRole)}
-			class="shrink-0 cursor-pointer rounded-md border border-border bg-transparent py-1 pl-2 pr-1 text-sm text-fg outline-none focus:border-accent disabled:opacity-50"
+			class="shrink-0 py-1 pl-2 pr-1"
 		>
 			{ASSIGNABLE_ROLES.map((r) => (
 				<option key={r} value={r}>
 					{ROLE_LABEL[r]}
 				</option>
 			))}
-		</select>
+		</Select>
 	);
 }
 

@@ -23,6 +23,7 @@ import {
 import { navigateTo, refreshBrowse } from '../core/actions.ts';
 import { FOLDER_NOTE_NAMES } from '../core/util.ts';
 import { toast, askConfirm } from '../core/toast.tsx';
+import { Button } from '../ui/index.ts';
 import {
 	ChevronIcon,
 	FolderIcon,
@@ -215,19 +216,19 @@ function RowMenu({
 			{open && (
 				<div class="absolute top-full right-0 z-30 mt-0.5 min-w-[168px] overflow-hidden rounded-md border border-border bg-bg py-1 shadow-lg">
 					{items.map((it) => (
-						<button
-							type="button"
+						<Button
+							variant="row"
 							onClick={(e) => {
 								e.stopPropagation();
 								it.onClick();
 							}}
-							class={`flex w-full items-center gap-2.5 px-3 py-1.5 text-left text-[13px] hover:bg-chip ${
+							class={`gap-2.5 rounded-none px-3 py-1.5 text-[13px] ${
 								it.danger ? 'text-[#d33]' : 'text-fg'
 							}`}
 						>
 							{it.icon && <span class="w-4 text-muted">{it.icon}</span>}
 							<span class="flex-1">{it.label}</span>
-						</button>
+						</Button>
 					))}
 				</div>
 			)}
@@ -771,14 +772,9 @@ function FileTree({
 					Its content isn’t under the default layout, so no pages show. Point Isomorphic at the repo
 					to index it.
 				</p>
-				<button
-					type="button"
-					disabled={configuring}
-					onClick={runConfigure}
-					class="mt-3 rounded-md bg-accent px-3.5 py-1.5 text-sm font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-60"
-				>
+				<Button disabled={configuring} onClick={runConfigure} class="mt-3">
 					{configuring ? 'Configuring…' : 'Auto-configure'}
-				</button>
+				</Button>
 			</div>
 		);
 	}

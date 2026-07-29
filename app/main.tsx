@@ -49,7 +49,6 @@ import {
 } from './core/actions.ts';
 import { toast, Toast, ConfirmDialog } from './core/toast.tsx';
 import {
-	iconBtn,
 	ListIcon,
 	SearchIcon,
 	HistoryIcon,
@@ -67,6 +66,7 @@ import {
 	ExpandCollapseIcon,
 	EyeIcon
 } from './core/icons.tsx';
+import { Button } from './ui/index.ts';
 // The Body dispatch table is codegenned from app/views/*.tsx (see scripts/gen-app.ts).
 import { renderView } from './views/registry.generated.ts';
 // Chrome still binds the editor's save/cancel + toolbar directly.
@@ -135,13 +135,17 @@ function OverflowMenu({ editing }: { editing: boolean }) {
 		close();
 		fn();
 	};
-	const rowClass =
-		'flex w-full items-center gap-2.5 px-3 py-1.5 text-left text-[13px] text-fg hover:bg-chip';
 	return (
 		<div ref={ref} class="relative">
-			<button type="button" title="More" onClick={() => setOpen((o) => !o)} class={iconBtn}>
+			<Button
+				variant="ghost"
+				size="icon"
+				title="More"
+				aria-label="More"
+				onClick={() => setOpen((o) => !o)}
+			>
 				<MoreIcon />
-			</button>
+			</Button>
 			{open && (
 				<div
 					style={maxH ? { maxHeight: `${maxH}px` } : undefined}
@@ -149,27 +153,39 @@ function OverflowMenu({ editing }: { editing: boolean }) {
 				>
 					{!editing && (
 						<>
-							<button type="button" onClick={go(() => openActivity())} class={rowClass}>
+							<Button
+								variant="row"
+								class="gap-2.5 rounded-none px-3 py-1.5 text-[13px]"
+								onClick={go(() => openActivity())}
+							>
 								<span class="w-4 text-muted">
 									<HistoryIcon />
 								</span>
 								<span class="flex-1">Recent changes</span>
-							</button>
-							<button type="button" onClick={go(openMembers)} class={rowClass}>
+							</Button>
+							<Button
+								variant="row"
+								class="gap-2.5 rounded-none px-3 py-1.5 text-[13px]"
+								onClick={go(openMembers)}
+							>
 								<span class="w-4 text-muted">
 									<PeopleIcon />
 								</span>
 								<span class="flex-1">Members</span>
-							</button>
+							</Button>
 							{/* Brain management (add/remove) lives here — the switcher top-left is
 							    switch-only. Shown when the user is admin of at least one brain's org. */}
 							{brainList?.some((b) => b.canManage) && (
-								<button type="button" onClick={go(openBrains)} class={rowClass}>
+								<Button
+									variant="row"
+									class="gap-2.5 rounded-none px-3 py-1.5 text-[13px]"
+									onClick={go(openBrains)}
+								>
 									<span class="w-4 text-muted">
 										<BrainGlyph />
 									</span>
 									<span class="flex-1">Manage brains</span>
-								</button>
+								</Button>
 							)}
 						</>
 					)}
@@ -180,29 +196,33 @@ function OverflowMenu({ editing }: { editing: boolean }) {
 								Display
 							</div>
 							{modes.map((m) => (
-								<button
-									type="button"
+								<Button
+									variant="row"
 									onClick={go(() => setDisplayMode(m))}
-									class={`flex w-full items-center gap-2.5 px-3 py-1.5 text-left text-[13px] hover:bg-chip ${
+									class={`gap-2.5 rounded-none px-3 py-1.5 text-[13px] ${
 										m === displayMode ? 'text-accent' : 'text-fg'
 									}`}
 								>
 									<span class="w-4 text-center">{MODE_ICON[m]}</span>
 									<span class="flex-1">{MODE_LABEL[m]}</span>
 									{m === displayMode && <span>✓</span>}
-								</button>
+								</Button>
 							))}
 						</>
 					)}
 					{!editing && (
 						<>
 							<div class="my-1 border-t border-border" />
-							<button type="button" onClick={go(openSettings)} class={rowClass}>
+							<Button
+								variant="row"
+								class="gap-2.5 rounded-none px-3 py-1.5 text-[13px]"
+								onClick={go(openSettings)}
+							>
 								<span class="w-4 text-muted">
 									<GearIcon />
 								</span>
 								<span class="flex-1">Your settings</span>
-							</button>
+							</Button>
 						</>
 					)}
 				</div>
@@ -219,9 +239,15 @@ function SearchBox() {
 	}, [open]);
 	if (!open)
 		return (
-			<button type="button" title="Search" onClick={() => setOpen(true)} class={iconBtn}>
+			<Button
+				variant="ghost"
+				size="icon"
+				title="Search"
+				aria-label="Search"
+				onClick={() => setOpen(true)}
+			>
 				<SearchIcon />
-			</button>
+			</Button>
 		);
 	return (
 		<input
@@ -455,28 +481,42 @@ function FileTreeToolbar() {
 		`rounded p-1 transition-colors hover:bg-chip ${on ? 'text-accent' : 'text-muted hover:text-fg'}`;
 	return (
 		<>
-			<button type="button" title="New note" onClick={() => treeCtl.newNote()} class={iconBtn}>
+			<Button
+				variant="ghost"
+				size="icon"
+				title="New note"
+				aria-label="New note"
+				onClick={() => treeCtl.newNote()}
+			>
 				<NewNoteIcon />
-			</button>
-			<button type="button" title="New folder" onClick={() => treeCtl.newFolder()} class={iconBtn}>
+			</Button>
+			<Button
+				variant="ghost"
+				size="icon"
+				title="New folder"
+				aria-label="New folder"
+				onClick={() => treeCtl.newFolder()}
+			>
 				<NewFolderIcon />
-			</button>
-			<button
-				type="button"
+			</Button>
+			<Button
+				variant="ghost"
+				size="icon"
 				title={treeCtl.sortDesc ? 'Sort Z → A' : 'Sort A → Z'}
+				aria-label={treeCtl.sortDesc ? 'Sort Z → A' : 'Sort A → Z'}
 				onClick={() => treeCtl.toggleSort()}
-				class={iconBtn}
 			>
 				<SortIcon desc={treeCtl.sortDesc} />
-			</button>
-			<button
-				type="button"
+			</Button>
+			<Button
+				variant="ghost"
+				size="icon"
 				title={treeCtl.allExpanded ? 'Collapse all' : 'Expand all'}
+				aria-label={treeCtl.allExpanded ? 'Collapse all' : 'Expand all'}
 				onClick={() => treeCtl.toggleExpandAll()}
-				class={iconBtn}
 			>
 				<ExpandCollapseIcon expanded={treeCtl.allExpanded} />
-			</button>
+			</Button>
 			{treeCtl.hasHidden && (
 				<button
 					type="button"
@@ -508,25 +548,27 @@ function Header({ view }: { view: View }) {
 				    "create your first brain" to someone reading a page in one is always wrong, so
 				    a brain on screen outranks an empty list however the list got that way. */}
 				{brainList && brainList.length === 0 && !activeBrain ? (
-					<button
-						type="button"
+					<Button
+						variant="ghost"
+						size="icon"
 						title="Create a brain"
+						aria-label="Create a brain"
 						onClick={openCreateBrain}
-						class={`${iconBtn} shrink-0`}
 					>
 						<PlusIcon />
-					</button>
+					</Button>
 				) : brainList && brainList.length >= 1 ? (
 					<BrainSwitcher />
 				) : (
-					<button
-						type="button"
+					<Button
+						variant="ghost"
+						size="icon"
 						title="Files"
+						aria-label="Files"
 						onClick={() => openBrowse()}
-						class={`${iconBtn} shrink-0`}
 					>
 						<ListIcon />
-					</button>
+					</Button>
 				)}
 				{/* Search and Graph sit with the brain switcher — all three are "get somewhere" —
 				    not stranded among the secondary actions on the right. The rule the bar follows:

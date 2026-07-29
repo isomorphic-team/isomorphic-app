@@ -17,6 +17,7 @@ import { fetchPage } from '../core/actions.ts';
 import { toast } from '../core/toast.tsx';
 import { PageProperties } from './PageView.tsx';
 import { defineView } from '../core/view-registry.ts';
+import { Button, Toolbar, ToolbarButton, ToolbarSeparator } from '../ui/index.ts';
 
 // ---- editor command helpers (toolbar state + toggles) ----
 
@@ -195,10 +196,15 @@ function EditorToolbar({ view }: { view: EditorView | null }) {
 		command(view.state, view.dispatch, view);
 		view.focus();
 	};
+	// `active` is passed only by the TOGGLES (bold, headings, blockquote…), and is
+	// forwarded as aria-pressed. The commands (undo, redo, wrap-in-list) leave it
+	// undefined so no aria-pressed is emitted for them — see ToolbarButton.
+	// aria-label is explicit because most labels are bare glyphs ("•", "↶", "❝")
+	// that a screen reader would otherwise announce literally.
 	const Btn = ({
 		label,
 		cmd,
-		active = false,
+		active,
 		title
 	}: {
 		label: preact.ComponentChildren;
@@ -206,18 +212,13 @@ function EditorToolbar({ view }: { view: EditorView | null }) {
 		active?: boolean;
 		title: string;
 	}) => (
-		<button
-			type="button"
-			title={title}
-			onMouseDown={run(cmd)}
-			class={`min-w-7 rounded px-1.5 py-1 text-[13px] leading-none hover:bg-chip ${active ? 'bg-chip text-accent' : 'text-fg'}`}
-		>
+		<ToolbarButton pressed={active} title={title} aria-label={title} onMouseDown={run(cmd)}>
 			{label}
-		</button>
+		</ToolbarButton>
 	);
-	const Sep = () => <span class="mx-0.5 h-4 w-px bg-border" />;
+	const Sep = () => <ToolbarSeparator />;
 	return (
-		<div class="flex flex-wrap items-center gap-0.5">
+		<Toolbar label="Formatting">
 			<Btn
 				label={<b>B</b>}
 				cmd={toggleMark(M.strong)}
@@ -268,7 +269,7 @@ function EditorToolbar({ view }: { view: EditorView | null }) {
 			<Sep />
 			<Btn label="↶" cmd={undo} title="Undo (⌘Z)" />
 			<Btn label="↷" cmd={redo} title="Redo (⌘⇧Z)" />
-		</div>
+		</Toolbar>
 	);
 }
 
@@ -386,22 +387,18 @@ function EditView({ state }: { state: { path: string; markdown: string; sha: str
 		bump();
 	}, [saving, state.path, state.sha]);
 
-	const saveBtn =
-		'rounded px-2.5 py-1 text-[13px] font-medium text-accent transition-colors hover:bg-chip disabled:opacity-60';
-	const cancelBtn =
-		'rounded px-2.5 py-1 text-[13px] text-muted transition-colors hover:bg-chip hover:text-fg';
 	return (
 		<div>
 			<PageProperties fm={frontmatter} />
 			<MarkdownEditor initialMarkdown={body} apiRef={apiRef} />
 			{/* A matching Save at the end for long pages — plain buttons, no boxed footer. */}
 			<div class="mt-8 flex items-center gap-1">
-				<button type="button" onClick={save} disabled={saving} class={saveBtn}>
+				<Button variant="subtle" size="sm" onClick={save} disabled={saving}>
 					{saving ? 'Saving…' : 'Save'}
-				</button>
-				<button type="button" onClick={cancel} class={cancelBtn}>
+				</Button>
+				<Button variant="ghost" size="sm" onClick={cancel}>
 					Cancel
-				</button>
+				</Button>
 			</div>
 		</div>
 	);
