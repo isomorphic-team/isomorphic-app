@@ -30,6 +30,7 @@ import {
 	openGraph,
 	openActivity,
 	openMembers,
+	openBrainAccess,
 	openBrains,
 	openSettings,
 	runSearch
@@ -40,6 +41,7 @@ import {
 	HistoryIcon,
 	GraphIcon,
 	PeopleIcon,
+	ShareIcon,
 	MoreIcon,
 	GearIcon,
 	BrainGlyph
@@ -109,6 +111,15 @@ function OverflowMenu({ editing }: { editing: boolean }) {
 										<PeopleIcon />
 									</span>
 									<span class="flex-1">Members</span>
+								</MenuRow>
+								{/* Ungated: brain_access is read-only and open to anyone who can reach
+								    the brain, so unlike Manage brains below there is no role to check.
+								    Members is the org's people, this is who reaches THIS brain. */}
+								<MenuRow onClick={go(() => openBrainAccess())}>
+									<span class="w-4 text-muted">
+										<ShareIcon />
+									</span>
+									<span class="flex-1">Sharing</span>
 								</MenuRow>
 								<MenuSeparator />
 								<div class={`px-3 pb-0.5 pt-1 ${eyebrow}`}>Your account</div>

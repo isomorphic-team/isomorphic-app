@@ -913,7 +913,13 @@ class McpSession {
 		// ---------- brain sharing (per-brain access) ----------
 		// The brain-scope sibling of the member tools: members moves the ORG roster,
 		// these move who can reach ONE brain. See src/tools/brain-access.ts.
-		registerBrainAccessTools(server, (opts) => this.tenantContext(opts));
+		// `sticky: true`, for the same reason registerBrainApp is: the sharing panel is an
+		// in-client view OF a brain, and the app's trail treats it as a peer of the file
+		// tree and the graph. Opening it for a named brain (the Share control in the
+		// brains list) therefore has to move the active brain with it, or the widget shows
+		// one brain's audience under another brain's name and its own bare follow-up calls
+		// hit the wrong one.
+		registerBrainAccessTools(server, (opts) => this.tenantContext({ ...opts, sticky: true }));
 
 		// ---------- connected accounts (identity linking) ----------
 		// The per-person "Your settings → Connected accounts" surface: connected_accounts

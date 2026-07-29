@@ -134,6 +134,24 @@ const PeopleIcon = () => (
 		/>
 	</svg>
 );
+// Sharing (per-brain access). Deliberately NOT the lock: that already means "you
+// can't edit this page" in the file tree, and deliberately not PeopleIcon, which is
+// the org roster. One node passing outward to two others is the distinction the two
+// screens actually have: Members is who is in the org, this is who this brain reaches.
+const ShareIcon = () => (
+	<svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true">
+		<circle cx="4" cy="8" r="1.9" fill="none" stroke="currentColor" stroke-width="1.4" />
+		<circle cx="12" cy="4" r="1.9" fill="none" stroke="currentColor" stroke-width="1.4" />
+		<circle cx="12" cy="12" r="1.9" fill="none" stroke="currentColor" stroke-width="1.4" />
+		<path
+			fill="none"
+			stroke="currentColor"
+			stroke-width="1.3"
+			stroke-linecap="round"
+			d="M5.7 7.1l4.6-2.2M5.7 8.9l4.6 2.2"
+		/>
+	</svg>
+);
 const MoreIcon = () => (
 	<svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true">
 		<circle cx="3" cy="8" r="1.4" fill="currentColor" />
@@ -337,6 +355,7 @@ export {
 	HistoryIcon,
 	GraphIcon,
 	PeopleIcon,
+	ShareIcon,
 	MoreIcon,
 	GearIcon,
 	BrainGlyph,

@@ -85,9 +85,17 @@ brain's org (a grant to a non-member is unreachable anyway, since resolution sta
 `memberships`; writing one would be a silent no-op); you can't grant above your own brain role;
 you can't revoke your own access.
 
-UI: `app/views/BrainAccessView.tsx`, reached from a **Share** control in the brains list (gated on
-`canShare`, the brain role, distinct from `canManage`, the org role that gates disconnect). The
-list also badges private brains. Adding someone opens `app/views/ShareBrainView.tsx`, a pushed
+UI: `app/views/BrainAccessView.tsx`. Sharing is a **view of the brain**, a peer of Files, Graph
+and Recent changes: it is in `brainDestinations()` so every brain crumb's picker offers it, and
+in the ⋯ menu's "This brain" group. It passes the trail's own scope test (switching brains shows
+a different answer), and it is ungated in both places because `brain_access` is read-only and
+open to anyone who can reach the brain at all; only the controls inside it are admin-gated.
+
+That placement is what makes `brain_access` **sticky** in `worker.ts`, like the other in-client
+view tools: opening the panel for a named brain moves the active brain with it. Otherwise the
+**Share** control in the brains list (gated on `canShare`, the brain role, as distinct from
+`canManage`, the org role that gates disconnect) would open one brain's audience under another
+brain's crumb. The list also badges private brains. Adding someone opens `app/views/ShareBrainView.tsx`, a pushed
 flow off the panel's header, which is the brain-scope twin of `InviteMemberView`: the two are
 deliberately the same screen one scope apart, because "add to the org" and "add to this brain"
 are exactly the pair a user is liable to confuse. `BRAIN_ROLE_BLURB` (in

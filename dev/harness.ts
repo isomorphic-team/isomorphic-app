@@ -768,6 +768,15 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
 		case 'brain_access': {
 			const id = resolveBrainArg(args?.brain) ?? activeBrainId;
 			const b = brainsFixture.find((x) => x.id === id);
+			// STICKY, matching worker.ts: the sharing panel is a view OF a brain and the
+			// trail lists it beside Files and Graph, so opening it for a named brain moves
+			// the active brain with it. Without this the preview would show one brain's
+			// audience under another brain's crumb.
+			if (b && id !== activeBrainId) {
+				activeBrainId = id;
+				openPath = Object.keys(pagesFor(activeBrainId))[0] ?? openPath;
+				rebuildSelector();
+			}
 			return accessResult(id, `Access for ${b?.label ?? id}.`);
 		}
 		case 'share_brain': {

@@ -51,6 +51,7 @@ import {
 	HistoryIcon,
 	GraphIcon,
 	PeopleIcon,
+	ShareIcon,
 	GearIcon
 } from '../core/icons.tsx';
 import { Menu, MenuRow, MenuSeparator, MenuNote, type MenuTriggerProps } from '../ui/Menu.tsx';
@@ -386,7 +387,12 @@ function brainDestinations(): Destination[] {
 		{ key: 'files', label: 'Files', icon: <ListIcon />, open: () => openBrowse() },
 		{ key: 'graph', label: 'Graph', icon: <GraphIcon />, open: () => openGraph() },
 		{ key: 'activity', label: 'Recent changes', icon: <HistoryIcon />, open: () => openActivity() },
-		{ key: 'members', label: 'Members', icon: <PeopleIcon />, open: openMembers }
+		{ key: 'members', label: 'Members', icon: <PeopleIcon />, open: openMembers },
+		// Ungated, unlike Manage brains: brain_access is readOnly and open to anyone who
+		// can reach the brain at all, so it can never be a destination whose click is
+		// refused. Only the CONTROLS inside it are admin-gated. Sharing sits last because
+		// it is the only one about the brain's audience rather than its contents.
+		{ key: 'sharing', label: 'Sharing', icon: <ShareIcon />, open: () => openBrainAccess() }
 	];
 }
 
@@ -640,32 +646,25 @@ export function Breadcrumb({ view }: { view: View }) {
 				<span class={crumbCurrent}>Invite</span>
 			</DestinationCrumb>
 		);
-	// Sharing is account-root despite being about one brain, and THE SCOPE TEST is why:
-	// it is opened for a NAMED brain (the Share control in the brains list) and stays on
-	// that brain, so switching the active brain does not change what it shows. Hanging it
-	// off the brain crumb would print the active brain's name above a panel governing a
-	// different one, which is the one thing a crumb must never do. The panel names its
-	// own brain in its first line. Same conditional parent as add-brain: the brains list
-	// is where it is usually opened from, but a bare `brain_access` call reaches it too.
+	// Sharing passes THE SCOPE TEST: who can reach a brain is a fact about that brain,
+	// and switching brains shows a different answer. So it is a view OF the brain and a
+	// peer of Files, Graph and Recent changes, pickable from any of them.
+	//
+	// That only holds because opening it MAKES ITS BRAIN ACTIVE (brain_access is
+	// registered sticky in worker.ts, like the other in-client view tools). Without
+	// that, the Share control in the brains list could open a panel for one brain under
+	// a crumb naming another.
 	if (view.kind === 'brain-access')
 		return (
-			<DestinationCrumb
-				root="account"
-				parent={
-					backKind() === 'brains'
-						? { key: 'brains', label: 'Manage brains', onClick: () => goBack(openBrains) }
-						: undefined
-				}
-			>
+			<DestinationCrumb current="sharing">
 				<span class={crumbCurrent}>Sharing</span>
 			</DestinationCrumb>
 		);
 	if (view.kind === 'share-brain')
 		return (
 			<DestinationCrumb
-				root="account"
 				parent={{
-					key: 'brain-access',
+					key: 'sharing',
 					label: 'Sharing',
 					onClick: () => goBack(() => openBrainAccess(view.brainId))
 				}}
