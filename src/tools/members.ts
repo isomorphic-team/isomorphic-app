@@ -9,7 +9,11 @@
 //
 // Authorization (enforced here, not in the lib):
 //   • Reading the roster is open to any member (viewer+).
-//   • Mutations require admin+ (getContext({ requires: 'admin' })).
+//   • Mutations require ORG admin+ (getContext({ requiresOrg: 'admin' })), and the
+//     `Org` matters: `requires` is the caller's role on the resolved BRAIN, which
+//     someone can hold by having had a single brain shared with them. Gating the
+//     roster on that would let one brain share confer the whole organization. Read
+//     ctx.orgRole here, never ctx.role. See docs/design/brain-level-permissions.md.
 //   • Lockout-proof guardrails: the OWNER role is never assignable, never
 //     removable, and never demotable through these tools, so every org keeps one
 //     recoverable super-user. An actor can't edit or remove THEMSELVES (the owner

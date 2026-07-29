@@ -104,6 +104,26 @@ Revocation has to actually revoke, so grants are torn down with the thing they h
 - `remove_member` → `deleteUserBrainGrantsInOrg`, or removing someone from the org leaves per-brain
   grants that still let them in.
 
+## Tests
+
+Two golden tests, both pure and both in CI, because the feature has two independent ways to
+be wrong:
+
+- `pnpm test:access` pins the RULE and the queries that apply it: `effectiveBrainRole` over its
+  whole input space, then the real exported functions against the real schema in an in-memory
+  SQLite. It answers "who can reach this brain, at what role".
+- `pnpm test:scope` pins WHICH ROLE EACH TOOL GATES ON, which the first cannot see. The real
+  handlers are registered against a stub server with a fake `getContext` that reproduces
+  worker.ts's two assertions, and both directions are asserted: an org viewer holding brain
+  admin is refused by every org-scope tool and admitted by `share_brain`, while an org owner
+  holding only brain viewer is the reverse. It also covers the guardrails that live in the tool
+  rather than in `orgs.ts` (share with a non-member, share with a strange email, revoking
+  yourself, the member-management lockout rules).
+
+Both were mutation-tested when written: reverting `members.ts` to `requires: 'admin'` turns
+`test:scope` red in five places, and flipping `share_brain` to `requiresOrg` turns it red in
+two. A scope test that stays green under those edits is not testing anything.
+
 ## Known gaps
 
 - **No audit trail on access changes.** `brain_memberships` records `granted_by`/`granted_at`, but

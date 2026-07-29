@@ -29,7 +29,7 @@
 		"format": "prettier --write .",
 		"gen:app": "tsx scripts/gen-app.ts",
 		"app:dev": "tsx scripts/app-dev.ts",
-		"test": "pnpm test:roundtrip && pnpm test:views && pnpm test:import && pnpm test:tools && pnpm test:patch && pnpm test:structure && pnpm test:index && pnpm test:policy && pnpm test:access",
+		"test": "pnpm test:roundtrip && pnpm test:views && pnpm test:import && pnpm test:tools && pnpm test:patch && pnpm test:structure && pnpm test:index && pnpm test:policy && pnpm test:access && pnpm test:scope",
 		"test:roundtrip": "tsx scripts/roundtrip-check.ts",
 		"test:views": "tsx scripts/test-views.ts",
 		"test:import": "tsx scripts/test-import.ts",
@@ -38,7 +38,8 @@
 		"test:structure": "tsx scripts/test-structure.ts",
 		"test:index": "tsx scripts/test-index.ts",
 		"test:policy": "tsx scripts/test-policy.ts",
-		"test:access": "tsx scripts/test-access.ts"
+		"test:access": "tsx scripts/test-access.ts",
+		"test:scope": "tsx scripts/test-scope.ts"
 	},
 	"dependencies": {
 		"@auth/core": "^0.34.3",
