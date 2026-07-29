@@ -134,17 +134,6 @@ const PeopleIcon = () => (
 		/>
 	</svg>
 );
-const HomeIcon = () => (
-	<svg viewBox="0 0 16 16" width="13" height="13" class="shrink-0" aria-hidden="true">
-		<path
-			fill="none"
-			stroke="currentColor"
-			stroke-width="1.5"
-			stroke-linejoin="round"
-			d="M2.5 7.5L8 2.5l5.5 5v5.5a1 1 0 01-1 1h-2.75V10h-3.5v4H3.5a1 1 0 01-1-1z"
-		/>
-	</svg>
-);
 const MoreIcon = () => (
 	<svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true">
 		<circle cx="3" cy="8" r="1.4" fill="currentColor" />
@@ -181,6 +170,24 @@ const BrainGlyph = () => (
 			stroke-width="1.3"
 			stroke-linejoin="round"
 			d="M2.6 8L8 11l5.4-3"
+		/>
+	</svg>
+);
+// The way OUT of a screen that is not a place in the trail (Your settings, Manage
+// brains). Deliberately an arrow and not a crumb: those screens have no parent to
+// name, so this is history, and it must not look like location.
+const ArrowLeftIcon = () => (
+	// 15px to match BrainGlyph exactly: these two alternate in the same leading slot of
+	// the trail, so any difference in size or inset shows up as the label after them
+	// jumping when you move between an account screen and a brain one.
+	<svg viewBox="0 0 16 16" width="15" height="15" class="shrink-0" aria-hidden="true">
+		<path
+			fill="none"
+			stroke="currentColor"
+			stroke-width="1.6"
+			stroke-linecap="round"
+			stroke-linejoin="round"
+			d="M9.5 3.5L5 8l4.5 4.5"
 		/>
 	</svg>
 );
@@ -330,11 +337,11 @@ export {
 	HistoryIcon,
 	GraphIcon,
 	PeopleIcon,
-	HomeIcon,
 	MoreIcon,
 	GearIcon,
 	BrainGlyph,
 	ChevronDownIcon,
+	ArrowLeftIcon,
 	PlusIcon,
 	NewNoteIcon,
 	NewFolderIcon,

@@ -21,7 +21,8 @@ import {
 	type OrgScope,
 	type Role,
 	brainLabel,
-	countByOrg,
+	brainLabelQualified,
+	orgDisplay,
 	matchBrain,
 	roleLabel,
 	roleAtLeast,
@@ -57,15 +58,10 @@ interface BrainRow {
 	configPrUrl?: string; // a "configure" PR is open (protected repo) — show pending
 }
 // A friendly org name — platform (personal) orgs are email-named, so show "Personal".
-function orgDisplay(b: AccessibleBrain): string {
-	if (b.org_model === 'platform') return 'Personal';
-	return b.org_name?.trim() || b.repo_owner;
-}
 function brainRows(brains: AccessibleBrain[], activeId: string | undefined): BrainRow[] {
-	const counts = countByOrg(brains);
 	return brains.map((b) => ({
 		id: b.id,
-		label: brainLabel(b, (counts.get(b.org_id) ?? 0) > 1),
+		label: brainLabel(b),
 		role: roleLabel(b.role),
 		active: b.id === activeId,
 		canManage: roleAtLeast(b.role, 'admin'),
@@ -153,10 +149,7 @@ export function registerBrainTools(
 			if (brains.length === 0) return fail('You have no brains to switch between.');
 			const m = matchBrain(brains, brain);
 			if (!m.brain) {
-				const counts = countByOrg(brains);
-				const names = (m.candidates ?? brains).map((b) =>
-					brainLabel(b, (counts.get(b.org_id) ?? 0) > 1)
-				);
+				const names = (m.candidates ?? brains).map(brainLabelQualified);
 				return fail(
 					m.candidates
 						? `"${brain}" matches multiple brains: ${names.join(', ')}. Be more specific.`
@@ -317,6 +310,15 @@ export function registerBrainTools(
 					.describe(
 						'The repo to adopt — "owner/name", or just "name" (defaults to the org’s GitHub owner). Omit to list the repos that can become brains.'
 					),
+				// Without this an adopted brain was unnameable for life: create_brain took
+				// a name, nothing else did, and there is no rename. The label then fell
+				// back to the repo, which is why it used to borrow the org's name instead.
+				name: z
+					.string()
+					.optional()
+					.describe(
+						'What to call this brain in the switcher, e.g. "Editorial". Defaults to the repo name.'
+					),
 				brain: z
 					.string()
 					.optional()
@@ -325,7 +327,7 @@ export function registerBrainTools(
 					)
 			}
 		},
-		async ({ repo, brain }) => {
+		async ({ repo, brain, name: displayName }) => {
 			const ctx = await getContext({ requires: 'admin', brain });
 			if (!ctx.orgId) return fail('Brain management is only available for organization accounts.');
 
@@ -377,7 +379,8 @@ export function registerBrainTools(
 				brain_id: brainIdFor(owner, name),
 				org_id: ctx.orgId,
 				repo_owner: owner,
-				repo_name: name
+				repo_name: name,
+				name: displayName?.trim() || null
 			});
 
 			// Guard: an adopted repo whose content isn't under the default layout would
@@ -510,10 +513,7 @@ export function registerBrainTools(
 			const all = await listBrains();
 			const m = matchBrain(all, brain);
 			if (!m.brain) {
-				const counts = countByOrg(all);
-				const names = (m.candidates ?? all).map((b) =>
-					brainLabel(b, (counts.get(b.org_id) ?? 0) > 1)
-				);
+				const names = (m.candidates ?? all).map(brainLabelQualified);
 				return fail(
 					m.candidates
 						? `"${brain}" matches multiple brains: ${names.join(', ')}. Be more specific.`
