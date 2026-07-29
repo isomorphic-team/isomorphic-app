@@ -77,6 +77,53 @@ Notes:
 - Bi-modal: keep the conversational path (Claude creates/moves/deletes via the tools) while
   the in-app UX gets the polish.
 
+# TODO: naming brains (rename, and a name at every creation path)
+
+A brain's display name is `brains.name`, and for most brains it is null — because only
+ONE of the four ways a brain comes into existence sets it. `create_brain` takes a name;
+`connect_brain` did not until 2026-07-29; `src/db/seed-operator-org.sql` and
+`scripts/onboard-org.ts` both omit the column from their INSERT entirely. And nothing
+anywhere can change a name once written.
+
+`brainLabel` (`src/lib/orgs.ts`) used to paper over this by inventing a label: prefix the
+org when an org held several brains, borrow the org's name when it held one, say
+"Personal" for a platform org. That made a brain's name depend on how many SIBLINGS it
+had, so adopting a second brain into an org silently renamed the first. Removed
+2026-07-29 in favour of one rule (named, else repo-derived), with the org shown as a
+grouping heading in the two surfaces that list brains.
+
+Which leaves the real gap:
+
+- **No rename.** Every brain adopted or seeded before `connect_brain` took a name is
+  stuck with its repo name forever. Wants a `rename_brain` tool (admin+, one D1 UPDATE)
+  and an inline rename on the Manage brains screen beside the disconnect ✕, matching the
+  file tree's rename affordance. Note this ADDS to a tool surface deliberately
+  consolidated 42 → 30, which is the reason it was not just built: worth doing, worth
+  being deliberate about. Folding it into `configure_brain` is the wrong shortcut —
+  that writes `.isomorphic.json` in the repo, while a name is a D1 field, so one tool
+  would be doing two unrelated writes to two different stores.
+- **The scripted paths still cannot name.** Add the `name` column to the seed template
+  and a `--name` flag to `scripts/onboard-org.ts`, or every operator-onboarded org
+  starts out needing the rename that does not exist yet.
+- **Backfill is optional and probably not worth it.** A migration could set a name for
+  existing null rows, but only the owner knows what each brain should be called. A
+  rename they can reach beats a guess we make for them.
+
+## Decided against: a global org picker
+
+Raised 2026-07-29 alongside the above. There is no active-org pointer in the model at
+all — `tenantContext` derives the org from whichever brain you chose — and everywhere org
+genuinely matters it is already an ARGUMENT at the point of decision: `AddBrainView` asks
+which organization, `connect_brain` takes a `brain` to target another org. A global picker
+would add a second selection that most screens ignore, plus a real ambiguity: if the
+active org is A and the active brain lives in B, which one does `members` show?
+
+Org stays derived. Where it needs to be visible it is a grouping heading (the brain
+picker, Manage brains) or a qualifier on an otherwise ambiguous label
+(`brainLabelQualified`, used in the "which of these did you mean" errors). If a user ever
+needs another org's roster without switching brains, that is an org argument ON the
+members screen — an argument again, not a mode.
+
 # TODO: productize the bootstrap flow for other users
 
 What's needed to take the current single-developer flow (run `pnpm bootstrap` locally, register an App, install on your org, scaffold) and let arbitrary users run it without help.
