@@ -380,20 +380,37 @@ function brainDestinations(): Destination[] {
 		// Files leads, and belongs here even though the brain crumb's own label already
 		// opens it. The brain crumb is doing two jobs — it is the ROOT of the trail and it
 		// is the file-tree VIEW — and only the first of those is visible from a picker. A
-		// list that offers Graph and Members while silently omitting the tree is claiming
-		// to be the views of this brain and isn't one of them.
+		// list that offers Graph while silently omitting the tree is claiming to be the
+		// views of this brain and isn't one of them.
 		// Order is deliberate: Files and Graph are the SAME brain drawn two ways, so they
-		// sit together at the top, and the feed and the roster follow.
+		// sit together at the top, and the feed and the audience follow.
 		{ key: 'files', label: 'Files', icon: <ListIcon />, open: () => openBrowse() },
 		{ key: 'graph', label: 'Graph', icon: <GraphIcon />, open: () => openGraph() },
 		{ key: 'activity', label: 'Recent changes', icon: <HistoryIcon />, open: () => openActivity() },
-		{ key: 'members', label: 'Members', icon: <PeopleIcon />, open: openMembers },
 		// Ungated, unlike Manage brains: brain_access is readOnly and open to anyone who
 		// can reach the brain at all, so it can never be a destination whose click is
 		// refused. Only the CONTROLS inside it are admin-gated. Sharing sits last because
 		// it is the only one about the brain's audience rather than its contents.
 		{ key: 'sharing', label: 'Sharing', icon: <ShareIcon />, open: () => openBrainAccess() }
 	];
+}
+
+// Views of the ORGANIZATION the active brain belongs to.
+//
+// Members used to sit in brainDestinations, and it was the one row there that failed
+// the scope test it was grouped by. `members` resolves the org FROM the brain and
+// returns that org's roster, so switching to a sibling brain in the same org shows an
+// identical list; only crossing into another org changes it. It is a view of the org,
+// reached through a brain, which is not the same as a view of the brain.
+//
+// That distinction is load-bearing now rather than cosmetic. Org role and brain role
+// are separate axes (docs/design/brain-level-permissions.md), and the roster is the ORG
+// one: showing it as a property of the brain you happen to be in is the same conflation
+// the tool gating exists to prevent, drawn in the UI.
+//
+// One row today. It stays its own group anyway, because the group is the statement.
+function orgDestinations(): Destination[] {
+	return [{ key: 'members', label: 'Members', icon: <PeopleIcon />, open: openMembers }];
 }
 
 function accountDestinations(): Destination[] {
@@ -407,6 +424,25 @@ function accountDestinations(): Destination[] {
 	];
 }
 
+// The three scopes a destination can belong to, and the one place each one's list and
+// wording live. Adding a fourth means adding it here, not at every call site.
+type Scope = 'brain' | 'org' | 'account';
+const DESTINATIONS: Record<Scope, () => Destination[]> = {
+	brain: brainDestinations,
+	org: orgDestinations,
+	account: accountDestinations
+};
+const SCOPE_LABEL: Record<Scope, string> = {
+	brain: 'Places in this brain',
+	org: 'Organization',
+	account: 'Your account'
+};
+const SCOPE_TITLE: Record<Scope, string> = {
+	brain: 'What else is in this brain',
+	org: 'Organization',
+	account: 'Your account'
+};
+
 // A destination crumb: its label, plus the picker of its siblings. `current` marks the
 // row you are on — and an unrecognised key (Search, which is a query rather than a
 // standing place) simply marks nothing, which is honest: the list still answers where
@@ -417,30 +453,27 @@ function DestinationPicker({
 	last,
 	children
 }: {
-	scope: 'brain' | 'account';
+	scope: Scope;
 	current: string;
 	last?: boolean;
 	children: ComponentChildren;
 }) {
-	const rows = scope === 'account' ? accountDestinations() : brainDestinations();
+	const rows = DESTINATIONS[scope]();
 	// NO PICKER WITHOUT A CHOICE. A chevron that opens onto the screen you are already
 	// looking at is furniture that promises somewhere to go and delivers nowhere — which
 	// is what an account crumb offers a user who administers no org, since Manage brains
-	// is then gated away and Your settings is all that is left.
+	// is then gated away and Your settings is all that is left. The org list is one row
+	// today, so this is also what keeps the Members crumb from growing a dead chevron.
 	if (!rows.some((d) => d.key !== current))
 		return <span class={last ? 'min-w-0 truncate' : 'shrink-0'}>{children}</span>;
 	return (
 		<Menu
-			label={scope === 'account' ? 'Your account' : 'Places in this brain'}
+			label={SCOPE_LABEL[scope]}
 			class={last ? 'min-w-0 shrink' : 'shrink-0'}
 			trigger={({ props, open }) => (
 				<span class="group flex min-w-0 items-center">
 					{children}
-					<CrumbChevron
-						props={props}
-						open={open}
-						title={scope === 'account' ? 'Your account' : 'What else is in this brain'}
-					/>
+					<CrumbChevron props={props} open={open} title={SCOPE_TITLE[scope]} />
 				</span>
 			)}
 		>
@@ -468,11 +501,18 @@ function DestinationPicker({
 
 // THE SCOPE TEST: does switching brains change what this screen shows?
 //
-// Yes for Members (a different org, a different roster), Recent changes, Graph and
-// Search — those are views OF a brain and belong under the brain crumb. No for Manage
-// brains and Your settings: the same list, the same identity, whichever brain happens
-// to be active. Hanging those off a brain crumb claimed a containment that is not
-// there, and read as "these people belong to this brain".
+// Yes for Recent changes, Graph, Sharing and Search: those are views OF a brain and
+// belong under the brain crumb. No for Manage brains and Your settings: the same list,
+// the same identity, whichever brain happens to be active. Hanging those off a brain
+// crumb claimed a containment that is not there, and read as "these things belong to
+// this brain".
+//
+// Members answers the test a third way, which is why there is a third scope. Switching
+// to a sibling brain in the same org shows the SAME roster; only crossing into another
+// org changes it. So it is neither a view of the brain nor a view of your account: it
+// is a view of the ORG, reached through whichever brain is active. It takes the back
+// arrow like an account screen, because it is not inside the brain either, but its
+// picker and its ⋯ group say Organization.
 //
 // So they get no parent crumb, because they have no parent to name — they sit beside
 // the brain, not inside it. What they get instead is a way back, and that is history
@@ -525,8 +565,11 @@ function DestinationCrumb({
 }: {
 	parent?: { key: string; label: string; onClick: () => void };
 	current?: string;
-	/** See THE SCOPE TEST above. `account` screens sit beside the brain, not inside it. */
-	root?: 'brain' | 'account';
+	/**
+	 * See THE SCOPE TEST above. Only `brain` screens sit INSIDE the brain and get the
+	 * brain crumb; `org` and `account` ones sit beside it and get a back arrow instead.
+	 */
+	root?: Scope;
 	/**
 	 * Kill the brain crumb's link. Only Files needs it: the brain crumb's label opens
 	 * the file tree, so on the file tree it would be a crumb that navigates to the view
@@ -537,7 +580,7 @@ function DestinationCrumb({
 }) {
 	return (
 		<nav class="flex min-w-0 items-center">
-			{root === 'account' ? (
+			{root !== 'brain' ? (
 				<BackCrumb />
 			) : (
 				<>
@@ -599,9 +642,13 @@ export function Breadcrumb({ view }: { view: View }) {
 				<span class={crumbCurrent}>Graph</span>
 			</DestinationCrumb>
 		);
+	// ORG root, not brain: the roster belongs to the organization the active brain sits
+	// in, and every brain in that org shows the same one. Under a brain crumb it read as
+	// "these people belong to this brain", which is the containment main already removed
+	// from Manage brains and Your settings for exactly the same reason.
 	if (view.kind === 'members')
 		return (
-			<DestinationCrumb current="members">
+			<DestinationCrumb root="org" current="members">
 				<span class={crumbCurrent}>Members</span>
 			</DestinationCrumb>
 		);
@@ -641,6 +688,7 @@ export function Breadcrumb({ view }: { view: View }) {
 	if (view.kind === 'invite-member')
 		return (
 			<DestinationCrumb
+				root="org"
 				parent={{ key: 'members', label: 'Members', onClick: () => goBack(openMembers) }}
 			>
 				<span class={crumbCurrent}>Invite</span>

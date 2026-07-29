@@ -91,6 +91,15 @@ in the ⋯ menu's "This brain" group. It passes the trail's own scope test (swit
 a different answer), and it is ungated in both places because `brain_access` is read-only and
 open to anyone who can reach the brain at all; only the controls inside it are admin-gated.
 
+Putting it there forced the matching correction to **Members**, which had been sitting in the
+brain group and was the one row there that failed the test the group is named for: `members`
+resolves the org from the brain, so every brain in one org shows the same roster. The nav now
+carries the same two scopes the authorization model does, plus account: `brain` (Files, Graph,
+Recent changes, Sharing), `org` (Members), `account` (Manage brains, Your settings). Only `brain`
+screens get the brain crumb; the other two take the back arrow, so neither claims a containment
+that is not there. Showing the ORG roster as a property of whichever brain you were in was the
+same conflation the tool gating exists to prevent, drawn in the UI instead of in code.
+
 That placement is what makes `brain_access` **sticky** in `worker.ts`, like the other in-client
 view tools: opening the panel for a named brain moves the active brain with it. Otherwise the
 **Share** control in the brains list (gated on `canShare`, the brain role, as distinct from
