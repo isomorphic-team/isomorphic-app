@@ -8,5 +8,6 @@
 // that line would get redrawn.
 export { cn } from './cn.ts';
 export { Button, type ButtonProps } from './Button.tsx';
+export { List, ListRow, listRowTitle, type ListRowProps } from './List.tsx';
 export { Input, Select, type InputProps, type SelectProps } from './Input.tsx';
 export { Toolbar, ToolbarButton, ToolbarSeparator, type ToolbarButtonProps } from './Toolbar.tsx';

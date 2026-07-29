@@ -61,6 +61,27 @@
 	--color-code: var(--c-code);
 }
 
+/* Base type scale for the CHROME (nav, file tree, list screens).
+   Nothing set this before, so any element that did not opt into a size class fell
+   through to the user agent's 16px — which is why the list screens rendered their
+   row titles ~19% larger than the file tree's explicit text-[13.5px] and read as a
+   different component family. This is the single fix that keeps them in step.
+
+   Set on `body`, deliberately NOT on `html`: Tailwind's text-sm/text-xs are `rem`
+   units resolved against the ROOT element, so moving the root would silently rescale
+   every explicit size class in the app too. Moving body only affects what inherits. */
+body {
+	font-size: 13.5px;
+}
+
+/* …and the reading surfaces are pinned back, since they are content rather than
+   chrome and their `em`-based heading scale is anchored to this value. Without
+   these two lines the base change above would shrink every rendered page. */
+.prose,
+.ProseMirror {
+	font-size: 1rem;
+}
+
 /* Prose defaults for rendered markdown (the viewer). Kept as plain CSS rather than
    @apply so the bundle doesn't depend on Tailwind's typography plugin. */
 .prose h1 {

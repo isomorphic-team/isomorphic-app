@@ -6,7 +6,7 @@ import { app, callTool, firstText } from '../core/host.ts';
 import { parseAccounts } from '../core/actions.ts';
 import { toast, askConfirm } from '../core/toast.tsx';
 import { InitialsAvatar, CloseIcon, GithubIcon } from '../core/icons.tsx';
-import { Button, Input } from '../ui/index.ts';
+import { Button, Input, List, ListRow } from '../ui/index.ts';
 
 // The person's linked identities, rendered inline in Your settings: email logins +
 // GitHub accounts. Anyone can link another of THEIR own accounts (verified by signing
@@ -90,12 +90,9 @@ function ConnectedAccountsSection({ initial }: { initial: ConnectedAccount[] }) 
 				</div>
 			)}
 
-			<ul class="flex flex-col">
+			<List>
 				{emails.map((a) => (
-					<li
-						key={a.user_id}
-						class="flex items-center gap-3 border-b border-border py-2.5 last:border-b-0"
-					>
+					<ListRow key={a.user_id}>
 						<InitialsAvatar name={a.name || a.email || '?'} />
 						<div class="min-w-0 flex-1">
 							<div class="flex items-baseline gap-2">
@@ -118,15 +115,12 @@ function ConnectedAccountsSection({ initial }: { initial: ConnectedAccount[] }) 
 								<CloseIcon />
 							</Button>
 						)}
-					</li>
+					</ListRow>
 				))}
 				{githubs.map((a) => (
-					<li
-						key={`gh-${a.github_user_id}`}
-						class="flex items-center gap-3 border-b border-border py-2.5 last:border-b-0"
-					>
+					<ListRow key={`gh-${a.github_user_id}`}>
 						<span
-							class="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-chip text-muted"
+							class="flex h-[18px] w-[18px] shrink-0 items-center justify-center rounded-full bg-chip text-muted"
 							aria-hidden="true"
 						>
 							<GithubIcon />
@@ -150,9 +144,9 @@ function ConnectedAccountsSection({ initial }: { initial: ConnectedAccount[] }) 
 						>
 							<CloseIcon />
 						</Button>
-					</li>
+					</ListRow>
 				))}
-			</ul>
+			</List>
 		</div>
 	);
 }

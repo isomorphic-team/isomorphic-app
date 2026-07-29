@@ -3,6 +3,7 @@ import { app } from '../core/host.ts';
 import { navigateTo } from '../core/actions.ts';
 import { relativeTime } from '../core/util.ts';
 import { InitialsAvatar } from '../core/icons.tsx';
+import { List, ListRow, listRowTitle } from '../ui/index.ts';
 import { defineView } from '../core/view-registry.ts';
 
 // Our librarian tools format commit subjects as "Action Title (wiki/path.md)". In the
@@ -26,12 +27,9 @@ function ActivityView({ entries, scopePath }: { entries: ActivityEntry[]; scopeP
 					{scopePath ? 'No changes for this page yet.' : 'No changes recorded yet.'}
 				</div>
 			) : (
-				<ul class="flex flex-col">
+				<List>
 					{entries.map((e) => (
-						<li
-							key={e.sha}
-							class="flex items-center gap-3 border-b border-border py-2.5 last:border-b-0"
-						>
+						<ListRow key={e.sha}>
 							<InitialsAvatar name={e.authorName} />
 							<div class="min-w-0 flex-1">
 								<div class="flex items-baseline gap-2">
@@ -40,7 +38,7 @@ function ActivityView({ entries, scopePath }: { entries: ActivityEntry[]; scopeP
 											type="button"
 											onClick={() => navigateTo(e.path!)}
 											title={e.message}
-											class="min-w-0 flex-1 truncate border-none bg-transparent p-0 text-left font-medium text-fg hover:underline focus-visible:underline"
+											class={`border-none bg-transparent p-0 ${listRowTitle}`}
 										>
 											{changeTitle(e)}
 										</button>
@@ -68,9 +66,9 @@ function ActivityView({ entries, scopePath }: { entries: ActivityEntry[]; scopeP
 									</button>
 								</div>
 							</div>
-						</li>
+						</ListRow>
 					))}
-				</ul>
+				</List>
 			)}
 		</div>
 	);

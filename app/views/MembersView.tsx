@@ -8,7 +8,7 @@ import { toast } from '../core/toast.tsx';
 import { relativeTime } from '../core/util.ts';
 import { InitialsAvatar, CloseIcon } from '../core/icons.tsx';
 import { defineView } from '../core/view-registry.ts';
-import { Button, Input, Select } from '../ui/index.ts';
+import { Button, Input, Select, List, ListRow } from '../ui/index.ts';
 
 const ROLE_LABEL: Record<MemberRole, string> = {
 	viewer: 'Viewer',
@@ -76,16 +76,13 @@ function MembersView({
 				</form>
 			)}
 
-			<ul class="flex flex-col">
+			<List>
 				{members.map((m) => {
 					const isSelf = m.user_id === me.user_id;
 					// Admins can edit anyone except the owner and themselves.
 					const editable = canManage && !isSelf && m.role !== 'owner';
 					return (
-						<li
-							key={m.user_id}
-							class="flex items-center gap-3 border-b border-border py-2.5 last:border-b-0"
-						>
+						<ListRow key={m.user_id}>
 							<InitialsAvatar name={m.name || m.email} />
 							<div class="min-w-0 flex-1">
 								<div class="flex items-baseline gap-2">
@@ -128,24 +125,21 @@ function MembersView({
 									<CloseIcon />
 								</Button>
 							)}
-						</li>
+						</ListRow>
 					);
 				})}
-			</ul>
+			</List>
 
 			{invites.length > 0 && (
 				<div class="mt-6">
 					<div class="mb-1.5 text-xs font-medium uppercase tracking-wide text-muted">
 						Pending invites
 					</div>
-					<ul class="flex flex-col">
+					<List>
 						{invites.map((inv) => (
-							<li
-								key={inv.invite_id}
-								class="flex items-center gap-3 border-b border-border py-2.5 last:border-b-0"
-							>
+							<ListRow key={inv.invite_id}>
 								<span
-									class="flex h-6 w-6 shrink-0 items-center justify-center rounded-full border border-dashed border-border text-[11px] text-muted"
+									class="flex h-[18px] w-[18px] shrink-0 items-center justify-center rounded-full border border-dashed border-border text-[10px] text-muted"
 									aria-hidden="true"
 								>
 									@
@@ -160,19 +154,20 @@ function MembersView({
 								</div>
 								<span class="shrink-0 text-sm text-muted">{ROLE_LABEL[inv.role]}</span>
 								{canManage && (
-									<button
-										type="button"
+									<Button
+										variant="ghost"
+										size="icon"
 										disabled={busy}
 										title={`Revoke invite for ${inv.email}`}
+										aria-label={`Revoke invite for ${inv.email}`}
 										onClick={() => run('remove_member', { email: inv.email })}
-										class="shrink-0 rounded p-1 text-muted transition-colors hover:bg-chip hover:text-fg disabled:opacity-50"
 									>
 										<CloseIcon />
-									</button>
+									</Button>
 								)}
-							</li>
+							</ListRow>
 						))}
-					</ul>
+					</List>
 				</div>
 			)}
 		</div>

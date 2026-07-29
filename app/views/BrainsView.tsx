@@ -6,7 +6,7 @@ import { openCreateBrain, switchBrain, brainsViewFromSc, openBrains } from '../c
 import { toast, askConfirm } from '../core/toast.tsx';
 import { BrainGlyph, CloseIcon } from '../core/icons.tsx';
 import { defineView } from '../core/view-registry.ts';
-import { Button } from '../ui/index.ts';
+import { Button, List, ListRow, listRowTitle } from '../ui/index.ts';
 
 // The brains list (bi-modal counterpart to the header switcher): every brain the user
 // can reach, with role, the active one marked. Selecting one switches to it. Wherever
@@ -93,12 +93,12 @@ function BrainsView({ brains, active }: { brains: BrainRow[]; active: string }) 
 					</Button>
 				</div>
 			) : (
-				<ul class="flex flex-col">
+				<List>
 					{brains.map((b) => (
-						<li key={b.id} class="flex items-center border-b border-border last:border-b-0">
-							<div class="flex min-w-0 flex-1 items-center gap-3 py-2.5">
+						<ListRow key={b.id} class="gap-0 py-0">
+							<div class="flex min-w-0 flex-1 items-center gap-2 py-1.5">
 								<span
-									class={`flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-chip ${b.id === active ? 'text-accent' : 'text-muted'}`}
+									class={`flex h-[18px] w-[18px] shrink-0 items-center justify-center rounded-full bg-chip ${b.id === active ? 'text-accent' : 'text-muted'}`}
 								>
 									<BrainGlyph />
 								</span>
@@ -112,7 +112,7 @@ function BrainsView({ brains, active }: { brains: BrainRow[]; active: string }) 
 											variant="link"
 											onClick={() => switchBrain(b.id)}
 											title={b.id === active ? `Open ${b.label}` : `Switch to ${b.label}`}
-											class="block max-w-full truncate text-left font-medium text-fg focus-visible:underline"
+											class={`block max-w-full ${listRowTitle}`}
 										>
 											{b.label}
 										</Button>
@@ -173,9 +173,9 @@ function BrainsView({ brains, active }: { brains: BrainRow[]; active: string }) 
 									<CloseIcon />
 								</Button>
 							)}
-						</li>
+						</ListRow>
 					))}
-				</ul>
+				</List>
 			)}
 
 			{canAdd && (
