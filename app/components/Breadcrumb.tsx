@@ -335,40 +335,37 @@ function PathCrumb({
 	);
 }
 
-// The destinations: the places that are NOT a path but still live one level under the
-// brain. They are siblings of each other in exactly the sense a folder's contents are,
-// which is what lets a destination crumb carry the same picker a path crumb does — the
-// trail answers "what else is at this level" identically wherever you are standing.
+// The destinations, in TWO SCOPES, because they are not one level. Recent changes,
+// Graph and Members are views of a brain; Manage brains and Your settings are views of
+// your account. A single flat list let a crumb offer Graph as a sibling of Your
+// settings, which is not what "what else is at this level" means — those are two
+// distinct operations and the trail should not pretend one leads to the other.
 //
-// This deliberately overlaps the ⋯ menu. The two answer different questions (⋯ is what
-// you can DO, the trail is where you can BE) and the overlap is the point: from a page
-// the trail's tail is a page, so ⋯ stays the only way in.
-function destinations(): {
-	key: string;
-	label: string;
-	icon: ComponentChildren;
-	open: () => void;
-}[] {
+// Which list a crumb offers follows from its own root (see THE SCOPE TEST): a crumb
+// under the brain offers brain destinations, an account crumb offers account ones. So
+// from Manage brains you reach Your settings and no further, which is exactly as far
+// as that level goes.
+//
+// This deliberately overlaps the ⋯ menu, which carries the same two groups. They answer
+// different questions (⋯ is what you can DO, the trail is where you can BE) and the
+// overlap is the point: from a page the trail's tail is a page, so ⋯ stays the only
+// way in.
+type Destination = { key: string; label: string; icon: ComponentChildren; open: () => void };
+
+function brainDestinations(): Destination[] {
 	return [
-		{
-			key: 'activity',
-			label: 'Recent changes',
-			icon: <HistoryIcon />,
-			open: () => openActivity()
-		},
+		{ key: 'activity', label: 'Recent changes', icon: <HistoryIcon />, open: () => openActivity() },
 		{ key: 'graph', label: 'Graph', icon: <GraphIcon />, open: () => openGraph() },
-		{ key: 'members', label: 'Members', icon: <PeopleIcon />, open: openMembers },
+		{ key: 'members', label: 'Members', icon: <PeopleIcon />, open: openMembers }
+	];
+}
+
+function accountDestinations(): Destination[] {
+	return [
 		// Same gate as the ⋯ menu's row: brain management is for admins of at least one
 		// org. A picker must never offer a destination its click would be refused.
 		...(brainList?.some((b) => b.canManage)
-			? [
-					{
-						key: 'brains',
-						label: 'Manage brains',
-						icon: <BrainGlyph />,
-						open: openBrains
-					}
-				]
+			? [{ key: 'brains', label: 'Manage brains', icon: <BrainGlyph />, open: openBrains }]
 			: []),
 		{ key: 'settings', label: 'Your settings', icon: <GearIcon />, open: openSettings }
 	];
@@ -379,27 +376,40 @@ function destinations(): {
 // standing place) simply marks nothing, which is honest: the list still answers where
 // else you could go.
 function DestinationPicker({
+	scope,
 	current,
 	last,
 	children
 }: {
+	scope: 'brain' | 'account';
 	current: string;
 	last?: boolean;
 	children: ComponentChildren;
 }) {
+	const rows = scope === 'account' ? accountDestinations() : brainDestinations();
+	// NO PICKER WITHOUT A CHOICE. A chevron that opens onto the screen you are already
+	// looking at is furniture that promises somewhere to go and delivers nowhere — which
+	// is what an account crumb offers a user who administers no org, since Manage brains
+	// is then gated away and Your settings is all that is left.
+	if (!rows.some((d) => d.key !== current))
+		return <span class={last ? 'min-w-0 truncate' : 'shrink-0'}>{children}</span>;
 	return (
 		<Menu
-			label="Places in this brain"
+			label={scope === 'account' ? 'Your account' : 'Places in this brain'}
 			class={last ? 'min-w-0 shrink' : 'shrink-0'}
 			trigger={({ props, open }) => (
 				<span class="group flex min-w-0 items-center">
 					{children}
-					<CrumbChevron props={props} open={open} title="What else is in this brain" />
+					<CrumbChevron
+						props={props}
+						open={open}
+						title={scope === 'account' ? 'Your account' : 'What else is in this brain'}
+					/>
 				</span>
 			)}
 		>
 			{(close) =>
-				destinations().map((d) => {
+				rows.map((d) => {
 					const here = d.key === current;
 					return (
 						<MenuRow
@@ -494,7 +504,7 @@ function DestinationCrumb({
 			)}
 			{parent && (
 				<>
-					<DestinationPicker current={parent.key}>
+					<DestinationPicker scope={root} current={parent.key}>
 						<button
 							type="button"
 							onClick={parent.onClick}
@@ -509,7 +519,7 @@ function DestinationCrumb({
 			{current === undefined ? (
 				<span class="min-w-0 truncate">{children}</span>
 			) : (
-				<DestinationPicker current={current} last>
+				<DestinationPicker scope={root} current={current} last>
 					<span class="min-w-0 truncate">{children}</span>
 				</DestinationPicker>
 			)}

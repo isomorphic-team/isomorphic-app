@@ -88,8 +88,16 @@ function OverflowMenu({ editing }: { editing: boolean }) {
 				};
 				return (
 					<>
+						{/* GROUPED BY SCOPE, the same two groups the breadcrumb uses. Recent changes
+						    and Members are views of THIS BRAIN and change when you switch brains;
+						    Manage brains and Your settings are views of YOUR ACCOUNT and do not.
+						    Ungrouped, this read as one flat list of five unrelated places, which is
+						    what made Members look like a property of whichever brain you were in.
+						    Graph is not here: it has its own lit control in the bar, and a row would
+						    be a second way to say the same thing. */}
 						{!editing && (
 							<>
+								<div class={`px-3 pb-0.5 pt-1 ${eyebrow}`}>This brain</div>
 								<MenuRow onClick={go(() => openActivity())}>
 									<span class="w-4 text-muted">
 										<HistoryIcon />
@@ -102,8 +110,10 @@ function OverflowMenu({ editing }: { editing: boolean }) {
 									</span>
 									<span class="flex-1">Members</span>
 								</MenuRow>
-								{/* Brain management (add/remove) lives here — the brain crumb's picker is
-								    switch-only. Shown when the user is admin of at least one brain's org. */}
+								<MenuSeparator />
+								<div class={`px-3 pb-0.5 pt-1 ${eyebrow}`}>Your account</div>
+								{/* Brain management (add/remove) — the brain crumb's picker is
+								    switch-only. Shown when the user is admin of at least one org. */}
 								{brainList?.some((b) => b.canManage) && (
 									<MenuRow onClick={go(openBrains)}>
 										<span class="w-4 text-muted">
@@ -112,6 +122,12 @@ function OverflowMenu({ editing }: { editing: boolean }) {
 										<span class="flex-1">Manage brains</span>
 									</MenuRow>
 								)}
+								<MenuRow onClick={go(openSettings)}>
+									<span class="w-4 text-muted">
+										<GearIcon />
+									</span>
+									<span class="flex-1">Your settings</span>
+								</MenuRow>
 							</>
 						)}
 						{hasDisplay && (
@@ -129,17 +145,6 @@ function OverflowMenu({ editing }: { editing: boolean }) {
 										{m === displayMode && <span>✓</span>}
 									</MenuRow>
 								))}
-							</>
-						)}
-						{!editing && (
-							<>
-								<MenuSeparator />
-								<MenuRow onClick={go(openSettings)}>
-									<span class="w-4 text-muted">
-										<GearIcon />
-									</span>
-									<span class="flex-1">Your settings</span>
-								</MenuRow>
 							</>
 						)}
 					</>
