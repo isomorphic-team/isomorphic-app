@@ -214,9 +214,12 @@ function connectedSettingsResult(msg: string): CallToolResult {
 	};
 }
 
-// In-memory multi-brain set so `#brains` (and the top-left switcher) previews the
-// brain-selection UX without a server. Three brains across three identities, mirroring
-// the real motivating case (personal / team / client).
+// In-memory multi-brain set so `#brains` (and the crumb's brain picker) previews the
+// brain-selection UX without a server. Personal / team / client, mirroring the real
+// motivating case — plus a SECOND brain in the Acme org, because one-brain-per-org is
+// the case that hides the interesting behaviour: labels are repo-derived rather than
+// the org's name once an org holds several, and the picker groups under an org heading
+// instead of prepending "Acme — " to every row. With one brain each, nothing shows.
 let brainsFixture = [
 	{
 		id: 'your-org/personal-wiki',
@@ -227,8 +230,15 @@ let brainsFixture = [
 	},
 	{
 		id: 'acme-co/acme-wiki',
-		label: 'Acme',
+		label: 'Acme wiki',
 		role: 'Admin',
+		orgId: 'org-acme',
+		orgLabel: 'Acme'
+	},
+	{
+		id: 'acme-co/acme-handbook',
+		label: 'Acme handbook',
+		role: 'Editor',
 		orgId: 'org-acme',
 		orgLabel: 'Acme'
 	},
@@ -242,11 +252,6 @@ let brainsFixture = [
 ];
 // Repos the "installation" can see that aren't brains yet — the connect_brain picker.
 let connectableRepos = [
-	{
-		id: 'acme-co/acme-handbook',
-		owner: 'acme-co',
-		repo: 'acme-handbook'
-	},
 	{ id: 'acme-co/content-dist', owner: 'acme-co', repo: 'content-dist' },
 	// Under the personal org, so the picker's step 1 (choose an org) has two live
 	// branches rather than one that dead-ends in the empty state.
@@ -264,7 +269,9 @@ function brainRows() {
 		...b,
 		active: b.id === activeBrainId,
 		canManage: b.role === 'Owner' || b.role === 'Admin',
-		needsConfig: b.orgId === 'org-acme',
+		// One row, not the whole Acme group — this previews the not-configured state,
+		// and every row wearing it would read as an org-level problem.
+		needsConfig: b.id === 'acme-co/acme-wiki',
 		configPrUrl: pendingConfigPr.get(b.id)
 	}));
 }

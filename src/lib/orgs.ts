@@ -648,7 +648,14 @@ export function brainLabel(b: AccessibleBrain, multipleInOrg = false): string {
 		.trim();
 	let base = b.org_name?.trim();
 	if (!base || base.includes('@')) base = b.org_model === 'platform' ? 'Personal' : humanRepo;
-	return multipleInOrg ? `${base} — ${humanRepo}` : base;
+	// A solo brain IS its org as far as the user is concerned, so it takes the org's
+	// name — that is what keeps a personal brain reading "Personal" rather than
+	// "jhansing". Where an org holds several, each takes its own repo-derived name and
+	// the ORG IS NOT PREPENDED: the surfaces that list brains group them under an org
+	// heading (app/core/util groupBrainsByOrg), so a prefix would say it a second time,
+	// once per row. Nothing else shows a label beside another org's, so nothing else
+	// needs the qualifier.
+	return multipleInOrg ? humanRepo || base : base;
 }
 
 // All brains the given users can reach, deduped by canonical id (keeping the highest
@@ -726,8 +733,17 @@ export function matchBrain(
 	const multi = countByOrg(brains);
 	const subs = brains.filter((b) => {
 		const label = brainLabel(b, (multi.get(b.org_id) ?? 0) > 1).toLowerCase();
+		// org_name is matched EXPLICITLY rather than incidentally. It used to ride along
+		// inside the label of any brain in a multi-brain org ("Beckers Healthcare — ed
+		// brain"), so `brain: "beckers"` resolved by accident of formatting; dropping the
+		// prefix would have silently broken every org-qualified handle an agent had
+		// learned. How a brain is DISPLAYED and what a human can call it are two
+		// questions, and only the first one changed.
 		return (
-			b.id.toLowerCase().includes(q) || b.repo_name.toLowerCase().includes(q) || label.includes(q)
+			b.id.toLowerCase().includes(q) ||
+			b.repo_name.toLowerCase().includes(q) ||
+			(b.org_name ?? '').toLowerCase().includes(q) ||
+			label.includes(q)
 		);
 	});
 	if (subs.length === 1) return { brain: subs[0] };

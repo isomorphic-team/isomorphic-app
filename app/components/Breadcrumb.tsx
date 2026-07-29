@@ -21,10 +21,11 @@
 // tree (`browseCache` — one list_pages call for the whole brain). A cold cache fetches
 // when a picker is OPENED rather than up front, so the bar never waits on data that a
 // given visit may not need.
+import { Fragment } from 'preact';
 import type { ComponentChildren } from 'preact';
 import { useEffect, useState } from 'preact/hooks';
 import type { View, BrowseData } from '../core/types.ts';
-import { isFolderNoteName } from '../core/util.ts';
+import { isFolderNoteName, groupBrainsByOrg } from '../core/util.ts';
 import { browseCache, brainList, activeBrain, goBack, backKind } from '../core/store.ts';
 import {
 	openBrowse,
@@ -52,7 +53,7 @@ import {
 	GearIcon
 } from '../core/icons.tsx';
 import { Menu, MenuRow, MenuSeparator, MenuNote, type MenuTriggerProps } from '../ui/Menu.tsx';
-import { crumbCurrent, crumbLink, crumbInert, crumbMeta } from '../ui/typography.ts';
+import { crumbCurrent, crumbLink, crumbInert, crumbMeta, eyebrow } from '../ui/typography.ts';
 
 // Wider than the 4px it was, because a crumb is no longer just a word: it is a label
 // and its picker, and those have to read as ONE unit. At the old spacing the chevron
@@ -252,28 +253,40 @@ function BrainCrumb({ inert }: { inert?: boolean }) {
 		>
 			{(close) => (
 				<>
-					{rows.map((b) => (
-						<MenuRow
-							key={b.id}
-							onClick={() => {
-								close();
-								switchBrain(b.id);
-							}}
-						>
-							<span class={b.active ? 'text-accent' : 'text-muted'}>
-								<BrainGlyph />
-							</span>
-							<span class="min-w-0 flex-1">
-								<span class="block truncate text-fg" title={b.label}>
-									{b.label}
-								</span>
-								<span class="block text-xs text-muted">
-									{b.role}
-									{b.configPrUrl ? ' · setup pending' : b.needsConfig ? ' · not configured' : ''}
-								</span>
-							</span>
-							{b.active && <span class="shrink-0 text-accent">✓</span>}
-						</MenuRow>
+					{/* Grouped by org, which is what carries the org name now that the label
+					    no longer prepends it. The heading appears only when there are two orgs
+					    to tell apart; with one, every row is in it and it says nothing. */}
+					{groupBrainsByOrg(rows).map((g) => (
+						<Fragment key={g.org ?? '·'}>
+							{g.org && <div class={`px-3 pb-0.5 pt-1 ${eyebrow}`}>{g.org}</div>}
+							{g.rows.map((b) => (
+								<MenuRow
+									key={b.id}
+									onClick={() => {
+										close();
+										switchBrain(b.id);
+									}}
+								>
+									<span class={b.active ? 'text-accent' : 'text-muted'}>
+										<BrainGlyph />
+									</span>
+									<span class="min-w-0 flex-1">
+										<span class="block truncate text-fg" title={b.label}>
+											{b.label}
+										</span>
+										<span class="block text-xs text-muted">
+											{b.role}
+											{b.configPrUrl
+												? ' · setup pending'
+												: b.needsConfig
+													? ' · not configured'
+													: ''}
+										</span>
+									</span>
+									{b.active && <span class="shrink-0 text-accent">✓</span>}
+								</MenuRow>
+							))}
+						</Fragment>
 					))}
 					<MenuSeparator />
 					<MenuRow

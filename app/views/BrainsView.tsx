@@ -1,3 +1,4 @@
+import { Fragment } from 'preact';
 import { useState } from 'preact/hooks';
 import type { BrainRow } from '../core/types.ts';
 import { app, callTool, firstText } from '../core/host.ts';
@@ -11,8 +12,9 @@ import {
 } from '../core/actions.ts';
 import { toast, askConfirm } from '../core/toast.tsx';
 import { BrainGlyph, CloseIcon } from '../core/icons.tsx';
+import { groupBrainsByOrg } from '../core/util.ts';
 import { defineView } from '../core/view-registry.ts';
-import { Button, List, ListRow, listRowTitle } from '../ui/index.ts';
+import { Button, List, ListRow, listRowTitle, eyebrow } from '../ui/index.ts';
 
 // The brains list (bi-modal counterpart to the header switcher): every brain the user
 // can reach, with role, the active one marked. Selecting one switches to it. Wherever
@@ -53,86 +55,95 @@ function BrainsView({ brains, active }: { brains: BrainRow[]; active: string }) 
 				</div>
 			) : (
 				<List>
-					{brains.map((b) => (
-						<ListRow key={b.id} class="gap-0 py-0">
-							<div class="flex min-w-0 flex-1 items-center gap-2 py-1.5">
-								<span
-									class={`flex h-[18px] w-[18px] shrink-0 items-center justify-center rounded-full bg-chip ${b.id === active ? 'text-accent' : 'text-muted'}`}
-								>
-									<BrainGlyph />
-								</span>
-								<span class="min-w-0 flex-1">
-									{b.needsConfig ? (
-										<span class="block truncate font-medium text-fg" title={b.label}>
-											{b.label}
-										</span>
-									) : (
-										<Button
-											variant="link"
-											onClick={() => switchBrain(b.id)}
-											title={b.id === active ? `Open ${b.label}` : `Switch to ${b.label}`}
-											class={`block max-w-full ${listRowTitle}`}
+					{/* Same org grouping as the crumb's brain picker, for the same reason: the
+					    label no longer carries the org, and this screen is the other place two
+					    orgs' brains sit in one list. The heading is a <li> because List is a
+					    <ul> — a bare <div> in there is invalid markup. */}
+					{groupBrainsByOrg(brains).map((g) => (
+						<Fragment key={g.org ?? '·'}>
+							{g.org && <li class={`px-0 pb-0.5 pt-2 first:pt-0 ${eyebrow}`}>{g.org}</li>}
+							{g.rows.map((b) => (
+								<ListRow key={b.id} class="gap-0 py-0">
+									<div class="flex min-w-0 flex-1 items-center gap-2 py-1.5">
+										<span
+											class={`flex h-[18px] w-[18px] shrink-0 items-center justify-center rounded-full bg-chip ${b.id === active ? 'text-accent' : 'text-muted'}`}
 										>
-											{b.label}
+											<BrainGlyph />
+										</span>
+										<span class="min-w-0 flex-1">
+											{b.needsConfig ? (
+												<span class="block truncate font-medium text-fg" title={b.label}>
+													{b.label}
+												</span>
+											) : (
+												<Button
+													variant="link"
+													onClick={() => switchBrain(b.id)}
+													title={b.id === active ? `Open ${b.label}` : `Switch to ${b.label}`}
+													class={`block max-w-full ${listRowTitle}`}
+												>
+													{b.label}
+												</Button>
+											)}
+											<span class="block text-xs text-muted">
+												{b.role}
+												{b.configPrUrl
+													? ' · setup pending review'
+													: b.needsConfig
+														? ' · not configured'
+														: ''}
+											</span>
+										</span>
+										{b.id === active && !b.needsConfig && (
+											<span class="shrink-0 text-sm text-accent">Active</span>
+										)}
+									</div>
+									{b.needsConfig &&
+										(b.configPrUrl ? (
+											// A configure PR is open (protected repo) — link to it instead of
+											// opening another. Merging it makes the pages appear automatically.
+											<Button
+												variant="link"
+												title="Review the setup pull request"
+												onClick={() => app.openLink({ url: b.configPrUrl! })}
+												class="mr-1"
+											>
+												Review PR ↗
+											</Button>
+										) : (
+											<Button
+												variant="link"
+												disabled={busy}
+												title={`Set up ${b.label} so its pages appear`}
+												onClick={() => run('configure_brain', { brain: b.id })}
+												class="mr-1"
+											>
+												Set up
+											</Button>
+										))}
+									{b.canManage && (
+										<Button
+											variant="ghost"
+											size="icon"
+											disabled={busy}
+											title={`Disconnect ${b.label}`}
+											aria-label={`Disconnect ${b.label}`}
+											onClick={async () => {
+												const ok = await askConfirm({
+													title: 'Disconnect brain?',
+													body: `${b.label} will be removed from this workspace. The GitHub repo and its contents are not deleted.`,
+													confirmLabel: 'Disconnect'
+												});
+												if (ok) run('disconnect_brain', { brain: b.id });
+											}}
+											class="ml-1"
+										>
+											<CloseIcon />
 										</Button>
 									)}
-									<span class="block text-xs text-muted">
-										{b.role}
-										{b.configPrUrl
-											? ' · setup pending review'
-											: b.needsConfig
-												? ' · not configured'
-												: ''}
-									</span>
-								</span>
-								{b.id === active && !b.needsConfig && (
-									<span class="shrink-0 text-sm text-accent">Active</span>
-								)}
-							</div>
-							{b.needsConfig &&
-								(b.configPrUrl ? (
-									// A configure PR is open (protected repo) — link to it instead of
-									// opening another. Merging it makes the pages appear automatically.
-									<Button
-										variant="link"
-										title="Review the setup pull request"
-										onClick={() => app.openLink({ url: b.configPrUrl! })}
-										class="mr-1"
-									>
-										Review PR ↗
-									</Button>
-								) : (
-									<Button
-										variant="link"
-										disabled={busy}
-										title={`Set up ${b.label} so its pages appear`}
-										onClick={() => run('configure_brain', { brain: b.id })}
-										class="mr-1"
-									>
-										Set up
-									</Button>
-								))}
-							{b.canManage && (
-								<Button
-									variant="ghost"
-									size="icon"
-									disabled={busy}
-									title={`Disconnect ${b.label}`}
-									aria-label={`Disconnect ${b.label}`}
-									onClick={async () => {
-										const ok = await askConfirm({
-											title: 'Disconnect brain?',
-											body: `${b.label} will be removed from this workspace. The GitHub repo and its contents are not deleted.`,
-											confirmLabel: 'Disconnect'
-										});
-										if (ok) run('disconnect_brain', { brain: b.id });
-									}}
-									class="ml-1"
-								>
-									<CloseIcon />
-								</Button>
-							)}
-						</ListRow>
+								</ListRow>
+							))}
+						</Fragment>
 					))}
 				</List>
 			)}
