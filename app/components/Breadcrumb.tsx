@@ -360,9 +360,11 @@ function brainDestinations(): Destination[] {
 		// is the file-tree VIEW — and only the first of those is visible from a picker. A
 		// list that offers Graph and Members while silently omitting the tree is claiming
 		// to be the views of this brain and isn't one of them.
+		// Order is deliberate: Files and Graph are the SAME brain drawn two ways, so they
+		// sit together at the top, and the feed and the roster follow.
 		{ key: 'files', label: 'Files', icon: <ListIcon />, open: () => openBrowse() },
-		{ key: 'activity', label: 'Recent changes', icon: <HistoryIcon />, open: () => openActivity() },
 		{ key: 'graph', label: 'Graph', icon: <GraphIcon />, open: () => openGraph() },
+		{ key: 'activity', label: 'Recent changes', icon: <HistoryIcon />, open: () => openActivity() },
 		{ key: 'members', label: 'Members', icon: <PeopleIcon />, open: openMembers }
 	];
 }
