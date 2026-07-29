@@ -200,8 +200,14 @@ function BrainCrumb({ inert }: { inert?: boolean }) {
 	// a gap would apply to the CHEVRON too, on top of the ml-0.5 every crumb's chevron
 	// already has, and the brain crumb would sit its picker 4× further from its label
 	// than the path crumbs do.
+	//
+	// THE LEADING SLOT IS SHARED with BackCrumb's arrow — one or the other opens the
+	// trail depending on scope. Its geometry (15px icon, p-0.5 inset, mr-1.5) is
+	// therefore identical in both, including the padding this span has no other use for:
+	// the arrow needs it as a hover target, and unequal insets moved every label in the
+	// bar by 2px when you crossed between an account screen and a brain one.
 	const glyph = (
-		<span class="mr-1.5 shrink-0 text-muted">
+		<span class="mr-1.5 shrink-0 p-0.5 text-muted">
 			<BrainGlyph />
 		</span>
 	);
@@ -463,7 +469,7 @@ function BackCrumb() {
 			title="Back"
 			aria-label="Back"
 			onClick={() => goBack(() => openBrowse())}
-			class="mr-2 shrink-0 rounded p-0.5 text-muted outline-none transition-colors hover:bg-chip hover:text-fg focus-visible:ring-2 focus-visible:ring-accent"
+			class="mr-1.5 shrink-0 rounded p-0.5 text-muted outline-none transition-colors hover:bg-chip hover:text-fg focus-visible:ring-2 focus-visible:ring-accent"
 		>
 			<ArrowLeftIcon />
 		</button>

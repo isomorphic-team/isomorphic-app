@@ -177,7 +177,10 @@ const BrainGlyph = () => (
 // brains). Deliberately an arrow and not a crumb: those screens have no parent to
 // name, so this is history, and it must not look like location.
 const ArrowLeftIcon = () => (
-	<svg viewBox="0 0 16 16" width="13" height="13" class="shrink-0" aria-hidden="true">
+	// 15px to match BrainGlyph exactly: these two alternate in the same leading slot of
+	// the trail, so any difference in size or inset shows up as the label after them
+	// jumping when you move between an account screen and a brain one.
+	<svg viewBox="0 0 16 16" width="15" height="15" class="shrink-0" aria-hidden="true">
 		<path
 			fill="none"
 			stroke="currentColor"
