@@ -247,7 +247,13 @@ let brainsFixture = [
 		label: 'Acme handbook',
 		role: 'Editor',
 		orgId: 'org-acme',
-		orgLabel: 'Acme'
+		orgLabel: 'Acme',
+		// Org-visible like its sibling. It cannot preview as Editor any more: role is
+		// DERIVED now, and the org-admin floor lifts an org admin to admin on every
+		// brain in the org, so an admin holding editor on one of them is not a state
+		// the rule can produce.
+		orgRole: 'admin' as PreviewRole,
+		visibility: 'org'
 	},
 	{
 		id: 'northwind/northwind-wiki',
@@ -260,7 +266,7 @@ let brainsFixture = [
 	}
 ];
 // Explicit per-brain grants (`brain_memberships`), keyed brain id -> user id.
-// The three brains together cover every path through effectiveBrainRole:
+// The brains together cover every path through effectiveBrainRole:
 //   Personal   private, mine. Katherine (an org EDITOR) is shared in read-only,
 //              which is the case per-brain roles exist for; Grace appears with no
 //              grant at all, via the org-admin floor; Devon cannot see it.
@@ -883,7 +889,18 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
 			const label = (hit?.repo ?? r).replace(/[-_]+/g, ' ');
 			brainsFixture = [
 				...brainsFixture,
-				{ id, label, role: 'Admin', orgId: org.orgId, orgLabel: org.orgLabel }
+				{
+					id,
+					label,
+					role: 'Admin',
+					orgId: org.orgId,
+					orgLabel: org.orgLabel,
+					// Matches connect_brain in src/tools/brains.ts: adopting a repo the org
+					// already owns is an org-wide act, so the brain lands ORG-VISIBLE. This
+					// is the opposite default from create_brain, which is private.
+					orgRole: 'admin' as PreviewRole,
+					visibility: 'org'
+				}
 			];
 			connectableRepos = connectableRepos.filter((x) => x.id !== id);
 			return {

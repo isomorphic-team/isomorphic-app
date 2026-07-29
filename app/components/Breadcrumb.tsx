@@ -36,6 +36,7 @@ import {
 	openMembers,
 	openSettings,
 	openAddBrain,
+	openBrainAccess,
 	navigateTo,
 	fetchPaths,
 	switchBrain
@@ -637,6 +638,39 @@ export function Breadcrumb({ view }: { view: View }) {
 				parent={{ key: 'members', label: 'Members', onClick: () => goBack(openMembers) }}
 			>
 				<span class={crumbCurrent}>Invite</span>
+			</DestinationCrumb>
+		);
+	// Sharing is account-root despite being about one brain, and THE SCOPE TEST is why:
+	// it is opened for a NAMED brain (the Share control in the brains list) and stays on
+	// that brain, so switching the active brain does not change what it shows. Hanging it
+	// off the brain crumb would print the active brain's name above a panel governing a
+	// different one, which is the one thing a crumb must never do. The panel names its
+	// own brain in its first line. Same conditional parent as add-brain: the brains list
+	// is where it is usually opened from, but a bare `brain_access` call reaches it too.
+	if (view.kind === 'brain-access')
+		return (
+			<DestinationCrumb
+				root="account"
+				parent={
+					backKind() === 'brains'
+						? { key: 'brains', label: 'Manage brains', onClick: () => goBack(openBrains) }
+						: undefined
+				}
+			>
+				<span class={crumbCurrent}>Sharing</span>
+			</DestinationCrumb>
+		);
+	if (view.kind === 'share-brain')
+		return (
+			<DestinationCrumb
+				root="account"
+				parent={{
+					key: 'brain-access',
+					label: 'Sharing',
+					onClick: () => goBack(() => openBrainAccess(view.brainId))
+				}}
+			>
+				<span class={crumbCurrent}>Share</span>
 			</DestinationCrumb>
 		);
 	if (view.kind === 'connect-account')
