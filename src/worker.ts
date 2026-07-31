@@ -68,6 +68,7 @@ import { registerBrainAccessTools } from './tools/brain-access.ts';
 import { registerConnectedAccountTools } from './tools/connected-accounts.ts';
 import { registerBrainTools } from './tools/brains.ts';
 import { registerOrgOnboardingTools } from './tools/org-onboarding.ts';
+import { registerFeedbackTools } from './tools/feedback.ts';
 import { loadCustomToolDefs, registerCustomTools, type CustomToolLoad } from './tools/custom.ts';
 import { resolveInstallationOrg, connectCustomerOrg } from './lib/org-connect.ts';
 import {
@@ -140,6 +141,14 @@ interface Env {
 	// Multi-tenant routing table (gh_user_id → installation_id, brain_owner,
 	// brain_repo). Schema in `src/db/schema.sql`.
 	PLATFORM_DB: D1Database;
+
+	// Product feedback (submit_feedback). FEEDBACK_REPO is the "owner/repo" of the
+	// tracker that receives reports; FEEDBACK_TOKEN is a separate narrowly scoped
+	// credential (Issues: write on that repo only), deliberately NOT the platform
+	// App, which has no `issues` permission and must not gain one. Both unset means
+	// the tool is not registered. See src/tools/feedback.ts.
+	FEEDBACK_REPO?: string;
+	FEEDBACK_TOKEN?: string;
 }
 
 // Identity surfaced via OAuth `props` (read from `ctx.props`). Empty in static mode.
@@ -236,6 +245,7 @@ When to reach for it:
 - MATCH THE BRAIN YOU ARE IN. Before adding to an existing folder, look at a sibling page (read_page) and follow what is already there — the same \`type:\` values, the same frontmatter keys, the same granularity. A brain that gives every vendor its own file and then gets one page holding twelve events is worse off than either convention applied consistently. When restructuring, run validate afterwards: it reports structure drift as advisory notes.
 - EDIT PART OF A PAGE, don't rewrite it. write_page's \`content\` REPLACES the whole body, so it destroys anything you haven't read. To change part of a page use \`edits\` (exact find/replace, each anchor matching once) or \`append\`: they touch only what you name, need no prior read, and fail loudly rather than guessing. If you do pass \`content\` for an existing page you didn't just write, call read_page first.
 - Write only when asked. Edits to a protected brain open a pull request that merges automatically once checks pass; tell the user the change is on its way rather than exposing git mechanics.
+- FEEDBACK ABOUT ISOMORPHIC ITSELF goes to the maintainers with submit_feedback. When the user says something here is broken, confusing, or missing, or asks for a feature, offer to send it rather than only sympathizing. It files a public issue on the project's tracker and needs no GitHub account from them. The first call posts nothing: show them the exact title and body it returns, then call again with \`confirm: true\`. Never file one without the user having seen the text, and never put a token, key, or their private content in it. (Feedback about their own CONTENT is a normal page edit, not this.)
 - The brain IS a GitHub repo, and every write tool (write_page, move_page, etc.) already commits to it — that is the only save path; there is no separate "push to GitHub" step. So if the user asks you to push, commit, sync, or save to GitHub, the write tools ARE how you do it (and if you already edited, it is already pushed). Never tell the user you cannot push or commit to GitHub.`;
 
 // Per-request MCP session. The transport is now STATELESS (a fresh server +
@@ -934,6 +944,28 @@ class McpSession {
 		// org + owner membership. The runtime analog of `pnpm onboard-org`. See
 		// src/tools/org-onboarding.ts and src/lib/org-connect.ts.
 		registerOrgOnboardingTools(server, (opts) => this.orgContext(opts), this.env);
+
+		// ---------- product feedback ----------
+		// submit_feedback files a bug/idea on the project's own PUBLIC tracker via a
+		// separate narrowly scoped credential (never the platform App). Registered
+		// only when FEEDBACK_REPO is configured.
+		//
+		// Identity is read straight off the token props and the active brain, NOT via
+		// tenantContext: it must not throw. A user who cannot resolve a brain (no
+		// brain yet, a broken install, static mode with no signed-in user) is
+		// precisely the user with something to report, so the one tool that reports it
+		// cannot be the one tool that depends on resolution succeeding.
+		registerFeedbackTools(
+			server,
+			() => ({
+				userId: this.props?.user_id,
+				email: this.props?.email,
+				ghLogin: this.props?.gh_login,
+				orgId: this.props?.org_id ?? undefined,
+				brainId: this.activeBrainId
+			}),
+			this.env
+		);
 
 		// ---------- brain selection (multi-brain) ----------
 		// brains (the interactive switcher + data) + switch_brain. A bare tool call

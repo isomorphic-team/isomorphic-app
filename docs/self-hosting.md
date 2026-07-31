@@ -49,7 +49,7 @@ git clone https://github.com/isomorphic-team/isomorphic-app
 cd isomorphic-app
 pnpm install
 pnpm setup:config       # generates wrangler.jsonc with local placeholder ids
-pnpm test               # eight golden tests, offline, should be green
+pnpm test               # eleven golden tests, offline, should be green
 ```
 
 You now have two useful things:
@@ -280,6 +280,26 @@ It is a cache and never the source of truth: every read first compares the branc
 indexed commit and reindexes what changed. So an edit made on github.com, by another agent, or
 by a merged pull request is picked up on the next read with no webhook and no manual step.
 Existing brains populate the index lazily on first read; there is nothing to backfill.
+
+**Product feedback (optional).** `submit_feedback` lets your users send a bug or an idea from
+inside Claude, as an issue on a GitHub tracker. It is off unless you configure a destination,
+and it deliberately does not use the platform GitHub App. That App has no `issues` permission
+and should not gain one, since widening it would expand the scope of every installation.
+Instead, point it at a repository and give it a credential of its own (a fine-grained PAT with
+Issues: read and write on that one repository, or a second small App):
+
+```sh
+pnpm exec wrangler secret put FEEDBACK_REPO    # e.g. your-org/your-fork
+pnpm exec wrangler secret put FEEDBACK_TOKEN
+```
+
+Create `feedback`, `bug`, `idea`, and `other` labels on that repository if you want reports
+labelled; a token without label-creation rights just files them unlabelled. Leave both unset
+and the tool is not registered at all, so nobody's reports go anywhere unexpected. Note the
+destination is a _public_ tracker in most setups: the tool always shows the user the exact
+issue text and requires an explicit confirmation before posting, publishes nothing about their
+account, and records the reporter privately in D1 (`feedback_reports`) keyed by the opaque
+report id printed in the issue. A per-user cap of ten reports a day bounds abuse.
 
 **Backups.** Your knowledge is in a git repository, so it is already backed up everywhere it
 is cloned. The D1 database holds only derived data plus org and membership rows. Losing the
