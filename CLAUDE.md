@@ -568,10 +568,11 @@ UI is `app/views/AnalyticsView.tsx`, an ORG-scope destination beside Members.
   any use for. `brain_id` is `''` and never NULL for org-scope calls, because
   SQLite treats PK NULLs as DISTINCT and a nullable column would defeat the
   upsert, appending a row per call forever.
-- **`USAGE_ANALYTICS` gates BOTH the recording and the tool registration**, so a
+- **`USAGE_ANALYTICS` (and `hasOrgModel`) gate BOTH the recording and the tool registration**, so a
   deployment that disables it records nothing and never shows a tab that can only
   answer zero. The generated config defaults it to `"true"`; set it to `"false"` to
-  turn the feature off. The Worker compares `=== 'true'` rather than `!== 'false'`,
+  turn the feature off. Single-tenant deployments do not register it either: the tab
+  is org-scope and there is no org to resolve. The Worker compares `=== 'true'` rather than `!== 'false'`,
   so a config that does not mention the key at all (hand-written, or predating this)
   records nothing: the only way to start collecting is a config that says so.
 - **Recording rides the loop that already rewrites every registration.**

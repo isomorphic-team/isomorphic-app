@@ -928,7 +928,12 @@ class McpSession {
 		// for the same reason submit_feedback is gated on FEEDBACK_REPO: with
 		// recording off there is nothing to report, and a tool that can only answer
 		// "zero" is worse than a tool that is not there. See src/tools/analytics.ts.
-		if (this.usageEnabled()) {
+		//
+		// Also gated on hasOrgModel: the tab is an ORG-scope destination and both its
+		// authorization and its recording read the resolved org, which a single-tenant
+		// deployment has none of. `recordUsage` already returns early without one, so
+		// registering it there would advertise a tab that can only answer zero.
+		if (this.usageEnabled() && hasOrgModel) {
 			registerAnalyticsTools(server, (opts) => this.tenantContext(opts));
 		}
 
