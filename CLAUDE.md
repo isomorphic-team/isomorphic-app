@@ -36,11 +36,12 @@ pnpm test:patch         # write_page append/edits (page-patch) golden test
 pnpm test:structure     # OKF conformance golden test (granularity, type:, nested frontmatter)
 pnpm test:access        # per-brain access rule (effectiveBrainRole) golden test
 pnpm test:scope         # org-vs-brain scope: which role each tool gates on
+pnpm test:feedback      # submit_feedback composition golden test (redaction, nothing identifying published)
 pnpm typecheck          # runs all three tsconfigs (node, worker, app)
 pnpm format             # prettier
 ```
 
-**Tests.** Ten pure golden tests, no network, all wired into CI and into the `test`
+**Tests.** Eleven pure golden tests, no network, all wired into CI and into the `test`
 script (`pnpm test` runs all of them): `pnpm test:roundtrip` (editor markdown
 round-trip), `pnpm test:views` (okf-view engine), `pnpm test:import` (import planner),
 `pnpm test:tools` (brain-authored tool parsing), `pnpm test:patch` (write_page append/edits),
@@ -50,7 +51,8 @@ Worker and app), `pnpm test:access` (the per-brain access rule: every input to
 `effectiveBrainRole`), `pnpm test:scope` (which role each TOOL gates on: the real handlers
 over a stub server and a fake `getContext`, asserting org-scope tools read `orgRole` and
 brain-scope tools read `role`, plus the `share_brain` and lockout guardrails that live in
-the tool rather than the lib). Adding one means adding it in BOTH `package.json`'s `test` script and
+the tool rather than the lib), `pnpm test:feedback` (what submit_feedback publishes, and what
+it redacts). Adding one means adding it in BOTH `package.json`'s `test` script and
 `.github/workflows/ci.yml`, or it runs in exactly one place and nobody notices which.
 Plus two real-GitHub end-to-end batteries under `scripts/`, **not in CI** (they need
 `.dev.vars` with platform App creds): `pnpm exec tsx scripts/e2e-librarian.ts` drives the
@@ -453,6 +455,46 @@ in hand, until resolve_import clears them. `scripts/e2e-import.ts` is the manual
 real-GitHub battery (32 checks, scratch repo, D1 shimmed on node:sqlite — run by hand when
 the import path changes, never in CI). Not built yet: a reconciliation widget; the
 the contacts-brain ETL cutover.
+
+## Product feedback (submit_feedback)
+
+`submit_feedback` (`src/tools/feedback.ts` + the pure `src/lib/feedback.ts`,
+`pnpm test:feedback`) files a user's bug/idea as an issue on a GitHub tracker, so
+feedback reaches the maintainers from inside the conversation and the reporter needs
+no GitHub account. Built 2026-07-30. Four decisions that are load-bearing:
+
+- **It does NOT use the platform GitHub App.** `src/manifest.ts` declares no
+  `issues` permission and must not gain one: that would widen the scope of every
+  customer org's installation to buy those customers nothing, and a self-hoster's
+  App cannot reach this project's repo anyway. Filing runs on a separate narrowly
+  scoped credential, `FEEDBACK_TOKEN` (Issues: write on one repo).
+- **Destination is config, never identity** (`FEEDBACK_REPO`, "owner/repo"). Unset →
+  the tool is **not registered**, so a fork neither files into our tracker nor
+  advertises a tool that can only apologize. Same rule as `PUBLIC_BASE_URL` and the
+  App slug. See [Deployment config](#deployment-config-wranglerjsonc-is-generated).
+- **The tracker is public, so nothing identifying is published.** The issue carries
+  the user's words plus an opaque `ISO-XXXXXXXX` report id; who filed it, from which
+  org and brain, goes to a private D1 row (`feedback_reports`, `migrations/0005`).
+  That is how "who asked for this?" stays answerable without a customer's email
+  being permanently indexed on a public repo. `composeIssue` takes no identity
+  argument at all, and the golden test asserts its arity to keep it that way: a
+  well-meaning "include the reporter so we can follow up" edit reads as an
+  improvement in review and is a privacy regression.
+- **The confirm gate is the real backstop, not the redaction.** A call without
+  `confirm: true` posts nothing and returns the exact title and body for the user to
+  read. `redact()` only strips shapes that are never legitimately in a bug report
+  (PEM blocks, bearer headers, `gh*_`/`re_`/`sk-` tokens, JWTs, emails) and
+  deliberately leaves commit shas, paths, and error text intact, because a scrubber
+  aggressive enough to catch every secret makes reports useless and gets deleted.
+  Both halves are pinned by `pnpm test:feedback`.
+
+Identity is read straight off the token props in `worker.ts`, **not** through
+`tenantContext`, which throws `NoBrainError` for a user with no brain: the user who
+cannot resolve a brain is exactly the user with something to report, so the one tool
+that reports it must not depend on resolution succeeding. Also fail-open on the
+duplicate search and on the D1 rate-limit count. **Not built:** an in-app form
+widget (v1 is conversational only), and any write back to the reporter when an issue
+is closed.
 
 ## Brain templates
 
