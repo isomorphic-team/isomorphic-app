@@ -83,11 +83,13 @@
 		// (who, which brain, which tool, migration 0006) and registers the org
 		// `analytics` tab. "false" records nothing and does not register the tool.
 		//
-		// OFF BY DEFAULT, deliberately. The counters never leave the deployment that
-		// wrote them (there is no phone-home anywhere in this codebase, and this does
-		// not add one), but they do record what a NAMED person did, and that is not
-		// something an operator should find out about after the fact. Turning it on
-		// is the operator saying their organization wants it.
+		// ON by default. The counters never leave the deployment that wrote them:
+		// there is no phone-home anywhere in this codebase and this does not add one,
+		// so nothing here reports to the project or to anyone but you.
+		//
+		// It does record what a NAMED person in your organization did, per day, and
+		// only your org admins can read it. If that is not something you want to
+		// collect, set this to "false" and nothing is written.
 		"USAGE_ANALYTICS": "__USAGE_ANALYTICS__"
 		// PLATFORM_ORG and PLATFORM_INSTALLATION_ID are deliberately NOT here.
 		// They are per-deployment values written to `.dev.vars` by bootstrap

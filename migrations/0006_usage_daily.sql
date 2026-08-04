@@ -13,9 +13,10 @@
 -- "was this person active on this day"; anything sharper is surveillance the
 -- feature has no use for.
 --
--- Recording is gated on the USAGE_ANALYTICS var (see src/worker.ts). Unset means
--- this table is never written and the `analytics` tool is never registered, so a
--- fresh clone records nothing until its operator opts in.
+-- Recording is gated on the USAGE_ANALYTICS var (see src/worker.ts), which the
+-- generated config sets to "true". Set it to "false" and this table is never
+-- written and the `analytics` tool is never registered. The migration still runs
+-- either way: the table is created and simply stays empty.
 --
 -- Additive: nothing deployed today reads or writes these rows, so the running
 -- code is unaffected during the deploy window.

@@ -517,11 +517,12 @@ UI is `app/views/AnalyticsView.tsx`, an ORG-scope destination beside Members.
   any use for. `brain_id` is `''` and never NULL for org-scope calls, because
   SQLite treats PK NULLs as DISTINCT and a nullable column would defeat the
   upsert, appending a row per call forever.
-- **Off unless `USAGE_ANALYTICS=true`**, which gates BOTH the recording and the
-  tool registration, so a fork records nothing and never shows a tab that can only
-  answer zero. Same rule as `FEEDBACK_REPO` and `PUBLIC_BASE_URL`. See
-  [Public-repo hygiene](#public-repo-hygiene-added-2026-07-27) for why this one is
-  off by default rather than on.
+- **`USAGE_ANALYTICS` gates BOTH the recording and the tool registration**, so a
+  deployment that disables it records nothing and never shows a tab that can only
+  answer zero. The generated config defaults it to `"true"`; set it to `"false"` to
+  turn the feature off. The Worker compares `=== 'true'` rather than `!== 'false'`,
+  so a config that does not mention the key at all (hand-written, or predating this)
+  records nothing: the only way to start collecting is a config that says so.
 - **Recording rides the loop that already rewrites every registration.**
   `McpSession.instrument()` (worker.ts) wraps each `_registeredTools` callback in
   the same pass as the claude.ai `execution` shim, so it is the one place that
@@ -633,8 +634,8 @@ The repo is public, so a few things that used to be free are not:
   software does may report anything to us, or to anyone but the operator running it.
   The rule is about WHERE data goes, not about whether usage is ever counted: the org
   Analytics tab (below) records per-day counters into the deployment's own D1, which
-  never leave it and which we cannot see on someone else's install. That is on the
-  right side of this line, and it is still off unless the operator sets
-  `USAGE_ANALYTICS=true`, because recording named people's activity is a decision an
-  operator should make rather than inherit. A change that sends any of it anywhere is
-  the thing this rule forbids, regardless of how aggregated or anonymous it looks.
+  never leave it and which we cannot see on someone else's install. That is why it is
+  allowed to be ON by default (`USAGE_ANALYTICS`, which a self-hoster sets to `false`
+  to disable). A change that SENDS any of it anywhere is the thing this rule forbids,
+  regardless of how aggregated or anonymous it looks, and no amount of "it's only
+  counts" makes an outbound call acceptable.

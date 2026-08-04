@@ -98,8 +98,8 @@ const SETTINGS = [
 	{
 		key: 'USAGE_ANALYTICS',
 		placeholder: '__USAGE_ANALYTICS__',
-		default: 'false',
-		help: '"true" records per-day usage counters and shows the org Analytics tab. Off by default.',
+		default: 'true',
+		help: '"true" records per-day usage counters and shows the org Analytics tab. Set "false" to disable.',
 		oneOf: ['true', 'false']
 	},
 	{
