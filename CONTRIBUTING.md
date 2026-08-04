@@ -27,7 +27,7 @@ git clone https://github.com/isomorphic-team/isomorphic-app
 cd isomorphic-app
 pnpm install
 pnpm setup:config       # writes wrangler.jsonc for local-only development
-pnpm test               # eight golden tests, no network, should be green
+pnpm test               # the golden tests, no network, should be green
 ```
 
 That is the whole loop for the parts of the project most changes touch. From there:
@@ -78,7 +78,7 @@ only testing your new path.
 
 ## Tests
 
-Eight pure golden tests, no network, all fast. `pnpm test` runs them all.
+Pure golden tests, no network, all fast. `pnpm test` runs them all.
 
 ```sh
 pnpm test:roundtrip     # editor markdown round-trip (ProseMirror in, identical markdown out)
@@ -89,6 +89,9 @@ pnpm test:patch         # write_page append/edits
 pnpm test:structure     # OKF conformance: granularity, type:, nested frontmatter
 pnpm test:index         # content-index freshness guard (bounded, resumable work per read)
 pnpm test:policy        # the path-policy wire contract between Worker and app
+pnpm test:access        # the per-brain access rule (every input to effectiveBrainRole)
+pnpm test:scope         # which role each tool gates on: brain scope vs org scope
+pnpm test:feedback      # what submit_feedback publishes, and what it redacts
 
 pnpm typecheck          # all three tsconfigs (node, worker, app)
 pnpm format             # prettier, run before pushing

@@ -49,7 +49,7 @@ git clone https://github.com/isomorphic-team/isomorphic-app
 cd isomorphic-app
 pnpm install
 pnpm setup:config       # generates wrangler.jsonc with local placeholder ids
-pnpm test               # eleven golden tests, offline, should be green
+pnpm test               # the golden tests, offline, should be green
 ```
 
 You now have two useful things:

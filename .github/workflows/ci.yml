@@ -62,7 +62,7 @@ jobs:
       # Gate on a clean typecheck across all three tsconfigs (node/worker/app).
       - run: pnpm typecheck
 
-      # All eight pure golden tests (no network, no secrets — safe on fork PRs).
+      # Every pure golden test (no network, no secrets — safe on fork PRs).
       # These were not all wired up here; test:roundtrip was running alone while
       # five more existed, and the content-index regression that motivated
       # test:index would have been caught by none of them. Listed individually
