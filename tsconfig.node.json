@@ -14,18 +14,17 @@
 		"allowImportingTsExtensions": true,
 		"verbatimModuleSyntax": true
 	},
-	// Enumerated rather than `scripts/**/*.ts`: some test scripts (test-policy) import
-	// from `app/`, which needs the DOM lib and belongs to tsconfig.app.json. Add a new
-	// Node-only script here so it is typechecked.
+	// Everything under scripts/ EXCEPT the two that import from `app/`
+	// (roundtrip-check, test-policy), which need the DOM lib and are covered by
+	// tsconfig.app.json. Typechecking the scripts matters: the e2e harnesses build a
+	// full BrainContext by hand, so a change to that shape should fail here rather
+	// than at 3am against a real repo.
 	"include": [
 		"src/bootstrap.ts",
 		"src/manifest.ts",
 		"src/persist.ts",
-		"scripts/doctor.ts",
-		"scripts/gen-brain-template.ts",
-		"scripts/onboard-org.ts",
-		"scripts/setup-config.ts",
-		"scripts/test-wiring.ts",
+		"scripts/**/*.ts",
 		"src/lib/**/*.ts"
-	]
+	],
+	"exclude": ["scripts/roundtrip-check.ts", "scripts/test-policy.ts"]
 }

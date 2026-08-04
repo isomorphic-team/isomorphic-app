@@ -36,6 +36,7 @@ import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/
 import { z } from 'zod';
 import { OAuthProvider, type OAuthHelpers } from '@cloudflare/workers-oauth-provider';
 import { installationOctokit, tokenOctokit, type AppCreds } from './lib/github.ts';
+import { githubStore, type BrainStore } from './lib/brain-repo.ts';
 import { getTenantByUserId, NoTenantError } from './lib/tenants.ts';
 import { provisionBrainForUser, provisionOrgForUser } from './lib/provision.ts';
 import {
@@ -210,6 +211,10 @@ class NoBrainError extends Error {
 
 interface TenantContext {
 	octokit: Awaited<ReturnType<typeof installationOctokit>>;
+	// The brain's storage, bound to that octokit. Every content read and write goes
+	// through this rather than the client above, which is what lets a non-GitHub
+	// backend serve the same tools. See src/lib/brain-repo.ts.
+	store: BrainStore;
 	repoArgs: { owner: string; repo: string };
 	// The caller's role ON THE RESOLVED BRAIN (effectiveBrainRole: an explicit
 	// grant, org visibility, or the org-admin floor: whichever is highest). Read
@@ -408,13 +413,13 @@ class McpSession {
 	private configCache = new Map<string, BrainConfig>();
 
 	private async loadConfig(
-		octokit: Awaited<ReturnType<typeof installationOctokit>>,
+		store: BrainStore,
 		repoArgs: { owner: string; repo: string }
 	): Promise<BrainConfig> {
 		const key = `${repoArgs.owner}/${repoArgs.repo}`;
 		const cached = this.configCache.get(key);
 		if (cached) return cached;
-		const cfg = await loadBrainConfig(octokit, repoArgs);
+		const cfg = await loadBrainConfig(store, repoArgs);
 		this.configCache.set(key, cfg);
 		return cfg;
 	}
@@ -500,10 +505,11 @@ class McpSession {
 				: undefined;
 			return {
 				octokit,
+				store: githubStore(octokit),
 				repoArgs,
 				role: 'owner',
 				orgRole: 'owner',
-				config: await this.loadConfig(octokit, repoArgs),
+				config: await this.loadConfig(githubStore(octokit), repoArgs),
 				author,
 				db: env.PLATFORM_DB,
 				brainId: `${repoArgs.owner}/${repoArgs.repo}`,
@@ -546,10 +552,11 @@ class McpSession {
 		const repoArgs = { owner, repo };
 		return {
 			octokit,
+			store: githubStore(octokit),
 			repoArgs,
 			role: 'owner',
 			orgRole: 'owner',
-			config: await this.loadConfig(octokit, repoArgs),
+			config: await this.loadConfig(githubStore(octokit), repoArgs),
 			db: env.PLATFORM_DB,
 			brainId: `${repoArgs.owner}/${repoArgs.repo}`,
 			activeBrain: { id: `${repoArgs.owner}/${repoArgs.repo}`, label: repoArgs.repo }
@@ -634,12 +641,13 @@ class McpSession {
 		this.noteScope(target.org_id, target.id);
 		return {
 			octokit,
+			store: githubStore(octokit),
 			repoArgs,
 			role: target.role,
 			orgRole: target.org_role,
 			orgId: target.org_id,
 			actorUserId: userId,
-			config: await this.loadConfig(octokit, repoArgs),
+			config: await this.loadConfig(githubStore(octokit), repoArgs),
 			author,
 			db: env.PLATFORM_DB,
 			brainId: target.id,
@@ -891,17 +899,17 @@ class McpSession {
 				}
 			},
 			async ({ prefix, brain }) => {
-				const { octokit, repoArgs, config, db, brainId } = await this.tenantContext({ brain });
+				const { store, repoArgs, config, db, brainId } = await this.tenantContext({ brain });
 
 				// No prefix = "the brain's editable content", which is exactly what the
 				// index holds — serve it from there (instant) and attach each page's title
 				// in structuredContent so the app's file tree can label files by title.
 				if (!prefix) {
-					await ensureFresh(db, octokit, repoArgs, brainId, config);
+					await ensureFresh(db, store, repoArgs, brainId, config);
 					const pages = await listIndexedPages(db, brainId);
 					// Everything that's NOT a content page (system files, .gitkeep markers,
 					// source, the log): the app shows these only when "show hidden" is on.
-					const hidden = await listHiddenPaths(octokit, repoArgs, config);
+					const hidden = await listHiddenPaths(store, repoArgs, config);
 					// Empty could mean a fresh brain OR an adopted repo whose content isn't under
 					// the configured roots — flag the latter so the app can offer to auto-configure.
 					// Only content-AREA files count as "something to show" here: the hidden list
@@ -909,7 +917,7 @@ class McpSession {
 					const needsConfig =
 						pages.length === 0 &&
 						!hidden.some((p) => isContentPath(p, config)) &&
-						(await detectNeedsConfig(octokit, repoArgs, config));
+						(await detectNeedsConfig(store, repoArgs, config));
 					return {
 						content: [
 							{
@@ -931,24 +939,9 @@ class McpSession {
 
 				// A prefix can target anything (including non-content like raw/), which the
 				// index doesn't hold, so keep the live tree walk for that case.
-				const { data: repo } = await octokit.rest.repos.get(repoArgs);
-				const { data: ref } = await octokit.rest.git.getRef({
-					...repoArgs,
-					ref: `heads/${repo.default_branch}`
-				});
-				const { data: commit } = await octokit.rest.git.getCommit({
-					...repoArgs,
-					commit_sha: ref.object.sha
-				});
-				const { data: tree } = await octokit.rest.git.getTree({
-					...repoArgs,
-					tree_sha: commit.tree.sha,
-					recursive: 'true'
-				});
-
-				const paths = tree.tree
-					.filter((e) => e.type === 'blob' && e.path?.endsWith('.md'))
-					.map((e) => e.path!)
+				const head = await store.getHead(repoArgs);
+				const paths = (await store.listTree(repoArgs, head))
+					.map((e) => e.path)
 					.filter((p) => p.startsWith(prefix))
 					.sort();
 
@@ -986,21 +979,20 @@ class McpSession {
 				}
 			},
 			async ({ path, brain }) => {
-				const { octokit, repoArgs, db, brainId, config } = await this.tenantContext({ brain });
-				const { data } = await octokit.rest.repos.getContent({ ...repoArgs, path });
-				if (Array.isArray(data) || data.type !== 'file') {
+				const { store, repoArgs, db, brainId, config } = await this.tenantContext({ brain });
+				const file = await store.readFile(repoArgs, path);
+				if (!file) {
 					return {
 						isError: true,
 						content: [{ type: 'text', text: `"${path}" is not a file.` }]
 					};
 				}
-				// `getContent` returns base64; decode UTF-8-safely.
-				const text = base64ToUtf8(data.content);
+				const text = file.content;
 				// Derived views: agents get the okf-view fence PLUS a freshly computed
 				// rendering beneath it — the current data without losing sight of the
 				// directive (so they don't hand-edit derived content). Falls back to
 				// the raw file if computing fails.
-				const views = await tryRenderViews(text, path, { db, octokit, repoArgs, brainId, config });
+				const views = await tryRenderViews(text, path, { db, store, repoArgs, brainId, config });
 				return { content: [{ type: 'text', text: views?.snapshotted ?? text }] };
 			}
 		);

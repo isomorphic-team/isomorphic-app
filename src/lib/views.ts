@@ -31,9 +31,8 @@
 // Worker-safe (no node:*). Callers MUST ensureFresh() before building a context.
 
 import type { D1Database } from '@cloudflare/workers-types';
-import type { Octokit } from 'octokit';
 import type { BrainConfig } from './brain-config.ts';
-import type { RepoRef } from './brain-repo.ts';
+import type { RepoRef, BrainStore } from './brain-repo.ts';
 import {
 	type ResolvedGraph,
 	type PageFields,
@@ -303,7 +302,7 @@ export interface RenderedViews {
 // view must never make a page unreadable or block a save.
 export interface ViewDeps {
 	db: D1Database;
-	octokit: Octokit;
+	store: BrainStore;
 	repoArgs: RepoRef;
 	brainId: string;
 	config: BrainConfig;
@@ -316,7 +315,7 @@ export async function tryRenderViews(
 ): Promise<RenderedViews | null> {
 	if (!hasViews(content)) return null;
 	try {
-		await ensureFresh(deps.db, deps.octokit, deps.repoArgs, deps.brainId, deps.config);
+		await ensureFresh(deps.db, deps.store, deps.repoArgs, deps.brainId, deps.config);
 		const ctx = await buildViewContext(deps.db, deps.brainId, deps.config);
 		return await renderViews(content, pagePath, ctx);
 	} catch (err) {

@@ -21,6 +21,7 @@ import { registerLibrarianTools } from '../src/tools/librarian.ts';
 import { installationOctokit } from '../src/lib/github.ts';
 import { createAndScaffoldBrain } from '../src/lib/scaffold-core.ts';
 import { loadBrainConfig } from '../src/lib/brain-config.ts';
+import { githubStore } from '../src/lib/brain-repo.ts';
 import { ledgerPath } from '../src/lib/brain-import.ts';
 import { utf8ToBase64, base64ToUtf8 } from '../src/lib/wiki.ts';
 
@@ -66,6 +67,8 @@ const db = {
 // ---- scratch repo ----
 const name = `brain-import-e2e-${Date.now().toString(36)}`;
 console.log(`Creating scratch brain ${org}/${name} …`);
+const store = githubStore(octokit);
+
 const brain = await createAndScaffoldBrain(octokit, {
 	org,
 	name,
@@ -78,10 +81,11 @@ const brainId = `${brain.owner}/${brain.name}`;
 const server = new McpServer({ name: 'import-e2e', version: '0.0.0' });
 const getContext = async () => ({
 	octokit,
+	store,
 	repoArgs,
 	role: 'owner' as const,
 	orgRole: 'owner' as const,
-	config: await loadBrainConfig(octokit, repoArgs),
+	config: await loadBrainConfig(store, repoArgs),
 	author: undefined,
 	db,
 	brainId,

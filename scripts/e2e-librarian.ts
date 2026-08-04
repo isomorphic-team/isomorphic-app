@@ -28,6 +28,7 @@ import { loadCustomToolDefs, registerCustomTools } from '../src/tools/custom.ts'
 import { installationOctokit } from '../src/lib/github.ts';
 import { createAndScaffoldBrain } from '../src/lib/scaffold-core.ts';
 import { loadBrainConfig } from '../src/lib/brain-config.ts';
+import { githubStore } from '../src/lib/brain-repo.ts';
 
 // ---- env from .dev.vars (values may be quoted) ----
 const devVarsPath = process.env.DEV_VARS_PATH ?? new URL('../.dev.vars', import.meta.url).pathname;
@@ -71,6 +72,8 @@ const db = {
 // ---- scratch repo ----
 const name = `brain-librarian-e2e-${Date.now().toString(36)}`;
 console.log(`Creating scratch brain ${org}/${name} …`);
+const store = githubStore(octokit);
+
 const brain = await createAndScaffoldBrain(octokit, {
 	org,
 	name,
@@ -83,10 +86,11 @@ const brainId = `${brain.owner}/${brain.name}`;
 const server = new McpServer({ name: 'librarian-e2e', version: '0.0.0' });
 const getContext = async () => ({
 	octokit,
+	store,
 	repoArgs,
 	role: 'owner' as const,
 	orgRole: 'owner' as const,
-	config: await loadBrainConfig(octokit, repoArgs),
+	config: await loadBrainConfig(store, repoArgs),
 	author: undefined,
 	db,
 	brainId,

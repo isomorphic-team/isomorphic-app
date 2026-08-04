@@ -199,6 +199,39 @@ in `SERVER_INSTRUCTIONS` (hosts load it wholesale), and a tool an agent will hun
 name mid-task should not be described in one terse line. Both descriptions carry a comment
 saying so; don't "tidy" them back.
 
+## `BrainStore`: the storage seam (where a brain physically lives)
+
+`src/lib/brain-repo.ts` exports **`BrainStore`**, the only interface between the tool
+layer and a brain's storage, plus **`githubStore(octokit)`**, the GitHub implementation.
+`TenantContext`/`BrainContext` carry a `store`; every content read and write goes through
+it. Added 2026-08-04 so a brain can also be a git repo on disk (the local runtime, and
+running the e2e batteries with no network).
+
+- **Nine operations, and no more.** `getHead`, `branchCommitSha`, `repoWritePolicy`,
+  `listTree`, `fetchPages`, `readFile`, `findOpenConfigPr`, `listCommits`, `commitFiles`,
+  `commitOrPR`. It is deliberately not a general storage abstraction: it is exactly what
+  the tools already did, in the shape they already did it. Widening it speculatively is the
+  failure mode the repo's contribution rules already name.
+- **`branchCommitSha`, `repoWritePolicy`, and `listCommits` are in it because they were
+  raw `octokit.rest.*` calls in `brain-index.ts`, `brain-config.ts`, and `apps.ts`.** A raw
+  octokit call in a content path compiles fine and then fails at runtime on any other
+  backend, which is the exact drift the interface exists to prevent. If you reach for
+  `ctx.octokit` while touching a brain's CONTENT, the operation belongs on the store.
+- **`octokit` is still on the context, and is now OPTIONAL.** It survives for the three
+  operations that are GitHub as a PLATFORM rather than a brain as STORAGE: create a
+  repository, list an installation's repositories, check a repo exists before connecting
+  it. All three live in `src/tools/brains.ts` behind `githubClient(ctx)`, all three are
+  org-model tools, and a deployment with no GitHub client has no org model and does not
+  register them (`hasOrgModel` in `worker.ts`).
+- **`commitFiles` atomicity is the load-bearing guarantee.** `write_page`'s "an edit batch
+  is never half-applied" rests on the branch ref not moving unless the whole bundle
+  committed. Any implementation must preserve that, which is why a local brain is a git
+  repo (`git commit`) and not a bare folder of files.
+- Coverage: `pnpm test:index` wraps its octokit stub in the REAL `githubStore` rather than
+  stubbing `BrainStore` directly, so it still exercises `fetchPages`'s GraphQL batching.
+  `pnpm test:scope` traps the store with a throwing Proxy, so an authorization test that
+  reaches storage fails loudly instead of passing.
+
 ## Content index (read-path backend)
 
 The read tools (`search_pages`, `find_inbound_links`, `validate`, `view_graph`) do **not**

@@ -14,6 +14,7 @@
 import { DatabaseSync } from 'node:sqlite';
 import { readFileSync } from 'node:fs';
 import { ensureFresh, INDEX_SCHEMA_VERSION, listIndexedPages } from '../src/lib/brain-index.ts';
+import { githubStore } from '../src/lib/brain-repo.ts';
 import { DEFAULT_BRAIN_CONFIG, type BrainConfig } from '../src/lib/brain-policy.ts';
 import { pageTitle } from '../src/lib/wiki.ts';
 
@@ -94,7 +95,10 @@ function makePages(n: number, rev = 0): FakePage[] {
 	return out;
 }
 
-// GitHub stub. Only the surface brain-index actually touches.
+// GitHub stub. Only the surface the GitHub BrainStore adapter actually touches.
+// Wrapped in the REAL githubStore below rather than stubbing BrainStore directly, so
+// this still exercises fetchPages' GraphQL batching (which graphqlCalls asserts) and
+// not just the index logic sitting on top of it.
 let currentPages: FakePage[] = [];
 let currentHead = 'commit-0';
 let graphqlCalls = 0;
@@ -135,6 +139,8 @@ const octokit = {
 	}
 } as never;
 
+const store = githubStore(octokit);
+
 const repo = { owner: 'example-org', repo: 'brain' };
 const brainId = 'example-org/brain';
 const config: BrainConfig = { ...DEFAULT_BRAIN_CONFIG };
@@ -172,7 +178,7 @@ async function readUntilConverged(maxReads: number): Promise<{ reads: number; pe
 	let peak = 0;
 	for (;;) {
 		resetCounters();
-		await ensureFresh(db, octokit, repo, brainId, config);
+		await ensureFresh(db, store, repo, brainId, config);
 		reads++;
 		peak = Math.max(peak, stmtCount);
 		const m = meta();
@@ -206,7 +212,7 @@ console.log('\nContent index — bounded, resumable ensureFresh\n');
 	currentPages = makePages(50);
 	currentHead = 'commit-small';
 	resetCounters();
-	await ensureFresh(db, octokit, repo, brainId, config);
+	await ensureFresh(db, store, repo, brainId, config);
 	const m = meta();
 	check('indexed in a single read', m?.indexed_commit_sha === currentHead);
 	check('schema_version at current', m?.schema_version === INDEX_SCHEMA_VERSION);
@@ -215,7 +221,7 @@ console.log('\nContent index — bounded, resumable ensureFresh\n');
 
 	// Steady state: an unchanged brain must cost essentially nothing.
 	resetCounters();
-	await ensureFresh(db, octokit, repo, brainId, config);
+	await ensureFresh(db, store, repo, brainId, config);
 	check('steady-state read writes no batches', batchCount === 0, `batches=${batchCount}`);
 }
 
@@ -229,7 +235,7 @@ console.log('\nContent index — bounded, resumable ensureFresh\n');
 	currentHead = 'commit-large';
 
 	resetCounters();
-	await ensureFresh(db, octokit, repo, brainId, config);
+	await ensureFresh(db, store, repo, brainId, config);
 	const first = stmtCount;
 	check('first read is bounded', first < PER_READ_STATEMENT_CEILING, `statements=${first}`);
 	check('first read recorded progress (meta row exists)', !!meta());
@@ -272,7 +278,7 @@ console.log('\nContent index — bounded, resumable ensureFresh\n');
 
 	resetCounters();
 	const graphqlBefore = graphqlCalls;
-	await ensureFresh(db, octokit, repo, brainId, config);
+	await ensureFresh(db, store, repo, brainId, config);
 	const first = stmtCount;
 	check(
 		'first read after the bump is bounded',

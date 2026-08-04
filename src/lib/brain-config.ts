@@ -21,8 +21,7 @@
 // importers. Worker-safe (no node:*): loaded from the repo via octokit at
 // request time.
 
-import type { Octokit } from 'octokit';
-import { type RepoRef, getHead, listTree, readFile } from './brain-repo.ts';
+import type { RepoRef, BrainStore } from './brain-repo.ts';
 import {
 	type BrainConfig,
 	type MergeMethod,
@@ -43,12 +42,12 @@ export * from './brain-policy.ts';
 // pages by default and reveals the rest behind "show hidden" (locked where the
 // policy makes them read-only). One recursive tree read.
 export async function listHiddenPaths(
-	octokit: Octokit,
+	store: BrainStore,
 	repo: RepoRef,
 	config: BrainConfig
 ): Promise<string[]> {
-	const head = await getHead(octokit, repo);
-	const tree = await listTree(octokit, repo, head, { extension: '*' });
+	const head = await store.getHead(repo);
+	const tree = await store.listTree(repo, head, { extension: '*' });
 	return tree
 		.map((e) => e.path)
 		.filter((p) => !(p.endsWith('.md') && isContentPath(p, config)))
@@ -108,7 +107,7 @@ export function parsePaths(raw: ConfigFile): Record<string, PathRole> {
 // Any failure (permissions, network) falls back to direct — the pre-config
 // behavior — so detection can never make a brain worse than it was.
 async function resolveWritePolicy(
-	octokit: Octokit,
+	store: BrainStore,
 	repo: RepoRef,
 	rawMode: unknown
 ): Promise<{ writeMode: WriteMode; defaultBranch: string; mergeMethod: MergeMethod }> {
@@ -117,21 +116,15 @@ async function resolveWritePolicy(
 	let defaultBranch = DEFAULT_BRAIN_CONFIG.defaultBranch;
 	let mergeMethod: MergeMethod = DEFAULT_BRAIN_CONFIG.mergeMethod;
 	try {
-		const { data: r } = await octokit.rest.repos.get(repo);
-		defaultBranch = r.default_branch;
-		// Prefer squash (one clean commit per edit bundle), then merge, then rebase.
-		mergeMethod = r.allow_squash_merge
-			? 'SQUASH'
-			: r.allow_merge_commit
-				? 'MERGE'
-				: r.allow_rebase_merge
-					? 'REBASE'
-					: 'MERGE';
+		const policy = await store.repoWritePolicy(repo);
+		defaultBranch = policy.defaultBranch;
+		mergeMethod = policy.mergeMethod;
 		if (explicit) return { writeMode: explicit, defaultBranch, mergeMethod };
-		// `.protected` on the branch object needs no admin permission (unlike the
-		// /protection endpoint), so this works with plain contents access.
-		const { data: br } = await octokit.rest.repos.getBranch({ ...repo, branch: defaultBranch });
-		return { writeMode: br.protected ? 'pull-request' : 'direct', defaultBranch, mergeMethod };
+		return {
+			writeMode: policy.branchProtected ? 'pull-request' : 'direct',
+			defaultBranch,
+			mergeMethod
+		};
 	} catch {
 		return { writeMode: explicit ?? 'direct', defaultBranch, mergeMethod };
 	}
@@ -141,8 +134,8 @@ async function resolveWritePolicy(
 // wiki/+raw/ defaults (never break a brain over a bad config commit). The write
 // policy is always resolved from the live repo (protection detection), regardless
 // of whether a config file exists.
-export async function loadBrainConfig(octokit: Octokit, repo: RepoRef): Promise<BrainConfig> {
-	const file = await readFile(octokit, repo, CONFIG_PATH);
+export async function loadBrainConfig(store: BrainStore, repo: RepoRef): Promise<BrainConfig> {
+	const file = await store.readFile(repo, CONFIG_PATH);
 	let raw: ConfigFile = {};
 	if (file) {
 		try {
@@ -155,11 +148,7 @@ export async function loadBrainConfig(octokit: Octokit, repo: RepoRef): Promise<
 	const rawMode = raw.writes?.mode ?? raw.writeMode;
 	const rawAutoMerge = raw.writes?.autoMerge ?? raw.autoMerge;
 	const rawFields = raw.index?.fields ?? raw.indexedFields;
-	const { writeMode, defaultBranch, mergeMethod } = await resolveWritePolicy(
-		octokit,
-		repo,
-		rawMode
-	);
+	const { writeMode, defaultBranch, mergeMethod } = await resolveWritePolicy(store, repo, rawMode);
 	return {
 		paths: parsePaths(raw),
 		writeMode,

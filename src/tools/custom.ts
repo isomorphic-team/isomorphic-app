@@ -24,7 +24,6 @@ import {
 	loadResolvedGraph,
 	backlinksTo
 } from '../lib/brain-index.ts';
-import { readFile } from '../lib/brain-repo.ts';
 import { tryRenderViews } from '../lib/views.ts';
 import { BRAIN_APP_URI } from './apps.ts';
 import {
@@ -57,14 +56,15 @@ export interface CustomToolLoad {
 // (one indexed-page listing, no blob fetches). Fail-open: a malformed page is an
 // error entry, never a thrown request.
 export async function loadCustomToolDefs(ctx: BrainContext): Promise<CustomToolLoad> {
-	const { db, octokit, repoArgs, brainId, config } = ctx;
-	await ensureFresh(db, octokit, repoArgs, brainId, config);
+	const { db, store, repoArgs, brainId, config } = ctx;
+	await ensureFresh(db, store, repoArgs, brainId, config);
 	const toolPages = (await listIndexedPages(db, brainId)).filter((p) => isToolPagePath(p.path));
 	if (toolPages.length === 0) return { defs: [], errors: [] };
 
 	const blobs = await Promise.all(
 		toolPages.map((p) =>
-			readFile(octokit, repoArgs, p.path)
+			store
+				.readFile(repoArgs, p.path)
 				.then((f) => ({ path: p.path, content: f?.content ?? null }))
 				.catch(() => ({ path: p.path, content: null }))
 		)
@@ -140,7 +140,7 @@ async function runView(def: CustomToolDef, args: Record<string, unknown>, ctx: B
 	const synthetic = '```okf-view\n' + directive + '\n```\n';
 	const rendered = await tryRenderViews(synthetic, def.sourcePath, {
 		db: ctx.db,
-		octokit: ctx.octokit,
+		store: ctx.store,
 		repoArgs: ctx.repoArgs,
 		brainId: ctx.brainId,
 		config: ctx.config
@@ -174,12 +174,12 @@ async function runOp(def: CustomToolDef, args: Record<string, unknown>, ctx: Bra
 }
 
 async function execOp(op: OpName, a: Record<string, string>, ctx: BrainContext): Promise<string> {
-	const { db, octokit, repoArgs, brainId, config } = ctx;
+	const { db, store, repoArgs, brainId, config } = ctx;
 	switch (op) {
 		case 'search_pages': {
 			const query = (a.query ?? '').trim();
 			if (query.length < 2) return 'search_pages needs a "query" arg of at least 2 characters.';
-			await ensureFresh(db, octokit, repoArgs, brainId, config);
+			await ensureFresh(db, store, repoArgs, brainId, config);
 			const hits = await searchIndex(db, brainId, query, a.prefix || undefined, 50);
 			if (hits.length === 0) return `No matches for "${query}".`;
 			return (
@@ -190,11 +190,11 @@ async function execOp(op: OpName, a: Record<string, string>, ctx: BrainContext):
 		case 'read_page': {
 			const path = (a.path ?? '').trim();
 			if (!path) return 'read_page needs a "path" arg.';
-			const file = await readFile(octokit, repoArgs, path);
+			const file = await store.readFile(repoArgs, path);
 			if (!file) return `"${path}" does not exist.`;
 			const views = await tryRenderViews(file.content, path, {
 				db,
-				octokit,
+				store,
 				repoArgs,
 				brainId,
 				config
@@ -204,7 +204,7 @@ async function execOp(op: OpName, a: Record<string, string>, ctx: BrainContext):
 		case 'find_inbound_links': {
 			const path = (a.path ?? '').trim();
 			if (!path) return 'find_inbound_links needs a "path" arg.';
-			await ensureFresh(db, octokit, repoArgs, brainId, config);
+			await ensureFresh(db, store, repoArgs, brainId, config);
 			const resolved = await loadResolvedGraph(db, brainId, config);
 			const refs = backlinksTo(resolved, path);
 			if (refs.length === 0) return `No pages link to "${path}".`;
@@ -213,7 +213,7 @@ async function execOp(op: OpName, a: Record<string, string>, ctx: BrainContext):
 			);
 		}
 		case 'list_pages': {
-			await ensureFresh(db, octokit, repoArgs, brainId, config);
+			await ensureFresh(db, store, repoArgs, brainId, config);
 			const pages = await listIndexedPages(db, brainId);
 			const prefix = (a.prefix ?? '').trim();
 			const filtered = prefix ? pages.filter((p) => p.path.startsWith(prefix)) : pages;

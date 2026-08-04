@@ -73,7 +73,105 @@ export const MAX_SCAN_PAGES = 5000;
 // under GitHub's GraphQL node/complexity limits. ceil(pages / this) = subrequests.
 const GRAPHQL_BLOB_BATCH = 100;
 
-export async function getHead(octokit: Octokit, repo: RepoRef): Promise<Head> {
+// ---------- the storage seam ----------
+//
+// Everything the tools do to a brain, as nine operations. This is the ONLY
+// interface between the tool layer and where a brain physically lives, which is
+// what makes a non-GitHub backend possible (a git repo on disk, for the local
+// runtime and for running the e2e batteries with no network).
+//
+// Deliberately NOT a general storage abstraction: it is exactly the set of
+// operations the tools already perform, in the shape they already perform them.
+// Anything wider would be speculative, and the repo's own contribution rules say
+// so. Implementations: githubStore below, and the fs/git adapter in
+// src/lib/brain-store-fs.ts.
+//
+// It is nine rather than the seven read/write primitives because two questions
+// that were being asked of octokit directly belong to the backend too: which
+// commit a NAMED branch points at (the content index's freshness guard compares
+// against the configured branch, not necessarily the default one), and how writes
+// land here (protected branch means propose rather than commit). Leaving either as
+// a raw octokit call would compile fine and then fail at runtime on any other
+// backend, which is exactly the drift this interface exists to prevent.
+
+// How writes land in a repo. `branchProtected` drives the direct-vs-pull-request
+// decision; a backend with no notion of protection reports false, which is honest
+// rather than a special case (nothing is gating the write).
+export interface RepoWritePolicy {
+	defaultBranch: string;
+	branchProtected: boolean;
+	mergeMethod: 'MERGE' | 'SQUASH' | 'REBASE';
+}
+
+// One entry of the brain's history, as view_activity renders it. Backend-neutral
+// on purpose: `url` is optional because a brain on disk has nothing to link to,
+// and `authorLogin` is a GitHub account name that only GitHub can supply.
+export interface CommitEntry {
+	sha: string;
+	message: string;
+	authorName: string;
+	authorLogin?: string;
+	date: string;
+	url?: string;
+}
+
+export interface CommitOpts {
+	message: string;
+	writes?: FileWrite[];
+	deletes?: string[];
+	head?: Head; // pass when already fetched to save round trips
+	author?: CommitAuthor; // attribute the commit to the human, not the App
+}
+
+export interface CommitOrPROpts extends CommitOpts {
+	writeMode: 'direct' | 'pull-request';
+	defaultBranch: string;
+	branchPrefix?: string; // PR branch name prefix, e.g. 'isomorphic/edit'
+	prTitle?: string;
+	prBody?: string;
+	// PR mode: arm auto-merge on the opened PR, with this merge method.
+	autoMerge?: boolean;
+	mergeMethod?: 'MERGE' | 'SQUASH' | 'REBASE';
+}
+
+export interface BrainStore {
+	getHead(repo: RepoRef): Promise<Head>;
+	branchCommitSha(repo: RepoRef, branch: string): Promise<string>;
+	repoWritePolicy(repo: RepoRef): Promise<RepoWritePolicy>;
+	listTree(repo: RepoRef, head: Head, opts?: { extension?: string }): Promise<TreeEntry[]>;
+	fetchPages(
+		repo: RepoRef,
+		entries: TreeEntry[]
+	): Promise<{ pages: PageContent[]; truncated: boolean }>;
+	readFile(repo: RepoRef, path: string): Promise<{ content: string; sha: string } | null>;
+	findOpenConfigPr(repo: RepoRef): Promise<string | undefined>;
+	// Recent commits, newest first, optionally scoped to one path. Backs
+	// view_activity, which is the repo-history surface rather than the
+	// product-usage one (see the analytics section of CLAUDE.md).
+	listCommits(repo: RepoRef, opts: { limit: number; path?: string }): Promise<CommitEntry[]>;
+	commitFiles(repo: RepoRef, opts: CommitOpts): Promise<{ sha: string; head: Head }>;
+	commitOrPR(repo: RepoRef, opts: CommitOrPROpts): Promise<WriteOutcome>;
+}
+
+// The GitHub implementation: the functions below, bound to one authenticated
+// Octokit. Whether that Octokit came from an App installation or a plain token
+// makes no difference here.
+export function githubStore(octokit: Octokit): BrainStore {
+	return {
+		getHead: (repo) => getHead(octokit, repo),
+		branchCommitSha: (repo, branch) => branchCommitSha(octokit, repo, branch),
+		repoWritePolicy: (repo) => repoWritePolicy(octokit, repo),
+		listTree: (repo, head, opts) => listTree(octokit, repo, head, opts),
+		fetchPages: (repo, entries) => fetchPages(octokit, repo, entries),
+		readFile: (repo, path) => readFile(octokit, repo, path),
+		findOpenConfigPr: (repo) => findOpenConfigPr(octokit, repo),
+		listCommits: (repo, opts) => listCommits(octokit, repo, opts),
+		commitFiles: (repo, opts) => commitFiles(octokit, repo, opts),
+		commitOrPR: (repo, opts) => commitOrPR(octokit, repo, opts)
+	};
+}
+
+async function getHead(octokit: Octokit, repo: RepoRef): Promise<Head> {
 	const { data: repoData } = await octokit.rest.repos.get(repo);
 	const branch = repoData.default_branch;
 	const { data: ref } = await octokit.rest.git.getRef({ ...repo, ref: `heads/${branch}` });
@@ -84,13 +182,62 @@ export async function getHead(octokit: Octokit, repo: RepoRef): Promise<Head> {
 	return { branch, commitSha: ref.object.sha, treeSha: commit.tree.sha };
 }
 
+// The commit a NAMED branch points at. Distinct from getHead, which resolves the
+// repo's DEFAULT branch: the content index's freshness guard compares against the
+// brain's configured branch, which need not be the default.
+async function branchCommitSha(octokit: Octokit, repo: RepoRef, branch: string): Promise<string> {
+	const { data } = await octokit.rest.git.getRef({ ...repo, ref: `heads/${branch}` });
+	return data.object.sha;
+}
+
+// The repo's default branch, whether it is protected, and which merge method to
+// use when a write has to land as a pull request. Throws on any failure; the
+// caller (resolveWritePolicy in brain-config.ts) decides what a failure means,
+// which is deliberately "fall back to direct writes" rather than "break the brain".
+async function repoWritePolicy(octokit: Octokit, repo: RepoRef): Promise<RepoWritePolicy> {
+	const { data: r } = await octokit.rest.repos.get(repo);
+	const defaultBranch = r.default_branch;
+	// Prefer squash (one clean commit per edit bundle), then merge, then rebase.
+	const mergeMethod = r.allow_squash_merge
+		? 'SQUASH'
+		: r.allow_merge_commit
+			? 'MERGE'
+			: r.allow_rebase_merge
+				? 'REBASE'
+				: 'MERGE';
+	// `.protected` on the branch object needs no admin permission (unlike the
+	// /protection endpoint), so this works with plain contents access.
+	const { data: br } = await octokit.rest.repos.getBranch({ ...repo, branch: defaultBranch });
+	return { defaultBranch, branchProtected: Boolean(br.protected), mergeMethod };
+}
+
+// Recent commits, newest first. One call, no per-blob fanout; `path` scopes it to
+// one page's history. `commit.author` is always populated (our attribution work
+// sets it); `author` is the linked GitHub account, absent for non-GitHub members.
+async function listCommits(
+	octokit: Octokit,
+	repo: RepoRef,
+	opts: { limit: number; path?: string }
+): Promise<CommitEntry[]> {
+	const { data } = await octokit.rest.repos.listCommits({
+		...repo,
+		per_page: opts.limit,
+		...(opts.path ? { path: opts.path } : {})
+	});
+	return data.map((c) => ({
+		sha: c.sha,
+		message: c.commit.message ?? '',
+		authorName: c.commit.author?.name ?? c.author?.login ?? 'Unknown',
+		authorLogin: c.author?.login ?? undefined,
+		date: c.commit.author?.date ?? c.commit.committer?.date ?? '',
+		url: c.html_url
+	}));
+}
+
 // The URL of an open "configure" PR (from configure_brain) for this repo, if any.
 // Used to show a pending-review state and to avoid opening a duplicate PR when the
 // repo's default branch is protected. Best-effort — never throws.
-export async function findOpenConfigPr(
-	octokit: Octokit,
-	repo: RepoRef
-): Promise<string | undefined> {
+async function findOpenConfigPr(octokit: Octokit, repo: RepoRef): Promise<string | undefined> {
 	try {
 		const { data } = await octokit.rest.pulls.list({ ...repo, state: 'open', per_page: 50 });
 		return data.find((p) => p.head?.ref?.startsWith('isomorphic/configure'))?.html_url;
@@ -100,7 +247,7 @@ export async function findOpenConfigPr(
 }
 
 // Full recursive tree of markdown files (plus anything else if `all`).
-export async function listTree(
+async function listTree(
 	octokit: Octokit,
 	repo: RepoRef,
 	head: Head,
@@ -127,7 +274,7 @@ export interface PageContent {
 // fields — so a whole-brain scan costs ceil(pages / batch) subrequests instead of
 // one per page (the old ceiling that pinned scans to 40). Capped at MAX_SCAN_PAGES
 // as a sanity bound; `truncated` tells the caller the scan was partial.
-export async function fetchPages(
+async function fetchPages(
 	octokit: Octokit,
 	repo: RepoRef,
 	entries: TreeEntry[]
@@ -183,7 +330,7 @@ export async function fetchPages(
 }
 
 // Read one file at HEAD via the contents API. Returns null when absent.
-export async function readFile(
+async function readFile(
 	octokit: Octokit,
 	repo: RepoRef,
 	path: string
@@ -201,7 +348,7 @@ export async function readFile(
 // One atomic commit: all writes and deletes land together or not at all.
 // `deletes` entries that don't exist in the tree are ignored by GitHub.
 // The returned sha is internal plumbing — never surface it to the user.
-export async function commitFiles(
+async function commitFiles(
 	octokit: Octokit,
 	repo: RepoRef,
 	opts: {
@@ -314,7 +461,7 @@ async function armAutoMerge(
 // pull request opened against the default branch. This is the single write
 // chokepoint the librarian + editor tools call so branch-protection handling
 // lives in one place. `head` should be the default branch's head.
-export async function commitOrPR(
+async function commitOrPR(
 	octokit: Octokit,
 	repo: RepoRef,
 	opts: {

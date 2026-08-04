@@ -18,9 +18,9 @@
 // optional; when present it's preserved and merged.
 
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import type { Octokit } from 'octokit';
 import type { D1Database } from '@cloudflare/workers-types';
 import { z } from 'zod';
+import type { Octokit } from 'octokit';
 import {
 	type Frontmatter,
 	slugify,
@@ -39,11 +39,7 @@ import {
 	type PageContent,
 	type WriteOutcome,
 	type CommitAuthor,
-	getHead,
-	listTree,
-	fetchPages,
-	readFile,
-	commitOrPR,
+	type BrainStore,
 	MAX_SCAN_PAGES
 } from '../lib/brain-repo.ts';
 import {
@@ -77,7 +73,18 @@ const brainArg = z
 	.describe('Which brain to target (name/handle). Defaults to the active brain.');
 
 export interface BrainContext {
-	octokit: Octokit;
+	// Where this brain's content lives. The ONLY way the content tools reach it,
+	// so they work against a GitHub repo or a git repo on disk without knowing
+	// which. See src/lib/brain-repo.ts.
+	store: BrainStore;
+	// The raw GitHub client, for the handful of operations that are GitHub as a
+	// PLATFORM rather than a brain as STORAGE: creating a repository, listing an
+	// installation's repositories, checking a repo exists before connecting it.
+	// Optional because a backend that is not GitHub has no such client, and every
+	// one of those operations belongs to the org model, which such a deployment
+	// does not register (see `hasOrgModel` in worker.ts). Anything a brain's
+	// CONTENT needs belongs on `store`, not here.
+	octokit?: Octokit;
 	repoArgs: RepoRef;
 	// The caller's role ON THIS BRAIN (viewer < editor < admin), resolved by
 	// effectiveBrainRole from an explicit share, the brain's org visibility, or the
@@ -184,8 +191,8 @@ async function fetchInboundLinkersForPaths(
 	targetPaths: string[],
 	exclude: Set<string>
 ): Promise<{ pages: PageContent[]; truncated: boolean }> {
-	const { octokit, repoArgs, config, db, brainId } = ctx;
-	const { truncated } = await ensureFresh(db, octokit, repoArgs, brainId, config);
+	const { store, repoArgs, config, db, brainId } = ctx;
+	const { truncated } = await ensureFresh(db, store, repoArgs, brainId, config);
 	const resolved = await loadResolvedGraph(db, brainId, config);
 	const linkerPaths = new Set<string>();
 	for (const t of targetPaths) {
@@ -194,8 +201,8 @@ async function fetchInboundLinkersForPaths(
 		}
 	}
 	if (linkerPaths.size === 0) return { pages: [], truncated };
-	const entries = (await listTree(octokit, repoArgs, head)).filter((e) => linkerPaths.has(e.path));
-	const { pages } = await fetchPages(octokit, repoArgs, entries);
+	const entries = (await store.listTree(repoArgs, head)).filter((e) => linkerPaths.has(e.path));
+	const { pages } = await store.fetchPages(repoArgs, entries);
 	return { pages, truncated };
 }
 
@@ -435,8 +442,8 @@ async function inboundRefs(
 	ctx: BrainContext,
 	targets: string[]
 ): Promise<{ refs: { path: string; count: number }[]; truncated: boolean }> {
-	const { octokit, repoArgs, config, db, brainId } = ctx;
-	const { truncated } = await ensureFresh(db, octokit, repoArgs, brainId, config);
+	const { store, repoArgs, config, db, brainId } = ctx;
+	const { truncated } = await ensureFresh(db, store, repoArgs, brainId, config);
 	const resolved = await loadResolvedGraph(db, brainId, config);
 	const targetSet = new Set(targets);
 	const counts = new Map<string, number>();
@@ -463,7 +470,7 @@ function splitProvidedContent(content: string): { fm: Frontmatter; body: string 
 async function withFreshSnapshots(ctx: BrainContext, path: string, content: string) {
 	const deps: ViewDeps = {
 		db: ctx.db,
-		octokit: ctx.octokit,
+		store: ctx.store,
 		repoArgs: ctx.repoArgs,
 		brainId: ctx.brainId,
 		config: ctx.config
@@ -489,7 +496,7 @@ async function createPageWrite(
 		sources?: string[];
 	}
 ) {
-	const { octokit, repoArgs, config, author } = ctx;
+	const { store, repoArgs, config, author } = ctx;
 	const { target, content, title, type, description, sources } = args;
 	// Fall back through the SAME chain the rest of the system resolves titles by
 	// (pageTitle): a `title:` in the caller's own content, then the body's `# H1`,
@@ -523,14 +530,14 @@ async function createPageWrite(
 	};
 	const newContent = await withFreshSnapshots(ctx, target, withFrontmatter(fm, provided.body));
 	const writes = [{ path: target, content: newContent }];
-	const log = await readFile(octokit, repoArgs, logPathOf(config));
+	const log = await store.readFile(repoArgs, logPathOf(config));
 	if (log) {
 		writes.push({
 			path: logPathOf(config),
 			content: insertLogEntry(log.content, today, `Created "${finalTitle}" (\`${target}\`).`)
 		});
 	}
-	const outcome = await commitOrPR(octokit, repoArgs, {
+	const outcome = await store.commitOrPR(repoArgs, {
 		writeMode: config.writeMode,
 		defaultBranch: config.defaultBranch,
 		author,
@@ -569,7 +576,7 @@ async function updatePageWrite(
 		sha?: string;
 	}
 ) {
-	const { octokit, repoArgs, config, author } = ctx;
+	const { store, repoArgs, config, author } = ctx;
 	const { path, content, rawBody, changeSummary, title, type, description, status, sha } = args;
 	const old = parseFrontmatter(existing.content);
 	// Three ways to arrive here, in precedence order: `rawBody` is an
@@ -646,7 +653,7 @@ async function updatePageWrite(
 		if (truncated) notes.push(`only the first ${MAX_SCAN_PAGES} pages were indexed for links`);
 	}
 
-	const log = await readFile(octokit, repoArgs, logPathOf(config));
+	const log = await store.readFile(repoArgs, logPathOf(config));
 	if (log) {
 		const label = newTitle ?? path;
 		const bullet =
@@ -656,7 +663,7 @@ async function updatePageWrite(
 		writes.push({ path: logPathOf(config), content: insertLogEntry(log.content, today, bullet) });
 	}
 
-	const outcome = await commitOrPR(octokit, repoArgs, {
+	const outcome = await store.commitOrPR(repoArgs, {
 		writeMode: config.writeMode,
 		defaultBranch: config.defaultBranch,
 		author,
@@ -680,7 +687,7 @@ async function updatePageWrite(
 	if (sha !== undefined) {
 		let freshSha = sha;
 		if (!(outcome.prUrl && !outcome.merged)) {
-			const saved = await readFile(octokit, repoArgs, path);
+			const saved = await store.readFile(repoArgs, path);
 			freshSha = saved?.sha ?? '';
 		}
 		return { ...res, structuredContent: { path, sha: freshSha } };
@@ -699,7 +706,7 @@ async function moveFolderWrite(
 	ctx: BrainContext,
 	args: { path: string; new_path?: string; new_name?: string }
 ) {
-	const { octokit, repoArgs, config, author } = ctx;
+	const { store, repoArgs, config, author } = ctx;
 	const { new_path, new_name } = args;
 	const folder = normFolderPath(args.path);
 	if (!folder) return fail('Give a folder path, e.g. "wiki/Projects".');
@@ -716,8 +723,8 @@ async function moveFolderWrite(
 	if (!isContentPath(`${newFolder}/.gitkeep`, config))
 		return fail(`Can't move to "${newFolder}" — it's outside this brain's editable content.`);
 
-	const head = await getHead(octokit, repoArgs);
-	const tree = await listTree(octokit, repoArgs, head, { extension: '*' });
+	const head = await store.getHead(repoArgs);
+	const tree = await store.listTree(repoArgs, head, { extension: '*' });
 	const moved = tree.filter((e) => e.path.startsWith(`${folder}/`));
 	if (moved.length === 0) return fail(`No folder "${folder}" found (it has no files).`);
 	for (const e of moved) {
@@ -737,7 +744,7 @@ async function moveFolderWrite(
 	const movedMd = new Set(movedMdEntries.map((e) => e.path));
 	// The moved pages' own content, fetched by known path (bounded by folder size)
 	// rather than a whole-brain scan, needed to rebase their outbound links.
-	const { pages: movedPages } = await fetchPages(octokit, repoArgs, movedMdEntries);
+	const { pages: movedPages } = await store.fetchPages(repoArgs, movedMdEntries);
 	const movedContent = new Map(movedPages.map((p) => [p.path, p.content]));
 	const today = todayIso();
 	const writes: { path: string; content: string }[] = [];
@@ -766,7 +773,7 @@ async function moveFolderWrite(
 	// 2. Non-markdown blobs under the folder (.gitkeep, etc.) — copy across verbatim.
 	for (const e of moved) {
 		if (movedMd.has(e.path)) continue;
-		const file = await readFile(octokit, repoArgs, e.path);
+		const file = await store.readFile(repoArgs, e.path);
 		writes.push({ path: rename(e.path), content: file?.content ?? '' });
 		deletes.push(e.path);
 	}
@@ -795,7 +802,7 @@ async function moveFolderWrite(
 		}
 	}
 
-	const log = await readFile(octokit, repoArgs, logPathOf(config));
+	const log = await store.readFile(repoArgs, logPathOf(config));
 	if (log) {
 		writes.push({
 			path: logPathOf(config),
@@ -803,7 +810,7 @@ async function moveFolderWrite(
 		});
 	}
 
-	const outcome = await commitOrPR(octokit, repoArgs, {
+	const outcome = await store.commitOrPR(repoArgs, {
 		writeMode: config.writeMode,
 		defaultBranch: config.defaultBranch,
 		author,
@@ -826,12 +833,12 @@ async function moveFolderWrite(
 
 // The folder-path form of delete_page: delete a whole subtree and everything under it.
 async function deleteFolderWrite(ctx: BrainContext, args: { path: string }) {
-	const { octokit, repoArgs, config, author } = ctx;
+	const { store, repoArgs, config, author } = ctx;
 	const folder = normFolderPath(args.path);
 	if (!folder) return fail('Give a folder path, e.g. "wiki/Projects".');
 
-	const head = await getHead(octokit, repoArgs);
-	const tree = await listTree(octokit, repoArgs, head, { extension: '*' });
+	const head = await store.getHead(repoArgs);
+	const tree = await store.listTree(repoArgs, head, { extension: '*' });
 	const doomed = tree.filter((e) => e.path.startsWith(`${folder}/`));
 	if (doomed.length === 0) return fail(`No folder "${folder}" found.`);
 	for (const e of doomed) {
@@ -850,7 +857,7 @@ async function deleteFolderWrite(ctx: BrainContext, args: { path: string }) {
 	const mdCount = doomedMd.size;
 	const label = `${mdCount} page${mdCount === 1 ? '' : 's'}`;
 	const writes: { path: string; content: string }[] = [];
-	const log = await readFile(octokit, repoArgs, logPathOf(config));
+	const log = await store.readFile(repoArgs, logPathOf(config));
 	if (log) {
 		writes.push({
 			path: logPathOf(config),
@@ -858,7 +865,7 @@ async function deleteFolderWrite(ctx: BrainContext, args: { path: string }) {
 		});
 	}
 
-	const outcome = await commitOrPR(octokit, repoArgs, {
+	const outcome = await store.commitOrPR(repoArgs, {
 		writeMode: config.writeMode,
 		defaultBranch: config.defaultBranch,
 		author,
@@ -981,7 +988,7 @@ export function registerLibrarianTools(
 			brain
 		}) => {
 			const ctx = await getContext({ requires: 'editor', brain });
-			const { octokit, repoArgs, config } = ctx;
+			const { store, repoArgs, config } = ctx;
 			const target = path.trim().replace(/^\/+/, '');
 			if (!target.endsWith('.md')) {
 				return fail('Pages must end in .md, e.g. "wiki/research/notes.md".');
@@ -997,8 +1004,8 @@ export function registerLibrarianTools(
 			if (isSourcePath(target, config)) return fail(`"${target}" is immutable source material.`);
 			if (isToolMaintained(target, config)) return fail(`"${target}" is maintained automatically.`);
 
-			const head = await getHead(octokit, repoArgs);
-			const existing = await readFile(octokit, repoArgs, target);
+			const head = await store.getHead(repoArgs);
+			const existing = await store.readFile(repoArgs, target);
 			const wantMode = mode ?? 'upsert';
 
 			// New path → create. Guard against an "update"-only intent and confirm editability.
@@ -1110,14 +1117,14 @@ export function registerLibrarianTools(
 			if (!path.trim().replace(/^\/+/, '').endsWith('.md')) {
 				return moveFolderWrite(ctx, { path, new_path, new_name: new_title });
 			}
-			const { octokit, repoArgs, config, author } = ctx;
+			const { store, repoArgs, config, author } = ctx;
 			if (!new_path && !new_title)
 				return fail('Give a new_path (move/rename) or a new_title (rename in place).');
 			if (isSourcePath(path, config))
 				return fail(`"${path}" is source material — it can't be moved.`);
 			if (isToolMaintained(path, config)) return fail(`"${path}" is maintained automatically.`);
 
-			const existing = await readFile(octokit, repoArgs, path);
+			const existing = await store.readFile(repoArgs, path);
 			if (!existing) return fail(`"${path}" does not exist.`);
 
 			const { frontmatter, body } = parseFrontmatter(existing.content);
@@ -1134,8 +1141,8 @@ export function registerLibrarianTools(
 			const newTitle = new_title ?? oldTitle;
 			if (newPath === path) return ok(`"${oldTitle}" is already at ${path} — nothing to move.`);
 
-			const head = await getHead(octokit, repoArgs);
-			const tree = await listTree(octokit, repoArgs, head);
+			const head = await store.getHead(repoArgs);
+			const tree = await store.listTree(repoArgs, head);
 			if (tree.some((e) => e.path === newPath)) {
 				return fail(`Can't move to ${newPath} — a page already exists there.`);
 			}
@@ -1173,7 +1180,7 @@ export function registerLibrarianTools(
 				content: withFrontmatter(fm, rebaseMdLinks(body, path, newPath))
 			});
 
-			const log = await readFile(octokit, repoArgs, logPathOf(config));
+			const log = await store.readFile(repoArgs, logPathOf(config));
 			if (log) {
 				const bullet =
 					newTitle !== oldTitle
@@ -1185,7 +1192,7 @@ export function registerLibrarianTools(
 				});
 			}
 
-			const outcome = await commitOrPR(octokit, repoArgs, {
+			const outcome = await store.commitOrPR(repoArgs, {
 				writeMode: config.writeMode,
 				defaultBranch: config.defaultBranch,
 				author,
@@ -1227,23 +1234,23 @@ export function registerLibrarianTools(
 			if (!path.trim().replace(/^\/+/, '').endsWith('.md')) {
 				return deleteFolderWrite(ctx, { path });
 			}
-			const { octokit, repoArgs, config, author } = ctx;
+			const { store, repoArgs, config, author } = ctx;
 			if (isSourcePath(path, config))
 				return fail(`"${path}" is source material — it can't be deleted.`);
 			if (isToolMaintained(path, config)) return fail(`"${path}" is maintained automatically.`);
 			if (!isContentPath(path, config))
 				return fail(`"${path}" is outside this brain's editable content.`);
 
-			const existing = await readFile(octokit, repoArgs, path);
+			const existing = await store.readFile(repoArgs, path);
 			if (!existing) return fail(`"${path}" does not exist.`);
 
-			const head = await getHead(octokit, repoArgs);
+			const head = await store.getHead(repoArgs);
 			const title = pageTitle(path, existing.content);
 			const { refs, truncated } = await inboundRefs(ctx, [path]);
 
 			const today = todayIso();
 			const writes: { path: string; content: string }[] = [];
-			const log = await readFile(octokit, repoArgs, logPathOf(config));
+			const log = await store.readFile(repoArgs, logPathOf(config));
 			if (log) {
 				writes.push({
 					path: logPathOf(config),
@@ -1251,7 +1258,7 @@ export function registerLibrarianTools(
 				});
 			}
 
-			const outcome = await commitOrPR(octokit, repoArgs, {
+			const outcome = await store.commitOrPR(repoArgs, {
 				writeMode: config.writeMode,
 				defaultBranch: config.defaultBranch,
 				author,
@@ -1293,14 +1300,14 @@ export function registerLibrarianTools(
 			}
 		},
 		async ({ path, brain }) => {
-			const { octokit, repoArgs, config, db, brainId } = await getContext({ brain });
+			const { store, repoArgs, config, db, brainId } = await getContext({ brain });
 			// readFile confirms the target exists and gives its authoritative current
 			// title; the backlinks themselves come from the content index.
-			const existing = await readFile(octokit, repoArgs, path);
+			const existing = await store.readFile(repoArgs, path);
 			if (!existing) return fail(`"${path}" does not exist.`);
 			const title = pageTitle(path, existing.content);
 
-			const { truncated } = await ensureFresh(db, octokit, repoArgs, brainId, config);
+			const { truncated } = await ensureFresh(db, store, repoArgs, brainId, config);
 			const resolved = await loadResolvedGraph(db, brainId, config);
 			const refs = backlinksTo(resolved, path);
 
@@ -1345,8 +1352,8 @@ export function registerLibrarianTools(
 			inputSchema: { brain: brainArg }
 		},
 		async ({ brain }) => {
-			const { octokit, repoArgs, config, db, brainId } = await getContext({ brain });
-			const { truncated } = await ensureFresh(db, octokit, repoArgs, brainId, config);
+			const { store, repoArgs, config, db, brainId } = await getContext({ brain });
+			const { truncated } = await ensureFresh(db, store, repoArgs, brainId, config);
 			const resolved = await loadResolvedGraph(db, brainId, config);
 
 			// Every link that resolved to no page (see loadResolvedGraph) — md links
@@ -1364,16 +1371,16 @@ export function registerLibrarianTools(
 			// resolve_import; a decision stays listed here until someone answers it.
 			const pendingSections: string[] = [];
 			try {
-				const head = await getHead(octokit, repoArgs);
+				const head = await store.getHead(repoArgs);
 				// listTree defaults to .md — ledgers are .json.
-				const tree = await listTree(octokit, repoArgs, head, { extension: '.json' });
+				const tree = await store.listTree(repoArgs, head, { extension: '.json' });
 				const ledgers = tree.filter((e) => /^\.isomorphic\/imports\/[^/]+\.json$/.test(e.path));
 				for (const entry of ledgers) {
 					const source = entry.path
 						.split('/')
 						.pop()!
 						.replace(/\.json$/, '');
-					const file = await readFile(octokit, repoArgs, entry.path);
+					const file = await store.readFile(repoArgs, entry.path);
 					let ledger;
 					try {
 						ledger = parseLedger(file?.content ?? null);
@@ -1407,7 +1414,7 @@ export function registerLibrarianTools(
 				const toolPaths = resolved.pages.filter((p) => isToolPagePath(p.path)).map((p) => p.path);
 				const namesSeen = new Map<string, string>();
 				for (const tp of toolPaths) {
-					const file = await readFile(octokit, repoArgs, tp);
+					const file = await store.readFile(repoArgs, tp);
 					if (!file) continue;
 					const res = parseToolDef(tp, file.content);
 					if (!res.def) {
@@ -1495,8 +1502,8 @@ export function registerLibrarianTools(
 			}
 		},
 		async ({ query, prefix, brain }) => {
-			const { octokit, repoArgs, config, db, brainId } = await getContext({ brain });
-			const { truncated } = await ensureFresh(db, octokit, repoArgs, brainId, config);
+			const { store, repoArgs, config, db, brainId } = await getContext({ brain });
+			const { truncated } = await ensureFresh(db, store, repoArgs, brainId, config);
 
 			const MAX_HITS = 50;
 			// Structured hits ride along for UI consumers (the brain MCP App);
