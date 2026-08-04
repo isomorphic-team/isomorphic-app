@@ -293,9 +293,14 @@ pnpm exec wrangler secret put FEEDBACK_REPO    # e.g. your-org/your-fork
 pnpm exec wrangler secret put FEEDBACK_TOKEN
 ```
 
-Create `feedback`, `bug`, `idea`, and `other` labels on that repository if you want reports
-labelled; a token without label-creation rights just files them unlabelled. Leave both unset
-and the tool is not registered at all, so nobody's reports go anywhere unexpected. Note the
+Reports are labelled `feedback` plus the kind (`bug`, `idea`, `other`). A fine-grained PAT
+with Issues: write creates those labels on demand, so there is nothing to pre-seed; a
+narrower credential files the report unlabelled rather than failing. Two things worth knowing
+about the credential: the issue is authored by whoever owns it, so a PAT on your own account
+makes every user's report look like yours (a machine account or a small GitHub App avoids
+that), and a PAT expires, after which reports fail with a clear error to the reporter and
+silence to you. Leave both secrets unset and the tool is not registered at all, so nobody's
+reports go anywhere unexpected. Note the
 destination is a _public_ tracker in most setups: the tool always shows the user the exact
 issue text and requires an explicit confirmation before posting, publishes nothing about their
 account, and records the reporter privately in D1 (`feedback_reports`) keyed by the opaque

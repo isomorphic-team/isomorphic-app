@@ -72,8 +72,12 @@ function ok(text: string, structuredContent?: Record<string, unknown>) {
 	};
 }
 
-// GitHub returns 422 for a label the token may not create. The report matters more
-// than its labels, so a label rejection retries bare rather than losing the issue.
+// Labels are best-effort. VERIFIED 2026-07-30 against real GitHub: a fine-grained
+// PAT with Issues: write DOES auto-create a label that does not exist yet (a report
+// labelled `feedback` created that label on a repo that had only `bug`), so no
+// pre-seeding is needed for that setup. The 422 retry stays for the setups where it
+// is not true, such as a credential with narrower rights: the report matters more
+// than its labels, so a label rejection files the issue bare rather than losing it.
 async function createIssue(
 	repo: string,
 	token: string,
