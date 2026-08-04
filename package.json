@@ -19,6 +19,7 @@
 	},
 	"scripts": {
 		"doctor": "tsx scripts/doctor.ts",
+		"try": "tsx src/local.ts",
 		"setup:config": "tsx scripts/setup-config.ts",
 		"bootstrap": "tsx src/bootstrap.ts",
 		"onboard-org": "tsx scripts/onboard-org.ts",

@@ -56,14 +56,13 @@ import {
 	type TenantOpts
 } from './lib/orgs.ts';
 import type { CommitAuthor } from './lib/brain-repo.ts';
-import { ensureFresh, listIndexedPages, detectNeedsConfig } from './lib/brain-index.ts';
-import { tryRenderViews } from './lib/views.ts';
 import { githubHandler } from './oauth/github-handler.ts';
 import { authHandler } from './oauth/auth-handler.ts';
-import { base64ToUtf8 } from './lib/wiki.ts';
 import { registerLibrarianTools } from './tools/librarian.ts';
 import { registerImportTools } from './tools/importer.ts';
 import { registerBrainApp } from './tools/apps.ts';
+import { SERVER_INSTRUCTIONS } from './lib/server-instructions.ts';
+import { registerCoreTools } from './tools/core.ts';
 import { registerMemberTools } from './tools/members.ts';
 import { registerBrainAccessTools } from './tools/brain-access.ts';
 import { registerConnectedAccountTools } from './tools/connected-accounts.ts';
@@ -75,13 +74,7 @@ import { recordUsage } from './lib/usage-store.ts';
 import { dayKey, countedCall } from './lib/usage.ts';
 import { loadCustomToolDefs, registerCustomTools, type CustomToolLoad } from './tools/custom.ts';
 import { resolveInstallationOrg, connectCustomerOrg } from './lib/org-connect.ts';
-import {
-	loadBrainConfig,
-	isContentPath,
-	listHiddenPaths,
-	pathPolicyOf,
-	type BrainConfig
-} from './lib/brain-config.ts';
+import { loadBrainConfig, type BrainConfig } from './lib/brain-config.ts';
 
 interface Env {
 	// Auth mode selector
@@ -255,23 +248,8 @@ interface TenantContext {
 // especially the in-client viewer — invoked at the right moments, since it applies
 // across the whole connector rather than one tool at a time. Keep it short and
 // behavioral; per-tool nuance lives in each tool's own description.
-const SERVER_INSTRUCTIONS = `Isomorphic is the user's "brain": a personal or team knowledge base (a GitHub-backed wiki) that can be searched, read, edited, and — importantly — VIEWED inside Claude via the Isomorphic app.
-
-When to reach for it:
-- Answer from the brain first for anything specific to this user or their org — their notes, projects, people, decisions, customers. Prefer search_pages / read_page over general knowledge for company- or user-specific questions.
-- OPEN THE VIEWER, don't just paste text. Whenever the user wants to look at, explore, or "see" a page, and whenever you cite or reference a specific brain page in an answer, call view_page(path) for that page (or browse_brain for the whole brain). These render the page inside Claude in the Isomorphic app so the user can click through it — far better than a wall of pasted markdown. Treat "I mentioned this page" as a cue to open it.
-- Use read_page (not view_page) only when YOU need the raw content to reason over it; use view_page when the goal is for the USER to see it.
-- For "what changed", "who edited this", or reviewing recent activity, call view_activity — it opens an audit feed of recent changes (who / what / when); pass a path for one page's history.
-- For anything about MEMBERS / the team / the organization's people / org roles / invites, call members. It opens the interactive roster inline (with invite + role controls for admins) and also returns the roster as data, so use it both when the user wants to see or manage people and when YOU need the roster to reason over (e.g. before a role change).
-- ACCESS IS PER BRAIN, and it is a DIFFERENT question from org membership. A new brain is PRIVATE to whoever created it: being in the organization does not mean you can open it. So for "who can see / who has access to / who is this brain shared with", call brain_access (it opens the sharing panel inline and returns the list as data); to share one, change what someone can do in it, revoke them, or make it private vs visible to the whole organization, call share_brain. Use members + set_member_role for someone's ORGANIZATION role, and brain_access + share_brain for access to a PARTICULAR brain. Sharing only works for people already in the organization, so invite_member first if they have no account.
-- The user may have MULTIPLE brains (personal, team, client). Tools act on the ACTIVE brain by default; call brains to show/switch them, switch_brain to change the active one, or pass \`brain\` to any tool (a name/handle like "acme" or "team wiki") to target a different brain. Opening a brain in the app — view_page / browse_brain / edit_page on a \`brain\` — makes it the ACTIVE brain (the user is now looking at it, and the in-client viewer follows it), so subsequent bare calls stay on it. A one-shot data read (read_page / search_pages with \`brain\`) does NOT change the active brain. If a request could mean a different brain than the active one, target it with \`brain\` or ask which brain. An org admin can adopt another repo as a brain with connect_brain (call it with no repo to see the eligible repos) and remove one with disconnect_brain.
-- FOLDER NOTES: a folder's overview page must be named \`index.md\` (\`README.md\` is also accepted on older vaults). A page at \`<folder>/index.md\` IS the folder: the app opens it when you click the folder, and okf-view directory listings link folders through it. Any other name (\`overview.md\`, \`vendors.md\`, \`about.md\`) is just a loose page sitting next to its siblings. So when you create a folder of related pages, or the user asks for an overview/index/landing page for a folder, write \`<folder>/index.md\`; and when you find an overview-shaped page under some other name, offer to move_page it to \`index.md\`.
-- ONE PAGE = ONE CONCEPT. These brains follow the Open Knowledge Format: anything other pages should be able to link to — a person, vendor, system, event series, project, decision — is its own \`.md\` file with a \`type:\` in its frontmatter. When you are about to write a list of named things as headings or bullets inside one page, stop and write a page per thing instead, then link to them from the parent. A folder note (\`index.md\`) LISTS what is in its folder; it never holds the folder's content inline. The tell that you got this wrong: a reader cannot link to the thing you just wrote, and search cannot return it as a result.
-- MATCH THE BRAIN YOU ARE IN. Before adding to an existing folder, look at a sibling page (read_page) and follow what is already there — the same \`type:\` values, the same frontmatter keys, the same granularity. A brain that gives every vendor its own file and then gets one page holding twelve events is worse off than either convention applied consistently. When restructuring, run validate afterwards: it reports structure drift as advisory notes.
-- EDIT PART OF A PAGE, don't rewrite it. write_page's \`content\` REPLACES the whole body, so it destroys anything you haven't read. To change part of a page use \`edits\` (exact find/replace, each anchor matching once) or \`append\`: they touch only what you name, need no prior read, and fail loudly rather than guessing. If you do pass \`content\` for an existing page you didn't just write, call read_page first.
-- Write only when asked. Edits to a protected brain open a pull request that merges automatically once checks pass; tell the user the change is on its way rather than exposing git mechanics.
-- FEEDBACK ABOUT ISOMORPHIC ITSELF goes to the maintainers with submit_feedback. When the user says something here is broken, confusing, or missing, or asks for a feature, offer to send it rather than only sympathizing. It files a public issue on the project's tracker and needs no GitHub account from them. The first call posts nothing: show them the exact title and body it returns, then call again with \`confirm: true\`. Never file one without the user having seen the text, and never put a token, key, or their private content in it. (Feedback about their own CONTENT is a normal page edit, not this.)
-- The brain IS a GitHub repo, and every write tool (write_page, move_page, etc.) already commits to it — that is the only save path; there is no separate "push to GitHub" step. So if the user asks you to push, commit, sync, or save to GitHub, the write tools ARE how you do it (and if you already edited, it is already pushed). Never tell the user you cannot push or commit to GitHub.`;
+// SERVER_INSTRUCTIONS lives in src/lib/server-instructions.ts, shared with the local
+// Node runtime so the two cannot drift.
 
 // Per-request MCP session. The transport is now STATELESS (a fresh server +
 // transport per POST, response on the same request), so this replaces the old
@@ -879,123 +857,10 @@ class McpSession {
 			}
 		);
 
-		// ---------- list_pages ----------
-		server.registerTool(
-			'list_pages',
-			{
-				title: 'List brain pages',
-				annotations: { readOnlyHint: true },
-				description:
-					"List markdown pages in the brain. With no prefix, returns the brain's editable content (per its .isomorphic.json roots); pass a prefix to filter to a subtree. Paths are relative to the repo root.",
-				inputSchema: {
-					prefix: z
-						.string()
-						.optional()
-						.describe('Path prefix to filter on (e.g. "wiki/" or "internal/frameworks/")'),
-					brain: z
-						.string()
-						.optional()
-						.describe('Which brain to target (name/handle). Defaults to the active brain.')
-				}
-			},
-			async ({ prefix, brain }) => {
-				const { store, repoArgs, config, db, brainId } = await this.tenantContext({ brain });
-
-				// No prefix = "the brain's editable content", which is exactly what the
-				// index holds — serve it from there (instant) and attach each page's title
-				// in structuredContent so the app's file tree can label files by title.
-				if (!prefix) {
-					await ensureFresh(db, store, repoArgs, brainId, config);
-					const pages = await listIndexedPages(db, brainId);
-					// Everything that's NOT a content page (system files, .gitkeep markers,
-					// source, the log): the app shows these only when "show hidden" is on.
-					const hidden = await listHiddenPaths(store, repoArgs, config);
-					// Empty could mean a fresh brain OR an adopted repo whose content isn't under
-					// the configured roots — flag the latter so the app can offer to auto-configure.
-					// Only content-AREA files count as "something to show" here: the hidden list
-					// now includes system files that exist in any repo.
-					const needsConfig =
-						pages.length === 0 &&
-						!hidden.some((p) => isContentPath(p, config)) &&
-						(await detectNeedsConfig(store, repoArgs, config));
-					return {
-						content: [
-							{
-								type: 'text' as const,
-								text:
-									pages.length === 0
-										? 'No markdown pages found.'
-										: pages.map((p) => p.path).join('\n')
-							}
-						],
-						// The app builds its file tree from THIS result after a brain switch
-						// (the switcher calls switch_brain, then re-fetches with list_pages),
-						// so the path policy has to ride along — otherwise the tree paints the
-						// new brain with the previous brain's roles: every folder outside the
-						// stale content root reads as hidden and every page reads as locked.
-						structuredContent: { pages, hidden, needsConfig, config: pathPolicyOf(config) }
-					};
-				}
-
-				// A prefix can target anything (including non-content like raw/), which the
-				// index doesn't hold, so keep the live tree walk for that case.
-				const head = await store.getHead(repoArgs);
-				const paths = (await store.listTree(repoArgs, head))
-					.map((e) => e.path)
-					.filter((p) => p.startsWith(prefix))
-					.sort();
-
-				return {
-					content: [
-						{
-							type: 'text' as const,
-							text:
-								paths.length === 0 ? `No markdown pages found under "${prefix}".` : paths.join('\n')
-						}
-					]
-				};
-			}
-		);
-
-		// ---------- read_page ----------
-		server.registerTool(
-			'read_page',
-			{
-				title: 'Read a brain page',
-				annotations: { readOnlyHint: true },
-				// Deliberately verbose and self-naming. This tool is the one an agent
-				// looks for by name mid-task ("I need read_page"), and a terse
-				// one-liner made it lose tool-search ranking to view_page, whose
-				// description talked about read_page more than this one did. The
-				// read-before-you-replace rule lives here too, at the point of need.
-				description:
-					"Read a page: read_page returns the page's raw markdown source (frontmatter and body) as text, fetched from the brain repo. Use it whenever you need a page's contents to reason over, quote, or edit. Read a page before any write_page call that passes `content`, since that replaces the whole body and would destroy text you have not seen (to change only part of a page, prefer write_page's non-destructive `append` / `edits` arguments, which need no prior read). This returns text to you and does not show anything to the user: use view_page when the goal is for the USER to see the page.",
-				inputSchema: {
-					path: z.string().describe('Path relative to the repo root, e.g. "AGENTS.md"'),
-					brain: z
-						.string()
-						.optional()
-						.describe('Which brain to target (name/handle). Defaults to the active brain.')
-				}
-			},
-			async ({ path, brain }) => {
-				const { store, repoArgs, db, brainId, config } = await this.tenantContext({ brain });
-				const file = await store.readFile(repoArgs, path);
-				if (!file) {
-					return {
-						isError: true,
-						content: [{ type: 'text', text: `"${path}" is not a file.` }]
-					};
-				}
-				const text = file.content;
-				// Derived views: agents get the okf-view fence PLUS a freshly computed
-				// rendering beneath it — the current data without losing sight of the
-				// directive (so they don't hand-edit derived content). Falls back to
-				// the raw file if computing fails.
-				const views = await tryRenderViews(text, path, { db, store, repoArgs, brainId, config });
-				return { content: [{ type: 'text', text: views?.snapshotted ?? text }] };
-			}
-		);
+		// ---------- list_pages + read_page ----------
+		// Defined in src/tools/core.ts so the local Node runtime registers the same
+		// two tools from the same source rather than a second copy.
+		registerCoreTools(server, (opts) => this.tenantContext(opts));
 
 		// ---------- librarian suite ----------
 		// write_page / move_page / delete_page / find_inbound_links / validate /

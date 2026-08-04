@@ -23,6 +23,8 @@
 		"src/bootstrap.ts",
 		"src/manifest.ts",
 		"src/persist.ts",
+		"src/local.ts",
+		"src/local/**/*.ts",
 		"scripts/**/*.ts",
 		"src/lib/**/*.ts"
 	],
