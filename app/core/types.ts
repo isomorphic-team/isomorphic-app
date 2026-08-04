@@ -90,6 +90,50 @@ export interface MemberSelf {
 	role: MemberRole;
 }
 
+// ---------- usage analytics (the org Analytics tab) ----------
+// Mirrors the payload of the `analytics` tool; the shapes are produced by
+// summarize() in src/lib/usage.ts, which is where their meaning is documented.
+
+export interface UsageWindow {
+	from: string;
+	to: string;
+	days: number;
+}
+export interface UsageTotals {
+	activeUsers: number;
+	members: number;
+	reads: number;
+	writes: number;
+	admin: number;
+	calls: number;
+	errors: number;
+}
+export interface UsagePoint {
+	day: string;
+	reads: number;
+	writes: number;
+}
+export interface UsagePerson {
+	user_id: string;
+	name: string | null;
+	email: string | null;
+	role: string | null;
+	reads: number;
+	writes: number;
+	admin: number;
+	lastActive: string | null;
+	/** Activity from someone no longer on the roster. */
+	former: boolean;
+}
+export interface UsageBrain {
+	brain_id: string;
+	label: string;
+	reads: number;
+	writes: number;
+	people: number;
+	lastActive: string | null;
+}
+
 // A brain the user can reach (see src/tools/brains.ts). Drives the nav switcher.
 export interface BrainRow {
 	id: string;

@@ -56,6 +56,20 @@ We use `@modelcontextprotocol/ext-apps`: `/server` (registerAppTool / registerAp
 
 Non-obvious things confirmed against the sources above (with the "why it bit us"):
 
+- **`server._registeredTools[name]` stores the function as `handler`, NOT `callback`**
+  (SDK 1.29, verified against the installed package). Two things in `src/worker.ts`
+  reach into this private map: the claude.ai compatibility shim (which blanks
+  `.execution`) and usage instrumentation (which wraps the function). The first
+  version of the wrapper used `.callback`, which is `undefined` there, so it threw on
+  `.bind()` and would have failed every request the moment `USAGE_ANALYTICS` was
+  switched on. Nothing caught it: reaching into privates requires an
+  `as unknown as` cast, which turns typechecking off exactly where it was needed, and
+  the flag was off locally. `pnpm test:usage` now pins the field name AND drives a
+  real `tools/call` over an in-memory client/server pair, because the field existing
+  does not prove the SDK still dispatches through it (if `registerTool` closed over
+  the original function, replacing the property would be a silent no-op and every
+  counter would read zero forever). Re-run that test after any SDK bump.
+
 - **MCP Apps display modes are `inline | fullscreen | pip`** — there is **no "sidebar"
   host mode.** A sidebar is a layout you build _inside_ a fullscreen app (Claude's design
   guidelines recommend exactly that for editors). PiP is a floating window, not a dock.

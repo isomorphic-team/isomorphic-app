@@ -414,6 +414,24 @@ export async function getAnyBrainInOrg(db: D1Database, orgId: string): Promise<B
 		.first<Brain>();
 }
 
+export async function getOrgById(db: D1Database, orgId: string): Promise<Org | null> {
+	return await db.prepare(`SELECT * FROM orgs WHERE org_id = ?1`).bind(orgId).first<Org>();
+}
+
+// Every brain an org holds, ignoring who can reach it. Deliberately NOT an access
+// query: the one caller is the org Analytics tab, which counts activity per brain
+// for an org admin and must therefore show a brain that exists but is private to
+// someone else (as a row with numbers, never with content). Anything that decides
+// what a user may OPEN goes through listAccessibleBrains and effectiveBrainRole
+// instead. Do not reuse this to populate a switcher.
+export async function listBrainsInOrg(db: D1Database, orgId: string): Promise<Brain[]> {
+	const { results } = await db
+		.prepare(`SELECT * FROM brains WHERE org_id = ?1 ORDER BY created_at ASC, brain_id ASC`)
+		.bind(orgId)
+		.all<Brain>();
+	return results ?? [];
+}
+
 // The oldest brain in an org that THIS user can actually reach: the brain a
 // freshly provisioned or freshly invited member lands on. Access runs through the
 // same pure rule as listAccessibleBrains, so a private brain nobody shared can
@@ -911,7 +929,11 @@ export interface AccessibleBrain {
 // against. Personal (platform-model) orgs are auto-named with the owner's email, which
 // reads badly, so those fall back to "Personal"; when an org holds more than one brain
 // the repo name is appended to disambiguate.
-export function brainLabel(b: AccessibleBrain): string {
+// Structurally typed rather than taking AccessibleBrain, so the plain `brains` row
+// (Brain) gets the same label as the resolved one. The rule below is the single
+// place a brain's display name is decided; a second copy for the analytics rows
+// would drift the moment either changed.
+export function brainLabel(b: { name?: string | null; repo_name: string }): string {
 	// ONE RULE: a brain is called what it is named, and an unnamed one is called after
 	// its repo. Nothing else — no org prefix when an org holds several, no borrowing the
 	// org's name when it holds one, no "Personal" for a platform org.

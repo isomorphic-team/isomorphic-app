@@ -32,6 +32,7 @@ import { assertRole, type Role, type TenantOpts, type AccessibleBrain } from '..
 import { registerMemberTools } from '../src/tools/members.ts';
 import { registerBrainAccessTools } from '../src/tools/brain-access.ts';
 import { registerBrainTools } from '../src/tools/brains.ts';
+import { registerAnalyticsTools } from '../src/tools/analytics.ts';
 import type { BrainContext } from '../src/tools/librarian.ts';
 
 let failures = 0;
@@ -50,6 +51,8 @@ function check(label: string, cond: boolean, detail = '') {
 // shared so each golden test still runs as one self-contained file.
 const sqlite = new DatabaseSync(':memory:');
 sqlite.exec(readFileSync(new URL('../src/db/auth-schema.sql', import.meta.url), 'utf8'));
+// The analytics tool reads usage_daily, so the scope test needs its table too.
+sqlite.exec(readFileSync(new URL('../migrations/0006_usage_daily.sql', import.meta.url), 'utf8'));
 function shimStatement(sql: string, params: unknown[] = []) {
 	return {
 		bind: (...p: unknown[]) => shimStatement(sql, p),
@@ -182,6 +185,7 @@ function toolsFor(p: Persona): Map<string, Handler> {
 	const getContext = contextFor(p);
 	registerMemberTools(server, getContext);
 	registerBrainAccessTools(server, getContext);
+	registerAnalyticsTools(server, getContext);
 	registerBrainTools(server, {
 		getContext,
 		orgContext: async (opts?: { requires?: Role }) => {
@@ -204,7 +208,8 @@ function toolsFor(p: Persona): Map<string, Handler> {
 			})) as AccessibleBrain[],
 		activeBrainId: () => 'northwind/main',
 		setActiveBrain: () => {},
-		invalidateConfig: () => {}
+		invalidateConfig: () => {},
+		analyticsEnabled: true
 	});
 	return handlers;
 }
@@ -355,6 +360,70 @@ check(
 	'the owner is not demotable through these tools',
 	await denies(orgBoss, 'set_member_role', { email: 'boss@example.com', role: 'admin' })
 );
+
+// ===========================================================================
+console.log('\nanalytics: the per-person table is gated on the ORG role');
+// ===========================================================================
+// The same escalation this whole file exists to prevent, in its newest form.
+// `analytics` shows org totals to any member, and per-person read/edit counts only
+// to org admins. If that inner check ever reads ctx.role instead of ctx.orgRole,
+// then being shared ONE brain as admin would expose what every colleague in the
+// organization did with their week. That is the members.ts bug with a different
+// payload, so it is asserted in both directions here.
+//
+// It is also asserted on the PAYLOAD, not just on allow/deny: the whole design is
+// that a non-admin's rows are never sent, rather than sent and hidden by the
+// widget. A regression that shipped the rows and trusted the UI would pass an
+// allow/deny check and leak anyway.
+async function analyticsPayload(p: Persona) {
+	const handler = toolsFor(p).get('analytics');
+	if (!handler) throw new Error('analytics not registered');
+	const res = (await handler({})) as {
+		isError?: boolean;
+		structuredContent?: {
+			canSeePeople?: boolean;
+			people?: unknown[];
+			totals?: { members?: number };
+		};
+	};
+	return res.structuredContent ?? {};
+}
+{
+	const shared = await analyticsPayload(sharedAdmin);
+	check(
+		`${sharedAdmin.label} can open analytics at all`,
+		shared.totals?.members !== undefined,
+		'org totals are open to any member, like the roster'
+	);
+	check(
+		'brain admin + org viewer is NOT shown the people table',
+		shared.canSeePeople === false,
+		'gating this on ctx.role would leak the org from a single shared brain'
+	);
+	check(
+		'and the per-person rows are WITHHELD, not merely flagged',
+		Array.isArray(shared.people) && shared.people.length === 0,
+		'the payload must not carry rows the viewer may not see'
+	);
+
+	const boss = await analyticsPayload(orgBoss);
+	check(
+		`${orgBoss.label} IS shown the people table`,
+		boss.canSeePeople === true,
+		'an org owner holding only brain viewer must still see it: this is org scope'
+	);
+	check(
+		'and the rows are actually present for them',
+		Array.isArray(boss.people) && boss.people.length > 0
+	);
+
+	const lurk = await analyticsPayload(lurker);
+	check('a plain org viewer sees totals but no people table', lurk.canSeePeople === false);
+	check(
+		'an org editor is not an admin here either',
+		(await analyticsPayload(writer)).canSeePeople === false
+	);
+}
 
 // ---------------------------------------------------------------------------
 if (failures) {

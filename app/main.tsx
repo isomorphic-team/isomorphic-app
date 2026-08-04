@@ -14,7 +14,7 @@ import { useEffect, useRef, useState } from 'preact/hooks';
 import { useSyncExternalStore } from 'preact/compat';
 import type { View } from './core/types.ts';
 import type { ViewAction } from './core/view-registry.ts';
-import { subscribeStore, version, currentView, show, brainList } from './core/store.ts';
+import { subscribeStore, version, currentView, show, brainList, features } from './core/store.ts';
 import {
 	app,
 	applyHostContext,
@@ -30,6 +30,7 @@ import {
 	openGraph,
 	openActivity,
 	openMembers,
+	openAnalytics,
 	openBrainAccess,
 	openBrains,
 	openSettings,
@@ -41,6 +42,7 @@ import {
 	HistoryIcon,
 	GraphIcon,
 	PeopleIcon,
+	ChartIcon,
 	ShareIcon,
 	MoreIcon,
 	GearIcon,
@@ -126,6 +128,17 @@ function OverflowMenu({ editing }: { editing: boolean }) {
 									</span>
 									<span class="flex-1">Members</span>
 								</MenuRow>
+								{/* Shown only where the server registered it: usage recording is
+								    opt-in per deployment (USAGE_ANALYTICS), and this menu must not
+								    offer a row whose click comes back "unknown tool". */}
+								{features.analytics && (
+									<MenuRow onClick={go(() => openAnalytics())}>
+										<span class="w-4 text-muted">
+											<ChartIcon />
+										</span>
+										<span class="flex-1">Analytics</span>
+									</MenuRow>
+								)}
 								<MenuSeparator />
 								<div class={`px-3 pb-0.5 pt-1 ${eyebrow}`}>Your account</div>
 								{/* Brain management (add/remove) — the brain crumb's picker is
@@ -220,11 +233,17 @@ function HeaderAction({ action }: { action: ViewAction }) {
 				aria-label={action.title}
 				disabled={action.disabled}
 				onClick={action.onClick}
+				aria-pressed={action.active === undefined ? undefined : action.active}
 				class={action.active ? 'text-accent' : undefined}
 			>
 				{action.icon}
 			</Button>
 		);
+	// A LABELLED action lights up exactly like an icon one. This branch used to drop
+	// `active` on the floor, so a labelled toggle group (the analytics window: 7d /
+	// 30d / 90d) rendered as three identical buttons with no way to tell which one you
+	// were looking at. Same accent the icon branch uses, plus aria-pressed, since three
+	// buttons where one is selected is a toggle group and not three separate commands.
 	return (
 		<Button
 			variant={action.primary ? 'subtle' : 'ghost'}
@@ -232,6 +251,8 @@ function HeaderAction({ action }: { action: ViewAction }) {
 			title={action.title}
 			disabled={action.disabled}
 			onClick={action.onClick}
+			aria-pressed={action.active === undefined ? undefined : action.active}
+			class={action.active ? 'text-accent' : undefined}
 		>
 			{action.label}
 		</Button>

@@ -35,7 +35,7 @@ name: Deploy Worker
 #        gh variable set WORKER_NAME CF_OAUTH_KV_ID CF_OAUTH_KV_PREVIEW_ID \
 #                        CF_D1_DATABASE_ID D1_DATABASE_NAME PUBLIC_BASE_URL \
 #                        AUTH_MODE IDENTITY_MODE AUTO_PROVISION AUTH_EMAIL_FROM \
-#                        APP_SLUG
+#                        APP_SLUG USAGE_ANALYTICS
 #
 # Step 4 exists because wrangler.jsonc is generated and gitignored — it holds one
 # deployment's identity (Worker name, public URL, Cloudflare resource ids) and so is
@@ -162,6 +162,7 @@ jobs:
           PUBLIC_BASE_URL: ${{ vars.PUBLIC_BASE_URL }}
           AUTH_EMAIL_FROM: ${{ vars.AUTH_EMAIL_FROM }}
           AUTO_PROVISION: ${{ vars.AUTO_PROVISION }}
+          USAGE_ANALYTICS: ${{ vars.USAGE_ANALYTICS }}
           # GitHub rejects repository variables named GITHUB_*, so the CI-facing
           # name is APP_SLUG. setup-config maps it back. See scripts/setup-config.ts.
           APP_SLUG: ${{ vars.APP_SLUG }}

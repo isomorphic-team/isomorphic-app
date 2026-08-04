@@ -38,6 +38,17 @@ function applyBrainContext(sc: Record<string, unknown>): void {
 		activeBrain = { id: ab.id, label: ab.label };
 	}
 }
+// What the SERVER registered, learned from the `brains` payload alongside the list
+// itself (ensureBrainList runs on every open). A widget cannot list the host's tools,
+// so without this the nav would have to offer every destination and let the unlucky
+// ones fail on click. Unknown until the list lands, and a missing flag reads as OFF:
+// a destination that quietly does not appear is a far smaller failure than one that
+// appears and errors.
+let features: { analytics: boolean } = { analytics: false };
+function setFeatures(v: Partial<{ analytics: boolean }> | undefined): void {
+	if (v && typeof v.analytics === 'boolean') features = { ...features, analytics: v.analytics };
+}
+
 // Whether the caller is admin+ in the active brain's org (can auto-configure it).
 function activeBrainCanManage(): boolean {
 	return !!brainList?.find((b) => b.id === activeBrain?.id)?.canManage;
@@ -155,6 +166,8 @@ export {
 	setActiveBrain,
 	setBrainList,
 	applyBrainContext,
+	features,
+	setFeatures,
 	activeBrainCanManage,
 	brainArgs,
 	brainPolicy,

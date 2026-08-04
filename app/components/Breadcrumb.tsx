@@ -26,7 +26,7 @@ import type { ComponentChildren } from 'preact';
 import { useEffect, useState } from 'preact/hooks';
 import type { View, BrowseData } from '../core/types.ts';
 import { isFolderNoteName, groupBrainsByOrg } from '../core/util.ts';
-import { browseCache, brainList, activeBrain, goBack, backKind } from '../core/store.ts';
+import { browseCache, brainList, activeBrain, features, goBack, backKind } from '../core/store.ts';
 import {
 	openBrowse,
 	openFolder,
@@ -34,6 +34,7 @@ import {
 	openGraph,
 	openBrains,
 	openMembers,
+	openAnalytics,
 	openSettings,
 	openAddBrain,
 	openBrainAccess,
@@ -51,6 +52,7 @@ import {
 	HistoryIcon,
 	GraphIcon,
 	PeopleIcon,
+	ChartIcon,
 	ShareIcon,
 	GearIcon
 } from '../core/icons.tsx';
@@ -408,9 +410,19 @@ function brainDestinations(): Destination[] {
 // one: showing it as a property of the brain you happen to be in is the same conflation
 // the tool gating exists to prevent, drawn in the UI.
 //
-// One row today. It stays its own group anyway, because the group is the statement.
+// Analytics is the second row, and it passes the same scope test Members does: the
+// usage numbers are the org's, identical from whichever brain you opened them in.
+// Conditional because it is the one destination whose TOOL may not exist: usage
+// recording is opt-in per deployment (USAGE_ANALYTICS), and `features` carries what
+// the server actually registered. A picker must never offer a destination whose
+// click is refused, which is the same rule Manage brains follows below.
 function orgDestinations(): Destination[] {
-	return [{ key: 'members', label: 'Members', icon: <PeopleIcon />, open: openMembers }];
+	return [
+		{ key: 'members', label: 'Members', icon: <PeopleIcon />, open: openMembers },
+		...(features.analytics
+			? [{ key: 'analytics', label: 'Analytics', icon: <ChartIcon />, open: () => openAnalytics() }]
+			: [])
+	];
 }
 
 function accountDestinations(): Destination[] {
@@ -650,6 +662,19 @@ export function Breadcrumb({ view }: { view: View }) {
 		return (
 			<DestinationCrumb root="org" current="members">
 				<span class={crumbCurrent}>Members</span>
+			</DestinationCrumb>
+		);
+	// Org root for the same reason as Members: the numbers describe the organization,
+	// so switching to a sibling brain shows the identical page.
+	//
+	// No window suffix here. The trail says WHERE YOU ARE, and the time range is not
+	// a place: it is the view's own control, which lives in the header's right-hand
+	// slot and shows its own state. A "· 30d" crumb was both the wrong half of the
+	// bar and a second, non-clickable copy of a control that was already there.
+	if (view.kind === 'analytics')
+		return (
+			<DestinationCrumb root="org" current="analytics">
+				<span class={crumbCurrent}>Analytics</span>
 			</DestinationCrumb>
 		);
 	if (view.kind === 'brains')

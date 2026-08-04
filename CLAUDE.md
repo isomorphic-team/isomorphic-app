@@ -37,11 +37,12 @@ pnpm test:structure     # OKF conformance golden test (granularity, type:, neste
 pnpm test:access        # per-brain access rule (effectiveBrainRole) golden test
 pnpm test:scope         # org-vs-brain scope: which role each tool gates on
 pnpm test:feedback      # submit_feedback composition golden test (redaction, nothing identifying published)
+pnpm test:usage         # usage-analytics golden test (tool-classification coverage, the summary fold)
 pnpm typecheck          # runs all three tsconfigs (node, worker, app)
 pnpm format             # prettier
 ```
 
-**Tests.** Eleven pure golden tests, no network, all wired into CI and into the `test`
+**Tests.** Twelve pure golden tests, no network, all wired into CI and into the `test`
 script (`pnpm test` runs all of them): `pnpm test:roundtrip` (editor markdown
 round-trip), `pnpm test:views` (okf-view engine), `pnpm test:import` (import planner),
 `pnpm test:tools` (brain-authored tool parsing), `pnpm test:patch` (write_page append/edits),
@@ -52,7 +53,10 @@ Worker and app), `pnpm test:access` (the per-brain access rule: every input to
 over a stub server and a fake `getContext`, asserting org-scope tools read `orgRole` and
 brain-scope tools read `role`, plus the `share_brain` and lockout guardrails that live in
 the tool rather than the lib), `pnpm test:feedback` (what submit_feedback publishes, and what
-it redacts). Adding one means adding it in BOTH `package.json`'s `test` script and
+it redacts), `pnpm test:usage` (usage analytics: that every registered tool name has an
+explicit `TOOL_KINDS` entry — it scans the tool sources, so a new tool cannot land
+unclassified — plus the summary fold, where members at zero and since-removed users both
+have to survive or the tiles stop matching the table). Adding one means adding it in BOTH `package.json`'s `test` script and
 `.github/workflows/ci.yml`, or it runs in exactly one place and nobody notices which.
 Plus two real-GitHub end-to-end batteries under `scripts/`, **not in CI** (they need
 `.dev.vars` with platform App creds): `pnpm exec tsx scripts/e2e-librarian.ts` drives the
@@ -496,6 +500,86 @@ duplicate search and on the D1 rate-limit count. **Not built:** an in-app form
 widget (v1 is conversational only), and any write back to the reporter when an issue
 is closed.
 
+## Usage analytics (the org Analytics tab)
+
+`analytics` (`src/tools/analytics.ts` + the pure `src/lib/usage.ts` and the D1
+half `src/lib/usage-store.ts`, `pnpm test:usage`) answers "is this organization
+actually using its brains, and who isn't": active members over the window, reads
+vs edits per day, a per-brain breakdown, and a per-person table. Built 2026-08-04.
+UI is `app/views/AnalyticsView.tsx`, an ORG-scope destination beside Members.
+
+- **Per-day counters, not an event log** (`usage_daily`, `migrations/0006`). One
+  UPSERT per tool call at grain (day, org, brain, user, tool), so rows are bounded
+  by members × brains × tools × days and every query is a GROUP BY. A raw event
+  log was the alternative and was rejected on three counts: unbounded growth
+  needing a prune job on day one, a per-person action timeline sitting in D1, and
+  scans instead of aggregates. One UTC day is the finest granularity the tab has
+  any use for. `brain_id` is `''` and never NULL for org-scope calls, because
+  SQLite treats PK NULLs as DISTINCT and a nullable column would defeat the
+  upsert, appending a row per call forever.
+- **`USAGE_ANALYTICS` gates BOTH the recording and the tool registration**, so a
+  deployment that disables it records nothing and never shows a tab that can only
+  answer zero. The generated config defaults it to `"true"`; set it to `"false"` to
+  turn the feature off. The Worker compares `=== 'true'` rather than `!== 'false'`,
+  so a config that does not mention the key at all (hand-written, or predating this)
+  records nothing: the only way to start collecting is a config that says so.
+- **Recording rides the loop that already rewrites every registration.**
+  `McpSession.instrument()` (worker.ts) wraps each `_registeredTools` callback in
+  the same pass as the claude.ai `execution` shim, so it is the one place that
+  sees every tool by name and the one place a new tool cannot forget to opt into.
+  It writes through `ctx.waitUntil` after the result has gone back, swallows its
+  own failures (a counter must never turn into a failed `read_page`), counts an
+  `isError` result as an error rather than a success, and clears `_resolvedScope`
+  first so a call that resolves no org records nothing instead of borrowing the
+  previous call's. Under-counting is fine; blocking a read is not. The wrapping
+  logic itself is `countedCall` in the pure lib, extracted so it is testable: it is
+  the riskiest code here, since it replaces the function the SDK invokes and a
+  mistake breaks every tool rather than skewing a chart. **The SDK field is
+  `handler`, not `callback`** — see `docs/references.md`; getting that wrong threw
+  on every request and typechecking could not see it through the required cast.
+- **TWO SCOPES AGAIN, and the gate is split.** Org totals and the per-brain table
+  are viewer+ like the roster; the PEOPLE table is admin+, and is **withheld from
+  the payload** rather than hidden by the widget. Per-person read counts are a
+  record of what a colleague did with their week, which is a different thing to
+  publish than the roster's names. Authorization reads `ctx.orgRole`, never
+  `ctx.role`, for the reason in `docs/design/brain-level-permissions.md`.
+- **It measures the PRODUCT, not the repository.** An edit made on github.com, by
+  a merged PR, or by another agent holding the repo token never reaches a tool
+  handler and is invisible here. `FOOTNOTE` says so and travels with every
+  rendering; `view_activity` remains the repo-history surface. Do not "fix" this by
+  folding commits in: they are a different population and mixing them silently
+  double-counts our own writes.
+- **`TOOL_KINDS` must gain an entry for every new tool.** Unknown names fall back
+  to `read`, which is correct for brain-authored `tool_*` pages (all three kinds
+  are read-only by construction) and silently wrong for a new write tool.
+  `pnpm test:usage` scans `src/tools/*.ts` **and `src/worker.ts`** for registered
+  names and fails on any that is unclassified, so the omission is a red test rather
+  than a permanently under-reported edit column.
+- **The chart is two small multiples, not one stacked bar.** Reads outnumber edits
+  by an order of magnitude, so a shared scale renders the edit series at sub-pixel
+  height: the number that answers "is anyone maintaining this?" would be the
+  invisible one. Each row is a single series in `--c-accent` scaled to its own
+  labelled max, which also means no categorical palette and no legend. (A gray/accent
+  two-series version was tried first and failed the `dataviz` validator's chroma
+  floor, with dark-mode tritan separation at ΔE 6.4.)
+- **The nav learns what exists from `features` on the `brains` payload.** A widget
+  cannot list the host's tools, and `ensureBrainList()` already runs on every open,
+  so the Analytics row appears only where the server registered it. A picker must
+  never offer a destination whose click is refused.
+- **Coverage.** `pnpm test:usage` covers the classification map (scanning the tool
+  sources so a new tool cannot land unclassified), the summary fold, `countedCall`
+  on all five paths (sync/async x return/throw, plus the `isError` result that never
+  threw), the SDK internals it depends on including a real dispatch, and the actual
+  `usage_daily` statements against the real migration over `node:sqlite`.
+  `pnpm test:scope` covers the authorization: that the per-person table gates on
+  `orgRole`, asserted on the PAYLOAD (a non-admin's rows must be absent, not merely
+  flagged) and in both directions. **Still uncovered:** the `features` flag reaching
+  the nav, tool registration actually being skipped when the flag is off, and the
+  whole app layer.
+- **Not built:** retention/pruning (rows are small, but nothing deletes them),
+  a CSV export, per-brain analytics (this is deliberately org-scope), and any
+  notion of a session or of time-on-page.
+
 ## Brain templates
 
 The brain repo's initial scaffold lives in `brain-template/` (the editable source of truth). Because the MCP Worker now scaffolds brains too (auto-provisioning, below) and Workers have no filesystem, the templates are **codegen'd** into `src/lib/brain-template.generated.ts` via `pnpm gen:templates` (run it after editing anything under `brain-template/`; the generated file is committed). Both runtimes import that module — the scaffold logic lives in `src/lib/scaffold-core.ts` (Worker-safe, octokit Git Data API, no `node:*`), used by both `bootstrap.ts` and the Worker.
@@ -546,4 +630,12 @@ The repo is public, so a few things that used to be free are not:
 - **No real account or resource identifiers.** Cloudflare KV/D1 ids, installation ids, org logins, and our hostname come from generated config or env vars. `src/db/seed-*.sql` are `<PLACEHOLDER>` templates on purpose; keep them that way.
 - **`/ops/` is gitignored** (root-anchored, so the tracked `docs/ops/` runbooks are unaffected). Anything naming real infrastructure or a real customer goes there.
 - **Nothing hosted-only.** The hosted service is a deployment of `main`, not a fork or a superset: no private module, no paid-tier feature flag, no `if (isHosted)`. If a change only makes sense for our deployment, it goes in as configuration or it does not go in. The full reasoning, including the cases that will test the line, is [`docs/design/open-source-boundary.md`](docs/design/open-source-boundary.md).
-- **No telemetry.** No phone-home, no usage beacon, in any build.
+- **No telemetry.** No phone-home, no usage beacon, in any build. Nothing this
+  software does may report anything to us, or to anyone but the operator running it.
+  The rule is about WHERE data goes, not about whether usage is ever counted: the org
+  Analytics tab (below) records per-day counters into the deployment's own D1, which
+  never leave it and which we cannot see on someone else's install. That is why it is
+  allowed to be ON by default (`USAGE_ANALYTICS`, which a self-hoster sets to `false`
+  to disable). A change that SENDS any of it anywhere is the thing this rule forbids,
+  regardless of how aggregated or anonymous it looks, and no amount of "it's only
+  counts" makes an outbound call acceptable.

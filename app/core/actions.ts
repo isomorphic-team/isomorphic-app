@@ -22,7 +22,12 @@ import type {
 	OrgTarget,
 	ConnectedAccount,
 	Identity,
-	BrowseData
+	BrowseData,
+	UsageWindow,
+	UsageTotals,
+	UsagePoint,
+	UsagePerson,
+	UsageBrain
 } from './types.ts';
 import { app, callTool, firstText } from './host.ts';
 import { FOLDER_NOTE_NAMES } from './util.ts';
@@ -37,6 +42,7 @@ import {
 	setActiveBrain,
 	brainList,
 	setBrainList,
+	setFeatures,
 	applyPolicy,
 	resetPolicy,
 	applyBrainContext,
@@ -116,6 +122,7 @@ function handleToolResult(result: CallToolResult) {
 			{ push: false }
 		);
 	else if (view === 'members') show(membersViewFromSc(sc), { push: false });
+	else if (view === 'analytics') show(analyticsViewFromSc(sc), { push: false });
 	else if (view === 'brain-access') show(brainAccessViewFromSc(sc), { push: false });
 	else if (view === 'brains') {
 		const bv = brainsViewFromSc(sc);
@@ -169,9 +176,16 @@ function ensureBrainList(): Promise<void> {
 			// A failed tool call comes back as a RESULT carrying isError — it does NOT throw.
 			// Without this check the empty payload silently read as a successful "zero brains".
 			if (res.isError) throw new Error(firstText(res));
-			const sc = (res.structuredContent ?? {}) as { brains?: BrainRow[]; active?: string };
+			const sc = (res.structuredContent ?? {}) as {
+				brains?: BrainRow[];
+				active?: string;
+				features?: { analytics?: boolean };
+			};
 			if (!Array.isArray(sc.brains)) throw new Error('brains: no list in the result');
 			setBrainList(sc.brains);
+			// Which optional server surfaces exist (today: the org Analytics tab). Rides
+			// this call because it is the one the app always makes on open.
+			setFeatures(sc.features);
 			const a = sc.brains.find((b) => b.id === (sc.active ?? activeBrain?.id));
 			if (a) setActiveBrain({ id: a.id, label: a.label });
 			bump();
@@ -601,6 +615,43 @@ async function openMembers() {
 	}
 }
 
+// Open the org's usage analytics. Org-scope like Members: the numbers are the same
+// from whichever brain you happen to be in, so this deliberately does NOT pass
+// brainArgs() and lets the server resolve the org off the active brain.
+async function openAnalytics(days?: number) {
+	show({ kind: 'loading', label: 'Loading analytics…' });
+	try {
+		const result = await callTool('analytics', { ...(days ? { days } : {}) });
+		if (result.isError) throw new Error(firstText(result));
+		show(analyticsViewFromSc((result.structuredContent ?? {}) as Record<string, unknown>));
+	} catch (e) {
+		show({
+			kind: 'error',
+			headline: "Couldn't load analytics.",
+			detail: String(e),
+			retry: () => openAnalytics(days)
+		});
+	}
+}
+
+// The analytics payload as a view. `people` arrives empty for non-admins (the server
+// withholds it rather than trusting the widget to hide it), and `canSeePeople` is what
+// tells the view whether an empty list means "withheld" or "nobody here".
+function analyticsViewFromSc(sc: Record<string, unknown>): View {
+	return {
+		kind: 'analytics',
+		orgName: typeof sc.orgName === 'string' ? sc.orgName : 'your organization',
+		window: sc.window as UsageWindow,
+		totals: sc.totals as UsageTotals,
+		series: Array.isArray(sc.series) ? (sc.series as UsagePoint[]) : [],
+		people: Array.isArray(sc.people) ? (sc.people as UsagePerson[]) : [],
+		brains: Array.isArray(sc.brains) ? (sc.brains as UsageBrain[]) : [],
+		canSeePeople: !!sc.canSeePeople,
+		truncated: !!sc.truncated,
+		footnote: typeof sc.footnote === 'string' ? sc.footnote : ''
+	};
+}
+
 // Re-render the roster in place from a mutation's returned structuredContent (every
 // member mutation returns the fresh roster), without pushing a history entry.
 function refreshMembers(sc: Record<string, unknown>) {
@@ -811,6 +862,7 @@ export {
 	openFolder,
 	openActivity,
 	openMembers,
+	openAnalytics,
 	refreshMembers,
 	parseAccounts,
 	parseIdentity,
