@@ -9,13 +9,15 @@ copyleft does not reach (your brain content, and any MCP client).
 
 This guide has three paths. Pick the smallest one that does what you need.
 
-| Path                            | Who it is for                                             | You need                                       | Time     |
-| ------------------------------- | --------------------------------------------------------- | ---------------------------------------------- | -------- |
-| **1. Local only**               | Trying it out, or developing on the codebase              | Node 24+, pnpm                                 | ~5 min   |
-| **2. Single-tenant deployment** | One person or one small team, one brain, one shared token | The above, plus GitHub org, plus Cloudflare    | ~30 min  |
-| **3. Multi-tenant deployment**  | Many people, several brains, roles, email sign-in         | The above, plus a domain and an email provider | ~2 hours |
+| Path                            | Who it is for                                             | You need                                        | Time     |
+| ------------------------------- | --------------------------------------------------------- | ----------------------------------------------- | -------- |
+| **1. Local only**               | Trying it out, or developing on the codebase              | Node 24+, pnpm                                  | ~5 min   |
+| **2. Single-tenant deployment** | One person or one small team, one brain, one shared token | The above, plus a GitHub token, plus Cloudflare | ~30 min  |
+| **3. Multi-tenant deployment**  | Many people, several brains, roles, email sign-in         | The above, plus a domain and an email provider  | ~2 hours |
 
-Everything in path 1 works with no accounts at all.
+Everything in path 1 works with no accounts at all. Path 2 needs no GitHub App and no
+GitHub organization unless you choose them: a personal access token on one repository is
+enough, and `pnpm doctor` will tell you what your `.dev.vars` is still missing.
 
 ---
 
@@ -63,9 +65,11 @@ pnpm worker:dev         # http://localhost:8787, the MCP server (needs credentia
 would serve, through the official MCP AppBridge host, over fixture data. It is the right
 place to work on the viewer, the editor, the tree, or the graph.
 
-`pnpm worker:dev` serves real MCP at `http://localhost:8787/mcp` but needs a GitHub App to
-reach a real repository, which is path 2's first half. You can point Claude Desktop, Claude
-Code, or the MCP Inspector at it once you have that.
+`pnpm worker:dev` serves real MCP at `http://localhost:8787/mcp`, but it needs a credential
+to reach a real repository. The cheapest is a personal access token on one repo, which is
+option A of path 2's first step and takes a couple of minutes. You can then point Claude
+Desktop, Claude Code, or the MCP Inspector at it. Run `pnpm doctor` if you are unsure what
+your checkout is still missing.
 
 ### Why `wrangler.jsonc` is generated
 
@@ -89,7 +93,30 @@ One brain, one shared bearer token, no accounts, no roles. Whoever holds the tok
 and write. This is a password on a door rather than an access-control model. It is fine for
 one person or a handful of trusted people, and it is far less setup than path 3.
 
-### 2a. Create the GitHub App and your first brain
+### 2a. Reach a brain
+
+Two ways. Take the first unless you need the second.
+
+**Option A: a token (recommended).** Make a repository for your brain, or pick one you
+already have, then create a fine-grained personal access token at
+[github.com/settings/personal-access-tokens](https://github.com/settings/personal-access-tokens)
+scoped to that one repository, with **Contents: read and write** and **Pull requests: read
+and write**. Put it in `.dev.vars`:
+
+```sh
+GITHUB_TOKEN="github_pat_…"
+BRAIN_REPO_OWNER="your-account"
+BRAIN_REPO_NAME="your-brain-repo"
+```
+
+That is the whole GitHub side. No organization, no App, no manifest flow, no installation
+id, and nothing to convert. Commits are attributed to whoever owns the token, which for a
+single user is what you want. An empty repository is fine; the librarian tools write into
+it. Skip to 2b.
+
+**Option B: a GitHub App.** Take this if you want commits authored by an App rather than by
+a person, if the brain lives under an organization whose access you would rather manage as
+an installation, or if you are heading for path 3, which requires it.
 
 You need a **GitHub organization**, not a personal account. GitHub only grants the
 `administration: write` permission (required to create repositories) to installations on
@@ -122,19 +149,21 @@ than an org. Bootstrap detects this and says so.
 
 ### 2b. Point local dev at your real brain
 
-Add to `.dev.vars`:
+Add to `.dev.vars`, on top of whichever of 2a you did:
 
 ```sh
 AUTH_MODE="static"
 MCP_BEARER_TOKEN="…"           # openssl rand -hex 32
-BRAIN_REPO_OWNER="your-org"
-BRAIN_REPO_NAME="your-brain-repo"
-GITHUB_APP_INSTALLATION_ID="…" # written by bootstrap
 ```
+
+Option B also needs `GITHUB_APP_INSTALLATION_ID` and `BRAIN_REPO_OWNER`/`BRAIN_REPO_NAME`,
+all written by bootstrap. `MCP_BEARER_TOKEN` is what your MCP client sends; it is separate
+from the GitHub credential and authenticates the client to _you_, not you to GitHub.
 
 Then:
 
 ```sh
+pnpm doctor                    # says what is still missing, and what to run next
 pnpm setup:config --force
 pnpm db:migrate                # applies migrations/ to the local D1
 pnpm worker:dev
@@ -157,6 +186,19 @@ PUBLIC_BASE_URL=https://my-brain.<your-subdomain>.workers.dev \
 `--provision` creates the KV namespace and the D1 database if they do not exist, finds them
 if they do, and writes their real ids into `wrangler.jsonc`. Then upload the secrets, which
 are deliberately not in `wrangler.jsonc` and never committed:
+
+If you took **option A** (a token), that is two secrets:
+
+```sh
+pnpm exec wrangler secret put GITHUB_TOKEN
+pnpm exec wrangler secret put MCP_BEARER_TOKEN
+```
+
+`BRAIN_REPO_OWNER` and `BRAIN_REPO_NAME` are not secret; keep them in `.dev.vars` for local
+runs and add them to the `vars` block of `wrangler.template.jsonc` (or set them with
+`wrangler secret put` too, which also works) for the deployed Worker.
+
+If you took **option B** (an App):
 
 ```sh
 pnpm exec wrangler secret put GITHUB_APP_ID
@@ -205,7 +247,9 @@ Orgs, roles (`viewer < editor < admin < owner`), a member roster with invitation
 brains per person, and email sign-in so nobody needs a GitHub account. This is the mode the
 hosted service runs in, on the same code.
 
-Do path 2 first and confirm it works. Then:
+Do path 2 first and confirm it works, taking **option B** in 2a: multi-tenant means minting
+a token per organization from one App installation, which a personal access token cannot do.
+Then:
 
 ### 3a. Choose an identity mode
 

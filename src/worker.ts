@@ -35,7 +35,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js';
 import { z } from 'zod';
 import { OAuthProvider, type OAuthHelpers } from '@cloudflare/workers-oauth-provider';
-import { installationOctokit, type AppCreds } from './lib/github.ts';
+import { installationOctokit, tokenOctokit, type AppCreds } from './lib/github.ts';
 import { getTenantByUserId, NoTenantError } from './lib/tenants.ts';
 import { provisionBrainForUser, provisionOrgForUser } from './lib/provision.ts';
 import {
@@ -104,6 +104,11 @@ interface Env {
 	GITHUB_APP_ID: string;
 	GITHUB_APP_PRIVATE_KEY_BASE64: string;
 	GITHUB_APP_INSTALLATION_ID?: string;
+	// Single-tenant alternative to the App entirely (AUTH_MODE=static): a plain
+	// access token for the one brain repo. Set this and the App credentials above
+	// are not read at all, which is what makes local development and one-person
+	// self-hosting cheap. Ignored in oauth mode, which mints a token per tenant.
+	GITHUB_TOKEN?: string;
 	// The App's URL slug (e.g. "isomorphic-mind"), from bootstrap. Used to build
 	// the install URL for the self-serve connect_github_org flow. Not a secret.
 	GITHUB_APP_SLUG?: string;
@@ -505,20 +510,39 @@ class McpSession {
 				activeBrain: { id: `${repoArgs.owner}/${repoArgs.repo}`, label: repoArgs.repo }
 			};
 		}
-		// Static (legacy single-tenant) path. The three env vars below were
-		// removed from `.dev.vars` when multi-tenant routing landed — fail fast
-		// with a clear error if static mode is selected without re-adding them.
-		const installationId = env.GITHUB_APP_INSTALLATION_ID;
+		// Single-tenant path: one human, one brain, no org model. Two ways to reach
+		// the repo, and GITHUB_TOKEN wins because it is the cheaper one to set up.
+		//
+		//   GITHUB_TOKEN         a plain access token (a fine-grained PAT with Contents
+		//                        + Pull requests write is enough). No GitHub App, no
+		//                        organization, no manifest flow, no installation id.
+		//                        This is the documented path for local development and
+		//                        for a single self-hoster. Commits are attributed to
+		//                        whoever owns the token, which for one user is what
+		//                        you want.
+		//   App installation     the original path, still supported: the platform App
+		//                        plus GITHUB_APP_INSTALLATION_ID. Required if you want
+		//                        App-authored commits or an org-owned installation.
+		//
+		// Both need BRAIN_REPO_OWNER/NAME, since there is no tenant table to resolve.
 		const owner = env.BRAIN_REPO_OWNER;
 		const repo = env.BRAIN_REPO_NAME;
-		if (!installationId || !owner || !repo) {
+		if (!owner || !repo) {
 			throw new Error(
-				'AUTH_MODE=static requires GITHUB_APP_INSTALLATION_ID, BRAIN_REPO_OWNER, and BRAIN_REPO_NAME env vars (legacy single-tenant config). These were removed when multi-tenant routing landed; switch AUTH_MODE=oauth, or re-add the env vars to fall back to static mode.'
+				'AUTH_MODE=static requires BRAIN_REPO_OWNER and BRAIN_REPO_NAME (which brain to serve), plus either GITHUB_TOKEN (simplest) or GITHUB_APP_INSTALLATION_ID with the platform App credentials. Run `pnpm doctor` to see what is missing.'
+			);
+		}
+		const installationId = env.GITHUB_APP_INSTALLATION_ID;
+		if (!env.GITHUB_TOKEN && !installationId) {
+			throw new Error(
+				'AUTH_MODE=static needs a way to reach GitHub: set GITHUB_TOKEN (a fine-grained PAT with Contents and Pull requests write on the brain repo), or set GITHUB_APP_INSTALLATION_ID and the platform App credentials. Run `pnpm doctor` to see what is missing.'
 			);
 		}
 		assertRole('owner', opts?.requires);
 		assertRole('owner', opts?.requiresOrg);
-		const octokit = await installationOctokit(appCreds(env), Number(installationId));
+		const octokit = env.GITHUB_TOKEN
+			? tokenOctokit(env.GITHUB_TOKEN)
+			: await installationOctokit(appCreds(env), Number(installationId));
 		const repoArgs = { owner, repo };
 		return {
 			octokit,
@@ -1010,12 +1034,22 @@ class McpSession {
 		// widget showed one brain while its own bare actions hit another.
 		registerBrainApp(server, (opts) => this.tenantContext({ ...opts, sticky: true }));
 
+		// Is there an org model at all? Single-tenant deployments (AUTH_MODE=static,
+		// whether reaching GitHub through a token or an App installation) have one
+		// human and one brain, and no `orgs` / `memberships` / `brain_memberships`
+		// rows for anything to resolve against. The tools below therefore cannot
+		// answer, and they should not appear rather than appear and reject: an
+		// advertised tool costs context in every conversation and a refusal reads to
+		// the model as a permissions problem it should work around. Same rule as
+		// FEEDBACK_REPO (unset means submit_feedback is never registered).
+		const hasOrgModel = env.AUTH_MODE === 'oauth';
+
 		// ---------- member management ----------
 		// The org-admin roster surface: members (the interactive roster + data) plus
 		// invite_member / set_member_role / remove_member. Reads are open to any member;
 		// mutations require admin+, with owner as the lockout-proof anchor. See
 		// src/tools/members.ts.
-		registerMemberTools(server, (opts) => this.tenantContext(opts));
+		if (hasOrgModel) registerMemberTools(server, (opts) => this.tenantContext(opts));
 
 		// ---------- brain sharing (per-brain access) ----------
 		// The brain-scope sibling of the member tools: members moves the ORG roster,
@@ -1033,14 +1067,15 @@ class McpSession {
 		// (the interactive panel + data) plus link_identity / unlink_identity.
 		// Links a person's emails + GitHub logins so any of them reaches
 		// the union of their brains; verified via magic-link. See src/tools/connected-accounts.ts.
-		registerConnectedAccountTools(server, (opts) => this.tenantContext(opts), this.env);
+		if (hasOrgModel)
+			registerConnectedAccountTools(server, (opts) => this.tenantContext(opts), this.env);
 
 		// ---------- org onboarding (self-serve Model-B connect) ----------
 		// connect_github_org returns a GitHub App install URL carrying a KV-stashed
 		// state; /github/install-callback resolves the install and writes the customer
 		// org + owner membership. The runtime analog of `pnpm onboard-org`. See
 		// src/tools/org-onboarding.ts and src/lib/org-connect.ts.
-		registerOrgOnboardingTools(server, (opts) => this.orgContext(opts), this.env);
+		if (hasOrgModel) registerOrgOnboardingTools(server, (opts) => this.orgContext(opts), this.env);
 
 		// ---------- usage analytics ----------
 		// The org's Analytics tab, reading the per-day counters the wrapper at the
@@ -1078,6 +1113,13 @@ class McpSession {
 		// brains (the interactive switcher + data) + switch_brain. A bare tool call
 		// acts on the active brain; switch_brain changes it (persisted
 		// in agent state); any tool's `brain` arg one-shots another. See src/tools/brains.ts.
+		//
+		// Registered in single-tenant mode too, unlike the org tools above: the app's
+		// nav calls `brains` on every open and learns which destinations exist from
+		// the `features` on its payload, so removing it blinds the widget rather than
+		// simplifying it. With no signed-in user the brain list is simply empty
+		// (listAccessibleBrainsForCaller returns [] without touching the org tables),
+		// which is an honest answer rather than a failure.
 		registerBrainTools(server, {
 			getContext: (opts) => this.tenantContext(opts),
 			orgContext: (opts) => this.orgContext(opts),

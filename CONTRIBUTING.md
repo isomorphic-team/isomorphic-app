@@ -17,10 +17,10 @@ Two things before you start:
 
 Typo and documentation fixes need no CLA. Everything else does.
 
-## Get it running in about ten minutes
+## Get it running in about five minutes
 
-You need Node 24+, `pnpm`, and a GitHub account. You do **not** need a Cloudflare account, a
-GitHub App, or an email provider to work on most of the codebase.
+You need Node 24+ (there is an `.nvmrc`) and `pnpm`. You do **not** need a GitHub account, a
+Cloudflare account, a GitHub App, or an email provider to work on most of the codebase.
 
 ```sh
 git clone https://github.com/isomorphic-team/isomorphic-app
@@ -28,18 +28,27 @@ cd isomorphic-app
 pnpm install
 pnpm setup:config       # writes wrangler.jsonc for local-only development
 pnpm test               # the golden tests, no network, should be green
+pnpm doctor             # what your checkout has, and what to run next
 ```
 
 That is the whole loop for the parts of the project most changes touch. From there:
 
-| You want to work on                          | Run               | What you get                                                                              |
-| -------------------------------------------- | ----------------- | ----------------------------------------------------------------------------------------- |
-| The in-client app UI (viewer, editor, graph) | `pnpm app:dev`    | `http://localhost:5175`, real `ui://` bytes over stub fixtures, live reload, no auth      |
-| Markdown / OKF / view engine logic           | `pnpm test:*`     | Pure golden tests, instant, no network                                                    |
-| MCP tools end to end                         | `pnpm worker:dev` | `http://localhost:8787/mcp`, needs `.dev.vars` (see [self-hosting](docs/self-hosting.md)) |
-| The one-time GitHub App setup flow           | `pnpm bootstrap`  | `http://localhost:3000`, needs a GitHub org you control                                   |
+| You want to work on                          | Run               | What you get                                                                         |
+| -------------------------------------------- | ----------------- | ------------------------------------------------------------------------------------ |
+| The in-client app UI (viewer, editor, graph) | `pnpm app:dev`    | `http://localhost:5175`, real `ui://` bytes over stub fixtures, live reload, no auth |
+| Markdown / OKF / view engine logic           | `pnpm test:*`     | Pure golden tests, instant, no network                                               |
+| MCP tools end to end                         | `pnpm worker:dev` | `http://localhost:8787/mcp`, needs a GitHub token (below)                            |
+| The one-time GitHub App setup flow           | `pnpm bootstrap`  | `http://localhost:3000`, needs a GitHub org you control                              |
 
 `pnpm app:dev` needs no credentials at all. If you are unsure where to start, start there.
+
+To run the **real MCP tools** against a **real repository**, you need one credential and not
+the whole GitHub App: a fine-grained personal access token scoped to a single repo, with
+Contents and Pull requests write. Put it in `.dev.vars` as `GITHUB_TOKEN`, name the repo with
+`BRAIN_REPO_OWNER` and `BRAIN_REPO_NAME`, set `MCP_BEARER_TOKEN` to anything random, then
+`pnpm db:migrate && pnpm worker:dev`. `pnpm bootstrap` and a GitHub organization are only
+needed for a multi-user deployment. Full detail in
+[`docs/self-hosting.md`](docs/self-hosting.md).
 
 ## Read this before your first non-trivial change
 
@@ -92,13 +101,15 @@ pnpm test:policy        # the path-policy wire contract between Worker and app
 pnpm test:access        # the per-brain access rule (every input to effectiveBrainRole)
 pnpm test:scope         # which role each tool gates on: brain scope vs org scope
 pnpm test:feedback      # what submit_feedback publishes, and what it redacts
+pnpm test:wiring        # every test:* script is in both package.json's `test` and ci.yml
 
 pnpm typecheck          # all three tsconfigs (node, worker, app)
 pnpm format             # prettier, run before pushing
 ```
 
 Adding a test means adding it in **both** `package.json`'s `test` script and
-`.github/workflows/ci.yml`, or it runs in exactly one place.
+`.github/workflows/ci.yml`, or it runs in exactly one place. `pnpm test:wiring` enforces
+that, so forgetting is a red test rather than a battery nobody notices is missing.
 
 Golden tests compare against expected strings inline in the test file. When you change behavior
 deliberately, update the expectation in the same commit and say in the pull request why the old

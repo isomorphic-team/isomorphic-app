@@ -7,7 +7,7 @@
 //      AS A SPECIFIC INSTALLATION on a specific account. Used for repo work.
 //      Lasts 1 hour. @octokit/auth-app caches and refreshes it for us.
 
-import { App } from 'octokit';
+import { App, Octokit } from 'octokit';
 
 // ---------- Base64 PEM round-trip (env vars hate multi-line strings) ----------
 // btoa/atob are web-standard and work in both Node (>=16) and Cloudflare Workers,
@@ -75,4 +75,19 @@ export function appOctokit(creds: AppCreds) {
 // Returns a fresh Octokit whose token is auto-refreshed by @octokit/auth-app.
 export async function installationOctokit(creds: AppCreds, installationId: number) {
 	return createApp(creds).getInstallationOctokit(installationId);
+}
+
+// Token-authed Octokit: the single-user alternative to the whole App dance.
+//
+// Every call the brain repo actually needs (the git data API, repos.getContent,
+// the batched GraphQL blob reads, pulls.*) is available to a fine-grained PAT with
+// Contents and Pull requests write on that one repository. What a token cannot do
+// is act as an App across MANY installations, which is the multi-tenant path and
+// is why this is single-tenant only.
+//
+// Deliberately not auto-refreshed: a PAT is a static credential that eventually
+// expires, and the failure (a 401 from GitHub) is clearer than a refresh loop that
+// cannot succeed.
+export function tokenOctokit(token: string): Octokit {
+	return new Octokit({ auth: token });
 }
