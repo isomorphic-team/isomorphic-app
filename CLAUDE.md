@@ -52,7 +52,7 @@ pnpm format             # prettier
 `pnpm test:views` (okf-view engine), `pnpm test:import` (import planner),
 `pnpm test:tools` (brain-authored tool parsing), `pnpm test:patch` (write_page
 append/edits), `pnpm test:structure` (OKF conformance), `pnpm test:index`
-(content-index freshness guard — bounded, resumable work per read; wraps an octokit
+(content-index freshness guard: bounded, resumable work per read; wraps an octokit
 stub in the REAL `githubStore` so it still covers `fetchPages`'s GraphQL batching),
 `pnpm test:policy` (the path-policy wire contract between Worker and app),
 `pnpm test:access` (the per-brain access rule: every input to `effectiveBrainRole`),
@@ -81,7 +81,7 @@ mode is the only coverage of the GitHub adapter itself, so run it when `githubSt
 changes.
 
 Adding a test means adding it in BOTH `package.json`'s `test` script and
-`.github/workflows/ci.yml` — `pnpm test:wiring` now fails the build if you forget,
+`.github/workflows/ci.yml`. `pnpm test:wiring` fails the build if you forget,
 rather than the battery silently running in exactly one place.
 
 **Iterating on the app UI:** use `pnpm app:dev` (renders the real `ui://` bytes via the
@@ -98,9 +98,9 @@ This repo ships **three distinct programs** sharing one `src/`:
 1. **Bootstrap server** (`src/bootstrap.ts`) — Node, Hono, run via `tsx`. One-shot setup flow that registers a GitHub App via the manifest flow, exchanges the code for credentials, and scaffolds the brain repo in one atomic Git Data API commit.
 2. **MCP Worker** (`src/worker.ts`) — Cloudflare Worker exposing MCP tools over **stateless** Streamable HTTP. Each request builds a fresh `McpServer` + `WebStandardStreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true })` behind the OAuth provider (`mcpApiHandler`), answering on the same POST (no SSE, no session). The per-request `McpSession` class holds tenant/brain resolution and all tool registration (`buildServer()`). Non-POST `/mcp` returns 405 (the stateless transport offers no server→client stream, and handing GET to the SDK transport on Workers hangs the request). The legacy `IsomorphicMindMcp` `McpAgent` **Durable Object** (`MCP_OBJECT` binding) is retained only as an **unused stub** to keep the binding valid — nothing routes to it. (History: this was a stateful McpAgent DO with long-lived SSE streams until 2026-07-17; the Claude host tore those streams down before async results arrived, so widgets intermittently failed. The stateless move fixed it.)
 
-3. **Local runtime** (`src/local.ts`) — Node, run via `tsx` as `pnpm try <folder>`. Serves the same content tools over a **git repository on disk** through the fs `BrainStore` (`src/local/brain-store-fs.ts`), with D1 shimmed over `node:sqlite` (`src/local/d1-sqlite.ts`). No auth (loopback only) and **no org model**, so members/sharing/invites/brain-switching are not registered. Builds a fresh `McpServer` per request for the same reason the Worker does: an `McpServer` binds to one transport. Added 2026-08-04 so a contributor reaches the real tools with no accounts, and so the write-path e2e batteries run offline in CI. `src/local/**` is Node-only and sits outside `src/lib/`. Reads come from the working tree, so its `getHead` reports a digest of that tree while `listCommits` reports git shas.
+3. **Local runtime** (`src/local.ts`): Node, run via `tsx` as `pnpm try <folder>`. Serves the same content tools over a **git repository on disk** through the fs `BrainStore` (`src/local/brain-store-fs.ts`), with D1 shimmed over `node:sqlite` (`src/local/d1-sqlite.ts`). No auth (loopback only) and **no org model**, so members/sharing/invites/brain-switching are not registered. Builds a fresh `McpServer` per request for the same reason the Worker does: an `McpServer` binds to one transport. Added 2026-08-04 so a contributor reaches the real tools with no accounts, and so the write-path e2e batteries run offline in CI. `src/local/**` is Node-only and sits outside `src/lib/`. Reads come from the working tree, so its `getHead` reports a digest of that tree while `listCommits` reports git shas.
 
-The split matters for `src/lib/`. Anything imported by `worker.ts` runs on Cloudflare Workers and **cannot use `node:*` modules** (no `node:crypto`, no `node:fs`, etc.). The two tsconfigs enforce this — `tsconfig.node.json` includes the bootstrap files, `src/local*`, `scripts/`, and `lib/`; `tsconfig.worker.json` includes `worker.ts` and `lib/`. `pnpm typecheck` runs both. If you need Node-only code, put it in `bootstrap.ts` (or a Node-only sibling), not in `lib/`.
+The split matters for `src/lib/`. Anything imported by `worker.ts` runs on Cloudflare Workers and **cannot use `node:*` modules** (no `node:crypto`, no `node:fs`, etc.). The tsconfigs enforce this: `tsconfig.node.json` includes the bootstrap files, `src/local*`, `scripts/`, and `lib/`; `tsconfig.worker.json` includes `worker.ts` and `lib/`; `tsconfig.app.json` covers `app/`. `pnpm typecheck` runs all three. Node-only code goes in `src/local/`, `bootstrap.ts`, or a Node-only sibling, never in `lib/`.
 
 ## Auth model
 

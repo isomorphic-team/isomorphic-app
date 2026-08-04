@@ -6,6 +6,7 @@
 		"lib": ["ES2023"],
 		"types": ["node"],
 		"strict": true,
+		"noUnusedLocals": true,
 		"esModuleInterop": true,
 		"forceConsistentCasingInFileNames": true,
 		"resolveJsonModule": true,

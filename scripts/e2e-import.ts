@@ -1,9 +1,11 @@
 // Manual end-to-end battery for the bulk importer (sync_records / resolve_import).
 //
-// NOT wired into CI (per the test-harness skip list — no real-GitHub E2E in CI).
+// Runs offline by default (fs + git BrainStore in a temp dir), so it is in CI. `--github`
+// runs the identical assertions against a real scratch repo, by hand.
 // Run by hand when the import path changes:
 //
-//   pnpm exec tsx scripts/e2e-import.ts
+//   pnpm test:e2e-import
+//   pnpm exec tsx scripts/e2e-import.ts --github
 //
 // Mirrors e2e-librarian.ts: requires `.dev.vars` with platform App creds +
 // PLATFORM_ORG / PLATFORM_INSTALLATION_ID, creates a scratch brain repo on the

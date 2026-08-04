@@ -33,7 +33,6 @@
 
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js';
-import { z } from 'zod';
 import { OAuthProvider, type OAuthHelpers } from '@cloudflare/workers-oauth-provider';
 import { installationOctokit, tokenOctokit, type AppCreds } from './lib/github.ts';
 import { githubStore, type BrainStore } from './lib/brain-repo.ts';
@@ -50,7 +49,6 @@ import {
 	brainLabel,
 	brainLabelQualified,
 	type AccessibleBrain,
-	type Org,
 	type OrgScope,
 	type Role,
 	type TenantOpts
@@ -183,10 +181,6 @@ function appCreds(env: Env): AppCreds {
 		appId: Number(env.GITHUB_APP_ID),
 		privateKeyBase64: env.GITHUB_APP_PRIVATE_KEY_BASE64
 	};
-}
-
-function repoArgs(env: Env) {
-	return { owner: env.BRAIN_REPO_OWNER, repo: env.BRAIN_REPO_NAME };
 }
 
 // Thrown by brain-scope resolution when the caller has an org but no brain yet

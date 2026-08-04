@@ -34,8 +34,8 @@ about. "Nothing" is a fine answer.
 
 - [ ] Existing brains keep working unchanged, including ones edited outside this codebase
 - [ ] Covered by `pnpm test:structure` or `pnpm test:roundtrip`
-- [ ] I ran `pnpm exec tsx scripts/e2e-librarian.ts` against real GitHub, **or** I could not
-      and a maintainer should
+- [ ] `pnpm test:e2e-librarian` passes (it runs offline; CI runs it too)
+- [ ] If this changes `githubStore`, a maintainer should also run it with `--github`
 
 ## If this adds a dependency
 

@@ -25,13 +25,6 @@ import {
 } from '@modelcontextprotocol/ext-apps/server';
 import { z } from 'zod';
 import { BRAIN_APP_HTML } from '../lib/app-bundle.generated.ts';
-import {
-	parseFrontmatter,
-	withFrontmatter,
-	insertLogEntry,
-	todayIso,
-	type Frontmatter
-} from '../lib/wiki.ts';
 import type { D1Database } from '@cloudflare/workers-types';
 import { MAX_SCAN_PAGES, type RepoRef, type BrainStore } from '../lib/brain-repo.ts';
 import {
@@ -48,7 +41,6 @@ import {
 	isSourcePath,
 	isToolMaintained,
 	listHiddenPaths,
-	logPathOf,
 	pathPolicyOf
 } from '../lib/brain-config.ts';
 import type { TenantOpts } from '../lib/orgs.ts';

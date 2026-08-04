@@ -25,7 +25,6 @@ import {
 	type ImportDecision,
 	type ImportRecord
 } from '../lib/brain-import.ts';
-import type { BrainStore } from '../lib/brain-repo.ts';
 import { ensureFresh, loadAllFields } from '../lib/brain-index.ts';
 import { hasViews, renderViews, buildViewContext } from '../lib/views.ts';
 import { insertLogEntry, todayIso } from '../lib/wiki.ts';

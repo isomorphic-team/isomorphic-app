@@ -1,6 +1,5 @@
 // Golden test for the content index's freshness guard (ensureFresh) — PURE, no
-// network. D1 is shimmed over node:sqlite (the same shim the e2e scripts use) and
-// GitHub is a stub, so this runs in CI.
+// network. D1 is shimmed over node:sqlite and GitHub is a stub, so this runs in CI.
 //
 // What it exists to catch: a read that has to do UNBOUNDED work. That failure mode
 // is not "slow", it is "this brain can never be read again" — the pass exceeds the
@@ -12,9 +11,9 @@
 //   pnpm test:index
 
 import { DatabaseSync } from 'node:sqlite';
-import { readFileSync } from 'node:fs';
 import { ensureFresh, INDEX_SCHEMA_VERSION, listIndexedPages } from '../src/lib/brain-index.ts';
 import { githubStore } from '../src/lib/brain-repo.ts';
+import { applyMigrations } from '../src/local/d1-sqlite.ts';
 import { DEFAULT_BRAIN_CONFIG, type BrainConfig } from '../src/lib/brain-policy.ts';
 import { pageTitle } from '../src/lib/wiki.ts';
 
@@ -28,10 +27,13 @@ function check(label: string, cond: boolean, detail = '') {
 }
 
 // ---- D1 shim over node:sqlite, instrumented to count the work each read does ----
+//
+// Schema comes from the real migrations, not src/db/index-schema.sql, which is a
+// reference copy that can drift from what a deployment actually runs. Its own shim
+// rather than localD1's, because this test counts statements and batches.
 
-const schema = readFileSync(new URL('../src/db/index-schema.sql', import.meta.url), 'utf8');
 let sqlite = new DatabaseSync(':memory:');
-sqlite.exec(schema);
+applyMigrations(sqlite);
 
 let stmtCount = 0; // statements executed since the last resetCounters()
 let batchCount = 0;
@@ -147,7 +149,7 @@ const config: BrainConfig = { ...DEFAULT_BRAIN_CONFIG };
 
 function resetDb() {
 	sqlite = new DatabaseSync(':memory:');
-	sqlite.exec(schema);
+	applyMigrations(sqlite);
 }
 
 function meta() {
