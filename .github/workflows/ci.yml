@@ -81,6 +81,9 @@ jobs:
       - run: pnpm test:scope
       - run: pnpm test:feedback
       - run: pnpm test:usage
+      # Lints the two lists above against package.json, so the instruction in the
+      # comment stops depending on anyone reading the comment.
+      - run: pnpm test:wiring
 
       # Formatting is checked, not applied — a PR that reformats unrelated files is
       # noise, and `--check` tells the contributor exactly what to run.

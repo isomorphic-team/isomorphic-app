@@ -14,13 +14,18 @@
 		"allowImportingTsExtensions": true,
 		"verbatimModuleSyntax": true
 	},
+	// Enumerated rather than `scripts/**/*.ts`: some test scripts (test-policy) import
+	// from `app/`, which needs the DOM lib and belongs to tsconfig.app.json. Add a new
+	// Node-only script here so it is typechecked.
 	"include": [
 		"src/bootstrap.ts",
 		"src/manifest.ts",
 		"src/persist.ts",
+		"scripts/doctor.ts",
 		"scripts/gen-brain-template.ts",
 		"scripts/onboard-org.ts",
 		"scripts/setup-config.ts",
+		"scripts/test-wiring.ts",
 		"src/lib/**/*.ts"
 	]
 }
