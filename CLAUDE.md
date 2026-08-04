@@ -21,6 +21,8 @@ contribution rules, and the licensing rationale: [`CONTRIBUTING.md`](CONTRIBUTIN
 
 ```sh
 pnpm install
+pnpm try <folder>       # local runtime: MCP over a git repo on disk, no accounts (127.0.0.1:8788)
+pnpm doctor             # what this checkout has, what it is missing, what to run next
 pnpm setup:config       # GENERATE wrangler.jsonc from wrangler.template.jsonc (run this first)
 pnpm bootstrap          # one-shot: registers GitHub App, scaffolds the brain repo (http://localhost:3000)
 pnpm worker:dev         # `wrangler dev` for the MCP Worker — http://localhost:8787
@@ -38,49 +40,67 @@ pnpm test:access        # per-brain access rule (effectiveBrainRole) golden test
 pnpm test:scope         # org-vs-brain scope: which role each tool gates on
 pnpm test:feedback      # submit_feedback composition golden test (redaction, nothing identifying published)
 pnpm test:usage         # usage-analytics golden test (tool-classification coverage, the summary fold)
+pnpm test:wiring        # every test:* script is in BOTH package.json's `test` and ci.yml
+pnpm test:e2e-librarian # write tools end to end, offline against a git repo in a temp dir
+pnpm test:e2e-import    # the importer end to end, same
 pnpm typecheck          # runs all three tsconfigs (node, worker, app)
 pnpm format             # prettier
 ```
 
-**Tests.** Twelve pure golden tests, no network, all wired into CI and into the `test`
-script (`pnpm test` runs all of them): `pnpm test:roundtrip` (editor markdown
-round-trip), `pnpm test:views` (okf-view engine), `pnpm test:import` (import planner),
-`pnpm test:tools` (brain-authored tool parsing), `pnpm test:patch` (write_page append/edits),
-`pnpm test:structure` (OKF conformance), `pnpm test:index` (content-index freshness guard —
-bounded, resumable work per read), `pnpm test:policy` (the path-policy wire contract between
-Worker and app), `pnpm test:access` (the per-brain access rule: every input to
-`effectiveBrainRole`), `pnpm test:scope` (which role each TOOL gates on: the real handlers
-over a stub server and a fake `getContext`, asserting org-scope tools read `orgRole` and
-brain-scope tools read `role`, plus the `share_brain` and lockout guardrails that live in
-the tool rather than the lib), `pnpm test:feedback` (what submit_feedback publishes, and what
-it redacts), `pnpm test:usage` (usage analytics: that every registered tool name has an
-explicit `TOOL_KINDS` entry — it scans the tool sources, so a new tool cannot land
-unclassified — plus the summary fold, where members at zero and since-removed users both
-have to survive or the tiles stop matching the table). Adding one means adding it in BOTH `package.json`'s `test` script and
-`.github/workflows/ci.yml`, or it runs in exactly one place and nobody notices which.
-Plus two real-GitHub end-to-end batteries under `scripts/`, **not in CI** (they need
-`.dev.vars` with platform App creds): `pnpm exec tsx scripts/e2e-librarian.ts` drives the
-librarian write tools, `scripts/e2e-import.ts` drives the importer. Both create a
-disposable `brain-*-e2e-*` scratch repo on the platform org (auto-deleted, never a real
-brain) and shim D1 over `node:sqlite` so the content index (`ensureFresh` /
-`loadResolvedGraph` / `backlinksTo`) runs for real against a full `BrainContext`. Run
-`e2e-librarian` after changing any write tool (write_page, move_page/delete_page on a page
-or folder); it asserts the index-driven link repointing and the "still referenced" delete
-notes that the write path now derives from the index rather than a whole-brain scan.
+**Tests.** All offline, all fork-safe, all wired into CI and into the `test` script
+(`pnpm test` runs everything): `pnpm test:roundtrip` (editor markdown round-trip),
+`pnpm test:views` (okf-view engine), `pnpm test:import` (import planner),
+`pnpm test:tools` (brain-authored tool parsing), `pnpm test:patch` (write_page
+append/edits), `pnpm test:structure` (OKF conformance), `pnpm test:index`
+(content-index freshness guard: bounded, resumable work per read; wraps an octokit
+stub in the REAL `githubStore` so it still covers `fetchPages`'s GraphQL batching),
+`pnpm test:policy` (the path-policy wire contract between Worker and app),
+`pnpm test:access` (the per-brain access rule: every input to `effectiveBrainRole`),
+`pnpm test:scope` (which role each TOOL gates on: the real handlers over a stub server
+and a fake `getContext`, asserting org-scope tools read `orgRole` and brain-scope tools
+read `role`, plus the `share_brain` and lockout guardrails that live in the tool rather
+than the lib; traps BOTH `octokit` and `store` with throwing Proxies so an authz test
+that reaches storage fails loudly), `pnpm test:feedback` (what submit_feedback publishes
+and what it redacts), `pnpm test:usage` (usage analytics: that every registered tool name
+has an explicit `TOOL_KINDS` entry, scanned from the tool sources so a new tool cannot land
+unclassified, plus the summary fold, where members at zero and since-removed users both have
+to survive or the tiles stop matching the table), and `pnpm test:wiring` (every `test:*`
+script appears in both `package.json`'s `test` and `ci.yml`, in three directions, including
+itself).
+
+**The two END-TO-END batteries now run in CI too** (changed 2026-08-04):
+`pnpm test:e2e-librarian` and `pnpm test:e2e-import` drive the real MCP tool handlers,
+through a real content index on `node:sqlite`, against a real brain. By default that is
+the fs + git `BrainStore` in a temp directory: no network, no credentials, nothing to
+clean up. They gate the write path (write_page's edits/append, move_page's link
+repointing over a folder subtree, delete_page's "still referenced" notes, the importer's
+no-resurrection ledger), which was previously maintainer-run by hand. `--github` runs the
+identical assertions against a disposable `brain-*-e2e-*` scratch repo on the platform
+org (needs `.dev.vars` with platform App creds, auto-deleted, never a real brain). That
+mode is the only coverage of the GitHub adapter itself, so run it when `githubStore`
+changes.
+
+Adding a test means adding it in BOTH `package.json`'s `test` script and
+`.github/workflows/ci.yml`. `pnpm test:wiring` fails the build if you forget,
+rather than the battery silently running in exactly one place.
 
 **Iterating on the app UI:** use `pnpm app:dev` (renders the real `ui://` bytes via the
 official AppBridge host over stubbed fixtures — no Worker/auth/host, live-reload). It
 exercises the UI, not the real write path; for that use `pnpm worker:dev` + a local MCP
 host (Inspector/Desktop) at `http://localhost:8787/mcp`.
 
-## Two-runtime architecture
+## Runtime architecture (three programs, one `src/`)
 
-This repo ships **two distinct programs** sharing one `src/`:
+Narrative walkthrough for newcomers: [`docs/architecture.md`](docs/architecture.md).
+
+This repo ships **three distinct programs** sharing one `src/`:
 
 1. **Bootstrap server** (`src/bootstrap.ts`) — Node, Hono, run via `tsx`. One-shot setup flow that registers a GitHub App via the manifest flow, exchanges the code for credentials, and scaffolds the brain repo in one atomic Git Data API commit.
 2. **MCP Worker** (`src/worker.ts`) — Cloudflare Worker exposing MCP tools over **stateless** Streamable HTTP. Each request builds a fresh `McpServer` + `WebStandardStreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true })` behind the OAuth provider (`mcpApiHandler`), answering on the same POST (no SSE, no session). The per-request `McpSession` class holds tenant/brain resolution and all tool registration (`buildServer()`). Non-POST `/mcp` returns 405 (the stateless transport offers no server→client stream, and handing GET to the SDK transport on Workers hangs the request). The legacy `IsomorphicMindMcp` `McpAgent` **Durable Object** (`MCP_OBJECT` binding) is retained only as an **unused stub** to keep the binding valid — nothing routes to it. (History: this was a stateful McpAgent DO with long-lived SSE streams until 2026-07-17; the Claude host tore those streams down before async results arrived, so widgets intermittently failed. The stateless move fixed it.)
 
-The split matters for `src/lib/`. Anything imported by `worker.ts` runs on Cloudflare Workers and **cannot use `node:*` modules** (no `node:crypto`, no `node:fs`, etc.). The two tsconfigs enforce this — `tsconfig.node.json` includes the bootstrap files and `lib/`; `tsconfig.worker.json` includes `worker.ts` and `lib/`. `pnpm typecheck` runs both. If you need Node-only code, put it in `bootstrap.ts` (or a Node-only sibling), not in `lib/`.
+3. **Local runtime** (`src/local.ts`): Node, run via `tsx` as `pnpm try <folder>`. Serves the same content tools over a **git repository on disk** through the fs `BrainStore` (`src/local/brain-store-fs.ts`), with D1 shimmed over `node:sqlite` (`src/local/d1-sqlite.ts`). No auth (loopback only) and **no org model**, so members/sharing/invites/brain-switching are not registered. Builds a fresh `McpServer` per request for the same reason the Worker does: an `McpServer` binds to one transport. Added 2026-08-04 so a contributor reaches the real tools with no accounts, and so the write-path e2e batteries run offline in CI. `src/local/**` is Node-only and sits outside `src/lib/`. Reads come from the working tree, so its `getHead` reports a digest of that tree while `listCommits` reports git shas.
+
+The split matters for `src/lib/`. Anything imported by `worker.ts` runs on Cloudflare Workers and **cannot use `node:*` modules** (no `node:crypto`, no `node:fs`, etc.). The tsconfigs enforce this: `tsconfig.node.json` includes the bootstrap files, `src/local*`, `scripts/`, and `lib/`; `tsconfig.worker.json` includes `worker.ts` and `lib/`; `tsconfig.app.json` covers `app/`. `pnpm typecheck` runs all three. Node-only code goes in `src/local/`, `bootstrap.ts`, or a Node-only sibling, never in `lib/`.
 
 ## Auth model
 
@@ -137,6 +157,8 @@ deployment's identity.
 - **No `routes` block, ever.** A custom domain is bound in the Cloudflare **dashboard**, independently of the config. A `routes` entry with `custom_domain: true` makes `wrangler dev` rewrite `request.url`'s host, which breaks the OAuth provider's host-based routing and forces a comment-out dance on every local run. The template says so too; don't re-add one.
 - The DO `migrations` array (`v1` new / `v2` deleted `IsomorphicMindMcp`) is **append-only** by Cloudflare's rules. Neither entry may be removed even though nothing routes to the class.
 - `AUTH_MODE=static` is the single-shared-bearer path (`MCP_BEARER_TOKEN`). It is no longer the default and is not an access-control model, but it is now the documented **self-hosting** entry point (one person, one brain, no Cloudflare-side identity setup), so it is supported rather than legacy. `oauth` + `IDENTITY_MODE=authjs` is what the hosted deployment runs. (History: an `alias: { "ai": … }` entry once stubbed a transitive import from the `agents` package; both the package and `src/stubs/` are gone.)
+- **In static mode, `GITHUB_TOKEN` replaces the GitHub App** (`tokenOctokit` in `src/lib/github.ts`, taken in `tenantContext`'s single-tenant branch ahead of `installationOctokit`). Every call `brain-repo.ts` makes is available to a fine-grained PAT with Contents + Pull requests write on the one repo, so `GITHUB_TOKEN` + `BRAIN_REPO_OWNER`/`NAME` is the whole GitHub side: no org, manifest flow, PKCS conversion, or installation id. The App path is unchanged and still required for `oauth`, which mints a token per tenant from one installation. Commits are attributed to the token's owner rather than to the App.
+- **Single-tenant mode does not register the org tools.** `hasOrgModel` (`AUTH_MODE === 'oauth'`) gates `registerMemberTools`, `registerConnectedAccountTools`, and `registerOrgOnboardingTools` in `buildServer`: with no `orgs`/`memberships` rows they can only reject, an advertised tool costs context in every conversation, and a refusal reads to the model as a permissions problem to work around. Same rule as `FEEDBACK_REPO`. `brains` stays registered: the app's nav calls it on every open and learns which destinations exist from its `features`, and with no signed-in user it returns an empty list.
 
 ## Brain model: arbitrary structure (no entity types)
 
@@ -196,6 +218,35 @@ So: each tool's description must stand alone and **name itself**, cross-tool ste
 in `SERVER_INSTRUCTIONS` (hosts load it wholesale), and a tool an agent will hunt for by
 name mid-task should not be described in one terse line. Both descriptions carry a comment
 saying so; don't "tidy" them back.
+
+## `BrainStore`: the storage seam (where a brain physically lives)
+
+`src/lib/brain-repo.ts` exports **`BrainStore`**, the only interface between the tool
+layer and a brain's storage, plus **`githubStore(octokit)`**. `TenantContext`/`BrainContext`
+carry a `store`; every content read and write goes through it. Added 2026-08-04 so a brain
+can also be a git repo on disk (the local runtime, and the e2e batteries with no network).
+
+- **Ten operations:** `getHead`, `branchCommitSha`, `repoWritePolicy`, `listTree`,
+  `fetchPages`, `readFile`, `findOpenConfigPr`, `listCommits`, `commitFiles`, `commitOrPR`.
+  Not a general storage abstraction: it is what the tools already did, in the shape they
+  already did it.
+- **`branchCommitSha`, `repoWritePolicy`, and `listCommits` are in it because they were
+  raw `octokit.rest.*` calls in `brain-index.ts`, `brain-config.ts`, and `apps.ts`.** A raw
+  octokit call in a content path compiles and then fails at runtime on another backend. If
+  you reach for `ctx.octokit` while touching a brain's CONTENT, it belongs on the store.
+- **`octokit` is still on the context, now OPTIONAL.** It covers the three operations that
+  are GitHub as a PLATFORM rather than a brain as STORAGE: create a repository, list an
+  installation's repositories, check a repo exists before connecting it. All three are in
+  `src/tools/brains.ts` behind `githubClient(ctx)`, all three are org-model tools, and a
+  deployment with no GitHub client has no org model and does not register them
+  (`hasOrgModel` in `worker.ts`).
+- **`commitFiles` atomicity is load-bearing.** `write_page`'s "an edit batch is never
+  half-applied" rests on the branch ref not moving unless the whole bundle committed. Any
+  implementation must preserve it, which is why a local brain is a git repo, not a folder.
+- Coverage: `pnpm test:index` wraps its octokit stub in the real `githubStore` rather than
+  stubbing `BrainStore`, so it still exercises `fetchPages`'s GraphQL batching.
+  `pnpm test:scope` traps the store with a throwing Proxy, so an authorization test that
+  reaches storage fails rather than passes.
 
 ## Content index (read-path backend)
 
@@ -517,10 +568,11 @@ UI is `app/views/AnalyticsView.tsx`, an ORG-scope destination beside Members.
   any use for. `brain_id` is `''` and never NULL for org-scope calls, because
   SQLite treats PK NULLs as DISTINCT and a nullable column would defeat the
   upsert, appending a row per call forever.
-- **`USAGE_ANALYTICS` gates BOTH the recording and the tool registration**, so a
+- **`USAGE_ANALYTICS` (and `hasOrgModel`) gate BOTH the recording and the tool registration**, so a
   deployment that disables it records nothing and never shows a tab that can only
   answer zero. The generated config defaults it to `"true"`; set it to `"false"` to
-  turn the feature off. The Worker compares `=== 'true'` rather than `!== 'false'`,
+  turn the feature off. Single-tenant deployments do not register it either: the tab
+  is org-scope and there is no org to resolve. The Worker compares `=== 'true'` rather than `!== 'false'`,
   so a config that does not mention the key at all (hand-written, or predating this)
   records nothing: the only way to start collecting is a config that says so.
 - **Recording rides the loop that already rewrites every registration.**

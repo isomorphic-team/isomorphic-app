@@ -25,7 +25,6 @@ import {
 	type ImportDecision,
 	type ImportRecord
 } from '../lib/brain-import.ts';
-import { getHead, listTree, fetchPages, readFile, commitOrPR } from '../lib/brain-repo.ts';
 import { ensureFresh, loadAllFields } from '../lib/brain-index.ts';
 import { hasViews, renderViews, buildViewContext } from '../lib/views.ts';
 import { insertLogEntry, todayIso } from '../lib/wiki.ts';
@@ -107,7 +106,7 @@ export function registerImportTools(
 		},
 		async ({ source, records, source_owned, manifest, adopt_existing, dry_run, brain }) => {
 			const ctx = await getContext({ requires: 'editor', brain });
-			const { octokit, repoArgs, config, author, db, brainId } = ctx;
+			const { store, repoArgs, config, author, db, brainId } = ctx;
 
 			if (config.sourceOfTruth === 'source') {
 				return fail(
@@ -136,7 +135,7 @@ export function registerImportTools(
 			}
 
 			// Freshness first — key discovery and diffs must reflect repo HEAD.
-			await ensureFresh(db, octokit, repoArgs, brainId, config);
+			await ensureFresh(db, store, repoArgs, brainId, config);
 
 			// Which pages claim which keys (source_key / source_keys frontmatter,
 			// straight from the index — discovery only, never the diff basis).
@@ -157,8 +156,8 @@ export function registerImportTools(
 			const matchedPaths = new Set(
 				[...claimsByPath].filter(([, keys]) => keys.some((k) => recordKeys.has(k))).map(([p]) => p)
 			);
-			const head = await getHead(octokit, repoArgs);
-			const tree = await listTree(octokit, repoArgs, head);
+			const head = await store.getHead(repoArgs);
+			const tree = await store.listTree(repoArgs, head);
 			const treePaths = new Set(tree.map((e) => e.path));
 			const existingPaths = new Set([...treePaths].filter((p) => isContentPath(p, config)));
 			const adoptPaths = new Set<string>();
@@ -168,8 +167,7 @@ export function registerImportTools(
 					if (p && existingPaths.has(p) && !claimsByPath.has(p)) adoptPaths.add(p);
 				}
 			}
-			const { pages: matchedPages } = await fetchPages(
-				octokit,
+			const { pages: matchedPages } = await store.fetchPages(
 				repoArgs,
 				tree.filter((e) => matchedPaths.has(e.path) || adoptPaths.has(e.path))
 			);
@@ -184,7 +182,7 @@ export function registerImportTools(
 				: undefined;
 
 			// The source's ledger — importer-owned state in the repo.
-			const ledgerFile = await readFile(octokit, repoArgs, ledgerPath(source));
+			const ledgerFile = await store.readFile(repoArgs, ledgerPath(source));
 			let ledger;
 			try {
 				ledger = parseLedger(ledgerFile?.content ?? null);
@@ -268,7 +266,7 @@ export function registerImportTools(
 			if (ledgerChanged) {
 				writes.push({ path: ledgerPath(source), content: serializeLedger(p.ledgerAfter) });
 			}
-			const log = await readFile(octokit, repoArgs, logPathOf(config));
+			const log = await store.readFile(repoArgs, logPathOf(config));
 			if (log && p.writes.length) {
 				writes.push({
 					path: logPathOf(config),
@@ -276,7 +274,7 @@ export function registerImportTools(
 				});
 			}
 
-			const outcome = await commitOrPR(octokit, repoArgs, {
+			const outcome = await store.commitOrPR(repoArgs, {
 				writeMode: config.writeMode,
 				defaultBranch: config.defaultBranch,
 				author,
@@ -332,12 +330,12 @@ export function registerImportTools(
 		},
 		async ({ source, decisions, brain }) => {
 			const ctx = await getContext({ requires: 'editor', brain });
-			const { octokit, repoArgs, config, author, db, brainId } = ctx;
+			const { store, repoArgs, config, author, db, brainId } = ctx;
 
 			const badAlias = decisions.find((d) => d.action === 'alias' && !d.alias_to?.trim());
 			if (badAlias) return fail(`Decision for "${badAlias.key}": alias needs "alias_to".`);
 
-			await ensureFresh(db, octokit, repoArgs, brainId, config);
+			await ensureFresh(db, store, repoArgs, brainId, config);
 			const allFields = await loadAllFields(db, brainId);
 
 			// Pages the decisions touch: claimants of decided keys + alias targets.
@@ -360,10 +358,9 @@ export function registerImportTools(
 			// Alias targets may carry no key claims yet — include them regardless.
 			for (const t of aliasTargets) relevant.add(t);
 
-			const head = await getHead(octokit, repoArgs);
-			const tree = await listTree(octokit, repoArgs, head);
-			const { pages } = await fetchPages(
-				octokit,
+			const head = await store.getHead(repoArgs);
+			const tree = await store.listTree(repoArgs, head);
+			const { pages } = await store.fetchPages(
 				repoArgs,
 				tree.filter((e) => relevant.has(e.path))
 			);
@@ -373,7 +370,7 @@ export function registerImportTools(
 				content: p.content
 			}));
 
-			const ledgerFile = await readFile(octokit, repoArgs, ledgerPath(source));
+			const ledgerFile = await store.readFile(repoArgs, ledgerPath(source));
 			let ledger;
 			try {
 				ledger = parseLedger(ledgerFile?.content ?? null);
@@ -400,7 +397,7 @@ export function registerImportTools(
 			if (serializeLedger(p.ledgerAfter) !== serializeLedger(ledger)) {
 				writes.push({ path: ledgerPath(source), content: serializeLedger(p.ledgerAfter) });
 			}
-			const log = await readFile(octokit, repoArgs, logPathOf(config));
+			const log = await store.readFile(repoArgs, logPathOf(config));
 			if (log) {
 				writes.push({
 					path: logPathOf(config),
@@ -412,7 +409,7 @@ export function registerImportTools(
 				});
 			}
 
-			const outcome = await commitOrPR(octokit, repoArgs, {
+			const outcome = await store.commitOrPR(repoArgs, {
 				writeMode: config.writeMode,
 				defaultBranch: config.defaultBranch,
 				author,

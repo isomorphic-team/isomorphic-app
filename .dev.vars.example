@@ -4,12 +4,30 @@
 # (`pnpm bootstrap`, `pnpm setup:config`, the e2e scripts) reads it via
 # `loadDevVarsIntoEnv()`. That is why it carries Wrangler's filename.
 #
-# Most keys here are written FOR you by `pnpm bootstrap`. Start there rather than
-# filling this in by hand. See docs/self-hosting.md.
+# Most keys here are written FOR you by `pnpm bootstrap`, which you only need for a
+# MULTI-USER deployment. For one person, or for working on the code, the three keys
+# in the first block below are the whole file. `pnpm doctor` tells you what is
+# missing for the mode you have chosen. See docs/self-hosting.md.
+
+# ======================================================================
+# The short path: one person, one brain, no GitHub App
+# ======================================================================
+# A plain access token for the one repo you want to serve. A fine-grained PAT with
+# Contents: read and write plus Pull requests: read and write on that repository is
+# enough (github.com/settings/personal-access-tokens). No organization, no App, no
+# manifest flow, no installation id: none of the block below is read when this is set.
+#
+# Requires AUTH_MODE=static (the generated default) and MCP_BEARER_TOKEN further down.
+# Commits are attributed to whoever owns the token.
+GITHUB_TOKEN=
+BRAIN_REPO_OWNER=
+BRAIN_REPO_NAME=
 
 # ======================================================================
 # GitHub App identity — written by `pnpm bootstrap` (manifest exchange)
 # ======================================================================
+# Only needed for a multi-user deployment (AUTH_MODE=oauth), or if you specifically
+# want App-authored commits on a single-tenant one.
 GITHUB_APP_ID=
 GITHUB_APP_SLUG=
 GITHUB_APP_CLIENT_ID=
@@ -28,11 +46,10 @@ GITHUB_APP_PRIVATE_KEY_BASE64=
 PLATFORM_ORG=
 PLATFORM_INSTALLATION_ID=
 
-# Single-tenant (AUTH_MODE=static) only: the one brain repo to serve, and the one
-# installation to reach it with. Ignored in oauth mode, which resolves both per request.
+# Single-tenant (AUTH_MODE=static) only, and only when reaching the brain through the
+# App instead of GITHUB_TOKEN: the installation that can see BRAIN_REPO_OWNER/NAME
+# (set those in the first block). Ignored in oauth mode, which resolves per request.
 GITHUB_APP_INSTALLATION_ID=
-BRAIN_REPO_OWNER=
-BRAIN_REPO_NAME=
 
 # ======================================================================
 # Auth

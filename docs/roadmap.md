@@ -124,6 +124,51 @@ picker, Manage brains) or a qualifier on an otherwise ambiguous label
 needs another org's roster without switching brains, that is an org argument ON the
 members screen — an argument again, not a mode.
 
+# TODO: local-first development (make a first contribution cheap). **DONE 2026-08-04**
+
+Full plan, including where it turned out to be wrong:
+[`docs/design/local-first-development.md`](design/local-first-development.md).
+
+All five workstreams shipped. `pnpm try <folder>` serves the real MCP tools over a git repo on
+disk with no accounts; `GITHUB_TOKEN` replaces the whole GitHub App for a single user;
+`BrainStore` is the storage seam; and **both write-path e2e batteries now run offline in CI**,
+which was the point. Remaining sub-items are struck through below.
+
+Today a contributor can reach the app UI in five minutes (`pnpm app:dev`, no accounts) and the
+pure engines instantly (`pnpm test`, offline). Everything else needs a GitHub org, a GitHub App,
+and `pnpm bootstrap`, because a brain is a GitHub repo and GitHub is not swappable. The same root
+cause keeps `scripts/e2e-librarian.ts` and `scripts/e2e-import.ts` out of CI, which means the
+write path (the riskiest code we have) is gated by a maintainer running them by hand rather
+than by a check on the pull request.
+
+Five workstreams, in order. The first two stand alone; do not start the fourth before the third
+has landed and settled.
+
+- ~~**Papercuts.** Pin Node (`engines` + `.nvmrc`; `node:sqlite` needs 22+, CI runs 24). Fix the
+  golden-test counts stated in `CONTRIBUTING.md`, `docs/self-hosting.md`, and `ci.yml`'s comment,
+  which disagree and will drift again: drop the numerals, keep the lists. Lint the documented
+  two-places rule: every
+  `test:*` script in `package.json` must appear in `ci.yml`. Add `pnpm doctor`. All good first
+  issues.~~ DONE (plus `pnpm doctor`, and `test:wiring` lints the two-places rule).
+- ~~**Bring your own token.** `GITHUB_TOKEN` + `BRAIN_REPO_*` builds a plain Octokit, replacing the
+  App for single-user and development use. Six `installationOctokit(...)` call sites, all in
+  `worker.ts`. Removes the org requirement, the manifest flow, bootstrap, and the PKCS conversion
+  from the critical path. App-only tools do not register, per the `FEEDBACK_REPO` precedent.~~ DONE.
+- ~~**The `BrainStore` seam.** `src/lib/brain-repo.ts` is already the chokepoint (17 of the repo's
+  36 `octokit.` call sites; ten operations as built). Extract an interface, make GitHub one adapter,
+  carry the store on `TenantContext`.~~ DONE, at ten operations rather than seven.
+- ~~**The local runtime.** `src/local.ts`, a Node MCP host over a git repo on disk. D1 becomes the
+  `node:sqlite` shim the e2e scripts already carry, KV becomes a `Map`, `waitUntil` and the OAuth
+  props become stubs, and the transport needs nothing (it is web-standard and `@hono/node-server`
+  is already a dependency). The only new code is the fs + git adapter. A local brain is a git
+  repo, not a bare folder, so `commitFiles`'s atomicity survives.~~ DONE: `pnpm try ~/notes`.
+- ~~**End-to-end tests in CI.** The payoff. Both e2e batteries run against the fs adapter with no
+  network and no credentials, so they move into `ci.yml` without breaking its fork-safe rule.
+  Keep the real-GitHub runs for the GitHub adapter itself.~~ DONE: `--github` runs the identical assertions by hand.
+
+Related: the section below productizes the same flow for **users**; this one is about
+**contributors**, and the two share the bootstrap-removal work.
+
 # TODO: productize the bootstrap flow for other users
 
 What's needed to take the current single-developer flow (run `pnpm bootstrap` locally, register an App, install on your org, scaffold) and let arbitrary users run it without help.
@@ -144,7 +189,7 @@ Current state: Worker (`src/worker.ts`) with the librarian (`write_page` / `move
 
 - ~~Replace static `MCP_BEARER_TOKEN` with OAuth.~~ Phase 1 done. OAuth path live behind `AUTH_MODE=oauth`.
 - ~~Multi-tenant routing (phase 2 read path): per-request D1 lookup keyed by the OAuth-bound `gh_user_id`.~~ Done in phase 2.0, `tenantContext()` in `worker.ts`. The static-mode env vars (`BRAIN_REPO_*`, `GITHUB_APP_INSTALLATION_ID`) remain as the legacy fallback until phase 3 cutover.
-- Phase 3 cutover: ~~hoist platform App creds to Worker secrets~~ done. Still to do: register the public _platform-owned_ App (the one in use is currently a user-owned dev App), drop the `AUTH_MODE=static` branch and the legacy `MCP_BEARER_TOKEN`, decommission the user-owned dev App.
+- Phase 3 cutover: ~~hoist platform App creds to Worker secrets~~ done. Still to do: register the public _platform-owned_ App (the one in use is currently a user-owned dev App), decommission the user-owned dev App. **`AUTH_MODE=static` is NO LONGER slated for removal** (changed 2026-08-04): it is the documented single-tenant self-hosting path, `GITHUB_TOKEN` mode is built on it, and `CLAUDE.md` has described it as supported rather than legacy since the repo went public. `MCP_BEARER_TOKEN` stays with it.
 - ~~Routes / custom-domain dev hassle~~: solved by binding the custom domain via the Cloudflare dashboard instead of via `wrangler.jsonc` routes. Dashboard binding is independent of the config, so local dev with `wrangler dev` no longer rewrites `request.url`. Don't re-add a `routes` block; it reintroduces the bug.
 - Disable `workers_dev` (`workers_dev: false`) so the custom domain is the canonical entry point. Cosmetic: the workers.dev URL works fine, just unnecessary now that the custom domain is live.
 - Claude Code MCP client OAuth bug: token is issued but not attached to the post-flow `/mcp` reconnection ([#46140](https://github.com/anthropics/claude-code/issues/46140)). Inspector works; track upstream until Anthropic fixes.
@@ -349,8 +394,9 @@ tradeoffs, and phased checklist: [`design/wysiwyg-markdown-editor.md`](design/wy
 
 # TODO: test harness
 
-Eight pure golden tests exist today (`pnpm test`), all offline. What's still missing is
-runtime coverage of the tool handlers themselves.
+A dozen golden tests exist today (`pnpm test`), all offline, plus two end-to-end batteries
+that drive the real tool handlers against a git repo in a temp directory (**DONE 2026-08-04**,
+see the local-first section above). What's still missing is unit-level and in-workerd coverage.
 
 - **Vitest unit tests for pure helpers.** `slugify`, `insertLogEntry`, `isRawPath`,
   `utf8ToBase64`. Fast, no I/O, instant feedback.
@@ -361,9 +407,11 @@ runtime coverage of the tool handlers themselves.
 - **OAuth-metadata regression test**: hit `/.well-known/oauth-authorization-server` and
   assert `issuer` / `authorization_endpoint` / `token_endpoint` resolve to the request
   origin. Would have caught the `custom_domain: true` rewrite bug we hit during phase 1.
-- **Skip list:** no E2E against real GitHub repos in CI (rate limits, flakiness, secret
-  management); no verbatim LLM output pinning; no bootstrap E2E (snapshot-test
-  `buildManifest` and call it done, since registering a real GitHub App from CI is gnarly).
+- **Skip list:** no E2E against **real GitHub** in CI (rate limits, flakiness, secret
+  management). The `--github` mode stays a by-hand maintainer step, while the offline
+  fs-backed run of the same assertions is in CI; no verbatim LLM output pinning; no bootstrap
+  E2E (snapshot-test `buildManifest` and call it done, since registering a real GitHub App from
+  CI is gnarly).
 - **Mocking strategy:** if the octokit mock surface grows past a few methods, build a thin
   in-memory GitHub stub instead of stacking `vi.mock` calls.
 

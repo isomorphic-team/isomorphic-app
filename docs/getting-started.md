@@ -17,7 +17,8 @@ Every Isomorphic server exposes MCP at **`/mcp`** on its own origin:
 | ------------------------------------- | ------------------------------- |
 | The hosted service, run by Isomorphic | `https://mcp.isomorphic.sh/mcp` |
 | Your own deployment                   | `https://<your-worker>/mcp`     |
-| Local development                     | `http://localhost:8787/mcp`     |
+| Local development (the Worker)        | `http://localhost:8787/mcp`     |
+| A folder on your machine (`pnpm try`) | `http://127.0.0.1:8788/mcp`     |
 
 The `/mcp` path is required. The bare origin returns 404.
 

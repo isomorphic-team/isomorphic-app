@@ -9,8 +9,21 @@ keeps reads fast at any size, computed views, and an in-client viewer and WYSIWY
 non-technical teammate never has to open GitHub.
 
 [Getting started](docs/getting-started.md) · [Self-hosting](docs/self-hosting.md) ·
+[Architecture](docs/architecture.md) ·
 [Licensing](docs/licensing.md) · [Contributing](CONTRIBUTING.md) ·
-[Architecture](CLAUDE.md) · [Roadmap](docs/roadmap.md)
+[Invariants](CLAUDE.md) · [Roadmap](docs/roadmap.md)
+
+**Try it in two minutes, with no accounts:**
+
+```sh
+git clone https://github.com/isomorphic-team/isomorphic-app
+cd isomorphic-app && pnpm install
+pnpm try ~/Documents/notes     # any folder of markdown; an Obsidian vault works
+```
+
+The real MCP server, the real librarian tools, and the real content index, against a git
+repository on your disk. No GitHub account, no Cloudflare account, no tokens. Connect it
+with `claude mcp add --transport http isomorphic-local http://127.0.0.1:8788/mcp`.
 
 > Open source under [AGPL-3.0-only](LICENSE). Run it, fork it, deploy it for your own company,
 > sell services around it. If you modify it and let others use your version over a network,
@@ -103,7 +116,7 @@ git clone https://github.com/isomorphic-team/isomorphic-app
 cd isomorphic-app
 pnpm install
 pnpm setup:config       # generate wrangler.jsonc for local development
-pnpm test               # eight golden tests, offline
+pnpm test               # the full suite, offline
 pnpm app:dev            # http://localhost:5175, the real app UI over fixtures
 ```
 
@@ -150,6 +163,8 @@ faster than any model's training data.
 ## Commands
 
 ```sh
+pnpm try <folder>       # local runtime: MCP over a git repo on disk, no accounts
+pnpm doctor             # what this checkout has, and what to run next
 pnpm setup:config       # generate wrangler.jsonc (--provision to create Cloudflare resources)
 pnpm bootstrap          # one-shot GitHub App registration + brain scaffold
 pnpm app:dev            # app UI dev server, no credentials needed
@@ -158,14 +173,14 @@ pnpm worker:deploy      # publish to Cloudflare
 pnpm gen:app            # regenerate the ui:// bundle (after editing app/)
 pnpm gen:templates      # regenerate the brain templates (after editing brain-template/)
 pnpm db:migrate         # apply D1 migrations locally
-pnpm test               # all eight golden tests
+pnpm test               # the full suite, offline
 pnpm typecheck          # all three tsconfigs
 pnpm format             # prettier
 ```
 
-Two further batteries hit real GitHub and are not in CI: `scripts/e2e-librarian.ts` and
-`scripts/e2e-import.ts`. Both create a disposable scratch repository, delete it afterwards, and
-never touch a real brain.
+`pnpm test` includes two end-to-end batteries that drive the real tool handlers against a git
+repo in a temp directory. The same two run against real GitHub with `--github`, which needs
+platform App credentials and creates a disposable scratch repository it deletes afterwards.
 
 ## Contributing
 

@@ -14,7 +14,12 @@
 	},
 	"type": "module",
 	"packageManager": "pnpm@10.33.2",
+	"engines": {
+		"node": ">=24"
+	},
 	"scripts": {
+		"doctor": "tsx scripts/doctor.ts",
+		"try": "tsx src/local.ts",
 		"setup:config": "tsx scripts/setup-config.ts",
 		"bootstrap": "tsx src/bootstrap.ts",
 		"onboard-org": "tsx scripts/onboard-org.ts",
@@ -29,7 +34,10 @@
 		"format": "prettier --write .",
 		"gen:app": "tsx scripts/gen-app.ts",
 		"app:dev": "tsx scripts/app-dev.ts",
-		"test": "pnpm test:roundtrip && pnpm test:views && pnpm test:import && pnpm test:tools && pnpm test:patch && pnpm test:structure && pnpm test:index && pnpm test:policy && pnpm test:access && pnpm test:scope && pnpm test:feedback && pnpm test:usage",
+		"test": "pnpm test:roundtrip && pnpm test:views && pnpm test:import && pnpm test:tools && pnpm test:patch && pnpm test:structure && pnpm test:index && pnpm test:policy && pnpm test:access && pnpm test:scope && pnpm test:feedback && pnpm test:usage && pnpm test:wiring && pnpm test:e2e-librarian && pnpm test:e2e-import",
+		"test:wiring": "tsx scripts/test-wiring.ts",
+		"test:e2e-librarian": "tsx scripts/e2e-librarian.ts",
+		"test:e2e-import": "tsx scripts/e2e-import.ts",
 		"test:roundtrip": "tsx scripts/roundtrip-check.ts",
 		"test:views": "tsx scripts/test-views.ts",
 		"test:import": "tsx scripts/test-import.ts",

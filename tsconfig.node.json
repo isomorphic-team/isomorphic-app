@@ -6,6 +6,7 @@
 		"lib": ["ES2023"],
 		"types": ["node"],
 		"strict": true,
+		"noUnusedLocals": true,
 		"esModuleInterop": true,
 		"forceConsistentCasingInFileNames": true,
 		"resolveJsonModule": true,
@@ -14,13 +15,19 @@
 		"allowImportingTsExtensions": true,
 		"verbatimModuleSyntax": true
 	},
+	// Everything under scripts/ EXCEPT the two that import from `app/`
+	// (roundtrip-check, test-policy), which need the DOM lib and are covered by
+	// tsconfig.app.json. Typechecking the scripts matters: the e2e harnesses build a
+	// full BrainContext by hand, so a change to that shape should fail here rather
+	// than at 3am against a real repo.
 	"include": [
 		"src/bootstrap.ts",
 		"src/manifest.ts",
 		"src/persist.ts",
-		"scripts/gen-brain-template.ts",
-		"scripts/onboard-org.ts",
-		"scripts/setup-config.ts",
+		"src/local.ts",
+		"src/local/**/*.ts",
+		"scripts/**/*.ts",
 		"src/lib/**/*.ts"
-	]
+	],
+	"exclude": ["scripts/roundtrip-check.ts", "scripts/test-policy.ts"]
 }

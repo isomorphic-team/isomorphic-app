@@ -33,9 +33,9 @@
 
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js';
-import { z } from 'zod';
 import { OAuthProvider, type OAuthHelpers } from '@cloudflare/workers-oauth-provider';
-import { installationOctokit, type AppCreds } from './lib/github.ts';
+import { installationOctokit, tokenOctokit, type AppCreds } from './lib/github.ts';
+import { githubStore, type BrainStore } from './lib/brain-repo.ts';
 import { getTenantByUserId, NoTenantError } from './lib/tenants.ts';
 import { provisionBrainForUser, provisionOrgForUser } from './lib/provision.ts';
 import {
@@ -49,20 +49,18 @@ import {
 	brainLabel,
 	brainLabelQualified,
 	type AccessibleBrain,
-	type Org,
 	type OrgScope,
 	type Role,
 	type TenantOpts
 } from './lib/orgs.ts';
 import type { CommitAuthor } from './lib/brain-repo.ts';
-import { ensureFresh, listIndexedPages, detectNeedsConfig } from './lib/brain-index.ts';
-import { tryRenderViews } from './lib/views.ts';
 import { githubHandler } from './oauth/github-handler.ts';
 import { authHandler } from './oauth/auth-handler.ts';
-import { base64ToUtf8 } from './lib/wiki.ts';
 import { registerLibrarianTools } from './tools/librarian.ts';
 import { registerImportTools } from './tools/importer.ts';
 import { registerBrainApp } from './tools/apps.ts';
+import { SERVER_INSTRUCTIONS } from './lib/server-instructions.ts';
+import { registerCoreTools } from './tools/core.ts';
 import { registerMemberTools } from './tools/members.ts';
 import { registerBrainAccessTools } from './tools/brain-access.ts';
 import { registerConnectedAccountTools } from './tools/connected-accounts.ts';
@@ -74,13 +72,7 @@ import { recordUsage } from './lib/usage-store.ts';
 import { dayKey, countedCall } from './lib/usage.ts';
 import { loadCustomToolDefs, registerCustomTools, type CustomToolLoad } from './tools/custom.ts';
 import { resolveInstallationOrg, connectCustomerOrg } from './lib/org-connect.ts';
-import {
-	loadBrainConfig,
-	isContentPath,
-	listHiddenPaths,
-	pathPolicyOf,
-	type BrainConfig
-} from './lib/brain-config.ts';
+import { loadBrainConfig, type BrainConfig } from './lib/brain-config.ts';
 
 interface Env {
 	// Auth mode selector
@@ -104,6 +96,11 @@ interface Env {
 	GITHUB_APP_ID: string;
 	GITHUB_APP_PRIVATE_KEY_BASE64: string;
 	GITHUB_APP_INSTALLATION_ID?: string;
+	// Single-tenant alternative to the App entirely (AUTH_MODE=static): a plain
+	// access token for the one brain repo. Set this and the App credentials above
+	// are not read at all, which is what makes local development and one-person
+	// self-hosting cheap. Ignored in oauth mode, which mints a token per tenant.
+	GITHUB_TOKEN?: string;
 	// The App's URL slug (e.g. "isomorphic-mind"), from bootstrap. Used to build
 	// the install URL for the self-serve connect_github_org flow. Not a secret.
 	GITHUB_APP_SLUG?: string;
@@ -186,10 +183,6 @@ function appCreds(env: Env): AppCreds {
 	};
 }
 
-function repoArgs(env: Env) {
-	return { owner: env.BRAIN_REPO_OWNER, repo: env.BRAIN_REPO_NAME };
-}
-
 // Thrown by brain-scope resolution when the caller has an org but no brain yet
 // (Phase 8: brains are created explicitly, not auto-provisioned). Brain-scope tools
 // let it propagate — the MCP layer surfaces the message — so the user is told to
@@ -205,6 +198,10 @@ class NoBrainError extends Error {
 
 interface TenantContext {
 	octokit: Awaited<ReturnType<typeof installationOctokit>>;
+	// The brain's storage, bound to that octokit. Every content read and write goes
+	// through this rather than the client above, which is what lets a non-GitHub
+	// backend serve the same tools. See src/lib/brain-repo.ts.
+	store: BrainStore;
 	repoArgs: { owner: string; repo: string };
 	// The caller's role ON THE RESOLVED BRAIN (effectiveBrainRole: an explicit
 	// grant, org visibility, or the org-admin floor: whichever is highest). Read
@@ -245,23 +242,8 @@ interface TenantContext {
 // especially the in-client viewer — invoked at the right moments, since it applies
 // across the whole connector rather than one tool at a time. Keep it short and
 // behavioral; per-tool nuance lives in each tool's own description.
-const SERVER_INSTRUCTIONS = `Isomorphic is the user's "brain": a personal or team knowledge base (a GitHub-backed wiki) that can be searched, read, edited, and — importantly — VIEWED inside Claude via the Isomorphic app.
-
-When to reach for it:
-- Answer from the brain first for anything specific to this user or their org — their notes, projects, people, decisions, customers. Prefer search_pages / read_page over general knowledge for company- or user-specific questions.
-- OPEN THE VIEWER, don't just paste text. Whenever the user wants to look at, explore, or "see" a page, and whenever you cite or reference a specific brain page in an answer, call view_page(path) for that page (or browse_brain for the whole brain). These render the page inside Claude in the Isomorphic app so the user can click through it — far better than a wall of pasted markdown. Treat "I mentioned this page" as a cue to open it.
-- Use read_page (not view_page) only when YOU need the raw content to reason over it; use view_page when the goal is for the USER to see it.
-- For "what changed", "who edited this", or reviewing recent activity, call view_activity — it opens an audit feed of recent changes (who / what / when); pass a path for one page's history.
-- For anything about MEMBERS / the team / the organization's people / org roles / invites, call members. It opens the interactive roster inline (with invite + role controls for admins) and also returns the roster as data, so use it both when the user wants to see or manage people and when YOU need the roster to reason over (e.g. before a role change).
-- ACCESS IS PER BRAIN, and it is a DIFFERENT question from org membership. A new brain is PRIVATE to whoever created it: being in the organization does not mean you can open it. So for "who can see / who has access to / who is this brain shared with", call brain_access (it opens the sharing panel inline and returns the list as data); to share one, change what someone can do in it, revoke them, or make it private vs visible to the whole organization, call share_brain. Use members + set_member_role for someone's ORGANIZATION role, and brain_access + share_brain for access to a PARTICULAR brain. Sharing only works for people already in the organization, so invite_member first if they have no account.
-- The user may have MULTIPLE brains (personal, team, client). Tools act on the ACTIVE brain by default; call brains to show/switch them, switch_brain to change the active one, or pass \`brain\` to any tool (a name/handle like "acme" or "team wiki") to target a different brain. Opening a brain in the app — view_page / browse_brain / edit_page on a \`brain\` — makes it the ACTIVE brain (the user is now looking at it, and the in-client viewer follows it), so subsequent bare calls stay on it. A one-shot data read (read_page / search_pages with \`brain\`) does NOT change the active brain. If a request could mean a different brain than the active one, target it with \`brain\` or ask which brain. An org admin can adopt another repo as a brain with connect_brain (call it with no repo to see the eligible repos) and remove one with disconnect_brain.
-- FOLDER NOTES: a folder's overview page must be named \`index.md\` (\`README.md\` is also accepted on older vaults). A page at \`<folder>/index.md\` IS the folder: the app opens it when you click the folder, and okf-view directory listings link folders through it. Any other name (\`overview.md\`, \`vendors.md\`, \`about.md\`) is just a loose page sitting next to its siblings. So when you create a folder of related pages, or the user asks for an overview/index/landing page for a folder, write \`<folder>/index.md\`; and when you find an overview-shaped page under some other name, offer to move_page it to \`index.md\`.
-- ONE PAGE = ONE CONCEPT. These brains follow the Open Knowledge Format: anything other pages should be able to link to — a person, vendor, system, event series, project, decision — is its own \`.md\` file with a \`type:\` in its frontmatter. When you are about to write a list of named things as headings or bullets inside one page, stop and write a page per thing instead, then link to them from the parent. A folder note (\`index.md\`) LISTS what is in its folder; it never holds the folder's content inline. The tell that you got this wrong: a reader cannot link to the thing you just wrote, and search cannot return it as a result.
-- MATCH THE BRAIN YOU ARE IN. Before adding to an existing folder, look at a sibling page (read_page) and follow what is already there — the same \`type:\` values, the same frontmatter keys, the same granularity. A brain that gives every vendor its own file and then gets one page holding twelve events is worse off than either convention applied consistently. When restructuring, run validate afterwards: it reports structure drift as advisory notes.
-- EDIT PART OF A PAGE, don't rewrite it. write_page's \`content\` REPLACES the whole body, so it destroys anything you haven't read. To change part of a page use \`edits\` (exact find/replace, each anchor matching once) or \`append\`: they touch only what you name, need no prior read, and fail loudly rather than guessing. If you do pass \`content\` for an existing page you didn't just write, call read_page first.
-- Write only when asked. Edits to a protected brain open a pull request that merges automatically once checks pass; tell the user the change is on its way rather than exposing git mechanics.
-- FEEDBACK ABOUT ISOMORPHIC ITSELF goes to the maintainers with submit_feedback. When the user says something here is broken, confusing, or missing, or asks for a feature, offer to send it rather than only sympathizing. It files a public issue on the project's tracker and needs no GitHub account from them. The first call posts nothing: show them the exact title and body it returns, then call again with \`confirm: true\`. Never file one without the user having seen the text, and never put a token, key, or their private content in it. (Feedback about their own CONTENT is a normal page edit, not this.)
-- The brain IS a GitHub repo, and every write tool (write_page, move_page, etc.) already commits to it — that is the only save path; there is no separate "push to GitHub" step. So if the user asks you to push, commit, sync, or save to GitHub, the write tools ARE how you do it (and if you already edited, it is already pushed). Never tell the user you cannot push or commit to GitHub.`;
+// SERVER_INSTRUCTIONS lives in src/lib/server-instructions.ts, shared with the local
+// Node runtime so the two cannot drift.
 
 // Per-request MCP session. The transport is now STATELESS (a fresh server +
 // transport per POST, response on the same request), so this replaces the old
@@ -403,13 +385,13 @@ class McpSession {
 	private configCache = new Map<string, BrainConfig>();
 
 	private async loadConfig(
-		octokit: Awaited<ReturnType<typeof installationOctokit>>,
+		store: BrainStore,
 		repoArgs: { owner: string; repo: string }
 	): Promise<BrainConfig> {
 		const key = `${repoArgs.owner}/${repoArgs.repo}`;
 		const cached = this.configCache.get(key);
 		if (cached) return cached;
-		const cfg = await loadBrainConfig(octokit, repoArgs);
+		const cfg = await loadBrainConfig(store, repoArgs);
 		this.configCache.set(key, cfg);
 		return cfg;
 	}
@@ -495,37 +477,54 @@ class McpSession {
 				: undefined;
 			return {
 				octokit,
+				store: githubStore(octokit),
 				repoArgs,
 				role: 'owner',
 				orgRole: 'owner',
-				config: await this.loadConfig(octokit, repoArgs),
+				config: await this.loadConfig(githubStore(octokit), repoArgs),
 				author,
 				db: env.PLATFORM_DB,
 				brainId: `${repoArgs.owner}/${repoArgs.repo}`,
 				activeBrain: { id: `${repoArgs.owner}/${repoArgs.repo}`, label: repoArgs.repo }
 			};
 		}
-		// Static (legacy single-tenant) path. The three env vars below were
-		// removed from `.dev.vars` when multi-tenant routing landed — fail fast
-		// with a clear error if static mode is selected without re-adding them.
-		const installationId = env.GITHUB_APP_INSTALLATION_ID;
+		// Single-tenant path: one human, one brain, no org model. Two ways to reach the
+		// repo; GITHUB_TOKEN takes precedence.
+		//
+		//   GITHUB_TOKEN         a plain access token (a fine-grained PAT with Contents +
+		//                        Pull requests write). No App, organization, manifest
+		//                        flow, or installation id. Commits are attributed to the
+		//                        token's owner.
+		//   App installation     the platform App plus GITHUB_APP_INSTALLATION_ID. Use
+		//                        for App-authored commits or an org-owned installation.
+		//
+		// Both need BRAIN_REPO_OWNER/NAME, since there is no tenant table to resolve.
 		const owner = env.BRAIN_REPO_OWNER;
 		const repo = env.BRAIN_REPO_NAME;
-		if (!installationId || !owner || !repo) {
+		if (!owner || !repo) {
 			throw new Error(
-				'AUTH_MODE=static requires GITHUB_APP_INSTALLATION_ID, BRAIN_REPO_OWNER, and BRAIN_REPO_NAME env vars (legacy single-tenant config). These were removed when multi-tenant routing landed; switch AUTH_MODE=oauth, or re-add the env vars to fall back to static mode.'
+				'AUTH_MODE=static requires BRAIN_REPO_OWNER and BRAIN_REPO_NAME (which brain to serve), plus either GITHUB_TOKEN (simplest) or GITHUB_APP_INSTALLATION_ID with the platform App credentials. Run `pnpm doctor` to see what is missing.'
+			);
+		}
+		const installationId = env.GITHUB_APP_INSTALLATION_ID;
+		if (!env.GITHUB_TOKEN && !installationId) {
+			throw new Error(
+				'AUTH_MODE=static needs a way to reach GitHub: set GITHUB_TOKEN (a fine-grained PAT with Contents and Pull requests write on the brain repo), or set GITHUB_APP_INSTALLATION_ID and the platform App credentials. Run `pnpm doctor` to see what is missing.'
 			);
 		}
 		assertRole('owner', opts?.requires);
 		assertRole('owner', opts?.requiresOrg);
-		const octokit = await installationOctokit(appCreds(env), Number(installationId));
+		const octokit = env.GITHUB_TOKEN
+			? tokenOctokit(env.GITHUB_TOKEN)
+			: await installationOctokit(appCreds(env), Number(installationId));
 		const repoArgs = { owner, repo };
 		return {
 			octokit,
+			store: githubStore(octokit),
 			repoArgs,
 			role: 'owner',
 			orgRole: 'owner',
-			config: await this.loadConfig(octokit, repoArgs),
+			config: await this.loadConfig(githubStore(octokit), repoArgs),
 			db: env.PLATFORM_DB,
 			brainId: `${repoArgs.owner}/${repoArgs.repo}`,
 			activeBrain: { id: `${repoArgs.owner}/${repoArgs.repo}`, label: repoArgs.repo }
@@ -610,12 +609,13 @@ class McpSession {
 		this.noteScope(target.org_id, target.id);
 		return {
 			octokit,
+			store: githubStore(octokit),
 			repoArgs,
 			role: target.role,
 			orgRole: target.org_role,
 			orgId: target.org_id,
 			actorUserId: userId,
-			config: await this.loadConfig(octokit, repoArgs),
+			config: await this.loadConfig(githubStore(octokit), repoArgs),
 			author,
 			db: env.PLATFORM_DB,
 			brainId: target.id,
@@ -847,139 +847,10 @@ class McpSession {
 			}
 		);
 
-		// ---------- list_pages ----------
-		server.registerTool(
-			'list_pages',
-			{
-				title: 'List brain pages',
-				annotations: { readOnlyHint: true },
-				description:
-					"List markdown pages in the brain. With no prefix, returns the brain's editable content (per its .isomorphic.json roots); pass a prefix to filter to a subtree. Paths are relative to the repo root.",
-				inputSchema: {
-					prefix: z
-						.string()
-						.optional()
-						.describe('Path prefix to filter on (e.g. "wiki/" or "internal/frameworks/")'),
-					brain: z
-						.string()
-						.optional()
-						.describe('Which brain to target (name/handle). Defaults to the active brain.')
-				}
-			},
-			async ({ prefix, brain }) => {
-				const { octokit, repoArgs, config, db, brainId } = await this.tenantContext({ brain });
-
-				// No prefix = "the brain's editable content", which is exactly what the
-				// index holds — serve it from there (instant) and attach each page's title
-				// in structuredContent so the app's file tree can label files by title.
-				if (!prefix) {
-					await ensureFresh(db, octokit, repoArgs, brainId, config);
-					const pages = await listIndexedPages(db, brainId);
-					// Everything that's NOT a content page (system files, .gitkeep markers,
-					// source, the log): the app shows these only when "show hidden" is on.
-					const hidden = await listHiddenPaths(octokit, repoArgs, config);
-					// Empty could mean a fresh brain OR an adopted repo whose content isn't under
-					// the configured roots — flag the latter so the app can offer to auto-configure.
-					// Only content-AREA files count as "something to show" here: the hidden list
-					// now includes system files that exist in any repo.
-					const needsConfig =
-						pages.length === 0 &&
-						!hidden.some((p) => isContentPath(p, config)) &&
-						(await detectNeedsConfig(octokit, repoArgs, config));
-					return {
-						content: [
-							{
-								type: 'text' as const,
-								text:
-									pages.length === 0
-										? 'No markdown pages found.'
-										: pages.map((p) => p.path).join('\n')
-							}
-						],
-						// The app builds its file tree from THIS result after a brain switch
-						// (the switcher calls switch_brain, then re-fetches with list_pages),
-						// so the path policy has to ride along — otherwise the tree paints the
-						// new brain with the previous brain's roles: every folder outside the
-						// stale content root reads as hidden and every page reads as locked.
-						structuredContent: { pages, hidden, needsConfig, config: pathPolicyOf(config) }
-					};
-				}
-
-				// A prefix can target anything (including non-content like raw/), which the
-				// index doesn't hold, so keep the live tree walk for that case.
-				const { data: repo } = await octokit.rest.repos.get(repoArgs);
-				const { data: ref } = await octokit.rest.git.getRef({
-					...repoArgs,
-					ref: `heads/${repo.default_branch}`
-				});
-				const { data: commit } = await octokit.rest.git.getCommit({
-					...repoArgs,
-					commit_sha: ref.object.sha
-				});
-				const { data: tree } = await octokit.rest.git.getTree({
-					...repoArgs,
-					tree_sha: commit.tree.sha,
-					recursive: 'true'
-				});
-
-				const paths = tree.tree
-					.filter((e) => e.type === 'blob' && e.path?.endsWith('.md'))
-					.map((e) => e.path!)
-					.filter((p) => p.startsWith(prefix))
-					.sort();
-
-				return {
-					content: [
-						{
-							type: 'text' as const,
-							text:
-								paths.length === 0 ? `No markdown pages found under "${prefix}".` : paths.join('\n')
-						}
-					]
-				};
-			}
-		);
-
-		// ---------- read_page ----------
-		server.registerTool(
-			'read_page',
-			{
-				title: 'Read a brain page',
-				annotations: { readOnlyHint: true },
-				// Deliberately verbose and self-naming. This tool is the one an agent
-				// looks for by name mid-task ("I need read_page"), and a terse
-				// one-liner made it lose tool-search ranking to view_page, whose
-				// description talked about read_page more than this one did. The
-				// read-before-you-replace rule lives here too, at the point of need.
-				description:
-					"Read a page: read_page returns the page's raw markdown source (frontmatter and body) as text, fetched from the brain repo. Use it whenever you need a page's contents to reason over, quote, or edit. Read a page before any write_page call that passes `content`, since that replaces the whole body and would destroy text you have not seen (to change only part of a page, prefer write_page's non-destructive `append` / `edits` arguments, which need no prior read). This returns text to you and does not show anything to the user: use view_page when the goal is for the USER to see the page.",
-				inputSchema: {
-					path: z.string().describe('Path relative to the repo root, e.g. "AGENTS.md"'),
-					brain: z
-						.string()
-						.optional()
-						.describe('Which brain to target (name/handle). Defaults to the active brain.')
-				}
-			},
-			async ({ path, brain }) => {
-				const { octokit, repoArgs, db, brainId, config } = await this.tenantContext({ brain });
-				const { data } = await octokit.rest.repos.getContent({ ...repoArgs, path });
-				if (Array.isArray(data) || data.type !== 'file') {
-					return {
-						isError: true,
-						content: [{ type: 'text', text: `"${path}" is not a file.` }]
-					};
-				}
-				// `getContent` returns base64; decode UTF-8-safely.
-				const text = base64ToUtf8(data.content);
-				// Derived views: agents get the okf-view fence PLUS a freshly computed
-				// rendering beneath it — the current data without losing sight of the
-				// directive (so they don't hand-edit derived content). Falls back to
-				// the raw file if computing fails.
-				const views = await tryRenderViews(text, path, { db, octokit, repoArgs, brainId, config });
-				return { content: [{ type: 'text', text: views?.snapshotted ?? text }] };
-			}
-		);
+		// ---------- list_pages + read_page ----------
+		// Defined in src/tools/core.ts so the local Node runtime registers the same
+		// two tools from the same source rather than a second copy.
+		registerCoreTools(server, (opts) => this.tenantContext(opts));
 
 		// ---------- librarian suite ----------
 		// write_page / move_page / delete_page / find_inbound_links / validate /
@@ -1010,12 +881,20 @@ class McpSession {
 		// widget showed one brain while its own bare actions hit another.
 		registerBrainApp(server, (opts) => this.tenantContext({ ...opts, sticky: true }));
 
+		// Single-tenant deployments (AUTH_MODE=static, whether reaching GitHub through a
+		// token or an App installation) have one human and one brain, and no `orgs` /
+		// `memberships` / `brain_memberships` rows to resolve against. The tools below
+		// cannot answer, so they are not registered: an advertised tool costs context in
+		// every conversation, and a refusal reads to the model as a permissions problem
+		// to work around. Same rule as FEEDBACK_REPO.
+		const hasOrgModel = env.AUTH_MODE === 'oauth';
+
 		// ---------- member management ----------
 		// The org-admin roster surface: members (the interactive roster + data) plus
 		// invite_member / set_member_role / remove_member. Reads are open to any member;
 		// mutations require admin+, with owner as the lockout-proof anchor. See
 		// src/tools/members.ts.
-		registerMemberTools(server, (opts) => this.tenantContext(opts));
+		if (hasOrgModel) registerMemberTools(server, (opts) => this.tenantContext(opts));
 
 		// ---------- brain sharing (per-brain access) ----------
 		// The brain-scope sibling of the member tools: members moves the ORG roster,
@@ -1033,14 +912,15 @@ class McpSession {
 		// (the interactive panel + data) plus link_identity / unlink_identity.
 		// Links a person's emails + GitHub logins so any of them reaches
 		// the union of their brains; verified via magic-link. See src/tools/connected-accounts.ts.
-		registerConnectedAccountTools(server, (opts) => this.tenantContext(opts), this.env);
+		if (hasOrgModel)
+			registerConnectedAccountTools(server, (opts) => this.tenantContext(opts), this.env);
 
 		// ---------- org onboarding (self-serve Model-B connect) ----------
 		// connect_github_org returns a GitHub App install URL carrying a KV-stashed
 		// state; /github/install-callback resolves the install and writes the customer
 		// org + owner membership. The runtime analog of `pnpm onboard-org`. See
 		// src/tools/org-onboarding.ts and src/lib/org-connect.ts.
-		registerOrgOnboardingTools(server, (opts) => this.orgContext(opts), this.env);
+		if (hasOrgModel) registerOrgOnboardingTools(server, (opts) => this.orgContext(opts), this.env);
 
 		// ---------- usage analytics ----------
 		// The org's Analytics tab, reading the per-day counters the wrapper at the
@@ -1048,7 +928,12 @@ class McpSession {
 		// for the same reason submit_feedback is gated on FEEDBACK_REPO: with
 		// recording off there is nothing to report, and a tool that can only answer
 		// "zero" is worse than a tool that is not there. See src/tools/analytics.ts.
-		if (this.usageEnabled()) {
+		//
+		// Also gated on hasOrgModel: the tab is an ORG-scope destination and both its
+		// authorization and its recording read the resolved org, which a single-tenant
+		// deployment has none of. `recordUsage` already returns early without one, so
+		// registering it there would advertise a tab that can only answer zero.
+		if (this.usageEnabled() && hasOrgModel) {
 			registerAnalyticsTools(server, (opts) => this.tenantContext(opts));
 		}
 
@@ -1078,6 +963,11 @@ class McpSession {
 		// brains (the interactive switcher + data) + switch_brain. A bare tool call
 		// acts on the active brain; switch_brain changes it (persisted
 		// in agent state); any tool's `brain` arg one-shots another. See src/tools/brains.ts.
+		//
+		// Registered in single-tenant mode too, unlike the org tools above: the app's nav
+		// calls `brains` on every open and learns which destinations exist from the
+		// `features` on its payload. With no signed-in user the list is empty
+		// (listAccessibleBrainsForCaller returns [] without touching the org tables).
 		registerBrainTools(server, {
 			getContext: (opts) => this.tenantContext(opts),
 			orgContext: (opts) => this.orgContext(opts),

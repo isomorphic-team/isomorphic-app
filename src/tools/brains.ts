@@ -13,6 +13,7 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { registerAppTool } from '@modelcontextprotocol/ext-apps/server';
 import { z } from 'zod';
+import type { Octokit } from 'octokit';
 import type { BrainContext } from './librarian.ts';
 import { BRAIN_APP_URI } from './apps.ts';
 import {
@@ -40,7 +41,20 @@ import {
 	listIndexedPages
 } from '../lib/brain-index.ts';
 import { CONFIG_PATH, DEFAULT_BRAIN_CONFIG } from '../lib/brain-config.ts';
-import { getHead, commitOrPR, findOpenConfigPr } from '../lib/brain-repo.ts';
+
+// The GitHub client, for the three operations in this file that are GitHub as a
+// platform rather than a brain as storage: create a repository, list the repos an
+// installation can reach, check a repo exists before connecting it. None touches a
+// brain's content, so none belongs on BrainStore.
+//
+// Every caller is an org-model tool, and a deployment with no GitHub client has no org
+// model and does not register them (`hasOrgModel` in worker.ts).
+function githubClient(ctx: { octokit?: Octokit }): Octokit {
+	if (!ctx.octokit) {
+		throw new Error('This action needs a GitHub-backed deployment (no GitHub client configured).');
+	}
+	return ctx.octokit;
+}
 
 function fail(text: string) {
 	return { isError: true as const, content: [{ type: 'text' as const, text }] };
@@ -104,12 +118,12 @@ async function detectRowSetup(
 ): Promise<{ needsConfig: boolean; configPrUrl?: string }> {
 	try {
 		const c = await getContext({ requires: 'admin', brain: brainId });
-		await ensureFresh(c.db, c.octokit, c.repoArgs, c.brainId, c.config);
+		await ensureFresh(c.db, c.store, c.repoArgs, c.brainId, c.config);
 		const pages = await listIndexedPages(c.db, c.brainId);
 		if (pages.length > 0) return { needsConfig: false };
-		if (!(await detectNeedsConfig(c.octokit, c.repoArgs, c.config))) return { needsConfig: false };
+		if (!(await detectNeedsConfig(c.store, c.repoArgs, c.config))) return { needsConfig: false };
 		// Misconfigured — is a "configure" PR already open (protected repo)?
-		const configPrUrl = await findOpenConfigPr(c.octokit, c.repoArgs);
+		const configPrUrl = await c.store.findOpenConfigPr(c.repoArgs);
 		return { needsConfig: true, configPrUrl };
 	} catch {
 		return { needsConfig: false };
@@ -280,7 +294,7 @@ export function registerBrainTools(
 			let created: Awaited<ReturnType<typeof createAndScaffoldBrain>>;
 			for (let attempt = 1; ; attempt++) {
 				try {
-					created = await createAndScaffoldBrain(ctx.octokit, {
+					created = await createAndScaffoldBrain(githubClient(ctx), {
 						org: owner,
 						name: repo,
 						description: `${display} — Isomorphic brain`
@@ -389,7 +403,7 @@ export function registerBrainTools(
 			if (repo === undefined) {
 				const brains = await listBrains();
 				const taken = new Set(brains.map((b) => b.id.toLowerCase()));
-				const res = await ctx.octokit.rest.apps.listReposAccessibleToInstallation({
+				const res = await githubClient(ctx).rest.apps.listReposAccessibleToInstallation({
 					per_page: 100
 				});
 				const repos = (res.data.repositories ?? [])
@@ -408,7 +422,7 @@ export function registerBrainTools(
 
 			// The org's installation must actually reach the repo, or we'd write a dead row.
 			try {
-				await ctx.octokit.rest.repos.get({ owner, repo: name });
+				await githubClient(ctx).rest.repos.get({ owner, repo: name });
 			} catch (e) {
 				const status = (e as { status?: number })?.status;
 				if (status === 404 || status === 403) {
@@ -447,7 +461,7 @@ export function registerBrainTools(
 			// connect but show no pages. Detect it now so the app can offer to configure.
 			const connectedId = `${owner}/${name}`;
 			const needsConfig = await detectNeedsConfig(
-				ctx.octokit,
+				ctx.store,
 				{ owner, repo: name },
 				DEFAULT_BRAIN_CONFIG
 			).catch(() => false);
@@ -494,7 +508,7 @@ export function registerBrainTools(
 			const ctx = await getContext({ requires: 'admin', brain });
 
 			// Don't open a second PR if a configure PR is already pending (protected repo).
-			const pending = await findOpenConfigPr(ctx.octokit, ctx.repoArgs);
+			const pending = await ctx.store.findOpenConfigPr(ctx.repoArgs);
 			if (pending) {
 				return {
 					content: [
@@ -511,8 +525,8 @@ export function registerBrainTools(
 			const body =
 				JSON.stringify({ paths: Object.fromEntries(roots.map((r) => [r, 'content'])) }, null, 2) +
 				'\n';
-			const head = await getHead(ctx.octokit, ctx.repoArgs);
-			const outcome = await commitOrPR(ctx.octokit, ctx.repoArgs, {
+			const head = await ctx.store.getHead(ctx.repoArgs);
+			const outcome = await ctx.store.commitOrPR(ctx.repoArgs, {
 				writeMode: ctx.config.writeMode,
 				defaultBranch: ctx.config.defaultBranch,
 				author: ctx.author,

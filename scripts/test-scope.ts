@@ -149,6 +149,18 @@ const octokit = new Proxy(
 	}
 ) as never;
 
+// Same trap for the storage seam, which is where the content tools go now. An
+// authorization test must fail BEFORE any of these are touched, so reaching one is
+// itself the bug being hunted.
+const store = new Proxy(
+	{},
+	{
+		get(_t, prop) {
+			throw new Error(`store.${String(prop)} reached in a no-network test`);
+		}
+	}
+) as never;
+
 // The REAL gate, copied in shape from worker.ts's tenantContext: two independent
 // assertions against two independent fields. If this test's copy and worker.ts ever
 // diverge the test is worthless, so it is deliberately these two lines and nothing
@@ -159,6 +171,7 @@ function contextFor(p: Persona) {
 		assertRole(p.orgRole, opts?.requiresOrg);
 		return {
 			octokit,
+			store,
 			repoArgs: { owner: 'northwind', repo: 'main' },
 			role: p.role,
 			orgRole: p.orgRole,

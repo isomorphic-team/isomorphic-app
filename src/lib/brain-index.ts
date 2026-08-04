@@ -17,16 +17,8 @@
 //   - The blob fetch reuses fetchPages (batched GraphQL), so a (re)build costs
 //     ceil(changedPages / 100) subrequests, not one per page.
 
-import type { Octokit } from 'octokit';
 import type { D1Database, D1PreparedStatement } from '@cloudflare/workers-types';
-import {
-	type RepoRef,
-	type TreeEntry,
-	getHead,
-	listTree,
-	fetchPages,
-	MAX_SCAN_PAGES
-} from './brain-repo.ts';
+import { type RepoRef, type TreeEntry, type BrainStore, MAX_SCAN_PAGES } from './brain-repo.ts';
 import {
 	type BrainConfig,
 	CONFIG_PATH,
@@ -194,22 +186,17 @@ export interface IndexState {
 }
 
 // The commit sha of a branch's tip — one subrequest, the cheap steady-state check.
-async function branchCommitSha(octokit: Octokit, repo: RepoRef, branch: string): Promise<string> {
-	const { data } = await octokit.rest.git.getRef({ ...repo, ref: `heads/${branch}` });
-	return data.object.sha;
-}
-
 // Reconcile the index with the repo HEAD, then return its state. Cheap when the
 // index is already current (one getRef); does an incremental — or first-time full —
 // reindex only when HEAD has moved. MUST be awaited before any index query.
 export async function ensureFresh(
 	db: D1Database,
-	octokit: Octokit,
+	store: BrainStore,
 	repo: RepoRef,
 	brainId: string,
 	config: BrainConfig
 ): Promise<IndexState> {
-	const liveSha = await branchCommitSha(octokit, repo, config.defaultBranch);
+	const liveSha = await store.branchCommitSha(repo, config.defaultBranch);
 	const meta = await db
 		.prepare(
 			`SELECT indexed_commit_sha, truncated, schema_version, rebuild_cursor
@@ -243,13 +230,13 @@ export async function ensureFresh(
 	}
 
 	// Stale (or never built) → (re)index. getHead gives the tree sha listTree needs.
-	const head = await getHead(octokit, repo);
+	const head = await store.getHead(repo);
 	// HEAD moved, which may mean .isomorphic.json changed (e.g. a merged "configure"
 	// PR). Re-read the config fresh here — rather than trusting a possibly-stale
 	// caller-side cache — so a content-shape change takes effect on the very next read,
 	// no reconnect needed. Falls back to the passed config on error.
-	const freshConfig = await loadBrainConfig(octokit, repo).catch(() => config);
-	const entries = (await listTree(octokit, repo, head)).filter(
+	const freshConfig = await loadBrainConfig(store, repo).catch(() => config);
+	const entries = (await store.listTree(repo, head)).filter(
 		(e) => e.path.endsWith('.md') && isContentPath(e.path, freshConfig)
 	);
 	const truncated = entries.length > MAX_SCAN_PAGES;
@@ -270,10 +257,10 @@ export async function ensureFresh(
 		// that its initial index can't be built in one request would otherwise fail,
 		// write no meta row, and take the !meta path again on the next read — wedged
 		// before it ever had an index, with nothing recorded to resume from.
-		const built = await fullBuild(db, octokit, repo, brainId, entries, freshConfig);
+		const built = await fullBuild(db, store, repo, brainId, entries, freshConfig);
 		if (!built) indexedSha = null;
 	} else {
-		const reconciled = await incrementalReindex(db, octokit, repo, brainId, entries, freshConfig);
+		const reconciled = await incrementalReindex(db, store, repo, brainId, entries, freshConfig);
 		if (!reconciled) indexedSha = meta.indexed_commit_sha;
 		// The incremental pass only rewrote CHANGED pages' rows; on a row-shape bump
 		// the unchanged pages still need their new rows built from stored content.
@@ -368,7 +355,7 @@ async function rebuildDerivedFromStore(
 // which sees the already-stored pages and only fetches the rest.
 async function fullBuild(
 	db: D1Database,
-	octokit: Octokit,
+	store: BrainStore,
 	repo: RepoRef,
 	brainId: string,
 	entries: TreeEntry[],
@@ -376,7 +363,7 @@ async function fullBuild(
 ): Promise<boolean> {
 	const complete = entries.length <= REINDEX_PAGE_BUDGET;
 	const take = complete ? entries : entries.slice(0, REINDEX_PAGE_BUDGET);
-	const { pages } = await fetchPages(octokit, repo, take);
+	const { pages } = await store.fetchPages(repo, take);
 	const shaByPath = new Map(take.map((e) => [e.path, e.sha]));
 	const stmts: D1PreparedStatement[] = [
 		db.prepare(`DELETE FROM brain_pages WHERE brain_id = ?1`).bind(brainId),
@@ -406,7 +393,7 @@ const REINDEX_PAGE_BUDGET = 600;
 // is closer to HEAD but not yet at it.
 async function incrementalReindex(
 	db: D1Database,
-	octokit: Octokit,
+	store: BrainStore,
 	repo: RepoRef,
 	brainId: string,
 	entries: TreeEntry[],
@@ -436,7 +423,7 @@ async function incrementalReindex(
 		);
 	}
 	if (changed.length) {
-		const { pages } = await fetchPages(octokit, repo, changed);
+		const { pages } = await store.fetchPages(repo, changed);
 		const shaByPath = new Map(changed.map((e) => [e.path, e.sha]));
 		for (const p of pages) {
 			stmts.push(
@@ -477,12 +464,12 @@ export async function resetIndex(db: D1Database, brainId: string): Promise<void>
 // the (default) content roots — the "connected but shows no pages" trap. Fetches the
 // tree, so callers gate it on "the page list came back empty" to avoid the cost.
 export async function detectNeedsConfig(
-	octokit: Octokit,
+	store: BrainStore,
 	repo: RepoRef,
 	config: BrainConfig
 ): Promise<boolean> {
-	const head = await getHead(octokit, repo);
-	const tree = await listTree(octokit, repo, head);
+	const head = await store.getHead(repo);
+	const tree = await store.listTree(repo, head);
 	if (tree.some((e) => e.path === CONFIG_PATH)) return false; // author configured it explicitly
 	const md = tree.filter((e) => e.path.endsWith('.md'));
 	if (md.length === 0) return false; // genuinely empty repo, not a misconfig

@@ -176,7 +176,7 @@ export function brainRepoNameForEmail(email: string, userId: string): string {
 // existing membership short-circuits, and a repo-name collision adopts the
 // existing repo (mirrors the GitHub-path race handling above).
 export async function provisionOrgForUser(input: ProvisionOrgInput): Promise<OrgContext> {
-	const { octokit, db, user, org, installationId } = input;
+	const { db, user, org, installationId } = input;
 
 	// Idempotent short-circuit: user already has an org with a brain.
 	const existing = await getMembershipWithOrg(db, user.user_id);

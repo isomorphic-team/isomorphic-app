@@ -7,38 +7,75 @@ others use your version over a network, in which case those users are entitled t
 modified source. See [`docs/licensing.md`](licensing.md) for the detail, including what the
 copyleft does not reach (your brain content, and any MCP client).
 
-This guide has three paths. Pick the smallest one that does what you need.
+This guide has four paths. Pick the smallest one that does what you need.
 
-| Path                            | Who it is for                                             | You need                                       | Time     |
-| ------------------------------- | --------------------------------------------------------- | ---------------------------------------------- | -------- |
-| **1. Local only**               | Trying it out, or developing on the codebase              | Node 24+, pnpm                                 | ~5 min   |
-| **2. Single-tenant deployment** | One person or one small team, one brain, one shared token | The above, plus GitHub org, plus Cloudflare    | ~30 min  |
-| **3. Multi-tenant deployment**  | Many people, several brains, roles, email sign-in         | The above, plus a domain and an email provider | ~2 hours |
+| Path                            | Who it is for                                             | You need                                        | Time     |
+| ------------------------------- | --------------------------------------------------------- | ----------------------------------------------- | -------- |
+| **0. A folder on your machine** | Trying it, or developing on it. No accounts at all.       | Node 24+, pnpm, git                             | ~2 min   |
+| **1. Local only**               | Working on the app UI, or on the Worker                   | Node 24+, pnpm                                  | ~5 min   |
+| **2. Single-tenant deployment** | One person or one small team, one brain, one shared token | The above, plus a GitHub token, plus Cloudflare | ~30 min  |
+| **3. Multi-tenant deployment**  | Many people, several brains, roles, email sign-in         | The above, plus a domain and an email provider  | ~2 hours |
 
-Everything in path 1 works with no accounts at all.
+Path 0 needs no accounts of any kind, and is the fastest way to see the thing work. Path 2 needs no GitHub App and no
+GitHub organization unless you choose them: a personal access token on one repository is
+enough, and `pnpm doctor` will tell you what your `.dev.vars` is still missing.
 
 ---
 
 ## What you are actually running
 
-Two programs from one `src/`:
+Three programs from one `src/`:
 
 - **The MCP Worker** (`src/worker.ts`), a Cloudflare Worker. It serves MCP tools to Claude and
   serves the in-client app UI. Uses D1 for a derived content index and, in multi-tenant mode,
-  for orgs and members. Uses KV for OAuth state.
+  for orgs and members. Uses KV for OAuth state. This is paths 2 and 3.
+- **The local runtime** (`src/local.ts`), a Node server that offers the same content tools over
+  a git repository on disk, with no accounts and no cloud anything. This is path 0.
 - **The bootstrap server** (`src/bootstrap.ts`), a Node script you run once. It registers a
   GitHub App for you and scaffolds your first brain repo, then you never run it again.
 
 And one thing you own that is not code:
 
-- **A brain**, which is an ordinary GitHub repository full of markdown. Your knowledge lives
-  there, in [Open Knowledge Format](https://github.com/GoogleCloudPlatform/knowledge-catalog/blob/main/okf/SPEC.md),
+- **A brain**, which is an ordinary git repository full of markdown, on GitHub or on your own
+  disk. Your knowledge lives there, in
+  [Open Knowledge Format](https://github.com/GoogleCloudPlatform/knowledge-catalog/blob/main/okf/SPEC.md),
   readable and editable without any of this software. If you stop using Isomorphic, you still
   have a git repo full of markdown.
 
-Cloudflare is currently the only supported deploy target. Workers, D1, and KV are used
+Cloudflare is the only supported deploy target for a SHARED instance. Workers, D1, and KV are used
 directly rather than through an abstraction layer, so porting to another runtime is real
 work rather than a config change. The free tier is enough for a small team.
+
+---
+
+## Path 0: a folder on your machine
+
+```sh
+git clone https://github.com/isomorphic-team/isomorphic-app
+cd isomorphic-app && pnpm install
+pnpm try ~/Documents/notes
+```
+
+A real MCP server, with the real librarian tools and the real content index, serving a
+directory of markdown. No GitHub account, no Cloudflare account, no tokens. Point a local
+MCP host at it:
+
+```sh
+claude mcp add --transport http isomorphic-local http://127.0.0.1:8788/mcp
+```
+
+**Your brain is a git repository.** If the folder is not one yet, `pnpm try` runs
+`git init` and commits what is already there. Every write lands as a commit, which is
+what gives `view_activity` a history and what makes an edit batch atomic. Reads come
+from the working tree, so files you edit in your own editor show up on the next call
+with nothing to sync. An Obsidian vault works, as does any folder of markdown.
+
+Path 0 has no second person. There is no org model, so members, roles, invitations, and
+brain sharing are not registered, and there is no authentication, which is why it binds
+to `127.0.0.1`. For anyone else to reach it, use path 2 or 3.
+
+The content index is kept at `.isomorphic/index.sqlite` inside the brain and gitignored
+for you. It is derived data and can be deleted at any time.
 
 ---
 
@@ -49,7 +86,7 @@ git clone https://github.com/isomorphic-team/isomorphic-app
 cd isomorphic-app
 pnpm install
 pnpm setup:config       # generates wrangler.jsonc with local placeholder ids
-pnpm test               # eleven golden tests, offline, should be green
+pnpm test               # the golden tests, offline, should be green
 ```
 
 You now have two useful things:
@@ -63,9 +100,11 @@ pnpm worker:dev         # http://localhost:8787, the MCP server (needs credentia
 would serve, through the official MCP AppBridge host, over fixture data. It is the right
 place to work on the viewer, the editor, the tree, or the graph.
 
-`pnpm worker:dev` serves real MCP at `http://localhost:8787/mcp` but needs a GitHub App to
-reach a real repository, which is path 2's first half. You can point Claude Desktop, Claude
-Code, or the MCP Inspector at it once you have that.
+`pnpm worker:dev` serves real MCP at `http://localhost:8787/mcp`, but it needs a credential
+to reach a real repository. The cheapest is a personal access token on one repo, which is
+option A of path 2's first step and takes a couple of minutes. You can then point Claude
+Desktop, Claude Code, or the MCP Inspector at it. Run `pnpm doctor` if you are unsure what
+your checkout is still missing.
 
 ### Why `wrangler.jsonc` is generated
 
@@ -89,7 +128,29 @@ One brain, one shared bearer token, no accounts, no roles. Whoever holds the tok
 and write. This is a password on a door rather than an access-control model. It is fine for
 one person or a handful of trusted people, and it is far less setup than path 3.
 
-### 2a. Create the GitHub App and your first brain
+### 2a. Reach a brain
+
+Two ways. Take the first unless you need the second.
+
+**Option A: a token (recommended).** Make a repository for your brain, or pick one you
+already have, then create a fine-grained personal access token at
+[github.com/settings/personal-access-tokens](https://github.com/settings/personal-access-tokens)
+scoped to that one repository, with **Contents: read and write** and **Pull requests: read
+and write**. Put it in `.dev.vars`:
+
+```sh
+GITHUB_TOKEN="github_pat_…"
+BRAIN_REPO_OWNER="your-account"
+BRAIN_REPO_NAME="your-brain-repo"
+```
+
+That is the whole GitHub side: no organization, App, manifest flow, or installation id.
+Commits are attributed to whoever owns the token. An empty repository is fine; the
+librarian tools write into it. Skip to 2b.
+
+**Option B: a GitHub App.** Take this if you want commits authored by an App rather than by
+a person, if the brain lives under an organization whose access you would rather manage as
+an installation, or if you are heading for path 3, which requires it.
 
 You need a **GitHub organization**, not a personal account. GitHub only grants the
 `administration: write` permission (required to create repositories) to installations on
@@ -122,19 +183,21 @@ than an org. Bootstrap detects this and says so.
 
 ### 2b. Point local dev at your real brain
 
-Add to `.dev.vars`:
+Add to `.dev.vars`, on top of whichever of 2a you did:
 
 ```sh
 AUTH_MODE="static"
 MCP_BEARER_TOKEN="…"           # openssl rand -hex 32
-BRAIN_REPO_OWNER="your-org"
-BRAIN_REPO_NAME="your-brain-repo"
-GITHUB_APP_INSTALLATION_ID="…" # written by bootstrap
 ```
+
+Option B also needs `GITHUB_APP_INSTALLATION_ID` and `BRAIN_REPO_OWNER`/`BRAIN_REPO_NAME`,
+all written by bootstrap. `MCP_BEARER_TOKEN` is what your MCP client sends. It is separate
+from the GitHub credential: it authenticates the client to you, not you to GitHub.
 
 Then:
 
 ```sh
+pnpm doctor                    # says what is still missing, and what to run next
 pnpm setup:config --force
 pnpm db:migrate                # applies migrations/ to the local D1
 pnpm worker:dev
@@ -157,6 +220,19 @@ PUBLIC_BASE_URL=https://my-brain.<your-subdomain>.workers.dev \
 `--provision` creates the KV namespace and the D1 database if they do not exist, finds them
 if they do, and writes their real ids into `wrangler.jsonc`. Then upload the secrets, which
 are deliberately not in `wrangler.jsonc` and never committed:
+
+If you took **option A** (a token), that is two secrets:
+
+```sh
+pnpm exec wrangler secret put GITHUB_TOKEN
+pnpm exec wrangler secret put MCP_BEARER_TOKEN
+```
+
+`BRAIN_REPO_OWNER` and `BRAIN_REPO_NAME` are not secret; keep them in `.dev.vars` for local
+runs and add them to the `vars` block of `wrangler.template.jsonc` (or set them with
+`wrangler secret put` too, which also works) for the deployed Worker.
+
+If you took **option B** (an App):
 
 ```sh
 pnpm exec wrangler secret put GITHUB_APP_ID
@@ -205,7 +281,9 @@ Orgs, roles (`viewer < editor < admin < owner`), a member roster with invitation
 brains per person, and email sign-in so nobody needs a GitHub account. This is the mode the
 hosted service runs in, on the same code.
 
-Do path 2 first and confirm it works. Then:
+Do path 2 first and confirm it works, taking **option B** in 2a: multi-tenant means minting
+a token per organization from one App installation, which a personal access token cannot do.
+Then:
 
 ### 3a. Choose an identity mode
 
