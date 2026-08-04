@@ -69,6 +69,9 @@ import { registerConnectedAccountTools } from './tools/connected-accounts.ts';
 import { registerBrainTools } from './tools/brains.ts';
 import { registerOrgOnboardingTools } from './tools/org-onboarding.ts';
 import { registerFeedbackTools } from './tools/feedback.ts';
+import { registerAnalyticsTools } from './tools/analytics.ts';
+import { recordUsage } from './lib/usage-store.ts';
+import { dayKey, countedCall } from './lib/usage.ts';
 import { loadCustomToolDefs, registerCustomTools, type CustomToolLoad } from './tools/custom.ts';
 import { resolveInstallationOrg, connectCustomerOrg } from './lib/org-connect.ts';
 import {
@@ -149,6 +152,16 @@ interface Env {
 	// the tool is not registered. See src/tools/feedback.ts.
 	FEEDBACK_REPO?: string;
 	FEEDBACK_TOKEN?: string;
+
+	// Usage analytics ("true" to enable). Off by default and in a fresh clone: the
+	// repo's standing rule is that no build phones home or beacons usage, and while
+	// these counters never leave the deployment that wrote them, recording what a
+	// named person did is not something an operator should discover after the fact.
+	// On, it does two things: every tool call bumps a per-day counter in
+	// `usage_daily` (migration 0006), and the org-scope `analytics` tool is
+	// registered. Off, neither happens and the table is never written.
+	// See src/lib/usage.ts and src/tools/analytics.ts.
+	USAGE_ANALYTICS?: string;
 }
 
 // Identity surfaced via OAuth `props` (read from `ctx.props`). Empty in static mode.
@@ -309,6 +322,51 @@ class McpSession {
 	private setActiveBrain(id: string): void {
 		this._activeBrainId = id;
 		this.ctx.waitUntil(this.env.OAUTH_KV.put('active_brain:' + this.userKey(), id));
+	}
+
+	// The org (and brain, if any) the last resolution in this request landed on.
+	//
+	// Usage recording needs to know WHICH org and brain a call touched, and only
+	// the resolver knows: the org follows the resolved brain, and a `brain` arg
+	// one-shots a different one, so neither the token props nor the active-brain
+	// pointer is authoritative. The recording wrapper in buildServer reads this
+	// after the handler returns. Undefined means the call resolved no org (the
+	// legacy single-tenant paths, or a failure before resolution), and nothing is
+	// recorded for it.
+	private _resolvedScope?: { orgId: string; brainId: string };
+
+	private noteScope(orgId: string | undefined, brainId?: string): void {
+		if (orgId) this._resolvedScope = { orgId, brainId: brainId ?? '' };
+	}
+
+	/** Whether this deployment records usage at all. Off unless explicitly enabled. */
+	private usageEnabled(): boolean {
+		return this.env.USAGE_ANALYTICS === 'true';
+	}
+
+	// Bump one per-day counter for a finished tool call. Fire-and-forget through
+	// waitUntil (the result has already gone back to the host) and swallowing its
+	// own failures: a counter is the least important thing this Worker does, and a
+	// D1 hiccup must never turn into a failed read_page. Under-counting is fine.
+	//
+	// Records nothing without BOTH a product identity and a resolved org, so the
+	// legacy single-tenant paths and calls that failed before resolution write no
+	// rows rather than writing anonymous ones.
+	private recordCall(tool: string, ok: boolean): void {
+		if (!this.usageEnabled()) return;
+		const userId = this.props?.user_id;
+		const scope = this._resolvedScope;
+		if (!userId || !scope) return;
+		this.ctx.waitUntil(
+			recordUsage(this.env.PLATFORM_DB, {
+				day: dayKey(new Date()),
+				orgId: scope.orgId,
+				brainId: scope.brainId,
+				userId,
+				tool,
+				ok
+			}).catch(() => {})
+		);
 	}
 
 	// Persist the resolved brain as active when a tool opts into stickiness (the
@@ -547,6 +605,7 @@ class McpSession {
 		const author: CommitAuthor | undefined = authorEmail
 			? { name: authorName, email: authorEmail }
 			: undefined;
+		this.noteScope(target.org_id, target.id);
 		return {
 			octokit,
 			repoArgs,
@@ -618,6 +677,8 @@ class McpSession {
 		const author: CommitAuthor | undefined = authorEmail
 			? { name: (user?.name || authorEmail).trim(), email: authorEmail }
 			: undefined;
+		// Org scope resolves no brain, so usage rows for these calls carry ''.
+		this.noteScope(membership.org.org_id);
 		return {
 			octokit,
 			org: membership.org,
@@ -654,6 +715,40 @@ class McpSession {
 			org: env.PLATFORM_ORG,
 			installationId
 		});
+	}
+
+	// Wrap ONE registered tool's handler so its call is counted after it finishes.
+	//
+	// Why here and not in each tool: this is the only place that sees every tool by
+	// name at once, first-party and brain-authored alike, and the only place a new
+	// tool cannot forget to opt in. It rides the loop that already rewrites every
+	// registration for the claude.ai `execution` shim.
+	//
+	// Three properties this has to keep:
+	//   • The result is untouched. The wrapper returns exactly what the handler
+	//     returned, and rethrows exactly what it threw.
+	//   • An MCP error result counts as an error. A handler that returns
+	//     `{ isError: true }` did not throw, and counting it as a success would hide
+	//     precisely the tools that are failing people.
+	//   • The scope is this call's. `_resolvedScope` is cleared first, so a call that
+	//     never resolves an org records nothing rather than borrowing the org that
+	//     the previous call in the same request resolved.
+	//
+	// THE FIELD IS `handler`, NOT `callback`. SDK 1.29's RegisteredTool stores the
+	// function as `handler`; this wrapped `callback` first, which is undefined there,
+	// so it threw on the .bind() and would have taken down every request the moment
+	// USAGE_ANALYTICS was switched on. Nothing caught it: the cast below defeats
+	// typechecking, and with the flag off the line never ran. `pnpm test:usage` now
+	// pins this field name against the installed SDK.
+	private instrument(name: string, tool: { handler: (...args: never[]) => unknown }): void {
+		tool.handler = countedCall(tool.handler.bind(tool), {
+			// Per-call, so a handler that never resolves an org records nothing rather
+			// than inheriting the org the previous call in this request resolved.
+			before: () => {
+				this._resolvedScope = undefined;
+			},
+			after: (ok) => this.recordCall(name, ok)
+		}) as typeof tool.handler;
 	}
 
 	// Build the MCP server for this request: instantiate McpServer and register
@@ -945,6 +1040,16 @@ class McpSession {
 		// src/tools/org-onboarding.ts and src/lib/org-connect.ts.
 		registerOrgOnboardingTools(server, (opts) => this.orgContext(opts), this.env);
 
+		// ---------- usage analytics ----------
+		// The org's Analytics tab, reading the per-day counters the wrapper at the
+		// bottom of this method writes. Registered only when USAGE_ANALYTICS is on,
+		// for the same reason submit_feedback is gated on FEEDBACK_REPO: with
+		// recording off there is nothing to report, and a tool that can only answer
+		// "zero" is worse than a tool that is not there. See src/tools/analytics.ts.
+		if (this.usageEnabled()) {
+			registerAnalyticsTools(server, (opts) => this.tenantContext(opts));
+		}
+
 		// ---------- product feedback ----------
 		// submit_feedback files a bug/idea on the project's own PUBLIC tracker via a
 		// separate narrowly scoped credential (never the platform App). Registered
@@ -977,7 +1082,8 @@ class McpSession {
 			listBrains: () => this.listAccessibleBrainsForCaller(),
 			activeBrainId: () => this.activeBrainId,
 			setActiveBrain: (id) => this.setActiveBrain(id),
-			invalidateConfig: (owner, repo) => this.invalidateConfig(owner, repo)
+			invalidateConfig: (owner, repo) => this.invalidateConfig(owner, repo),
+			analyticsEnabled: this.usageEnabled()
 		});
 
 		// ---------- user-defined tools (brain-tools) ----------
@@ -998,11 +1104,15 @@ class McpSession {
 		// tasks. Remove once claude.ai tolerates the field.
 		const registered = (
 			server as unknown as {
-				_registeredTools: Record<string, { execution?: unknown }>;
+				_registeredTools: Record<
+					string,
+					{ execution?: unknown; handler: (...args: never[]) => unknown }
+				>;
 			}
 		)._registeredTools;
-		for (const tool of Object.values(registered)) {
+		for (const [name, tool] of Object.entries(registered)) {
 			tool.execution = undefined;
+			if (this.usageEnabled()) this.instrument(name, tool);
 		}
 
 		return server;

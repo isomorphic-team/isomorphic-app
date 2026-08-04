@@ -80,6 +80,7 @@ jobs:
       - run: pnpm test:access
       - run: pnpm test:scope
       - run: pnpm test:feedback
+      - run: pnpm test:usage
 
       # Formatting is checked, not applied — a PR that reformats unrelated files is
       # noise, and `--check` tells the contributor exactly what to run.

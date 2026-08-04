@@ -78,7 +78,17 @@
 		// connect_github_org flow (customer-owned orgs). Public and stable, so it
 		// ships inline on deploy rather than as a secret. Leave empty if you are
 		// not using that flow.
-		"GITHUB_APP_SLUG": "__GITHUB_APP_SLUG__"
+		"GITHUB_APP_SLUG": "__GITHUB_APP_SLUG__",
+		// Usage analytics. "true" records one per-day counter row per tool call
+		// (who, which brain, which tool, migration 0006) and registers the org
+		// `analytics` tab. "false" records nothing and does not register the tool.
+		//
+		// OFF BY DEFAULT, deliberately. The counters never leave the deployment that
+		// wrote them (there is no phone-home anywhere in this codebase, and this does
+		// not add one), but they do record what a NAMED person did, and that is not
+		// something an operator should find out about after the fact. Turning it on
+		// is the operator saying their organization wants it.
+		"USAGE_ANALYTICS": "__USAGE_ANALYTICS__"
 		// PLATFORM_ORG and PLATFORM_INSTALLATION_ID are deliberately NOT here.
 		// They are per-deployment values written to `.dev.vars` by bootstrap
 		// (local) and uploaded with `wrangler secret put` (prod). The installation

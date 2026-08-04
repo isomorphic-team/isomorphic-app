@@ -91,6 +91,26 @@ const SearchIcon = () => (
 		<path stroke="currentColor" stroke-width="1.5" stroke-linecap="round" d="M10.5 10.5L14 14" />
 	</svg>
 );
+// Analytics. Bars rather than a line or a dial: the tab's own headline shape is a
+// per-day bar row, so the glyph is the thing it opens.
+const ChartIcon = () => (
+	<svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true">
+		<path
+			fill="none"
+			stroke="currentColor"
+			stroke-width="1.5"
+			stroke-linecap="round"
+			d="M2.5 13.2h11"
+		/>
+		<path
+			fill="none"
+			stroke="currentColor"
+			stroke-width="1.6"
+			stroke-linecap="round"
+			d="M4.8 13.2V9M8 13.2V4.4M11.2 13.2v-2.6"
+		/>
+	</svg>
+);
 const HistoryIcon = () => (
 	<svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true">
 		<circle cx="8" cy="8" r="6.25" fill="none" stroke="currentColor" stroke-width="1.5" />
@@ -353,6 +373,7 @@ export {
 	ListIcon,
 	SearchIcon,
 	HistoryIcon,
+	ChartIcon,
 	GraphIcon,
 	PeopleIcon,
 	ShareIcon,

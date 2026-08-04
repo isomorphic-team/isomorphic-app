@@ -125,10 +125,25 @@ export function registerBrainTools(
 		activeBrainId: () => string | undefined;
 		setActiveBrain: (id: string) => void;
 		invalidateConfig: (owner: string, repo: string) => void;
+		// Whether this deployment registered the org `analytics` tool (USAGE_ANALYTICS).
+		// Rides on this payload because the app fetches the brain list on every open
+		// (ensureBrainList) and has no other way to ask what the server registered: a
+		// widget cannot list tools. The nav gates its Analytics row on this, so a
+		// deployment with usage recording off never shows a destination whose click
+		// would come back "unknown tool".
+		analyticsEnabled: boolean;
 	}
 ) {
-	const { getContext, orgContext, listBrains, activeBrainId, setActiveBrain, invalidateConfig } =
-		deps;
+	const {
+		getContext,
+		orgContext,
+		listBrains,
+		activeBrainId,
+		setActiveBrain,
+		invalidateConfig,
+		analyticsEnabled
+	} = deps;
+	const features = { analytics: analyticsEnabled };
 
 	// GitHub returns 422 when a repo with that name already exists on the org — used to
 	// pick the next free `name-N` slug when creating a brain.
@@ -172,7 +187,13 @@ export function registerBrainTools(
 				content: [
 					{ type: 'text' as const, text: `Switched to ${label}. Tools now act on it by default.` }
 				],
-				structuredContent: { view: 'brains', brains: rows, active: m.brain.id, switched: true }
+				structuredContent: {
+					view: 'brains',
+					brains: rows,
+					active: m.brain.id,
+					switched: true,
+					features
+				}
 			};
 		}
 	);
@@ -218,7 +239,7 @@ export function registerBrainTools(
 			);
 			return {
 				content: [{ type: 'text' as const, text: rowsText(rows) }],
-				structuredContent: { view: 'brains', brains: rows, active }
+				structuredContent: { view: 'brains', brains: rows, active, features }
 			};
 		}
 	);

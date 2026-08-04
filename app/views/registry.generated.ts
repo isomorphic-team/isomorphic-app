@@ -3,6 +3,7 @@ import type { VNode } from 'preact';
 import type { View, ViewAction } from '../core/view-registry.ts';
 import ActivityView from './ActivityView.tsx';
 import AddBrainView from './AddBrainView.tsx';
+import AnalyticsView from './AnalyticsView.tsx';
 import BrainAccessView from './BrainAccessView.tsx';
 import BrainsView from './BrainsView.tsx';
 import Browse from './Browse.tsx';
@@ -21,6 +22,7 @@ import ShareBrainView from './ShareBrainView.tsx';
 const VIEW_DEFS = [
 	ActivityView,
 	AddBrainView,
+	AnalyticsView,
 	BrainAccessView,
 	BrainsView,
 	Browse,

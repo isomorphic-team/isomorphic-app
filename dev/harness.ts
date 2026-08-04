@@ -23,6 +23,14 @@ import { renderViews, stripSnapshots, hasViews, type ViewContext } from '../src/
 // The REAL per-brain access rule (pure, no D1) so the sharing preview resolves
 // exactly like prod: org visibility + explicit grants + the org-admin floor.
 import { effectiveBrainRole, roleLabel, type Role } from '../src/lib/orgs.ts';
+import {
+	dayKey,
+	shiftDay,
+	summarize,
+	summaryText,
+	FOOTNOTE,
+	type UsageRow
+} from '../src/lib/usage.ts';
 import PAGES from './fixtures.json';
 
 // Per-brain content. Previously a single shared `pages` map backed every brain, so
@@ -143,6 +151,76 @@ let orgMembers: {
 		added_at: '2026-06-20T00:00:00Z'
 	}
 ];
+// Usage fixtures for `#analytics`. Rows are synthesized here and folded by the REAL
+// summarize() from src/lib/usage.ts, the same way the harness runs the real views
+// engine — so the preview exercises the actual fold, not a hand-written payload.
+//
+// Shaped to make the states that matter visible at a glance: one heavy reader, one
+// editor, one member who has never touched it (the actionable row), one departed
+// user, a quiet weekend, and a second brain nobody opened.
+function usageFixtureRows(days: number): UsageRow[] {
+	const today = dayKey(new Date());
+	const rows: UsageRow[] = [];
+	// The real brain ids, so the per-brain table joins its labels instead of falling
+	// back to raw ids and showing every fixture brain at zero.
+	const B1 = brainsFixture[0].id;
+	const push = (day: string, user: string, brain: string, tool: string, calls: number) => {
+		if (calls > 0) rows.push({ day, user_id: user, brain_id: brain, tool, calls, errors: 0 });
+	};
+	for (let i = 0; i < days; i++) {
+		const day = shiftDay(today, -i);
+		const dow = new Date(`${day}T00:00:00Z`).getUTCDay();
+		const weekend = dow === 0 || dow === 6;
+		// Deterministic pseudo-variation: no Math.random, so reloads are stable.
+		const jitter = (n: number) => ((i * 7 + n * 13) % 9) - 4;
+		push(day, 'u-me', B1, 'read_page', weekend ? 0 : Math.max(0, 14 + jitter(1)));
+		push(day, 'u-me', B1, 'search_pages', weekend ? 0 : Math.max(0, 5 + jitter(2)));
+		push(day, 'u-me', B1, 'write_page', weekend || i % 3 ? 0 : 2 + (i % 2));
+		push(day, 'u-cael', B1, 'read_page', weekend ? 0 : Math.max(0, 6 + jitter(3)));
+		push(day, 'u-cael', B1, 'write_page', i % 4 ? 0 : 1);
+		if (i % 6 === 0) push(day, 'u-mira', B1, 'view_page', 3);
+		if (i === 2) push(day, 'u-me', '', 'invite_member', 1);
+		// Someone who has since left the org: their calls still count toward totals.
+		if (i > days - 8 && i % 2 === 0) push(day, 'u-gone', B1, 'read_page', 4);
+	}
+	return rows;
+}
+
+function analyticsResult(days: number): CallToolResult {
+	const to = dayKey(new Date());
+	const from = shiftDay(to, -(days - 1));
+	const summary = summarize({
+		rows: usageFixtureRows(days),
+		roster: orgMembers.map((m) => ({
+			user_id: m.user_id,
+			name: m.name,
+			email: m.email,
+			role: m.role
+		})),
+		brains: brainsFixture.map((b) => ({ brain_id: b.id, label: b.label })),
+		from,
+		to
+	});
+	return {
+		content: [{ type: 'text', text: summaryText(summary, 'Example Org') }],
+		structuredContent: {
+			view: 'analytics',
+			orgName: 'Example Org',
+			window: summary.window,
+			totals: summary.totals,
+			series: summary.series,
+			brains: summary.brains,
+			people: summary.people,
+			// ME is the owner, so the preview shows the admin view. Flip to false to
+			// preview the withheld state a viewer/editor sees.
+			canSeePeople: true,
+			truncated: false,
+			footnote: FOOTNOTE,
+			activeBrain: brainMeta(activeBrainId)
+		}
+	};
+}
+
 let orgInvites: {
 	invite_id: string;
 	email: string;
@@ -361,7 +439,14 @@ function resolveBrainArg(arg: unknown): string | undefined {
 		?.id;
 }
 function brainsResult(msg: string, withView: boolean): CallToolResult {
-	const sc: Record<string, unknown> = { brains: brainRows(), active: activeBrainId };
+	const sc: Record<string, unknown> = {
+		brains: brainRows(),
+		active: activeBrainId,
+		// What the server registered. On here so the harness previews the nav with
+		// the Analytics row present; a real deployment sends false unless
+		// USAGE_ANALYTICS is set.
+		features: { analytics: true }
+	};
 	if (withView) sc.view = 'brains';
 	return { content: [{ type: 'text', text: msg }], structuredContent: sc };
 }
@@ -692,6 +777,8 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
 				structuredContent: { target: { path, title: targetTitle }, refs, truncated: false }
 			};
 		}
+		case 'analytics':
+			return analyticsResult(Number(args?.days ?? 30));
 		case 'members':
 			return rosterResult(
 				`${orgMembers.length} member(s), ${orgInvites.length} pending invite(s).`
@@ -1092,6 +1179,7 @@ const browseMode = hashMode === 'browse';
 const activityMode = hashMode === 'activity';
 const graphMode = hashMode === 'graph';
 const membersMode = hashMode === 'members';
+const analyticsMode = hashMode === 'analytics';
 const brainsMode = hashMode === 'brains';
 const settingsMode = hashMode === 'settings';
 const connectedMode = hashMode === 'connected';
@@ -1122,23 +1210,26 @@ bridge.oninitialized = async () => {
 		? 'brains'
 		: accessMode
 			? 'access'
-			: membersMode
-				? 'members'
-				: graphMode
-					? 'graph'
-					: activityMode
-						? 'activity'
-						: browseMode
-							? 'browse'
-							: editMode
-								? 'edit'
-								: 'page';
+			: analyticsMode
+				? 'analytics'
+				: membersMode
+					? 'members'
+					: graphMode
+						? 'graph'
+						: activityMode
+							? 'activity'
+							: browseMode
+								? 'browse'
+								: editMode
+									? 'edit'
+									: 'page';
 	bridge.sendToolInput({
 		arguments:
 			browseMode ||
 			activityMode ||
 			graphMode ||
 			membersMode ||
+			analyticsMode ||
 			brainsMode ||
 			accessMode ||
 			settingsMode ||
@@ -1178,6 +1269,8 @@ bridge.oninitialized = async () => {
 		bridge.sendToolResult(await handleTool('brains', {}));
 	} else if (membersMode) {
 		bridge.sendToolResult(await handleTool('members', {}));
+	} else if (analyticsMode) {
+		bridge.sendToolResult(await handleTool('analytics', { days: Number(hashPath) || 30 }));
 	} else if (accessMode) {
 		bridge.sendToolResult(await handleTool('brain_access', {}));
 	} else if (graphMode) {

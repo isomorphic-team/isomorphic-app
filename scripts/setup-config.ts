@@ -96,6 +96,13 @@ const SETTINGS = [
 		help: 'Your GitHub App slug (github.com/apps/<slug>). Written by `pnpm bootstrap` as GITHUB_APP_SLUG.'
 	},
 	{
+		key: 'USAGE_ANALYTICS',
+		placeholder: '__USAGE_ANALYTICS__',
+		default: 'false',
+		help: '"true" records per-day usage counters and shows the org Analytics tab. Off by default.',
+		oneOf: ['true', 'false']
+	},
+	{
 		key: 'D1_DATABASE_NAME',
 		placeholder: '__D1_DATABASE_NAME__',
 		default: 'platform-db',
