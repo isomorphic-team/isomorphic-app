@@ -12,75 +12,89 @@
 // on a real SQLite database via node:sqlite (Node 22+), shimmed to the D1
 // surface brain-index uses — so ensureFresh / key discovery run for real.
 import { readFileSync } from 'node:fs';
-import { DatabaseSync } from 'node:sqlite';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { basename, join } from 'node:path';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { registerImportTools } from '../src/tools/importer.ts';
 import { registerLibrarianTools } from '../src/tools/librarian.ts';
 import { installationOctokit } from '../src/lib/github.ts';
-import { createAndScaffoldBrain } from '../src/lib/scaffold-core.ts';
+import { createAndScaffoldBrain, buildScaffoldFiles } from '../src/lib/scaffold-core.ts';
 import { loadBrainConfig } from '../src/lib/brain-config.ts';
-import { githubStore } from '../src/lib/brain-repo.ts';
+import { githubStore, type BrainStore } from '../src/lib/brain-repo.ts';
+import { ensureGitRepo, fsBrainStore } from '../src/local/brain-store-fs.ts';
+import { localD1 } from '../src/local/d1-sqlite.ts';
 import { ledgerPath } from '../src/lib/brain-import.ts';
-import { utf8ToBase64, base64ToUtf8 } from '../src/lib/wiki.ts';
 
-// ---- env from .dev.vars (values may be quoted) ----
-const devVarsPath = process.env.DEV_VARS_PATH ?? new URL('../.dev.vars', import.meta.url).pathname;
-const devVars: Record<string, string> = {};
-for (const line of readFileSync(devVarsPath, 'utf8').split('\n')) {
-	const m = line.match(/^([A-Z0-9_]+)\s*=\s*(.*)$/);
-	if (!m) continue;
-	devVars[m[1]] = m[2].replace(/^"(.*)"$/, '$1');
-}
-const org = devVars.PLATFORM_ORG;
-const installationId = Number(devVars.PLATFORM_INSTALLATION_ID);
-if (!org || !installationId) throw new Error('PLATFORM_ORG / PLATFORM_INSTALLATION_ID missing');
+const GITHUB_MODE = process.argv.includes('--github');
 
-const octokit = await installationOctokit(
-	{ appId: Number(devVars.GITHUB_APP_ID), privateKeyBase64: devVars.GITHUB_APP_PRIVATE_KEY_BASE64 },
-	installationId
-);
+// ---- D1 over node:sqlite, the real migrations (src/local/d1-sqlite.ts) ----
+const { db } = localD1();
 
-// ---- D1 shim over node:sqlite (only the surface brain-index uses) ----
-const sqlite = new DatabaseSync(':memory:');
-sqlite.exec(readFileSync(new URL('../src/db/index-schema.sql', import.meta.url), 'utf8'));
-function shimStatement(sql: string, params: unknown[] = []) {
-	return {
-		bind: (...p: unknown[]) => shimStatement(sql, p),
-		first: async () => sqlite.prepare(sql).get(...(params as [])) ?? null,
-		all: async () => ({ results: sqlite.prepare(sql).all(...(params as [])) }),
-		run: async () => {
-			sqlite.prepare(sql).run(...(params as []));
-			return { success: true };
+// ---- the brain under test: fs+git by default, real GitHub with --github ----
+let store: BrainStore;
+let repoArgs: { owner: string; repo: string };
+let brainId: string;
+let name: string;
+let cleanup: () => Promise<void>;
+
+if (GITHUB_MODE) {
+	const devVarsPath =
+		process.env.DEV_VARS_PATH ?? new URL('../.dev.vars', import.meta.url).pathname;
+	const devVars: Record<string, string> = {};
+	for (const line of readFileSync(devVarsPath, 'utf8').split('\n')) {
+		const m = line.match(/^([A-Z0-9_]+)\s*=\s*(.*)$/);
+		if (!m) continue;
+		devVars[m[1]] = m[2].replace(/^"(.*)"$/, '$1');
+	}
+	const org = devVars.PLATFORM_ORG;
+	const installationId = Number(devVars.PLATFORM_INSTALLATION_ID);
+	if (!org || !installationId) throw new Error('PLATFORM_ORG / PLATFORM_INSTALLATION_ID missing');
+	const octokit = await installationOctokit(
+		{
+			appId: Number(devVars.GITHUB_APP_ID),
+			privateKeyBase64: devVars.GITHUB_APP_PRIVATE_KEY_BASE64
+		},
+		installationId
+	);
+	name = `brain-import-e2e-${Date.now().toString(36)}`;
+	console.log(`Creating scratch brain ${org}/${name} …`);
+	const brain = await createAndScaffoldBrain(octokit, {
+		org,
+		name,
+		description: 'Importer E2E test, safe to delete'
+	});
+	store = githubStore(octokit);
+	repoArgs = { owner: brain.owner, repo: brain.name };
+	brainId = `${brain.owner}/${brain.name}`;
+	cleanup = async () => {
+		console.log(`\nDeleting scratch repo ${org}/${name} …`);
+		try {
+			await octokit.rest.repos.delete(repoArgs);
+			console.log('Deleted.');
+		} catch (err) {
+			console.log(`Could not delete (${(err as { status?: number }).status}), delete it manually.`);
 		}
 	};
+} else {
+	const dir = await mkdtemp(join(tmpdir(), 'brain-import-e2e-'));
+	name = basename(dir);
+	console.log(`Creating scratch brain in ${dir} …`);
+	await ensureGitRepo(dir, { name: 'E2E', email: 'e2e@localhost' });
+	store = fsBrainStore({ dir, author: { name: 'E2E', email: 'e2e@localhost' } });
+	repoArgs = { owner: 'local', repo: name };
+	brainId = `local/${name}`;
+	await store.commitFiles(repoArgs, { message: 'Scaffold brain', writes: buildScaffoldFiles() });
+	cleanup = async () => {
+		await rm(dir, { recursive: true, force: true });
+	};
 }
-const db = {
-	prepare: (sql: string) => shimStatement(sql),
-	batch: async (stmts: { run: () => Promise<unknown> }[]) => {
-		for (const s of stmts) await s.run();
-		return [];
-	}
-} as never;
-
-// ---- scratch repo ----
-const name = `brain-import-e2e-${Date.now().toString(36)}`;
-console.log(`Creating scratch brain ${org}/${name} …`);
-const store = githubStore(octokit);
-
-const brain = await createAndScaffoldBrain(octokit, {
-	org,
-	name,
-	description: 'Import E2E test — safe to delete'
-});
-const repoArgs = { owner: brain.owner, repo: brain.name };
-const brainId = `${brain.owner}/${brain.name}`;
 
 // ---- in-memory MCP client wired to the real handlers ----
 const server = new McpServer({ name: 'import-e2e', version: '0.0.0' });
 const getContext = async () => ({
-	octokit,
 	store,
 	repoArgs,
 	role: 'owner' as const,
@@ -127,34 +141,22 @@ async function call(tool: string, args: Record<string, unknown>): Promise<CallRe
 	};
 }
 
-// Direct GitHub helpers for simulating a human curator.
+// A human curator editing the brain OUTSIDE our tools. Expressed through the store
+// so it works against either backend, and so these edits look exactly like the ones
+// the importer's no-resurrection rule has to respect.
 async function ghRead(path: string): Promise<{ content: string; sha: string } | null> {
-	try {
-		const { data } = await octokit.rest.repos.getContent({ ...repoArgs, path });
-		if (Array.isArray(data) || data.type !== 'file') return null;
-		return { content: base64ToUtf8(data.content), sha: data.sha };
-	} catch {
-		return null;
-	}
+	return store.readFile(repoArgs, path);
 }
 async function ghWrite(path: string, content: string, message: string) {
-	const existing = await ghRead(path);
-	await octokit.rest.repos.createOrUpdateFileContents({
-		...repoArgs,
-		path,
-		message,
-		content: utf8ToBase64(content),
-		...(existing ? { sha: existing.sha } : {})
-	});
+	await store.commitFiles(repoArgs, { message, writes: [{ path, content }] });
 }
 async function ghDelete(path: string, message: string) {
 	const existing = await ghRead(path);
 	if (!existing) throw new Error(`cannot delete missing ${path}`);
-	await octokit.rest.repos.deleteFile({ ...repoArgs, path, message, sha: existing.sha });
+	await store.commitFiles(repoArgs, { message, deletes: [path] });
 }
 async function headSha(): Promise<string> {
-	const { data } = await octokit.rest.git.getRef({ ...repoArgs, ref: 'heads/main' });
-	return data.object.sha;
+	return (await store.getHead(repoArgs)).commitSha;
 }
 
 const SOURCE = 'e2e-feed';
@@ -439,13 +441,5 @@ try {
 		console.log('\nAll import E2E checks passed.');
 	}
 } finally {
-	console.log(`Deleting scratch repo ${org}/${name} …`);
-	try {
-		await octokit.rest.repos.delete(repoArgs);
-		console.log('Deleted.');
-	} catch (err) {
-		console.error(
-			`Could not delete (${(err as { status?: number }).status}) — delete manually: https://github.com/${org}/${name}/settings`
-		);
-	}
+	await cleanup();
 }

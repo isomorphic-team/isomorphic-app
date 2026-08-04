@@ -5,87 +5,112 @@
 // repointing via fetchInboundLinkersForPaths, for both a single page and a folder
 // subtree — move_page/delete_page take a folder path with no .md).
 //
-// NOT wired into CI (see docs/roadmap.md test-harness "skip list" — no real-GitHub E2E
-// in CI). Run it by hand when the write tools change:
+// TWO BACKENDS, ONE BATTERY. By default it runs against the fs + git BrainStore in a
+// temporary directory: no network, no credentials, no scratch repo, so it runs in CI
+// and a contributor can run it on a fresh clone. With --github it runs the identical
+// assertions against a real scratch repo on the platform org, which is the only way
+// to prove the GitHub adapter itself.
 //
-//   pnpm exec tsx scripts/e2e-librarian.ts
+//   pnpm test:e2e                              (local, offline, in CI)
+//   pnpm exec tsx scripts/e2e-librarian.ts --github   (real GitHub, by hand)
 //
-// Requires `.dev.vars` (repo root, or DEV_VARS_PATH env var) with the platform
-// App creds + PLATFORM_ORG / PLATFORM_INSTALLATION_ID. Creates a scratch brain
-// repo `brain-librarian-e2e-*` on the platform org, drives the REAL MCP tool
-// handlers against it through an in-memory client transport, and deletes the
-// repo afterwards (success or failure). The content index runs on a real SQLite
-// database via node:sqlite (Node 22+), shimmed to the D1 surface brain-index
-// uses — so ensureFresh / loadResolvedGraph / backlinksTo run for real, exactly
-// like prod. (Mirrors e2e-import.ts.)
+// The --github mode requires `.dev.vars` (repo root, or DEV_VARS_PATH) with the
+// platform App creds + PLATFORM_ORG / PLATFORM_INSTALLATION_ID, creates a scratch
+// brain repo `brain-librarian-e2e-*`, and deletes it afterwards (success or failure).
+//
+// The content index runs on a real SQLite database via node:sqlite in both modes,
+// shimmed to the D1 surface, so ensureFresh / loadResolvedGraph / backlinksTo run for
+// real exactly like prod. (Mirrors e2e-import.ts.)
 import { readFileSync } from 'node:fs';
-import { DatabaseSync } from 'node:sqlite';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { basename, join } from 'node:path';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { registerLibrarianTools } from '../src/tools/librarian.ts';
 import { loadCustomToolDefs, registerCustomTools } from '../src/tools/custom.ts';
 import { installationOctokit } from '../src/lib/github.ts';
-import { createAndScaffoldBrain } from '../src/lib/scaffold-core.ts';
+import { createAndScaffoldBrain, buildScaffoldFiles } from '../src/lib/scaffold-core.ts';
 import { loadBrainConfig } from '../src/lib/brain-config.ts';
-import { githubStore } from '../src/lib/brain-repo.ts';
+import { githubStore, type BrainStore } from '../src/lib/brain-repo.ts';
+import { ensureGitRepo, fsBrainStore } from '../src/local/brain-store-fs.ts';
+import { localD1 } from '../src/local/d1-sqlite.ts';
 
-// ---- env from .dev.vars (values may be quoted) ----
-const devVarsPath = process.env.DEV_VARS_PATH ?? new URL('../.dev.vars', import.meta.url).pathname;
-const devVars: Record<string, string> = {};
-for (const line of readFileSync(devVarsPath, 'utf8').split('\n')) {
-	const m = line.match(/^([A-Z0-9_]+)\s*=\s*(.*)$/);
-	if (!m) continue;
-	devVars[m[1]] = m[2].replace(/^"(.*)"$/, '$1');
-}
-const org = devVars.PLATFORM_ORG;
-const installationId = Number(devVars.PLATFORM_INSTALLATION_ID);
-if (!org || !installationId) throw new Error('PLATFORM_ORG / PLATFORM_INSTALLATION_ID missing');
+const GITHUB_MODE = process.argv.includes('--github');
 
-const octokit = await installationOctokit(
-	{ appId: Number(devVars.GITHUB_APP_ID), privateKeyBase64: devVars.GITHUB_APP_PRIVATE_KEY_BASE64 },
-	installationId
-);
+// ---- D1 over node:sqlite, the real migrations (src/local/d1-sqlite.ts) ----
+const { db } = localD1();
 
-// ---- D1 shim over node:sqlite (only the surface brain-index uses) ----
-const sqlite = new DatabaseSync(':memory:');
-sqlite.exec(readFileSync(new URL('../src/db/index-schema.sql', import.meta.url), 'utf8'));
-function shimStatement(sql: string, params: unknown[] = []) {
-	return {
-		bind: (...p: unknown[]) => shimStatement(sql, p),
-		first: async () => sqlite.prepare(sql).get(...(params as [])) ?? null,
-		all: async () => ({ results: sqlite.prepare(sql).all(...(params as [])) }),
-		run: async () => {
-			sqlite.prepare(sql).run(...(params as []));
-			return { success: true };
+// ---- the brain under test ----
+let store: BrainStore;
+let repoArgs: { owner: string; repo: string };
+let brainId: string;
+let name: string;
+let cleanup: () => Promise<void>;
+
+if (GITHUB_MODE) {
+	const devVarsPath =
+		process.env.DEV_VARS_PATH ?? new URL('../.dev.vars', import.meta.url).pathname;
+	const devVars: Record<string, string> = {};
+	for (const line of readFileSync(devVarsPath, 'utf8').split('\n')) {
+		const m = line.match(/^([A-Z0-9_]+)\s*=\s*(.*)$/);
+		if (!m) continue;
+		devVars[m[1]] = m[2].replace(/^"(.*)"$/, '$1');
+	}
+	const org = devVars.PLATFORM_ORG;
+	const installationId = Number(devVars.PLATFORM_INSTALLATION_ID);
+	if (!org || !installationId) throw new Error('PLATFORM_ORG / PLATFORM_INSTALLATION_ID missing');
+	const octokit = await installationOctokit(
+		{
+			appId: Number(devVars.GITHUB_APP_ID),
+			privateKeyBase64: devVars.GITHUB_APP_PRIVATE_KEY_BASE64
+		},
+		installationId
+	);
+	name = `brain-librarian-e2e-${Date.now().toString(36)}`;
+	console.log(`Creating scratch brain ${org}/${name} …`);
+	const brain = await createAndScaffoldBrain(octokit, {
+		org,
+		name,
+		description: 'Librarian E2E test, safe to delete'
+	});
+	store = githubStore(octokit);
+	repoArgs = { owner: brain.owner, repo: brain.name };
+	brainId = `${brain.owner}/${brain.name}`;
+	cleanup = async () => {
+		console.log(`\nDeleting scratch repo ${org}/${name} …`);
+		try {
+			await octokit.rest.repos.delete(repoArgs);
+			console.log('Deleted.');
+		} catch (err) {
+			console.log(
+				`Could not delete (${(err as { status?: number }).status}), delete manually: https://github.com/${org}/${name}/settings`
+			);
 		}
 	};
+} else {
+	const dir = await mkdtemp(join(tmpdir(), 'brain-librarian-e2e-'));
+	name = basename(dir);
+	console.log(`Creating scratch brain in ${dir} …`);
+	await ensureGitRepo(dir, { name: 'E2E', email: 'e2e@localhost' });
+	store = fsBrainStore({ dir, author: { name: 'E2E', email: 'e2e@localhost' } });
+	repoArgs = { owner: 'local', repo: name };
+	brainId = `local/${name}`;
+	// The same scaffold the GitHub path gets, from the same pure builder, so both
+	// backends start from a byte-identical brain.
+	await store.commitFiles(repoArgs, {
+		message: 'Scaffold brain',
+		writes: buildScaffoldFiles()
+	});
+	cleanup = async () => {
+		await rm(dir, { recursive: true, force: true });
+	};
 }
-const db = {
-	prepare: (sql: string) => shimStatement(sql),
-	batch: async (stmts: { run: () => Promise<unknown> }[]) => {
-		for (const s of stmts) await s.run();
-		return [];
-	}
-} as never;
-
-// ---- scratch repo ----
-const name = `brain-librarian-e2e-${Date.now().toString(36)}`;
-console.log(`Creating scratch brain ${org}/${name} …`);
-const store = githubStore(octokit);
-
-const brain = await createAndScaffoldBrain(octokit, {
-	org,
-	name,
-	description: 'Librarian E2E test — safe to delete'
-});
-const repoArgs = { owner: brain.owner, repo: brain.name };
-const brainId = `${brain.owner}/${brain.name}`;
 
 // ---- in-memory MCP client wired to the real handlers, with a full context ----
 const server = new McpServer({ name: 'librarian-e2e', version: '0.0.0' });
 const getContext = async () => ({
-	octokit,
 	store,
 	repoArgs,
 	role: 'owner' as const,
@@ -137,29 +162,26 @@ async function call(tool: string, args: Record<string, unknown>) {
 	return { isError: !!res.isError, text: res.content.map((c) => c.text).join('\n') };
 }
 async function headSha(): Promise<string> {
-	const { data } = await octokit.rest.git.getRef({ ...repoArgs, ref: 'heads/main' });
-	return data.object.sha;
+	return (await store.getHead(repoArgs)).commitSha;
 }
 async function fileText(path: string): Promise<string | null> {
-	try {
-		const { data } = await octokit.rest.repos.getContent({ ...repoArgs, path });
-		if (Array.isArray(data) || (data as { type: string }).type !== 'file') return null;
-		return Buffer.from((data as { content: string }).content, 'base64').toString('utf8');
-	} catch {
-		return null;
-	}
+	return (await store.readFile(repoArgs, path))?.content ?? null;
 }
-async function assertOneCommit(label: string, before: string) {
-	const data = await eventually(
-		async () =>
-			(await octokit.rest.git.getCommit({ ...repoArgs, commit_sha: await headSha() })).data,
-		(d) => d.parents.length === 1 && d.parents[0].sha === before
+// "The write landed as exactly ONE commit" is the atomic-bundle guarantee, and it
+// has to be asked in a way BOTH backends can answer. Counting commits does that.
+// Comparing revision identifiers would not: the fs backend's getHead reports a digest
+// of the working tree (so an edit made outside our tools still invalidates the index)
+// while its listCommits reports real git shas, and those are two different identifier
+// spaces on purpose.
+async function commitCount(): Promise<number> {
+	return (await store.listCommits(repoArgs, { limit: 200 })).length;
+}
+async function assertOneCommit(label: string, before: number) {
+	const n = await eventually(
+		async () => (await commitCount()) - before,
+		(v) => v === 1
 	);
-	check(
-		`${label}: exactly one commit`,
-		data.parents.length === 1 && data.parents[0].sha === before,
-		`parent=${data.parents[0]?.sha?.slice(0, 7)} expected=${before.slice(0, 7)}`
-	);
+	check(`${label}: exactly one commit`, n === 1, `commits added = ${n}`);
 }
 async function settledHead(): Promise<string> {
 	let prev = await headSha();
@@ -185,7 +207,8 @@ async function waitInbound(target: string, linker: string) {
 
 try {
 	// ── write_page (create): a new page, one bundled commit ──────────────────
-	let before = await settledHead();
+	await settledHead();
+	let before = await commitCount();
 	let r = await call('write_page', {
 		path: 'wiki/customers/acme.md',
 		title: 'Acme',
@@ -221,7 +244,8 @@ try {
 
 	// ── write_page (metadata-only): omit content to publish — status flips to
 	//    published and the body is untouched. (Absorbed the old publish_page.) ─
-	before = await settledHead();
+	await settledHead();
+	before = await commitCount();
 	r = await call('write_page', { path: 'wiki/customers/acme.md', status: 'published' });
 	check('write_page (publish) succeeds', !r.isError, r.text);
 	const acmePublished = await eventually(
@@ -244,7 +268,8 @@ try {
 	//
 	// `type` is OKF's one required field. It must land in the file, and lead the
 	// frontmatter the way the spec's own examples do.
-	before = await settledHead();
+	await settledHead();
+	before = await commitCount();
 	r = await call('write_page', {
 		path: 'wiki/vendors/swoogo.md',
 		title: 'Swoogo',
@@ -350,7 +375,8 @@ try {
 	//    rest of it. The point is that a caller who has never read the page can
 	//    still edit it safely, so every check here is "the text I didn't name is
 	//    still there". ─────────────────────────────────────────────────────────
-	before = await settledHead();
+	await settledHead();
+	before = await commitCount();
 	r = await call('write_page', {
 		path: 'wiki/customers/acme.md',
 		append: '## Contacts\n\n- Wile E. Coyote'
@@ -374,7 +400,8 @@ try {
 	);
 	await assertOneCommit('write_page append', before);
 
-	before = await settledHead();
+	await settledHead();
+	before = await commitCount();
 	r = await call('write_page', {
 		path: 'wiki/customers/acme.md',
 		edits: [{ find: 'They buy rockets.', replace: 'They buy rockets and boosters.' }]
@@ -400,7 +427,8 @@ try {
 
 	// An anchor that only matches FRONTMATTER must not match: edits operate on the
 	// body, so metadata can't be rewritten behind the frontmatter merge's back.
-	before = await settledHead();
+	await settledHead();
+	before = await commitCount();
 	r = await call('write_page', {
 		path: 'wiki/customers/acme.md',
 		edits: [{ find: 'Rocket-parts customer', replace: 'Rocket customer' }]
@@ -477,7 +505,8 @@ try {
 	});
 	await waitInbound('wiki/proj/alpha.md', 'wiki/notes/ref.md');
 
-	before = await settledHead();
+	await settledHead();
+	before = await commitCount();
 	r = await call('move_page', { path: 'wiki/proj', new_path: 'wiki/work' });
 	check('move_page (folder) succeeds', !r.isError, r.text);
 	check('move_page (folder) reports a repoint', /1 page\(s\) were repointed/.test(r.text), r.text);
@@ -503,7 +532,8 @@ try {
 
 	// ══ move_page (single file): the .md path form still moves + repoints. ═════
 	await waitInbound('wiki/work/alpha.md', 'wiki/notes/ref.md');
-	before = await settledHead();
+	await settledHead();
+	before = await commitCount();
 	r = await call('move_page', { path: 'wiki/work/alpha.md', new_path: 'wiki/work/alpha-1.md' });
 	check('move_page (file) succeeds', !r.isError, r.text);
 	await assertOneCommit('move_page file (moved blob + inbound repoint + log)', before);
@@ -624,15 +654,7 @@ try {
 	await toolClient.close();
 	await toolServer.close();
 } finally {
-	console.log(`\nDeleting scratch repo ${org}/${name} …`);
-	try {
-		await octokit.rest.repos.delete(repoArgs);
-		console.log('Deleted.');
-	} catch (err) {
-		console.log(
-			`Could not delete (${(err as { status?: number }).status}) — delete manually: https://github.com/${org}/${name}/settings`
-		);
-	}
+	await cleanup();
 	await client.close();
 	await server.close();
 }
