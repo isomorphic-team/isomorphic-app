@@ -77,17 +77,15 @@ export async function installationOctokit(creds: AppCreds, installationId: numbe
 	return createApp(creds).getInstallationOctokit(installationId);
 }
 
-// Token-authed Octokit: the single-user alternative to the whole App dance.
+// Token-authed Octokit: the single-user alternative to an App installation.
 //
-// Every call the brain repo actually needs (the git data API, repos.getContent,
-// the batched GraphQL blob reads, pulls.*) is available to a fine-grained PAT with
-// Contents and Pull requests write on that one repository. What a token cannot do
-// is act as an App across MANY installations, which is the multi-tenant path and
-// is why this is single-tenant only.
+// Every call a brain repo needs (the git data API, repos.getContent, the batched
+// GraphQL blob reads, pulls.*) is available to a fine-grained PAT with Contents and
+// Pull requests write on that repository. A token cannot act as an App across many
+// installations, so this is single-tenant only.
 //
-// Deliberately not auto-refreshed: a PAT is a static credential that eventually
-// expires, and the failure (a 401 from GitHub) is clearer than a refresh loop that
-// cannot succeed.
+// Not auto-refreshed: a PAT expires, and a 401 from GitHub is clearer than a refresh
+// loop that cannot succeed.
 export function tokenOctokit(token: string): Octokit {
 	return new Octokit({ auth: token });
 }

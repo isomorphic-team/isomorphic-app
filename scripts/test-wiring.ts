@@ -1,20 +1,16 @@
-// Golden test for the TEST WIRING itself: every `test:*` script has to be listed in
-// BOTH `package.json`'s aggregate `test` script and `.github/workflows/ci.yml`.
+// Golden test for the test wiring itself: every `test:*` script must appear in both
+// `package.json`'s aggregate `test` script and `.github/workflows/ci.yml`.
 //
-// CONTRIBUTING.md and CLAUDE.md have both carried that instruction as prose for a
-// while ("or it runs in exactly one place and nobody notices which"). Prose does not
-// fail a pull request. The failure mode is silent in the direction that matters: a
-// battery wired only into `package.json` passes locally for whoever wrote it and
-// never runs on anyone else's change, so the regression it was written to catch
-// comes back through CI green.
+// CONTRIBUTING.md and CLAUDE.md carried that as prose, which does not fail a pull
+// request. A battery wired only into `package.json` passes for whoever wrote it and
+// never runs on anyone else's change.
 //
-// Deliberately three-way, because each direction catches a different mistake:
-//   1. missing from the aggregate  -> `pnpm test` is a lie
-//   2. missing from ci.yml         -> the pull-request gate is a lie
+// Three directions, each catching a different mistake:
+//   1. missing from the aggregate  -> `pnpm test` does not run it
+//   2. missing from ci.yml         -> it does not gate a pull request
 //   3. in ci.yml but not a script  -> a rename left CI running nothing
 //
-// This test lints itself: `test:wiring` is a `test:*` script, so it has to appear in
-// both places too, and it will report itself if it does not.
+// `test:wiring` is itself a `test:*` script, so it checks its own wiring too.
 //
 //   pnpm test:wiring
 

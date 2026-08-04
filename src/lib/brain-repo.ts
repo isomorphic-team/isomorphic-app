@@ -75,37 +75,29 @@ const GRAPHQL_BLOB_BATCH = 100;
 
 // ---------- the storage seam ----------
 //
-// Everything the tools do to a brain, as nine operations. This is the ONLY
-// interface between the tool layer and where a brain physically lives, which is
-// what makes a non-GitHub backend possible (a git repo on disk, for the local
-// runtime and for running the e2e batteries with no network).
+// Everything the tools do to a brain, as ten operations. The only interface between
+// the tool layer and where a brain physically lives, so a brain can be a GitHub repo
+// or a git repo on disk. Implementations: githubStore below, and the fs/git adapter
+// in src/local/brain-store-fs.ts.
 //
-// Deliberately NOT a general storage abstraction: it is exactly the set of
-// operations the tools already perform, in the shape they already perform them.
-// Anything wider would be speculative, and the repo's own contribution rules say
-// so. Implementations: githubStore below, and the fs/git adapter in
-// src/lib/brain-store-fs.ts.
+// Not a general storage abstraction: it is the set of operations the tools already
+// perform, in the shape they already perform them.
 //
-// It is nine rather than the seven read/write primitives because two questions
-// that were being asked of octokit directly belong to the backend too: which
-// commit a NAMED branch points at (the content index's freshness guard compares
-// against the configured branch, not necessarily the default one), and how writes
-// land here (protected branch means propose rather than commit). Leaving either as
-// a raw octokit call would compile fine and then fail at runtime on any other
-// backend, which is exactly the drift this interface exists to prevent.
+// branchCommitSha, repoWritePolicy, and listCommits are here rather than left as raw
+// octokit calls in content paths. A raw octokit call compiles fine and fails at
+// runtime on any other backend.
 
 // How writes land in a repo. `branchProtected` drives the direct-vs-pull-request
-// decision; a backend with no notion of protection reports false, which is honest
-// rather than a special case (nothing is gating the write).
+// decision; a backend with no notion of protection reports false.
 export interface RepoWritePolicy {
 	defaultBranch: string;
 	branchProtected: boolean;
 	mergeMethod: 'MERGE' | 'SQUASH' | 'REBASE';
 }
 
-// One entry of the brain's history, as view_activity renders it. Backend-neutral
-// on purpose: `url` is optional because a brain on disk has nothing to link to,
-// and `authorLogin` is a GitHub account name that only GitHub can supply.
+// One entry of the brain's history, as view_activity renders it. `url` is optional
+// (a brain on disk has nothing to link to) and so is `authorLogin` (only GitHub can
+// supply an account name).
 export interface CommitEntry {
 	sha: string;
 	message: string;
@@ -145,17 +137,14 @@ export interface BrainStore {
 	): Promise<{ pages: PageContent[]; truncated: boolean }>;
 	readFile(repo: RepoRef, path: string): Promise<{ content: string; sha: string } | null>;
 	findOpenConfigPr(repo: RepoRef): Promise<string | undefined>;
-	// Recent commits, newest first, optionally scoped to one path. Backs
-	// view_activity, which is the repo-history surface rather than the
-	// product-usage one (see the analytics section of CLAUDE.md).
+	// Recent commits, newest first, optionally scoped to one path. Backs view_activity.
 	listCommits(repo: RepoRef, opts: { limit: number; path?: string }): Promise<CommitEntry[]>;
 	commitFiles(repo: RepoRef, opts: CommitOpts): Promise<{ sha: string; head: Head }>;
 	commitOrPR(repo: RepoRef, opts: CommitOrPROpts): Promise<WriteOutcome>;
 }
 
-// The GitHub implementation: the functions below, bound to one authenticated
-// Octokit. Whether that Octokit came from an App installation or a plain token
-// makes no difference here.
+// The GitHub implementation: the functions below, bound to one authenticated Octokit.
+// An App installation token and a plain access token work the same here.
 export function githubStore(octokit: Octokit): BrainStore {
 	return {
 		getHead: (repo) => getHead(octokit, repo),
@@ -182,18 +171,17 @@ async function getHead(octokit: Octokit, repo: RepoRef): Promise<Head> {
 	return { branch, commitSha: ref.object.sha, treeSha: commit.tree.sha };
 }
 
-// The commit a NAMED branch points at. Distinct from getHead, which resolves the
-// repo's DEFAULT branch: the content index's freshness guard compares against the
-// brain's configured branch, which need not be the default.
+// The commit a named branch points at. getHead resolves the repo's DEFAULT branch;
+// the content index's freshness guard compares against the brain's configured branch,
+// which need not be the same.
 async function branchCommitSha(octokit: Octokit, repo: RepoRef, branch: string): Promise<string> {
 	const { data } = await octokit.rest.git.getRef({ ...repo, ref: `heads/${branch}` });
 	return data.object.sha;
 }
 
-// The repo's default branch, whether it is protected, and which merge method to
-// use when a write has to land as a pull request. Throws on any failure; the
-// caller (resolveWritePolicy in brain-config.ts) decides what a failure means,
-// which is deliberately "fall back to direct writes" rather than "break the brain".
+// The repo's default branch, whether it is protected, and which merge method to use
+// when a write lands as a pull request. Throws on failure; resolveWritePolicy in
+// brain-config.ts decides what a failure means (it falls back to direct writes).
 async function repoWritePolicy(octokit: Octokit, repo: RepoRef): Promise<RepoWritePolicy> {
 	const { data: r } = await octokit.rest.repos.get(repo);
 	const defaultBranch = r.default_branch;
@@ -211,9 +199,9 @@ async function repoWritePolicy(octokit: Octokit, repo: RepoRef): Promise<RepoWri
 	return { defaultBranch, branchProtected: Boolean(br.protected), mergeMethod };
 }
 
-// Recent commits, newest first. One call, no per-blob fanout; `path` scopes it to
-// one page's history. `commit.author` is always populated (our attribution work
-// sets it); `author` is the linked GitHub account, absent for non-GitHub members.
+// Recent commits, newest first. One call, no per-blob fanout; `path` scopes it to one
+// page's history. `commit.author` is always populated (our attribution work sets it);
+// `author` is the linked GitHub account, absent for non-GitHub members.
 async function listCommits(
 	octokit: Octokit,
 	repo: RepoRef,

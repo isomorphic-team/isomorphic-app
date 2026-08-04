@@ -1,14 +1,13 @@
 // The `instructions` field of the MCP server: server-level guidance the host loads
 // wholesale and the model reads as "how to use this connector". The main lever for
-// getting the brain, and especially the in-client viewer, invoked at the right
-// moments, since it applies across the whole connector rather than one tool at a time.
+// getting the brain, and the in-client viewer, invoked at the right moments, since it
+// applies across the whole connector rather than one tool at a time.
 //
-// Lives here rather than in worker.ts because the local Node runtime serves the same
-// instructions, and two copies would drift.
+// Here rather than in worker.ts because the local runtime serves the same instructions.
 //
-// NOTE: `instructions` is only emitted in the initialize result (SDK server/index.js
+// `instructions` is only emitted in the initialize result (SDK server/index.js
 // _oninitialize), so it is fixed for the life of a connection. Making it per-brain
-// would go stale on switch_brain exactly like the custom-tool roster does.
+// would go stale on switch_brain, like the custom-tool roster does.
 
 export const SERVER_INSTRUCTIONS = `Isomorphic is the user's "brain": a personal or team knowledge base (a GitHub-backed wiki) that can be searched, read, edited, and — importantly — VIEWED inside Claude via the Isomorphic app.
 

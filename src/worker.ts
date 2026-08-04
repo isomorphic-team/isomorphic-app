@@ -494,19 +494,15 @@ class McpSession {
 				activeBrain: { id: `${repoArgs.owner}/${repoArgs.repo}`, label: repoArgs.repo }
 			};
 		}
-		// Single-tenant path: one human, one brain, no org model. Two ways to reach
-		// the repo, and GITHUB_TOKEN wins because it is the cheaper one to set up.
+		// Single-tenant path: one human, one brain, no org model. Two ways to reach the
+		// repo; GITHUB_TOKEN takes precedence.
 		//
-		//   GITHUB_TOKEN         a plain access token (a fine-grained PAT with Contents
-		//                        + Pull requests write is enough). No GitHub App, no
-		//                        organization, no manifest flow, no installation id.
-		//                        This is the documented path for local development and
-		//                        for a single self-hoster. Commits are attributed to
-		//                        whoever owns the token, which for one user is what
-		//                        you want.
-		//   App installation     the original path, still supported: the platform App
-		//                        plus GITHUB_APP_INSTALLATION_ID. Required if you want
-		//                        App-authored commits or an org-owned installation.
+		//   GITHUB_TOKEN         a plain access token (a fine-grained PAT with Contents +
+		//                        Pull requests write). No App, organization, manifest
+		//                        flow, or installation id. Commits are attributed to the
+		//                        token's owner.
+		//   App installation     the platform App plus GITHUB_APP_INSTALLATION_ID. Use
+		//                        for App-authored commits or an org-owned installation.
 		//
 		// Both need BRAIN_REPO_OWNER/NAME, since there is no tenant table to resolve.
 		const owner = env.BRAIN_REPO_OWNER;
@@ -891,14 +887,12 @@ class McpSession {
 		// widget showed one brain while its own bare actions hit another.
 		registerBrainApp(server, (opts) => this.tenantContext({ ...opts, sticky: true }));
 
-		// Is there an org model at all? Single-tenant deployments (AUTH_MODE=static,
-		// whether reaching GitHub through a token or an App installation) have one
-		// human and one brain, and no `orgs` / `memberships` / `brain_memberships`
-		// rows for anything to resolve against. The tools below therefore cannot
-		// answer, and they should not appear rather than appear and reject: an
-		// advertised tool costs context in every conversation and a refusal reads to
-		// the model as a permissions problem it should work around. Same rule as
-		// FEEDBACK_REPO (unset means submit_feedback is never registered).
+		// Single-tenant deployments (AUTH_MODE=static, whether reaching GitHub through a
+		// token or an App installation) have one human and one brain, and no `orgs` /
+		// `memberships` / `brain_memberships` rows to resolve against. The tools below
+		// cannot answer, so they are not registered: an advertised tool costs context in
+		// every conversation, and a refusal reads to the model as a permissions problem
+		// to work around. Same rule as FEEDBACK_REPO.
 		const hasOrgModel = env.AUTH_MODE === 'oauth';
 
 		// ---------- member management ----------
@@ -971,12 +965,10 @@ class McpSession {
 		// acts on the active brain; switch_brain changes it (persisted
 		// in agent state); any tool's `brain` arg one-shots another. See src/tools/brains.ts.
 		//
-		// Registered in single-tenant mode too, unlike the org tools above: the app's
-		// nav calls `brains` on every open and learns which destinations exist from
-		// the `features` on its payload, so removing it blinds the widget rather than
-		// simplifying it. With no signed-in user the brain list is simply empty
-		// (listAccessibleBrainsForCaller returns [] without touching the org tables),
-		// which is an honest answer rather than a failure.
+		// Registered in single-tenant mode too, unlike the org tools above: the app's nav
+		// calls `brains` on every open and learns which destinations exist from the
+		// `features` on its payload. With no signed-in user the list is empty
+		// (listAccessibleBrainsForCaller returns [] without touching the org tables).
 		registerBrainTools(server, {
 			getContext: (opts) => this.tenantContext(opts),
 			orgContext: (opts) => this.orgContext(opts),

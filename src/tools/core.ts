@@ -1,12 +1,8 @@
-// list_pages and read_page — the two content tools that both runtimes need.
+// list_pages and read_page, the two content tools both runtimes need.
 //
-// They lived inline in worker.ts's buildServer until the local runtime needed them
-// too. Everything else in that method is either identity (whoami, which has no
-// meaning without a signed-in user) or a register*Tools call that was already
-// shared; these two were the only definitions the Worker kept to itself.
-//
-// Both take the same getContext every other suite takes, so they work unchanged
-// against a GitHub-backed brain or a git repo on disk.
+// They were inline in worker.ts's buildServer until the local runtime needed them too.
+// Both take the same getContext every other suite takes, so they work against a
+// GitHub-backed brain or a git repo on disk.
 
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';

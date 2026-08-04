@@ -1,13 +1,11 @@
-// `pnpm doctor` — tell someone what state their checkout is in and what to run next.
+// `pnpm doctor`: what state this checkout is in, and what to run next.
 //
-// Every setup question a new contributor or self-hoster asks is a diagnostic this
-// repo could have printed itself: which Node, did setup:config run, which auth mode
-// is .dev.vars actually configured for, what is that mode missing. The answers are
-// all local, so asking a human is pure latency.
+// Which Node, whether setup:config and db:migrate have run, which auth mode .dev.vars
+// is configured for, and what that mode is missing. All answerable locally.
 //
-// Exit code is 1 only for a HARD blocker (wrong Node, no dependencies). "You have
-// not configured a brain yet" is a normal state for someone who just cloned, and a
-// doctor that exits non-zero on it teaches people to ignore the exit code.
+// Exit code is 1 only for a hard blocker (wrong Node, no dependencies). "No brain
+// configured yet" is the normal state five minutes after cloning, and exiting non-zero
+// on it teaches people to ignore the exit code.
 //
 //   pnpm doctor
 

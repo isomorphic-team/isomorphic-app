@@ -21,10 +21,9 @@ cd isomorphic-app && pnpm install
 pnpm try ~/Documents/notes     # any folder of markdown; an Obsidian vault works
 ```
 
-That runs the real MCP server, the real librarian tools, and the real content index
-against a git repository on your disk. No GitHub account, no Cloudflare account, no
-tokens. Connect it with
-`claude mcp add --transport http isomorphic-local http://127.0.0.1:8788/mcp`.
+The real MCP server, the real librarian tools, and the real content index, against a git
+repository on your disk. No GitHub account, no Cloudflare account, no tokens. Connect it
+with `claude mcp add --transport http isomorphic-local http://127.0.0.1:8788/mcp`.
 
 > Open source under [AGPL-3.0-only](LICENSE). Run it, fork it, deploy it for your own company,
 > sell services around it. If you modify it and let others use your version over a network,

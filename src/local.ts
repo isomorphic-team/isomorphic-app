@@ -2,27 +2,23 @@
 //
 //   pnpm try ~/notes
 //
-// The third program in this repo, alongside the bootstrap server and the Worker. It
-// exists because the Worker cannot do this: workerd has no filesystem. What it is NOT
-// is a port. The Worker-shaped things it has to supply are three stubs and one real
-// adapter:
+// The third program in this repo, alongside the bootstrap server and the Worker, which
+// cannot serve a folder because workerd has no filesystem. What it supplies in place of
+// the Worker's bindings:
 //
-//   env.PLATFORM_DB   -> node:sqlite, shimmed to D1     (src/local/d1-sqlite.ts)
-//   env.OAUTH_KV      -> not needed; there is one brain and one user
+//   env.PLATFORM_DB   -> node:sqlite, shimmed to D1   (src/local/d1-sqlite.ts)
+//   env.OAUTH_KV      -> not needed; one brain, one user
 //   ctx.waitUntil     -> not needed; nothing is deferred
 //   OAuth props       -> one local user, named from git config
-//   octokit           -> the fs + git BrainStore          (src/local/brain-store-fs.ts)
+//   octokit           -> the fs + git BrainStore       (src/local/brain-store-fs.ts)
 //
-// The transport needs no substitute at all: WebStandardStreamableHTTPServerTransport
-// speaks web-standard Request/Response, which Node has, and @hono/node-server bridges
-// the two.
+// The transport needs no substitute: WebStandardStreamableHTTPServerTransport speaks
+// web-standard Request/Response and @hono/node-server bridges it to node's http server.
 //
-// WHAT IS DELIBERATELY ABSENT. There is no org model, so no members, invitations,
-// brain sharing, connected accounts, org onboarding, or brain switching: with one
-// brain and one person those tools can only reject, and an advertised tool costs
-// context in every conversation. Same rule as FEEDBACK_REPO, and the same rule
-// `hasOrgModel` applies in the Worker. There is also no auth: the server binds to
-// loopback only, and anything reachable by other people belongs on the Worker.
+// No org model, so no members, invitations, brain sharing, connected accounts, org
+// onboarding, or brain switching: with one brain and one person those tools can only
+// reject. The Worker applies the same rule via `hasOrgModel`. No auth either; it binds
+// to loopback.
 
 import { serve } from '@hono/node-server';
 import { Hono } from 'hono';
@@ -45,8 +41,7 @@ const args = process.argv.slice(2).filter((a) => !a.startsWith('-'));
 const dir = resolve(args[0] ?? process.cwd());
 const port = Number(process.env.PORT ?? 8788);
 
-// Read the operator's git identity so commits are attributed to them rather than to
-// a placeholder. Their own repo, their own name on the history.
+// The operator's git identity, so commits are attributed to them.
 function gitIdentity(): { name: string; email: string } {
 	const read = (key: string, fallback: string) => {
 		try {
@@ -68,14 +63,14 @@ const store = fsBrainStore({ dir, author });
 const repoArgs = { owner: 'local', repo: basename(dir) };
 const brainId = `local/${basename(dir)}`;
 
-// The content index is kept next to the brain rather than in memory: rebuilding the
-// index of a large vault on every launch is slow and buys nothing.
+// The content index is kept next to the brain rather than in memory, so a large vault
+// is not reindexed on every launch.
 const stateDir = resolve(dir, '.isomorphic');
 mkdirSync(stateDir, { recursive: true });
 const { db } = localD1(resolve(stateDir, 'index.sqlite'));
 
-// One brain, one user, full rights. `role` and `orgRole` both report owner for the
-// same reason the Worker's single-tenant path does: there is nobody else to be.
+// One brain, one user, full rights. Both roles report owner, as the Worker's
+// single-tenant path does.
 async function getContext(): Promise<BrainContext> {
 	return {
 		store,
@@ -95,9 +90,8 @@ async function getContext(): Promise<BrainContext> {
 // to reach the host anyway (the transport cannot push tools/list_changed).
 const custom = await loadCustomToolDefs(await getContext()).catch(() => ({ defs: [], errors: [] }));
 
-// ONE SERVER PER REQUEST, like the Worker. An McpServer binds to a single transport,
-// so reusing one across requests answers the first call and then 500s on every one
-// after it. Registration is cheap; the index and the git repo hold the state.
+// One server per request, like the Worker. An McpServer binds to a single transport, so
+// a reused one answers the first call and 500s on every one after.
 function buildServer(): McpServer {
 	const server = new McpServer(
 		{ name: 'isomorphic-local', title: `Isomorphic (${basename(dir)})`, version: '0.1.0' },
@@ -110,9 +104,8 @@ function buildServer(): McpServer {
 	registerBrainApp(server, getContext);
 	registerCustomTools(server, getContext, custom.defs);
 
-	// The claude.ai compatibility shim, for the same reason worker.ts carries it: SDK
-	// 1.29 stamps `execution` on every registration and claude.ai's client-side
-	// validation rejects the unfamiliar field.
+	// The claude.ai compatibility shim, as in worker.ts: SDK 1.29 stamps `execution` on
+	// every registration and claude.ai's client-side validation rejects the field.
 	const registered = (
 		server as unknown as { _registeredTools: Record<string, { execution?: unknown }> }
 	)._registeredTools;
@@ -129,7 +122,7 @@ app.post('/mcp', async (c) => {
 	await buildServer().connect(transport);
 	return transport.handleRequest(c.req.raw);
 });
-// Same 405 as the Worker: the stateless transport offers no server-to-server stream,
+// Same 405 as the Worker: the stateless transport offers no server-to-client stream,
 // and answering GET makes compliant clients retry forever.
 app.all('/mcp', (c) => c.text('Method Not Allowed', 405, { Allow: 'POST' }));
 

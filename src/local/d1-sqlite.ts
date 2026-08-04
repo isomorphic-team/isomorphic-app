@@ -1,16 +1,12 @@
-// D1, shimmed over `node:sqlite`. Node-only (see the note at the top of
-// brain-store-fs.ts about why this is not in src/lib/).
+// D1, shimmed over `node:sqlite`. Node-only, so not in src/lib/.
 //
-// The content index is D1 code, and it is not optional: every read goes through
-// ensureFresh. So anything that runs the real tools outside a Worker needs a D1 that
-// behaves like D1. Three places did: e2e-librarian, e2e-import, and test-index each
-// carried their own near-identical copy of this shim. This is that copy, once, so the
-// local runtime and the e2e batteries cannot drift from each other.
+// Every read goes through ensureFresh, which is D1 code, so anything running the real
+// tools outside a Worker needs a D1-shaped database. e2e-librarian, e2e-import, and
+// test-index each carried a near-identical copy of this shim; this is the one copy.
 //
-// Only the surface the index and the org tables actually use: prepare/bind, first,
-// all, run, and batch. `batch` is sequential rather than a real transaction, which
-// matches how the tools use it (idempotent upserts) and is the same compromise the
-// e2e scripts have always made.
+// Only the surface the index and the org tables use: prepare/bind, first, all, run,
+// batch. `batch` is sequential rather than transactional, matching how the tools use
+// it (idempotent upserts).
 
 import { DatabaseSync } from 'node:sqlite';
 import { readFileSync, readdirSync } from 'node:fs';
@@ -18,9 +14,8 @@ import type { D1Database } from '@cloudflare/workers-types';
 
 const MIGRATIONS_DIR = new URL('../../migrations/', import.meta.url);
 
-// Apply the REAL migrations rather than src/db/*.sql, which are reference copies.
-// If a migration would not apply here, it would not apply to a deployment either,
-// so this is worth a few milliseconds at startup.
+// The real migrations, not src/db/*.sql, which are reference copies. A migration that
+// fails here would fail a deployment too.
 export function applyMigrations(sqlite: DatabaseSync): void {
 	const files = readdirSync(MIGRATIONS_DIR)
 		.filter((f) => f.endsWith('.sql'))
@@ -36,8 +31,7 @@ export interface LocalDb {
 }
 
 // `path` defaults to an in-memory database. Pass a file to keep the content index
-// across restarts, which is what the local runtime does: rebuilding the index of a
-// large vault on every launch is slow and pointless.
+// across restarts, which is what the local runtime does.
 export function localD1(path = ':memory:'): LocalDb {
 	const sqlite = new DatabaseSync(path);
 	applyMigrations(sqlite);

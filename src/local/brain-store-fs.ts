@@ -1,21 +1,15 @@
-// A BrainStore backed by a git repository on disk. Node-only.
+// A BrainStore backed by a git repository on disk. Node-only, so not in src/lib/,
+// which is typechecked against the Workers runtime and may not import `node:*`.
+// Reachable only from src/local.ts.
 //
-// NOT in src/lib/, deliberately: that tree is typechecked against the Workers
-// runtime and may not import `node:*`. This file is reachable only from
-// src/local.ts, which is the Node entry point.
+// A git repo rather than a bare folder: commitFiles has to land a multi-file bundle
+// whole or not at all, which write_page's edit batches depend on, and plain
+// filesystem writes cannot do that. Committing also gives view_activity a history.
 //
-// WHY A GIT REPO AND NOT A BARE FOLDER. commitFiles promises that a multi-file
-// bundle lands whole or not at all, and write_page's "an edit batch is never
-// half-applied" rests on it. Plain filesystem writes cannot promise that. Committing
-// also keeps view_activity meaningful and keeps the product's central claim ("your
-// knowledge is a git repo you own") literally true rather than true-with-an-asterisk.
-//
-// WHY THE WORKING TREE RATHER THAN `git ls-tree`. Someone running a local brain will
-// edit files in their editor, and reading only committed state would show them stale
-// content until they remembered to commit. So reads see the working tree, and the
-// "revision" the content index compares against is a digest of that tree (see
-// treeToken) rather than a commit sha. The index only ever asks "has anything
-// changed?", and a stat digest answers exactly that question, immediately.
+// Reads come from the WORKING TREE rather than `git ls-tree`, so a file edited in the
+// user's own editor is visible without them committing first. The revision the content
+// index compares against is therefore a digest of that tree (treeToken), not a commit
+// sha; the index only asks whether anything changed.
 
 import { execFile } from 'node:child_process';
 import { createHash } from 'node:crypto';
@@ -37,8 +31,8 @@ import type {
 
 const exec = promisify(execFile);
 
-// Never walked. `.git` would swamp the tree and the rest are noise no brain wants
-// indexed; a local brain pointed at a project directory is a normal thing to do.
+// Never walked. Pointing a local brain at a project directory is normal, so skip the
+// directories that would swamp the index.
 const SKIP_DIRS = new Set(['.git', 'node_modules', '.next', 'dist', 'build', '.venv']);
 
 export class LocalGitError extends Error {}
@@ -59,8 +53,8 @@ interface Entry {
 	mtimeMs: number;
 }
 
-// Recursive walk of the working tree. One stat per file, no file contents read,
-// so this stays cheap enough to run on every read the way ensureFresh expects.
+// Recursive walk of the working tree. One stat per file and no contents read, so it
+// is cheap enough to run on every read, which is what ensureFresh does.
 async function walk(root: string): Promise<Entry[]> {
 	const out: Entry[] = [];
 	async function visit(dir: string): Promise<void> {
@@ -84,15 +78,13 @@ async function walk(root: string): Promise<Entry[]> {
 	return out;
 }
 
-// The per-file "blob sha" the content index diffs against. Size plus mtime rather
-// than a content hash: the index only compares these for equality, and hashing every
-// file on every read would mean reading the whole brain to answer "did anything
-// change?", which is the cost the index exists to avoid.
+// The per-file "blob sha" the content index diffs against. Size plus mtime, not a
+// content hash: the index only compares for equality, and hashing every file on every
+// read would mean reading the whole brain to detect a change.
 const fileToken = (e: Entry) => `${e.size}-${e.mtimeMs}`;
 
 // The whole-tree revision, standing in for a commit sha. Any create, delete, or edit
-// moves it, including one made outside our tools, which is the same guarantee the
-// GitHub backend gets from comparing the branch HEAD.
+// moves it, including one made outside our tools.
 function treeToken(entries: Entry[]): string {
 	const h = createHash('sha1');
 	for (const e of [...entries].sort((a, b) => a.path.localeCompare(b.path))) {
@@ -101,9 +93,8 @@ function treeToken(entries: Entry[]): string {
 	return h.digest('hex');
 }
 
-// Guard every path that comes in from a tool: a brain is the directory the operator
-// pointed at, and nothing may be written outside it. `path.resolve` collapses `..`
-// before the check, so this catches traversal rather than merely discouraging it.
+// Nothing may be read or written outside the directory the operator pointed at.
+// `path.resolve` collapses `..` before the check.
 function safeJoin(root: string, path: string): string {
 	const full = resolve(root, path);
 	if (full !== root && !full.startsWith(root + sep)) {
@@ -118,11 +109,10 @@ export interface FsStoreOptions {
 	author?: { name: string; email: string };
 }
 
-// The local content index lives inside the brain (next to it is convenient and
-// survives restarts) but is derived data that must never be committed. Ignore the
-// database FILES specifically, not the whole `.isomorphic/` directory: the importer's
-// per-source ledger lives at `.isomorphic/imports/<source>.json` and is meant to be
-// committed, since it is what stops a deleted page being silently resurrected.
+// The local content index lives inside the brain and survives restarts, but is derived
+// data that must not be committed. Ignore the database files specifically rather than
+// the whole `.isomorphic/` directory: the importer's ledger at
+// `.isomorphic/imports/<source>.json` does belong in the repo.
 const IGNORE_LINE = '.isomorphic/index.sqlite*';
 
 async function ensureIndexIgnored(dir: string): Promise<void> {
@@ -137,11 +127,10 @@ async function ensureIndexIgnored(dir: string): Promise<void> {
 	);
 }
 
-// Make `dir` a git repository if it is not one already, and make sure whatever was
-// already sitting in it is COMMITTED. Adopting a folder of notes has to produce a
-// repo whose history contains the notes: otherwise the first tool write commits one
-// file into an otherwise-empty repo, view_activity shows a brain that apparently did
-// not exist until today, and nothing the user wrote is recoverable through git.
+// Make `dir` a git repository if it is not one, and commit whatever was already in it.
+// Without the initial commit the first tool write lands one file in an empty repo,
+// view_activity shows a brain with no past, and nothing the user wrote is recoverable
+// through git.
 export async function ensureGitRepo(
 	dir: string,
 	author?: { name: string; email: string }
@@ -153,8 +142,7 @@ export async function ensureGitRepo(
 	if (!fresh) return;
 
 	await git(dir, ['add', '--all']);
-	// --allow-empty so an empty folder still gets a HEAD: getHead has to answer
-	// something, and a repo with no commits has nothing to answer with.
+	// --allow-empty so an empty folder still gets a HEAD for getHead to report.
 	const args = [
 		'commit',
 		'--allow-empty',
@@ -163,8 +151,7 @@ export async function ensureGitRepo(
 		'--no-gpg-sign'
 	];
 	if (author) args.push('--author', `${author.name} <${author.email}>`);
-	// git refuses to commit without an identity, and a machine that has never
-	// configured one should not be a dead end. -c sets it for this command only.
+	// git refuses to commit without an identity. -c sets one for this command only.
 	const ident = author ?? { name: 'Isomorphic', email: 'local@localhost' };
 	await git(dir, ['-c', `user.name=${ident.name}`, '-c', `user.email=${ident.email}`, ...args]);
 }
@@ -192,7 +179,6 @@ export function fsBrainStore(opts: FsStoreOptions): BrainStore {
 	): Promise<{ sha: string; head: Head }> => {
 		void repoUnused;
 		// Capture what we are about to overwrite so a failure halfway can be undone.
-		// This is the atomicity that write_page's edit batches depend on.
 		const undo: Array<{ full: string; prior: string | null }> = [];
 		const touched = [...(o.writes ?? []).map((w) => w.path), ...(o.deletes ?? [])];
 		try {
@@ -222,8 +208,7 @@ export function fsBrainStore(opts: FsStoreOptions): BrainStore {
 		const author = o.author ?? opts.author;
 		const args = ['commit', '-m', o.message, '--no-gpg-sign', '--allow-empty'];
 		if (author) args.push('--author', `${author.name} <${author.email}>`);
-		// -c, so a machine with no configured git identity can still commit. Without
-		// it git refuses outright, and every write in the session fails.
+		// -c, so a machine with no configured git identity can still commit.
 		const ident = author ?? { name: 'Isomorphic', email: 'local@localhost' };
 		await git(root, ['-c', `user.name=${ident.name}`, '-c', `user.email=${ident.email}`, ...args]);
 		const sha = (await git(root, ['rev-parse', 'HEAD'])).trim();
@@ -233,15 +218,14 @@ export function fsBrainStore(opts: FsStoreOptions): BrainStore {
 	return {
 		getHead: () => head(),
 
-		// Every branch is the same working tree here, so the branch name is not a
-		// selector. Returning the tree digest keeps the index's freshness guard
-		// working: it moves whenever anything on disk moves.
+		// Every branch is the same working tree here, so the branch name selects nothing.
+		// The tree digest moves whenever anything on disk moves, which is what the
+		// index's freshness guard needs.
 		branchCommitSha: async () => (await head()).commitSha,
 
 		repoWritePolicy: async (): Promise<RepoWritePolicy> => {
 			const h = await head();
-			// Nothing gates a write to a directory you own, so reporting "not
-			// protected" is honest rather than a special case.
+			// Nothing gates a write to a directory you own.
 			return { defaultBranch: h.branch, branchProtected: false, mergeMethod: 'MERGE' };
 		},
 
@@ -258,8 +242,7 @@ export function fsBrainStore(opts: FsStoreOptions): BrainStore {
 				try {
 					pages.push({ path: e.path, content: await readFile(safeJoin(root, e.path), 'utf8') });
 				} catch {
-					// Deleted between the walk and the read. The next read reconciles it,
-					// exactly as a blob that vanished mid-scan would on GitHub.
+					// Deleted between the walk and the read; the next read reconciles it.
 				}
 			}
 			return { pages, truncated: false };
@@ -276,13 +259,12 @@ export function fsBrainStore(opts: FsStoreOptions): BrainStore {
 			};
 		},
 
-		// There are no pull requests, so there is never one open. Not an error: the
-		// caller uses this to decide whether to show a pending-review state.
+		// No pull requests, so never one open.
 		findOpenConfigPr: async () => undefined,
 
 		listCommits: async (_repo, o): Promise<CommitEntry[]> => {
-			// Unit separator between fields and record separator between commits, so a
-			// commit message containing newlines cannot be misparsed as another entry.
+			// Unit separator between fields, record separator between commits, so a message
+			// containing newlines cannot be misparsed as another entry.
 			const fmt = '%H%x1f%an%x1f%aI%x1f%B%x1e';
 			const args = ['log', `-n${o.limit}`, `--format=${fmt}`];
 			if (o.path) args.push('--', o.path);
@@ -306,10 +288,9 @@ export function fsBrainStore(opts: FsStoreOptions): BrainStore {
 
 		commitOrPR: async (repo, o: CommitOrPROpts): Promise<WriteOutcome> => {
 			if (o.writeMode === 'pull-request') {
-				// Only reachable when a brain's own .isomorphic.json asks for review,
-				// since repoWritePolicy never reports protection here. Committing anyway
-				// would silently land a change the brain said needs approval, so refuse
-				// and say why rather than quietly downgrading the guarantee.
+				// Only reachable when a brain's own .isomorphic.json asks for review, since
+				// repoWritePolicy never reports protection here. Committing anyway would
+				// land a change the brain said needs approval.
 				throw new LocalGitError(
 					'This brain is configured for pull-request writes, which a local brain cannot open. Set writes.mode to "direct" in .isomorphic.json, or serve this brain from GitHub.'
 				);

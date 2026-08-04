@@ -73,17 +73,15 @@ const brainArg = z
 	.describe('Which brain to target (name/handle). Defaults to the active brain.');
 
 export interface BrainContext {
-	// Where this brain's content lives. The ONLY way the content tools reach it,
-	// so they work against a GitHub repo or a git repo on disk without knowing
-	// which. See src/lib/brain-repo.ts.
+	// Where this brain's content lives, and the only way the content tools reach it.
+	// See src/lib/brain-repo.ts.
 	store: BrainStore;
-	// The raw GitHub client, for the handful of operations that are GitHub as a
-	// PLATFORM rather than a brain as STORAGE: creating a repository, listing an
-	// installation's repositories, checking a repo exists before connecting it.
-	// Optional because a backend that is not GitHub has no such client, and every
-	// one of those operations belongs to the org model, which such a deployment
-	// does not register (see `hasOrgModel` in worker.ts). Anything a brain's
-	// CONTENT needs belongs on `store`, not here.
+	// The raw GitHub client, for operations that are GitHub as a platform rather than
+	// a brain as storage: creating a repository, listing an installation's
+	// repositories, checking a repo exists before connecting it. Optional because a
+	// non-GitHub backend has no such client; all of those operations belong to the org
+	// model, which such a deployment does not register (`hasOrgModel` in worker.ts).
+	// Anything a brain's content needs goes on `store`.
 	octokit?: Octokit;
 	repoArgs: RepoRef;
 	// The caller's role ON THIS BRAIN (viewer < editor < admin), resolved by

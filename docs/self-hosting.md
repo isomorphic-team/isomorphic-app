@@ -56,30 +56,26 @@ cd isomorphic-app && pnpm install
 pnpm try ~/Documents/notes
 ```
 
-That is a real MCP server, with the real librarian tools and the real content index,
-serving a directory of markdown. No GitHub account, no Cloudflare account, no tokens,
-nothing to configure. Point a local MCP host at it:
+A real MCP server, with the real librarian tools and the real content index, serving a
+directory of markdown. No GitHub account, no Cloudflare account, no tokens. Point a local
+MCP host at it:
 
 ```sh
 claude mcp add --transport http isomorphic-local http://127.0.0.1:8788/mcp
 ```
 
 **Your brain is a git repository.** If the folder is not one yet, `pnpm try` runs
-`git init` and commits what is already there, so nothing you point it at can be lost.
-Every write the tools make lands as a commit, which is what makes `view_activity`
-meaningful and what makes an edit batch atomic. Edit files in your own editor whenever
-you like: reads come from the working tree, so external changes show up on the next
-call with nothing to sync.
+`git init` and commits what is already there. Every write lands as a commit, which is
+what gives `view_activity` a history and what makes an edit batch atomic. Reads come
+from the working tree, so files you edit in your own editor show up on the next call
+with nothing to sync. An Obsidian vault works, as does any folder of markdown.
 
-An Obsidian vault works. So does any folder of markdown.
+Path 0 has no second person. There is no org model, so members, roles, invitations, and
+brain sharing are not registered, and there is no authentication, which is why it binds
+to `127.0.0.1`. For anyone else to reach it, use path 2 or 3.
 
-What path 0 does NOT have: other people. There is no org model, so no members, roles,
-invitations, or brain sharing, and those tools are not registered rather than
-registered and unable to answer. There is also no authentication, which is why it
-binds to `127.0.0.1` only. The moment you want a second person, you want path 2 or 3.
-
-The content index is kept at `.isomorphic/index.sqlite` inside the brain and is
-gitignored for you; it is derived data and can be deleted at any time.
+The content index is kept at `.isomorphic/index.sqlite` inside the brain and gitignored
+for you. It is derived data and can be deleted at any time.
 
 ---
 
@@ -148,10 +144,9 @@ BRAIN_REPO_OWNER="your-account"
 BRAIN_REPO_NAME="your-brain-repo"
 ```
 
-That is the whole GitHub side. No organization, no App, no manifest flow, no installation
-id, and nothing to convert. Commits are attributed to whoever owns the token, which for a
-single user is what you want. An empty repository is fine; the librarian tools write into
-it. Skip to 2b.
+That is the whole GitHub side: no organization, App, manifest flow, or installation id.
+Commits are attributed to whoever owns the token. An empty repository is fine; the
+librarian tools write into it. Skip to 2b.
 
 **Option B: a GitHub App.** Take this if you want commits authored by an App rather than by
 a person, if the brain lives under an organization whose access you would rather manage as
@@ -196,8 +191,8 @@ MCP_BEARER_TOKEN="…"           # openssl rand -hex 32
 ```
 
 Option B also needs `GITHUB_APP_INSTALLATION_ID` and `BRAIN_REPO_OWNER`/`BRAIN_REPO_NAME`,
-all written by bootstrap. `MCP_BEARER_TOKEN` is what your MCP client sends; it is separate
-from the GitHub credential and authenticates the client to _you_, not you to GitHub.
+all written by bootstrap. `MCP_BEARER_TOKEN` is what your MCP client sends. It is separate
+from the GitHub credential: it authenticates the client to you, not you to GitHub.
 
 Then:
 

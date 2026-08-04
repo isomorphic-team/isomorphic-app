@@ -43,14 +43,12 @@ import {
 import { CONFIG_PATH, DEFAULT_BRAIN_CONFIG } from '../lib/brain-config.ts';
 
 // The GitHub client, for the three operations in this file that are GitHub as a
-// PLATFORM rather than a brain as STORAGE: create a repository, list the repos an
-// installation can reach, check a repo exists before connecting it. None of them
-// touches a brain's content, so none of them belongs on BrainStore.
+// platform rather than a brain as storage: create a repository, list the repos an
+// installation can reach, check a repo exists before connecting it. None touches a
+// brain's content, so none belongs on BrainStore.
 //
-// Every caller is an org-model tool, and a deployment with no GitHub client is one
-// with no org model, which does not register these (see `hasOrgModel` in
-// worker.ts). So this throw is unreachable rather than merely unlikely, and it
-// says which assumption broke if that ever stops being true.
+// Every caller is an org-model tool, and a deployment with no GitHub client has no org
+// model and does not register them (`hasOrgModel` in worker.ts).
 function githubClient(ctx: { octokit?: Octokit }): Octokit {
 	if (!ctx.octokit) {
 		throw new Error('This action needs a GitHub-backed deployment (no GitHub client configured).');

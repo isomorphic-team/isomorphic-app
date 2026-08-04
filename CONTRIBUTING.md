@@ -41,19 +41,18 @@ That is the whole loop for the parts of the project most changes touch. From the
 | The Worker, auth, orgs, multi-tenancy        | `pnpm worker:dev`  | `http://localhost:8787/mcp`, needs a GitHub token (below)                            |
 | The one-time GitHub App setup flow           | `pnpm bootstrap`   | `http://localhost:3000`, needs a GitHub org you control                              |
 
-**`pnpm try <folder>` is the one to start with.** It runs the real MCP server, the real
-librarian tools, and the real content index against a git repository on disk, with no GitHub
-account, no Cloudflare account, and no tokens. Point it at a folder of markdown (an Obsidian
-vault works) and connect a local MCP host:
+**Start with `pnpm try <folder>`.** It runs the real MCP server, the real librarian tools, and
+the real content index against a git repository on disk, with no GitHub account, no Cloudflare
+account, and no tokens. Point it at a folder of markdown (an Obsidian vault works) and connect
+a local MCP host:
 
 ```sh
 pnpm try ~/Documents/notes
 claude mcp add --transport http isomorphic-local http://127.0.0.1:8788/mcp
 ```
 
-If the folder is not a git repo it becomes one, and what is already in it is committed, so
-nothing you point it at can be lost. Writes land as commits. See
-[`docs/architecture.md`](docs/architecture.md) for what it is and is not.
+If the folder is not a git repo it becomes one, and what is already in it is committed. Writes
+land as commits. [`docs/architecture.md`](docs/architecture.md) covers what it leaves out.
 
 To run the Worker against a **GitHub-hosted** brain, you need one credential and not the whole
 GitHub App: a fine-grained personal access token scoped to a single repo, with Contents and
@@ -66,7 +65,7 @@ needed for a multi-user deployment. Full detail in
 ## Read this before your first non-trivial change
 
 [`CLAUDE.md`](CLAUDE.md) is the architecture document. Maintainers keep it current because
-coding agents read it. It covers the two-runtime split, the content index, the derived-views
+coding agents read it. It covers the runtime split, the content index, the derived-views
 engine, OKF conformance, and the folder-note convention, and each section says _why_ the design
 is what it is. Skim the section covering your area before you change it. The most common
 failure is a change that is locally correct and violates an invariant documented there.
@@ -80,10 +79,11 @@ surface moves fast.
 
 Each of these has broken a deploy.
 
-**1. `src/lib/` runs on Cloudflare Workers. No `node:*` imports.** The repo ships two programs
-from one `src/`: a Node bootstrap server and a Workers MCP server. Anything in `src/lib/` is
-imported by both. `pnpm typecheck` runs three tsconfigs to catch a leak, so run it before you
-push. Node-only code belongs in `src/bootstrap.ts` or a Node-only sibling.
+**1. `src/lib/` runs on Cloudflare Workers. No `node:*` imports.** The repo ships three programs
+from one `src/`: a Workers MCP server, a Node local runtime, and a Node bootstrap server.
+`src/lib/` is imported by all three, and the Worker is the constraint. `pnpm typecheck` runs
+three tsconfigs to catch a leak, so run it before you push. Node-only code belongs in
+`src/local/`, `src/bootstrap.ts`, or a Node-only sibling.
 
 **2. Generated files are committed and CI checks they are fresh.** After editing anything in
 `app/` or anything under `src/lib/` that the app imports, run `pnpm gen:app`. After editing
@@ -121,8 +121,7 @@ pnpm format             # prettier, run before pushing
 ```
 
 Adding a test means adding it in **both** `package.json`'s `test` script and
-`.github/workflows/ci.yml`, or it runs in exactly one place. `pnpm test:wiring` enforces
-that, so forgetting is a red test rather than a battery nobody notices is missing.
+`.github/workflows/ci.yml`, or it runs in exactly one place. `pnpm test:wiring` enforces that.
 
 Golden tests compare against expected strings inline in the test file. When you change behavior
 deliberately, update the expectation in the same commit and say in the pull request why the old
@@ -136,21 +135,20 @@ pnpm test:e2e-librarian    # the librarian write tools
 pnpm test:e2e-import       # the bulk importer
 ```
 
-They run offline, against a git repo in a temp directory, so they are part of `pnpm test` and
-they gate your pull request like everything else. If you change a write tool, these are the
-tests that will catch you.
+They run offline against a git repo in a temp directory, so they are part of `pnpm test` and
+gate your pull request like everything else. If you change a write tool, these are the tests
+that catch you.
 
-The same two also run against **real GitHub**, which is the only way to exercise the GitHub
-half of the storage layer. That mode needs platform GitHub App credentials in `.dev.vars`, so
-it is a maintainer thing rather than a merge requirement:
+The same two also run against **real GitHub**, the only coverage of the GitHub half of the
+storage layer. That mode needs platform GitHub App credentials in `.dev.vars`, so it is a
+maintainer step rather than a merge requirement:
 
 ```sh
 pnpm exec tsx scripts/e2e-librarian.ts --github
 ```
 
 It creates a disposable `brain-*-e2e-*` scratch repo, auto-deletes it, and never touches a real
-brain. The assertions are identical in both modes, on purpose: if the two backends ever disagree,
-that is the bug.
+brain. The assertions are identical in both modes.
 
 ## Making a change
 
