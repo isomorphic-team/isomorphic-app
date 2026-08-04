@@ -7,15 +7,16 @@ others use your version over a network, in which case those users are entitled t
 modified source. See [`docs/licensing.md`](licensing.md) for the detail, including what the
 copyleft does not reach (your brain content, and any MCP client).
 
-This guide has three paths. Pick the smallest one that does what you need.
+This guide has four paths. Pick the smallest one that does what you need.
 
 | Path                            | Who it is for                                             | You need                                        | Time     |
 | ------------------------------- | --------------------------------------------------------- | ----------------------------------------------- | -------- |
-| **1. Local only**               | Trying it out, or developing on the codebase              | Node 24+, pnpm                                  | ~5 min   |
+| **0. A folder on your machine** | Trying it, or developing on it. No accounts at all.       | Node 24+, pnpm, git                             | ~2 min   |
+| **1. Local only**               | Working on the app UI, or on the Worker                   | Node 24+, pnpm                                  | ~5 min   |
 | **2. Single-tenant deployment** | One person or one small team, one brain, one shared token | The above, plus a GitHub token, plus Cloudflare | ~30 min  |
 | **3. Multi-tenant deployment**  | Many people, several brains, roles, email sign-in         | The above, plus a domain and an email provider  | ~2 hours |
 
-Everything in path 1 works with no accounts at all. Path 2 needs no GitHub App and no
+Path 0 needs no accounts of any kind, and is the fastest way to see the thing work. Path 2 needs no GitHub App and no
 GitHub organization unless you choose them: a personal access token on one repository is
 enough, and `pnpm doctor` will tell you what your `.dev.vars` is still missing.
 
@@ -23,24 +24,62 @@ enough, and `pnpm doctor` will tell you what your `.dev.vars` is still missing.
 
 ## What you are actually running
 
-Two programs from one `src/`:
+Three programs from one `src/`:
 
 - **The MCP Worker** (`src/worker.ts`), a Cloudflare Worker. It serves MCP tools to Claude and
   serves the in-client app UI. Uses D1 for a derived content index and, in multi-tenant mode,
-  for orgs and members. Uses KV for OAuth state.
+  for orgs and members. Uses KV for OAuth state. This is paths 2 and 3.
+- **The local runtime** (`src/local.ts`), a Node server that offers the same content tools over
+  a git repository on disk, with no accounts and no cloud anything. This is path 0.
 - **The bootstrap server** (`src/bootstrap.ts`), a Node script you run once. It registers a
   GitHub App for you and scaffolds your first brain repo, then you never run it again.
 
 And one thing you own that is not code:
 
-- **A brain**, which is an ordinary GitHub repository full of markdown. Your knowledge lives
-  there, in [Open Knowledge Format](https://github.com/GoogleCloudPlatform/knowledge-catalog/blob/main/okf/SPEC.md),
+- **A brain**, which is an ordinary git repository full of markdown, on GitHub or on your own
+  disk. Your knowledge lives there, in
+  [Open Knowledge Format](https://github.com/GoogleCloudPlatform/knowledge-catalog/blob/main/okf/SPEC.md),
   readable and editable without any of this software. If you stop using Isomorphic, you still
   have a git repo full of markdown.
 
-Cloudflare is currently the only supported deploy target. Workers, D1, and KV are used
+Cloudflare is the only supported deploy target for a SHARED instance. Workers, D1, and KV are used
 directly rather than through an abstraction layer, so porting to another runtime is real
 work rather than a config change. The free tier is enough for a small team.
+
+---
+
+## Path 0: a folder on your machine
+
+```sh
+git clone https://github.com/isomorphic-team/isomorphic-app
+cd isomorphic-app && pnpm install
+pnpm try ~/Documents/notes
+```
+
+That is a real MCP server, with the real librarian tools and the real content index,
+serving a directory of markdown. No GitHub account, no Cloudflare account, no tokens,
+nothing to configure. Point a local MCP host at it:
+
+```sh
+claude mcp add --transport http isomorphic-local http://127.0.0.1:8788/mcp
+```
+
+**Your brain is a git repository.** If the folder is not one yet, `pnpm try` runs
+`git init` and commits what is already there, so nothing you point it at can be lost.
+Every write the tools make lands as a commit, which is what makes `view_activity`
+meaningful and what makes an edit batch atomic. Edit files in your own editor whenever
+you like: reads come from the working tree, so external changes show up on the next
+call with nothing to sync.
+
+An Obsidian vault works. So does any folder of markdown.
+
+What path 0 does NOT have: other people. There is no org model, so no members, roles,
+invitations, or brain sharing, and those tools are not registered rather than
+registered and unable to answer. There is also no authentication, which is why it
+binds to `127.0.0.1` only. The moment you want a second person, you want path 2 or 3.
+
+The content index is kept at `.isomorphic/index.sqlite` inside the brain and is
+gitignored for you; it is derived data and can be deleted at any time.
 
 ---
 

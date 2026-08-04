@@ -9,8 +9,22 @@ keeps reads fast at any size, computed views, and an in-client viewer and WYSIWY
 non-technical teammate never has to open GitHub.
 
 [Getting started](docs/getting-started.md) · [Self-hosting](docs/self-hosting.md) ·
+[Architecture](docs/architecture.md) ·
 [Licensing](docs/licensing.md) · [Contributing](CONTRIBUTING.md) ·
-[Architecture](CLAUDE.md) · [Roadmap](docs/roadmap.md)
+[Invariants](CLAUDE.md) · [Roadmap](docs/roadmap.md)
+
+**Try it in two minutes, with no accounts:**
+
+```sh
+git clone https://github.com/isomorphic-team/isomorphic-app
+cd isomorphic-app && pnpm install
+pnpm try ~/Documents/notes     # any folder of markdown; an Obsidian vault works
+```
+
+That runs the real MCP server, the real librarian tools, and the real content index
+against a git repository on your disk. No GitHub account, no Cloudflare account, no
+tokens. Connect it with
+`claude mcp add --transport http isomorphic-local http://127.0.0.1:8788/mcp`.
 
 > Open source under [AGPL-3.0-only](LICENSE). Run it, fork it, deploy it for your own company,
 > sell services around it. If you modify it and let others use your version over a network,

@@ -33,18 +33,31 @@ pnpm doctor             # what your checkout has, and what to run next
 
 That is the whole loop for the parts of the project most changes touch. From there:
 
-| You want to work on                          | Run               | What you get                                                                         |
-| -------------------------------------------- | ----------------- | ------------------------------------------------------------------------------------ |
-| The in-client app UI (viewer, editor, graph) | `pnpm app:dev`    | `http://localhost:5175`, real `ui://` bytes over stub fixtures, live reload, no auth |
-| Markdown / OKF / view engine logic           | `pnpm test:*`     | Pure golden tests, instant, no network                                               |
-| MCP tools end to end                         | `pnpm worker:dev` | `http://localhost:8787/mcp`, needs a GitHub token (below)                            |
-| The one-time GitHub App setup flow           | `pnpm bootstrap`  | `http://localhost:3000`, needs a GitHub org you control                              |
+| You want to work on                          | Run                | What you get                                                                         |
+| -------------------------------------------- | ------------------ | ------------------------------------------------------------------------------------ |
+| The real MCP tools, end to end               | `pnpm try ~/notes` | `http://127.0.0.1:8788/mcp`, serving a folder of markdown. No accounts.              |
+| The in-client app UI (viewer, editor, graph) | `pnpm app:dev`     | `http://localhost:5175`, real `ui://` bytes over stub fixtures, live reload, no auth |
+| Markdown / OKF / view engine logic           | `pnpm test`        | Pure golden tests, instant, no network                                               |
+| The Worker, auth, orgs, multi-tenancy        | `pnpm worker:dev`  | `http://localhost:8787/mcp`, needs a GitHub token (below)                            |
+| The one-time GitHub App setup flow           | `pnpm bootstrap`   | `http://localhost:3000`, needs a GitHub org you control                              |
 
-`pnpm app:dev` needs no credentials at all. If you are unsure where to start, start there.
+**`pnpm try <folder>` is the one to start with.** It runs the real MCP server, the real
+librarian tools, and the real content index against a git repository on disk, with no GitHub
+account, no Cloudflare account, and no tokens. Point it at a folder of markdown (an Obsidian
+vault works) and connect a local MCP host:
 
-To run the **real MCP tools** against a **real repository**, you need one credential and not
-the whole GitHub App: a fine-grained personal access token scoped to a single repo, with
-Contents and Pull requests write. Put it in `.dev.vars` as `GITHUB_TOKEN`, name the repo with
+```sh
+pnpm try ~/Documents/notes
+claude mcp add --transport http isomorphic-local http://127.0.0.1:8788/mcp
+```
+
+If the folder is not a git repo it becomes one, and what is already in it is committed, so
+nothing you point it at can be lost. Writes land as commits. See
+[`docs/architecture.md`](docs/architecture.md) for what it is and is not.
+
+To run the Worker against a **GitHub-hosted** brain, you need one credential and not the whole
+GitHub App: a fine-grained personal access token scoped to a single repo, with Contents and
+Pull requests write. Put it in `.dev.vars` as `GITHUB_TOKEN`, name the repo with
 `BRAIN_REPO_OWNER` and `BRAIN_REPO_NAME`, set `MCP_BEARER_TOKEN` to anything random, then
 `pnpm db:migrate && pnpm worker:dev`. `pnpm bootstrap` and a GitHub organization are only
 needed for a multi-user deployment. Full detail in
@@ -115,17 +128,29 @@ Golden tests compare against expected strings inline in the test file. When you 
 deliberately, update the expectation in the same commit and say in the pull request why the old
 expectation was wrong. Expect a review comment on a golden updated without one.
 
-Two further batteries hit **real GitHub** and are not in CI, because they need platform GitHub
-App credentials in `.dev.vars`:
+Two of those batteries are **end to end**: they drive the real MCP tool handlers, through a
+real content index on SQLite, against a real brain.
 
 ```sh
-pnpm exec tsx scripts/e2e-librarian.ts   # the librarian write tools
-pnpm exec tsx scripts/e2e-import.ts      # the bulk importer
+pnpm test:e2e-librarian    # the librarian write tools
+pnpm test:e2e-import       # the bulk importer
 ```
 
-Both create a disposable `brain-*-e2e-*` scratch repo, auto-delete it, and never touch a real
-brain. Maintainers run `e2e-librarian` for any change to a write tool. You are not expected to
-run these to get a pull request merged; say in the PR that you could not, and a maintainer will.
+They run offline, against a git repo in a temp directory, so they are part of `pnpm test` and
+they gate your pull request like everything else. If you change a write tool, these are the
+tests that will catch you.
+
+The same two also run against **real GitHub**, which is the only way to exercise the GitHub
+half of the storage layer. That mode needs platform GitHub App credentials in `.dev.vars`, so
+it is a maintainer thing rather than a merge requirement:
+
+```sh
+pnpm exec tsx scripts/e2e-librarian.ts --github
+```
+
+It creates a disposable `brain-*-e2e-*` scratch repo, auto-deletes it, and never touches a real
+brain. The assertions are identical in both modes, on purpose: if the two backends ever disagree,
+that is the bug.
 
 ## Making a change
 

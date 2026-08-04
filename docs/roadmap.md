@@ -124,9 +124,15 @@ picker, Manage brains) or a qualifier on an otherwise ambiguous label
 needs another org's roster without switching brains, that is an org argument ON the
 members screen — an argument again, not a mode.
 
-# TODO: local-first development (make a first contribution cheap)
+# TODO: local-first development (make a first contribution cheap). **DONE 2026-08-04**
 
-Full plan: [`docs/design/local-first-development.md`](design/local-first-development.md).
+Full plan, including where it turned out to be wrong:
+[`docs/design/local-first-development.md`](design/local-first-development.md).
+
+All five workstreams shipped. `pnpm try <folder>` serves the real MCP tools over a git repo on
+disk with no accounts; `GITHUB_TOKEN` replaces the whole GitHub App for a single user;
+`BrainStore` is the storage seam; and **both write-path e2e batteries now run offline in CI**,
+which was the point. Remaining sub-items are struck through below.
 
 Today a contributor can reach the app UI in five minutes (`pnpm app:dev`, no accounts) and the
 pure engines instantly (`pnpm test`, offline). Everything else needs a GitHub org, a GitHub App,
@@ -138,27 +144,27 @@ than by a check on the pull request.
 Five workstreams, in order. The first two stand alone; do not start the fourth before the third
 has landed and settled.
 
-- **Papercuts.** Pin Node (`engines` + `.nvmrc`; `node:sqlite` needs 22+, CI runs 24). Fix the
+- ~~**Papercuts.** Pin Node (`engines` + `.nvmrc`; `node:sqlite` needs 22+, CI runs 24). Fix the
   golden-test counts stated in `CONTRIBUTING.md`, `docs/self-hosting.md`, and `ci.yml`'s comment,
   which disagree and will drift again: drop the numerals, keep the lists. Lint the documented
   two-places rule: every
   `test:*` script in `package.json` must appear in `ci.yml`. Add `pnpm doctor`. All good first
-  issues.
-- **Bring your own token.** `GITHUB_TOKEN` + `BRAIN_REPO_*` builds a plain Octokit, replacing the
+  issues.~~ DONE (plus `pnpm doctor`, and `test:wiring` lints the two-places rule).
+- ~~**Bring your own token.** `GITHUB_TOKEN` + `BRAIN_REPO_*` builds a plain Octokit, replacing the
   App for single-user and development use. Six `installationOctokit(...)` call sites, all in
   `worker.ts`. Removes the org requirement, the manifest flow, bootstrap, and the PKCS conversion
-  from the critical path. App-only tools do not register, per the `FEEDBACK_REPO` precedent.
-- **The `BrainStore` seam.** `src/lib/brain-repo.ts` is already the chokepoint (17 of the repo's
+  from the critical path. App-only tools do not register, per the `FEEDBACK_REPO` precedent.~~ DONE.
+- ~~**The `BrainStore` seam.** `src/lib/brain-repo.ts` is already the chokepoint (17 of the repo's
   36 `octokit.` call sites; seven functions total). Extract an interface, make GitHub one adapter,
-  carry the store on `TenantContext`. Pure refactor, no new capability, proven by `e2e-librarian`.
-- **The local runtime.** `src/local.ts`, a Node MCP host over a git repo on disk. D1 becomes the
+  carry the store on `TenantContext`.~~ DONE, at ten operations rather than seven.
+- ~~**The local runtime.** `src/local.ts`, a Node MCP host over a git repo on disk. D1 becomes the
   `node:sqlite` shim the e2e scripts already carry, KV becomes a `Map`, `waitUntil` and the OAuth
   props become stubs, and the transport needs nothing (it is web-standard and `@hono/node-server`
   is already a dependency). The only new code is the fs + git adapter. A local brain is a git
-  repo, not a bare folder, so `commitFiles`'s atomicity survives. Goal: `pnpm try ~/notes`.
-- **End-to-end tests in CI.** The payoff. Both e2e batteries run against the fs adapter with no
+  repo, not a bare folder, so `commitFiles`'s atomicity survives.~~ DONE: `pnpm try ~/notes`.
+- ~~**End-to-end tests in CI.** The payoff. Both e2e batteries run against the fs adapter with no
   network and no credentials, so they move into `ci.yml` without breaking its fork-safe rule.
-  Keep the real-GitHub runs for the GitHub adapter itself.
+  Keep the real-GitHub runs for the GitHub adapter itself.~~ DONE: `--github` runs the identical assertions by hand.
 
 Related: the section below productizes the same flow for **users**; this one is about
 **contributors**, and the two share the bootstrap-removal work.

@@ -1,7 +1,32 @@
 # Design: local-first development
 
-Status: **proposed**. A plan to make a first contribution cheap, and to move the write-path
-end-to-end batteries into CI as a side effect.
+Status: **built** (2026-08-04). A plan to make a first contribution cheap, and to move the
+write-path end-to-end batteries into CI as a side effect. Both happened.
+
+**What shipped, and where the plan was wrong.** Kept for the reasoning; the corrections are the
+useful part.
+
+- The seam is **ten operations, not seven**. `branchCommitSha`, `repoWritePolicy`, and
+  `listCommits` were raw `octokit.rest.*` calls sitting in content paths (`brain-index.ts`,
+  `brain-config.ts`, `apps.ts`). Each compiled fine and would have failed at runtime on any
+  other backend, which is the drift the interface exists to prevent.
+- `octokit` did not disappear from the context; it became **optional**, for the three operations
+  that are GitHub as a PLATFORM rather than a brain as STORAGE (create a repo, list an
+  installation's repos, check a repo exists). All three are org-model tools behind
+  `githubClient()` in `src/tools/brains.ts`.
+- The fs adapter is **`src/local/brain-store-fs.ts`, not `src/lib/`**: `src/lib/` is typechecked
+  against workerd and may not import `node:*`. The plan named the wrong directory.
+- The local runtime needed **two extractions** the plan did not anticipate: `SERVER_INSTRUCTIONS`
+  and the `list_pages`/`read_page` definitions were inline in `worker.ts`, so a second runtime
+  would have meant a second copy of each. They are now `src/lib/server-instructions.ts` and
+  `src/tools/core.ts`.
+- The fs backend reads the **working tree**, not `git ls-tree`, so an edit made in the user's
+  own editor is visible immediately. Its `getHead` therefore reports a digest of that tree while
+  `listCommits` reports real git shas: two identifier spaces, on purpose. The e2e battery's
+  "exactly one commit" assertion had to become a commit COUNT rather than a sha comparison,
+  which is the more honest assertion anyway.
+- Workstream 1 also landed the org-tool gating (`hasOrgModel`), which the plan had listed only
+  as a rule to follow.
 
 ## The problem
 
