@@ -13,6 +13,8 @@
 //   2. Git keeps every version forever, in a repo the customer clones. An attachment
 //      is not a cache entry; it is permanent history.
 
+import { relativeHref } from './wiki.ts';
+
 // Extension -> MIME. The registry is deliberately small: an allowlist, so an upload
 // of an unknown or executable type is refused rather than stored and served back.
 const MEDIA_TYPES: Readonly<Record<string, string>> = {
@@ -172,21 +174,12 @@ export function defaultAttachmentPath(pagePath: string, filename: string): strin
 // The markdown to insert into a page so the attachment shows up. Ordinary image
 // syntax, relative to the referencing page: nothing here is an Isomorphic extension,
 // so the page still renders correctly on github.com and in any OKF reader.
+//
+// The href comes from wiki.ts's relativeHref rather than a local implementation, and
+// that is load-bearing rather than tidiness. move_page repoints links through
+// rewriteMdLinks, which uses relativeHref; a second function here that formatted the
+// same path differently (a leading "./", say) meant a link silently changed shape the
+// first time its image was moved. The e2e round trip caught exactly that.
 export function attachmentMarkdown(pagePath: string, assetPath: string, alt: string): string {
-	return `![${alt.replace(/[[\]]/g, '')}](${relativeAssetHref(pagePath, assetPath)})`;
-}
-
-// The shortest relative href from a page to an asset. Kept here rather than reusing
-// wiki.ts's relativeHref so the app can compute it without pulling in the page layer.
-export function relativeAssetHref(fromPath: string, assetPath: string): string {
-	const from = fromPath.split('/').slice(0, -1);
-	const to = assetPath.split('/');
-	const file = to.pop()!;
-	let i = 0;
-	while (i < from.length && i < to.length && from[i] === to[i]) i++;
-	const up = from.slice(i).map(() => '..');
-	const down = to.slice(i);
-	const parts = [...up, ...down, file];
-	// A sibling path has to start with "./" or markdown readers treat it as a bare word.
-	return up.length === 0 ? `./${parts.join('/')}` : parts.join('/');
+	return `![${alt.replace(/[[\]]/g, '')}](${relativeHref(pagePath, assetPath)})`;
 }

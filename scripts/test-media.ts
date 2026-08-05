@@ -21,6 +21,7 @@
 
 import { parsePaths } from '../src/lib/brain-config.ts';
 import { isAssetPath, isContentPath } from '../src/lib/brain-policy.ts';
+import { relativeHref } from '../src/lib/wiki.ts';
 import {
 	MAX_ATTACHMENT_BYTES,
 	attachmentMarkdown,
@@ -31,7 +32,6 @@ import {
 	isModelViewable,
 	isValidBase64,
 	mediaTypeOf,
-	relativeAssetHref,
 	validateAttachment
 } from '../src/lib/media.ts';
 
@@ -184,30 +184,8 @@ console.log('\nfilenames and default placement');
 	);
 }
 
-console.log('\nrelative hrefs (what github.com and OKF readers follow)');
+console.log('\nthe inserted link (what github.com and OKF readers follow)');
 {
-	check(
-		'sibling assets folder',
-		relativeAssetHref('wiki/vendors/acme.md', 'wiki/vendors/assets/logo.png') ===
-			'./assets/logo.png',
-		relativeAssetHref('wiki/vendors/acme.md', 'wiki/vendors/assets/logo.png')
-	);
-	check(
-		'up one level',
-		relativeAssetHref('wiki/vendors/deep/acme.md', 'wiki/vendors/assets/logo.png') ===
-			'../assets/logo.png',
-		relativeAssetHref('wiki/vendors/deep/acme.md', 'wiki/vendors/assets/logo.png')
-	);
-	check(
-		'up two levels',
-		relativeAssetHref('wiki/a/b/c.md', 'wiki/assets/logo.png') === '../../assets/logo.png',
-		relativeAssetHref('wiki/a/b/c.md', 'wiki/assets/logo.png')
-	);
-	check(
-		'same directory',
-		relativeAssetHref('wiki/a.md', 'wiki/logo.png') === './logo.png',
-		relativeAssetHref('wiki/a.md', 'wiki/logo.png')
-	);
 	// The generated markdown has to be ordinary image syntax: no Isomorphic extension,
 	// or the page stops rendering everywhere except inside our own app.
 	const md = attachmentMarkdown(
@@ -215,12 +193,37 @@ console.log('\nrelative hrefs (what github.com and OKF readers follow)');
 		'wiki/vendors/assets/logo.png',
 		'Acme logo'
 	);
-	check('renders as plain markdown', md === '![Acme logo](./assets/logo.png)', md);
+	check('renders as plain markdown', md === '![Acme logo](assets/logo.png)', md);
+	check(
+		'up one level',
+		attachmentMarkdown('wiki/vendors/deep/acme.md', 'wiki/vendors/assets/logo.png', 'x') ===
+			'![x](../assets/logo.png)',
+		attachmentMarkdown('wiki/vendors/deep/acme.md', 'wiki/vendors/assets/logo.png', 'x')
+	);
+	check(
+		'up two levels',
+		attachmentMarkdown('wiki/a/b/c.md', 'wiki/assets/logo.png', 'x') ===
+			'![x](../../assets/logo.png)',
+		attachmentMarkdown('wiki/a/b/c.md', 'wiki/assets/logo.png', 'x')
+	);
 	check(
 		'brackets in alt text cannot break the link',
-		attachmentMarkdown('a.md', 'assets/x.png', 'a [weird] name') ===
-			'![a weird name](./assets/x.png)'
+		attachmentMarkdown('a.md', 'assets/x.png', 'a [weird] name') === '![a weird name](assets/x.png)'
 	);
+
+	// The regression this pins, found by the e2e round trip: attachmentMarkdown wrote the
+	// href one way and move_page's rewriteMdLinks (which goes through relativeHref) wrote
+	// it another, so a link silently changed shape the first time its image was moved.
+	// There must be exactly ONE way to spell the path.
+	const cases: [string, string][] = [
+		['wiki/vendors/acme.md', 'wiki/vendors/assets/logo.png'],
+		['wiki/a/b/c.md', 'wiki/assets/logo.png'],
+		['index.md', 'assets/logo.png']
+	];
+	const agree = cases.every(
+		([page, asset]) => attachmentMarkdown(page, asset, 'x') === `![x](${relativeHref(page, asset)})`
+	);
+	check('the inserted href is the same one move_page would write', agree);
 }
 
 console.log('\nisAssetPath (what the index will record as an attachment link)');
