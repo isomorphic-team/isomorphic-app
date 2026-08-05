@@ -1439,19 +1439,35 @@ export function registerLibrarianTools(
 			title: 'Find pages linking to a page',
 			annotations: { readOnlyHint: true },
 			description:
-				'List every page that links to the given page — via markdown links or [[wikilinks]]. Useful before restructuring or to gauge how connected a page is.',
+				'List everything that links to the given page or attachment — via markdown links, image embeds, or [[wikilinks]]. Useful before restructuring, before deleting an image (to see which pages would lose it), or to gauge how connected a page is.',
 			inputSchema: {
 				brain: brainArg,
-				path: z.string().describe('Target page path, e.g. "wiki/customers/acme.md".')
+				path: z
+					.string()
+					.describe(
+						'Target page or attachment path, e.g. "wiki/customers/acme.md" or "wiki/customers/assets/logo.png".'
+					)
 			}
 		},
 		async ({ path, brain }) => {
 			const { store, repoArgs, config, db, brainId } = await getContext({ brain });
-			// readFile confirms the target exists and gives its authoritative current
-			// title; the backlinks themselves come from the content index.
-			const existing = await store.readFile(repoArgs, path);
-			if (!existing) return fail(`"${path}" does not exist.`);
-			const title = pageTitle(path, existing.content);
+			// An attachment has to take a different existence check. readFile decodes the
+			// blob as UTF-8, and on a PNG that does not fail — it returns mojibake — so
+			// the old path would sail past the `!existing` guard and then run pageTitle()
+			// over binary garbage, labelling the image with whatever fell out of it.
+			// An attachment's title is its filename; there is nothing inside to read.
+			let title: string;
+			if (isAssetPath(path, config)) {
+				const file = await store.readBinary(repoArgs, path);
+				if (!file) return fail(`"${path}" does not exist.`);
+				title = path.split('/').pop() ?? path;
+			} else {
+				// readFile confirms the target exists and gives its authoritative current
+				// title; the backlinks themselves come from the content index.
+				const existing = await store.readFile(repoArgs, path);
+				if (!existing) return fail(`"${path}" does not exist.`);
+				title = pageTitle(path, existing.content);
+			}
 
 			const { truncated } = await ensureFresh(db, store, repoArgs, brainId, config);
 			const resolved = await loadResolvedGraph(db, brainId, config);

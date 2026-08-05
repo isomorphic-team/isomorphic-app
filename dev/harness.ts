@@ -19,6 +19,7 @@ import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { BRAIN_APP_HTML } from '../src/lib/app-bundle.generated.ts';
 import { slugify, resolveRelative, parseFrontmatter } from '../src/lib/wiki.ts';
 import { DEFAULT_BRAIN_CONFIG, isContentPath } from '../src/lib/brain-policy.ts';
+import { classifyMdLink } from '../src/lib/links.ts';
 import { renderViews, stripSnapshots, hasViews, type ViewContext } from '../src/lib/views.ts';
 // The REAL per-brain access rule (pure, no D1) so the sharing preview resolves
 // exactly like prod: org visibility + explicit grants + the org-admin floor.
@@ -831,9 +832,15 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
 			return { ...r, structuredContent: { view: 'graph', nodes, edges, focus, truncated: false } };
 		}
 		case 'find_inbound_links': {
+			// Two kinds of target. A PAGE is looked up in the page map and titled from its
+			// content; an ATTACHMENT lives in the asset map and is titled by its filename.
+			// Missing that split made the asset view report "no page shows this file" for
+			// an image that was plainly on a page, because the lookup errored before any
+			// scanning happened.
+			const asset = assetsFor(bid)[path];
 			const targetMd = pg[path];
-			if (targetMd === undefined) return errText(`"${path}" does not exist.`);
-			const targetTitle = titleOf(path, targetMd);
+			if (targetMd === undefined && !asset) return errText(`"${path}" does not exist.`);
+			const targetTitle = asset ? (path.split('/').pop() ?? path) : titleOf(path, targetMd);
 			const targetSlug = slugify(path.split('/').pop()!.replace(/\.md$/, ''));
 			const refs: { path: string; title: string; mdCount: number; wikiCount: number }[] = [];
 			for (const p of pth) {
@@ -841,9 +848,15 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
 				const content = pg[p];
 				let mdCount = 0;
 				let wikiCount = 0;
+				// The REAL classification rule, imported rather than approximated. This
+				// scan used to be a hand-written regex that only counted `.md` targets,
+				// so the preview reported "no page shows this file" for an image that was
+				// plainly on a page — a divergence from prod that manufactured a bug
+				// rather than revealing one. classifyMdLink is what the content index
+				// itself calls; the harness only supplies the page set.
 				for (const m of content.matchAll(/\]\(([^)]+)\)/g)) {
-					const tgt = m[1].split('#')[0].trim();
-					if (tgt.endsWith('.md') && resolveRelative(p, tgt) === path) mdCount++;
+					const c = classifyMdLink(p, m[1], DEFAULT_BRAIN_CONFIG, (q) => q in pg);
+					if ((c.kind === 'page' || c.kind === 'asset') && c.target === path) mdCount++;
 				}
 				for (const m of content.matchAll(/\[\[([^\]|]+)(?:\|[^\]]*)?\]\]/g)) {
 					const t = m[1].trim();

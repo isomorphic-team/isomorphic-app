@@ -19,22 +19,9 @@
 
 import type { D1Database, D1PreparedStatement } from '@cloudflare/workers-types';
 import { type RepoRef, type TreeEntry, type BrainStore, MAX_SCAN_PAGES } from './brain-repo.ts';
-import {
-	type BrainConfig,
-	CONFIG_PATH,
-	isContentPath,
-	isAssetPath,
-	isSourcePath,
-	loadBrainConfig
-} from './brain-config.ts';
-import {
-	parseFrontmatter,
-	extractLinks,
-	resolveRelative,
-	slugify,
-	isFrontmatterBlock,
-	pageTitle
-} from './wiki.ts';
+import { classifyMdLink } from './links.ts';
+import { type BrainConfig, CONFIG_PATH, isContentPath, loadBrainConfig } from './brain-config.ts';
+import { parseFrontmatter, extractLinks, slugify, isFrontmatterBlock, pageTitle } from './wiki.ts';
 
 // Version of the index's ROW SHAPE (not the D1 schema — migrations handle that).
 // Bumped when (re)indexing starts producing rows older builds lack, so brains
@@ -532,24 +519,18 @@ export async function loadResolvedGraph(
 	for (const l of linksRes.results) {
 		const kind = l.kind === 'wiki' ? 'wiki' : 'md';
 		if (kind === 'md') {
-			const target = resolveRelative(l.source, l.raw_target);
-			if (!target.endsWith('.md')) {
-				// An attachment reference. MD_LINK_RE already captures `![](…)`, so these
-				// were always in brain_links; they were simply dropped here, which is why
-				// backlinksTo used to report an image as referenced by nobody. Record them
-				// so move_page can repoint them and delete_page can warn.
-				//
-				// Still never `broken`: the index holds no inventory of which assets exist,
-				// so we cannot tell a typo from a file we have not indexed, and guessing
-				// would make validate cry wolf on every brain with a stray link.
-				if (isAssetPath(target, config)) {
-					assetEdges.push({ source: l.source, target, kind, cnt: l.cnt });
-				}
-				continue;
-			}
-			if (isSourcePath(target, config)) continue; // source isn't indexed; not "broken"
-			if (pathSet.has(target)) edges.push({ source: l.source, target, kind, cnt: l.cnt });
-			else if (isContentPath(target, config))
+			// The rule itself lives in links.ts, pure, so the dev harness resolves links
+			// exactly the way this does. It used to be inlined here, which meant nothing
+			// outside D1 could reuse it and the harness carried a divergent copy.
+			const c = classifyMdLink(l.source, l.raw_target, config, (p) => pathSet.has(p));
+			const target = c.target!;
+			if (c.kind === 'page') edges.push({ source: l.source, target, kind, cnt: l.cnt });
+			// Attachments are recorded but kept out of `edges`: MD_LINK_RE always
+			// captured `![](…)`, so these were in brain_links all along and were simply
+			// dropped, which is why backlinksTo used to report an image as referenced by
+			// nobody. move_page repoints them and delete_page warns about them.
+			else if (c.kind === 'asset') assetEdges.push({ source: l.source, target, kind, cnt: l.cnt });
+			else if (c.kind === 'broken')
 				broken.push({ source: l.source, rawTarget: l.raw_target, kind, target });
 		} else {
 			const target =

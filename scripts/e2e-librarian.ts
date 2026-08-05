@@ -721,6 +721,23 @@ try {
 			raw.structuredContent?.dataUri === `data:image/png;base64,${PNG_1PX}`
 		);
 
+		// find_inbound_links has to work on an ATTACHMENT, not just a page. It is what
+		// the app's asset view calls to answer "which pages would lose this if I
+		// deleted it", and the failure mode is quiet: an empty list looks like a
+		// correct answer.
+		//
+		// The specific trap: readFile decodes a blob as UTF-8, and on a PNG that does
+		// not return null, it returns mojibake — so an existence check written for
+		// pages sails straight past and then titles the image from binary garbage.
+		const links = await call('find_inbound_links', { path: assetPath });
+		check('find_inbound_links works on an attachment', !links.isError, links.text);
+		check('and names the page that shows it', links.text.includes(host), links.text);
+		check(
+			'and titles it by filename rather than from its bytes',
+			links.text.includes('acme-logo.png') && !/[�]/.test(links.text),
+			links.text
+		);
+
 		// Moving an attachment has to repoint what displays it. This is the payoff of
 		// the assetEdges change: without it backlinksTo returns nothing here and the
 		// link on the page silently rots.
