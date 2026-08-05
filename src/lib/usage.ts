@@ -44,6 +44,9 @@ export const TOOL_KINDS: Record<string, UsageKind> = {
 	whoami: 'read',
 	connected_accounts: 'read',
 	analytics: 'read',
+	// Reading an attachment is a read like any other. The app also calls it once per
+	// image while rendering a page, so it is expected to be noisier than read_page.
+	read_media: 'read',
 
 	// Writes: anything that changes brain content.
 	write_page: 'write',
@@ -56,6 +59,8 @@ export const TOOL_KINDS: Record<string, UsageKind> = {
 	// because it records the INTENT to edit, which is the thing the tab is asked
 	// about ("is anyone actually maintaining this brain?").
 	edit_page: 'write',
+	// An upload is a content change, and a permanent one: it lands in git history.
+	attach_media: 'write',
 
 	// Administration: people, brains, and the wiring between them. Kept apart from
 	// writes so a busy month of onboarding does not read as a busy month of

@@ -40,10 +40,12 @@ import {
 	type WriteOutcome,
 	type CommitAuthor,
 	type BrainStore,
+	type FileWrite,
 	MAX_SCAN_PAGES
 } from '../lib/brain-repo.ts';
 import {
 	type BrainConfig,
+	isAssetPath,
 	isContentPath,
 	isSourcePath,
 	isToolMaintained,
@@ -61,6 +63,7 @@ import {
 import { tryRenderViews, type ViewDeps } from '../lib/views.ts';
 import { isToolPagePath, parseToolDef } from '../lib/custom-tools.ts';
 import { isFolderNoteName } from '../lib/view-directives.ts';
+import { attachmentSlug, formatBytes, isMediaPath, mediaTypeOf } from '../lib/media.ts';
 import { applyPageEdits } from '../lib/page-patch.ts';
 import { parseLedger } from '../lib/brain-import.ts';
 import type { TenantOpts, Role } from '../lib/orgs.ts';
@@ -129,11 +132,11 @@ function normFolderPath(p: string): string {
 	return p.trim().replace(/^\/+/, '').replace(/\/+$/, '');
 }
 
-function ok(text: string) {
+export function ok(text: string) {
 	return { content: [{ type: 'text' as const, text }] };
 }
 
-function fail(text: string) {
+export function fail(text: string) {
 	return { isError: true as const, content: [{ type: 'text' as const, text }] };
 }
 
@@ -142,7 +145,7 @@ function fail(text: string) {
 //   - PR, auto-merged immediately → "done" (it's already live on the branch)
 //   - PR, auto-merge armed        → "proposed", will merge itself once checks pass
 //   - PR, no auto-merge           → "proposed", needs a human to merge
-function landed(outcome: WriteOutcome, done: string, proposed: string) {
+export function landed(outcome: WriteOutcome, done: string, proposed: string) {
 	if (!outcome.prUrl) return ok(done);
 	if (outcome.merged) return ok(`${done} (via PR ${outcome.prUrl})`);
 	const tail = outcome.autoMergeEnabled
@@ -700,6 +703,128 @@ async function updatePageWrite(
 //     repointed to a moved sibling first, then the body is rebased for the new location.
 //     Titles never change on a move, so [[wikilinks]] still resolve.
 //   - OUTSIDE pages linking INTO a moved page: their relative md links are repointed.
+// Move or rename an ATTACHMENT. Structurally the page move with the page parts taken
+// out: an image has no frontmatter, no title, and no outbound links to rebase, so all
+// that is left is carrying the bytes across and repointing what points AT it.
+//
+// The repointing is the reason this is worth having rather than telling people to
+// re-upload. rewriteMdLinks already matched `![](…)`, and backlinksTo now returns
+// asset referrers, so both halves were in place; without this branch a `.png` path
+// would fall through to moveFolderWrite and be treated as a subtree.
+async function moveAssetWrite(ctx: BrainContext, args: { path: string; newPath: string }) {
+	const { store, repoArgs, config, author } = ctx;
+	const { path, newPath } = args;
+
+	if (!isMediaPath(newPath))
+		return fail(`Can't move to ${newPath} — it has to keep a supported file extension.`);
+	if (mediaTypeOf(path) !== mediaTypeOf(newPath))
+		return fail(
+			`Can't move ${path} to ${newPath} — that changes the file type, which would break how it is read.`
+		);
+	if (!isContentPath(newPath, config))
+		return fail(`Can't move to ${newPath} — it's outside this brain's editable content.`);
+	if (newPath === path) return ok(`${path} is already there — nothing to move.`);
+
+	const file = await store.readBinary(repoArgs, path);
+	if (!file) return fail(`"${path}" does not exist.`);
+
+	const head = await store.getHead(repoArgs);
+	const tree = await store.listTree(repoArgs, head, { extension: '*' });
+	if (tree.some((e) => e.path === newPath)) {
+		return fail(`Can't move to ${newPath} — something already exists there.`);
+	}
+
+	const { pages, truncated } = await fetchInboundLinkers(ctx, head, path);
+	const today = todayIso();
+	const writes: FileWrite[] = [{ path: newPath, content: file.contentBase64, encoding: 'base64' }];
+	let repointedPages = 0;
+
+	for (const page of pages) {
+		if (isToolMaintained(page.path, config)) continue;
+		const md = rewriteMdLinks(page.content, page.path, path, newPath);
+		if (md.changed > 0) {
+			writes.push({ path: page.path, content: md.body });
+			repointedPages++;
+		}
+	}
+
+	const log = await store.readFile(repoArgs, logPathOf(config));
+	if (log) {
+		writes.push({
+			path: logPathOf(config),
+			content: insertLogEntry(log.content, today, `Moved \`${path}\` to \`${newPath}\`.`)
+		});
+	}
+
+	const outcome = await store.commitOrPR(repoArgs, {
+		writeMode: config.writeMode,
+		defaultBranch: config.defaultBranch,
+		author,
+		autoMerge: config.autoMerge,
+		mergeMethod: config.mergeMethod,
+		message: `Move ${path} to ${newPath}\n\nRepointed ${repointedPages} page(s). Logged in the same change.`,
+		writes,
+		deletes: [path],
+		head,
+		branchPrefix: 'isomorphic/move',
+		prTitle: `Move ${path}`,
+		prBody: `Move \`${path}\` to \`${newPath}\`. Proposed via the Isomorphic brain tools.`
+	});
+
+	return landed(
+		outcome,
+		`Moved ${path} to ${newPath}. Links in ${repointedPages} page(s) were repointed; the change was logged.${truncationNote(truncated)}`,
+		`Proposed moving ${path} to ${newPath}; links in ${repointedPages} page(s) repointed.${truncationNote(truncated)}`
+	);
+}
+
+// Delete an ATTACHMENT. The "still referenced" note matters more here than for a
+// page: a page that loses a link shows as a broken link in validate, while an image
+// that vanishes just leaves a hole on every page that displayed it.
+async function deleteAssetWrite(ctx: BrainContext, args: { path: string }) {
+	const { store, repoArgs, config, author } = ctx;
+	const { path } = args;
+
+	const file = await store.readBinary(repoArgs, path);
+	if (!file) return fail(`"${path}" does not exist.`);
+
+	const head = await store.getHead(repoArgs);
+	const { refs, truncated } = await inboundRefs(ctx, [path]);
+	const today = todayIso();
+	const writes: FileWrite[] = [];
+	const log = await store.readFile(repoArgs, logPathOf(config));
+	if (log) {
+		writes.push({
+			path: logPathOf(config),
+			content: insertLogEntry(log.content, today, `Deleted \`${path}\`.`)
+		});
+	}
+
+	const outcome = await store.commitOrPR(repoArgs, {
+		writeMode: config.writeMode,
+		defaultBranch: config.defaultBranch,
+		author,
+		autoMerge: config.autoMerge,
+		mergeMethod: config.mergeMethod,
+		message: `Delete ${path}\n\nDeletion logged.`,
+		writes,
+		deletes: [path],
+		head,
+		branchPrefix: 'isomorphic/delete',
+		prTitle: `Delete ${path}`,
+		prBody: `Delete \`${path}\`. Proposed via the Isomorphic brain tools.`
+	});
+
+	const refNote = refs.length
+		? `\n\nHeads up — ${refs.length} page(s) still show it:\n${refs.map((r) => `- ${r.path}`).join('\n')}`
+		: '';
+	return landed(
+		outcome,
+		`Deleted ${path} (${formatBytes(file.size)}). The change was logged.${refNote}${truncationNote(truncated)}`,
+		`Proposed deleting ${path}.${refNote}${truncationNote(truncated)}`
+	);
+}
+
 async function moveFolderWrite(
 	ctx: BrainContext,
 	args: { path: string; new_path?: string; new_name?: string }
@@ -1110,9 +1235,23 @@ export function registerLibrarianTools(
 		},
 		async ({ path, new_path, new_title, brain }) => {
 			const ctx = await getContext({ requires: 'editor', brain });
+			const normPath = path.trim().replace(/^\/+/, '');
+			// Three shapes share this tool. Attachments are checked FIRST: they have no
+			// .md extension, so without this they would fall through to the folder branch
+			// and `wiki/assets/logo.png` would be treated as a subtree to move.
+			if (!normPath.endsWith('.md') && isAssetPath(normPath, ctx.config)) {
+				const dir = normPath.includes('/') ? normPath.slice(0, normPath.lastIndexOf('/')) : '';
+				const renamed = new_title ? attachmentSlug(new_title) : '';
+				const newPath = new_path
+					? new_path.trim().replace(/^\/+/, '')
+					: renamed && (dir ? `${dir}/${renamed}` : renamed);
+				if (!newPath)
+					return fail('Give a new_path (move/rename) or a new_title (rename in place).');
+				return moveAssetWrite(ctx, { path: normPath, newPath });
+			}
 			// A path without a .md extension is a folder: move/rename the whole subtree
 			// (new_title renames the folder in place, kept as typed).
-			if (!path.trim().replace(/^\/+/, '').endsWith('.md')) {
+			if (!normPath.endsWith('.md')) {
 				return moveFolderWrite(ctx, { path, new_path, new_name: new_title });
 			}
 			const { store, repoArgs, config, author } = ctx;
@@ -1228,8 +1367,17 @@ export function registerLibrarianTools(
 		},
 		async ({ path, brain }) => {
 			const ctx = await getContext({ requires: 'editor', brain });
+			const normPath = path.trim().replace(/^\/+/, '');
+			// Attachments first, for the same reason as move_page: an image path has no
+			// .md extension, and letting it reach the folder branch would delete the
+			// directory it lives in rather than the one file that was asked for.
+			if (!normPath.endsWith('.md') && isAssetPath(normPath, ctx.config)) {
+				if (isSourcePath(normPath, ctx.config))
+					return fail(`"${normPath}" is source material — it can't be deleted.`);
+				return deleteAssetWrite(ctx, { path: normPath });
+			}
 			// A path without a .md extension is a folder: delete the whole subtree.
-			if (!path.trim().replace(/^\/+/, '').endsWith('.md')) {
+			if (!normPath.endsWith('.md')) {
 				return deleteFolderWrite(ctx, { path });
 			}
 			const { store, repoArgs, config, author } = ctx;
