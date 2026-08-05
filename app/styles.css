@@ -334,12 +334,15 @@ body {
 	/* The alt text would otherwise show as a broken-image glyph while loading. */
 	color: transparent;
 }
-.prose img.asset-missing {
-	min-height: 0;
-	padding: 0.5rem 0.75rem;
+/* A missing attachment is a SPAN, not a styled <img>: an <img> with an unresolvable
+   src keeps drawing the browser's broken-image glyph no matter what CSS says, which
+   is exactly the "this looks broken" impression the note exists to avoid. */
+.prose .asset-missing {
+	display: inline-block;
+	padding: 0.375rem 0.625rem;
+	border-radius: var(--r-md, 8px);
 	background: var(--c-chip);
 	color: var(--c-muted);
 	font-size: 0.8125rem;
-	/* A missing attachment should read as a note, not a broken picture. */
 	font-style: italic;
 }

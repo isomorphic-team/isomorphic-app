@@ -84,14 +84,18 @@ async function hydrateImages(root: HTMLElement, pagePath: string): Promise<void>
 			img.classList.remove('asset-loading');
 			if (dataUri) {
 				img.setAttribute('src', dataUri);
-			} else {
-				// Never leave a broken-image glyph: say which file is missing, since the
-				// most likely cause is a link to something that was moved or never
-				// uploaded, and the filename is the only useful clue.
-				img.classList.add('asset-missing');
-				img.setAttribute('alt', `Missing attachment: ${repoPath}`);
-				img.setAttribute('title', `Missing attachment: ${repoPath}`);
+				return;
 			}
+			// REPLACE the element rather than restyling it. An <img> whose src never
+			// resolves keeps drawing the browser's own broken-image glyph next to
+			// whatever alt text you give it, and no CSS on the img removes that glyph —
+			// so a note that was supposed to read as prose still reads as a broken
+			// picture. Swapping in a span drops the element that owns the icon.
+			const note = document.createElement('span');
+			note.className = 'asset-missing';
+			note.textContent = `Missing attachment: ${repoPath}`;
+			note.title = `${repoPath} is linked from this page but is not in the brain. It may have been moved or deleted.`;
+			img.replaceWith(note);
 		})
 	);
 }
