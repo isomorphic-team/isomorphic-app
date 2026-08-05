@@ -317,3 +317,29 @@ body {
 .ProseMirror.resize-cursor {
 	cursor: col-resize;
 }
+
+/* ---------- attachments ---------- */
+/* Images arrive as data URIs from read_media AFTER the markdown is rendered (the
+   iframe CSP allows no external origin, and a private brain repo has no URL we could
+   point at anyway). So an <img> spends a moment with no source: give it a settled
+   placeholder rather than letting the layout jump when each picture lands. */
+.prose img {
+	max-width: 100%;
+	height: auto;
+	border-radius: var(--r-md, 8px);
+}
+.prose img.asset-loading {
+	min-height: 4rem;
+	background: var(--c-chip);
+	/* The alt text would otherwise show as a broken-image glyph while loading. */
+	color: transparent;
+}
+.prose img.asset-missing {
+	min-height: 0;
+	padding: 0.5rem 0.75rem;
+	background: var(--c-chip);
+	color: var(--c-muted);
+	font-size: 0.8125rem;
+	/* A missing attachment should read as a note, not a broken picture. */
+	font-style: italic;
+}

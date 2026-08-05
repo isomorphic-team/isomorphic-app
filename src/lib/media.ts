@@ -181,5 +181,17 @@ export function defaultAttachmentPath(pagePath: string, filename: string): strin
 // same path differently (a leading "./", say) meant a link silently changed shape the
 // first time its image was moved. The e2e round trip caught exactly that.
 export function attachmentMarkdown(pagePath: string, assetPath: string, alt: string): string {
-	return `![${alt.replace(/[[\]]/g, '')}](${relativeHref(pagePath, assetPath)})`;
+	const label = alt.replace(/[[\]]/g, '');
+	const href = relativeHref(pagePath, assetPath);
+	// Images embed; anything else links. A PDF written as `![](…)` renders as a broken
+	// image in every markdown reader there is, including github.com — the embed syntax
+	// is not a generic "attachment" marker, it means "show this picture here".
+	return isEmbeddable(assetPath) ? `![${label}](${href})` : `[${label}](${href})`;
+}
+
+// Can this be shown inline on a page? Every image type, including SVG (which renders
+// fine in an <img>) and GIF. Distinct from isModelViewable, which is the narrower
+// question of what Claude can ingest.
+export function isEmbeddable(path: string): boolean {
+	return (mediaTypeOf(path) ?? '').startsWith('image/');
 }

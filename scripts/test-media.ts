@@ -9,9 +9,9 @@
 //   2. The EXTENSION/MIME AGREEMENT. These are read by different consumers later
 //      (the extension by every git client, the MIME by the app and the model), and a
 //      `.png` that is really a PDF fails at display time with no explanation.
-//   3. relativeAssetHref, which decides whether the link we write into a page
-//      resolves for github.com and for outside OKF readers. It is the one piece of
-//      this that a human will never notice is wrong until a picture stops rendering
+//   3. The INSERTED LINK, which decides whether a picture resolves for github.com and
+//      for outside OKF readers, and whether it survives a move_page unchanged. This is
+//      the piece a human never notices is wrong until an image stops rendering
 //      somewhere we do not test.
 //   4. isAssetPath, the predicate the index uses to decide an image link is worth
 //      recording — get it wrong in the permissive direction and validate starts
@@ -29,6 +29,7 @@ import {
 	base64Bytes,
 	defaultAttachmentPath,
 	formatBytes,
+	isEmbeddable,
 	isModelViewable,
 	isValidBase64,
 	mediaTypeOf,
@@ -224,6 +225,24 @@ console.log('\nthe inserted link (what github.com and OKF readers follow)');
 		([page, asset]) => attachmentMarkdown(page, asset, 'x') === `![x](${relativeHref(page, asset)})`
 	);
 	check('the inserted href is the same one move_page would write', agree);
+
+	// Images embed, documents link. `![](…)` on a PDF renders as a broken image in
+	// every markdown reader including github.com — the embed syntax means "show this
+	// picture", not "here is an attachment".
+	check(
+		'a pdf is linked, not embedded',
+		attachmentMarkdown('wiki/a.md', 'wiki/assets/report.pdf', 'Q4 report') ===
+			'[Q4 report](assets/report.pdf)',
+		attachmentMarkdown('wiki/a.md', 'wiki/assets/report.pdf', 'Q4 report')
+	);
+	check(
+		'an svg still embeds',
+		attachmentMarkdown('wiki/a.md', 'assets/d.svg', 'd').startsWith('!')
+	);
+	check('a gif still embeds', attachmentMarkdown('wiki/a.md', 'assets/d.gif', 'd').startsWith('!'));
+	check('isEmbeddable agrees for png', isEmbeddable('a/b.png'));
+	check('isEmbeddable is false for pdf', !isEmbeddable('a/b.pdf'));
+	check('isEmbeddable is false for a page', !isEmbeddable('a/b.md'));
 }
 
 console.log('\nisAssetPath (what the index will record as an attachment link)');

@@ -43,6 +43,13 @@ const PERSONAL_PAGES = PAGES as Record<string, string>;
 // exercises the "empty folder shows" + "show hidden" behavior out of the box.
 PERSONAL_PAGES['wiki/Projects/.gitkeep'] ??= '';
 
+// Seed an attachment on a page of the DEFAULT brain, so opening the preview shows a
+// rendered image without switching brains or uploading anything first. Two links: one
+// that resolves and one that does not, because the missing-attachment state is the
+// one nobody remembers to look at.
+PERSONAL_PAGES['wiki/concepts/vision.md'] +=
+	'\n![The shape of the thing](assets/vision-sketch.png)\n\n![A sketch that was moved away](assets/gone.png)\n';
+
 // Seed the config file itself so the "show hidden" toggle has the real system
 // files to reveal (mirrors prod, where every brain repo carries one).
 PERSONAL_PAGES['.isomorphic.json'] ??=
@@ -58,8 +65,11 @@ const ACME_PAGES: Record<string, string> = {
 		'---\ntitle: Acme\n---\n\nKnowledge base for **Acme**. Start with our [[mission]] and the [[onboarding]] program.\n',
 	'wiki/concepts/mission.md':
 		'---\ntitle: Mission\n---\n\nAcme builds tools for small teams. See the [[content-pipeline]] for how we publish.\n',
+	// Carries an attachment (seeded in brainAssets) plus a link to one that does not
+	// exist, so the preview shows BOTH states: a rendered image and the missing-file
+	// note. The broken case is the one nobody remembers to look at.
 	'wiki/programs/onboarding.md':
-		'---\ntitle: Onboarding\n---\n\nOur flagship customer onboarding program. Run by [[lead]].\n',
+		'---\ntitle: Onboarding\n---\n\nOur flagship customer onboarding program. Run by [[lead]].\n\n![The onboarding flow](assets/onboarding-flow.png)\n\n![A diagram that was moved away](assets/gone.png)\n',
 	'wiki/people/lead.md':
 		'---\ntitle: Team Lead\n---\n\nLeads Acme; owns the [[mission]] and the [[onboarding]] program.\n',
 	'wiki/playbooks/content-pipeline.md':
@@ -83,6 +93,32 @@ const brainContent: Record<string, Record<string, string>> = {
 // The content map for a brain (auto-vivify so a freshly connect_brain'd brain works).
 function pagesFor(id: string): Record<string, string> {
 	return (brainContent[id] ??= {});
+}
+
+// ---- attachments ----
+//
+// Stored per brain as base64, the same shape read_media returns, so the app's whole
+// image path (hydrate -> data URI -> <img>) is exercised offline. Without this the
+// preview could not show a picture at all: the iframe CSP allows no external origin,
+// so there is nowhere else the bytes could come from.
+//
+// A 64x64 palette PNG, 128 bytes. Small enough to sit inline here, and a real image
+// rather than a 1x1, so "did it render?" is answerable by looking.
+const SAMPLE_PNG =
+	'iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAMAAACdt4HsAAAADFBMVEU7StZbje+Px/fv9P+rZWLWAAAAL0lEQVR42u3MMREAIAwEsEL9e2bBwW9/iYDMAHwnJBAIeoIbEggEPcGGBAJBTfAA1t8YAcvRfzcAAAAASUVORK5CYII=';
+const brainAssets: Record<string, Record<string, { data: string; mimeType: string }>> = {
+	// Referenced by the seeded links above. The default brain gets one so the preview
+	// shows an image immediately; Acme gets one so switching brains proves attachments
+	// are per-brain rather than global.
+	'your-org/personal-wiki': {
+		'wiki/concepts/assets/vision-sketch.png': { data: SAMPLE_PNG, mimeType: 'image/png' }
+	},
+	'acme-co/acme-wiki': {
+		'wiki/programs/assets/onboarding-flow.png': { data: SAMPLE_PNG, mimeType: 'image/png' }
+	}
+};
+function assetsFor(id: string): Record<string, { data: string; mimeType: string }> {
+	return (brainAssets[id] ??= {});
 }
 // Which brain a content call targets. The app now threads the DISPLAYED brain into
 // every call (see brainArgs() in app/main.tsx), so honor an explicit `brain` arg
@@ -542,6 +578,45 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
 			// plus a freshly computed snapshot; the app unwraps it for display.
 			if (!hasViews(md)) return text(md);
 			return text((await renderViews(md, path, viewCtxFor(pg))).snapshotted);
+		}
+		case 'read_media': {
+			const asset = assetsFor(bid)[path];
+			if (!asset) return errText(`No file at "${path}".`);
+			const r = text(`${path} (${asset.mimeType})`);
+			return {
+				...r,
+				structuredContent: {
+					path,
+					mimeType: asset.mimeType,
+					size: Math.floor((asset.data.length * 3) / 4),
+					dataUri: `data:${asset.mimeType};base64,${asset.data}`
+				}
+			};
+		}
+		case 'attach_media': {
+			// Mirrors the server closely enough to exercise the app: same default
+			// placement, same single-bundle behavior (file + page edit together), same
+			// ordinary-markdown link. The point is that a drop in the preview really
+			// does change the page and then really does render.
+			const pagePath = String(args?.page ?? '');
+			const filename = String(args?.filename ?? 'attachment');
+			const mimeType = String(args?.mime_type ?? '');
+			const data = String(args?.data ?? '');
+			const md = pg[pagePath];
+			if (md === undefined) return errText(`No page at "${pagePath}".`);
+			const ext = filename.includes('.') ? filename.slice(filename.lastIndexOf('.') + 1) : 'bin';
+			const slug =
+				filename
+					.slice(0, filename.length - ext.length - 1)
+					.toLowerCase()
+					.replace(/[^a-z0-9]+/g, '-')
+					.replace(/^-+|-+$/g, '') || 'attachment';
+			const dir = pagePath.slice(0, pagePath.lastIndexOf('/'));
+			const target = `${dir}/assets/${slug}.${ext}`;
+			assetsFor(bid)[target] = { data, mimeType };
+			const alt = String(args?.alt ?? filename);
+			pg[pagePath] = `${md.replace(/\n*$/, '')}\n\n![${alt}](assets/${slug}.${ext})\n`;
+			return text(`Stored ${target}. The change was logged.`);
 		}
 		case 'list_pages': {
 			const prefix = String(args?.prefix ?? '');
