@@ -5,8 +5,7 @@ import type { Backref } from '../core/types.ts';
 import { callTool } from '../core/host.ts';
 import { brainArgs, isEditablePath } from '../core/store.ts';
 import { navigateTo, renderMarkdown, onProseClick, openEditor } from '../core/actions.ts';
-import { attachToPage, forgetAssets, hydrateImages, prepareUpload } from '../core/media.ts';
-import { toast } from '../core/toast.tsx';
+import { hydrateImages } from '../core/media.ts';
 import { defineView } from '../core/view-registry.ts';
 import { eyebrow } from '../ui/typography.ts';
 
@@ -174,84 +173,6 @@ function MarkdownBody({ path, body }: { path: string; body: string }) {
 	return <div ref={ref} dangerouslySetInnerHTML={{ __html: renderMarkdown(body) }} />;
 }
 
-// Upload affordance for a page: a drop target over the article plus a file picker.
-//
-// This is the product's ENTIRE upload surface. The model cannot pass bytes to a tool,
-// so if someone wants a screenshot in their brain, it happens here or not at all —
-// which is why the empty state says so out loud rather than leaving people to discover
-// it by asking Claude and being told no.
-function AttachImages({ path, onDone }: { path: string; onDone: () => void }) {
-	const inputRef = useRef<HTMLInputElement>(null);
-	const [dragging, setDragging] = useState(false);
-	const [busy, setBusy] = useState(false);
-
-	async function upload(files: FileList | null) {
-		if (!files || files.length === 0 || busy) return;
-		setBusy(true);
-		try {
-			// Sequential, not parallel: each upload is a commit against the same branch,
-			// and firing several at once races them into a lost update.
-			for (const file of Array.from(files)) {
-				const prepared = await prepareUpload(file);
-				if ('error' in prepared) {
-					toast(prepared.error, true);
-					continue;
-				}
-				const res = await attachToPage(path, prepared);
-				if (!res.ok) {
-					toast(res.message || `Could not attach ${prepared.filename}.`, true);
-					continue;
-				}
-				toast(prepared.note ? `${res.message} ${prepared.note}` : res.message);
-			}
-			onDone();
-		} finally {
-			setBusy(false);
-			if (inputRef.current) inputRef.current.value = '';
-		}
-	}
-
-	return (
-		<div
-			onDragOver={(e) => {
-				e.preventDefault();
-				if (!dragging) setDragging(true);
-			}}
-			onDragLeave={() => setDragging(false)}
-			onDrop={(e) => {
-				e.preventDefault();
-				setDragging(false);
-				void upload(e.dataTransfer?.files ?? null);
-			}}
-			class={`mt-4 rounded-lg border border-dashed px-3 py-2.5 text-sm transition-colors ${
-				dragging ? 'border-fg bg-chip' : 'border-border'
-			}`}
-		>
-			<input
-				ref={inputRef}
-				type="file"
-				multiple
-				accept="image/png,image/jpeg,image/gif,image/webp,image/svg+xml,application/pdf"
-				class="hidden"
-				onChange={(e) => void upload((e.target as HTMLInputElement).files)}
-			/>
-			<div class="flex items-center justify-between gap-3">
-				<span class="text-muted">
-					{busy ? 'Saving…' : dragging ? 'Drop to add to this page' : 'Drop an image here'}
-				</span>
-				<button
-					type="button"
-					disabled={busy}
-					onClick={() => inputRef.current?.click()}
-					class="cursor-pointer rounded-md border border-border bg-transparent px-2 py-1 text-xs text-fg hover:bg-chip disabled:cursor-default disabled:opacity-50"
-				>
-					Choose a file
-				</button>
-			</div>
-		</div>
-	);
-}
-
 function PageView({ path, markdown }: { path: string; markdown: string }) {
 	const { frontmatter, body: rawBody } = parseFrontmatter(markdown);
 	// Derived views: content from read_page carries okf-view fences with freshly
@@ -268,19 +189,6 @@ function PageView({ path, markdown }: { path: string; markdown: string }) {
 				{showTitle && <h1>{title}</h1>}
 				<MarkdownBody path={path} body={body} />
 			</article>
-			{/* Same policy verdict the write tools use, so we never offer an upload a
-			    write would refuse. */}
-			{isEditablePath(path) && (
-				<AttachImages
-					path={path}
-					onDone={() => {
-						// The page now references a file that was not there when this view
-						// was rendered, so re-read it rather than patching the DOM.
-						forgetAssets();
-						void navigateTo(path);
-					}}
-				/>
-			)}
 			<LinkedReferences path={path} />
 		</div>
 	);
