@@ -81,6 +81,7 @@ jobs:
       - run: pnpm test:scope
       - run: pnpm test:feedback
       - run: pnpm test:usage
+      - run: pnpm test:media
       # Lints the two lists above against package.json, so the instruction in the
       # comment stops depending on anyone reading the comment.
       - run: pnpm test:wiring

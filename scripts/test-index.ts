@@ -11,7 +11,13 @@
 //   pnpm test:index
 
 import { DatabaseSync } from 'node:sqlite';
-import { ensureFresh, INDEX_SCHEMA_VERSION, listIndexedPages } from '../src/lib/brain-index.ts';
+import {
+	backlinksTo,
+	ensureFresh,
+	INDEX_SCHEMA_VERSION,
+	listIndexedPages,
+	loadResolvedGraph
+} from '../src/lib/brain-index.ts';
 import { githubStore } from '../src/lib/brain-repo.ts';
 import { applyMigrations } from '../src/local/d1-sqlite.ts';
 import { DEFAULT_BRAIN_CONFIG, type BrainConfig } from '../src/lib/brain-policy.ts';
@@ -359,6 +365,105 @@ console.log('\nContent index — bounded, resumable ensureFresh\n');
 		(await listIndexedPages(db, brainId)).length === 300
 	);
 	check('index reflects the new HEAD', meta()?.indexed_commit_sha === 'commit-d');
+}
+
+// ---- attachments in the link graph ----
+//
+// The bug this pins: MD_LINK_RE always captured `![](…)`, so image links were in
+// brain_links all along, but loadResolvedGraph dropped every non-.md target. That
+// made backlinksTo report an attachment as referenced by nobody, which in turn made
+// move_page repoint nothing and delete_page call a still-used image unreferenced.
+//
+// Note what is deliberately NOT set up here: the .png is never added to the tree
+// stub. Assets are not inventoried by the index, and the asset edge has to come from
+// the LINK alone, so this fixture is the design's actual shape.
+{
+	console.log('\nattachments in the link graph');
+	resetDb();
+	currentPages = [
+		{
+			path: 'wiki/vendors/acme.md',
+			sha: 'sha-acme-1',
+			content: [
+				'# Acme',
+				'',
+				'![The logo](./assets/logo.png)',
+				'A [real page](../index.md) and a [missing one](./nope.md).',
+				'A [source doc](../../raw/notes.txt) too.'
+			].join('\n')
+		},
+		{
+			path: 'wiki/index.md',
+			sha: 'sha-index-1',
+			content: '# Index\n\nAlso shows ![it](./vendors/assets/logo.png).'
+		}
+	];
+	currentHead = 'commit-assets';
+	await ensureFresh(db, store, repo, brainId, config);
+	const g = await loadResolvedGraph(db, brainId, config);
+
+	const asset = 'wiki/vendors/assets/logo.png';
+	check(
+		'image link is recorded as an asset edge',
+		g.assetEdges.some((e) => e.source === 'wiki/vendors/acme.md' && e.target === asset),
+		JSON.stringify(g.assetEdges)
+	);
+	check(
+		'a second page referencing it is recorded too',
+		g.assetEdges.filter((e) => e.target === asset).length === 2,
+		JSON.stringify(g.assetEdges)
+	);
+	// The graph view builds nodes from `pages` and degree from `edges`; an asset in
+	// that list would be a link to a node the renderer has no data for.
+	check(
+		'asset edges stay OUT of the page edge list',
+		!g.edges.some((e) => e.target === asset),
+		JSON.stringify(g.edges)
+	);
+	check(
+		'page-to-page links still resolve',
+		g.edges.some((e) => e.source === 'wiki/vendors/acme.md' && e.target === 'wiki/index.md')
+	);
+	// The whole reason assets are never "broken": the index has no inventory of which
+	// ones exist, so it cannot tell a typo from a file it has not indexed.
+	check(
+		'a missing attachment is never reported broken',
+		!g.broken.some((b) => b.target?.endsWith('.png')),
+		JSON.stringify(g.broken)
+	);
+	check(
+		'but a missing PAGE still is',
+		g.broken.some((b) => b.target === 'wiki/vendors/nope.md'),
+		JSON.stringify(g.broken)
+	);
+	// Regression guard on the pre-existing rule: source material is not indexed, so a
+	// link into raw/ is not broken either, and must not have become an asset edge.
+	check(
+		'a link into source material is neither broken nor an asset',
+		!g.broken.some((b) => b.target?.startsWith('raw/')) &&
+			!g.assetEdges.some((e) => e.target.startsWith('raw/')),
+		JSON.stringify({ broken: g.broken, assetEdges: g.assetEdges })
+	);
+
+	// The payoff: this is the call move_page and delete_page make.
+	const refs = backlinksTo(g, asset);
+	check(
+		'backlinksTo finds both referrers of an attachment',
+		refs.length === 2,
+		JSON.stringify(refs)
+	);
+	check(
+		'and counts them, so "still referenced" can say how many',
+		refs.every((r) => r.count === 1),
+		JSON.stringify(refs)
+	);
+	// Backlinks for pages must be unaffected by reading two lists instead of one.
+	const pageRefs = backlinksTo(g, 'wiki/index.md');
+	check(
+		'page backlinks still work and do not pick up assets',
+		pageRefs.length === 1 && pageRefs[0].path === 'wiki/vendors/acme.md',
+		JSON.stringify(pageRefs)
+	);
 }
 
 console.log(

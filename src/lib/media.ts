@@ -45,8 +45,16 @@ const MODEL_VIEWABLE: ReadonlySet<string> = new Set([
 export const MAX_ATTACHMENT_BYTES = 5 * 1024 * 1024;
 
 // The extension of `path`, lowercased, without the dot. '' when there is none.
+//
+// Trimmed first: a filename arriving from a browser file picker can carry trailing
+// whitespace, and without the trim `"shot.png "` yields the extension `"png "`, which
+// matches nothing in the registry and rejects a perfectly good upload.
+//
+// `dot <= 0` rather than `dot < 0`, so a dotfile like `.gitkeep` has NO extension
+// rather than an extension of "gitkeep". Every caller depends on that one rule, which
+// is why this is the only place it is written down.
 function extensionOf(path: string): string {
-	const name = path.split('/').pop() ?? '';
+	const name = (path.split('/').pop() ?? '').trim();
 	const dot = name.lastIndexOf('.');
 	return dot <= 0 ? '' : name.slice(dot + 1).toLowerCase();
 }
@@ -130,8 +138,13 @@ export function formatBytes(bytes: number): string {
 // punctuation collapsed to dashes, extension preserved. Mirrors `slugify` in wiki.ts
 // so an attachment and a page derived from the same title agree.
 export function attachmentSlug(filename: string): string {
-	const ext = extensionOf(filename);
-	const base = ext ? filename.slice(0, filename.length - ext.length - 1) : filename;
+	const trimmed = filename.trim();
+	const ext = extensionOf(trimmed);
+	// A degenerate name like ".png" has no extension by the dotfile rule above, so it
+	// slugs to "png" and then fails validateAttachment for having no supported type.
+	// That is the intended outcome: better to tell the uploader to name the file than
+	// to invent a name and store bytes under something they never chose.
+	const base = ext ? trimmed.slice(0, trimmed.length - ext.length - 1) : trimmed;
 	const slug =
 		base
 			.toLowerCase()
