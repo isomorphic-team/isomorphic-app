@@ -6,6 +6,7 @@
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { marked } from 'marked';
 import { slugify, resolveRelative } from '../../src/lib/wiki.ts';
+import { mediaTypeOf } from '../../src/lib/media.ts';
 import type {
 	View,
 	Hit,
@@ -850,6 +851,19 @@ function renderMarkdown(body: string): string {
 // Delegated link handling for rendered markdown.
 function onProseClick(fromPath: string) {
 	return async (e: MouseEvent) => {
+		// An attachment shown on the page opens on its own. Two ways to arrive here and
+		// both were dead ends before: an embedded image is a bare <img> with no anchor
+		// at all (`![](…)` produces no link), and a markdown link to a non-page file
+		// fell through the `.md` branch below. So a picture was reachable from the file
+		// tree but not from the page displaying it, which is the opposite of how anyone
+		// navigates.
+		const img = (e.target as HTMLElement).closest('img[data-asset-path]');
+		// Unless the author wrapped it in a link themselves (`[![alt](img.png)](page.md)`),
+		// in which case their link wins and the anchor branches below handle it.
+		if (img && !img.closest('a')) {
+			e.preventDefault();
+			return openAsset(img.getAttribute('data-asset-path')!);
+		}
 		const a = (e.target as HTMLElement).closest('a');
 		if (!a) return;
 		const href = a.getAttribute('href') ?? '';
@@ -865,6 +879,10 @@ function onProseClick(fromPath: string) {
 		} else if (href.endsWith('.md') || href.includes('.md#')) {
 			e.preventDefault();
 			navigateTo(resolveRelative(fromPath, href));
+		} else if (mediaTypeOf(resolveRelative(fromPath, href))) {
+			// A link to an attachment — a PDF, or an image linked rather than embedded.
+			e.preventDefault();
+			openAsset(resolveRelative(fromPath, href));
 		}
 	};
 }

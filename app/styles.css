@@ -366,3 +366,9 @@ body {
 		var(--sq) calc(var(--sq) * -1),
 		calc(var(--sq) * -1) 0;
 }
+
+/* A rendered attachment is clickable: it opens on its own page. zoom-in rather than
+   pointer, because the action is "look closer", not "follow a link". */
+.prose img[data-asset-path] {
+	cursor: zoom-in;
+}
