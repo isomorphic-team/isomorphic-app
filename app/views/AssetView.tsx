@@ -52,9 +52,9 @@ function UsedOn({ path }: { path: string }) {
 
 	return (
 		<section class="mt-8 border-t border-border pt-4">
-			<h2 class={`mb-2.5 ${eyebrow}`}>
-				Used on{state.refs.length ? ` · ${state.refs.length}` : ''}
-			</h2>
+			{/* No count in the heading: the list under it is the count, and each row
+			    already carries its own. */}
+			<h2 class={`mb-2.5 ${eyebrow}`}>Used on</h2>
 			{state.refs.length === 0 ? (
 				// Worth stating plainly rather than showing an empty list: an unreferenced
 				// attachment is invisible everywhere else in the app, and still costs space
