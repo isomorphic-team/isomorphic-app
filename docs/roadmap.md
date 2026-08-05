@@ -302,49 +302,68 @@ The MCP spec has a `resources` primitive distinct from tools: read-only, URI-add
 - Token-size guards: refuse to serve resources above a per-resource cap (or annotate `mimeType` and size so clients can choose). One user attaching 30 wiki pages should not silently blow the context window.
 - Privacy via path: filter private paths out of `resources/list` results, mirroring the existing path-as-ACL convention.
 
-# TODO: media attachments (upload, view, and pass images through MCP)
+# TODO: media attachments (upload, view, and pass images through MCP). **DONE 2026-08-05**
 
-Full design: [`docs/design/media-attachments.md`](design/media-attachments.md). Let people
-put images into a brain, see them in the app, and have Claude look at them, with the brain
-still an ordinary git repo.
+Images (and PDFs) live in a brain, render in the app, and can be handed to Claude to
+look at. Full design: [`docs/design/media-attachments.md`](design/media-attachments.md).
 
-The load-bearing constraint, and the reason to read the doc before building: **the model
-cannot hand us bytes.** Tool arguments are JSON produced by the model, and a model shown an
-image has visual tokens, not base64. There is no MCP path from a conversation attachment
-into a tool call (elicitation carries primitives or a URL, not files). So the upload surface
-is the **app iframe**, which is a real browser context with a real file input; the
-conversation is where images get read, not written. Anyone who starts from "Claude, save
-this screenshot" builds the wrong thing.
+**The constraint that set the shape: the model cannot hand us bytes.** Tool arguments
+are JSON produced by the model, and a model shown an image holds visual tokens, not
+base64. No host passes a conversation attachment into a tool call. So "Claude, save
+this screenshot" cannot be made to work by any tool design, and the upload surface is
+the **app iframe** (a real browser context with a real file input). The conversation is
+where images are read, not written. `attach_media`'s own description says so, because
+that is where an agent hunting for the tool will look.
 
-The rest, in short:
+What shipped:
 
-- **Storage is a real change to the seam.** `commitFiles` builds tree entries with inline
-  UTF-8 `content`, which cannot carry binary. Binary needs `createBlob({encoding:'base64'})`
-  then a tree entry by `sha`, in `githubStore` and in the fs adapter (which writes `'utf8'`
-  today). Cap at 5 MiB/file: git keeps every version forever, and it stays under Claude's
-  10 MB base64 image ceiling.
-- **Display is data URIs, not a CSP allowlist.** The app iframe's default CSP is
-  `img-src 'self' data:`. `_meta.ui.csp.resourceDomains` could widen it, but brain repos are
-  private, so raw GitHub URLs need short-lived signed redirects to a host you would not
-  naturally declare. Data URIs work on every deployment including `pnpm try`.
-- **One narrow index change does most of the work.** `MD_LINK_RE` already matches `![](…)`
-  and the rewrite helpers already repoint image links; `loadResolvedGraph` deliberately
-  drops non-`.md` targets (`brain-index.ts:529`) so stray asset links are not reported
-  broken. Admitting known assets as edges makes `move_page` repointing and the
-  "still referenced" delete note cover images for free.
-- **Two new tools, two extended** (`attach_media`, `read_media`; `move_page`/`delete_page`
-  accept asset paths), honoring the same don't-grow-the-surface pressure that took us
-  42 → 30. New names need `TOOL_KINDS` entries or `pnpm test:usage` fails, by design.
-- **Images only for the model in v1.** PDFs store and display, but whether this host turns
-  an embedded `resource` blob into a document block is unverified, and building on an
-  unverified host behavior is how the SSE-teardown bug happened.
-- **Phase 0 is verification, not code:** confirm a sandboxed MCP App iframe in Claude allows
-  `<input type="file">` and drag-drop. If it does not, the upload path above collapses and
-  the design needs rethinking.
+- ~~**Binary storage.** `FileWrite` grew an `encoding`; binary becomes a blob referenced
+  by sha, because `createTree`'s inline `content` decodes as UTF-8 and silently mangles
+  a PNG. Both write paths now build trees through one shared helper. The fs adapter got
+  the same rule plus a rollback fix (it captured prior contents as a utf8 _string_, so
+  undoing a half-written bundle would have corrupted any binary it restored).~~
+- ~~**Attachments in the link graph.** `MD_LINK_RE` always matched `![](…)`, but
+  `loadResolvedGraph` dropped non-`.md` targets, so `backlinksTo` reported an image as
+  referenced by nobody — `move_page` would repoint nothing and `delete_page` would call
+  a still-used image unreferenced. Asset links now resolve into a separate `assetEdges`
+  list (separate because the graph view builds nodes from `pages`). They still never
+  count as `broken`: the index has no asset inventory, and guessing makes `validate` cry
+  wolf.~~
+- ~~**Tools:** `attach_media`, `read_media`, plus attachment branches in `move_page` /
+  `delete_page` rather than media twins. Both treated "no `.md`" as "folder", so an image
+  path would have been handled as a _subtree_ — the asset check runs first in both.~~
+- ~~**App:** images hydrate as `data:` URIs after render (the iframe CSP is
+  `img-src 'self' data:`, and a private brain repo has no URL to point at); drop-target
+  upload with client-side downscale to a 2576px long edge; attachments browsable in the
+  file tree with their own asset view showing preview, metadata, and which pages use it.~~
+- ~~**One rule for link classification** (`src/lib/links.ts`). It used to be inlined in
+  `loadResolvedGraph`, so nothing outside D1 could reuse it and the dev harness carried a
+  divergent copy — which made the preview report "no references" for an image that was
+  plainly on a page. A preview wrong in a _different direction_ than prod is worse than
+  no preview: it manufactures bugs and conceals real ones.~~
 
-Not built / deliberately out: thumbnails or any server-side image processing, Git LFS (it
-moves bytes out of the tree, so a clone stops being the whole brain), OCR or search over
-image content, camera capture (no camera in the mobile WebView), per-brain quotas.
+Decisions worth not relitigating: **data URIs, not a CSP allowlist** (brain repos are
+private, so raw GitHub URLs need expiring signed redirects to a host you would not
+naturally declare); **5 MiB cap** (git keeps every version forever in a repo the customer
+clones); **co-located `assets/`** (so `move_page` on a folder carries its pictures, and
+plain markdown readers resolve the link); **images embed, documents link** (`![](…)` on a
+PDF is a broken image everywhere, including github.com).
+
+Not built, in rough priority order:
+
+- **Phase 0 host verification, still open.** Whether a sandboxed MCP App iframe in Claude
+  permits `<input type="file">` and drag-drop. Everything above stands either way, but if
+  it is blocked the upload _entry point_ needs rethinking. Verify before building further
+  on it.
+- **Point the dev harness at a real local MCP server** (`pnpm try`) instead of stubbing
+  tool responses. The stubs exist because the harness runs in a browser and the real read
+  path needs a store plus D1 — but the local-first work now provides both, so the whole
+  class of prod/preview divergence above could be deleted rather than fixed case by case.
+- An orphan advisory in `validate` (an attachment nothing references is invisible in the
+  app yet still in every clone forever), a brain-wide `assets/` option for shared images,
+  URL ingest (`attach_media` fetching a URL the model found), returning PDFs to the model
+  (unverified whether this host turns an embedded resource blob into a document block),
+  and retention/pruning.
 
 # TODO: derived views & non-destructive sync
 
