@@ -4,6 +4,7 @@ import type { View, ViewAction } from '../core/view-registry.ts';
 import ActivityView from './ActivityView.tsx';
 import AddBrainView from './AddBrainView.tsx';
 import AnalyticsView from './AnalyticsView.tsx';
+import AssetView from './AssetView.tsx';
 import BrainAccessView from './BrainAccessView.tsx';
 import BrainsView from './BrainsView.tsx';
 import Browse from './Browse.tsx';
@@ -23,6 +24,7 @@ const VIEW_DEFS = [
 	ActivityView,
 	AddBrainView,
 	AnalyticsView,
+	AssetView,
 	BrainAccessView,
 	BrainsView,
 	Browse,

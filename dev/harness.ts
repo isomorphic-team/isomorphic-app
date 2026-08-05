@@ -625,11 +625,18 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
 			// .gitkeep, source, the log) comes back as `hidden` for the eye toggle.
 			const visible = listed.filter(isContentPage);
 			const hiddenPaths = listed.filter((p) => !isContentPage(p));
+			// Attachments live in their own map here (they are bytes, not markdown), so
+			// they have to be folded in explicitly — the server gets both from one tree
+			// walk. Reported as `assets`, never as `hidden`: they are content.
+			const assetPaths = Object.keys(assetsFor(bid))
+				.filter((p) => p.startsWith(prefix))
+				.sort();
 			const r = text(visible.join('\n'));
 			return {
 				...r,
 				structuredContent: {
 					pages: visible.map((p) => ({ path: p, title: titleOf(p, pg[p]) })),
+					assets: assetPaths,
 					hidden: hiddenPaths
 				}
 			};
@@ -1363,6 +1370,7 @@ bridge.oninitialized = async () => {
 							view: 'browse',
 							paths: apth.filter(isContentPage),
 							pages: apth.filter(isContentPage).map((p) => ({ path: p, title: titleOf(p, ap[p]) })),
+							assets: Object.keys(assetsFor(activeBrainId)).sort(),
 							hidden: apth.filter((p) => !isContentPage(p)),
 							activeBrain: brainMeta(activeBrainId)
 						}

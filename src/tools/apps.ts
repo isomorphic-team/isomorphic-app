@@ -40,7 +40,7 @@ import {
 	isContentPath,
 	isSourcePath,
 	isToolMaintained,
-	listHiddenPaths,
+	listNonPagePaths,
 	pathPolicyOf
 } from '../lib/brain-config.ts';
 import type { TenantOpts } from '../lib/orgs.ts';
@@ -262,9 +262,8 @@ export function registerBrainApp(
 			await ensureFresh(db, store, repoArgs, brainId, config);
 			const pages = await listIndexedPages(db, brainId);
 			const paths = pages.map((p) => p.path);
-			// Everything that's NOT a content page (system files, .gitkeep markers,
-			// source, the log): the app shows these only when "show hidden" is on.
-			const hidden = await listHiddenPaths(store, repoArgs, config);
+			// Attachments listed apart from hidden files — see listNonPagePaths.
+			const { assets, hidden } = await listNonPagePaths(store, repoArgs, config);
 			const text = paths.length ? paths.join('\n') : 'The brain is empty.';
 			// Empty could be a fresh brain or an adopted repo whose content isn't under the
 			// configured roots — flag the latter so the app can offer to auto-configure.
@@ -280,6 +279,7 @@ export function registerBrainApp(
 					view: 'browse',
 					paths,
 					pages,
+					assets,
 					hidden,
 					config: editPolicy(config),
 					activeBrain,

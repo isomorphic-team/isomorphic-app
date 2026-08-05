@@ -346,3 +346,23 @@ body {
 	font-size: 0.8125rem;
 	font-style: italic;
 }
+
+/* Backing for a single attachment shown on its own. Checkerboard rather than a flat
+   panel: a transparent PNG on a solid background reads as an opaque white rectangle,
+   and whether the thing has transparency is one of the few reasons to open an image
+   by itself. */
+.asset-canvas {
+	--sq: 10px;
+	background-color: var(--c-chip);
+	background-image:
+		linear-gradient(45deg, rgba(128, 128, 128, 0.16) 25%, transparent 25%),
+		linear-gradient(-45deg, rgba(128, 128, 128, 0.16) 25%, transparent 25%),
+		linear-gradient(45deg, transparent 75%, rgba(128, 128, 128, 0.16) 75%),
+		linear-gradient(-45deg, transparent 75%, rgba(128, 128, 128, 0.16) 75%);
+	background-size: calc(var(--sq) * 2) calc(var(--sq) * 2);
+	background-position:
+		0 0,
+		0 var(--sq),
+		var(--sq) calc(var(--sq) * -1),
+		calc(var(--sq) * -1) 0;
+}

@@ -84,6 +84,7 @@ function handleToolResult(result: CallToolResult) {
 			const data: BrowseData = {
 				paths,
 				titleByPath: pagesToTitleMap(sc.pages),
+				assets: Array.isArray(sc.assets) ? (sc.assets as string[]) : [],
 				hidden: Array.isArray(sc.hidden) ? (sc.hidden as string[]) : [],
 				needsConfig: !!sc.needsConfig
 			};
@@ -467,6 +468,40 @@ async function navigateTo(path: string) {
 	}
 }
 
+// Open one attachment on its own. The counterpart to navigateTo for files that are
+// not pages: same shape (loading -> view -> error with retry), different tool.
+//
+// It exists because assets became browsable. A tree row you can see but not open is
+// worse than one that was never listed, so making them visible obliged us to give
+// them somewhere to go.
+async function openAsset(path: string) {
+	show({ kind: 'loading', label: `Loading ${path}…` });
+	try {
+		const res = await callTool('read_media', { path, ...brainArgs() });
+		if (res.isError) throw new Error(firstText(res));
+		const sc = (res.structuredContent ?? {}) as {
+			mimeType?: string;
+			size?: number;
+			dataUri?: string;
+		};
+		show({
+			kind: 'asset',
+			path,
+			mimeType: sc.mimeType ?? '',
+			size: typeof sc.size === 'number' ? sc.size : 0,
+			dataUri: sc.dataUri ?? ''
+		});
+	} catch (e) {
+		if (isNoBrain(String(e))) return openAddBrain();
+		show({
+			kind: 'error',
+			headline: `Couldn't load ${path}`,
+			detail: String(e),
+			retry: () => openAsset(path)
+		});
+	}
+}
+
 // Build a path→title lookup from a tool's structuredContent.pages (see list_pages /
 // browse_brain, which serve titles from the content index). Tolerant of a missing or
 // malformed field so the tree still renders (falling back to filenames).
@@ -506,6 +541,7 @@ async function fetchPaths(): Promise<BrowseData> {
 	const data: BrowseData = {
 		paths,
 		titleByPath: pagesToTitleMap(sc.pages),
+		assets: Array.isArray(sc.assets) ? (sc.assets as string[]) : [],
 		hidden: Array.isArray(sc.hidden) ? (sc.hidden as string[]) : [],
 		needsConfig: !!sc.needsConfig
 	};
@@ -856,6 +892,7 @@ export {
 	fetchPage,
 	fetchPageList,
 	navigateTo,
+	openAsset,
 	pagesToTitleMap,
 	fetchPaths,
 	openBrowse,
