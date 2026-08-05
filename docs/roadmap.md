@@ -355,15 +355,59 @@ Not built, in rough priority order:
   permits `<input type="file">` and drag-drop. Everything above stands either way, but if
   it is blocked the upload _entry point_ needs rethinking. Verify before building further
   on it.
-- **Point the dev harness at a real local MCP server** (`pnpm try`) instead of stubbing
-  tool responses. The stubs exist because the harness runs in a browser and the real read
-  path needs a store plus D1 — but the local-first work now provides both, so the whole
-  class of prod/preview divergence above could be deleted rather than fixed case by case.
+- Making the dev harness run the real server (its own section below).
 - An orphan advisory in `validate` (an attachment nothing references is invisible in the
   app yet still in every clone forever), a brain-wide `assets/` option for shared images,
   URL ingest (`attach_media` fetching a URL the model found), returning PDFs to the model
   (unverified whether this host turns an embedded resource blob into a document block),
   and retention/pruning.
+
+# TODO: make `pnpm app:dev` run the real server, not a reimplementation of it
+
+The dev harness (`dev/harness.ts`) loads the REAL app bytes and drives them over the
+REAL `AppBridge`, so the app side is production code. But it answers every tool call
+itself, from fixtures. That second half is roughly 1,400 lines reimplementing the
+server, and it is the largest remaining source of "works in the preview, differs in
+prod".
+
+It bit us on 2026-08-05. The harness scanned links with its own regex that only counted
+`.md` targets, so the asset view reported "no page shows this file" for an image that
+was plainly on a page — while production answered correctly. **A preview that is wrong
+in a different direction than prod is worse than no preview: it manufactures bugs that
+do not exist and conceals ones that do.** The immediate fix extracted the rule to
+`src/lib/links.ts` so both call the same function, but that is one rule out of many;
+`list_pages`, `read_page`, `find_inbound_links`, `search_pages`, the write tools and the
+members/analytics surfaces all still have a hand-written twin in there.
+
+Why the stubs exist: the harness runs **in a browser tab**, and the real read path needs
+a `BrainStore` (octokit or `node:fs`) plus D1 for the content index. Neither exists in a
+browser, so it imports the pure libs it can (`renderViews`, `effectiveBrainRole`,
+`classifyMdLink`, `resolveRelative`) and fakes the rest.
+
+That reason expired with the local-first work (**DONE 2026-08-04**). `pnpm try <folder>`
+already serves the real MCP tools over a git repo on disk, with a real store and D1 over
+`node:sqlite`. So the harness no longer needs to fake a server — it needs to _talk_ to
+one:
+
+- `scripts/app-dev.ts` boots a `pnpm try` server on a scratch brain seeded from
+  `dev/fixtures.json`, and the browser-side harness forwards `callServerTool` to it over
+  HTTP instead of answering from a `switch`.
+- The AppBridge/iframe/host-context half stays exactly as it is. That part is already
+  faithful and is not what drifts.
+- Delete the tool `switch` and the fixture-shaped duplicates of server logic. The seeded
+  brain becomes ordinary markdown files in a temp directory, which is also easier to
+  extend than a JSON blob.
+
+Payoff: the preview exercises the same handlers, gates, and index as prod, so divergence
+stops being a category of bug. It also makes the harness the natural place to reproduce a
+reported issue. Cost: `app:dev` gains a server process and a scratch directory, and the
+offline-with-no-setup property has to survive (`pnpm try` is already offline, so it
+should).
+
+Keep one escape hatch: some previews are _states_, not data — `#nobrains`, the
+"adopted repo, no content configured" empty state, a brain with 3,000 pages. Those want
+seeded fixtures or flags, not a live server, so the harness should still be able to
+force a state without pretending to be a server.
 
 # TODO: derived views & non-destructive sync
 
