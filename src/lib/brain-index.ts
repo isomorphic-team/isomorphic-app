@@ -23,6 +23,7 @@ import {
 	type BrainConfig,
 	CONFIG_PATH,
 	isContentPath,
+	isAssetPath,
 	isSourcePath,
 	loadBrainConfig
 } from './brain-config.ts';
@@ -493,6 +494,11 @@ export interface BrokenLink {
 export interface ResolvedGraph {
 	pages: { path: string; title: string }[];
 	edges: ResolvedEdge[]; // links between two known pages (directed, with counts)
+	// Links from a page to an ATTACHMENT (an image, a PDF). Kept apart from `edges`
+	// rather than merged into them, because the graph view builds its nodes from
+	// `pages` alone and computes degree from `edges`: an asset edge in that list would
+	// reference a node the renderer has no data for. Backlink queries read both.
+	assetEdges: ResolvedEdge[];
 	broken: BrokenLink[]; // links that resolve to no page (powers validate)
 }
 
@@ -521,12 +527,26 @@ export async function loadResolvedGraph(
 	const byTitle = new Map(pages.map((p) => [p.title.trim().toLowerCase(), p.path]));
 
 	const edges: ResolvedEdge[] = [];
+	const assetEdges: ResolvedEdge[] = [];
 	const broken: BrokenLink[] = [];
 	for (const l of linksRes.results) {
 		const kind = l.kind === 'wiki' ? 'wiki' : 'md';
 		if (kind === 'md') {
 			const target = resolveRelative(l.source, l.raw_target);
-			if (!target.endsWith('.md')) continue; // asset / non-page — out of scope
+			if (!target.endsWith('.md')) {
+				// An attachment reference. MD_LINK_RE already captures `![](…)`, so these
+				// were always in brain_links; they were simply dropped here, which is why
+				// backlinksTo used to report an image as referenced by nobody. Record them
+				// so move_page can repoint them and delete_page can warn.
+				//
+				// Still never `broken`: the index holds no inventory of which assets exist,
+				// so we cannot tell a typo from a file we have not indexed, and guessing
+				// would make validate cry wolf on every brain with a stray link.
+				if (isAssetPath(target, config)) {
+					assetEdges.push({ source: l.source, target, kind, cnt: l.cnt });
+				}
+				continue;
+			}
 			if (isSourcePath(target, config)) continue; // source isn't indexed; not "broken"
 			if (pathSet.has(target)) edges.push({ source: l.source, target, kind, cnt: l.cnt });
 			else if (isContentPath(target, config))
@@ -538,7 +558,7 @@ export async function loadResolvedGraph(
 			else broken.push({ source: l.source, rawTarget: l.raw_target, kind });
 		}
 	}
-	return { pages, edges, broken };
+	return { pages, edges, assetEdges, broken };
 }
 
 // The brain's content pages with display titles, straight from the index (no link
@@ -567,7 +587,10 @@ export function backlinksTo(
 ): { path: string; title: string; count: number; mdCount: number; wikiCount: number }[] {
 	const titleByPath = new Map(resolved.pages.map((p) => [p.path, p.title]));
 	const agg = new Map<string, { mdCount: number; wikiCount: number }>();
-	for (const e of resolved.edges) {
+	// Both lists: an asset path can never collide with a page path (one ends in .md,
+	// the other cannot), so scanning both is unambiguous and spares every caller from
+	// having to know whether it is asking about a page or a picture.
+	for (const e of [...resolved.edges, ...resolved.assetEdges]) {
 		if (e.target !== targetPath || e.source === targetPath) continue;
 		const a = agg.get(e.source) ?? { mdCount: 0, wikiCount: 0 };
 		if (e.kind === 'md') a.mdCount += e.cnt;

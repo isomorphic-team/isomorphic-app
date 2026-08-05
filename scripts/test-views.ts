@@ -58,6 +58,7 @@ const ctx: ViewContext = {
 			{ source: 'people/ada-lovelace.md', target: 'organizations/acme.md', kind: 'md', cnt: 1 },
 			{ source: 'people/grace-hopper.md', target: 'organizations/acme.md', kind: 'wiki', cnt: 2 }
 		],
+		assetEdges: [],
 		broken: []
 	},
 	fieldsFor: async (paths) => new Map([...fields].filter(([p]) => paths.includes(p)))
@@ -262,6 +263,7 @@ async function main() {
 				{ path: 'Projects/roadmap.md', title: 'Roadmap' } // direct file, not a folder
 			],
 			edges: [],
+			assetEdges: [],
 			broken: []
 		},
 		fieldsFor: async (paths) =>
@@ -410,6 +412,7 @@ async function main() {
 				{ path: 'Projects/plain.md', title: 'Plain' }
 			],
 			edges: [],
+			assetEdges: [],
 			broken: []
 		},
 		fieldsFor: async () => new Map()

@@ -20,6 +20,8 @@
 // the legacy field shape and synthesizes a map, so old .isomorphic.json files
 // keep working unchanged.
 
+import { isMediaPath } from './media.ts';
+
 // How writes reach the repo. `direct` commits to the default branch (right for
 // dedicated brains the app owns); `pull-request` opens a PR instead (right for a
 // branch-protected repo, e.g. an adopted customer KB whose main requires review).
@@ -166,6 +168,21 @@ export function isToolMaintained(path: string, cfg: PathPolicy): boolean {
 // enforce the `.md` extension.)
 export function isContentPath(path: string, cfg: PathPolicy): boolean {
 	return roleOf(path, cfg) === 'content';
+}
+
+// The attachment predicate: is this an uploaded file living in the brain's content,
+// as opposed to a page? Deliberately NOT a new PathRole. Assets sit under the same
+// `content` roots as the pages that reference them and are told apart by not ending
+// in `.md`, which is the distinction every page tool already enforces at its call
+// site. A fifth role would have changed the path-policy wire contract the app and
+// Worker share (pnpm test:policy) and forced every existing brain to add a prefix to
+// its config before a single image could be uploaded.
+//
+// The media-type check is what keeps this from claiming arbitrary repo files: a
+// stray `.yml` or `LICENSE` under wiki/ is neither a page nor an attachment.
+export function isAssetPath(path: string, cfg: PathPolicy): boolean {
+	if (path.endsWith('.md') || isHiddenName(path)) return false;
+	return roleOf(path, cfg) === 'content' && isMediaPath(path);
 }
 
 // The display predicate: a dotfile/dot-folder name ("hidden by convention", e.g.
