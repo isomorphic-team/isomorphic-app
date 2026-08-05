@@ -302,6 +302,50 @@ The MCP spec has a `resources` primitive distinct from tools: read-only, URI-add
 - Token-size guards: refuse to serve resources above a per-resource cap (or annotate `mimeType` and size so clients can choose). One user attaching 30 wiki pages should not silently blow the context window.
 - Privacy via path: filter private paths out of `resources/list` results, mirroring the existing path-as-ACL convention.
 
+# TODO: media attachments (upload, view, and pass images through MCP)
+
+Full design: [`docs/design/media-attachments.md`](design/media-attachments.md). Let people
+put images into a brain, see them in the app, and have Claude look at them, with the brain
+still an ordinary git repo.
+
+The load-bearing constraint, and the reason to read the doc before building: **the model
+cannot hand us bytes.** Tool arguments are JSON produced by the model, and a model shown an
+image has visual tokens, not base64. There is no MCP path from a conversation attachment
+into a tool call (elicitation carries primitives or a URL, not files). So the upload surface
+is the **app iframe**, which is a real browser context with a real file input; the
+conversation is where images get read, not written. Anyone who starts from "Claude, save
+this screenshot" builds the wrong thing.
+
+The rest, in short:
+
+- **Storage is a real change to the seam.** `commitFiles` builds tree entries with inline
+  UTF-8 `content`, which cannot carry binary. Binary needs `createBlob({encoding:'base64'})`
+  then a tree entry by `sha`, in `githubStore` and in the fs adapter (which writes `'utf8'`
+  today). Cap at 5 MiB/file: git keeps every version forever, and it stays under Claude's
+  10 MB base64 image ceiling.
+- **Display is data URIs, not a CSP allowlist.** The app iframe's default CSP is
+  `img-src 'self' data:`. `_meta.ui.csp.resourceDomains` could widen it, but brain repos are
+  private, so raw GitHub URLs need short-lived signed redirects to a host you would not
+  naturally declare. Data URIs work on every deployment including `pnpm try`.
+- **One narrow index change does most of the work.** `MD_LINK_RE` already matches `![](…)`
+  and the rewrite helpers already repoint image links; `loadResolvedGraph` deliberately
+  drops non-`.md` targets (`brain-index.ts:529`) so stray asset links are not reported
+  broken. Admitting known assets as edges makes `move_page` repointing and the
+  "still referenced" delete note cover images for free.
+- **Two new tools, two extended** (`attach_media`, `read_media`; `move_page`/`delete_page`
+  accept asset paths), honoring the same don't-grow-the-surface pressure that took us
+  42 → 30. New names need `TOOL_KINDS` entries or `pnpm test:usage` fails, by design.
+- **Images only for the model in v1.** PDFs store and display, but whether this host turns
+  an embedded `resource` blob into a document block is unverified, and building on an
+  unverified host behavior is how the SSE-teardown bug happened.
+- **Phase 0 is verification, not code:** confirm a sandboxed MCP App iframe in Claude allows
+  `<input type="file">` and drag-drop. If it does not, the upload path above collapses and
+  the design needs rethinking.
+
+Not built / deliberately out: thumbnails or any server-side image processing, Git LFS (it
+moves bytes out of the tree, so a clone stops being the whole brain), OCR or search over
+image content, camera capture (no camera in the mobile WebView), per-brain quotas.
+
 # TODO: derived views & non-destructive sync
 
 Full PRD: [`design/derived-views-and-sync-prd.md`](design/derived-views-and-sync-prd.md).
