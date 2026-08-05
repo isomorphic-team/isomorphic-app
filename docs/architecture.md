@@ -95,3 +95,4 @@ every conversation. The Worker applies the same rule to single-tenant deployment
 | Who can do what              | `src/lib/orgs.ts`, `pnpm test:access` and `pnpm test:scope`                       |
 | The viewer or editor         | `app/`, run `pnpm app:dev`; re-run `pnpm gen:app` before committing               |
 | Where a brain lives          | `src/lib/brain-repo.ts` (the seam), `src/local/brain-store-fs.ts` (the other end) |
+| Two changes at once          | [`parallel-agents.md`](parallel-agents.md), for worktrees, brains, and ports      |

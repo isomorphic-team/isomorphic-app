@@ -102,6 +102,29 @@ This repo ships **three distinct programs** sharing one `src/`:
 
 The split matters for `src/lib/`. Anything imported by `worker.ts` runs on Cloudflare Workers and **cannot use `node:*` modules** (no `node:crypto`, no `node:fs`, etc.). The tsconfigs enforce this: `tsconfig.node.json` includes the bootstrap files, `src/local*`, `scripts/`, and `lib/`; `tsconfig.worker.json` includes `worker.ts` and `lib/`; `tsconfig.app.json` covers `app/`. `pnpm typecheck` runs all three. Node-only code goes in `src/local/`, `bootstrap.ts`, or a Node-only sibling, never in `lib/`.
 
+## Running several agents at once
+
+Full document: [`docs/parallel-agents.md`](docs/parallel-agents.md). **Read it before spinning
+up a parallel worker.** The same seams that made the local runtime possible (the `BrainStore`
+interface, the three-program split, the per-brain sqlite index) are what let several agents work
+this repo concurrently. The operational rules, which are not inferable from the code:
+
+- **Work in your own worktree** under `.claude/worktrees/`. Never `git checkout`/`git switch` in
+  the shared checkout: another agent is working in it.
+- **Run `pnpm install` and `pnpm setup:config` first** in a fresh worktree. `node_modules`,
+  `wrangler.jsonc`, `.dev.vars`, and `.wrangler/` are all gitignored, so a new worktree has none
+  of them, and `wrangler.jsonc` is generated rather than committed.
+- **Own your brain and your port.** `pnpm try <folder>` defaults to 8788 and honors `PORT`;
+  `pnpm app:dev` is 5175 and honors `PORT`; `pnpm worker:dev` is 8787 and takes `--port`. The
+  content index lives at `<brain>/.isomorphic/index.sqlite`, so two agents sharing a brain
+  directory share its index.
+- **Stay offline.** `pnpm test` needs no credentials. Do not pass `--github` to the e2e batteries
+  unless you changed the GitHub adapter, never `pnpm worker:deploy`, and never
+  `wrangler d1 migrations apply --remote`.
+- **Regenerate, don't merge.** `app-bundle.generated.ts` and `brain-template.generated.ts` are
+  committed, so parallel work on `app/` or `brain-template/` conflicts there. Re-run
+  `pnpm gen:app` / `pnpm gen:templates` after the merge.
+
 ## Auth model
 
 GitHub App auth uses two tokens — see `src/lib/github.ts`:

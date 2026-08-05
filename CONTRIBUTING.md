@@ -75,6 +75,11 @@ Apps spec, the MCP SDK, Claude host design guidelines, ProseMirror, Cloudflare l
 verified facts about them. Read the primary source rather than trusting memory or an LLM; that
 surface moves fast.
 
+[`docs/parallel-agents.md`](docs/parallel-agents.md) is for working on more than one change at a
+time, whether that is you in two terminals or several coding agents. It covers what each worker
+has to own (a worktree, a brain, a port, its own generated `wrangler.jsonc`) and the handful of
+things that are still shared.
+
 ## The three rules that will bite you
 
 Each of these has broken a deploy.
