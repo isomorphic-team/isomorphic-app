@@ -197,20 +197,21 @@ async function prepareUpload(file: File): Promise<Prepared | { error: string }> 
 	return { data, filename, mimeType, bytes: blob.size, note };
 }
 
-// Upload one prepared file and attach it to a page. Returns the message the server
-// gave us, so the caller can surface the real outcome (including "proposed" when the
-// brain writes through pull requests) rather than inventing a success string.
-async function attachToPage(
-	pagePath: string,
-	prepared: Prepared,
-	alt?: string
+// Store one prepared file WITHOUT touching any page.
+//
+// The editor inserts its own image node and the save writes the page, so the server
+// must not also append a link — it would appear twice, and the second copy would be
+// overwritten by the save anyway. `page` is deliberately omitted: attach_media takes
+// either a page to attach to or an explicit path, and this is the path case.
+async function uploadAttachment(
+	path: string,
+	prepared: Prepared
 ): Promise<{ ok: boolean; message: string }> {
 	const res = await callTool('attach_media', {
-		page: pagePath,
+		path,
 		filename: prepared.filename,
 		mime_type: prepared.mimeType,
 		data: prepared.data,
-		...(alt ? { alt } : {}),
 		...brainArgs()
 	});
 	return { ok: !res.isError, message: firstText(res) };
@@ -218,10 +219,10 @@ async function attachToPage(
 
 export {
 	MAX_EDGE,
-	attachToPage,
 	forgetAssets,
 	hydrateImages,
 	loadAsset,
 	prepareUpload,
+	uploadAttachment,
 	type Prepared
 };

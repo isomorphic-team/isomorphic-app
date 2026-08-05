@@ -595,28 +595,40 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
 			};
 		}
 		case 'attach_media': {
-			// Mirrors the server closely enough to exercise the app: same default
-			// placement, same single-bundle behavior (file + page edit together), same
-			// ordinary-markdown link. The point is that a drop in the preview really
-			// does change the page and then really does render.
+			// Two shapes, same as the server. `page` stores the file AND appends a link
+			// (the conversational path). `path` stores it and nothing else — which is what
+			// the editor uses, because it has already inserted the image node itself and
+			// the save writes the page; appending here would duplicate the link.
 			const pagePath = String(args?.page ?? '');
+			const explicitPath = String(args?.path ?? '');
 			const filename = String(args?.filename ?? 'attachment');
 			const mimeType = String(args?.mime_type ?? '');
 			const data = String(args?.data ?? '');
-			const md = pg[pagePath];
-			if (md === undefined) return errText(`No page at "${pagePath}".`);
-			const ext = filename.includes('.') ? filename.slice(filename.lastIndexOf('.') + 1) : 'bin';
-			const slug =
-				filename
-					.slice(0, filename.length - ext.length - 1)
-					.toLowerCase()
-					.replace(/[^a-z0-9]+/g, '-')
-					.replace(/^-+|-+$/g, '') || 'attachment';
-			const dir = pagePath.slice(0, pagePath.lastIndexOf('/'));
-			const target = `${dir}/assets/${slug}.${ext}`;
+			if (!pagePath && !explicitPath) return errText('Give a `page` or a `path`.');
+
+			let target = explicitPath;
+			if (!target) {
+				const ext = filename.includes('.') ? filename.slice(filename.lastIndexOf('.') + 1) : 'bin';
+				const slug =
+					filename
+						.slice(0, filename.length - ext.length - 1)
+						.toLowerCase()
+						.replace(/[^a-z0-9]+/g, '-')
+						.replace(/^-+|-+$/g, '') || 'attachment';
+				const dir = pagePath.slice(0, pagePath.lastIndexOf('/'));
+				target = `${dir}/assets/${slug}.${ext}`;
+			}
 			assetsFor(bid)[target] = { data, mimeType };
-			const alt = String(args?.alt ?? filename);
-			pg[pagePath] = `${md.replace(/\n*$/, '')}\n\n![${alt}](assets/${slug}.${ext})\n`;
+
+			if (pagePath) {
+				const md = pg[pagePath];
+				if (md === undefined) return errText(`No page at "${pagePath}".`);
+				const alt = String(args?.alt ?? filename);
+				const rel = target.startsWith(`${pagePath.slice(0, pagePath.lastIndexOf('/'))}/`)
+					? target.slice(pagePath.lastIndexOf('/') + 1)
+					: target;
+				pg[pagePath] = `${md.replace(/\n*$/, '')}\n\n![${alt}](${rel})\n`;
+			}
 			return text(`Stored ${target}. The change was logged.`);
 		}
 		case 'list_pages': {
