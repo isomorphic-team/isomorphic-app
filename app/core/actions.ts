@@ -5,7 +5,11 @@
 
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { marked } from 'marked';
-import { slugify, resolveRelative } from '../../src/lib/wiki.ts';
+import {
+	resolveRelative,
+	buildWikilinkIndex,
+	resolveWikilink as resolveWikilinkPath
+} from '../../src/lib/wiki.ts';
 import type {
 	View,
 	Hit,
@@ -450,6 +454,11 @@ async function fetchPageList(): Promise<string[]> {
 	return (browseCache ?? (await fetchPaths())).paths;
 }
 
+async function fetchPageIndex(): Promise<{ path: string; title: string }[]> {
+	const data = browseCache ?? (await fetchPaths());
+	return data.paths.map((path) => ({ path, title: data.titleByPath[path] ?? '' }));
+}
+
 // ---------- navigation ----------
 
 async function navigateTo(path: string) {
@@ -789,10 +798,12 @@ async function openEditor(path: string) {
 	}
 }
 
+// Same resolver the server uses (src/lib/wiki.ts), over the page list the tree
+// already holds — so a link the viewer refuses to open is one validate reports too,
+// rather than the two disagreeing about what [[Weekly Sync]] means.
 async function resolveWikilink(target: string): Promise<string | null> {
-	const slug = slugify(target);
-	const pages = await fetchPageList();
-	return pages.find((p) => p.split('/').pop()!.replace(/\.md$/, '') === slug) ?? null;
+	const pages = await fetchPageIndex();
+	return resolveWikilinkPath(buildWikilinkIndex(pages), target) ?? null;
 }
 
 // ---------- markdown rendering (viewer) ----------

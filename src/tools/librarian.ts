@@ -31,7 +31,9 @@ import {
 	rewriteMdLinks,
 	rewriteWikiLinks,
 	rebaseMdLinks,
-	insertLogEntry
+	insertLogEntry,
+	wikilinkKey,
+	wikilinkTargetName
 } from '../lib/wiki.ts';
 import {
 	type RepoRef,
@@ -51,6 +53,7 @@ import {
 } from '../lib/brain-config.ts';
 import {
 	type PageFields,
+	type BrokenLink,
 	ensureFresh,
 	loadResolvedGraph,
 	backlinksTo,
@@ -118,7 +121,7 @@ export interface BrainContext {
 	activeBrain: { id: string; label: string };
 }
 
-// Filename stem, used to match [[Wiki Links]] against pages by slug.
+// Filename stem, which is one of the names a [[Wiki Link]] can call a page by.
 function slugOf(path: string): string {
 	return path.split('/').pop()!.replace(/\.md$/, '');
 }
@@ -334,7 +337,7 @@ function inlinedSections(content: string, known: Set<string>): string[] {
 		if (STRUCTURAL_HEADINGS.has(heading.toLowerCase())) continue;
 		if (heading.endsWith('?') || NARRATIVE_HEADING_RE.test(heading)) continue;
 		if (heading.split(/\s+/).length > MAX_CONCEPT_HEADING_WORDS) continue;
-		if (known.has(slugify(heading))) continue; // a page by this name already exists
+		if (known.has(wikilinkKey(heading))) continue; // a page by this name already exists
 		const text = s.text.join('\n');
 		if (/\]\(|\[\[/.test(text)) continue; // links out — a listing entry, working as intended
 		if (text.replace(/\s+/g, ' ').trim().length < MIN_SECTION_PROSE) continue;
@@ -350,11 +353,13 @@ export function inlinedConceptSuggestions(
 	pages: { path: string; title: string }[]
 ): string[] {
 	// Every name the brain already has a page for, so a section that merely restates
-	// an existing page isn't mistaken for a homeless concept.
+	// an existing page isn't mistaken for a homeless concept. Both sides go through
+	// wikilinkKey for the reason resolution does: a filename kept raw here never
+	// matches a heading, so every Title Case page read as homeless.
 	const known = new Set<string>();
 	for (const p of pages) {
-		known.add(slugOf(p.path));
-		if (p.title) known.add(slugify(p.title));
+		known.add(wikilinkKey(slugOf(p.path)));
+		if (p.title) known.add(wikilinkKey(p.title));
 	}
 	const out: string[] = [];
 	for (const note of notes) {
@@ -394,27 +399,129 @@ export function typeFieldSuggestions(
 	];
 }
 
-// Pages that resolve to the SAME title. `[[wikilinks]]` are matched by slug or
-// title (loadResolvedGraph), and a title map is last-one-wins, so a duplicate
-// title means every `[[That Title]]` in the brain silently lands on one arbitrary
-// page and the others become unreachable by name. Pure over the index's page list.
+// Pages a `[[wikilink]]` cannot tell apart. Resolution matches on path, then
+// filename, then title (buildWikilinkIndex), and each lane keeps the first claim,
+// so two pages sharing a title — or sharing a filename in different folders — mean
+// every `[[That Name]]` lands on one of them and the rest are unreachable by name.
+// Pure over the index's page list.
 export function ambiguousTitleSuggestions(pages: { path: string; title: string }[]): string[] {
-	const byTitle = new Map<string, string[]>();
-	for (const p of pages) {
-		const key = p.title.trim().toLowerCase();
-		if (!key) continue;
-		byTitle.set(key, [...(byTitle.get(key) ?? []), p.path]);
+	const group = (of: (p: { path: string; title: string }) => string) => {
+		const by = new Map<string, { label: string; paths: string[] }>();
+		for (const p of pages) {
+			const label = of(p);
+			const key = wikilinkKey(label);
+			if (!key) continue;
+			const entry = by.get(key) ?? { label, paths: [] };
+			entry.paths.push(p.path);
+			by.set(key, entry);
+		}
+		return [...by.entries()].filter(([, e]) => e.paths.length > 1);
+	};
+	const nameOf = (p: { path: string }) => {
+		const file = p.path.slice(p.path.lastIndexOf('/') + 1);
+		if (!isFolderNoteName(file)) return file.replace(/\.md$/, '');
+		const folder = p.path.slice(0, p.path.lastIndexOf('/'));
+		return folder.slice(folder.lastIndexOf('/') + 1);
+	};
+	const seen = new Set<string>();
+	const clashes: { label: string; paths: string[] }[] = [];
+	for (const [key, entry] of [...group((p) => p.title), ...group(nameOf)].sort(([a], [b]) =>
+		a.localeCompare(b)
+	)) {
+		if (seen.has(key)) continue;
+		seen.add(key);
+		clashes.push(entry);
 	}
-	const clashes = [...byTitle.entries()]
-		.filter(([, paths]) => paths.length > 1)
-		.sort(([a], [b]) => a.localeCompare(b));
-	if (clashes.length === 0) return [];
 	return clashes
 		.slice(0, 5)
 		.map(
-			([title, paths]) =>
-				`- ${paths.length} pages share the title "${title}", so a [[${title}]] wikilink can only reach one of them: ${paths.sort().join(', ')}. Give them distinct titles, or link these by path.`
+			({ label, paths }) =>
+				`- ${paths.length} pages answer to the name "${label}", so a [[${label}]] wikilink can only reach one of them: ${paths.sort().join(', ')}. Give them distinct titles, or link these by path.`
 		);
+}
+
+// ---------- the broken-link report ----------
+
+// Everything past punctuation and separators, for "did you mean" only. Two pages
+// whose loose forms match are NOT the same page — this is a suggestion, never a
+// resolution rule.
+const looseKey = (text: string) => text.toLowerCase().replace(/[^a-z0-9]+/g, '');
+
+// How many lines one section of the report may print before it summarizes. A
+// report long enough to scroll past is a report nobody reads, which is how the
+// genuine problems ended up buried under the noise this exists to prevent.
+const MAX_REPORT_LINES = 40;
+
+// Format the broken links for validate, SPLIT BY KIND, because the two mean
+// different things to whoever has to fix them: a markdown link names a file that
+// is not there (always actionable, and the path says where), while a wikilink is
+// a name that matched no page (often a typo or a rename, sometimes a page that was
+// never written). Wikilinks are grouped by target so one placeholder repeated
+// across thirty pages costs one line, and a near-miss names the page it probably
+// meant — which is what makes "reported broken but the page exists" diagnosable in
+// one run instead of by hand.
+export function brokenLinkReport(
+	broken: BrokenLink[],
+	pages: { path: string; title: string }[]
+): string[] {
+	const sections: string[] = [];
+
+	const md = broken
+		.filter((b) => b.kind === 'md')
+		.sort((a, b) => a.source.localeCompare(b.source) || a.rawTarget.localeCompare(b.rawTarget));
+	if (md.length) {
+		const lines = md
+			.slice(0, MAX_REPORT_LINES)
+			.map((b) => `- ${b.source}: "${b.rawTarget}" — no page at ${b.target}.`);
+		const more = md.length > MAX_REPORT_LINES ? `\n…and ${md.length - MAX_REPORT_LINES} more.` : '';
+		sections.push(
+			`${md.length} markdown link(s) point at a file that isn't there:\n${lines.join('\n')}${more}`
+		);
+	}
+
+	const wiki = broken.filter((b) => b.kind === 'wiki');
+	if (wiki.length) {
+		const byTarget = new Map<string, { target: string; sources: string[] }>();
+		for (const b of wiki) {
+			const entry = byTarget.get(b.rawTarget) ?? { target: b.rawTarget, sources: [] };
+			if (!entry.sources.includes(b.source)) entry.sources.push(b.source);
+			byTarget.set(b.rawTarget, entry);
+		}
+		const candidates = pages.map((p) => ({
+			path: p.path,
+			title: p.title,
+			loose: looseKey(p.title),
+			looseName: looseKey(p.path.slice(p.path.lastIndexOf('/') + 1).replace(/\.md$/, ''))
+		}));
+		// A page whose name contains the link's, or the other way round — the shape a
+		// typo, a truncation, or a since-renamed page leaves behind. Nothing else is
+		// close enough to be worth naming.
+		const nearMiss = (target: string) => {
+			const key = looseKey(wikilinkTargetName(target));
+			if (key.length < 4) return undefined;
+			return candidates.find(
+				(c) =>
+					(c.loose.length >= 4 && (c.loose.includes(key) || key.includes(c.loose))) ||
+					(c.looseName.length >= 4 && (c.looseName.includes(key) || key.includes(c.looseName)))
+			);
+		};
+		const entries = [...byTarget.values()].sort((a, b) => a.target.localeCompare(b.target));
+		const lines = entries.slice(0, MAX_REPORT_LINES).map(({ target, sources }) => {
+			const where = sources.slice(0, 5).join(', ');
+			const rest = sources.length > 5 ? ` and ${sources.length - 5} more page(s)` : '';
+			const hit = nearMiss(target);
+			const hint = hit ? ` — did you mean [[${hit.title}]] (${hit.path})?` : '';
+			return `- [[${target}]] in ${where}${rest}${hint}`;
+		});
+		const more =
+			entries.length > MAX_REPORT_LINES
+				? `\n…and ${entries.length - MAX_REPORT_LINES} more target(s).`
+				: '';
+		sections.push(
+			`${wiki.length} wikilink(s) match no page (${entries.length} distinct target(s)):\n${lines.join('\n')}${more}`
+		);
+	}
+	return sections;
 }
 
 // How much of the brain's link graph is written in a syntax that only resolves
@@ -1126,10 +1233,10 @@ export function registerLibrarianTools(
 			if (!existing) return fail(`"${path}" does not exist.`);
 
 			const { frontmatter, body } = parseFrontmatter(existing.content);
-			const oldTitle =
-				typeof frontmatter?.title === 'string' && frontmatter.title.trim()
-					? frontmatter.title
-					: slugOf(path).replace(/-/g, ' ');
+			// pageTitle is the single title resolver (frontmatter > H1 > filename); a
+			// second copy here would repoint links to a name the rest of the system
+			// doesn't call this page.
+			const oldTitle = pageTitle(path, existing.content);
 			const newPath = new_path
 				? new_path.trim().replace(/^\/+/, '')
 				: `${path.slice(0, path.lastIndexOf('/'))}/${slugify(new_title!)}.md`;
@@ -1162,6 +1269,14 @@ export function registerLibrarianTools(
 				changed += md.changed;
 				if (newTitle !== oldTitle) {
 					const wl = rewriteWikiLinks(content, oldTitle, newTitle);
+					content = wl.body;
+					changed += wl.changed;
+				}
+				// A wikilink can also name a page by its FILENAME, so a rename orphans
+				// those unless they move with it (the title lane above only catches the
+				// ones written as the title).
+				if (wikilinkKey(slugOf(newPath)) !== wikilinkKey(slugOf(path))) {
+					const wl = rewriteWikiLinks(content, slugOf(path), slugOf(newPath));
 					content = wl.body;
 					changed += wl.changed;
 				}
@@ -1354,13 +1469,10 @@ export function registerLibrarianTools(
 			const { truncated } = await ensureFresh(db, store, repoArgs, brainId, config);
 			const resolved = await loadResolvedGraph(db, brainId, config);
 
-			// Every link that resolved to no page (see loadResolvedGraph) — md links
-			// whose target page is missing, and [[wikilinks]] matching no slug/title.
-			const problems = resolved.broken.map((b) =>
-				b.kind === 'md'
-					? `- ${b.source}: broken link "${b.rawTarget}" (no page at ${b.target}).`
-					: `- ${b.source}: wikilink [[${b.rawTarget}]] doesn't match any page.`
-			);
+			// Every link that resolved to no page (see loadResolvedGraph), reported in
+			// two sections: files that aren't there, and names that match no page.
+			const problemSections = brokenLinkReport(resolved.broken, resolved.pages);
+			const problemCount = resolved.broken.length;
 			const pageCount = resolved.pages.length;
 
 			// Pending import decisions: the last sync's unanswered questions, persisted
@@ -1471,11 +1583,11 @@ export function registerLibrarianTools(
 			}
 
 			const extras = `${truncationNote(truncated)}${pendingText}${toolText}${folderNoteText}${structureText}`;
-			if (problems.length === 0) {
-				return ok(`Checked ${pageCount} page(s) — no problems found.${extras}`);
+			if (problemCount === 0) {
+				return ok(`Checked ${pageCount} page(s) — no broken links.${extras}`);
 			}
 			return ok(
-				`Checked ${pageCount} page(s) — ${problems.length} problem(s):\n${problems.join('\n')}${extras}`
+				`Checked ${pageCount} page(s) — ${problemCount} broken link(s):\n\n${problemSections.join('\n\n')}${extras}`
 			);
 		}
 	);

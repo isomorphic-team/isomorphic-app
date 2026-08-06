@@ -528,7 +528,7 @@ try {
 
 	// The brain is still internally consistent after the move.
 	r = await call('validate', {});
-	check('validate clean after move_page (folder)', /no problems found/.test(r.text), r.text);
+	check('validate clean after move_page (folder)', /no broken links/.test(r.text), r.text);
 
 	// ══ move_page (single file): the .md path form still moves + repoints. ═════
 	await waitInbound('wiki/work/alpha.md', 'wiki/notes/ref.md');
