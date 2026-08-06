@@ -150,6 +150,27 @@ const EVENTS = [
 }
 
 {
+	// The same listing, but the pages are found by FILENAME rather than title (their
+	// titles come from an H1 that says something longer). Both sides of this lookup
+	// go through wikilinkKey, so a Title Case filename matches — keeping the raw
+	// filename here reported every one of these pages as homeless.
+	const body = EVENTS.map(
+		(e) =>
+			`## ${e}\n\nA recurring franchise held each year for hospital executives, with a dedicated sponsorship tier structure.\n`
+	).join('\n');
+	const pages = [
+		{ path: 'wiki/events/index.md', title: 'Events' },
+		...EVENTS.map((e) => ({ path: `wiki/events/${e}.md`, title: `${e} (annual series)` }))
+	];
+	const out = inlinedConceptSuggestions([{ path: 'wiki/events/index.md', content: body }], pages);
+	check(
+		'existing pages: matched by filename, not only by title',
+		out.length === 0,
+		JSON.stringify(out)
+	);
+}
+
+{
 	// A rendered okf-view's own headings are generated, not authored.
 	const view = EVENTS.map(
 		(e) => `## ${e}\n\nGenerated tally line for this group of pages here.\n`

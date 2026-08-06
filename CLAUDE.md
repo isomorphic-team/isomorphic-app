@@ -36,6 +36,7 @@ pnpm test:import        # bulk-import planner golden test
 pnpm test:tools         # user-defined (brain-authored) tools parse-layer golden test
 pnpm test:patch         # write_page append/edits (page-patch) golden test
 pnpm test:structure     # OKF conformance golden test (granularity, type:, nested frontmatter)
+pnpm test:links         # wikilink resolution + the broken-link report golden test
 pnpm test:access        # per-brain access rule (effectiveBrainRole) golden test
 pnpm test:scope         # org-vs-brain scope: which role each tool gates on
 pnpm test:feedback      # submit_feedback composition golden test (redaction, nothing identifying published)
@@ -51,7 +52,9 @@ pnpm format             # prettier
 (`pnpm test` runs everything): `pnpm test:roundtrip` (editor markdown round-trip),
 `pnpm test:views` (okf-view engine), `pnpm test:import` (import planner),
 `pnpm test:tools` (brain-authored tool parsing), `pnpm test:patch` (write_page
-append/edits), `pnpm test:structure` (OKF conformance), `pnpm test:index`
+append/edits), `pnpm test:structure` (OKF conformance), `pnpm test:links`
+(wikilink resolution: every spelling a human writes by hand, plus what the
+broken-link report says about the ones that match nothing), `pnpm test:index`
 (content-index freshness guard: bounded, resumable work per read; wraps an octokit
 stub in the REAL `githubStore` so it still covers `fetchPages`'s GraphQL batching),
 `pnpm test:policy` (the path-policy wire contract between Worker and app),
@@ -269,8 +272,26 @@ unbounded and ~10× faster.
   from the org tables. Threaded through `TenantContext`/`BrainContext` (`db` + `brainId`).
 - **Links are stored raw and resolved at QUERY time** (`loadResolvedGraph`) against the current
   page set, so adding/removing a page fixes/breaks inbound links with no whole-brain
-  re-resolve. Resolution (md via `resolveRelative`, `[[wikilinks]]` via slug/title) is the
-  exact same logic the live scan used, so the index can't disagree with it.
+  re-resolve. Markdown links resolve via `resolveRelative`; `[[wikilinks]]` go through
+  `buildWikilinkIndex` / `resolveWikilink` in `wiki.ts` (see below).
+- **Wikilink resolution has THREE LANES and both sides share one key** (`wikilinkKey`,
+  fixed 2026-08-06, issue #12). A `[[link]]` is written from memory, so it may be the
+  page's title, its filename, either in another case, hyphens where the other has spaces,
+  a folder path, or carry a `#heading`. `wikilinkKey` reduces all of that to one form and
+  the lookup table is built with the SAME function, in order of specificity: path (every
+  multi-segment suffix, so `[[Meetings/Weekly Sync]]` works without knowing the `wiki/`
+  prefix) → filename → title. Ties go to the first page in path order, so resolution is
+  stable across reads. The bug this replaces keyed the table by RAW filename and queried it
+  with SLUGIFIED link text, so any page whose filename was not already slug-shaped
+  ("2026-06-26 Weekly Sync.md") was reachable only by title — on one 149-page brain that was
+  ~100 links reported broken whose pages `list_pages` and `read_page` returned happily. The
+  app viewer calls the same two functions (`app/core/actions.ts`), because a link the viewer
+  refuses to open must be one validate reports.
+- **Link extraction skips code** (`maskCode` in `wiki.ts`): `[[Name]]` inside a fence or
+  backticks on a conventions page is a syntax example, not a link, and reporting it is noise
+  no one can ever clear. This is why `INDEX_SCHEMA_VERSION` is 4 — v1–v3 link rows hold those
+  examples, so `rebuildDerivedFromStore` now refreshes `brain_links` alongside titles and
+  fields, lazily, from stored content.
 - **The batched `fetchPages` (GraphQL) is the indexer's fetch engine** — a (re)build costs
   `ceil(changedPages / 100)` subrequests, not one per page. `MAX_SCAN_PAGES` (1500) is now a
   memory/time sanity bound, not a subrequest limit.

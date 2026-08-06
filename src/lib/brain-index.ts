@@ -30,9 +30,12 @@ import {
 	parseFrontmatter,
 	extractLinks,
 	resolveRelative,
-	slugify,
 	isFrontmatterBlock,
-	pageTitle
+	pageTitle,
+	buildWikilinkIndex,
+	resolveWikilink,
+	wikilinkKey,
+	wikilinkTargetName
 } from './wiki.ts';
 
 // Version of the index's ROW SHAPE (not the D1 schema — migrations handle that).
@@ -44,7 +47,9 @@ import {
 // those keys ("resource: /source/x.md" as a value) which a filter could still match.
 // v3: titles resolve via pageTitle (frontmatter title > body H1 > folder/filename),
 // so stored titles from v1/v2 can disagree with what the page calls itself.
-export const INDEX_SCHEMA_VERSION = 3;
+// v4: link extraction skips code spans and fenced blocks, so v1–v3 link rows hold
+// "links" that were only ever syntax examples.
+export const INDEX_SCHEMA_VERSION = 4;
 
 // ---------- shared helpers ----------
 
@@ -293,17 +298,18 @@ export async function ensureFresh(
 // Bounding it converges instead — each read advances the cursor by a slice.
 const REBUILD_PAGE_BUDGET = 300;
 
-// Rebuild the DERIVED rows — the page title and the queryable frontmatter fields —
-// for at most REBUILD_PAGE_BUDGET pages, from the content already stored in
-// brain_pages. Used on a schema_version bump, where page content is current but
-// what we compute FROM it has changed (v1: fields table added; v2: nested
-// frontmatter no longer flattened into fields; v3: titles now resolve through
-// pageTitle, so a stored title can be stale). No GitHub refetch: content is local.
+// Rebuild the DERIVED rows — the page title, its links, and the queryable
+// frontmatter fields — for at most REBUILD_PAGE_BUDGET pages, from the content
+// already stored in brain_pages. Used on a schema_version bump, where page content
+// is current but what we compute FROM it has changed (v1: fields table added;
+// v2: nested frontmatter no longer flattened into fields; v3: titles now resolve
+// through pageTitle; v4: link extraction skips code). No GitHub refetch: content
+// is local.
 //
 // Walks pages in path order starting AFTER `cursor`. Returns the cursor to resume
-// from, or null when the brain is fully rebuilt. Each page's field rows are
-// cleared per-path rather than by one brain-wide DELETE, so a partial pass leaves
-// the pages it already did intact and re-running a slice is idempotent.
+// from, or null when the brain is fully rebuilt. Each page's rows are cleared
+// per-path rather than by one brain-wide DELETE, so a partial pass leaves the
+// pages it already did intact and re-running a slice is idempotent.
 async function rebuildDerivedFromStore(
 	db: D1Database,
 	brainId: string,
@@ -326,9 +332,22 @@ async function rebuildDerivedFromStore(
 				.prepare(`UPDATE brain_pages SET title = ?3 WHERE brain_id = ?1 AND path = ?2`)
 				.bind(brainId, r.path, pageTitle(r.path, r.content)),
 			db
+				.prepare(`DELETE FROM brain_links WHERE brain_id = ?1 AND source = ?2`)
+				.bind(brainId, r.path),
+			db
 				.prepare(`DELETE FROM brain_page_fields WHERE brain_id = ?1 AND path = ?2`)
 				.bind(brainId, r.path)
 		);
+		for (const l of parseLinks(r.content)) {
+			stmts.push(
+				db
+					.prepare(
+						`INSERT OR REPLACE INTO brain_links (brain_id, source, raw_target, kind, cnt)
+						 VALUES (?1, ?2, ?3, ?4, ?5)`
+					)
+					.bind(brainId, r.path, l.rawTarget, l.kind, l.cnt)
+			);
+		}
 		for (const f of fieldRowsOf(r.content, config)) {
 			stmts.push(
 				db
@@ -497,7 +516,7 @@ export interface ResolvedGraph {
 }
 
 // Pull the brain's pages + raw links and resolve every link against the current
-// page set — markdown links via resolveRelative, [[wikilinks]] via slug/title,
+// page set — markdown links via resolveRelative, [[wikilinks]] by path/filename/title,
 // exactly as the live scan did. Two D1 queries, then in-memory resolution; no
 // GitHub content fetch. This is the shared primitive behind graph / backlinks /
 // validate.
@@ -517,8 +536,7 @@ export async function loadResolvedGraph(
 
 	const pages = pagesRes.results.map((r) => ({ path: r.path, title: r.title ?? deslug(r.path) }));
 	const pathSet = new Set(pages.map((p) => p.path));
-	const bySlug = new Map(pages.map((p) => [slugOf(p.path), p.path]));
-	const byTitle = new Map(pages.map((p) => [p.title.trim().toLowerCase(), p.path]));
+	const wikiIndex = buildWikilinkIndex(pages);
 
 	const edges: ResolvedEdge[] = [];
 	const broken: BrokenLink[] = [];
@@ -532,8 +550,10 @@ export async function loadResolvedGraph(
 			else if (isContentPath(target, config))
 				broken.push({ source: l.source, rawTarget: l.raw_target, kind, target });
 		} else {
-			const target =
-				bySlug.get(slugify(l.raw_target)) ?? byTitle.get(l.raw_target.trim().toLowerCase());
+			// [[#Section]] is an anchor within the linking page — nothing to resolve,
+			// and not a broken link either.
+			if (!wikilinkKey(wikilinkTargetName(l.raw_target))) continue;
+			const target = resolveWikilink(wikiIndex, l.raw_target);
 			if (target) edges.push({ source: l.source, target, kind, cnt: l.cnt });
 			else broken.push({ source: l.source, rawTarget: l.raw_target, kind });
 		}

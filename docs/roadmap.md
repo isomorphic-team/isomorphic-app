@@ -629,7 +629,7 @@ and unbounded, so these are optimizations or new surfaces):
 ~~Obsidian-style graph of pages as nodes and wikilinks/markdown-links as edges.~~
 **Built.** Server tool `view_graph` (`src/tools/apps.ts`) builds the adjacency
 list from the SAME link extraction as `validate` / `find_inbound_links` (markdown
-links via `resolveRelative`, wikilinks via slug/title), deduped undirected,
+links via `resolveRelative`, wikilinks by path/filename/title), deduped undirected,
 nodes carrying a `degree`. Returns `{ view:'graph', nodes, edges, focus?, truncated }`
 in `structuredContent`. Rendered by `GraphView` (`app/main.tsx`), a dependency-free
 canvas force layout (O(n²) springs, fine at the scan ceiling): repulsion +
