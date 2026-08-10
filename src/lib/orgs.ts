@@ -1127,6 +1127,29 @@ export function matchOrg(
 	return {};
 }
 
+// A suspended org the person belongs to. Exists only to tell "you have no org yet"
+// apart from "your org is suspended", which listAccessibleOrgs cannot answer because
+// it drops suspended rows. That filter is right for choosing an org to act in and
+// dangerous at the empty case: without this, a member of one suspended org looks
+// brand new and gets auto-provisioned a fresh personal org instead of being told why
+// theirs stopped working.
+export async function firstSuspendedOrg(db: D1Database, userIds: string[]): Promise<Org | null> {
+	if (userIds.length === 0) return null;
+	const placeholders = userIds.map((_, i) => `?${i + 1}`).join(', ');
+	return await db
+		.prepare(
+			`SELECT o.*
+			   FROM memberships m
+			   JOIN orgs o ON o.org_id = m.org_id
+			  WHERE m.user_id IN (${placeholders})
+			    AND o.suspended_at IS NOT NULL
+			  ORDER BY o.created_at ASC, o.org_id ASC
+			  LIMIT 1`
+		)
+		.bind(...userIds)
+		.first<Org>();
+}
+
 // Which org an org-scope action lands in. Pure, and split out of the Worker's
 // orgContext so the rule can be tested: it decides where a new brain gets WRITTEN, and
 // what it replaced was a `SELECT ... LIMIT 1` with no ORDER BY, so a person in two orgs
@@ -1151,6 +1174,32 @@ export function chooseOrg(
 		);
 	}
 	return orgs.find((o) => o.org.org_id === opts.activeOrgId) ?? orgs[0];
+}
+
+// The whole org-selection decision for a person, in one function a test can drive
+// against a real database. The Worker's orgContext wraps this with token minting and
+// first-touch provisioning; keeping the decision here is what makes the empty case
+// testable, and the empty case is where the subtle bug lives (see firstSuspendedOrg).
+//
+// Returns null ONLY for a person with no membership anywhere, which is the caller's
+// signal to provision. Every other failure throws with a caller-facing message.
+//
+// `activeOrgId` is a THUNK, not a value: resolving where the caller is working costs a
+// query, and it is pointless when a handle was named or there is only one org. The
+// caller should not have to know that, so the skipping decision lives here.
+export async function resolveOrgForPerson(
+	db: D1Database,
+	userIds: string[],
+	opts: { org?: string; activeOrgId?: () => Promise<string | undefined> } = {}
+): Promise<AccessibleOrg | null> {
+	const orgs = await listAccessibleOrgs(db, userIds);
+	if (orgs.length === 0) {
+		const suspended = await firstSuspendedOrg(db, userIds);
+		if (suspended) throw new Error(`Org ${suspended.org_id} is suspended. Contact your admin.`);
+		return null;
+	}
+	const activeOrgId = !opts.org && orgs.length > 1 ? await opts.activeOrgId?.() : undefined;
+	return chooseOrg(orgs, { org: opts.org, activeOrgId });
 }
 
 // Resolve a caller-supplied `brain` handle against what they can access. Matches (in

@@ -45,12 +45,11 @@ import {
 	linkedUserIds,
 	getAppUserByGithubUserId,
 	listAccessibleOrgs,
-	chooseOrg,
+	resolveOrgForPerson,
 	matchBrain,
 	brainLabel,
 	brainLabelQualified,
 	type AccessibleBrain,
-	type AccessibleOrg,
 	type Org,
 	type OrgScope,
 	type Role,
@@ -375,14 +374,13 @@ class McpSession {
 		return linkedUserIds(this.env.PLATFORM_DB, userId);
 	}
 
-	// The org holding the connection's active brain, when the caller belongs to it.
-	// Lets an org-scope action default to where the user is already working instead of
-	// to whichever org happens to sort first.
-	private async orgOfActiveBrain(orgs: AccessibleOrg[]): Promise<AccessibleOrg | undefined> {
+	// The org holding the connection's active brain. Lets an org-scope action default
+	// to where the user is already working instead of to whichever org sorts first.
+	// Called lazily by resolveOrgForPerson, which skips it when it cannot matter.
+	private async activeBrainOrgId(): Promise<string | undefined> {
 		if (!this.activeBrainId) return undefined;
 		const brains = await this.listAccessibleBrainsForCaller();
-		const orgId = brains.find((b) => b.id === this.activeBrainId)?.org_id;
-		return orgId ? orgs.find((o) => o.org.org_id === orgId) : undefined;
+		return brains.find((b) => b.id === this.activeBrainId)?.org_id;
 	}
 
 	// All brains the current caller can reach (authjs path). Used by the brain tools
@@ -680,21 +678,24 @@ class McpSession {
 		// path still keyed on a single user_id, so a membership held under a linked email
 		// was unreachable here while every brain query already unioned across them. That is
 		// the account-linking asymmetry that made create_brain behave as if nothing was linked.
-		const orgs = await listAccessibleOrgs(env.PLATFORM_DB, await this.personUserIds(userId));
+		// The PERSON's orgs, and the whole selection decision, live in orgs.ts so a test
+		// can drive them against a real database (see resolveOrgForPerson). Null here
+		// means no membership anywhere, which is the one case that provisions.
+		const personIds = await this.personUserIds(userId);
+		const picked = await resolveOrgForPerson(env.PLATFORM_DB, personIds, {
+			org: opts?.org,
+			activeOrgId: () => this.activeBrainOrgId()
+		});
 		let membership: { role: Role; org: Org };
-		if (orgs.length === 0) {
-			// First touch with no org yet — create the personal org (org-only).
+		if (picked) {
+			membership = picked;
+		} else {
+			// First touch with no org at all: create the personal org (org-only).
 			const p = await this.autoProvisionOrg(userId, email);
 			membership = { role: p.role, org: p.org };
 			if (membership.org.suspended_at) {
 				throw new Error(`Org ${membership.org.org_id} is suspended. Contact your admin.`);
 			}
-		} else {
-			// Resolving the active brain's org costs a query, so it is skipped when a handle
-			// was named (it wins anyway) or there is only one org to choose between.
-			const activeOrgId =
-				!opts?.org && orgs.length > 1 ? (await this.orgOfActiveBrain(orgs))?.org.org_id : undefined;
-			membership = chooseOrg(orgs, { org: opts?.org, activeOrgId });
 		}
 		assertRole(membership.role, opts?.requires);
 		const octokit = await installationOctokit(appCreds(env), membership.org.installation_id);
