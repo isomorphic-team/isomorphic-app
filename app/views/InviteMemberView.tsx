@@ -7,7 +7,7 @@ import { toast } from '../core/toast.tsx';
 import { PeopleIcon } from '../core/icons.tsx';
 import { RoleSelect, ROLE_BLURB } from '../components/RoleSelect.tsx';
 import { defineView } from '../core/view-registry.ts';
-import { Button, Input, Flow } from '../ui/index.ts';
+import { Button, Input, Flow, submitOnEnter } from '../ui/index.ts';
 
 // Invite someone to the org. Opened from the Members screen's header action.
 //
@@ -51,7 +51,7 @@ function InviteMemberView() {
 						>
 							Cancel
 						</Button>
-						<Button type="submit" disabled={busy || !email.trim()} class="text-sm">
+						<Button type="button" onClick={submit} disabled={busy || !email.trim()} class="text-sm">
 							{busy ? 'Sending…' : 'Send invite'}
 						</Button>
 					</>
@@ -62,6 +62,7 @@ function InviteMemberView() {
 					<Input
 						// eslint-disable-next-line
 						autofocus
+						onKeyDown={submitOnEnter(submit)}
 						type="email"
 						required
 						value={email}

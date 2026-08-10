@@ -12,7 +12,7 @@
 export { cn } from './cn.ts';
 export { Button, type ButtonProps } from './Button.tsx';
 export { List, ListRow, listRowTitle, type ListRowProps } from './List.tsx';
-export { Flow, FlowNote, type FlowProps } from './Flow.tsx';
+export { Flow, FlowNote, submitOnEnter, type FlowProps } from './Flow.tsx';
 export {
 	eyebrow,
 	viewTitle,

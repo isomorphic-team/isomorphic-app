@@ -7,7 +7,7 @@ import { openBrains, submitCreateBrain, finishAddBrain } from '../core/actions.t
 import { toast } from '../core/toast.tsx';
 import { BrainGlyph, GithubIcon, PlusIcon } from '../core/icons.tsx';
 import { defineView } from '../core/view-registry.ts';
-import { Button, Input, List, Flow, FlowNote } from '../ui/index.ts';
+import { Button, Input, List, Flow, FlowNote, submitOnEnter } from '../ui/index.ts';
 
 // Add a brain — the ONE way a brain joins this workspace, by either of its two
 // sources:
@@ -154,7 +154,12 @@ function AddBrainView({ orgs, first }: { orgs: OrgTarget[]; first: boolean }) {
 							{/* On the very first brain there is nothing to go back to and no
 							    alternative source, so the only button is the affirmative one. */}
 							{!first && cancel}
-							<Button type="submit" disabled={busy || !name.trim()} class="text-sm">
+							<Button
+								type="button"
+								onClick={create}
+								disabled={busy || !name.trim()}
+								class="text-sm"
+							>
 								{busy ? 'Creating…' : 'Create brain'}
 							</Button>
 						</>
@@ -166,6 +171,7 @@ function AddBrainView({ orgs, first }: { orgs: OrgTarget[]; first: boolean }) {
 							type="text"
 							// eslint-disable-next-line
 							autofocus
+							onKeyDown={submitOnEnter(create)}
 							value={name}
 							placeholder="e.g. Personal, Project Atlas"
 							disabled={busy}
