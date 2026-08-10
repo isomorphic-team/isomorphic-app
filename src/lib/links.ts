@@ -15,15 +15,19 @@
 // this link pointing at?" calls it too, and they cannot drift.
 
 import { resolveRelative } from './wiki.ts';
-import { isAssetPath, isContentPath, isSourcePath, type PathPolicy } from './brain-policy.ts';
+import { isContentFilePath, isContentPath, isSourcePath, type PathPolicy } from './brain-policy.ts';
 
 export type MdLinkKind =
 	// Points at a known content page: a real edge in the graph.
 	| 'page'
-	// Points at an attachment (image, PDF) under content. A real reference too, but
-	// kept apart: the graph view draws nodes from pages, so an asset in that list
-	// would be an edge to a node the renderer has no data for.
-	| 'asset'
+	// Points at a non-page FILE under content — an image, a PDF, a spreadsheet. A real
+	// reference too, but kept apart: the graph view draws nodes from pages, so one of
+	// these in that list would be an edge to a node the renderer has no data for.
+	//
+	// Deliberately every non-page content file, not just the types the app can render.
+	// Narrowing it to the media allowlist is what forced delete_page to grow a second,
+	// parallel way to find inbound references for everything else.
+	| 'file'
 	// Points at a content page that does not exist. This is what `validate` reports.
 	| 'broken'
 	// Everything we deliberately say nothing about: external URLs, anchors, source
@@ -59,7 +63,7 @@ export function classifyMdLink(
 	if (!target) return { kind: 'ignore' };
 
 	if (!target.endsWith('.md')) {
-		return { kind: isAssetPath(target, cfg) ? 'asset' : 'ignore', target };
+		return { kind: isContentFilePath(target, cfg) ? 'file' : 'ignore', target };
 	}
 	// Source material is not indexed, so a link into it is not broken.
 	if (isSourcePath(target, cfg)) return { kind: 'ignore', target };

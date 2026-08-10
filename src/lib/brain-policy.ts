@@ -181,8 +181,20 @@ export function isContentPath(path: string, cfg: PathPolicy): boolean {
 // The media-type check is what keeps this from claiming arbitrary repo files: a
 // stray `.yml` or `LICENSE` under wiki/ is neither a page nor an attachment.
 export function isAssetPath(path: string, cfg: PathPolicy): boolean {
+	return isContentFilePath(path, cfg) && isMediaPath(path);
+}
+
+// The broader predicate: a file under content that ISN'T a page, whatever its type.
+// isAssetPath is this plus the media allowlist, because the app only offers to
+// render and upload types it can handle.
+//
+// Link classification needs the wider net. Deleting a linked `.csv` breaks the page
+// linking to it exactly as deleting a `.png` does, and "we have no viewer for this
+// type" is no reason to stay quiet about it. Keeping the two apart is what left
+// delete_page with a second, parallel way to find inbound references.
+export function isContentFilePath(path: string, cfg: PathPolicy): boolean {
 	if (path.endsWith('.md') || isHiddenName(path)) return false;
-	return roleOf(path, cfg) === 'content' && isMediaPath(path);
+	return roleOf(path, cfg) === 'content';
 }
 
 // The display predicate: a dotfile/dot-folder name ("hidden by convention", e.g.

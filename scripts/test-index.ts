@@ -389,7 +389,8 @@ console.log('\nContent index — bounded, resumable ensureFresh\n');
 				'',
 				'![The logo](./assets/logo.png)',
 				'A [real page](../index.md) and a [missing one](./nope.md).',
-				'A [source doc](../../raw/notes.txt) too.'
+				'A [source doc](../../raw/notes.txt) too.',
+				'And a [spreadsheet](./data/pricing.csv) the app cannot render.'
 			].join('\n')
 		},
 		{
@@ -405,13 +406,13 @@ console.log('\nContent index — bounded, resumable ensureFresh\n');
 	const asset = 'wiki/vendors/assets/logo.png';
 	check(
 		'image link is recorded as an asset edge',
-		g.assetEdges.some((e) => e.source === 'wiki/vendors/acme.md' && e.target === asset),
-		JSON.stringify(g.assetEdges)
+		g.fileEdges.some((e) => e.source === 'wiki/vendors/acme.md' && e.target === asset),
+		JSON.stringify(g.fileEdges)
 	);
 	check(
 		'a second page referencing it is recorded too',
-		g.assetEdges.filter((e) => e.target === asset).length === 2,
-		JSON.stringify(g.assetEdges)
+		g.fileEdges.filter((e) => e.target === asset).length === 2,
+		JSON.stringify(g.fileEdges)
 	);
 	// The graph view builds nodes from `pages` and degree from `edges`; an asset in
 	// that list would be a link to a node the renderer has no data for.
@@ -437,12 +438,32 @@ console.log('\nContent index — bounded, resumable ensureFresh\n');
 		JSON.stringify(g.broken)
 	);
 	// Regression guard on the pre-existing rule: source material is not indexed, so a
-	// link into raw/ is not broken either, and must not have become an asset edge.
+	// link into raw/ is not broken either, and must not have become a file edge.
 	check(
-		'a link into source material is neither broken nor an asset',
+		'a link into source material is neither broken nor a file edge',
 		!g.broken.some((b) => b.target?.startsWith('raw/')) &&
-			!g.assetEdges.some((e) => e.target.startsWith('raw/')),
-		JSON.stringify({ broken: g.broken, assetEdges: g.assetEdges })
+			!g.fileEdges.some((e) => e.target.startsWith('raw/')),
+		JSON.stringify({ broken: g.broken, fileEdges: g.fileEdges })
+	);
+	// A non-page file the APP cannot render is still a file the brain can lose. This
+	// is the case that fell between the two implementations: the media allowlist said
+	// "not an asset" and dropped it, while delete_page's separate query found it. One
+	// rule now, so deleting a linked .csv warns exactly as deleting a .png does.
+	const csv = 'wiki/vendors/data/pricing.csv';
+	check(
+		'a link to a non-media content file is a file edge too',
+		g.fileEdges.some((e) => e.target === csv),
+		JSON.stringify(g.fileEdges)
+	);
+	check(
+		'and backlinksTo finds it',
+		backlinksTo(g, csv).some((r) => r.path === 'wiki/vendors/acme.md'),
+		JSON.stringify(backlinksTo(g, csv))
+	);
+	check(
+		'while staying out of the page edge list',
+		!g.edges.some((e) => e.target === csv),
+		JSON.stringify(g.edges)
 	);
 
 	// The payoff: this is the call move_page and delete_page make.

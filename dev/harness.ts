@@ -873,7 +873,7 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
 				// itself calls; the harness only supplies the page set.
 				for (const m of content.matchAll(/\]\(([^)]+)\)/g)) {
 					const c = classifyMdLink(p, m[1], DEFAULT_BRAIN_CONFIG, (q) => q in pg);
-					if ((c.kind === 'page' || c.kind === 'asset') && c.target === path) mdCount++;
+					if ((c.kind === 'page' || c.kind === 'file') && c.target === path) mdCount++;
 				}
 				for (const m of content.matchAll(/\[\[([^\]|]+)(?:\|[^\]]*)?\]\]/g)) {
 					const t = m[1].trim();

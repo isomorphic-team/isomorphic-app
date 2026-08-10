@@ -59,7 +59,6 @@ import {
 	type PageFields,
 	type BrokenLink,
 	ensureFresh,
-	inboundFileRefs,
 	loadResolvedGraph,
 	backlinksTo,
 	searchIndex,
@@ -1102,11 +1101,14 @@ async function moveFileWrite(
 // this, a path like "wiki/assets/logo.png" routed to the FOLDER deleter and came
 // back as "No folder found" about a file that existed.
 //
-// Inbound references are checked differently to a page's. A link to a non-page file
-// is not an edge in the resolved page graph, so inboundRefs cannot see it, and
-// deleting an embedded image would otherwise break every page showing it in silence.
+// Inbound references come from the SAME inboundRefs the page deleter uses. They used
+// to need a separate query, because a link to a non-page file was not an edge in the
+// resolved graph — now it is one (fileEdges), so the parallel implementation is gone.
+// That matters beyond tidiness: the two disagreed. inboundRefs also drops references
+// from tool-maintained files, so the changelog's own mention of a path no longer
+// counts as a page that would lose something.
 async function deleteFileWrite(ctx: BrainContext, head: Head, args: { path: string }) {
-	const { store, repoArgs, config, author, db, brainId } = ctx;
+	const { store, repoArgs, config, author } = ctx;
 	const path = args.path.trim().replace(/^\/+/, '');
 	if (isSourcePath(path, config))
 		return fail(`"${path}" is source material — it can't be deleted.`);
@@ -1114,8 +1116,7 @@ async function deleteFileWrite(ctx: BrainContext, head: Head, args: { path: stri
 	if (!isContentPath(path, config))
 		return fail(`"${path}" is outside this brain's editable content.`);
 
-	const { truncated } = await ensureFresh(db, store, repoArgs, brainId, config);
-	const refs = await inboundFileRefs(db, brainId, path);
+	const { refs, truncated } = await inboundRefs(ctx, [path]);
 
 	const today = todayIso();
 	const writes: { path: string; content: string }[] = [];
@@ -1145,7 +1146,7 @@ async function deleteFileWrite(ctx: BrainContext, head: Head, args: { path: stri
 	const refNote = refs.length
 		? `\n\nHeads up — ${refs.length} page(s) still link to it:\n${refs
 				.slice(0, 20)
-				.map((p) => `- ${p}`)
+				.map((r) => `- ${r.path} (${r.count} link(s))`)
 				.join('\n')}${refs.length > 20 ? `\n…and ${refs.length - 20} more.` : ''}`
 		: '';
 	return landed(
