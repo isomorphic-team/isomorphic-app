@@ -336,7 +336,7 @@ check(
 // from either, which is what identity linking means.
 sqlite.exec(`
   INSERT INTO orgs (org_id, name, model, installation_id, brain_owner, github_org_login, created_by, created_at)
-    VALUES ('org2', 'The AI Lab', 'customer', 2, 'the-ai-laboratory', 'the-ai-laboratory', 'dave-work', '2026-04-01');
+    VALUES ('org2', 'Contoso Group', 'customer', 2, 'contoso-io', 'contoso-io', 'dave-work', '2026-04-01');
   INSERT INTO orgs (org_id, name, model, installation_id, brain_owner, created_by, created_at, suspended_at)
     VALUES ('org3', 'Dormant', 'customer', 3, 'dormant', 'dave-work', '2026-05-01', '2026-06-01');
   INSERT INTO app_users (user_id, email, name, person_id) VALUES
@@ -388,10 +388,10 @@ check(
 
 console.log('\nmatchOrg: naming an org the way a human would');
 const daveOrgs = await listAccessibleOrgs(db, await linkedUserIds(db, 'dave-home'));
-check('by display name', matchOrg(daveOrgs, 'The AI Lab').org?.org.org_id === 'org2');
-check('case-insensitively', matchOrg(daveOrgs, 'the ai lab').org?.org.org_id === 'org2');
-check('by GitHub owner', matchOrg(daveOrgs, 'the-ai-laboratory').org?.org.org_id === 'org2');
-check('by substring', matchOrg(daveOrgs, 'northwind').org?.org.org_id === 'org1');
+check('by display name', matchOrg(daveOrgs, 'Contoso Group').org?.org.org_id === 'org2');
+check('case-insensitively', matchOrg(daveOrgs, 'contoso group').org?.org.org_id === 'org2');
+check('by GitHub owner', matchOrg(daveOrgs, 'contoso-io').org?.org.org_id === 'org2');
+check('by substring', matchOrg(daveOrgs, 'ontoso').org?.org.org_id === 'org2');
 check('a miss returns neither an org nor candidates', !matchOrg(daveOrgs, 'acme').org);
 check('an empty handle never silently picks one', !matchOrg(daveOrgs, '   ').org);
 
@@ -404,10 +404,10 @@ const threw = (fn: () => unknown) => {
 		return true;
 	}
 };
-check('a named handle wins', chooseOrg(daveOrgs, { org: 'The AI Lab' }).org.org_id === 'org2');
+check('a named handle wins', chooseOrg(daveOrgs, { org: 'Contoso Group' }).org.org_id === 'org2');
 check(
 	'...over the org the caller is working in',
-	chooseOrg(daveOrgs, { org: 'The AI Lab', activeOrgId: 'org1' }).org.org_id === 'org2'
+	chooseOrg(daveOrgs, { org: 'Contoso Group', activeOrgId: 'org1' }).org.org_id === 'org2'
 );
 check(
 	'with no handle, the org the caller is working in wins',

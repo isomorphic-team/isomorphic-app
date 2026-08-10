@@ -63,6 +63,18 @@ semantics end to end:
   folder (e.g. `concepts`) → the file icon creates one, pre-seeded with a
   directory view.
 
+### Adding a brain, including into an org that holds none
+
+`/#brains` → **Add a brain** → **Connect an existing repo**. The org list comes from
+the `orgs` field on the `brains` payload, not from the brains themselves, so it
+includes **Contoso Group**: an org with **no brains at all**, holding one connectable
+repo (`contoso-io/field-guide`). That org is the case worth clicking. It cannot be
+derived from a list of brains, and connecting its first repo is the flow that used to
+be impossible, because the target org was named by naming a brain already inside it.
+
+Picking it and adopting the repo should land you in the new brain. If Contoso Group is
+missing from the picker, the payload lost its `orgs` field.
+
 ### Brain sharing demo (per-brain access)
 
 `/#access` opens the sharing panel for the active brain, and the **Share** control

@@ -247,7 +247,7 @@ function toolsFor(p: Persona): Map<string, Handler> {
 		listOrgs: async () =>
 			[
 				{ org_id: 'org1', name: 'Northwind', brain_owner: 'northwind' },
-				{ org_id: 'org2', name: 'The AI Lab', brain_owner: 'the-ai-lab' }
+				{ org_id: 'org2', name: 'Contoso Group', brain_owner: 'contoso-io' }
 			].map((o) => ({
 				role: p.orgRole,
 				org: {
@@ -340,19 +340,19 @@ async function askFrom(tool: string, args: Record<string, unknown>) {
 
 const connectAsk = await askFrom('connect_brain', {
 	repo: 'northwind/newrepo',
-	org: 'The AI Lab'
+	org: 'Contoso Group'
 });
 check(
 	'connect_brain forwards `org` to orgContext',
-	connectAsk?.org === 'The AI Lab',
+	connectAsk?.org === 'Contoso Group',
 	`got ${JSON.stringify(connectAsk)}`
 );
 check('...and still gates it at admin', connectAsk?.requires === 'admin');
 
-const createAsk = await askFrom('create_brain', { name: 'Scratch', org: 'The AI Lab' });
+const createAsk = await askFrom('create_brain', { name: 'Scratch', org: 'Contoso Group' });
 check(
 	'create_brain forwards `org` to orgContext',
-	createAsk?.org === 'The AI Lab',
+	createAsk?.org === 'Contoso Group',
 	`got ${JSON.stringify(createAsk)}`
 );
 check('...and still gates it at editor', createAsk?.requires === 'editor');

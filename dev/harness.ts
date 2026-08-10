@@ -22,7 +22,7 @@ import { DEFAULT_BRAIN_CONFIG, isContentPath } from '../src/lib/brain-policy.ts'
 import { renderViews, stripSnapshots, hasViews, type ViewContext } from '../src/lib/views.ts';
 // The REAL per-brain access rule (pure, no D1) so the sharing preview resolves
 // exactly like prod: org visibility + explicit grants + the org-admin floor.
-import { effectiveBrainRole, roleLabel, type Role } from '../src/lib/orgs.ts';
+import { effectiveBrainRole, roleLabel, roleAtLeast, type Role } from '../src/lib/orgs.ts';
 import {
 	dayKey,
 	shiftDay,
@@ -357,12 +357,42 @@ let brainGrants: Record<string, Record<string, PreviewRole>> = {
 	'acme-co/acme-wiki': {},
 	'northwind/northwind-wiki': { 'u-me': 'viewer' }
 };
+// The orgs I belong to, which is NOT the same list as the orgs my brains are in.
+// `org-empty` holds no brain at all, and that is the point: it cannot be derived from
+// brainsFixture, so it is the case that proves the picker reads the server's org list
+// (the `orgs` field on the brains payload) rather than deriving one. It is also the
+// only org where "connect the first repo" can be exercised end to end. Mirrors
+// listAccessibleOrgs on the server.
+let orgsFixture = [
+	{
+		orgId: 'org-personal',
+		orgLabel: 'Personal',
+		owner: 'your-org',
+		orgRole: 'owner' as PreviewRole
+	},
+	{ orgId: 'org-acme', orgLabel: 'Acme', owner: 'acme-co', orgRole: 'admin' as PreviewRole },
+	{
+		orgId: 'org-northwind',
+		orgLabel: 'Northwind',
+		owner: 'northwind',
+		orgRole: 'viewer' as PreviewRole
+	},
+	{
+		orgId: 'org-empty',
+		orgLabel: 'Contoso Group',
+		owner: 'contoso-io',
+		orgRole: 'admin' as PreviewRole
+	}
+];
+
 // Repos the "installation" can see that aren't brains yet — the connect_brain picker.
 let connectableRepos = [
 	{ id: 'acme-co/content-dist', owner: 'acme-co', repo: 'content-dist' },
 	// Under the personal org, so the picker's step 1 (choose an org) has two live
 	// branches rather than one that dead-ends in the empty state.
-	{ id: 'your-org/notes-archive', owner: 'your-org', repo: 'notes-archive' }
+	{ id: 'your-org/notes-archive', owner: 'your-org', repo: 'notes-archive' },
+	// Under the BRAINLESS org, so connecting a first repo into one is reachable here.
+	{ id: 'contoso-io/field-guide', owner: 'contoso-io', repo: 'field-guide' }
 ];
 let activeBrainId = brainsFixture[0].id;
 // The active brain's content — used by the host chrome (initial render + page selector),
@@ -442,6 +472,12 @@ function brainsResult(msg: string, withView: boolean): CallToolResult {
 	const sc: Record<string, unknown> = {
 		brains: brainRows(),
 		active: activeBrainId,
+		// The orgs a brain can be added to, admin+ only, exactly as the server sends
+		// them. The add-a-brain picker reads this rather than deriving orgs from the
+		// brains above, which is the only way an org holding no brains can be offered.
+		orgs: orgsFixture
+			.filter((o) => roleAtLeast(o.orgRole, 'admin'))
+			.map((o) => ({ orgId: o.orgId, orgLabel: o.orgLabel })),
 		// What the server registered. On here so the harness previews the nav with
 		// the Analytics row present; a real deployment sends false unless
 		// USAGE_ANALYTICS is set.
@@ -509,7 +545,17 @@ function viewCtxFor(pg: Record<string, string>): ViewContext {
 				const { frontmatter } = parseFrontmatter(pg[p] ?? '');
 				if (!frontmatter) continue;
 				const fields = new Map<string, string[]>();
-				for (const [k, v] of Object.entries(frontmatter)) fields.set(k, Array.isArray(v) ? v : [v]);
+				for (const [k, v] of Object.entries(frontmatter)) {
+					// Nested frontmatter is preserved verbatim but deliberately NOT indexed
+					// on the server, so an okf-view filter cannot see inside it. Skipping
+					// non-scalars here keeps the preview honest about that.
+					if (typeof v === 'string') fields.set(k, [v]);
+					else if (Array.isArray(v))
+						fields.set(
+							k,
+							v.filter((x) => typeof x === 'string')
+						);
+				}
 				out.set(p, fields);
 			}
 			return out;
@@ -959,12 +1005,18 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
 				structuredContent: { repos: connectableRepos }
 			};
 		case 'connect_brain': {
+			// Targeted by ORG, never by a brain inside it: an org with no brains has none
+			// to name, and that is exactly the org a first repo is being connected into.
+			// Falls back to the active brain's org, matching orgContext's default.
+			const q = String(args?.org ?? '').toLowerCase();
+			const activeOrgId = brainsFixture.find((b) => b.id === activeBrainId)?.orgId;
 			const org =
-				brainsFixture.find((b) => b.id === String(args?.brain ?? activeBrainId)) ??
-				brainsFixture[0];
-			// An org owns the repos under its GitHub owner (brain ids are `owner/repo`),
-			// so the picker is scoped the way the real installation would be.
-			const owner = org.id.split('/')[0];
+				orgsFixture.find((o) => o.orgId.toLowerCase() === q || o.orgLabel.toLowerCase() === q) ??
+				orgsFixture.find((o) => o.orgId === activeOrgId) ??
+				orgsFixture[0];
+			// An org owns the repos under its GitHub owner, so the picker is scoped the
+			// way the real installation would be.
+			const owner = org.owner;
 			const candidates = connectableRepos.filter((x) => x.owner === owner);
 			// NO `repo` ARG → return the connectable candidates instead of adopting. This
 			// branch was missing, so the add-a-brain picker's first call fell through to
