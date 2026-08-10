@@ -508,6 +508,11 @@ async function fetchPaths(): Promise<BrowseData> {
 	// apply the path policy here or the tree keeps whatever policy the last
 	// host-initiated result left behind (a different brain's, or the wiki/ default).
 	applyPolicy(sc);
+	// Same reasoning, and it is what keeps the trail's root crumb honest: this call can
+	// be the FIRST thing the app does (the self-boot in connectToHost, when no tool
+	// result opened the widget), in which case nothing else has said which brain the
+	// tree belongs to and the crumb would name a view instead of a brain.
+	applyBrainContext(sc);
 	const paths = firstText(result)
 		.split('\n')
 		.map((l) => l.trim())

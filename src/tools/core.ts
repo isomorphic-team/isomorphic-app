@@ -36,7 +36,7 @@ export function registerCoreTools(
 			}
 		},
 		async ({ prefix, brain }) => {
-			const { store, repoArgs, config, db, brainId } = await getContext({ brain });
+			const { store, repoArgs, config, db, brainId, activeBrain } = await getContext({ brain });
 
 			// No prefix = "the brain's editable content", which is exactly what the
 			// index holds — serve it from there (instant) and attach each page's title
@@ -70,7 +70,21 @@ export function registerCoreTools(
 					// so the path policy has to ride along — otherwise the tree paints the
 					// new brain with the previous brain's roles: every folder outside the
 					// stale content root reads as hidden and every page reads as locked.
-					structuredContent: { pages, hidden, needsConfig, config: pathPolicyOf(config) }
+					//
+					// `activeBrain` rides along for the same reason, and it is the one every
+					// app tool already carries: this is the ONLY tool that can draw the whole
+					// file tree, so a payload without it leaves the app rendering a brain's
+					// contents while unable to name the brain. The widget reaches this tool
+					// directly (its own navigation, and the 1200ms self-boot when no tool
+					// result opened it), so nothing else is guaranteed to have said which
+					// brain this is.
+					structuredContent: {
+						pages,
+						hidden,
+						needsConfig,
+						config: pathPolicyOf(config),
+						activeBrain
+					}
 				};
 			}
 
