@@ -1,6 +1,6 @@
 # Design: the seam between brains
 
-- Status: Draft for discussion. Nothing built. Open questions in §12 are unresolved.
+- Status: Draft for discussion. Nothing built. Open questions in §13 are unresolved.
 - Author: Jon Hansing (via Claude)
 - Date: 2026-08-10
 - Audience: the engineering session that picks this up, and Jon deciding whether it should exist
@@ -49,9 +49,9 @@ Flows 1 and 2 look alike and are not. The discriminating question is not "which 
 but **who needs it**:
 
 - **"I need to find it."** The reader is the same person, who already has access to both brains.
-  Nothing needs to move. What is missing is a **read** that spans a person's brains: cross-brain
-  search, and cross-brain wikilinks. Copying to solve this is strictly worse: it creates a second
-  copy that drifts, for a reader who could have read the original.
+  Nothing needs to move. What is missing is a **read** that spans a person's brains. Copying to
+  solve this is strictly worse: it creates a second copy that drifts, for a reader who could have
+  read the original.
 - **"Someone who cannot reach my brain needs to see it."** The reader is a client, and the client
   cannot and must not read the personal brain. Content must physically cross into a repository
   they can read. This is **publishing**, and it is the only case where copying is the right answer.
@@ -63,8 +63,8 @@ across a boundary they already have, unless the client is meant to see them too.
 Naming the mechanism **publication** rather than **sync** keeps this straight, and puts the
 question that actually matters (who is now able to read this) in the name of the feature.
 
-The rest of this document is about publishing. Cross-brain read is a separate, probably cheaper,
-probably higher-value piece of work, sketched in §11.
+The rest of this document is about publishing. Cross-brain read is separate, smaller, and
+probably higher-value work, and most of its mechanism already ships: see §11.
 
 ## 4. Hard constraints
 
@@ -262,7 +262,89 @@ are the reason to be careful rather than fast:
 - **A dry run is the default.** Same as `sync_records`' proposal pattern: the first call reports
   what would cross, and applying it is a second, explicit call.
 
-## 11. What we reuse, what is new, and what this is not
+## 11. Cross-brain read and write: most of it already ships
+
+§3 sends the "I need to find it" half of the problem here. Verified in source, the mechanism
+already exists and the gap is narrower than it looks.
+
+**Every content tool already takes an optional `brain`.** `read_page`, `list_pages`,
+`search_pages`, `find_inbound_links`, `validate`, `write_page`, `move_page` and `delete_page` all
+carry `brainArg`, resolved by `matchBrain` against the caller's accessible set. Three properties
+that make this safe today and are worth not breaking:
+
+- **A targeted call does not move you.** `maybeStick` fires only when a tool passes `sticky`
+  (the in-client view tools and `brain_access`), so reading or writing another brain leaves the
+  active brain alone.
+- **Authorization is per brain.** Resolution runs `effectiveBrainRole` for the brain actually
+  named, so a write into another brain is checked against that brain, not the one you came from.
+- **Ambiguity is refused, not guessed.** `matchBrain` returns candidates on a multi-hit and the
+  resolver throws with the list.
+
+So "while working in the client brain, add a to-do to my personal brain" works now. So does
+reading one brain from a conversation rooted in another. **What does not exist is a single call
+that spans brains**, and that is the whole of the gap.
+
+### The three real gaps
+
+1. **Fan-out.** Every call resolves exactly one brain. At the storage layer this is nearly
+   nothing: one D1 holds every brain's index and the queries are `WHERE brain_id = ?1`. The cost
+   is freshness, not SQL. `ensureFresh` is one `branchCommitSha` per brain per read, so fanning
+   out over N brains spends N subrequests before answering. That forces a decision, and the right
+   one is: **the freshness guarantee is per brain, and only the brain you are in keeps it.**
+   Fan-out search serves the others from whatever is indexed and labels the result as such;
+   a `read_page` on any hit resolves the authoritative blob anyway. Slightly stale discovery
+   followed by a fresh read is correct behavior for a search.
+2. **Discoverability.** The capability is invisible rather than absent. `SERVER_INSTRUCTIONS` is
+   emitted only in the `initialize` result and is therefore fixed for the life of a connection, so
+   it cannot enumerate a caller's brains; `brains` returns them but is only called when something
+   prompts it. This is the `read_page` / `view_page` description failure in another costume: a
+   capability an agent does not find by name does not exist.
+3. **Attribution in results.** A fan-out result set that does not say which brain each hit came
+   from will get one client's material quoted into another client's conversation. Every row must
+   name its brain.
+
+### The risk here is conversational, not mechanical
+
+Publishing moves bytes into a repository someone else controls: one-time, auditable, irreversible,
+and it changes who is _able_ to read. Cross-brain read moves nothing and grants nobody access, so
+it reads as safe. The leak channel is different in kind: a conversation rooted in one client's
+brain surfaces another engagement's material, the model writes it into a reply, and a human pastes
+that reply somewhere. Nothing was published; the leak went through the human.
+
+Mitigations, in order of value:
+
+- **Every result names its brain** (gap 3 above). Cheap, and it is the one that matters.
+- **A per-brain opt-out from fan-out** in `.isomorphic.json`. A client brain almost certainly
+  wants it; a personal brain probably does.
+- **Fan-out is opt-in per call, never ambient.** The default stays the active brain, so an
+  ordinary conversation keeps an ordinary blast radius.
+
+### Write fans out over nothing
+
+Cross-brain read fanning out is a convenience. Cross-brain write fanning out is a bulk operation
+whose blast radius crosses organizations and is invisible in the transcript. This is the objection
+the roadmap already raises against `filter:`-selected bulk updates, one boundary worse. A write
+names exactly one brain, always.
+
+The residual write risk is not ambiguity (refused) but confident-and-wrong: a unique substring
+match on the wrong brain lands a real page in a real client's repository. The cheap mitigation is
+that **the write response names the brain it landed in**, so the mistake is visible in the same
+turn rather than found later.
+
+### Why this comes first
+
+Cross-brain read does not replace publishing; it shrinks it. Everything that merely needs to be
+_found_ stops needing to cross, and what remains is genuinely "a reader who cannot reach my brain
+must see this", which is a smaller and much better specified problem. Building read first tells us
+how much publishing is actually left.
+
+Deliberately excluded: **cross-brain wikilinks.** A `[[gb:Kickoff]]` means nothing to github.com
+or to any OKF consumer, which is a larger divergence than `[[wikilinks]]` already are, and a
+broken cross-brain link is indistinguishable from a permission denial. Rendering one tells a
+reader that a page exists which they are not allowed to see, and `validate` would report the same
+page broken for one reader and fine for another.
+
+## 12. What we reuse, what is new, and what this is not
 
 **Reused essentially unchanged:**
 
@@ -289,16 +371,19 @@ are the reason to be careful rather than fast:
 - Bidirectional sync. A page has exactly one home brain. Two-way traffic between two brains is two
   seams over disjoint page sets, never the same page in both. This is the PRD's out-of-scope item
   and it stays out.
-- Cross-brain search and cross-brain wikilinks. Separate work, probably cheaper, and it answers
-  the "I need to find it" half of §3 outright. Worth doing first if the real pain turns out to be
-  finding rather than publishing.
+- Cross-brain read, which is separate and smaller work that answers the "I need to find it" half
+  of §3 outright, and which should probably be built first. See §11.
 - Any notion of a shared page that lives in two brains at once.
 
-## 12. Open questions
+## 13. Open questions
 
 - **Is publishing the actual want, or is it cross-brain read?** §3 splits the motivating flows and
-  two of the three fall on the read side. If that holds, cross-brain read is the higher-value build
-  and this document describes the smaller half.
+  two of the three fall on the read side, where §11 finds the mechanism already shipped. If that
+  holds, this document describes the smaller half and should be built second.
+- **Should fan-out search be a `brain: "*"` value or its own tool?** The argument already exists on
+  every read tool, so widening its accepted values is nearly free and keeps one vocabulary. A
+  separate tool is more discoverable (§11, gap 2) at the cost of a slot on a surface that was
+  deliberately shrunk from 42 tools to 30.
 - **Where does the key come from on first publication?** Stamping a generated id into the sending
   page's frontmatter is durable and survives moves on both sides, but it means publishing writes to
   the sending brain, which is a side effect on a read-shaped act. The alternative, deriving the key
@@ -315,7 +400,7 @@ are the reason to be careful rather than fast:
   exists in the ledger for import keys and probably transfers, but it has not been thought through
   for a flow whose sender expects delivery.
 
-## 13. Rejected alternatives
+## 14. Rejected alternatives
 
 - **A shared "commons" brain that all three link into.** Moves the problem: the client still cannot
   read it, so the confidentiality boundary reappears one level up, and now three brains depend on a
