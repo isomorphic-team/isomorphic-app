@@ -825,6 +825,12 @@ try {
 		);
 	}
 	const logAfter = (await fileText('wiki/log.md')) ?? '';
+	const bullets = (s: string) => s.split('Updated fields on').length - 1;
+	check(
+		'set_fields: exactly one changelog bullet was added for three pages',
+		bullets(logAfter) - bullets(logBefore) === 1,
+		`before ${bullets(logBefore)}, after ${bullets(logAfter)}`
+	);
 	check(
 		'set_fields: one changelog line for the whole batch, not one per page',
 		logAfter.split('Updated fields on').length === 2,
