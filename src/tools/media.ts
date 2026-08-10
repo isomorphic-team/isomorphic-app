@@ -30,6 +30,7 @@ import {
 	formatBytes,
 	isModelViewable,
 	mediaTypeOf,
+	uniqueAttachmentPath,
 	validateAttachment
 } from '../lib/media.ts';
 
@@ -109,17 +110,31 @@ export function registerMediaTools(
 				return fail(`"${pagePath}" is not a page. Pass a path ending in .md, or use \`path\`.`);
 			}
 
-			const target = normalizePath(
+			const desired = normalizePath(
 				path ? path : defaultAttachmentPath(pagePath, filename.trim() || 'attachment')
 			);
 
 			// Same three guards every write tool applies, in the same order, so an
 			// attachment cannot reach somewhere a page could not.
-			if (isSourcePath(target, config))
-				return fail(`"${target}" is source material — it can't be written to.`);
-			if (isToolMaintained(target, config)) return fail(`"${target}" is maintained automatically.`);
-			if (!isContentPath(target, config))
-				return fail(`"${target}" is outside this brain's editable content.`);
+			if (isSourcePath(desired, config))
+				return fail(`"${desired}" is source material — it can't be written to.`);
+			if (isToolMaintained(desired, config))
+				return fail(`"${desired}" is maintained automatically.`);
+			if (!isContentPath(desired, config))
+				return fail(`"${desired}" is outside this brain's editable content.`);
+
+			// Never write over a file that is already there. One tree read rather than a
+			// blob read: existence is all this needs, and readBinary would pull down the
+			// whole of whatever it collided with.
+			const head = await store.getHead(repoArgs);
+			const taken = new Set(
+				(await store.listTree(repoArgs, head, { extension: '*' })).map((e) => e.path)
+			);
+			const target = uniqueAttachmentPath(desired, (p) => taken.has(p));
+			if (!target)
+				return fail(
+					`"${desired}" already exists, and so does every numbered variant of it. Give an explicit \`path\` with a different name.`
+				);
 
 			const clean = stripDataUrl(data).trim();
 			const problem = validateAttachment({ path: target, mimeType: mime_type, data: clean });
@@ -166,17 +181,28 @@ export function registerMediaTools(
 				mergeMethod: config.mergeMethod,
 				message: `Attach ${target}${appendedTo ? ` to ${appendedTo}` : ''}\n\n${formatBytes(bytes)} ${mime_type}. Logged in the same change.`,
 				writes,
+				head,
 				branchPrefix: 'isomorphic/attach',
 				prTitle: `Attach ${target}`,
 				prBody: `Add \`${target}\` (${formatBytes(bytes)})${appendedTo ? ` and reference it from \`${appendedTo}\`` : ''}. Proposed via the Isomorphic brain tools.`
 			});
 
 			const where = appendedTo ? ` and added it to "${appendedTo}"` : '';
-			return landed(
+			// Say so when the name changed. A caller that inserted a link before uploading
+			// (the editor does) is pointing at the name it asked for, and a rename it is
+			// never told about is a broken image it cannot explain.
+			const renamed =
+				target === desired
+					? ''
+					: ` It was named ${target.split('/').pop()} because ${desired.split('/').pop()} was taken.`;
+			const result = landed(
 				outcome,
-				`Stored ${target} (${formatBytes(bytes)})${where}. The change was logged.`,
-				`Proposed storing ${target} (${formatBytes(bytes)})${where}.`
+				`Stored ${target} (${formatBytes(bytes)})${where}. The change was logged.${renamed}`,
+				`Proposed storing ${target} (${formatBytes(bytes)})${where}.${renamed}`
 			);
+			// The path is the one thing a programmatic caller cannot recompute: it depends
+			// on what was already in the repo.
+			return { ...result, structuredContent: { path: target, bytes, mimeType: mime_type } };
 		}
 	);
 

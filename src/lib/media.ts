@@ -171,6 +171,37 @@ export function defaultAttachmentPath(pagePath: string, filename: string): strin
 	return dir ? `${dir}/${ASSETS_DIR}/${name}` : `${ASSETS_DIR}/${name}`;
 }
 
+// How many numbered variants of one filename we will try before giving up.
+const MAX_ATTACHMENT_VARIANTS = 50;
+
+// A path nothing occupies yet: `logo.png` -> `logo-2.png` -> `logo-3.png`.
+//
+// Storing an attachment used to overwrite whatever already sat at the path, silently.
+// Two screenshots pasted a moment apart, or two people attaching `diagram.png` to the
+// same page, meant the first file was gone — and because every page linking to it kept
+// linking to the same path, those pages quietly started showing the OTHER picture.
+// Nothing in the transcript said so.
+//
+// The caller cannot prevent this: only the repo knows what is already there. So the
+// server picks the free name and REPORTS it back, and the app corrects the link it
+// optimistically inserted. Returns '' when even the variants are taken, which the
+// tool turns into a plain refusal rather than a silent clobber.
+export function uniqueAttachmentPath(target: string, taken: (path: string) => boolean): string {
+	if (!taken(target)) return target;
+	const slash = target.lastIndexOf('/');
+	const dir = slash >= 0 ? target.slice(0, slash + 1) : '';
+	const name = target.slice(slash + 1);
+	// Leading dot = a dotfile, not an extension (same rule as extensionOf above).
+	const dot = name.lastIndexOf('.');
+	const stem = dot > 0 ? name.slice(0, dot) : name;
+	const ext = dot > 0 ? name.slice(dot) : '';
+	for (let n = 2; n <= MAX_ATTACHMENT_VARIANTS; n++) {
+		const candidate = `${dir}${stem}-${n}${ext}`;
+		if (!taken(candidate)) return candidate;
+	}
+	return '';
+}
+
 // The markdown to insert into a page so the attachment shows up. Ordinary image
 // syntax, relative to the referencing page: nothing here is an Isomorphic extension,
 // so the page still renders correctly on github.com and in any OKF reader.

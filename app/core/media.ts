@@ -203,10 +203,13 @@ async function prepareUpload(file: File): Promise<Prepared | { error: string }> 
 // must not also append a link — it would appear twice, and the second copy would be
 // overwritten by the save anyway. `page` is deliberately omitted: attach_media takes
 // either a page to attach to or an explicit path, and this is the path case.
+// `storedAt` is where the file ACTUALLY landed, which is not always where we asked:
+// the server renames on a collision, because only it knows what is already in the
+// repo. The caller has to follow that, or it keeps a link to a name nothing occupies.
 async function uploadAttachment(
 	path: string,
 	prepared: Prepared
-): Promise<{ ok: boolean; message: string }> {
+): Promise<{ ok: boolean; message: string; storedAt: string }> {
 	const res = await callTool('attach_media', {
 		path,
 		filename: prepared.filename,
@@ -214,7 +217,12 @@ async function uploadAttachment(
 		data: prepared.data,
 		...brainArgs()
 	});
-	return { ok: !res.isError, message: firstText(res) };
+	const sc = (res.structuredContent ?? {}) as { path?: string };
+	return {
+		ok: !res.isError,
+		message: firstText(res),
+		storedAt: typeof sc.path === 'string' && sc.path ? sc.path : path
+	};
 }
 
 export {

@@ -43,11 +43,15 @@ function attachableFiles(list: FileList | null | undefined): File[] {
 // A pasted screenshot arrives as a File with no useful name ("image.png", or empty).
 // Give it something a human can recognise in a file tree six months later, since this
 // name becomes a permanent path in the repo.
+// Seconds, not minutes. The stamp is the whole of the uniqueness: two pastes a few
+// seconds apart produced the same name, defaultAttachmentPath produced the same path,
+// and the second upload overwrote the first with no error anywhere. `index` only
+// separates files within ONE paste, so it does not help across two.
 function nameFor(file: File, index: number): string {
 	const raw = (file.name || '').trim();
 	if (raw && raw.toLowerCase() !== 'image.png') return raw;
 	const ext = (mediaTypeOf(raw) ? raw.split('.').pop() : 'png') ?? 'png';
-	const stamp = new Date().toISOString().slice(0, 16).replace(/[-:T]/g, '');
+	const stamp = new Date().toISOString().slice(0, 19).replace(/[-:T]/g, '');
 	return `pasted-${stamp}${index ? `-${index + 1}` : ''}.${ext}`;
 }
 
@@ -79,6 +83,18 @@ function removeNode(view: EditorView, node: PMNode): void {
 	view.dispatch(view.state.tr.delete(pos, pos + node.nodeSize));
 }
 
+// Point an already-inserted image at a different path. Needed because the node goes in
+// before the upload finishes, and the server may store the file under another name if
+// that one was taken. Returns the replacement node, since changing attrs makes a new
+// one and the old handle no longer matches anything in the document.
+function repointImage(view: EditorView, node: PMNode, src: string): PMNode | null {
+	const pos = findNodePos(view, node);
+	if (pos === null) return null;
+	const replacement = view.state.schema.nodes.image.create({ ...node.attrs, src });
+	view.dispatch(view.state.tr.replaceWith(pos, pos + node.nodeSize, replacement));
+	return replacement;
+}
+
 // Upload one file and leave an image node pointing at it.
 //
 // The node is inserted BEFORE the upload finishes, with the path the file is going to
@@ -102,12 +118,14 @@ async function uploadOne(
 	const target = defaultAttachmentPath(pagePath, prepared.filename);
 	const href = relativeHref(pagePath, target);
 	const alt = prepared.filename.replace(/\.[a-z0-9]+$/i, '');
-	const node = insertImage(view, pos, href, alt);
 
-	// Show it immediately from the local bytes. Without this the editor renders a
-	// broken image for the duration of the upload, and for a large screenshot that is
-	// long enough to read as failure.
+	// Prime the preview BEFORE inserting the node, not after. Inserting constructs the
+	// nodeView, which looks for a local preview synchronously; priming afterwards meant
+	// it never saw one, fell through to read_media for bytes the server had not been
+	// sent yet, and latched into "Missing attachment" for the rest of the session. The
+	// upload then succeeded silently behind a picture that said it had failed.
 	primeLocalPreview(target, `data:${prepared.mimeType};base64,${prepared.data}`);
+	const node = insertImage(view, pos, href, alt);
 
 	pendingUploads++;
 	bump();
@@ -118,6 +136,13 @@ async function uploadOne(
 			removeNode(view, node);
 			forgetLocalPreview(target);
 			return;
+		}
+		// The server renames on a collision, since only it can see what the repo already
+		// holds. Follow it, or the page keeps a link to a name nothing occupies.
+		if (res.storedAt !== target) {
+			primeLocalPreview(res.storedAt, `data:${prepared.mimeType};base64,${prepared.data}`);
+			forgetLocalPreview(target);
+			repointImage(view, node, relativeHref(pagePath, res.storedAt));
 		}
 		if (prepared.note) toast(prepared.note);
 	} catch (e) {
@@ -134,8 +159,29 @@ async function uploadOne(
 // been, but the read path has not seen them). Keyed by repo path so the nodeView can
 // find one without knowing whether it came from an upload or the server.
 const localPreviews = new Map<string, string>();
+
+// The nodeViews currently on screen, by the path each one is showing. A nodeView
+// resolves ONCE, when it is constructed, so without this it can only ever be as
+// correct as the instant it was built — and an image whose bytes arrive a moment
+// later stays broken until you leave the page and come back. Registering them means
+// the bytes can find the picture instead of the picture having to poll for bytes.
+const liveViews = new Map<string, Set<ImageNodeView>>();
+
+function registerView(path: string, view: ImageNodeView): void {
+	let set = liveViews.get(path);
+	if (!set) liveViews.set(path, (set = new Set()));
+	set.add(view);
+}
+function unregisterView(path: string, view: ImageNodeView): void {
+	const set = liveViews.get(path);
+	if (!set) return;
+	set.delete(view);
+	if (set.size === 0) liveViews.delete(path);
+}
+
 function primeLocalPreview(path: string, dataUri: string): void {
 	localPreviews.set(path, dataUri);
+	for (const v of liveViews.get(path) ?? []) v.showBytes(dataUri);
 }
 function forgetLocalPreview(path: string): void {
 	localPreviews.delete(path);
@@ -174,32 +220,66 @@ export function mediaHandlers(pagePath: string) {
 // image in the editor would otherwise be a broken-image glyph, including ones that
 // render perfectly in the viewer. Same data-URI route the viewer uses, same cache.
 export class ImageNodeView {
-	dom: HTMLImageElement;
+	// A container, not the <img> itself, so the missing state can REPLACE the image
+	// rather than restyle it. An <img> whose src never resolves keeps drawing the
+	// browser's own broken-image glyph beside whatever alt text you set, and no CSS
+	// removes that glyph — so a note meant to read as prose still reads as a broken
+	// picture. The viewer learned this already (hydrateImages swaps in a span); the
+	// nodeView was still setting alt on a live <img> and showing the glyph.
+	dom: HTMLSpanElement;
+	private alt: string;
+	private repoPath = '';
 
 	constructor(node: PMNode, pagePath: string) {
-		this.dom = document.createElement('img');
-		this.dom.alt = String(node.attrs.alt ?? '');
-		this.dom.className = 'max-w-full rounded';
+		this.alt = String(node.attrs.alt ?? '');
+		this.dom = document.createElement('span');
+		this.dom.className = 'asset-node';
 		void this.resolve(String(node.attrs.src ?? ''), pagePath);
 	}
 
 	private async resolve(src: string, pagePath: string): Promise<void> {
 		if (!src || /^(data:|https?:|blob:)/i.test(src)) {
-			this.dom.src = src;
+			this.showBytes(src);
 			return;
 		}
-		const repoPath = resolveRelative(pagePath, src);
-		const local = localPreviews.get(repoPath);
+		this.repoPath = resolveRelative(pagePath, src);
+		registerView(this.repoPath, this);
+
+		const local = localPreviews.get(this.repoPath);
 		if (local) {
-			this.dom.src = local;
+			this.showBytes(local);
 			return;
 		}
-		const dataUri = await loadAsset(repoPath);
-		if (dataUri) this.dom.src = dataUri;
-		else {
-			this.dom.alt = `Missing attachment: ${repoPath}`;
-			this.dom.classList.add('asset-missing');
-		}
+		const dataUri = await loadAsset(this.repoPath);
+		// An upload that finished while this was in flight has already called
+		// showBytes through the registry; don't overwrite a good picture with a
+		// stale miss.
+		if (dataUri) this.showBytes(dataUri);
+		else if (!this.resolved) this.showMissing();
+	}
+
+	private resolved = false;
+
+	// Called both by resolve() and, when an upload completes, by primeLocalPreview.
+	showBytes(src: string): void {
+		this.resolved = true;
+		const img = document.createElement('img');
+		img.src = src;
+		img.alt = this.alt;
+		img.className = 'max-w-full rounded';
+		this.dom.replaceChildren(img);
+	}
+
+	private showMissing(): void {
+		const note = document.createElement('span');
+		note.className = 'asset-missing';
+		note.textContent = `Missing attachment: ${this.repoPath}`;
+		note.title = `${this.repoPath} is linked from this page but is not in the brain. It may have been moved or deleted.`;
+		this.dom.replaceChildren(note);
+	}
+
+	destroy(): void {
+		if (this.repoPath) unregisterView(this.repoPath, this);
 	}
 
 	// Attachments are atomic: there is nothing inside an image for ProseMirror to

@@ -33,6 +33,7 @@ import {
 	isModelViewable,
 	isValidBase64,
 	mediaTypeOf,
+	uniqueAttachmentPath,
 	validateAttachment
 } from '../src/lib/media.ts';
 
@@ -183,6 +184,47 @@ console.log('\nfilenames and default placement');
 		'a root page still gets an assets folder',
 		defaultAttachmentPath('index.md', 'a.png') === 'assets/a.png'
 	);
+}
+
+console.log('\nnot overwriting an attachment that is already there');
+{
+	// Storing used to write straight over whatever occupied the path. Two screenshots
+	// pasted a moment apart, or two people attaching "diagram.png" to the same page,
+	// silently destroyed the first — and every page linking to it kept the same link,
+	// so those pages quietly began showing a different picture.
+	const free = uniqueAttachmentPath('wiki/a/assets/logo.png', () => false);
+	check('a free path is used as-is', free === 'wiki/a/assets/logo.png', free);
+
+	const taken = new Set(['wiki/a/assets/logo.png']);
+	const second = uniqueAttachmentPath('wiki/a/assets/logo.png', (p) => taken.has(p));
+	check(
+		'a taken path is numbered, keeping the extension',
+		second === 'wiki/a/assets/logo-2.png',
+		second
+	);
+
+	taken.add('wiki/a/assets/logo-2.png');
+	const third = uniqueAttachmentPath('wiki/a/assets/logo.png', (p) => taken.has(p));
+	check(
+		'and numbering continues past the first variant',
+		third === 'wiki/a/assets/logo-3.png',
+		third
+	);
+
+	// The extension has to survive, or the stored filename stops describing the bytes
+	// and mediaTypeOf (which every reader trusts) starts answering wrong.
+	check(
+		'the numbered name still resolves to the same media type',
+		mediaTypeOf(third) === mediaTypeOf('wiki/a/assets/logo.png')
+	);
+
+	// A dotfile has no extension to preserve — the leading dot is the name.
+	const dotfile = uniqueAttachmentPath('wiki/a/.keep', (p) => p === 'wiki/a/.keep');
+	check('a dotfile numbers without inventing an extension', dotfile === 'wiki/a/.keep-2', dotfile);
+
+	// Exhaustion returns '' rather than looping or clobbering, so the tool can refuse.
+	const exhausted = uniqueAttachmentPath('wiki/a/assets/logo.png', () => true);
+	check('an exhausted name yields nothing rather than overwriting', exhausted === '', exhausted);
 }
 
 console.log('\nthe inserted link (what github.com and OKF readers follow)');

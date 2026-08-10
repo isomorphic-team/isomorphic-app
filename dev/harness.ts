@@ -20,6 +20,7 @@ import { BRAIN_APP_HTML } from '../src/lib/app-bundle.generated.ts';
 import { slugify, resolveRelative, parseFrontmatter } from '../src/lib/wiki.ts';
 import { DEFAULT_BRAIN_CONFIG, isContentPath } from '../src/lib/brain-policy.ts';
 import { classifyMdLink } from '../src/lib/links.ts';
+import { uniqueAttachmentPath } from '../src/lib/media.ts';
 import { renderViews, stripSnapshots, hasViews, type ViewContext } from '../src/lib/views.ts';
 // The REAL per-brain access rule (pure, no D1) so the sharing preview resolves
 // exactly like prod: org visibility + explicit grants + the org-admin floor.
@@ -618,7 +619,12 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
 				const dir = pagePath.slice(0, pagePath.lastIndexOf('/'));
 				target = `${dir}/assets/${slug}.${ext}`;
 			}
-			assetsFor(bid)[target] = { data, mimeType };
+			// Mirrors the server: never overwrite a file that is already there, number
+			// the name instead, and report where it actually landed.
+			const store = assetsFor(bid);
+			target = uniqueAttachmentPath(target, (p) => p in store || pth.includes(p));
+			if (!target) return errText('Every numbered variant of that name is taken.');
+			store[target] = { data, mimeType };
 
 			if (pagePath) {
 				const md = pg[pagePath];
@@ -629,7 +635,10 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
 					: target;
 				pg[pagePath] = `${md.replace(/\n*$/, '')}\n\n![${alt}](${rel})\n`;
 			}
-			return text(`Stored ${target}. The change was logged.`);
+			return {
+				...text(`Stored ${target}. The change was logged.`),
+				structuredContent: { path: target, mimeType }
+			};
 		}
 		case 'list_pages': {
 			const prefix = String(args?.prefix ?? '');

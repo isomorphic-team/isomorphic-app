@@ -889,6 +889,60 @@ try {
 			data: PNG_1PX
 		});
 		check('attach_media refuses an unsupported type', badType.isError, badType.text);
+
+		// Storing must never write over a file that is already there. This is the one
+		// failure mode with no visible symptom: the second upload succeeds, the path is
+		// unchanged, so every page linking to it silently starts showing the other
+		// picture and the transcript says "Stored" both times. Only the repo knows what
+		// is already present, so the SERVER has to pick the free name and report it.
+		//
+		// A 1x1 RED png, so "which file is at this path" is answerable by comparing
+		// bytes rather than by trusting the message.
+		const PNG_RED =
+			'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
+		const firstPath = 'wiki/vendors/assets/shared.png';
+		await call('attach_media', {
+			path: firstPath,
+			filename: 'shared.png',
+			mime_type: 'image/png',
+			data: PNG_1PX
+		});
+		const clash = await call('attach_media', {
+			path: firstPath,
+			filename: 'shared.png',
+			mime_type: 'image/png',
+			data: PNG_RED
+		});
+		check('a second attach at a taken path still succeeds', !clash.isError, clash.text);
+		check(
+			'but lands at a NUMBERED path, not the one asked for',
+			clash.text.includes('wiki/vendors/assets/shared-2.png'),
+			clash.text
+		);
+		const original = await store.readBinary(repoArgs, firstPath);
+		check(
+			'the first file is untouched — its bytes, not the second upload',
+			original?.contentBase64 === PNG_1PX,
+			`${original?.contentBase64?.slice(0, 24)}…`
+		);
+		const variant = await store.readBinary(repoArgs, 'wiki/vendors/assets/shared-2.png');
+		check('and the second file is stored alongside it', variant?.contentBase64 === PNG_RED);
+		// The app inserts its link BEFORE uploading, so a rename it is not told about
+		// leaves the page pointing at a name nothing occupies.
+		const thirdAttach = (await client.callTool({
+			name: 'attach_media',
+			arguments: {
+				path: firstPath,
+				filename: 'shared.png',
+				mime_type: 'image/png',
+				data: PNG_RED
+			}
+		})) as { structuredContent?: { path?: string } };
+		check(
+			'the actual path comes back as data, not only as prose',
+			thirdAttach.structuredContent?.path === 'wiki/vendors/assets/shared-3.png',
+			JSON.stringify(thirdAttach.structuredContent)
+		);
 	}
 } finally {
 	await cleanup();

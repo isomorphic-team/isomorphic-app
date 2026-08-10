@@ -334,11 +334,20 @@ body {
 	/* The alt text would otherwise show as a broken-image glyph while loading. */
 	color: transparent;
 }
+/* The editor wraps each image in a container so the missing state can replace the
+   <img> rather than restyle it (same reason as the note below). The wrapper must not
+   introduce a line box of its own, or every attachment would sit lower than it did. */
+.prose .asset-node {
+	display: inline-block;
+	max-width: 100%;
+	line-height: 0;
+}
 /* A missing attachment is a SPAN, not a styled <img>: an <img> with an unresolvable
    src keeps drawing the browser's broken-image glyph no matter what CSS says, which
    is exactly the "this looks broken" impression the note exists to avoid. */
 .prose .asset-missing {
 	display: inline-block;
+	line-height: normal;
 	padding: 0.375rem 0.625rem;
 	border-radius: var(--r-md, 8px);
 	background: var(--c-chip);
