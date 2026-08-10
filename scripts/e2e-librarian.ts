@@ -5,6 +5,13 @@
 // repointing via fetchInboundLinkersForPaths, for both a single page and a folder
 // subtree — move_page/delete_page take a folder path with no .md).
 //
+// It also covers the ORG-scope tools that decide where a brain LANDS (`brains`,
+// `connect_brain`), which resolve through orgContext / resolveOrgForPerson rather
+// than tenantContext and were uncovered until 2026-08-10. The org rows are real, in
+// the same D1 as the content index, and one of them deliberately holds NO brain:
+// listAccessibleBrains cannot see such an org, which is what once made adopting a
+// FIRST repo into a newly connected org impossible.
+//
 // TWO BACKENDS, ONE BATTERY. By default it runs against the fs + git BrainStore in a
 // temporary directory: no network, no credentials, no scratch repo, so it runs in CI
 // and a contributor can run it on a fresh clone. With --github it runs the identical
@@ -29,6 +36,14 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { registerLibrarianTools } from '../src/tools/librarian.ts';
+import { registerBrainTools } from '../src/tools/brains.ts';
+import {
+	listAccessibleBrains,
+	listAccessibleOrgs,
+	resolveOrgForPerson,
+	assertRole,
+	type Role
+} from '../src/lib/orgs.ts';
 import { loadCustomToolDefs, registerCustomTools } from '../src/tools/custom.ts';
 import { installationOctokit } from '../src/lib/github.ts';
 import { createAndScaffoldBrain, buildScaffoldFiles } from '../src/lib/scaffold-core.ts';
@@ -48,6 +63,13 @@ let repoArgs: { owner: string; repo: string };
 let brainId: string;
 let name: string;
 let cleanup: () => Promise<void>;
+// The GitHub client for the three PLATFORM operations (create a repo, list an
+// installation's repos, check a repo exists). These are GitHub-as-a-platform, not
+// a brain as storage, so BrainStore deliberately cannot back them and the offline
+// mode has to stand in for them the way it stands in for the repo itself.
+let platformOctokit: never;
+// A second repo, existing but not yet a brain: what connect_brain adopts.
+let adoptRepo: string;
 
 if (GITHUB_MODE) {
 	const devVarsPath =
@@ -78,15 +100,27 @@ if (GITHUB_MODE) {
 	store = githubStore(octokit);
 	repoArgs = { owner: brain.owner, repo: brain.name };
 	brainId = `${brain.owner}/${brain.name}`;
+	platformOctokit = octokit as never;
+	// A real second repo for connect_brain to adopt. Scaffolded like the first so the
+	// post-adopt config detection has actual content to look at.
+	adoptRepo = `${name}-adopt`;
+	console.log(`Creating scratch repo ${org}/${adoptRepo} …`);
+	await createAndScaffoldBrain(octokit, {
+		org,
+		name: adoptRepo,
+		description: 'Librarian E2E adopt target, safe to delete'
+	});
 	cleanup = async () => {
-		console.log(`\nDeleting scratch repo ${org}/${name} …`);
-		try {
-			await octokit.rest.repos.delete(repoArgs);
-			console.log('Deleted.');
-		} catch (err) {
-			console.log(
-				`Could not delete (${(err as { status?: number }).status}), delete manually: https://github.com/${org}/${name}/settings`
-			);
+		for (const repo of [name, adoptRepo]) {
+			console.log(`\nDeleting scratch repo ${org}/${repo} …`);
+			try {
+				await octokit.rest.repos.delete({ owner: org, repo });
+				console.log('Deleted.');
+			} catch (err) {
+				console.log(
+					`Could not delete (${(err as { status?: number }).status}), delete manually: https://github.com/${org}/${repo}/settings`
+				);
+			}
 		}
 	};
 } else {
@@ -106,6 +140,36 @@ if (GITHUB_MODE) {
 	cleanup = async () => {
 		await rm(dir, { recursive: true, force: true });
 	};
+	// The offline stand-in for GitHub-as-a-platform. Narrow on purpose: it answers
+	// only the two reads connect_brain makes, and answers them from a fixed set, so
+	// "the installation can reach this repo" is a real branch with a real negative
+	// case. What it CANNOT stand in for is the adapter itself, which is what
+	// --github is for: there, post-adopt config detection runs against actual repo
+	// content, and here it fails closed to needsConfig=false.
+	adoptRepo = `${name}-adopt`;
+	const reachable = new Set([name, adoptRepo]);
+	platformOctokit = {
+		rest: {
+			repos: {
+				get: async ({ repo }: { owner: string; repo: string }) => {
+					if (reachable.has(repo)) return { data: { name: repo } };
+					const err: Error & { status?: number } = new Error('Not Found');
+					err.status = 404;
+					throw err;
+				}
+			},
+			apps: {
+				listReposAccessibleToInstallation: async () => ({
+					data: {
+						repositories: [...reachable].map((repo) => ({
+							name: repo,
+							owner: { login: repoArgs.owner }
+						}))
+					}
+				})
+			}
+		}
+	} as never;
 }
 
 // ---- in-memory MCP client wired to the real handlers, with a full context ----
@@ -653,6 +717,201 @@ try {
 	check('tool prepends its instruction body', /Report the matches below\./.test(invText), invText);
 	await toolClient.close();
 	await toolServer.close();
+
+	// ── org + brain tools: where a brain LANDS ───────────────────────────────
+	// Everything above acts on a brain that already exists. These tools decide
+	// which ORGANIZATION a brain is created in or adopted into, and they resolve
+	// through a different path (orgContext / resolveOrgForPerson, not
+	// tenantContext) that nothing else in this battery reaches.
+	//
+	// The org rows are real, in the same D1 the content index runs on, and the
+	// decision runs through the real resolveOrgForPerson. `ORG_EMPTY` deliberately
+	// holds NO brain: an org with none is invisible to listAccessibleBrains, which
+	// is what used to make adopting a FIRST repo into a new org impossible.
+	const USER = 'u-e2e';
+	const ORG_MAIN = 'org-e2e-main';
+	const ORG_EMPTY = 'org-e2e-empty';
+	const run = (sql: string, ...binds: unknown[]) =>
+		db
+			.prepare(sql)
+			.bind(...binds)
+			.run();
+	await run(
+		`INSERT INTO app_users (user_id, email, name) VALUES (?1, ?2, ?3)`,
+		USER,
+		'e2e@example.com',
+		'E2E'
+	);
+	await run(
+		`INSERT INTO orgs (org_id, name, model, installation_id, brain_owner, created_by, created_at)
+		 VALUES (?1, ?2, 'customer', 1, ?3, ?4, '2026-01-01')`,
+		ORG_MAIN,
+		'Main Org',
+		repoArgs.owner,
+		USER
+	);
+	await run(
+		`INSERT INTO orgs (org_id, name, model, installation_id, brain_owner, created_by, created_at)
+		 VALUES (?1, ?2, 'customer', 1, ?3, ?4, '2026-02-01')`,
+		ORG_EMPTY,
+		'Contoso Group',
+		repoArgs.owner,
+		USER
+	);
+	await run(
+		`INSERT INTO memberships (org_id, user_id, role) VALUES (?1, ?2, 'owner')`,
+		ORG_MAIN,
+		USER
+	);
+	await run(
+		`INSERT INTO memberships (org_id, user_id, role) VALUES (?1, ?2, 'owner')`,
+		ORG_EMPTY,
+		USER
+	);
+	await run(
+		`INSERT INTO brains (brain_id, org_id, repo_owner, repo_name, name, visibility, created_at)
+		 VALUES (?1, ?2, ?3, ?4, ?5, 'org', '2026-01-02')`,
+		'b-e2e-main',
+		ORG_MAIN,
+		repoArgs.owner,
+		repoArgs.repo,
+		'Main'
+	);
+
+	let activeId = brainId;
+	// Mirrors the Worker's orgContext minus the two things a test cannot own: minting
+	// an installation token, and first-touch provisioning. The DECISION is the real
+	// one, which is why it lives in resolveOrgForPerson rather than in the Worker.
+	const orgContext = async (opts?: { requires?: Role; org?: string }) => {
+		const picked = await resolveOrgForPerson(db, [USER], { org: opts?.org });
+		if (!picked) throw new Error('You do not belong to any organization yet.');
+		assertRole(picked.role, opts?.requires);
+		return {
+			octokit: platformOctokit,
+			org: picked.org,
+			role: picked.role,
+			db,
+			actorUserId: USER,
+			author: undefined
+		};
+	};
+
+	const brainServer = new McpServer({ name: 'librarian-e2e-brains', version: '0.0.0' });
+	registerBrainTools(brainServer, {
+		getContext,
+		orgContext,
+		listOrgs: () => listAccessibleOrgs(db, [USER]),
+		listBrains: () => listAccessibleBrains(db, [USER]),
+		activeBrainId: () => activeId,
+		setActiveBrain: (id: string) => {
+			activeId = id;
+		},
+		invalidateConfig: () => {},
+		analyticsEnabled: false
+	});
+	const [brainCT, brainST] = InMemoryTransport.createLinkedPair();
+	await brainServer.connect(brainST);
+	const brainClient = new Client({ name: 'e2e-brains', version: '0.0.0' });
+	await brainClient.connect(brainCT);
+	const callBrain = async (tool: string, args: Record<string, unknown>) => {
+		const res = (await brainClient.callTool({ name: tool, arguments: args })) as {
+			isError?: boolean;
+			content: { type: string; text: string }[];
+			structuredContent?: Record<string, unknown>;
+		};
+		return {
+			isError: !!res.isError,
+			text: res.content.map((c) => c.text).join('\n'),
+			sc: res.structuredContent ?? {}
+		};
+	};
+
+	let br = await callBrain('brains', {});
+	check('brains lists the brain under test', !br.isError && br.text.includes('Main'), br.text);
+	const offeredOrgs = (br.sc.orgs as { orgId: string }[] | undefined) ?? [];
+	check(
+		'brains payload offers BOTH orgs, including the one with no brains',
+		offeredOrgs.some((o) => o.orgId === ORG_MAIN) && offeredOrgs.some((o) => o.orgId === ORG_EMPTY),
+		JSON.stringify(offeredOrgs)
+	);
+
+	// The picker: no `repo` lists what the org's installation can reach and has not
+	// already been adopted. The brain under test is adopted, so it must not appear.
+	br = await callBrain('connect_brain', { org: 'Contoso Group' });
+	// Asserted on the structured ids, not the rendered text: the adopt repo's name has
+	// the brain's name as a prefix, so a substring check passes no matter what.
+	const candidates = ((br.sc.repos as { id: string }[] | undefined) ?? []).map((r) => r.id);
+	check(
+		'connect_brain with no repo lists connectable candidates',
+		!br.isError && candidates.includes(`${repoArgs.owner}/${adoptRepo}`),
+		JSON.stringify(candidates)
+	);
+	check(
+		'...and excludes a repo that is already a brain',
+		!candidates.includes(`${repoArgs.owner}/${repoArgs.repo}`),
+		JSON.stringify(candidates)
+	);
+
+	// THE REGRESSION. Adopting the first repo into an org that holds none. Before the
+	// org argument existed this call had no way to name ORG_EMPTY at all, because the
+	// only handle was a brain already inside it.
+	br = await callBrain('connect_brain', {
+		repo: `${repoArgs.owner}/${adoptRepo}`,
+		org: 'Contoso Group',
+		name: 'Adopted'
+	});
+	check('connect_brain adopts into a brainless org', !br.isError, br.text);
+	const adopted = (await db
+		.prepare(`SELECT org_id, visibility, name FROM brains WHERE repo_name = ?1`)
+		.bind(adoptRepo)
+		.first()) as { org_id?: string; visibility?: string; name?: string } | null;
+	check(
+		'...writing the brains row into THAT org, not the default one',
+		adopted?.org_id === ORG_EMPTY,
+		`org_id = ${adopted?.org_id}`
+	);
+	check(
+		'...org-visible, unlike create_brain’s private default',
+		adopted?.visibility === 'org',
+		`visibility = ${adopted?.visibility}`
+	);
+	check(
+		'...under the caller’s chosen name',
+		adopted?.name === 'Adopted',
+		`name = ${adopted?.name}`
+	);
+
+	br = await callBrain('brains', {});
+	check('the adopted brain now shows in the list', br.text.includes('Adopted'), br.text);
+
+	// Guardrails.
+	br = await callBrain('connect_brain', {
+		repo: `${repoArgs.owner}/${adoptRepo}`,
+		org: 'Contoso Group'
+	});
+	check(
+		'connect_brain refuses a repo that is already a brain here',
+		br.isError && /already a brain/i.test(br.text),
+		br.text
+	);
+	br = await callBrain('connect_brain', {
+		repo: `${repoArgs.owner}/definitely-not-a-real-repo`,
+		org: 'Contoso Group'
+	});
+	check(
+		'connect_brain refuses a repo the installation cannot reach',
+		br.isError && /can't access/i.test(br.text),
+		br.text
+	);
+	br = await callBrain('connect_brain', { repo: 'x/y', org: 'no-such-org' });
+	check(
+		'connect_brain refuses an org handle that matches nothing',
+		br.isError && /No organization matching/i.test(br.text),
+		br.text
+	);
+
+	await brainClient.close();
+	await brainServer.close();
 } finally {
 	await cleanup();
 	await client.close();

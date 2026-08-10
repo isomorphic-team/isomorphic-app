@@ -48,6 +48,23 @@ pnpm typecheck          # runs all three tsconfigs (node, worker, app)
 pnpm format             # prettier
 ```
 
+**TESTS ARE EXPECTED FOR EVERY FEATURE AND EVERY FIX, in the same change.** Not
+deferred, not "typecheck covers it", not a manual check narrated in the summary.
+Shipping without one is a decision to argue for explicitly, not a default. Two
+rules that make the difference between coverage and its appearance:
+
+- **A green suite proves nothing unless it touches the changed code.** Before
+  reporting a change as tested, break it deliberately and confirm the test goes
+  red. A test that passes against both the old and new behavior is testing
+  neither. Say which battery covers a change, and say plainly when none does.
+- **Test the thing that DECIDES.** If the deciding logic sits somewhere no test
+  can call it (a private method on `McpSession`, a branch inside a handler),
+  move the logic instead of skipping the test. That is why so much of
+  `src/lib/` is pure: `effectiveBrainRole`, `chooseOrg`, `countedCall`, and
+  `resolveOrgForPerson` were all extracted so the rule could be pinned. The
+  pattern to copy is: pure or db-only function in `lib/`, thin wiring in the
+  Worker.
+
 **Tests.** All offline, all fork-safe, all wired into CI and into the `test` script
 (`pnpm test` runs everything): `pnpm test:roundtrip` (editor markdown round-trip),
 `pnpm test:views` (okf-view engine), `pnpm test:import` (import planner),
@@ -77,7 +94,11 @@ through a real content index on `node:sqlite`, against a real brain. By default 
 the fs + git `BrainStore` in a temp directory: no network, no credentials, nothing to
 clean up. They gate the write path (write_page's edits/append, move_page's link
 repointing over a folder subtree, delete_page's "still referenced" notes, the importer's
-no-resurrection ledger), which was previously maintainer-run by hand. `--github` runs the
+no-resurrection ledger), which was previously maintainer-run by hand. `e2e-librarian`
+also covers the ORG-scope tools that decide where a brain LANDS (`brains`,
+`connect_brain`): real org rows in the same D1, the real `resolveOrgForPerson`, and one
+org deliberately holding NO brain, since that is the org `listAccessibleBrains` cannot
+see and the one a first adoption used to be impossible into. `--github` runs the
 identical assertions against a disposable `brain-*-e2e-*` scratch repo on the platform
 org (needs `.dev.vars` with platform App creds, auto-deleted, never a real brain). That
 mode is the only coverage of the GitHub adapter itself, so run it when `githubStore`
