@@ -43,10 +43,12 @@ import {
 	type WriteOutcome,
 	type CommitAuthor,
 	type BrainStore,
+	type FileWrite,
 	MAX_SCAN_PAGES
 } from '../lib/brain-repo.ts';
 import {
 	type BrainConfig,
+	isAssetPath,
 	isContentPath,
 	isHiddenName,
 	isSourcePath,
@@ -57,13 +59,13 @@ import {
 	type PageFields,
 	type BrokenLink,
 	ensureFresh,
-	inboundFileRefs,
 	loadResolvedGraph,
 	backlinksTo,
 	searchIndex,
 	loadAllFields,
 	loadPageContents
 } from '../lib/brain-index.ts';
+import { isMediaPath, mediaTypeOf } from '../lib/media.ts';
 import { tryRenderViews, type ViewDeps } from '../lib/views.ts';
 import { isToolPagePath, parseToolDef } from '../lib/custom-tools.ts';
 import { isFolderNoteName } from '../lib/view-directives.ts';
@@ -135,11 +137,11 @@ function normFolderPath(p: string): string {
 	return p.trim().replace(/^\/+/, '').replace(/\/+$/, '');
 }
 
-function ok(text: string) {
+export function ok(text: string) {
 	return { content: [{ type: 'text' as const, text }] };
 }
 
-function fail(text: string) {
+export function fail(text: string) {
 	return { isError: true as const, content: [{ type: 'text' as const, text }] };
 }
 
@@ -148,7 +150,7 @@ function fail(text: string) {
 //   - PR, auto-merged immediately → "done" (it's already live on the branch)
 //   - PR, auto-merge armed        → "proposed", will merge itself once checks pass
 //   - PR, no auto-merge           → "proposed", needs a human to merge
-function landed(outcome: WriteOutcome, done: string, proposed: string) {
+export function landed(outcome: WriteOutcome, done: string, proposed: string) {
 	if (!outcome.prUrl) return ok(done);
 	if (outcome.merged) return ok(`${done} (via PR ${outcome.prUrl})`);
 	const tail = outcome.autoMergeEnabled
@@ -1034,19 +1036,37 @@ async function moveFileWrite(
 		return fail(`Can't move to "${newPath}" — it's outside this brain's editable content.`);
 	if (tree.some((e) => e.path === newPath))
 		return fail(`Can't move to "${newPath}" — a file already exists there.`);
-
-	const file = await store.readFile(repoArgs, path);
-	if (!file) return fail(`"${path}" does not exist.`);
-	// Blobs reach us base64-decoded as UTF-8 text, so anything that isn't text has
-	// already lost bytes by the time we could write it back. Refuse rather than
-	// commit a corrupted copy over the original.
-	if (/[\u0000\uFFFD]/.test(file.content))
+	// Renaming a `.png` to `.jpg` converts nothing; it leaves a file whose extension
+	// lies about its bytes, and the extension is what every later reader goes on.
+	if (isMediaPath(path) && mediaTypeOf(path) !== mediaTypeOf(newPath))
 		return fail(
-			`"${path}" isn't a text file, so it can't be moved through these tools without corrupting it. Move it with git, or on github.com.`
+			`Can't move ${path} to ${newPath} — that changes the file type, which would break how it is read.`
 		);
 
+	// Read as BYTES, not as text. Blobs reach readFile base64-decoded as UTF-8, so a
+	// PNG arrives already mangled and writing it back would commit a corrupted copy
+	// over the original — which is why this used to refuse a non-text file outright.
+	// readBinary plus a base64 FileWrite carries the bytes through untouched, so an
+	// attachment now moves like anything else.
+	const file = await store.readBinary(repoArgs, path);
+	if (!file) return fail(`"${path}" does not exist.`);
+
+	// Repoint what points AT it. This was skipped on the grounds that non-`.md`
+	// targets sit outside the resolved graph. They no longer do — assetEdges records
+	// them — so a moved attachment no longer rots every page displaying it.
+	const { pages, truncated } = await fetchInboundLinkers(ctx, head, path);
+	let repointedPages = 0;
+
 	const today = todayIso();
-	const writes = [{ path: newPath, content: file.content }];
+	const writes: FileWrite[] = [{ path: newPath, content: file.contentBase64, encoding: 'base64' }];
+	for (const page of pages) {
+		if (isToolMaintained(page.path, config)) continue;
+		const md = rewriteMdLinks(page.content, page.path, path, newPath);
+		if (md.changed > 0) {
+			writes.push({ path: page.path, content: md.body });
+			repointedPages++;
+		}
+	}
 	const log = await store.readFile(repoArgs, logPathOf(config));
 	if (log) {
 		writes.push({
@@ -1061,7 +1081,7 @@ async function moveFileWrite(
 		author,
 		autoMerge: config.autoMerge,
 		mergeMethod: config.mergeMethod,
-		message: `Move ${path} -> ${newPath}`,
+		message: `Move ${path} -> ${newPath}\n\nRepointed ${repointedPages} page(s).`,
 		writes,
 		deletes: [path],
 		head,
@@ -1071,8 +1091,8 @@ async function moveFileWrite(
 	});
 	return landed(
 		outcome,
-		`Moved "${path}" to ${newPath}. It isn't a page, so no links needed repointing; the change was logged.`,
-		`Proposed moving "${path}" to ${newPath}.`
+		`Moved "${path}" to ${newPath}. Links in ${repointedPages} page(s) were repointed; the change was logged.${truncationNote(truncated)}`,
+		`Proposed moving "${path}" to ${newPath}; links in ${repointedPages} page(s) repointed.${truncationNote(truncated)}`
 	);
 }
 
@@ -1081,11 +1101,14 @@ async function moveFileWrite(
 // this, a path like "wiki/assets/logo.png" routed to the FOLDER deleter and came
 // back as "No folder found" about a file that existed.
 //
-// Inbound references are checked differently to a page's. A link to a non-page file
-// is not an edge in the resolved page graph, so inboundRefs cannot see it, and
-// deleting an embedded image would otherwise break every page showing it in silence.
+// Inbound references come from the SAME inboundRefs the page deleter uses. They used
+// to need a separate query, because a link to a non-page file was not an edge in the
+// resolved graph — now it is one (fileEdges), so the parallel implementation is gone.
+// That matters beyond tidiness: the two disagreed. inboundRefs also drops references
+// from tool-maintained files, so the changelog's own mention of a path no longer
+// counts as a page that would lose something.
 async function deleteFileWrite(ctx: BrainContext, head: Head, args: { path: string }) {
-	const { store, repoArgs, config, author, db, brainId } = ctx;
+	const { store, repoArgs, config, author } = ctx;
 	const path = args.path.trim().replace(/^\/+/, '');
 	if (isSourcePath(path, config))
 		return fail(`"${path}" is source material — it can't be deleted.`);
@@ -1093,8 +1116,7 @@ async function deleteFileWrite(ctx: BrainContext, head: Head, args: { path: stri
 	if (!isContentPath(path, config))
 		return fail(`"${path}" is outside this brain's editable content.`);
 
-	const { truncated } = await ensureFresh(db, store, repoArgs, brainId, config);
-	const refs = await inboundFileRefs(db, brainId, path);
+	const { refs, truncated } = await inboundRefs(ctx, [path]);
 
 	const today = todayIso();
 	const writes: { path: string; content: string }[] = [];
@@ -1124,7 +1146,7 @@ async function deleteFileWrite(ctx: BrainContext, head: Head, args: { path: stri
 	const refNote = refs.length
 		? `\n\nHeads up — ${refs.length} page(s) still link to it:\n${refs
 				.slice(0, 20)
-				.map((p) => `- ${p}`)
+				.map((r) => `- ${r.path} (${r.count} link(s))`)
 				.join('\n')}${refs.length > 20 ? `\n…and ${refs.length - 20} more.` : ''}`
 		: '';
 	return landed(
@@ -1424,6 +1446,10 @@ export function registerLibrarianTools(
 			// Ask the tree instead of guessing, then hand the answer to the mover that
 			// fits. Guessing "folder" is what made a dotfile unaddressable: it reported
 			// "no folder found (it has no files)" about a file that was right there.
+			//
+			// This supersedes an attachment-specific branch that routed on isAssetPath:
+			// the tree answers the same question for EVERY non-page file, so an
+			// attachment needs no case of its own.
 			if (!path.trim().replace(/^\/+/, '').endsWith('.md')) {
 				const cleaned = path.trim().replace(/^\/+/, '').replace(/\/+$/, '');
 				const head = await ctx.store.getHead(ctx.repoArgs);
@@ -1559,7 +1585,8 @@ export function registerLibrarianTools(
 			const ctx = await getContext({ requires: 'editor', brain });
 			// A path without a .md extension is a folder OR a non-page file; the tree
 			// says which, for the same reason it does in move_page. Guessing "folder"
-			// answered "No folder found" about files that were plainly there.
+			// answered "No folder found" about files that were plainly there. This
+			// supersedes an attachment-specific branch, exactly as in move_page.
 			if (!path.trim().replace(/^\/+/, '').endsWith('.md')) {
 				const cleaned = path.trim().replace(/^\/+/, '').replace(/\/+$/, '');
 				const head = await ctx.store.getHead(ctx.repoArgs);
@@ -1629,19 +1656,35 @@ export function registerLibrarianTools(
 			title: 'Find pages linking to a page',
 			annotations: { readOnlyHint: true },
 			description:
-				'List every page that links to the given page — via markdown links or [[wikilinks]]. Useful before restructuring or to gauge how connected a page is.',
+				'List everything that links to the given page or attachment — via markdown links, image embeds, or [[wikilinks]]. Useful before restructuring, before deleting an image (to see which pages would lose it), or to gauge how connected a page is.',
 			inputSchema: {
 				brain: brainArg,
-				path: z.string().describe('Target page path, e.g. "wiki/customers/acme.md".')
+				path: z
+					.string()
+					.describe(
+						'Target page or attachment path, e.g. "wiki/customers/acme.md" or "wiki/customers/assets/logo.png".'
+					)
 			}
 		},
 		async ({ path, brain }) => {
 			const { store, repoArgs, config, db, brainId } = await getContext({ brain });
-			// readFile confirms the target exists and gives its authoritative current
-			// title; the backlinks themselves come from the content index.
-			const existing = await store.readFile(repoArgs, path);
-			if (!existing) return fail(`"${path}" does not exist.`);
-			const title = pageTitle(path, existing.content);
+			// An attachment has to take a different existence check. readFile decodes the
+			// blob as UTF-8, and on a PNG that does not fail — it returns mojibake — so
+			// the old path would sail past the `!existing` guard and then run pageTitle()
+			// over binary garbage, labelling the image with whatever fell out of it.
+			// An attachment's title is its filename; there is nothing inside to read.
+			let title: string;
+			if (isAssetPath(path, config)) {
+				const file = await store.readBinary(repoArgs, path);
+				if (!file) return fail(`"${path}" does not exist.`);
+				title = path.split('/').pop() ?? path;
+			} else {
+				// readFile confirms the target exists and gives its authoritative current
+				// title; the backlinks themselves come from the content index.
+				const existing = await store.readFile(repoArgs, path);
+				if (!existing) return fail(`"${path}" does not exist.`);
+				title = pageTitle(path, existing.content);
+			}
 
 			const { truncated } = await ensureFresh(db, store, repoArgs, brainId, config);
 			const resolved = await loadResolvedGraph(db, brainId, config);

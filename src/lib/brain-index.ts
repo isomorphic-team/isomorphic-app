@@ -19,17 +19,11 @@
 
 import type { D1Database, D1PreparedStatement } from '@cloudflare/workers-types';
 import { type RepoRef, type TreeEntry, type BrainStore, MAX_SCAN_PAGES } from './brain-repo.ts';
-import {
-	type BrainConfig,
-	CONFIG_PATH,
-	isContentPath,
-	isSourcePath,
-	loadBrainConfig
-} from './brain-config.ts';
+import { classifyMdLink } from './links.ts';
+import { type BrainConfig, CONFIG_PATH, isContentPath, loadBrainConfig } from './brain-config.ts';
 import {
 	parseFrontmatter,
 	extractLinks,
-	resolveRelative,
 	isFrontmatterBlock,
 	pageTitle,
 	buildWikilinkIndex,
@@ -512,6 +506,12 @@ export interface BrokenLink {
 export interface ResolvedGraph {
 	pages: { path: string; title: string }[];
 	edges: ResolvedEdge[]; // links between two known pages (directed, with counts)
+	// Links from a page to a non-page FILE under content (an image, a PDF, a CSV).
+	// Kept apart from `edges` rather than merged into them, because the graph view
+	// builds its nodes from `pages` alone and computes degree from `edges`: one of
+	// these in that list would reference a node the renderer has no data for.
+	// Backlink queries read both.
+	fileEdges: ResolvedEdge[];
 	broken: BrokenLink[]; // links that resolve to no page (powers validate)
 }
 
@@ -539,15 +539,23 @@ export async function loadResolvedGraph(
 	const wikiIndex = buildWikilinkIndex(pages);
 
 	const edges: ResolvedEdge[] = [];
+	const fileEdges: ResolvedEdge[] = [];
 	const broken: BrokenLink[] = [];
 	for (const l of linksRes.results) {
 		const kind = l.kind === 'wiki' ? 'wiki' : 'md';
 		if (kind === 'md') {
-			const target = resolveRelative(l.source, l.raw_target);
-			if (!target.endsWith('.md')) continue; // asset / non-page — out of scope
-			if (isSourcePath(target, config)) continue; // source isn't indexed; not "broken"
-			if (pathSet.has(target)) edges.push({ source: l.source, target, kind, cnt: l.cnt });
-			else if (isContentPath(target, config))
+			// The rule itself lives in links.ts, pure, so the dev harness resolves links
+			// exactly the way this does. It used to be inlined here, which meant nothing
+			// outside D1 could reuse it and the harness carried a divergent copy.
+			const c = classifyMdLink(l.source, l.raw_target, config, (p) => pathSet.has(p));
+			const target = c.target!;
+			if (c.kind === 'page') edges.push({ source: l.source, target, kind, cnt: l.cnt });
+			// Non-page files are recorded but kept out of `edges`: MD_LINK_RE always
+			// captured `![](…)`, so these were in brain_links all along and were simply
+			// dropped, which is why backlinksTo used to report an image as referenced by
+			// nobody. move_page repoints them and delete_page warns about them.
+			else if (c.kind === 'file') fileEdges.push({ source: l.source, target, kind, cnt: l.cnt });
+			else if (c.kind === 'broken')
 				broken.push({ source: l.source, rawTarget: l.raw_target, kind, target });
 		} else {
 			// [[#Section]] is an anchor within the linking page — nothing to resolve,
@@ -558,31 +566,7 @@ export async function loadResolvedGraph(
 			else broken.push({ source: l.source, rawTarget: l.raw_target, kind });
 		}
 	}
-	return { pages, edges, broken };
-}
-
-// Pages whose markdown links point at a NON-PAGE file: an embedded image, a PDF,
-// anything that isn't `.md`. loadResolvedGraph drops these deliberately, because
-// they are not edges in the PAGE graph and reporting them as broken would be wrong.
-// But deleting the file they point at still breaks them, and delete_page's whole
-// contract is that nothing dangles without being said out loud. One query plus an
-// in-memory resolve, the same shape loadResolvedGraph already pays for.
-// Call ensureFresh first.
-export async function inboundFileRefs(
-	db: D1Database,
-	brainId: string,
-	targetPath: string
-): Promise<string[]> {
-	const res = await db
-		.prepare(`SELECT source, raw_target FROM brain_links WHERE brain_id = ?1 AND kind = 'md'`)
-		.bind(brainId)
-		.all<{ source: string; raw_target: string }>();
-	const sources = new Set<string>();
-	for (const l of res.results) {
-		if (l.source === targetPath) continue;
-		if (resolveRelative(l.source, l.raw_target) === targetPath) sources.add(l.source);
-	}
-	return [...sources].sort();
+	return { pages, edges, fileEdges, broken };
 }
 
 // The brain's content pages with display titles, straight from the index (no link
@@ -611,7 +595,10 @@ export function backlinksTo(
 ): { path: string; title: string; count: number; mdCount: number; wikiCount: number }[] {
 	const titleByPath = new Map(resolved.pages.map((p) => [p.path, p.title]));
 	const agg = new Map<string, { mdCount: number; wikiCount: number }>();
-	for (const e of resolved.edges) {
+	// Both lists: an asset path can never collide with a page path (one ends in .md,
+	// the other cannot), so scanning both is unambiguous and spares every caller from
+	// having to know whether it is asking about a page or a picture.
+	for (const e of [...resolved.edges, ...resolved.fileEdges]) {
 		if (e.target !== targetPath || e.source === targetPath) continue;
 		const a = agg.get(e.source) ?? { mdCount: 0, wikiCount: 0 };
 		if (e.kind === 'md') a.mdCount += e.cnt;

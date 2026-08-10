@@ -29,6 +29,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { registerLibrarianTools } from '../src/tools/librarian.ts';
+import { registerMediaTools } from '../src/tools/media.ts';
 import { loadCustomToolDefs, registerCustomTools } from '../src/tools/custom.ts';
 import { installationOctokit } from '../src/lib/github.ts';
 import { createAndScaffoldBrain, buildScaffoldFiles } from '../src/lib/scaffold-core.ts';
@@ -122,6 +123,7 @@ const getContext = async () => ({
 	activeBrain: { id: brainId, label: name }
 });
 registerLibrarianTools(server, getContext);
+registerMediaTools(server, getContext);
 const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
 await server.connect(serverTransport);
 const client = new Client({ name: 'e2e', version: '0.0.0' });
@@ -763,6 +765,185 @@ try {
 	check('tool prepends its instruction body', /Report the matches below\./.test(invText), invText);
 	await toolClient.close();
 	await toolServer.close();
+
+	// ---- attachments: bytes have to survive a real commit ----
+	//
+	// This is the only place the binary path is exercised end to end. Everything
+	// else about attachments is pure and covered by test:media; what cannot be
+	// tested purely is whether a PNG comes back byte-identical after going through
+	// createBlob -> tree -> commit -> read. The whole reason FileWrite grew an
+	// `encoding` is that the inline-content path decodes as UTF-8 and would corrupt
+	// these bytes silently, so a round-trip that compares base64 exactly is the
+	// assertion that would have caught it.
+	console.log('\nattachments');
+	{
+		// A 1x1 transparent PNG. Small, but real: it contains bytes that are not valid
+		// UTF-8, which is precisely what a text write path mangles.
+		const PNG_1PX =
+			'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==';
+		const host = 'wiki/vendors/acme.md';
+		await call('write_page', { path: host, content: '# Acme\n\nA vendor.\n', title: 'Acme' });
+
+		const before = await commitCount();
+		const attach = await call('attach_media', {
+			page: host,
+			filename: 'Acme Logo.png',
+			mime_type: 'image/png',
+			data: PNG_1PX,
+			alt: 'Acme logo'
+		});
+		check('attach_media succeeds', !attach.isError, attach.text);
+
+		const assetPath = 'wiki/vendors/assets/acme-logo.png';
+		const stored = await store.readBinary(repoArgs, assetPath);
+		check('the file is stored where it was placed', !!stored, assetPath);
+		// The assertion this block exists for.
+		check(
+			'bytes survive the round trip unchanged',
+			stored?.contentBase64 === PNG_1PX,
+			`${stored?.contentBase64?.slice(0, 24)}… vs ${PNG_1PX.slice(0, 24)}…`
+		);
+		check('size is reported from the stored blob', stored?.size === 70, String(stored?.size));
+
+		const hostText = (await fileText(host)) ?? '';
+		check(
+			'the page gained a relative markdown image link',
+			hostText.includes('![Acme logo](assets/acme-logo.png)'),
+			hostText
+		);
+		check('the upload landed as ONE commit', (await commitCount()) === before + 1);
+
+		// read_media hands the model an actual image block, not a description of one.
+		const raw = (await client.callTool({
+			name: 'read_media',
+			arguments: { path: assetPath }
+		})) as {
+			isError?: boolean;
+			content: { type: string; data?: string; mimeType?: string }[];
+			structuredContent?: { dataUri?: string; mimeType?: string };
+		};
+		const img = raw.content.find((c) => c.type === 'image');
+		check('read_media returns an image content block', !!img, JSON.stringify(raw.content));
+		check('with the same bytes it stored', img?.data === PNG_1PX);
+		check('and the right mime type', img?.mimeType === 'image/png');
+		check(
+			'and a data URI for the app to render under the iframe CSP',
+			raw.structuredContent?.dataUri === `data:image/png;base64,${PNG_1PX}`
+		);
+
+		// find_inbound_links has to work on an ATTACHMENT, not just a page. It is what
+		// the app's asset view calls to answer "which pages would lose this if I
+		// deleted it", and the failure mode is quiet: an empty list looks like a
+		// correct answer.
+		//
+		// The specific trap: readFile decodes a blob as UTF-8, and on a PNG that does
+		// not return null, it returns mojibake — so an existence check written for
+		// pages sails straight past and then titles the image from binary garbage.
+		const links = await call('find_inbound_links', { path: assetPath });
+		check('find_inbound_links works on an attachment', !links.isError, links.text);
+		check('and names the page that shows it', links.text.includes(host), links.text);
+		check(
+			'and titles it by filename rather than from its bytes',
+			links.text.includes('acme-logo.png') && !/[�]/.test(links.text),
+			links.text
+		);
+
+		// Moving an attachment has to repoint what displays it. This is the payoff of
+		// the assetEdges change: without it backlinksTo returns nothing here and the
+		// link on the page silently rots.
+		const moved = await call('move_page', {
+			path: assetPath,
+			new_path: 'wiki/vendors/assets/logo.png'
+		});
+		check('move_page moves an attachment', !moved.isError, moved.text);
+		const afterMove = (await fileText(host)) ?? '';
+		check(
+			'and repoints the page that displays it',
+			afterMove.includes('](assets/logo.png)') && !afterMove.includes('acme-logo.png'),
+			afterMove
+		);
+		check(
+			'the old path is gone',
+			(await store.readBinary(repoArgs, assetPath)) === null,
+			'old asset still present'
+		);
+
+		// And deleting one has to say who still shows it, since an image that vanishes
+		// leaves a hole rather than a broken link anyone would notice. Asserted on the
+		// page being NAMED rather than on the wording: the contract is that nothing
+		// dangles silently, and pinning the sentence makes a reworded message look like
+		// a regression.
+		const del = await call('delete_page', { path: 'wiki/vendors/assets/logo.png' });
+		check('delete_page deletes an attachment', !del.isError, del.text);
+		check('and warns that a page still shows it', del.text.includes(host), del.text);
+		check(
+			'the file is actually gone',
+			(await store.readBinary(repoArgs, 'wiki/vendors/assets/logo.png')) === null
+		);
+
+		// A folder path must still behave like a folder, not get caught by the asset branch.
+		const badType = await call('attach_media', {
+			page: host,
+			filename: 'notes.txt',
+			mime_type: 'text/plain',
+			data: PNG_1PX
+		});
+		check('attach_media refuses an unsupported type', badType.isError, badType.text);
+
+		// Storing must never write over a file that is already there. This is the one
+		// failure mode with no visible symptom: the second upload succeeds, the path is
+		// unchanged, so every page linking to it silently starts showing the other
+		// picture and the transcript says "Stored" both times. Only the repo knows what
+		// is already present, so the SERVER has to pick the free name and report it.
+		//
+		// A 1x1 RED png, so "which file is at this path" is answerable by comparing
+		// bytes rather than by trusting the message.
+		const PNG_RED =
+			'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
+		const firstPath = 'wiki/vendors/assets/shared.png';
+		await call('attach_media', {
+			path: firstPath,
+			filename: 'shared.png',
+			mime_type: 'image/png',
+			data: PNG_1PX
+		});
+		const clash = await call('attach_media', {
+			path: firstPath,
+			filename: 'shared.png',
+			mime_type: 'image/png',
+			data: PNG_RED
+		});
+		check('a second attach at a taken path still succeeds', !clash.isError, clash.text);
+		check(
+			'but lands at a NUMBERED path, not the one asked for',
+			clash.text.includes('wiki/vendors/assets/shared-2.png'),
+			clash.text
+		);
+		const original = await store.readBinary(repoArgs, firstPath);
+		check(
+			'the first file is untouched — its bytes, not the second upload',
+			original?.contentBase64 === PNG_1PX,
+			`${original?.contentBase64?.slice(0, 24)}…`
+		);
+		const variant = await store.readBinary(repoArgs, 'wiki/vendors/assets/shared-2.png');
+		check('and the second file is stored alongside it', variant?.contentBase64 === PNG_RED);
+		// The app inserts its link BEFORE uploading, so a rename it is not told about
+		// leaves the page pointing at a name nothing occupies.
+		const thirdAttach = (await client.callTool({
+			name: 'attach_media',
+			arguments: {
+				path: firstPath,
+				filename: 'shared.png',
+				mime_type: 'image/png',
+				data: PNG_RED
+			}
+		})) as { structuredContent?: { path?: string } };
+		check(
+			'the actual path comes back as data, not only as prose',
+			thirdAttach.structuredContent?.path === 'wiki/vendors/assets/shared-3.png',
+			JSON.stringify(thirdAttach.structuredContent)
+		);
+	}
 } finally {
 	await cleanup();
 	await client.close();

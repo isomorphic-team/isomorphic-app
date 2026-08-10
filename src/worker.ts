@@ -61,6 +61,7 @@ import { registerImportTools } from './tools/importer.ts';
 import { registerBrainApp } from './tools/apps.ts';
 import { SERVER_INSTRUCTIONS } from './lib/server-instructions.ts';
 import { registerCoreTools } from './tools/core.ts';
+import { registerMediaTools } from './tools/media.ts';
 import { registerMemberTools } from './tools/members.ts';
 import { registerBrainAccessTools } from './tools/brain-access.ts';
 import { registerConnectedAccountTools } from './tools/connected-accounts.ts';
@@ -851,6 +852,7 @@ class McpSession {
 		// Defined in src/tools/core.ts so the local Node runtime registers the same
 		// two tools from the same source rather than a second copy.
 		registerCoreTools(server, (opts) => this.tenantContext(opts));
+		registerMediaTools(server, (opts) => this.tenantContext(opts));
 
 		// ---------- librarian suite ----------
 		// write_page / move_page / delete_page / find_inbound_links / validate /

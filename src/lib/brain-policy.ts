@@ -20,6 +20,8 @@
 // the legacy field shape and synthesizes a map, so old .isomorphic.json files
 // keep working unchanged.
 
+import { isMediaPath } from './media.ts';
+
 // How writes reach the repo. `direct` commits to the default branch (right for
 // dedicated brains the app owns); `pull-request` opens a PR instead (right for a
 // branch-protected repo, e.g. an adopted customer KB whose main requires review).
@@ -165,6 +167,33 @@ export function isToolMaintained(path: string, cfg: PathPolicy): boolean {
 // The core predicate: may this path be an editable content page? (Callers still
 // enforce the `.md` extension.)
 export function isContentPath(path: string, cfg: PathPolicy): boolean {
+	return roleOf(path, cfg) === 'content';
+}
+
+// The attachment predicate: is this an uploaded file living in the brain's content,
+// as opposed to a page? Deliberately NOT a new PathRole. Assets sit under the same
+// `content` roots as the pages that reference them and are told apart by not ending
+// in `.md`, which is the distinction every page tool already enforces at its call
+// site. A fifth role would have changed the path-policy wire contract the app and
+// Worker share (pnpm test:policy) and forced every existing brain to add a prefix to
+// its config before a single image could be uploaded.
+//
+// The media-type check is what keeps this from claiming arbitrary repo files: a
+// stray `.yml` or `LICENSE` under wiki/ is neither a page nor an attachment.
+export function isAssetPath(path: string, cfg: PathPolicy): boolean {
+	return isContentFilePath(path, cfg) && isMediaPath(path);
+}
+
+// The broader predicate: a file under content that ISN'T a page, whatever its type.
+// isAssetPath is this plus the media allowlist, because the app only offers to
+// render and upload types it can handle.
+//
+// Link classification needs the wider net. Deleting a linked `.csv` breaks the page
+// linking to it exactly as deleting a `.png` does, and "we have no viewer for this
+// type" is no reason to stay quiet about it. Keeping the two apart is what left
+// delete_page with a second, parallel way to find inbound references.
+export function isContentFilePath(path: string, cfg: PathPolicy): boolean {
+	if (path.endsWith('.md') || isHiddenName(path)) return false;
 	return roleOf(path, cfg) === 'content';
 }
 

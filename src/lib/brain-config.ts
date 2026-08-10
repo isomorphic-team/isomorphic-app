@@ -30,28 +30,41 @@ import {
 	CONFIG_PATH,
 	DEFAULT_BRAIN_CONFIG,
 	PATH_ROLES,
+	isAssetPath,
 	isContentPath,
 	normRoot
 } from './brain-policy.ts';
 
 export * from './brain-policy.ts';
 
-// Everything in the repo that is NOT a visible content page: system files
-// (.isomorphic.json), folder markers (.gitkeep), immutable source, the
-// changelog, ignored paths, non-md assets. The app's file tree shows content
-// pages by default and reveals the rest behind "show hidden" (locked where the
-// policy makes them read-only). One recursive tree read.
-export async function listHiddenPaths(
+// Everything in the repo that is NOT a content page, split into the two kinds the
+// app treats differently.
+//
+// `assets` are attachments: real content, uploaded on purpose, just not markdown.
+// They used to fall into `hidden` purely because they lack a `.md` extension, which
+// filed a picture someone deliberately added alongside `.gitkeep` markers and the
+// config file, reachable only by turning on "show hidden". A brain that stores
+// something and then will not show it to you is the bug this split fixes.
+//
+// `hidden` keeps its old meaning: system files, source material, the log, dotfiles.
+//
+// One tree walk for both, because the two call sites (list_pages and browse_brain)
+// each need both lists and a second walk would double the cost of every file tree.
+export async function listNonPagePaths(
 	store: BrainStore,
 	repo: RepoRef,
 	config: BrainConfig
-): Promise<string[]> {
+): Promise<{ assets: string[]; hidden: string[] }> {
 	const head = await store.getHead(repo);
 	const tree = await store.listTree(repo, head, { extension: '*' });
-	return tree
-		.map((e) => e.path)
-		.filter((p) => !(p.endsWith('.md') && isContentPath(p, config)))
-		.sort();
+	const assets: string[] = [];
+	const hidden: string[] = [];
+	for (const { path } of tree) {
+		if (path.endsWith('.md') && isContentPath(path, config)) continue; // a page
+		if (isAssetPath(path, config)) assets.push(path);
+		else hidden.push(path);
+	}
+	return { assets: assets.sort(), hidden: hidden.sort() };
 }
 
 function stringList(v: unknown, fallback: string[]): string[] {
