@@ -27,11 +27,11 @@ carries primitives, and neither carries a file.
 So the byte-carrying path has to originate somewhere that actually holds bytes. There are
 three candidates, and only one is good:
 
-| Path                                                           | Verdict                                                                                              |
-| -------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
-| Model re-emits an attached image as base64 in a tool argument  | **Impossible.** Not a limitation to work around; the model does not have the bytes.                  |
-| The MCP App iframe reads a local file and calls a tool with it | **The design.** The iframe is a real browser context with a real file input.                         |
-| URL ingest: the model passes a URL, the Worker fetches it      | **Useful secondary path.** Works for images already on the web, not for anything on the user's disk. |
+| Path                                                           | Verdict                                                                              |
+| -------------------------------------------------------------- | ------------------------------------------------------------------------------------ |
+| Model re-emits an attached image as base64 in a tool argument  | **Impossible.** Not a limitation to work around; the model does not have the bytes.  |
+| The MCP App iframe reads a local file and calls a tool with it | **The design.** The iframe is a real browser context with a real file input.         |
+| URL ingest: the model passes a URL, the Worker fetches it      | **Built** (§11). Works for anything on the web, not for anything on the user's disk. |
 
 Everything below follows from that. The upload surface is the app, not the conversation.
 The conversation is where images are _read_, not where they are _written_.
@@ -241,11 +241,17 @@ to 30, with two merges recorded in `CLAUDE.md`). So: **two new tools, two extend
 
 `attach_media` is registered as a normal tool because the AppBridge routes widget calls
 through the host's `tools/call`, so an unregistered tool is not callable from the iframe.
-Its description should say plainly that it needs file bytes and is normally invoked by the
-Isomorphic app, so an agent does not burn a turn trying to synthesize base64. That follows
-the description rule already written down for `read_page` vs `view_page`: each tool's
-description stands alone and names itself, and cross-tool steering lives in
-`SERVER_INSTRUCTIONS`.
+Its description has to separate the two ways of supplying a file: `url` is the argument an
+agent can produce, `data` is filled in by the app, and saying so is what stops an agent
+burning a turn trying to synthesize base64. That follows the description rule already
+written down for `read_page` vs `view_page`: each tool's description stands alone and names
+itself, and cross-tool steering lives in `SERVER_INSTRUCTIONS`.
+
+`read_media`'s data URI is **opt-in** (`include_data`, set by the app). Hosts put
+`structuredContent` in front of the model alongside the content blocks, so sending it
+unconditionally spent a second and larger copy of every image as text, on top of the image
+block the model can actually see, and long enough to truncate the response it was attached
+to. See §11 and issue #20.
 
 **Usage analytics:** every new tool name needs a `TOOL_KINDS` entry, or `pnpm test:usage`
 fails by design. `attach_media` is an `edit`; `read_media` is a `read`.
@@ -297,9 +303,7 @@ on `viewer`).
 with a visible notice; lazy `read_media` per image; asset rows in the file tree. Remember
 `pnpm gen:app` or the deployed bundle goes stale silently.
 
-**Phase 5: URL ingest** (optional). A `url` argument on `attach_media` so the Worker fetches
-an image the model found on the web. Needs an egress allowlist decision and a size guard
-before the fetch, not after.
+**Phase 5: URL ingest.** Built, §11.
 
 ---
 
@@ -315,7 +319,51 @@ before the fetch, not after.
 
 ---
 
-## 11. Open questions for the owner
+## 11. URL ingest (built 2026-08-10, issue #20)
+
+`attach_media` takes `url` as an alternative to `data`. The server downloads the file, so
+the bytes never pass through the model's output and the model needs only the address.
+
+The trigger was the first agent-shaped task to hit the §1 constraint in practice: an agent
+located a floor plan, rendered a PDF page to PNG, cropped and compressed it to 14 KB, and
+then had no way to hand those bytes over. It attempted the ~19,000 characters of base64,
+mis-transcribed the tail, and got `Attachment data is not valid base64`.
+
+`url` does **not** solve that case, and is not claimed to. The file existed only on the
+agent's own disk, and the crop meant even a source handle from another connector would
+have carried the wrong bytes. What it does solve is the larger population around it:
+anything already at a public address, in one call, with no human in the loop. It also
+routes around a constraint the app path cannot: the fetch runs on the Worker, so a domain
+the agent's own sandbox is blocked from reaching is still reachable.
+
+**The address guards are the security boundary**, not hygiene, because this makes the
+Worker fetch a caller-supplied URL for anyone holding `editor` on a brain. In
+`src/lib/media.ts`, covered by `pnpm test:media`:
+
+- **https only**, no credentials in the URL.
+- **A refused-address list**: loopback, private and carrier-grade-NAT ranges, link-local
+  (which is where cloud metadata sits, at 169.254.169.254), multicast and reserved space,
+  the IPv6 equivalents including the IPv4-mapped spelling, and `.local` / `.internal` /
+  `.home.arpa` hostnames. The WHATWG parser normalizes decimal, octal, and hex IPv4 forms
+  before the range check sees them, so `https://2130706433/` arrives as `127.0.0.1`.
+- **Redirects are followed by hand**, up to three hops, each re-checked by the same rule.
+  `redirect: 'follow'` would validate the first address and then let a 302 point anywhere.
+- **Two size checks.** `Content-Length` refuses an oversized file without downloading it;
+  the streaming reader aborts mid-body at the same limit, because a header is a claim and
+  this is what holds when the claim is absent or false.
+- **The served type and the filename must agree**, the rule `validateAttachment` already
+  applies to an upload. The case this catches most often is not an attack: it is a URL that
+  answers with an HTML login wall or error page, refused before anything is committed.
+- A 15s timeout.
+
+The honest limit: these check the URL, and a public hostname that resolves to a private
+address defeats a hostname check. Cloudflare's `fetch` egresses to the public internet
+rather than into any network of ours, and the local runtime binds to loopback, so what
+remains reaches nothing either deployment owns.
+
+---
+
+## 12. Open questions for the owner
 
 1. **Is the app-only upload path acceptable as the product story?** It is a real constraint,
    not a shortcut, but it means "Claude, save this screenshot to the brain" will not work,

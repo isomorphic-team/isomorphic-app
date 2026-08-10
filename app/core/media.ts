@@ -45,7 +45,14 @@ async function loadAsset(repoPath: string): Promise<string | null> {
 
 	const p = (async () => {
 		try {
-			const res = await callTool('read_media', { path: repoPath, ...brainArgs() });
+			// include_data is what asks for the bytes. It is off by default because the
+			// model gets an image block and does not need a second copy as text, and the
+			// app is the caller that genuinely cannot render without them.
+			const res = await callTool('read_media', {
+				path: repoPath,
+				include_data: true,
+				...brainArgs()
+			});
 			if (res.isError) return null;
 			const sc = (res.structuredContent ?? {}) as { dataUri?: string };
 			if (typeof sc.dataUri !== 'string') return null;

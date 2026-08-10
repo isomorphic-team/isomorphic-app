@@ -5,9 +5,15 @@
 // thing that shapes the whole surface: THE MODEL CANNOT HAND US BYTES. Tool arguments
 // are JSON produced by the model, and a model shown an image holds visual tokens, not
 // base64 — it cannot reproduce a file it was never given as text, and no host passes a
-// conversation attachment into a tool call. So attach_media is called by the Isomorphic
-// app (a real browser context with a real file input), and its description says so, or
+// conversation attachment into a tool call. So `data` is filled in by the Isomorphic
+// app (a real browser context with a real file input), and the description says so, or
 // an agent burns a turn trying to synthesize a PNG.
+//
+// `url` is the way out of that for a model, and the only one: it names a location and
+// the server does the downloading, so the bytes never cross the model's output at all.
+// It does not replace the app path, which still owns every file that exists only on
+// someone's disk. Added for issue #20, where an agent could find, fetch, crop and
+// compress a floor plan and then had no way to hand over 14 KB of PNG.
 //
 // Only two tools, and move/delete are handled by the EXISTING move_page / delete_page
 // rather than gaining media twins. That is deliberate: this repo has documented
@@ -27,6 +33,7 @@ import {
 	attachmentMarkdown,
 	base64Bytes,
 	defaultAttachmentPath,
+	fetchRemoteAttachment,
 	formatBytes,
 	isModelViewable,
 	mediaTypeOf,
@@ -62,23 +69,36 @@ export function registerMediaTools(
 		{
 			title: 'Attach a file to the brain',
 			description:
-				// Self-naming and explicit about who calls it, for the same reason
-				// read_page's description is verbose: an agent that goes looking for this
-				// tool needs to learn from the description alone that it cannot supply the
-				// argument, rather than trying and failing.
-				"attach_media stores an uploaded file (an image, a PDF) in the brain and optionally adds it to a page. It requires the file's raw bytes as base64, which means it is normally called by the Isomorphic app when someone drops a file into the panel — NOT by you. You cannot produce the `data` argument from an image in the conversation: you can see that image, but you do not have its bytes. If a user asks you to save a picture they attached to the chat, tell them to drop it into the Isomorphic panel instead.",
+				// Self-naming and explicit about which argument belongs to whom, for the
+				// same reason read_page's description is verbose: an agent that goes
+				// looking for this tool needs to learn from the description alone which
+				// half of it it can actually call, rather than trying and failing.
+				'attach_media stores a file (an image, a PDF) in the brain and optionally adds it to a page. There are two ways to supply the file and only one of them is yours. Pass `url` and the server downloads the file itself: that is how YOU attach something, and it works for anything reachable at a public https address (a diagram, a photo, a PDF), including pages your own sandbox cannot reach. `data` takes raw base64 and is supplied by the Isomorphic app when someone drops a file into the panel, NOT by you: you cannot produce it from an image in the conversation, because you can see that image but do not have its bytes. So if the file is one the user attached to the chat, or one you produced yourself with no public URL, tell them to drop it into the Isomorphic panel instead.',
 			inputSchema: {
+				url: z
+					.string()
+					.optional()
+					.describe(
+						'Public https URL to download the file from. The server fetches it, so you never handle the bytes. Use this one.'
+					),
 				data: z
 					.string()
+					.optional()
 					.describe(
-						'The file\'s bytes, base64-encoded (no "data:" prefix). Supplied by the app, not by the model.'
+						'The file\'s bytes, base64-encoded (no "data:" prefix). Supplied by the app, not by the model. Give this or `url`, not both.'
 					),
 				filename: z
 					.string()
-					.describe('Original filename, used to derive the stored name and the file type.'),
+					.optional()
+					.describe(
+						'Filename used to derive the stored name and the file type. Required with `data`; with `url` it defaults to the name in the URL.'
+					),
 				mime_type: z
 					.string()
-					.describe('The file\'s MIME type, e.g. "image/png". Must agree with the extension.'),
+					.optional()
+					.describe(
+						'The file\'s MIME type, e.g. "image/png". Must agree with the extension. Required with `data`; with `url` it comes from the response.'
+					),
 				page: z
 					.string()
 					.optional()
@@ -98,7 +118,7 @@ export function registerMediaTools(
 				brain: brainArg
 			}
 		},
-		async ({ data, filename, mime_type, page, path, alt, brain }) => {
+		async ({ url, data, filename, mime_type, page, path, alt, brain }) => {
 			const ctx = await getContext({ requires: 'editor', brain });
 			const { store, repoArgs, config, author } = ctx;
 
@@ -110,8 +130,39 @@ export function registerMediaTools(
 				return fail(`"${pagePath}" is not a page. Pass a path ending in .md, or use \`path\`.`);
 			}
 
+			// Resolve the bytes before the destination, because with `url` the filename
+			// (and so the default path, and so the collision check) comes from what the
+			// server downloaded rather than from anything the caller said.
+			if (!url && !data) {
+				return fail("Give a `url` for the server to fetch, or `data` with the file's bytes.");
+			}
+			if (url && data) {
+				return fail('Give either `url` or `data`, not both.');
+			}
+
+			let name = (filename ?? '').trim();
+			let mime = (mime_type ?? '').trim();
+			let clean: string;
+
+			if (url) {
+				// The editor gate above has already run, so this fetch is never anonymous.
+				const fetched = await fetchRemoteAttachment(url, { filename: name });
+				if ('error' in fetched) return fail(fetched.error);
+				clean = fetched.data;
+				name = fetched.filename;
+				mime = mime || fetched.mimeType;
+			} else {
+				if (!name) {
+					return fail('Give a `filename` so the file can be named and typed.');
+				}
+				if (!mime) {
+					return fail("Give a `mime_type` that agrees with the filename's extension.");
+				}
+				clean = stripDataUrl(data ?? '').trim();
+			}
+
 			const desired = normalizePath(
-				path ? path : defaultAttachmentPath(pagePath, filename.trim() || 'attachment')
+				path ? path : defaultAttachmentPath(pagePath, name || 'attachment')
 			);
 
 			// Same three guards every write tool applies, in the same order, so an
@@ -136,8 +187,7 @@ export function registerMediaTools(
 					`"${desired}" already exists, and so does every numbered variant of it. Give an explicit \`path\` with a different name.`
 				);
 
-			const clean = stripDataUrl(data).trim();
-			const problem = validateAttachment({ path: target, mimeType: mime_type, data: clean });
+			const problem = validateAttachment({ path: target, mimeType: mime, data: clean });
 			if (problem) return fail(problem);
 
 			const bytes = base64Bytes(clean);
@@ -152,7 +202,7 @@ export function registerMediaTools(
 			if (pagePath) {
 				const existing = await store.readFile(repoArgs, pagePath);
 				if (!existing) return fail(`No page at "${pagePath}".`);
-				const link = attachmentMarkdown(pagePath, target, alt?.trim() || filename.trim());
+				const link = attachmentMarkdown(pagePath, target, alt?.trim() || name);
 				const body = existing.content.endsWith('\n')
 					? `${existing.content}\n${link}\n`
 					: `${existing.content}\n\n${link}\n`;
@@ -179,7 +229,7 @@ export function registerMediaTools(
 				author,
 				autoMerge: config.autoMerge,
 				mergeMethod: config.mergeMethod,
-				message: `Attach ${target}${appendedTo ? ` to ${appendedTo}` : ''}\n\n${formatBytes(bytes)} ${mime_type}. Logged in the same change.`,
+				message: `Attach ${target}${appendedTo ? ` to ${appendedTo}` : ''}\n\n${formatBytes(bytes)} ${mime}${url ? `, fetched from ${url}` : ''}. Logged in the same change.`,
 				writes,
 				head,
 				branchPrefix: 'isomorphic/attach',
@@ -202,7 +252,7 @@ export function registerMediaTools(
 			);
 			// The path is the one thing a programmatic caller cannot recompute: it depends
 			// on what was already in the repo.
-			return { ...result, structuredContent: { path: target, bytes, mimeType: mime_type } };
+			return { ...result, structuredContent: { path: target, bytes, mimeType: mime } };
 		}
 	);
 
@@ -216,10 +266,16 @@ export function registerMediaTools(
 				'read_media fetches a file stored in the brain (an image, a PDF) by its path. For an image type Claude can see (PNG, JPEG, GIF, WebP) it returns the picture itself, so you can look at it and describe or reason about it. The app also calls this to render images inside a page. Use it when a page references an image and the question depends on what the image actually shows.',
 			inputSchema: {
 				path: z.string().describe('Path of the stored file, e.g. "wiki/vendors/assets/logo.png".'),
+				include_data: z
+					.boolean()
+					.optional()
+					.describe(
+						'Include the raw bytes as a data URI in the structured result. Set by the Isomorphic app, which needs them to render the image. Leave it off: you are handed the picture itself.'
+					),
 				brain: brainArg
 			}
 		},
-		async ({ path, brain }) => {
+		async ({ path, include_data, brain }) => {
 			const { store, repoArgs, config } = await getContext({ brain });
 			const target = normalizePath(path);
 
@@ -248,11 +304,18 @@ export function registerMediaTools(
 			// structuredContent carries the data URI for the app, which renders it under
 			// the iframe's default CSP (img-src 'self' data:) with no external origin and
 			// no expiring signed URL. See docs/design/media-attachments.md §3.
+			//
+			// Only for the app, though, which is why it is opt-in. Hosts put
+			// structuredContent in front of the model alongside the content blocks, so
+			// sending it unconditionally spent a second, larger copy of every image as
+			// text: a 150 KB PNG became ~200 KB of base64 that read as nothing, on top of
+			// the image block the model can actually see, and long enough to truncate the
+			// response it was attached to. Reported as issue #20.
 			const structuredContent = {
 				path: target,
 				mimeType,
 				size: file.size,
-				dataUri: `data:${mimeType};base64,${file.contentBase64}`
+				...(include_data ? { dataUri: `data:${mimeType};base64,${file.contentBase64}` } : {})
 			};
 
 			if (!isModelViewable(mimeType)) {

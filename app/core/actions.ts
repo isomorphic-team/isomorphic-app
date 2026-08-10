@@ -506,7 +506,9 @@ async function navigateTo(path: string) {
 async function openAsset(path: string) {
 	show({ kind: 'loading', label: `Loading ${path}…` });
 	try {
-		const res = await callTool('read_media', { path, ...brainArgs() });
+		// include_data: the asset view IS the bytes. See app/core/media.ts on why the
+		// default is off.
+		const res = await callTool('read_media', { path, include_data: true, ...brainArgs() });
 		if (res.isError) throw new Error(firstText(res));
 		const sc = (res.structuredContent ?? {}) as {
 			mimeType?: string;
