@@ -439,7 +439,10 @@ for (const [tool, args] of CONTENT_WRITES) {
 	check(`${tool} refuses a brain viewer at the gate`, gated(viewer.detail), viewer.detail);
 	const boss = await attempt(orgBoss, tool, args);
 	check(`${tool} refuses an org OWNER who is only a brain viewer`, gated(boss.detail), boss.detail);
-	check(`${tool} admits a brain editor (it reaches the store)`, await passesGate(writer, tool, args));
+	check(
+		`${tool} admits a brain editor (it reaches the store)`,
+		await passesGate(writer, tool, args)
+	);
 	// The share_brain mirror: content is a brain act, so a brain admin does it even
 	// as an org viewer.
 	check(
