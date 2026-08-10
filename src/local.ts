@@ -28,6 +28,7 @@ import { execFileSync } from 'node:child_process';
 import { basename, resolve } from 'node:path';
 import { mkdirSync } from 'node:fs';
 import { registerCoreTools } from './tools/core.ts';
+import { registerMediaTools } from './tools/media.ts';
 import { registerLibrarianTools, type BrainContext } from './tools/librarian.ts';
 import { registerImportTools } from './tools/importer.ts';
 import { registerBrainApp } from './tools/apps.ts';
@@ -99,6 +100,7 @@ function buildServer(): McpServer {
 	);
 
 	registerCoreTools(server, getContext);
+	registerMediaTools(server, getContext);
 	registerLibrarianTools(server, getContext);
 	registerImportTools(server, getContext);
 	registerBrainApp(server, getContext);

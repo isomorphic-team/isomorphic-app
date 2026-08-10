@@ -114,7 +114,7 @@ Which leaves the real gap:
 Raised 2026-07-29 alongside the above. There is no active-org pointer in the model at
 all — `tenantContext` derives the org from whichever brain you chose — and everywhere org
 genuinely matters it is already an ARGUMENT at the point of decision: `AddBrainView` asks
-which organization, `connect_brain` takes a `brain` to target another org. A global picker
+which organization, and `create_brain` / `connect_brain` take an `org`. A global picker
 would add a second selection that most screens ignore, plus a real ambiguity: if the
 active org is A and the active brain lives in B, which one does `members` show?
 
@@ -263,45 +263,64 @@ Derived 2026-07-06 from commit-history analysis of two production AI-maintained 
 - **Draft to publish lifecycle.** `status: draft | published` in frontmatter as a first-class act. Draft pages visible to tools but flagged; a publish act flips status and logs it. Keeps the "proposed changes" review lane separate from the fast direct-save lane.
 - **Open-questions page**: a living page whose bullets get struck through and linked when a later page resolves them. Add to the brain template.
 
-# TODO: set frontmatter without rewriting the body
+# TODO: bulk page updates (batch field writes, and find/replace across pages)
 
-Filed as the "Related" half of issue #14, by a user archiving ~44 completed todos: once
-they were moved, marking each one `done:` had no route that left the body alone.
+Every write tool targets one logical thing: one page, or one folder subtree. The
+underlying primitive does not have that limit, since `commitFiles` already lands N
+files in one atomic commit. Three wants sit on the other side of that gap.
 
-`write_page`'s `edits` and `append` operate on the BODY only (`page-patch.ts`), and
-`content` replaces the whole body, so setting one arbitrary key means reading the page,
-reconstructing its text, and writing it back. That is the read-then-rewrite cycle
-`edits`/`append` were built to remove, and an agent that cannot read first is one call away
-from clobbering the page. The workaround in the field was `sync_records` with
-`adopt_existing: true`, which does write frontmatter in bulk but binds every page it touches
-to an import source (a `source_key` plus a ledger entry): a permanent side effect for a
-one-off field update.
+**Batch field writes.** The case that produced issue #14: 44 archived todos, each
+needing `done:`. With `fields` on `write_page` that is 44 calls, 44 commits, and 44
+near-identical `wiki/log.md` bullets for one human act ("I archived the finished
+work"). The changelog is a product surface, so that last part is a data-quality
+problem and not only a latency one.
 
-The mechanism is already there. `updatePageWrite` keeps the existing body verbatim when a
-call carries neither `content` nor a patch, which is how `write_page(path, status:)` works
-today. What is missing is that only four metadata keys are exposed (`title`, `type`,
-`description`, `status`), so `done:` cannot be said at all. The shape is a `fields` object
-on `write_page`, merged through the managed-frontmatter path.
+**Find/replace across pages.** Renaming a term, a product, or a person everywhere it
+appears. Impossible today except page by page, and unlike the field case there is no
+workaround at all. Probably the more valuable half.
 
-Decisions to make before building it:
+**Appending the same block to a set of pages.** Rarer, but it falls out of the same
+shape for free.
 
-- **Removing a key.** An object of keys can only set them. Clearing one needs a stated
-  convention (an explicit null) or a second argument.
-- **Collision with the managed keys.** `fields: { status: ... }` and the `status` argument
-  can disagree within one call. One has to win, by decision rather than by accident of
-  merge order.
-- **Nested frontmatter has to survive.** OKF's `sources:` / `generated:` blocks are held
-  verbatim and re-emitted byte for byte (`FrontmatterBlock` in `wiki.ts`). A new writer that
-  flattens them on the way through reintroduces exactly the data-loss bug that type exists
-  to prevent.
-- **Whether this is per-page at all.** The reported case is 44 pages, and arbitrary keys on
-  `write_page` still cost 44 calls. If the real need is "set a field across a set of pages",
-  that is a different tool: `sync_records` already has the batch shape, and the objection to
-  it was the import binding, not the arity. Building the single-page version first may
-  answer the wrong question.
+A `set_fields` tool covering only the first was built and then cut before merge
+(branch `feat/frontmatter-fields`, if the code is wanted). Two reasons, both worth
+keeping:
 
-Indexing needs nothing: `brain_page_fields` already indexes every scalar frontmatter key, so
-a new key becomes queryable by `okf-view` `filter:` and `group-by:` on the next read.
+- **The routing rule was wrong.** Steering between `set_fields` and `write_page`'s
+  `fields` came out as "how many pages", which is not the real axis: `set_fields`
+  applies ONE patch to many pages, so an agent setting each todo's `done:` to the
+  date it actually finished has 44 pages and cannot use it. The better discriminator
+  is modifier versus verb (is a body write happening anyway?), and that only pays for
+  itself once the batch verb does more than one thing.
+- **It answered the smaller half.** Shipping the fields-only batch would have spent
+  the tool slot, and the naming, on the want that already has a workaround.
+
+Design questions to settle before building:
+
+- **Shape.** The natural generalization is `write_page`'s partial-update vocabulary
+  applied to a set: `{fields?, edits?, append?}` over N paths, one commit, one
+  changelog line. That is one tool for all three wants.
+- **The exactly-once rule does not survive the jump.** `edits` is safe on one page
+  because an anchor matching zero times or several aborts the whole call. Across 44
+  pages a find string legitimately matches zero times on most of them, so bulk
+  find/replace needs "skip where absent", which is the very rule that makes the
+  single-page version safe. Needs an explicit answer (a per-page outcome report? a
+  required `expect:` count? apply only where unambiguous and name the rest?), not a
+  quiet relaxation.
+- **Selection: explicit paths, folder, or query.** Explicit paths make the blast
+  radius visible in the transcript, which matters for a call that atomically rewrites
+  200 pages. A folder path is the middle ground and matches what `move_page` and
+  `delete_page` already accept. A `filter:` expression (reusing okf-view's selection
+  language) is the powerful option and the dangerous one: a computed target set is a
+  blast radius the caller cannot see. If it is ever offered, it wants a preview step
+  like `sync_records`' proposal pattern rather than a bare write.
+- **Idempotence.** The cut implementation skipped pages already carrying the values so
+  a re-run wrote no commit at all. Worth keeping in any version; it is what makes the
+  tool safe to retry.
+- **Not `sync_records`.** It is already the general bulk writer, and it was rejected
+  here for a specific reason: it binds every page it touches to an import source
+  (`source_key` plus a ledger entry), a permanent side effect for a one-off update.
+  The objection was the binding, not the batching.
 
 # TODO: brain schema migrations (fleet-wide template/schema updates)
 
@@ -341,6 +360,113 @@ The MCP spec has a `resources` primitive distinct from tools: read-only, URI-add
 - Skip source material from the default resource tree: transcripts are big and noisy; expose only via the `read_page` tool when Claude needs them.
 - Token-size guards: refuse to serve resources above a per-resource cap (or annotate `mimeType` and size so clients can choose). One user attaching 30 wiki pages should not silently blow the context window.
 - Privacy via path: filter private paths out of `resources/list` results, mirroring the existing path-as-ACL convention.
+
+# TODO: media attachments (upload, view, and pass images through MCP). **DONE 2026-08-05**
+
+Images (and PDFs) live in a brain, render in the app, and can be handed to Claude to
+look at. Full design: [`docs/design/media-attachments.md`](design/media-attachments.md).
+
+**The constraint that set the shape: the model cannot hand us bytes.** Tool arguments
+are JSON produced by the model, and a model shown an image holds visual tokens, not
+base64. No host passes a conversation attachment into a tool call. So "Claude, save
+this screenshot" cannot be made to work by any tool design, and the upload surface is
+the **app iframe** (a real browser context with a real file input). The conversation is
+where images are read, not written. `attach_media`'s own description says so, because
+that is where an agent hunting for the tool will look.
+
+What shipped:
+
+- ~~**Binary storage.** `FileWrite` grew an `encoding`; binary becomes a blob referenced
+  by sha, because `createTree`'s inline `content` decodes as UTF-8 and silently mangles
+  a PNG. Both write paths now build trees through one shared helper. The fs adapter got
+  the same rule plus a rollback fix (it captured prior contents as a utf8 _string_, so
+  undoing a half-written bundle would have corrupted any binary it restored).~~
+- ~~**Attachments in the link graph.** `MD_LINK_RE` always matched `![](…)`, but
+  `loadResolvedGraph` dropped non-`.md` targets, so `backlinksTo` reported an image as
+  referenced by nobody — `move_page` would repoint nothing and `delete_page` would call
+  a still-used image unreferenced. Asset links now resolve into a separate `assetEdges`
+  list (separate because the graph view builds nodes from `pages`). They still never
+  count as `broken`: the index has no asset inventory, and guessing makes `validate` cry
+  wolf.~~
+- ~~**Tools:** `attach_media`, `read_media`, plus attachment branches in `move_page` /
+  `delete_page` rather than media twins. Both treated "no `.md`" as "folder", so an image
+  path would have been handled as a _subtree_ — the asset check runs first in both.~~
+- ~~**App:** images hydrate as `data:` URIs after render (the iframe CSP is
+  `img-src 'self' data:`, and a private brain repo has no URL to point at); drop-target
+  upload with client-side downscale to a 2576px long edge; attachments browsable in the
+  file tree with their own asset view showing preview, metadata, and which pages use it.~~
+- ~~**One rule for link classification** (`src/lib/links.ts`). It used to be inlined in
+  `loadResolvedGraph`, so nothing outside D1 could reuse it and the dev harness carried a
+  divergent copy — which made the preview report "no references" for an image that was
+  plainly on a page. A preview wrong in a _different direction_ than prod is worse than
+  no preview: it manufactures bugs and conceals real ones.~~
+
+Decisions worth not relitigating: **data URIs, not a CSP allowlist** (brain repos are
+private, so raw GitHub URLs need expiring signed redirects to a host you would not
+naturally declare); **5 MiB cap** (git keeps every version forever in a repo the customer
+clones); **co-located `assets/`** (so `move_page` on a folder carries its pictures, and
+plain markdown readers resolve the link); **images embed, documents link** (`![](…)` on a
+PDF is a broken image everywhere, including github.com).
+
+Not built, in rough priority order:
+
+- **Phase 0 host verification, still open.** Whether a sandboxed MCP App iframe in Claude
+  permits `<input type="file">` and drag-drop. Everything above stands either way, but if
+  it is blocked the upload _entry point_ needs rethinking. Verify before building further
+  on it.
+- Making the dev harness run the real server (its own section below).
+- An orphan advisory in `validate` (an attachment nothing references is invisible in the
+  app yet still in every clone forever), a brain-wide `assets/` option for shared images,
+  URL ingest (`attach_media` fetching a URL the model found), returning PDFs to the model
+  (unverified whether this host turns an embedded resource blob into a document block),
+  and retention/pruning.
+
+# TODO: make `pnpm app:dev` run the real server, not a reimplementation of it
+
+The dev harness (`dev/harness.ts`) loads the REAL app bytes and drives them over the
+REAL `AppBridge`, so the app side is production code. But it answers every tool call
+itself, from fixtures. That second half is roughly 1,400 lines reimplementing the
+server, and it is the largest remaining source of "works in the preview, differs in
+prod".
+
+It bit us on 2026-08-05. The harness scanned links with its own regex that only counted
+`.md` targets, so the asset view reported "no page shows this file" for an image that
+was plainly on a page — while production answered correctly. **A preview that is wrong
+in a different direction than prod is worse than no preview: it manufactures bugs that
+do not exist and conceals ones that do.** The immediate fix extracted the rule to
+`src/lib/links.ts` so both call the same function, but that is one rule out of many;
+`list_pages`, `read_page`, `find_inbound_links`, `search_pages`, the write tools and the
+members/analytics surfaces all still have a hand-written twin in there.
+
+Why the stubs exist: the harness runs **in a browser tab**, and the real read path needs
+a `BrainStore` (octokit or `node:fs`) plus D1 for the content index. Neither exists in a
+browser, so it imports the pure libs it can (`renderViews`, `effectiveBrainRole`,
+`classifyMdLink`, `resolveRelative`) and fakes the rest.
+
+That reason expired with the local-first work (**DONE 2026-08-04**). `pnpm try <folder>`
+already serves the real MCP tools over a git repo on disk, with a real store and D1 over
+`node:sqlite`. So the harness no longer needs to fake a server — it needs to _talk_ to
+one:
+
+- `scripts/app-dev.ts` boots a `pnpm try` server on a scratch brain seeded from
+  `dev/fixtures.json`, and the browser-side harness forwards `callServerTool` to it over
+  HTTP instead of answering from a `switch`.
+- The AppBridge/iframe/host-context half stays exactly as it is. That part is already
+  faithful and is not what drifts.
+- Delete the tool `switch` and the fixture-shaped duplicates of server logic. The seeded
+  brain becomes ordinary markdown files in a temp directory, which is also easier to
+  extend than a JSON blob.
+
+Payoff: the preview exercises the same handlers, gates, and index as prod, so divergence
+stops being a category of bug. It also makes the harness the natural place to reproduce a
+reported issue. Cost: `app:dev` gains a server process and a scratch directory, and the
+offline-with-no-setup property has to survive (`pnpm try` is already offline, so it
+should).
+
+Keep one escape hatch: some previews are _states_, not data — `#nobrains`, the
+"adopted repo, no content configured" empty state, a brain with 3,000 pages. Those want
+seeded fixtures or flags, not a live server, so the harness should still be able to
+force a state without pretending to be a server.
 
 # TODO: derived views & non-destructive sync
 

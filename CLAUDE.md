@@ -50,6 +50,23 @@ pnpm typecheck          # runs all four tsconfigs (node, worker, app, tests)
 pnpm format             # prettier
 ```
 
+**TESTS ARE EXPECTED FOR EVERY FEATURE AND EVERY FIX, in the same change.** Not
+deferred, not "typecheck covers it", not a manual check narrated in the summary.
+Shipping without one is a decision to argue for explicitly, not a default. Two
+rules that make the difference between coverage and its appearance:
+
+- **A green suite proves nothing unless it touches the changed code.** Before
+  reporting a change as tested, break it deliberately and confirm the test goes
+  red. A test that passes against both the old and new behavior is testing
+  neither. Say which battery covers a change, and say plainly when none does.
+- **Test the thing that DECIDES.** If the deciding logic sits somewhere no test
+  can call it (a private method on `McpSession`, a branch inside a handler),
+  move the logic instead of skipping the test. That is why so much of
+  `src/lib/` is pure: `effectiveBrainRole`, `chooseOrg`, `countedCall`, and
+  `resolveOrgForPerson` were all extracted so the rule could be pinned. The
+  pattern to copy is: pure or db-only function in `lib/`, thin wiring in the
+  Worker.
+
 **Tests.** All offline, all fork-safe, all wired into CI and into the `test` script
 (`pnpm test` runs everything): `pnpm test:roundtrip` (editor markdown round-trip),
 `pnpm test:views` (okf-view engine), `pnpm test:import` (import planner),
@@ -96,7 +113,11 @@ through a real content index on `node:sqlite`, against a real brain. By default 
 the fs + git `BrainStore` in a temp directory: no network, no credentials, nothing to
 clean up. They gate the write path (write_page's edits/append, move_page's link
 repointing over a folder subtree, delete_page's "still referenced" notes, the importer's
-no-resurrection ledger), which was previously maintainer-run by hand. `--github` runs the
+no-resurrection ledger), which was previously maintainer-run by hand. `e2e-librarian`
+also covers the ORG-scope tools that decide where a brain LANDS (`brains`,
+`connect_brain`): real org rows in the same D1, the real `resolveOrgForPerson`, and one
+org deliberately holding NO brain, since that is the org `listAccessibleBrains` cannot
+see and the one a first adoption used to be impossible into. `--github` runs the
 identical assertions against a disposable `brain-*-e2e-*` scratch repo on the platform
 org (needs `.dev.vars` with platform App creds, auto-deleted, never a real brain). That
 mode is the only coverage of the GitHub adapter itself, so run it when `githubStore`
@@ -213,9 +234,11 @@ owner likes, not forced into our schema.
 - **Only `wiki/log.md` is tool-maintained** (append-only changelog). `wiki/index.md` is
   now just a regular editable page; new brains are scaffolded with no predefined wiki
   folders and no index.
-- Frontmatter is optional/free-form. `isToolMaintained` (src/tools/librarian.ts) and
-  `isEditablePath` (app/main.tsx) are the write-policy guards. Schema doc for agents:
-  `brain-template/AGENTS.md`.
+- Frontmatter is optional/free-form, and now WRITABLE that way too: `write_page`'s
+  `fields` sets or removes any brain-owned key without touching the body (see [Writing
+  frontmatter](#writing-frontmatter-fields-and-the-properties-panel)).
+  `isToolMaintained` (src/tools/librarian.ts) and `isEditablePath` (app/main.tsx) are
+  the write-policy guards. Schema doc for agents: `brain-template/AGENTS.md`.
 - Future: "special folders" (e.g. skills) may get meaning later, but there's no use case
   yet — don't reintroduce a taxonomy speculatively.
 
@@ -482,6 +505,63 @@ None of this reintroduces a taxonomy: `type` is a free-form string, and folders 
   tolerated, so this is legal, just non-standard); `README.md` as a folder-note fallback is not
   an OKF reserved name, so such a page is technically a concept document owing a `type`.
 
+## Writing frontmatter (`fields` and the properties panel)
+
+Built 2026-08-10, from the "Related" half of issue #14. Frontmatter was read as an
+open key space and written as a closed one: the indexer stores **every** flat key
+(`brain_page_fields`), `okf-view` filters and groups by any of them, and the app
+renders any of them as a properties grid, while `write_page` exposed exactly four
+(`title`, `type`, `description`, `status`). So a brain could invent a vocabulary,
+query it, and display it, but the only way to SET one of its own keys was `content`,
+which replaces the whole body. The reported case was 44 archived todos that could
+not be marked `done:` without rewriting all 44 pages.
+
+- **`fields` on `write_page`** is JSON Merge Patch (RFC 7386): a present key sets, an
+  explicit `null` removes, an absent key is untouched. It rides the path that already
+  existed, since `updatePageWrite` keeps the body verbatim when a call carries neither
+  `content` nor a patch. Engine is `applyFieldPatch` in `src/lib/page-patch.ts`, pure,
+  beside the body patcher it is the twin of (`pnpm test:patch`).
+- **Three refusals, each forced by something else in the codebase, not by taste.**
+  (1) Key names must match `parseFrontmatter`'s `FM_KEY_RE` (`[A-Za-z0-9_-]`), which
+  SKIPS lines it cannot parse: a key with a space would be written successfully and
+  vanish on the next read, so the writer must not be able to produce a file our own
+  reader loses. (2) The managed keys are refused with a pointer to their own argument;
+  `title` is why this is a rule rather than a preference, since a retitle repoints every
+  inbound wikilink in the same save and a `fields`-set title would break links silently.
+  (3) A key currently holding a nested `FrontmatterBlock` is refused for BOTH set and
+  remove, because those runs are replayed byte for byte and flattening one destroys
+  provenance the caller has not read. That is the same invariant `edits` enforces: you
+  cannot destroy what you have not seen.
+- **This is deliberately PER-PAGE, and the batch case is unbuilt.** A `set_fields`
+  tool (an explicit `paths` list, one `commitOrPR` bundle, one changelog line) was
+  written and then cut before merge. The reasoning is in
+  [`docs/roadmap.md`](docs/roadmap.md): the routing rule between it and `fields` came
+  out to "how many pages", which is the wrong axis (the real question is whether it is
+  the SAME change), and the more valuable missing capability turned out to be bulk
+  find/replace, which `set_fields` would not have covered. So the 44-page case still
+  costs 44 calls and 44 changelog bullets. Do not re-add a fields-only batch tool
+  without reading that item first.
+- **The app's properties panel is editable** (`PageProperties` in
+  `app/views/PageView.tsx`), which is the half that serves humans rather than agents.
+  Its edit policy is not a second copy of the rules: it imports `isUsableFieldKey` from
+  the write path, routes `type`/`description`/`status` through their own arguments, and
+  never offers an edit on `sources` (rendered as a count, often the nested block) or
+  `updated` (stamped every save). Editing is offered in the VIEWER only, never in
+  `EditView`, where a property write would race the unsaved body the author has open.
+- **Told to the model in the usual three places**, descending reach: `SERVER_INSTRUCTIONS`
+  ("metadata is a field write, not a rewrite"), `write_page`'s own description and the
+  `fields` argument, and `brain-template/AGENTS.md`.
+- **Indexing needed nothing.** `brain_page_fields` already indexes every flat key, so a
+  new key is filterable on the next read. `write_page` does warn past
+  `MAX_FIELD_KEYS_PER_PAGE` (24), where the indexer stops reading keys: without that,
+  the field would be set in the file and invisible to `okf-view`, surfacing later as a
+  view that mysteriously misses pages.
+- Coverage: `pnpm test:patch` (the pure engine, including byte-for-byte survival of a
+  nested block), `pnpm test:e2e-librarian` (the real write path: body untouched, one
+  commit, every refusal proving nothing was written), and `pnpm test:scope`, which now
+  registers the librarian tools and asserts all three content writes gate on the BRAIN
+  role at `editor` in both directions. **Uncovered:** the app layer, as everywhere else.
+
 ## User-defined tools (brain-tools)
 
 A brain can define its **own MCP tools**: any content page under a **`tools/`** folder
@@ -705,7 +785,8 @@ Auth.js specifics that bite: config MUST be built per-request with `env.PLATFORM
 - **Brain sharing** (`src/tools/brain-access.ts`): `brain_access` (any access to the brain) opens the inline sharing panel and returns the list as data; `share_brain` (brain admin+) is every mutation in one verb: grant, change level, revoke (`access: 'none'`), and the `private`/`org` visibility flip. Guardrails: share only within the brain's org (a grant to a non-member is unreachable anyway, since resolution starts from `memberships`), never above your own brain role, never revoke yourself. UI is `app/views/BrainAccessView.tsx`. Sharing is a **brain-scope destination** (in `brainDestinations()` and the ⋯ menu's "This brain" group, beside Files/Graph/Recent changes/Members) because it passes the trail's scope test: switching brains shows a different answer. Ungated in both, since `brain_access` is read-only and open to anyone with access; only its controls are admin-gated. That is why `brain_access` is registered **`sticky: true`** in `worker.ts` like the other in-client view tools: the **Share** control in the brains list opens it for a NAMED brain, and without sticky the panel would render under another brain's crumb. Share is gated on `canShare` (brain role), which is deliberately not `canManage` (org role, gates disconnect). Adding someone is `app/views/ShareBrainView.tsx`, a pushed flow off that panel's header (the `app/ui/Flow.tsx` convention that every add-shaped action follows) and the brain-scope twin of `InviteMemberView`. Role NAMES are shared between the two scopes, descriptions are not: `ROLE_BLURB` vs `BRAIN_ROLE_BLURB` in `app/components/RoleSelect.tsx`.
 - **Member management** (built 2026-07-13, `src/tools/members.ts`): the org-admin roster surface. `members` (viewer+) both opens the in-client roster UI (`app/views/MembersView.tsx`) and returns the roster as data; **it is an ORG-scope destination in the nav, not a brain one** (`orgDestinations()` in `app/components/Breadcrumb.tsx`, and the ⋯ menu's "Organization" group) because every brain in one org shows the same roster: it takes the back arrow rather than the brain crumb, so it never reads as "these people belong to this brain". Contrast `brain_access`, which IS brain-scope. The three nav scopes (`brain` / `org` / `account`) are the `Scope` type there, and `DESTINATIONS`/`SCOPE_LABEL` are the one place each list and its wording live; the mutations `invite_member` / `set_member_role` / `remove_member` are admin+. (The former split `list_members`/`view_members` pair was merged into `members` on 2026-07-24, tool-surface consolidation.) Lockout-proof guardrails live in `members.ts`: `owner` is never assignable/removable/demotable, you can't edit your own membership, and you can't grant above your own role. Admins can make Admins; all members can see the roster (incl. emails). Invites are consumed at first sign-in by the already-wired `provisionOrgForUser` path. `orgId`/`actorUserId` ride on `TenantContext` (authjs path only; single-tenant paths reject with "org accounts only").
 - **Multi-brain selection** (P1, built 2026-07-14, `src/tools/brains.ts`): one connection can reach several brains (personal / team / client). `tenantContext({ requires, brain })` now resolves the CHOSEN brain — explicit `brain` arg (fuzzy-matched) → the connection's **active brain** → the default (oldest). Per-brain org token + role + commit attribution; the content index already isolates by `brainId`, so a call never crosses brains. Tools: `brains` (interactive switcher + data) / `switch_brain`, plus an optional **`brain` arg on every tool**. (`list_brains`/`view_brains` were merged into `brains` on 2026-07-24.) Active brain is persisted in `OAUTH_KV` (`active_brain:<userKey>`), **per-user** (the stateless transport has no per-connection DO state); loaded once per request, written fire-and-forget. The app's **top-left nav becomes a brain switcher** when there are 2+ brains (`BrainSwitcher` in `app/main.tsx`; still the Files button with one brain). Key seam for P2: `personUserIds(userId)` (worker.ts) and `listAccessibleBrains(db, userIds[])` (orgs.ts) take a SET of user ids — identity-linking just widens that set. **No schema change.**
-- **Multi-brain P2 (identity linking)** — NOT built. The plan: link a person's emails (`app_users.person_id`) so the accessible-brains set unions across identities; verification via magic-link; "Connected accounts" under the Your-settings surface. See `docs/design/org-roles-permissions.md`.
+- **Multi-brain P2 (identity linking)** is built. A person's emails share an `app_users.person_id`; `linkedUserIds` turns one signed-in id into the person's whole set, and resolution unions across it. Surface: `connected_accounts` / `link_identity` / `unlink_identity`, verified by a magic-link round trip. **Org scope was the last path still keyed on a single user id** (`orgContext` called `getMembershipWithOrg(db, userId)`), so `create_brain` and `connect_github_org` behaved as though nothing had been linked while every brain query already unioned. It reads `listAccessibleOrgs(db, personUserIds)` now. See `docs/design/org-roles-permissions.md`.
+- **Placing a brain uses `listAccessibleOrgs`, never `listAccessibleBrains`.** The latter inner-joins `brains`, so an org holding none produces no row: correct for choosing a brain to act on, wrong for choosing where to PUT one. That made the first brain in a freshly connected org unreachable. `connect_brain` picked its org by naming a brain already in it, and `create_brain` had no org argument at all and resolved through a `LIMIT 1` with no `ORDER BY`, so a person in two orgs got an arbitrary one. Both take an optional **`org`** now (fuzzy-matched on name / GitHub owner / org id by `matchOrg`); `connect_brain`'s `brain` argument is gone, since it only ever meant "which org". `chooseOrg` is the pure pick and throws rather than guessing: named handle > the active brain's org > oldest. The `brains` payload carries the org list, because the widget's picker could not derive a brainless org either. Covered by `pnpm test:access` (the query and the pick) and `pnpm test:scope` (that both tools forward `org`, and that the payload carries the list).
 - **Founding operator**: `src/db/seed-operator-org.sql` is a one-shot migration template that maps the founding operator's email onto a pre-existing brain (adopt, not re-provision) — fill in the placeholders and apply to local + remote D1.
 - **Model-B onboarding** (built, `docs/ops/onboarding-a-customer-org.md`): standing up a customer-owned org now has two paths. **Self-serve** — `connect_github_org` (`src/tools/org-onboarding.ts`) returns a GitHub App install URL carrying a KV-stashed `state`; installing redirects to `/github/install-callback`, which resolves the installation (App JWT) and writes the `customer` org + owner membership via `connectCustomerOrg` (`src/lib/org-connect.ts`), idempotent on re-install. The user then adopts a repo with `connect_brain`. Needs `GITHUB_APP_SLUG` on the Worker. **Operator** — `pnpm onboard-org` (`scripts/onboard-org.ts`) is the scripted replacement for hand-editing `seed-customer-org.sql`: it resolves `installation_id` from GitHub, verifies repo reachability, bakes the operator email into `created_by`/`invited_by`, and writes the org/brain/invite rows (dry-run by default; `--apply local|remote|both`).
 - **Not yet built** (design steps 4/6): invitations/admin UI, Google/SSO providers.

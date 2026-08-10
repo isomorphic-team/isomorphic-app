@@ -5,6 +5,13 @@
 // repointing via fetchInboundLinkersForPaths, for both a single page and a folder
 // subtree — move_page/delete_page take a folder path with no .md).
 //
+// It also covers the ORG-scope tools that decide where a brain LANDS (`brains`,
+// `connect_brain`), which resolve through orgContext / resolveOrgForPerson rather
+// than tenantContext and were uncovered until 2026-08-10. The org rows are real, in
+// the same D1 as the content index, and one of them deliberately holds NO brain:
+// listAccessibleBrains cannot see such an org, which is what once made adopting a
+// FIRST repo into a newly connected org impossible.
+//
 // TWO BACKENDS, ONE BATTERY. By default it runs against the fs + git BrainStore in a
 // temporary directory: no network, no credentials, no scratch repo, so it runs in CI
 // and a contributor can run it on a fresh clone. With --github it runs the identical
@@ -29,6 +36,15 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { registerLibrarianTools } from '../src/tools/librarian.ts';
+import { registerBrainTools } from '../src/tools/brains.ts';
+import {
+	listAccessibleBrains,
+	listAccessibleOrgs,
+	resolveOrgForPerson,
+	assertRole,
+	type Role
+} from '../src/lib/orgs.ts';
+import { registerMediaTools } from '../src/tools/media.ts';
 import { loadCustomToolDefs, registerCustomTools } from '../src/tools/custom.ts';
 import { installationOctokit } from '../src/lib/github.ts';
 import { createAndScaffoldBrain, buildScaffoldFiles } from '../src/lib/scaffold-core.ts';
@@ -48,6 +64,15 @@ let repoArgs: { owner: string; repo: string };
 let brainId: string;
 let name: string;
 let cleanup: () => Promise<void>;
+// The GitHub client for the three PLATFORM operations (create a repo, list an
+// installation's repos, check a repo exists). These are GitHub-as-a-platform, not
+// a brain as storage, so BrainStore deliberately cannot back them and the offline
+// mode has to stand in for them the way it stands in for the repo itself.
+let platformOctokit: never;
+// A second repo, existing but not yet a brain: what connect_brain adopts.
+let adoptRepo: string;
+// Repos create_brain scaffolds during the run, deleted with the rest in --github mode.
+const createdRepos: string[] = [];
 
 if (GITHUB_MODE) {
 	const devVarsPath =
@@ -78,15 +103,27 @@ if (GITHUB_MODE) {
 	store = githubStore(octokit);
 	repoArgs = { owner: brain.owner, repo: brain.name };
 	brainId = `${brain.owner}/${brain.name}`;
+	platformOctokit = octokit as never;
+	// A real second repo for connect_brain to adopt. Scaffolded like the first so the
+	// post-adopt config detection has actual content to look at.
+	adoptRepo = `${name}-adopt`;
+	console.log(`Creating scratch repo ${org}/${adoptRepo} …`);
+	await createAndScaffoldBrain(octokit, {
+		org,
+		name: adoptRepo,
+		description: 'Librarian E2E adopt target, safe to delete'
+	});
 	cleanup = async () => {
-		console.log(`\nDeleting scratch repo ${org}/${name} …`);
-		try {
-			await octokit.rest.repos.delete(repoArgs);
-			console.log('Deleted.');
-		} catch (err) {
-			console.log(
-				`Could not delete (${(err as { status?: number }).status}), delete manually: https://github.com/${org}/${name}/settings`
-			);
+		for (const repo of [name, adoptRepo, ...createdRepos]) {
+			console.log(`\nDeleting scratch repo ${org}/${repo} …`);
+			try {
+				await octokit.rest.repos.delete({ owner: org, repo });
+				console.log('Deleted.');
+			} catch (err) {
+				console.log(
+					`Could not delete (${(err as { status?: number }).status}), delete manually: https://github.com/${org}/${repo}/settings`
+				);
+			}
 		}
 	};
 } else {
@@ -106,6 +143,36 @@ if (GITHUB_MODE) {
 	cleanup = async () => {
 		await rm(dir, { recursive: true, force: true });
 	};
+	// The offline stand-in for GitHub-as-a-platform. Narrow on purpose: it answers
+	// only the two reads connect_brain makes, and answers them from a fixed set, so
+	// "the installation can reach this repo" is a real branch with a real negative
+	// case. What it CANNOT stand in for is the adapter itself, which is what
+	// --github is for: there, post-adopt config detection runs against actual repo
+	// content, and here it fails closed to needsConfig=false.
+	adoptRepo = `${name}-adopt`;
+	const reachable = new Set([name, adoptRepo]);
+	platformOctokit = {
+		rest: {
+			repos: {
+				get: async ({ repo }: { owner: string; repo: string }) => {
+					if (reachable.has(repo)) return { data: { name: repo } };
+					const err: Error & { status?: number } = new Error('Not Found');
+					err.status = 404;
+					throw err;
+				}
+			},
+			apps: {
+				listReposAccessibleToInstallation: async () => ({
+					data: {
+						repositories: [...reachable].map((repo) => ({
+							name: repo,
+							owner: { login: repoArgs.owner }
+						}))
+					}
+				})
+			}
+		}
+	} as never;
 }
 
 // ---- in-memory MCP client wired to the real handlers, with a full context ----
@@ -122,6 +189,7 @@ const getContext = async () => ({
 	activeBrain: { id: brainId, label: name }
 });
 registerLibrarianTools(server, getContext);
+registerMediaTools(server, getContext);
 const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
 await server.connect(serverTransport);
 const client = new Client({ name: 'e2e', version: '0.0.0' });
@@ -713,6 +781,88 @@ try {
 	);
 	check('deleted folder subtree is gone', goneItem === null);
 
+	// ══ frontmatter fields: write_page `fields` ══
+	// The reported case (issue #14): a todo-per-page vault marking finished work
+	// done. The invariant under test on every assertion here is that the BODY never
+	// moves, because the whole point is not having to read the page first.
+	const TODO_BODY = '# Ship the importer\n\nA body line that must survive every field write.\n';
+	await call('write_page', {
+		path: 'wiki/todos/alpha.md',
+		title: 'Todo alpha',
+		type: 'Todo',
+		content: TODO_BODY
+	});
+	await settledHead();
+
+	before = await commitCount();
+	r = await call('write_page', {
+		path: 'wiki/todos/alpha.md',
+		fields: { done: '2026-08-10', owner: 'ana', priority: 2 }
+	});
+	check('write_page fields: succeeds with no content argument', !r.isError, r.text);
+	check('write_page fields: names what it set', /set done, owner, priority/.test(r.text), r.text);
+	await assertOneCommit('write_page fields', before);
+	const alpha = await eventually(
+		() => fileText('wiki/todos/alpha.md'),
+		(t) => !!t && /done:/.test(t)
+	);
+	check(
+		'write_page fields: key is on the page',
+		/done:\s*2026-08-10/.test(alpha ?? ''),
+		alpha ?? ''
+	);
+	check(
+		'write_page fields: numbers land as scalars',
+		/priority:\s*2/.test(alpha ?? ''),
+		alpha ?? ''
+	);
+	check(
+		'write_page fields: the body is untouched',
+		(alpha ?? '').includes('A body line that must survive every field write.'),
+		alpha ?? ''
+	);
+	check(
+		'write_page fields: managed frontmatter still intact',
+		/type:\s*Todo/.test(alpha ?? '') && /title:\s*Todo alpha/.test(alpha ?? ''),
+		alpha ?? ''
+	);
+
+	r = await call('write_page', { path: 'wiki/todos/alpha.md', fields: { owner: null } });
+	check(
+		'write_page fields: null removes a key',
+		!r.isError && /removed owner/.test(r.text),
+		r.text
+	);
+	const alphaCut = await eventually(
+		() => fileText('wiki/todos/alpha.md'),
+		(t) => !!t && !/owner:/.test(t)
+	);
+	check('write_page fields: the key is gone from the file', !/owner:/.test(alphaCut ?? ''));
+	check('write_page fields: ...and the rest stayed', /done:\s*2026-08-10/.test(alphaCut ?? ''));
+
+	// The refusals. Each one exists so a caller cannot destroy something it has not read.
+	r = await call('write_page', { path: 'wiki/todos/alpha.md', fields: { title: 'Renamed' } });
+	check('write_page fields: refuses a managed key', r.isError, r.text);
+	check('write_page fields: ...and points at the argument', /title" argument/.test(r.text), r.text);
+	r = await call('write_page', { path: 'wiki/todos/alpha.md', fields: { 'due date': 'friday' } });
+	check('write_page fields: refuses a key that would not read back', r.isError, r.text);
+
+	// wiki/notes/kickoff.md carries the nested OKF sources:/generated: blocks.
+	r = await call('write_page', { path: 'wiki/notes/kickoff.md', fields: { sources: 'clobber' } });
+	check('write_page fields: refuses to flatten nested YAML', r.isError, r.text);
+	r = await call('write_page', { path: 'wiki/notes/kickoff.md', fields: { reviewed: 'yes' } });
+	check('write_page fields: writes alongside nested YAML', !r.isError, r.text);
+	const kickoffAfter = await eventually(
+		() => fileText('wiki/notes/kickoff.md'),
+		(t) => !!t && /reviewed:\s*yes/.test(t)
+	);
+	check(
+		'write_page fields: the nested block still round-trips',
+		/-\s+resource:\s*\/source\/kickoff\.md/.test(kickoffAfter ?? '') &&
+			/title:\s*Kickoff transcript/.test(kickoffAfter ?? ''),
+		kickoffAfter ?? ''
+	);
+
 	// ══ custom tools: author a tool page, discover it via the index, invoke it ══
 	// A tool page under tools/ becomes a `tool_<name>` MCP tool. Discovery is the
 	// exact loadCustomToolDefs the Worker runs in buildServer; invocation runs the
@@ -763,6 +913,460 @@ try {
 	check('tool prepends its instruction body', /Report the matches below\./.test(invText), invText);
 	await toolClient.close();
 	await toolServer.close();
+
+	// ---- attachments: bytes have to survive a real commit ----
+	//
+	// This is the only place the binary path is exercised end to end. Everything
+	// else about attachments is pure and covered by test:media; what cannot be
+	// tested purely is whether a PNG comes back byte-identical after going through
+	// createBlob -> tree -> commit -> read. The whole reason FileWrite grew an
+	// `encoding` is that the inline-content path decodes as UTF-8 and would corrupt
+	// these bytes silently, so a round-trip that compares base64 exactly is the
+	// assertion that would have caught it.
+	console.log('\nattachments');
+	{
+		// A 1x1 transparent PNG. Small, but real: it contains bytes that are not valid
+		// UTF-8, which is precisely what a text write path mangles.
+		const PNG_1PX =
+			'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==';
+		const host = 'wiki/vendors/acme.md';
+		await call('write_page', { path: host, content: '# Acme\n\nA vendor.\n', title: 'Acme' });
+
+		const before = await commitCount();
+		const attach = await call('attach_media', {
+			page: host,
+			filename: 'Acme Logo.png',
+			mime_type: 'image/png',
+			data: PNG_1PX,
+			alt: 'Acme logo'
+		});
+		check('attach_media succeeds', !attach.isError, attach.text);
+
+		const assetPath = 'wiki/vendors/assets/acme-logo.png';
+		const stored = await store.readBinary(repoArgs, assetPath);
+		check('the file is stored where it was placed', !!stored, assetPath);
+		// The assertion this block exists for.
+		check(
+			'bytes survive the round trip unchanged',
+			stored?.contentBase64 === PNG_1PX,
+			`${stored?.contentBase64?.slice(0, 24)}… vs ${PNG_1PX.slice(0, 24)}…`
+		);
+		check('size is reported from the stored blob', stored?.size === 70, String(stored?.size));
+
+		const hostText = (await fileText(host)) ?? '';
+		check(
+			'the page gained a relative markdown image link',
+			hostText.includes('![Acme logo](assets/acme-logo.png)'),
+			hostText
+		);
+		check('the upload landed as ONE commit', (await commitCount()) === before + 1);
+
+		// read_media hands the model an actual image block, not a description of one.
+		const raw = (await client.callTool({
+			name: 'read_media',
+			arguments: { path: assetPath }
+		})) as {
+			isError?: boolean;
+			content: { type: string; data?: string; mimeType?: string }[];
+			structuredContent?: { dataUri?: string; mimeType?: string };
+		};
+		const img = raw.content.find((c) => c.type === 'image');
+		check('read_media returns an image content block', !!img, JSON.stringify(raw.content));
+		check('with the same bytes it stored', img?.data === PNG_1PX);
+		check('and the right mime type', img?.mimeType === 'image/png');
+		check(
+			'and a data URI for the app to render under the iframe CSP',
+			raw.structuredContent?.dataUri === `data:image/png;base64,${PNG_1PX}`
+		);
+
+		// find_inbound_links has to work on an ATTACHMENT, not just a page. It is what
+		// the app's asset view calls to answer "which pages would lose this if I
+		// deleted it", and the failure mode is quiet: an empty list looks like a
+		// correct answer.
+		//
+		// The specific trap: readFile decodes a blob as UTF-8, and on a PNG that does
+		// not return null, it returns mojibake — so an existence check written for
+		// pages sails straight past and then titles the image from binary garbage.
+		const links = await call('find_inbound_links', { path: assetPath });
+		check('find_inbound_links works on an attachment', !links.isError, links.text);
+		check('and names the page that shows it', links.text.includes(host), links.text);
+		check(
+			'and titles it by filename rather than from its bytes',
+			links.text.includes('acme-logo.png') && !/[�]/.test(links.text),
+			links.text
+		);
+
+		// Moving an attachment has to repoint what displays it. This is the payoff of
+		// the assetEdges change: without it backlinksTo returns nothing here and the
+		// link on the page silently rots.
+		const moved = await call('move_page', {
+			path: assetPath,
+			new_path: 'wiki/vendors/assets/logo.png'
+		});
+		check('move_page moves an attachment', !moved.isError, moved.text);
+		const afterMove = (await fileText(host)) ?? '';
+		check(
+			'and repoints the page that displays it',
+			afterMove.includes('](assets/logo.png)') && !afterMove.includes('acme-logo.png'),
+			afterMove
+		);
+		check(
+			'the old path is gone',
+			(await store.readBinary(repoArgs, assetPath)) === null,
+			'old asset still present'
+		);
+
+		// And deleting one has to say who still shows it, since an image that vanishes
+		// leaves a hole rather than a broken link anyone would notice. Asserted on the
+		// page being NAMED rather than on the wording: the contract is that nothing
+		// dangles silently, and pinning the sentence makes a reworded message look like
+		// a regression.
+		const del = await call('delete_page', { path: 'wiki/vendors/assets/logo.png' });
+		check('delete_page deletes an attachment', !del.isError, del.text);
+		check('and warns that a page still shows it', del.text.includes(host), del.text);
+		check(
+			'the file is actually gone',
+			(await store.readBinary(repoArgs, 'wiki/vendors/assets/logo.png')) === null
+		);
+
+		// A folder path must still behave like a folder, not get caught by the asset branch.
+		const badType = await call('attach_media', {
+			page: host,
+			filename: 'notes.txt',
+			mime_type: 'text/plain',
+			data: PNG_1PX
+		});
+		check('attach_media refuses an unsupported type', badType.isError, badType.text);
+
+		// Storing must never write over a file that is already there. This is the one
+		// failure mode with no visible symptom: the second upload succeeds, the path is
+		// unchanged, so every page linking to it silently starts showing the other
+		// picture and the transcript says "Stored" both times. Only the repo knows what
+		// is already present, so the SERVER has to pick the free name and report it.
+		//
+		// A 1x1 RED png, so "which file is at this path" is answerable by comparing
+		// bytes rather than by trusting the message.
+		const PNG_RED =
+			'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
+		const firstPath = 'wiki/vendors/assets/shared.png';
+		await call('attach_media', {
+			path: firstPath,
+			filename: 'shared.png',
+			mime_type: 'image/png',
+			data: PNG_1PX
+		});
+		const clash = await call('attach_media', {
+			path: firstPath,
+			filename: 'shared.png',
+			mime_type: 'image/png',
+			data: PNG_RED
+		});
+		check('a second attach at a taken path still succeeds', !clash.isError, clash.text);
+		check(
+			'but lands at a NUMBERED path, not the one asked for',
+			clash.text.includes('wiki/vendors/assets/shared-2.png'),
+			clash.text
+		);
+		const original = await store.readBinary(repoArgs, firstPath);
+		check(
+			'the first file is untouched — its bytes, not the second upload',
+			original?.contentBase64 === PNG_1PX,
+			`${original?.contentBase64?.slice(0, 24)}…`
+		);
+		const variant = await store.readBinary(repoArgs, 'wiki/vendors/assets/shared-2.png');
+		check('and the second file is stored alongside it', variant?.contentBase64 === PNG_RED);
+		// The app inserts its link BEFORE uploading, so a rename it is not told about
+		// leaves the page pointing at a name nothing occupies.
+		const thirdAttach = (await client.callTool({
+			name: 'attach_media',
+			arguments: {
+				path: firstPath,
+				filename: 'shared.png',
+				mime_type: 'image/png',
+				data: PNG_RED
+			}
+		})) as { structuredContent?: { path?: string } };
+		check(
+			'the actual path comes back as data, not only as prose',
+			thirdAttach.structuredContent?.path === 'wiki/vendors/assets/shared-3.png',
+			JSON.stringify(thirdAttach.structuredContent)
+		);
+	}
+
+	// ── org + brain tools: where a brain LANDS ───────────────────────────────
+	// Everything above acts on a brain that already exists. These tools decide
+	// which ORGANIZATION a brain is created in or adopted into, and they resolve
+	// through a different path (orgContext / resolveOrgForPerson, not
+	// tenantContext) that nothing else in this battery reaches.
+	//
+	// The org rows are real, in the same D1 the content index runs on, and the
+	// decision runs through the real resolveOrgForPerson. `ORG_EMPTY` deliberately
+	// holds NO brain: an org with none is invisible to listAccessibleBrains, which
+	// is what used to make adopting a FIRST repo into a new org impossible.
+	const USER = 'u-e2e';
+	const ORG_MAIN = 'org-e2e-main';
+	const ORG_EMPTY = 'org-e2e-empty';
+	const run = (sql: string, ...binds: unknown[]) =>
+		db
+			.prepare(sql)
+			.bind(...binds)
+			.run();
+	await run(
+		`INSERT INTO app_users (user_id, email, name) VALUES (?1, ?2, ?3)`,
+		USER,
+		'e2e@example.com',
+		'E2E'
+	);
+	await run(
+		`INSERT INTO orgs (org_id, name, model, installation_id, brain_owner, created_by, created_at)
+		 VALUES (?1, ?2, 'customer', 1, ?3, ?4, '2026-01-01')`,
+		ORG_MAIN,
+		'Main Org',
+		repoArgs.owner,
+		USER
+	);
+	await run(
+		`INSERT INTO orgs (org_id, name, model, installation_id, brain_owner, created_by, created_at)
+		 VALUES (?1, ?2, 'customer', 1, ?3, ?4, '2026-02-01')`,
+		ORG_EMPTY,
+		'Contoso Group',
+		repoArgs.owner,
+		USER
+	);
+	// A third org whose GitHub owner DIFFERS from the other two. Those two share one
+	// deliberately, so connect_brain's candidate list can reach the adopt target, which
+	// also means the owner cannot reveal which org was resolved. This one can:
+	// create_brain names its org's owner on both the success and the failure path.
+	const ORG_OTHER = 'org-e2e-other';
+	await run(
+		`INSERT INTO orgs (org_id, name, model, installation_id, brain_owner, created_by, created_at)
+		 VALUES (?1, ?2, 'customer', 1, ?3, ?4, '2026-03-01')`,
+		ORG_OTHER,
+		'Third Party',
+		'other-owner-org',
+		USER
+	);
+	await run(
+		`INSERT INTO memberships (org_id, user_id, role) VALUES (?1, ?2, 'owner')`,
+		ORG_MAIN,
+		USER
+	);
+	await run(
+		`INSERT INTO memberships (org_id, user_id, role) VALUES (?1, ?2, 'owner')`,
+		ORG_EMPTY,
+		USER
+	);
+	await run(
+		`INSERT INTO memberships (org_id, user_id, role) VALUES (?1, ?2, 'owner')`,
+		ORG_OTHER,
+		USER
+	);
+	await run(
+		`INSERT INTO brains (brain_id, org_id, repo_owner, repo_name, name, visibility, created_at)
+		 VALUES (?1, ?2, ?3, ?4, ?5, 'org', '2026-01-02')`,
+		'b-e2e-main',
+		ORG_MAIN,
+		repoArgs.owner,
+		repoArgs.repo,
+		'Main'
+	);
+
+	let activeId = brainId;
+	// Mirrors the Worker's orgContext minus the two things a test cannot own: minting
+	// an installation token, and first-touch provisioning. The DECISION is the real
+	// one, which is why it lives in resolveOrgForPerson rather than in the Worker.
+	const orgContext = async (opts?: { requires?: Role; org?: string }) => {
+		const picked = await resolveOrgForPerson(db, [USER], { org: opts?.org });
+		if (!picked) throw new Error('You do not belong to any organization yet.');
+		assertRole(picked.role, opts?.requires);
+		return {
+			octokit: platformOctokit,
+			org: picked.org,
+			role: picked.role,
+			db,
+			actorUserId: USER,
+			author: undefined
+		};
+	};
+
+	const brainServer = new McpServer({ name: 'librarian-e2e-brains', version: '0.0.0' });
+	registerBrainTools(brainServer, {
+		getContext,
+		orgContext,
+		listOrgs: () => listAccessibleOrgs(db, [USER]),
+		listBrains: () => listAccessibleBrains(db, [USER]),
+		activeBrainId: () => activeId,
+		setActiveBrain: (id: string) => {
+			activeId = id;
+		},
+		invalidateConfig: () => {},
+		analyticsEnabled: false
+	});
+	const [brainCT, brainST] = InMemoryTransport.createLinkedPair();
+	await brainServer.connect(brainST);
+	const brainClient = new Client({ name: 'e2e-brains', version: '0.0.0' });
+	await brainClient.connect(brainCT);
+	const callBrain = async (tool: string, args: Record<string, unknown>) => {
+		const res = (await brainClient.callTool({ name: tool, arguments: args })) as {
+			isError?: boolean;
+			content: { type: string; text: string }[];
+			structuredContent?: Record<string, unknown>;
+		};
+		return {
+			isError: !!res.isError,
+			text: res.content.map((c) => c.text).join('\n'),
+			sc: res.structuredContent ?? {}
+		};
+	};
+
+	let br = await callBrain('brains', {});
+	check('brains lists the brain under test', !br.isError && br.text.includes('Main'), br.text);
+	const offeredOrgs = (br.sc.orgs as { orgId: string }[] | undefined) ?? [];
+	check(
+		'brains payload offers BOTH orgs, including the one with no brains',
+		offeredOrgs.some((o) => o.orgId === ORG_MAIN) && offeredOrgs.some((o) => o.orgId === ORG_EMPTY),
+		JSON.stringify(offeredOrgs)
+	);
+
+	// The picker: no `repo` lists what the org's installation can reach and has not
+	// already been adopted. The brain under test is adopted, so it must not appear.
+	br = await callBrain('connect_brain', { org: 'Contoso Group' });
+	// Asserted on the structured ids, not the rendered text: the adopt repo's name has
+	// the brain's name as a prefix, so a substring check passes no matter what.
+	const candidates = ((br.sc.repos as { id: string }[] | undefined) ?? []).map((r) => r.id);
+	check(
+		'connect_brain with no repo lists connectable candidates',
+		!br.isError && candidates.includes(`${repoArgs.owner}/${adoptRepo}`),
+		JSON.stringify(candidates)
+	);
+	check(
+		'...and excludes a repo that is already a brain',
+		!candidates.includes(`${repoArgs.owner}/${repoArgs.repo}`),
+		JSON.stringify(candidates)
+	);
+
+	// THE REGRESSION. Adopting the first repo into an org that holds none. Before the
+	// org argument existed this call had no way to name ORG_EMPTY at all, because the
+	// only handle was a brain already inside it.
+	br = await callBrain('connect_brain', {
+		repo: `${repoArgs.owner}/${adoptRepo}`,
+		org: 'Contoso Group',
+		name: 'Adopted'
+	});
+	check('connect_brain adopts into a brainless org', !br.isError, br.text);
+	const adopted = (await db
+		.prepare(`SELECT org_id, visibility, name FROM brains WHERE repo_name = ?1`)
+		.bind(adoptRepo)
+		.first()) as { org_id?: string; visibility?: string; name?: string } | null;
+	check(
+		'...writing the brains row into THAT org, not the default one',
+		adopted?.org_id === ORG_EMPTY,
+		`org_id = ${adopted?.org_id}`
+	);
+	check(
+		'...org-visible, unlike create_brain’s private default',
+		adopted?.visibility === 'org',
+		`visibility = ${adopted?.visibility}`
+	);
+	check(
+		'...under the caller’s chosen name',
+		adopted?.name === 'Adopted',
+		`name = ${adopted?.name}`
+	);
+
+	br = await callBrain('brains', {});
+	check('the adopted brain now shows in the list', br.text.includes('Adopted'), br.text);
+
+	// Guardrails.
+	br = await callBrain('connect_brain', {
+		repo: `${repoArgs.owner}/${adoptRepo}`,
+		org: 'Contoso Group'
+	});
+	check(
+		'connect_brain refuses a repo that is already a brain here',
+		br.isError && /already a brain/i.test(br.text),
+		br.text
+	);
+	br = await callBrain('connect_brain', {
+		repo: `${repoArgs.owner}/definitely-not-a-real-repo`,
+		org: 'Contoso Group'
+	});
+	check(
+		'connect_brain refuses a repo the installation cannot reach',
+		br.isError && /can't access/i.test(br.text),
+		br.text
+	);
+	br = await callBrain('connect_brain', { repo: 'x/y', org: 'no-such-org' });
+	check(
+		'connect_brain refuses an org handle that matches nothing',
+		br.isError && /No organization matching/i.test(br.text),
+		br.text
+	);
+
+	// ── create_brain: the OTHER way a brain lands in an org ──────────────────
+	// Scaffolding a fresh repo goes through the Git Data API, which the offline stand-in
+	// cannot honestly fake, so the two modes assert different depths of the same thing.
+	// Offline proves the ORG RESOLUTION reached the scaffold (the failure names the
+	// resolved org's GitHub owner, and only the third org has a distinct one); --github
+	// proves the whole act.
+	if (GITHUB_MODE) {
+		br = await callBrain('create_brain', { name: 'Created By E2E', org: 'Contoso Group' });
+		check('create_brain scaffolds a new brain', !br.isError, br.text);
+		const made = (await db
+			.prepare(`SELECT brain_id, org_id, visibility, repo_name FROM brains WHERE name = ?1`)
+			.bind('Created By E2E')
+			.first()) as {
+			brain_id?: string;
+			org_id?: string;
+			visibility?: string;
+			repo_name?: string;
+		} | null;
+		if (made?.repo_name) createdRepos.push(made.repo_name);
+		check(
+			'...into the org the caller named, not the default one',
+			made?.org_id === ORG_EMPTY,
+			`org_id = ${made?.org_id}`
+		);
+		check(
+			'...PRIVATE by default, the opposite of connect_brain',
+			made?.visibility === 'private',
+			`visibility = ${made?.visibility}`
+		);
+		const grant = (await db
+			.prepare(`SELECT role FROM brain_memberships WHERE brain_id = ?1 AND user_id = ?2`)
+			.bind(made?.brain_id ?? '', USER)
+			.first()) as { role?: string } | null;
+		check(
+			'...with an explicit admin grant for its creator',
+			grant?.role === 'admin',
+			`grant = ${grant?.role}`
+		);
+		check(
+			'...and it shows in the brain list',
+			(await callBrain('brains', {})).text.includes('Created By E2E')
+		);
+	} else {
+		br = await callBrain('create_brain', { name: 'Scratch', org: 'Third Party' });
+		check(
+			'create_brain resolves the NAMED org before scaffolding',
+			br.isError && br.text.includes('other-owner-org'),
+			br.text
+		);
+		check(
+			'...and does not silently fall back to the default org',
+			!br.text.includes(repoArgs.owner),
+			br.text
+		);
+	}
+	br = await callBrain('create_brain', { name: 'Nope', org: 'no-such-org' });
+	check(
+		'create_brain refuses an org handle that matches nothing',
+		br.isError && /No organization matching/i.test(br.text),
+		br.text
+	);
+
+	await brainClient.close();
+	await brainServer.close();
 } finally {
 	await cleanup();
 	await client.close();

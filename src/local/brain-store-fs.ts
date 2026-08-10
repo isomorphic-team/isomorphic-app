@@ -179,25 +179,30 @@ export function fsBrainStore(opts: FsStoreOptions): BrainStore {
 	): Promise<{ sha: string; head: Head }> => {
 		void repoUnused;
 		// Capture what we are about to overwrite so a failure halfway can be undone.
-		const undo: Array<{ full: string; prior: string | null }> = [];
+		// Buffers, not strings: rolling a half-written bundle back through a utf8 decode
+		// would silently corrupt any binary file it restored.
+		const undo: Array<{ full: string; prior: Buffer | null }> = [];
 		const touched = [...(o.writes ?? []).map((w) => w.path), ...(o.deletes ?? [])];
 		try {
 			for (const w of o.writes ?? []) {
 				const full = safeJoin(root, w.path);
-				undo.push({ full, prior: existsSync(full) ? await readFile(full, 'utf8') : null });
+				undo.push({ full, prior: existsSync(full) ? await readFile(full) : null });
 				await mkdir(dirname(full), { recursive: true });
-				await writeFile(full, w.content, 'utf8');
+				// Same rule as the GitHub adapter: a base64 write carries bytes, so decode
+				// it rather than writing the encoded text to disk.
+				if (w.encoding === 'base64') await writeFile(full, Buffer.from(w.content, 'base64'));
+				else await writeFile(full, w.content, 'utf8');
 			}
 			for (const p of o.deletes ?? []) {
 				const full = safeJoin(root, p);
 				if (!existsSync(full)) continue;
-				undo.push({ full, prior: await readFile(full, 'utf8') });
+				undo.push({ full, prior: await readFile(full) });
 				await rm(full, { force: true });
 			}
 		} catch (err) {
 			for (const u of undo.reverse()) {
 				if (u.prior === null) await rm(u.full, { force: true });
-				else await writeFile(u.full, u.prior, 'utf8');
+				else await writeFile(u.full, u.prior);
 			}
 			throw err;
 		}
@@ -256,6 +261,19 @@ export function fsBrainStore(opts: FsStoreOptions): BrainStore {
 			return {
 				content: await readFile(full, 'utf8'),
 				sha: fileToken({ path, size: s.size, mtimeMs: Math.floor(s.mtimeMs) })
+			};
+		},
+
+		readBinary: async (_repo, path) => {
+			const full = safeJoin(root, path);
+			if (!existsSync(full)) return null;
+			const s = await stat(full);
+			if (!s.isFile()) return null;
+			const bytes = await readFile(full);
+			return {
+				contentBase64: bytes.toString('base64'),
+				sha: fileToken({ path, size: s.size, mtimeMs: Math.floor(s.mtimeMs) }),
+				size: s.size
 			};
 		},
 

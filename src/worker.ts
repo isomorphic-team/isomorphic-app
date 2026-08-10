@@ -44,11 +44,13 @@ import {
 	listAccessibleBrains,
 	linkedUserIds,
 	getAppUserByGithubUserId,
-	getMembershipWithOrg,
+	listAccessibleOrgs,
+	resolveOrgForPerson,
 	matchBrain,
 	brainLabel,
 	brainLabelQualified,
 	type AccessibleBrain,
+	type Org,
 	type OrgScope,
 	type Role,
 	type TenantOpts
@@ -61,6 +63,7 @@ import { registerImportTools } from './tools/importer.ts';
 import { registerBrainApp } from './tools/apps.ts';
 import { SERVER_INSTRUCTIONS } from './lib/server-instructions.ts';
 import { registerCoreTools } from './tools/core.ts';
+import { registerMediaTools } from './tools/media.ts';
 import { registerMemberTools } from './tools/members.ts';
 import { registerBrainAccessTools } from './tools/brain-access.ts';
 import { registerConnectedAccountTools } from './tools/connected-accounts.ts';
@@ -372,6 +375,15 @@ class McpSession {
 		return linkedUserIds(this.env.PLATFORM_DB, userId);
 	}
 
+	// The org holding the connection's active brain. Lets an org-scope action default
+	// to where the user is already working instead of to whichever org sorts first.
+	// Called lazily by resolveOrgForPerson, which skips it when it cannot matter.
+	private async activeBrainOrgId(): Promise<string | undefined> {
+		if (!this.activeBrainId) return undefined;
+		const brains = await this.listAccessibleBrainsForCaller();
+		return brains.find((b) => b.id === this.activeBrainId)?.org_id;
+	}
+
 	// All brains the current caller can reach (authjs path). Used by the brain tools
 	// (brains / switch_brain) and the switcher.
 	private async listAccessibleBrainsForCaller(): Promise<AccessibleBrain[]> {
@@ -654,7 +666,7 @@ class McpSession {
 	// the "you have no brains yet" state. Authjs-only; the legacy github/static paths
 	// have no org row and are rejected (mirrors the member tools' "org accounts only").
 	// Ensures the personal org exists on first touch (org-only provision).
-	private async orgContext(opts?: { requires?: Role }): Promise<OrgScope> {
+	private async orgContext(opts?: { requires?: Role; org?: string }): Promise<OrgScope> {
 		const env = this.env;
 		if (env.AUTH_MODE !== 'oauth' || !this.props?.user_id) {
 			throw new Error(
@@ -663,14 +675,28 @@ class McpSession {
 		}
 		const userId = this.props.user_id;
 		const email = this.props.email ?? '';
-		let membership = await getMembershipWithOrg(env.PLATFORM_DB, userId);
-		if (!membership) {
-			// First touch with no org yet — create the personal org (org-only).
+		// The PERSON's orgs, not the signed-in id's. Org scope was the last resolution
+		// path still keyed on a single user_id, so a membership held under a linked email
+		// was unreachable here while every brain query already unioned across them. That is
+		// the account-linking asymmetry that made create_brain behave as if nothing was linked.
+		// The PERSON's orgs, and the whole selection decision, live in orgs.ts so a test
+		// can drive them against a real database (see resolveOrgForPerson). Null here
+		// means no membership anywhere, which is the one case that provisions.
+		const personIds = await this.personUserIds(userId);
+		const picked = await resolveOrgForPerson(env.PLATFORM_DB, personIds, {
+			org: opts?.org,
+			activeOrgId: () => this.activeBrainOrgId()
+		});
+		let membership: { role: Role; org: Org };
+		if (picked) {
+			membership = picked;
+		} else {
+			// First touch with no org at all: create the personal org (org-only).
 			const p = await this.autoProvisionOrg(userId, email);
 			membership = { role: p.role, org: p.org };
-		}
-		if (membership.org.suspended_at) {
-			throw new Error(`Org ${membership.org.org_id} is suspended. Contact your admin.`);
+			if (membership.org.suspended_at) {
+				throw new Error(`Org ${membership.org.org_id} is suspended. Contact your admin.`);
+			}
 		}
 		assertRole(membership.role, opts?.requires);
 		const octokit = await installationOctokit(appCreds(env), membership.org.installation_id);
@@ -851,6 +877,7 @@ class McpSession {
 		// Defined in src/tools/core.ts so the local Node runtime registers the same
 		// two tools from the same source rather than a second copy.
 		registerCoreTools(server, (opts) => this.tenantContext(opts));
+		registerMediaTools(server, (opts) => this.tenantContext(opts));
 
 		// ---------- librarian suite ----------
 		// write_page / move_page / delete_page / find_inbound_links / validate /
@@ -971,6 +998,10 @@ class McpSession {
 		registerBrainTools(server, {
 			getContext: (opts) => this.tenantContext(opts),
 			orgContext: (opts) => this.orgContext(opts),
+			listOrgs: async () =>
+				this.props?.user_id
+					? listAccessibleOrgs(this.env.PLATFORM_DB, await this.personUserIds(this.props.user_id))
+					: [],
 			listBrains: () => this.listAccessibleBrainsForCaller(),
 			activeBrainId: () => this.activeBrainId,
 			setActiveBrain: (id) => this.setActiveBrain(id),
