@@ -147,6 +147,65 @@ So identity is an explicit key, exactly as the importer already does it:
   every key ever received, so a page the receiver deleted stays deleted instead of reappearing on
   the next run. This is the no-resurrection rule, unchanged.
 
+### Where an arrival lands
+
+Placement is a **first-arrival question only**, which is the whole payoff of keying on identity
+instead of path. The default: `into:` plus the source page's basename, flat.
+
+Sending brain, `wiki/clients/gordon-brothers/deliverables/2026-08-10 Kickoff Plan.md`:
+
+```yaml
+type: Deliverable
+status: published
+publish_to: gb-engagement
+```
+
+Receiving brain, subscription `into: "wiki/from-ai-lab/"`, first run creates
+`wiki/from-ai-lab/2026-08-10 Kickoff Plan.md`:
+
+```yaml
+type: Deliverable
+status: published
+source_key: 01J9X…
+source: gb-engagement
+updated: 2026-08-10
+```
+
+Four decisions in that:
+
+- **Flat, not mirrored.** Mirroring `clients/gordon-brothers/deliverables/` into the client's
+  repository leaks the sending brain's internal organization, and folder names are themselves
+  information (`prospects/`, `pricing/`, `renewal-risk/`). A frontmatter-selected set is scattered
+  and has no common root to mirror anyway. Where a publication genuinely is a subtree, an optional
+  `relative_to:` on the publication can preserve structure below that root, which keeps the
+  leakage bounded to what the author named.
+- **The selector field does not cross.** `publish_to` is the sender's routing, meaningless in the
+  receiving brain, and actively wrong there: a received page carrying it looks like a page that
+  wants to publish onward. Whatever key drives `select:` is stripped on the way through.
+- **The seam id crosses, and today's importer does not do this.** `createContent` stamps
+  `source_key` and `updated` and nothing naming the source, so a brain holding two subscriptions
+  cannot tell from a page which seam delivered it, and the only answer lives in whichever ledger
+  happens to hold the key. Tolerable for a spreadsheet; not for cross-brain, where "who sent me
+  this" is the receiver's first question. The received page carries the seam id as `source`.
+- **Collisions are already handled.** Two published pages sharing a basename hit the importer's
+  existing clobber guard: a create aimed at a path that exists and does not claim the key errors
+  by name and points at `adopt_existing`. Refusing and reporting beats auto-suffixing, since a
+  generated suffix is unstable the moment the colliding page unpublishes.
+
+After the first arrival the receiver owns the location:
+
+- **The receiver may move it anywhere**, and the next run finds it by key and updates it in place.
+  Arrivals land quarantined in `into:` so provenance is visible at a glance, and moving one out is
+  how a receiver interleaves it with their own material. Both behaviors, one default.
+- **A `move_page` on the SENDING side must not move the received page.** Filing in the receiving
+  brain is the receiver's business. This is the rule that makes the seam survive routine tidying on
+  either side, and it is the reason identity is a key.
+- **Read-only governs the body, not the filing.** `move_page` stays available on a received page;
+  renaming does not, because `title:` comes from upstream and a local rename would be overwritten
+  on the next run.
+- The landing folder wants a folder note, and it can be scaffolded with one: `index.md` holding a
+  `kind: pages` view `under` the landing path indexes arrivals with machinery that already exists.
+
 Because path is not identity, **the sending side's export folder does not need to exist at all**.
 Which is the next point.
 
