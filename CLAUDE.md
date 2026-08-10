@@ -195,9 +195,8 @@ owner likes, not forced into our schema.
   now just a regular editable page; new brains are scaffolded with no predefined wiki
   folders and no index.
 - Frontmatter is optional/free-form, and now WRITABLE that way too: `write_page`'s
-  `fields` sets or removes any brain-owned key on one page and `set_fields` does it
-  across a list, both without touching the body (see [Writing
-  frontmatter](#writing-frontmatter-fields-set_fields-the-properties-panel)).
+  `fields` sets or removes any brain-owned key without touching the body (see [Writing
+  frontmatter](#writing-frontmatter-fields-and-the-properties-panel)).
   `isToolMaintained` (src/tools/librarian.ts) and `isEditablePath` (app/main.tsx) are
   the write-policy guards. Schema doc for agents: `brain-template/AGENTS.md`.
 - Future: "special folders" (e.g. skills) may get meaning later, but there's no use case
@@ -466,7 +465,7 @@ None of this reintroduces a taxonomy: `type` is a free-form string, and folders 
   tolerated, so this is legal, just non-standard); `README.md` as a folder-note fallback is not
   an OKF reserved name, so such a page is technically a concept document owing a `type`.
 
-## Writing frontmatter (`fields`, `set_fields`, the properties panel)
+## Writing frontmatter (`fields` and the properties panel)
 
 Built 2026-08-10, from the "Related" half of issue #14. Frontmatter was read as an
 open key space and written as a closed one: the indexer stores **every** flat key
@@ -493,14 +492,15 @@ not be marked `done:` without rewriting all 44 pages.
   remove, because those runs are replayed byte for byte and flattening one destroys
   provenance the caller has not read. That is the same invariant `edits` enforces: you
   cannot destroy what you have not seen.
-- **`set_fields` is the batch verb, and it is a separate tool on purpose.** 44 pages
-  through `write_page` is 44 commits and 44 near-identical `wiki/log.md` bullets, and
-  the changelog is a product surface: one intent should read as one line in it. It
-  takes an explicit `paths` list (cap `MAX_SET_FIELDS_PAGES` = 200, matching
-  `sync_records`), lands as one `commitOrPR` bundle, and **skips pages that already
-  carry the values**, so a re-run is a no-op rather than a churn of empty edits. Like
-  `write_page`'s `edits`, it is never half-applied: a missing path, an off-limits path,
-  or a nested-YAML conflict fails the whole call naming every offender.
+- **This is deliberately PER-PAGE, and the batch case is unbuilt.** A `set_fields`
+  tool (an explicit `paths` list, one `commitOrPR` bundle, one changelog line) was
+  written and then cut before merge. The reasoning is in
+  [`docs/roadmap.md`](docs/roadmap.md): the routing rule between it and `fields` came
+  out to "how many pages", which is the wrong axis (the real question is whether it is
+  the SAME change), and the more valuable missing capability turned out to be bulk
+  find/replace, which `set_fields` would not have covered. So the 44-page case still
+  costs 44 calls and 44 changelog bullets. Do not re-add a fields-only batch tool
+  without reading that item first.
 - **The app's properties panel is editable** (`PageProperties` in
   `app/views/PageView.tsx`), which is the half that serves humans rather than agents.
   Its edit policy is not a second copy of the rules: it imports `isUsableFieldKey` from
@@ -518,10 +518,9 @@ not be marked `done:` without rewriting all 44 pages.
   view that mysteriously misses pages.
 - Coverage: `pnpm test:patch` (the pure engine, including byte-for-byte survival of a
   nested block), `pnpm test:e2e-librarian` (the real write path: body untouched, one
-  commit for a batch, one changelog line, the idempotent re-run, every refusal), and
-  `pnpm test:scope`, which now registers the librarian tools and asserts all four
-  content writes gate on the BRAIN role at `editor` in both directions. **Uncovered:**
-  the app layer, as everywhere else.
+  commit, every refusal proving nothing was written), and `pnpm test:scope`, which now
+  registers the librarian tools and asserts all three content writes gate on the BRAIN
+  role at `editor` in both directions. **Uncovered:** the app layer, as everywhere else.
 
 ## User-defined tools (brain-tools)
 

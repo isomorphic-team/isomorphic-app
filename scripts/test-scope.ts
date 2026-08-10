@@ -313,7 +313,6 @@ console.log('\nContent writes gate on the BRAIN role, at editor');
 // gate and died on the stub", and that distinction is the whole test.
 const CONTENT_WRITES: [string, Record<string, unknown>][] = [
 	['write_page', { path: 'wiki/a.md', fields: { done: 'yes' } }],
-	['set_fields', { paths: ['wiki/a.md'], fields: { done: 'yes' } }],
 	['move_page', { path: 'wiki/a.md', new_path: 'wiki/b.md' }],
 	['delete_page', { path: 'wiki/a.md' }]
 ];
@@ -331,10 +330,10 @@ for (const [tool, args] of CONTENT_WRITES) {
 	);
 }
 // A bad patch must not be the thing that stops an unauthorized caller: authorization
-// has to come first, or the error text tells a stranger which keys exist.
+// has to come first, or the error text tells a stranger which keys the page carries.
 {
-	const r = await attempt(lurker, 'set_fields', { paths: ['wiki/a.md'], fields: { title: 'x' } });
-	check('set_fields checks the role before it validates the patch', gated(r.detail), r.detail);
+	const r = await attempt(lurker, 'write_page', { path: 'wiki/a.md', fields: { title: 'x' } });
+	check('write_page checks the role before it validates the patch', gated(r.detail), r.detail);
 }
 
 // ===========================================================================

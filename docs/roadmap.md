@@ -263,6 +263,65 @@ Derived 2026-07-06 from commit-history analysis of two production AI-maintained 
 - **Draft to publish lifecycle.** `status: draft | published` in frontmatter as a first-class act. Draft pages visible to tools but flagged; a publish act flips status and logs it. Keeps the "proposed changes" review lane separate from the fast direct-save lane.
 - **Open-questions page**: a living page whose bullets get struck through and linked when a later page resolves them. Add to the brain template.
 
+# TODO: bulk page updates (batch field writes, and find/replace across pages)
+
+Every write tool targets one logical thing: one page, or one folder subtree. The
+underlying primitive does not have that limit, since `commitFiles` already lands N
+files in one atomic commit. Three wants sit on the other side of that gap.
+
+**Batch field writes.** The case that produced issue #14: 44 archived todos, each
+needing `done:`. With `fields` on `write_page` that is 44 calls, 44 commits, and 44
+near-identical `wiki/log.md` bullets for one human act ("I archived the finished
+work"). The changelog is a product surface, so that last part is a data-quality
+problem and not only a latency one.
+
+**Find/replace across pages.** Renaming a term, a product, or a person everywhere it
+appears. Impossible today except page by page, and unlike the field case there is no
+workaround at all. Probably the more valuable half.
+
+**Appending the same block to a set of pages.** Rarer, but it falls out of the same
+shape for free.
+
+A `set_fields` tool covering only the first was built and then cut before merge
+(branch `feat/frontmatter-fields`, if the code is wanted). Two reasons, both worth
+keeping:
+
+- **The routing rule was wrong.** Steering between `set_fields` and `write_page`'s
+  `fields` came out as "how many pages", which is not the real axis: `set_fields`
+  applies ONE patch to many pages, so an agent setting each todo's `done:` to the
+  date it actually finished has 44 pages and cannot use it. The better discriminator
+  is modifier versus verb (is a body write happening anyway?), and that only pays for
+  itself once the batch verb does more than one thing.
+- **It answered the smaller half.** Shipping the fields-only batch would have spent
+  the tool slot, and the naming, on the want that already has a workaround.
+
+Design questions to settle before building:
+
+- **Shape.** The natural generalization is `write_page`'s partial-update vocabulary
+  applied to a set: `{fields?, edits?, append?}` over N paths, one commit, one
+  changelog line. That is one tool for all three wants.
+- **The exactly-once rule does not survive the jump.** `edits` is safe on one page
+  because an anchor matching zero times or several aborts the whole call. Across 44
+  pages a find string legitimately matches zero times on most of them, so bulk
+  find/replace needs "skip where absent", which is the very rule that makes the
+  single-page version safe. Needs an explicit answer (a per-page outcome report? a
+  required `expect:` count? apply only where unambiguous and name the rest?), not a
+  quiet relaxation.
+- **Selection: explicit paths, folder, or query.** Explicit paths make the blast
+  radius visible in the transcript, which matters for a call that atomically rewrites
+  200 pages. A folder path is the middle ground and matches what `move_page` and
+  `delete_page` already accept. A `filter:` expression (reusing okf-view's selection
+  language) is the powerful option and the dangerous one: a computed target set is a
+  blast radius the caller cannot see. If it is ever offered, it wants a preview step
+  like `sync_records`' proposal pattern rather than a bare write.
+- **Idempotence.** The cut implementation skipped pages already carrying the values so
+  a re-run wrote no commit at all. Worth keeping in any version; it is what makes the
+  tool safe to retry.
+- **Not `sync_records`.** It is already the general bulk writer, and it was rejected
+  here for a specific reason: it binds every page it touches to an import source
+  (`source_key` plus a ledger entry), a permanent side effect for a one-off update.
+  The objection was the binding, not the batching.
+
 # TODO: brain schema migrations (fleet-wide template/schema updates)
 
 How template and schema changes reach every customer brain after they're scaffolded. Today this is manual, which doesn't scale past a handful of tenants.

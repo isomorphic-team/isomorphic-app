@@ -713,19 +713,17 @@ try {
 	);
 	check('deleted folder subtree is gone', goneItem === null);
 
-	// ══ frontmatter fields: write_page `fields`, and set_fields across pages ══
+	// ══ frontmatter fields: write_page `fields` ══
 	// The reported case (issue #14): a todo-per-page vault marking finished work
 	// done. The invariant under test on every assertion here is that the BODY never
 	// moves, because the whole point is not having to read the page first.
 	const TODO_BODY = '# Ship the importer\n\nA body line that must survive every field write.\n';
-	for (const slug of ['alpha', 'beta', 'gamma']) {
-		await call('write_page', {
-			path: `wiki/todos/${slug}.md`,
-			title: `Todo ${slug}`,
-			type: 'Todo',
-			content: TODO_BODY
-		});
-	}
+	await call('write_page', {
+		path: 'wiki/todos/alpha.md',
+		title: 'Todo alpha',
+		type: 'Todo',
+		content: TODO_BODY
+	});
 	await settledHead();
 
 	before = await commitCount();
@@ -796,75 +794,6 @@ try {
 			/title:\s*Kickoff transcript/.test(kickoffAfter ?? ''),
 		kickoffAfter ?? ''
 	);
-
-	// ── set_fields: many pages, one commit, one changelog line ──
-	const logBefore = (await fileText('wiki/log.md')) ?? '';
-	before = await commitCount();
-	r = await call('set_fields', {
-		paths: ['wiki/todos/alpha.md', 'wiki/todos/beta.md', 'wiki/todos/gamma.md'],
-		fields: { archived: 'true' }
-	});
-	check('set_fields: succeeds', !r.isError, r.text);
-	check('set_fields: reports the page count', /Updated 3 pages/.test(r.text), r.text);
-	check(
-		'set_fields: says the bodies were left alone',
-		/bodies were not touched/i.test(r.text),
-		r.text
-	);
-	await assertOneCommit('set_fields (3 pages)', before);
-	for (const slug of ['alpha', 'beta', 'gamma']) {
-		const t = await eventually(
-			() => fileText(`wiki/todos/${slug}.md`),
-			(x) => !!x && /archived:\s*true/.test(x)
-		);
-		check(`set_fields: ${slug} carries the field`, /archived:\s*true/.test(t ?? ''), t ?? '');
-		check(
-			`set_fields: ${slug} kept its body`,
-			(t ?? '').includes('A body line that must survive every field write.'),
-			t ?? ''
-		);
-	}
-	const logAfter = (await fileText('wiki/log.md')) ?? '';
-	const bullets = (s: string) => s.split('Updated fields on').length - 1;
-	check(
-		'set_fields: exactly one changelog bullet was added for three pages',
-		bullets(logAfter) - bullets(logBefore) === 1,
-		`before ${bullets(logBefore)}, after ${bullets(logAfter)}`
-	);
-	check(
-		'set_fields: one changelog line for the whole batch, not one per page',
-		logAfter.split('Updated fields on').length === 2,
-		logAfter.slice(0, 400)
-	);
-
-	// Idempotent: the same call again must not churn the pages.
-	before = await commitCount();
-	r = await call('set_fields', {
-		paths: ['wiki/todos/alpha.md', 'wiki/todos/beta.md', 'wiki/todos/gamma.md'],
-		fields: { archived: 'true' }
-	});
-	check(
-		'set_fields: a repeat run reports no change',
-		!r.isError && /No change/.test(r.text),
-		r.text
-	);
-	check('set_fields: ...and writes no commit', (await commitCount()) === before);
-
-	// Never half-applied: one bad path stops the whole batch.
-	r = await call('set_fields', {
-		paths: ['wiki/todos/alpha.md', 'wiki/todos/nonexistent.md'],
-		fields: { batch_guard: 'yes' }
-	});
-	check('set_fields: a missing path fails the call', r.isError, r.text);
-	check('set_fields: ...and names it', /wiki\/todos\/nonexistent\.md/.test(r.text), r.text);
-	check(
-		'set_fields: ...and wrote nothing at all',
-		!((await fileText('wiki/todos/alpha.md')) ?? '').includes('batch_guard')
-	);
-	r = await call('set_fields', { paths: ['wiki/todos'], fields: { x: 'y' } });
-	check('set_fields: refuses a folder path', r.isError && /end in \.md/.test(r.text), r.text);
-	r = await call('set_fields', { paths: ['wiki/todos/alpha.md'], fields: { status: 'published' } });
-	check('set_fields: refuses a managed key too', r.isError, r.text);
 
 	// ══ custom tools: author a tool page, discover it via the index, invoke it ══
 	// A tool page under tools/ becomes a `tool_<name>` MCP tool. Discovery is the
