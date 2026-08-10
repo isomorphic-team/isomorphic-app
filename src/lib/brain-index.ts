@@ -81,7 +81,7 @@ function parseLinks(content: string): ParsedLink[] {
 // optionally restricts). Hard caps bound the rows any single page can produce, so
 // "index everything" stays cheap even on a hostile page.
 
-const MAX_FIELD_KEYS_PER_PAGE = 24;
+export const MAX_FIELD_KEYS_PER_PAGE = 24;
 const MAX_FIELD_VALUE_CHARS = 256;
 const MAX_FIELD_LIST_ELEMENTS = 20;
 

@@ -215,9 +215,11 @@ owner likes, not forced into our schema.
 - **Only `wiki/log.md` is tool-maintained** (append-only changelog). `wiki/index.md` is
   now just a regular editable page; new brains are scaffolded with no predefined wiki
   folders and no index.
-- Frontmatter is optional/free-form. `isToolMaintained` (src/tools/librarian.ts) and
-  `isEditablePath` (app/main.tsx) are the write-policy guards. Schema doc for agents:
-  `brain-template/AGENTS.md`.
+- Frontmatter is optional/free-form, and now WRITABLE that way too: `write_page`'s
+  `fields` sets or removes any brain-owned key without touching the body (see [Writing
+  frontmatter](#writing-frontmatter-fields-and-the-properties-panel)).
+  `isToolMaintained` (src/tools/librarian.ts) and `isEditablePath` (app/main.tsx) are
+  the write-policy guards. Schema doc for agents: `brain-template/AGENTS.md`.
 - Future: "special folders" (e.g. skills) may get meaning later, but there's no use case
   yet — don't reintroduce a taxonomy speculatively.
 
@@ -483,6 +485,63 @@ None of this reintroduces a taxonomy: `type` is a free-form string, and folders 
   `status: draft|published` vs the spec's `draft|stable|deprecated` (unknown values must be
   tolerated, so this is legal, just non-standard); `README.md` as a folder-note fallback is not
   an OKF reserved name, so such a page is technically a concept document owing a `type`.
+
+## Writing frontmatter (`fields` and the properties panel)
+
+Built 2026-08-10, from the "Related" half of issue #14. Frontmatter was read as an
+open key space and written as a closed one: the indexer stores **every** flat key
+(`brain_page_fields`), `okf-view` filters and groups by any of them, and the app
+renders any of them as a properties grid, while `write_page` exposed exactly four
+(`title`, `type`, `description`, `status`). So a brain could invent a vocabulary,
+query it, and display it, but the only way to SET one of its own keys was `content`,
+which replaces the whole body. The reported case was 44 archived todos that could
+not be marked `done:` without rewriting all 44 pages.
+
+- **`fields` on `write_page`** is JSON Merge Patch (RFC 7386): a present key sets, an
+  explicit `null` removes, an absent key is untouched. It rides the path that already
+  existed, since `updatePageWrite` keeps the body verbatim when a call carries neither
+  `content` nor a patch. Engine is `applyFieldPatch` in `src/lib/page-patch.ts`, pure,
+  beside the body patcher it is the twin of (`pnpm test:patch`).
+- **Three refusals, each forced by something else in the codebase, not by taste.**
+  (1) Key names must match `parseFrontmatter`'s `FM_KEY_RE` (`[A-Za-z0-9_-]`), which
+  SKIPS lines it cannot parse: a key with a space would be written successfully and
+  vanish on the next read, so the writer must not be able to produce a file our own
+  reader loses. (2) The managed keys are refused with a pointer to their own argument;
+  `title` is why this is a rule rather than a preference, since a retitle repoints every
+  inbound wikilink in the same save and a `fields`-set title would break links silently.
+  (3) A key currently holding a nested `FrontmatterBlock` is refused for BOTH set and
+  remove, because those runs are replayed byte for byte and flattening one destroys
+  provenance the caller has not read. That is the same invariant `edits` enforces: you
+  cannot destroy what you have not seen.
+- **This is deliberately PER-PAGE, and the batch case is unbuilt.** A `set_fields`
+  tool (an explicit `paths` list, one `commitOrPR` bundle, one changelog line) was
+  written and then cut before merge. The reasoning is in
+  [`docs/roadmap.md`](docs/roadmap.md): the routing rule between it and `fields` came
+  out to "how many pages", which is the wrong axis (the real question is whether it is
+  the SAME change), and the more valuable missing capability turned out to be bulk
+  find/replace, which `set_fields` would not have covered. So the 44-page case still
+  costs 44 calls and 44 changelog bullets. Do not re-add a fields-only batch tool
+  without reading that item first.
+- **The app's properties panel is editable** (`PageProperties` in
+  `app/views/PageView.tsx`), which is the half that serves humans rather than agents.
+  Its edit policy is not a second copy of the rules: it imports `isUsableFieldKey` from
+  the write path, routes `type`/`description`/`status` through their own arguments, and
+  never offers an edit on `sources` (rendered as a count, often the nested block) or
+  `updated` (stamped every save). Editing is offered in the VIEWER only, never in
+  `EditView`, where a property write would race the unsaved body the author has open.
+- **Told to the model in the usual three places**, descending reach: `SERVER_INSTRUCTIONS`
+  ("metadata is a field write, not a rewrite"), `write_page`'s own description and the
+  `fields` argument, and `brain-template/AGENTS.md`.
+- **Indexing needed nothing.** `brain_page_fields` already indexes every flat key, so a
+  new key is filterable on the next read. `write_page` does warn past
+  `MAX_FIELD_KEYS_PER_PAGE` (24), where the indexer stops reading keys: without that,
+  the field would be set in the file and invisible to `okf-view`, surfacing later as a
+  view that mysteriously misses pages.
+- Coverage: `pnpm test:patch` (the pure engine, including byte-for-byte survival of a
+  nested block), `pnpm test:e2e-librarian` (the real write path: body untouched, one
+  commit, every refusal proving nothing was written), and `pnpm test:scope`, which now
+  registers the librarian tools and asserts all three content writes gate on the BRAIN
+  role at `editor` in both directions. **Uncovered:** the app layer, as everywhere else.
 
 ## User-defined tools (brain-tools)
 

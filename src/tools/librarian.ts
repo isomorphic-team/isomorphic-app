@@ -63,13 +63,19 @@ import {
 	backlinksTo,
 	searchIndex,
 	loadAllFields,
-	loadPageContents
+	loadPageContents,
+	MAX_FIELD_KEYS_PER_PAGE
 } from '../lib/brain-index.ts';
 import { isMediaPath, mediaTypeOf } from '../lib/media.ts';
 import { tryRenderViews, type ViewDeps } from '../lib/views.ts';
 import { isToolPagePath, parseToolDef } from '../lib/custom-tools.ts';
 import { isFolderNoteName } from '../lib/view-directives.ts';
-import { applyPageEdits } from '../lib/page-patch.ts';
+import {
+	applyPageEdits,
+	applyFieldPatch,
+	validateFieldPatch,
+	type FieldPatch
+} from '../lib/page-patch.ts';
 import { parseLedger } from '../lib/brain-import.ts';
 import type { TenantOpts, Role } from '../lib/orgs.ts';
 
@@ -79,6 +85,24 @@ const brainArg = z
 	.string()
 	.optional()
 	.describe('Which brain to target (name/handle). Defaults to the active brain.');
+
+// Frontmatter keys are free-form and brain-owned, exactly like folders and
+// `type:` values, so this takes whatever the brain calls things rather than a
+// fixed list.
+const fieldsArg = z
+	.record(
+		z.union([
+			z.string(),
+			z.number(),
+			z.boolean(),
+			z.array(z.union([z.string(), z.number()])),
+			z.null()
+		])
+	)
+	.optional()
+	.describe(
+		'Frontmatter fields to set on the page, as {key: value}. The BODY IS LEFT ALONE, so you do not need to read the page first: use this for any metadata the brain tracks its own way ("done", "owner", "due", "priority", "client"). A value may be text, a number, true/false, or a list. Pass null to REMOVE a key. Keys use letters, digits, dashes and underscores only. Every key set here becomes filterable by okf-view. Not for title / type / description / status: those have their own arguments, because setting them does more than write a value.'
+	);
 
 export interface BrainContext {
 	// Where this brain's content lives, and the only way the content tools reach it.
@@ -603,11 +627,12 @@ async function createPageWrite(
 		title?: string;
 		type?: string;
 		description?: string;
+		fields?: FieldPatch;
 		sources?: string[];
 	}
 ) {
 	const { store, repoArgs, config, author } = ctx;
-	const { target, content, title, type, description, sources } = args;
+	const { target, content, title, type, description, fields, sources } = args;
 	// Fall back through the SAME chain the rest of the system resolves titles by
 	// (pageTitle): a `title:` in the caller's own content, then the body's `# H1`,
 	// then the filename — or the folder's name for a folder note. Deriving straight
@@ -638,7 +663,15 @@ async function createPageWrite(
 		// `sources` argument was absent, which is exactly how provenance went missing.
 		...Object.fromEntries(Object.entries(provided.fm).filter(([k]) => !(k in managed)))
 	};
-	const newContent = await withFreshSnapshots(ctx, target, withFrontmatter(fm, provided.body));
+	// A create can carry `fields` too, so a page can be born with the brain's own
+	// metadata instead of needing a second call to add it.
+	let finalFm = fm;
+	if (fields) {
+		const patched = applyFieldPatch(fm, fields);
+		if (!patched.ok) return fail(patched.error);
+		finalFm = patched.frontmatter;
+	}
+	const newContent = await withFreshSnapshots(ctx, target, withFrontmatter(finalFm, provided.body));
 	const writes = [{ path: target, content: newContent }];
 	const log = await store.readFile(repoArgs, logPathOf(config));
 	if (log) {
@@ -683,11 +716,13 @@ async function updatePageWrite(
 		type?: string;
 		description?: string;
 		status?: 'draft' | 'published';
+		fields?: FieldPatch;
 		sha?: string;
 	}
 ) {
 	const { store, repoArgs, config, author } = ctx;
-	const { path, content, rawBody, changeSummary, title, type, description, status, sha } = args;
+	const { path, content, rawBody, changeSummary, title, type, description, status, fields, sha } =
+		args;
 	const old = parseFrontmatter(existing.content);
 	// Three ways to arrive here, in precedence order: `rawBody` is an
 	// already-patched body (append/edits — frontmatter was split off by the
@@ -711,11 +746,14 @@ async function updatePageWrite(
 		title !== undefined ||
 		type !== undefined ||
 		description !== undefined ||
-		status !== undefined;
+		status !== undefined ||
+		fields !== undefined;
 
 	let newContent: string;
+	let fieldSummary: string | undefined;
+	let fieldCount = 0;
 	if (manageFm) {
-		const fm: Frontmatter = {
+		let fm: Frontmatter = {
 			...(old.frontmatter ?? {}),
 			...provided.fm,
 			...(newTitle ? { title: newTitle } : {}),
@@ -724,6 +762,13 @@ async function updatePageWrite(
 			...(status ? { status } : {}),
 			updated: today
 		};
+		if (fields) {
+			const patched = applyFieldPatch(fm, fields);
+			if (!patched.ok) return fail(patched.error);
+			fm = patched.frontmatter;
+			fieldSummary = patched.summary;
+			fieldCount = Object.keys(fm).length;
+		}
 		newContent = withFrontmatter(fm, provided.body);
 	} else {
 		newContent = provided.body;
@@ -743,6 +788,17 @@ async function updatePageWrite(
 		notes.push(
 			`replaced the whole body (was ${count(old.body)} lines, now ${count(provided.body)})`
 		);
+	}
+	if (fieldSummary) {
+		notes.push(fieldSummary);
+		// Past the cap the indexer stops reading keys, so the field would be set in
+		// the file and invisible to okf-view filter:/group-by:. Say so here rather
+		// than letting it surface later as a view that misses pages.
+		if (fieldCount > MAX_FIELD_KEYS_PER_PAGE) {
+			notes.push(
+				`heads up: this page now has ${fieldCount} frontmatter keys and only the first ${MAX_FIELD_KEYS_PER_PAGE} are indexed, so the last ones cannot be filtered on`
+			);
+		}
 	}
 
 	// Retitling breaks [[Old Title]] wikilinks — repoint them in the same save. Only the
@@ -1230,7 +1286,7 @@ export function registerLibrarianTools(
 		{
 			title: 'Write a brain page',
 			description:
-				'Create a new page, or change an existing one, at a content path you choose (folders are free-form). ONE PAGE = ONE CONCEPT: anything another page should be able to link to — a person, vendor, system, event series, project — gets its own file, never a section inside a bigger page. If you are about to write a heading per item, write a page per item instead. To change PART of a page use `edits` (exact find/replace; each anchor must match exactly once) or `append` (add to the end): both leave the rest of the page untouched, so you do not have to read it first and cannot destroy text you have not seen. `content` REPLACES the entire body, so pass it only for a new page or a deliberate full rewrite, and read the page first (read_page) if you did not just write it. A new page starts as a draft; on an existing page frontmatter is preserved and merged, the "updated" date is bumped, a retitle repoints inbound links, and passing none of content/edits/append changes only metadata (e.g. status: "published" to publish a draft). Every change is logged. Pass mode: "create" to require a new path (fails if it exists) or "update" to require an existing one.',
+				'Create a new page, or change an existing one, at a content path you choose (folders are free-form). ONE PAGE = ONE CONCEPT: anything another page should be able to link to — a person, vendor, system, event series, project — gets its own file, never a section inside a bigger page. If you are about to write a heading per item, write a page per item instead. To change PART of a page use `edits` (exact find/replace; each anchor must match exactly once) or `append` (add to the end): both leave the rest of the page untouched, so you do not have to read it first and cannot destroy text you have not seen. To change METADATA rather than page text, use `fields` (set or remove any frontmatter key the brain tracks, e.g. done/owner/due) or the title/type/description/status arguments: those leave the body untouched. `content` REPLACES the entire body, so pass it only for a new page or a deliberate full rewrite, and read the page first (read_page) if you did not just write it. A new page starts as a draft; on an existing page frontmatter is preserved and merged, the "updated" date is bumped, a retitle repoints inbound links, and passing none of content/edits/append changes only metadata (e.g. status: "published" to publish a draft). Every change is logged. Pass mode: "create" to require a new path (fails if it exists) or "update" to require an existing one.',
 			inputSchema: {
 				brain: brainArg,
 				path: z
@@ -1282,6 +1338,7 @@ export function registerLibrarianTools(
 					.enum(['draft', 'published'])
 					.optional()
 					.describe('Lifecycle status. New pages default to draft; set "published" to publish.'),
+				fields: fieldsArg,
 				sources: z
 					.array(z.string())
 					.optional()
@@ -1311,6 +1368,7 @@ export function registerLibrarianTools(
 			type,
 			description,
 			status,
+			fields,
 			sources,
 			mode,
 			sha,
@@ -1332,6 +1390,12 @@ export function registerLibrarianTools(
 			}
 			if (isSourcePath(target, config)) return fail(`"${target}" is immutable source material.`);
 			if (isToolMaintained(target, config)) return fail(`"${target}" is maintained automatically.`);
+			// Key names and managed keys are context-free, so reject a bad patch before
+			// touching the repo rather than after reading the blob.
+			if (fields) {
+				const invalid = validateFieldPatch(fields);
+				if (invalid) return fail(invalid);
+			}
 
 			const head = await store.getHead(repoArgs);
 			const existing = await store.readFile(repoArgs, target);
@@ -1358,6 +1422,7 @@ export function registerLibrarianTools(
 					title,
 					type,
 					description,
+					fields,
 					sources
 				});
 			}
@@ -1380,10 +1445,11 @@ export function registerLibrarianTools(
 				title === undefined &&
 				type === undefined &&
 				description === undefined &&
-				status === undefined
+				status === undefined &&
+				fields === undefined
 			) {
 				return fail(
-					'Nothing to update: pass append / edits (to change part of the page) or content (to replace the body), or a title / type / description / status change.'
+					'Nothing to update: pass append / edits (to change part of the page) or content (to replace the body), or a fields / title / type / description / status change.'
 				);
 			}
 
@@ -1406,6 +1472,7 @@ export function registerLibrarianTools(
 				type,
 				description,
 				status,
+				fields,
 				sha
 			});
 		}

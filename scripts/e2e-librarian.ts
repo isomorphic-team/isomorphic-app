@@ -781,6 +781,88 @@ try {
 	);
 	check('deleted folder subtree is gone', goneItem === null);
 
+	// ══ frontmatter fields: write_page `fields` ══
+	// The reported case (issue #14): a todo-per-page vault marking finished work
+	// done. The invariant under test on every assertion here is that the BODY never
+	// moves, because the whole point is not having to read the page first.
+	const TODO_BODY = '# Ship the importer\n\nA body line that must survive every field write.\n';
+	await call('write_page', {
+		path: 'wiki/todos/alpha.md',
+		title: 'Todo alpha',
+		type: 'Todo',
+		content: TODO_BODY
+	});
+	await settledHead();
+
+	before = await commitCount();
+	r = await call('write_page', {
+		path: 'wiki/todos/alpha.md',
+		fields: { done: '2026-08-10', owner: 'ana', priority: 2 }
+	});
+	check('write_page fields: succeeds with no content argument', !r.isError, r.text);
+	check('write_page fields: names what it set', /set done, owner, priority/.test(r.text), r.text);
+	await assertOneCommit('write_page fields', before);
+	const alpha = await eventually(
+		() => fileText('wiki/todos/alpha.md'),
+		(t) => !!t && /done:/.test(t)
+	);
+	check(
+		'write_page fields: key is on the page',
+		/done:\s*2026-08-10/.test(alpha ?? ''),
+		alpha ?? ''
+	);
+	check(
+		'write_page fields: numbers land as scalars',
+		/priority:\s*2/.test(alpha ?? ''),
+		alpha ?? ''
+	);
+	check(
+		'write_page fields: the body is untouched',
+		(alpha ?? '').includes('A body line that must survive every field write.'),
+		alpha ?? ''
+	);
+	check(
+		'write_page fields: managed frontmatter still intact',
+		/type:\s*Todo/.test(alpha ?? '') && /title:\s*Todo alpha/.test(alpha ?? ''),
+		alpha ?? ''
+	);
+
+	r = await call('write_page', { path: 'wiki/todos/alpha.md', fields: { owner: null } });
+	check(
+		'write_page fields: null removes a key',
+		!r.isError && /removed owner/.test(r.text),
+		r.text
+	);
+	const alphaCut = await eventually(
+		() => fileText('wiki/todos/alpha.md'),
+		(t) => !!t && !/owner:/.test(t)
+	);
+	check('write_page fields: the key is gone from the file', !/owner:/.test(alphaCut ?? ''));
+	check('write_page fields: ...and the rest stayed', /done:\s*2026-08-10/.test(alphaCut ?? ''));
+
+	// The refusals. Each one exists so a caller cannot destroy something it has not read.
+	r = await call('write_page', { path: 'wiki/todos/alpha.md', fields: { title: 'Renamed' } });
+	check('write_page fields: refuses a managed key', r.isError, r.text);
+	check('write_page fields: ...and points at the argument', /title" argument/.test(r.text), r.text);
+	r = await call('write_page', { path: 'wiki/todos/alpha.md', fields: { 'due date': 'friday' } });
+	check('write_page fields: refuses a key that would not read back', r.isError, r.text);
+
+	// wiki/notes/kickoff.md carries the nested OKF sources:/generated: blocks.
+	r = await call('write_page', { path: 'wiki/notes/kickoff.md', fields: { sources: 'clobber' } });
+	check('write_page fields: refuses to flatten nested YAML', r.isError, r.text);
+	r = await call('write_page', { path: 'wiki/notes/kickoff.md', fields: { reviewed: 'yes' } });
+	check('write_page fields: writes alongside nested YAML', !r.isError, r.text);
+	const kickoffAfter = await eventually(
+		() => fileText('wiki/notes/kickoff.md'),
+		(t) => !!t && /reviewed:\s*yes/.test(t)
+	);
+	check(
+		'write_page fields: the nested block still round-trips',
+		/-\s+resource:\s*\/source\/kickoff\.md/.test(kickoffAfter ?? '') &&
+			/title:\s*Kickoff transcript/.test(kickoffAfter ?? ''),
+		kickoffAfter ?? ''
+	);
+
 	// ══ custom tools: author a tool page, discover it via the index, invoke it ══
 	// A tool page under tools/ becomes a `tool_<name>` MCP tool. Discovery is the
 	// exact loadCustomToolDefs the Worker runs in buildServer; invocation runs the

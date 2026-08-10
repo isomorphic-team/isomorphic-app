@@ -35,7 +35,7 @@ import { registerMediaTools } from '../src/tools/media.ts';
 import { DEFAULT_BRAIN_CONFIG } from '../src/lib/brain-policy.ts';
 import { registerBrainTools } from '../src/tools/brains.ts';
 import { registerAnalyticsTools } from '../src/tools/analytics.ts';
-import type { BrainContext } from '../src/tools/librarian.ts';
+import { registerLibrarianTools, type BrainContext } from '../src/tools/librarian.ts';
 
 let failures = 0;
 function check(label: string, cond: boolean, detail = '') {
@@ -211,6 +211,7 @@ function toolsFor(p: Persona): Map<string, Handler> {
 	registerBrainAccessTools(server, getContext);
 	registerMediaTools(server, getContext);
 	registerAnalyticsTools(server, getContext);
+	registerLibrarianTools(server, getContext);
 	registerBrainTools(server, {
 		getContext,
 		orgContext: async (opts?: { requires?: Role; org?: string }) => {
@@ -293,6 +294,17 @@ const denies = async (p: Persona, tool: string, args?: Record<string, unknown>) 
 	(await attempt(p, tool, args)).outcome === 'denied';
 const allows = async (p: Persona, tool: string, args?: Record<string, unknown>) =>
 	(await attempt(p, tool, args)).outcome === 'allowed';
+
+// The content tools run against the store, which this file replaces with a proxy that
+// throws on contact. So "reached the store" IS the signal that the gate admitted the
+// caller: it got past authorization and every in-handler guard, and died on the one
+// thing a no-network test refuses to provide. Asserting on that marker keeps the
+// admit direction real, rather than settling for only testing refusals.
+const STORE_MARKER = 'reached in a no-network test';
+async function passesGate(p: Persona, tool: string, args: Record<string, unknown> = {}) {
+	const r = await attempt(p, tool, args);
+	return r.outcome === 'allowed' || r.detail.includes(STORE_MARKER);
+}
 
 // Aimed at u-spare, never at a user another section asserts on. `remove_member` here
 // genuinely deletes the membership row.
@@ -409,6 +421,43 @@ check(
 );
 
 // ===========================================================================
+console.log('\nContent writes gate on the BRAIN role, at editor');
+// ===========================================================================
+// Writing a page is a property of the brain, so an ORG owner who holds only viewer
+// on this brain must be refused, and someone shared the brain as editor must not be.
+// The refusals are asserted on the gate's own MESSAGE rather than on the verdict,
+// because these tools have in-handler guards too and "denied" alone cannot tell a
+// working gate from a path check that happened to reject the same call.
+const CONTENT_WRITES: [string, Record<string, unknown>][] = [
+	['write_page', { path: 'wiki/a.md', fields: { done: 'yes' } }],
+	['move_page', { path: 'wiki/a.md', new_path: 'wiki/b.md' }],
+	['delete_page', { path: 'wiki/a.md' }]
+];
+const gated = (detail: string) => /requires editor access/.test(detail);
+for (const [tool, args] of CONTENT_WRITES) {
+	const viewer = await attempt(lurker, tool, args);
+	check(`${tool} refuses a brain viewer at the gate`, gated(viewer.detail), viewer.detail);
+	const boss = await attempt(orgBoss, tool, args);
+	check(`${tool} refuses an org OWNER who is only a brain viewer`, gated(boss.detail), boss.detail);
+	check(
+		`${tool} admits a brain editor (it reaches the store)`,
+		await passesGate(writer, tool, args)
+	);
+	// The share_brain mirror: content is a brain act, so a brain admin does it even
+	// as an org viewer.
+	check(
+		`${tool} admits a brain admin who is only an org viewer`,
+		await passesGate(sharedAdmin, tool, args)
+	);
+}
+// A bad patch must not be the thing that stops an unauthorized caller: authorization
+// has to come first, or the error text tells a stranger which keys the page carries.
+{
+	const r = await attempt(lurker, 'write_page', { path: 'wiki/a.md', fields: { title: 'x' } });
+	check('write_page checks the role before it validates the patch', gated(r.detail), r.detail);
+}
+
+// ===========================================================================
 console.log('\nAttachments: writing needs editor, reading does not');
 // ===========================================================================
 // A 1x1 PNG, so attach_media gets past validateAttachment and actually reaches its
@@ -421,17 +470,6 @@ const ATTACH_ARGS = {
 	mime_type: 'image/png',
 	page: 'wiki/vendors/acme.md'
 };
-
-// The content tools run against the store, which this file replaces with a proxy that
-// throws on contact. So "reached the store" IS the signal that the gate admitted the
-// caller: it got past authorization and every in-handler guard, and died on the one
-// thing a no-network test refuses to provide. Asserting on that marker keeps the
-// admit direction real, rather than settling for only testing refusals.
-const STORE_MARKER = 'reached in a no-network test';
-async function passesGate(p: Persona, tool: string, args: Record<string, unknown> = {}) {
-	const r = await attempt(p, tool, args);
-	return r.outcome === 'allowed' || r.detail.includes(STORE_MARKER);
-}
 
 check(
 	'attach_media refuses a plain viewer',
