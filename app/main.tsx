@@ -362,7 +362,13 @@ function Root() {
 			{/* One padding source for every view (page / browse / search / edit / activity
 			    / graph / members) so they read identically. Kept tight — the app usually
 			    renders inline in the chat column, where big margins waste width. */}
+			{/* `data-view` names the view currently rendered. It rides on the <main> that
+			    was already here rather than a wrapper, so it adds no element and cannot
+			    change layout, and it sits at the ONE render site rather than in each view
+			    file, so a view added later carries it for free. `pnpm test:ui` selects on
+			    it: [data-view="page"], [data-view="browse"], and so on. */}
 			<main
+				data-view={view.kind}
 				class={`mx-auto w-full flex-1 px-3.5 pt-3 pb-5 ${wide ? 'max-w-[1100px]' : 'max-w-[860px]'}`}
 			>
 				<Body view={view} />

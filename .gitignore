@@ -29,6 +29,14 @@ app/.tailwind.out.css
 .preview-build/
 dev/bundle.js
 
+# Playwright run artifacts (traces, failure screenshots, the HTML report). The visual
+# BASELINES under tests/ui/__screenshots__/ are committed on purpose — they are the
+# expected output, not an artifact.
+/test-results/
+/playwright-report/
+/blob-report/
+/.playwright/
+
 # Local operational scripts with real infra/customer data (not for the public repo).
 # Root-anchored so it does NOT match the tracked docs/ops/ directory.
 /ops/

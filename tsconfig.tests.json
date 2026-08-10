@@ -1,0 +1,25 @@
+{
+	"compilerOptions": {
+		"target": "ES2022",
+		"module": "ESNext",
+		"moduleResolution": "bundler",
+		// DOM as well as ES2023: `page.evaluate` callbacks are typed as ordinary
+		// functions but run in the browser, so they reference `document` directly.
+		"lib": ["ES2023", "DOM"],
+		"types": ["node"],
+		"strict": true,
+		"noUnusedLocals": true,
+		"esModuleInterop": true,
+		"forceConsistentCasingInFileNames": true,
+		"skipLibCheck": true,
+		"noEmit": true,
+		"allowImportingTsExtensions": true,
+		"verbatimModuleSyntax": true
+	},
+	// The Playwright UI tests. Playwright TRANSPILES specs rather than typechecking
+	// them, so without this the suite is the one body of code in the repo where a
+	// renamed route or a changed helper signature fails at runtime, in a browser,
+	// instead of at `pnpm typecheck`. The Route union in tests/ui/harness.ts only
+	// earns its keep if something checks it.
+	"include": ["tests/**/*.ts", "playwright.config.ts"]
+}

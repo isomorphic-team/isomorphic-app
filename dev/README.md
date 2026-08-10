@@ -109,6 +109,79 @@ org-admin floor, and only a `grant` row is editable.
 To test the real write path, run `pnpm worker:dev` (→ `http://localhost:8787/mcp`)
 and point a local MCP host (MCP Inspector, Claude Desktop) at it.
 
+## Automated tests (`pnpm test:ui`)
+
+This harness is also the fixture for the UI test suite (`tests/ui/`, Playwright +
+Chromium). Same bytes, same AppBridge, same fixtures — driven by a browser instead of
+by you.
+
+```sh
+pnpm exec playwright install chromium   # one time
+pnpm test:ui                            # functional + visual
+```
+
+It serves on **5176**, not 5175, so it never collides with a preview you have open.
+`scripts/app-dev.ts --once` is what it starts: one build, then a plain static server
+with no watchers and no live-reload, because a rebuild landing mid-assertion reads as
+a flaky app rather than a moving server.
+
+What the suite covers, and deliberately does not:
+
+- **Covers**: that every route mounts (`smoke`), that the tree / folder notes / brain
+  switching / search behave (`navigation`), that the editor round-trips and Cancel
+  discards (`editor`), that the sharing panel puts the access rule on screen and gates
+  its controls on the BRAIN role (`sharing`), that analytics is anchored to a frozen
+  clock (`analytics`), and how it all looks in three display modes and two themes
+  (`visual`).
+- **Does not cover**: tool semantics. The view engine, page patches, the access rule
+  and the analytics fold are pinned by pure golden tests (`test:views`, `test:patch`,
+  `test:access`, `test:usage`) that run in milliseconds. Re-asserting those through the
+  DOM would be a slow duplicate that fails for unrelated reasons.
+- **Says nothing about the real host.** This harness IS the host, so the claude.ai
+  mount gap, the real iframe CSP, and the auth round trip stay invisible here.
+
+### Two frozen clocks
+
+`?now=<ISO>` freezes the **harness's** clock, so the fixtures produce fixed dates
+(analytics window and series, activity timestamps, invite ages). That alone is not
+enough: the **app** renders those dates relatively ("last active 5d ago") off its own
+`Date.now()` inside the iframe, which the harness cannot reach. The tests also call
+`page.clock.setFixedTime`, which does reach it. Freeze one without the other and every
+relative label drifts daily.
+
+`setFixedTime`, not `clock.install()` — the latter freezes timers too, and the app's
+cold-boot path is a 1200ms `setTimeout` that would then never fire.
+
+### Visual baselines
+
+Baselines live in `tests/ui/__screenshots__/<platform>/` and are **committed**: they
+are the expected output, not an artifact. They are platform-specific because font
+rasterization differs between macOS and the Linux CI runner, so a macOS baseline never
+matches CI and vice versa.
+
+`pnpm test:ui` **skips the visual project entirely** on a platform with no baselines,
+and skips everything if Chromium is not installed, rather than failing. A missing
+browser or a missing baseline is a setup gap, not a regression, and `pnpm test` should
+stay green on a fresh clone. `UI_STRICT=1` turns those skips into failures; CI sets it
+so a broken install step cannot hide behind a green skip.
+
+To generate or refresh them:
+
+```sh
+pnpm ui:baselines    # playwright test --project=visual --update-snapshots=all
+```
+
+Use that script rather than a bare `--update-snapshots`, which only fills in MISSING
+baselines and silently leaves a changed one alone (verified on Playwright 1.62).
+
+For Linux baselines from a Mac, run it in the matching container so the fonts match
+CI:
+
+```sh
+docker run --rm -v "$PWD":/w -w /w mcr.microsoft.com/playwright:v1.62.1-noble \
+  sh -c "corepack enable && pnpm install --frozen-lockfile && pnpm ui:baselines"
+```
+
 ## Files
 
 - `harness.ts` — the AppBridge host: mounts the app in an iframe, sends the opening
