@@ -70,6 +70,8 @@ let cleanup: () => Promise<void>;
 let platformOctokit: never;
 // A second repo, existing but not yet a brain: what connect_brain adopts.
 let adoptRepo: string;
+// Repos create_brain scaffolds during the run, deleted with the rest in --github mode.
+const createdRepos: string[] = [];
 
 if (GITHUB_MODE) {
 	const devVarsPath =
@@ -111,7 +113,7 @@ if (GITHUB_MODE) {
 		description: 'Librarian E2E adopt target, safe to delete'
 	});
 	cleanup = async () => {
-		for (const repo of [name, adoptRepo]) {
+		for (const repo of [name, adoptRepo, ...createdRepos]) {
 			console.log(`\nDeleting scratch repo ${org}/${repo} …`);
 			try {
 				await octokit.rest.repos.delete({ owner: org, repo });
@@ -868,6 +870,19 @@ try {
 		repoArgs.owner,
 		USER
 	);
+	// A third org whose GitHub owner DIFFERS from the other two. Those two share one
+	// deliberately, so connect_brain's candidate list can reach the adopt target, which
+	// also means the owner cannot reveal which org was resolved. This one can:
+	// create_brain names its org's owner on both the success and the failure path.
+	const ORG_OTHER = 'org-e2e-other';
+	await run(
+		`INSERT INTO orgs (org_id, name, model, installation_id, brain_owner, created_by, created_at)
+		 VALUES (?1, ?2, 'customer', 1, ?3, ?4, '2026-03-01')`,
+		ORG_OTHER,
+		'Third Party',
+		'other-owner-org',
+		USER
+	);
 	await run(
 		`INSERT INTO memberships (org_id, user_id, role) VALUES (?1, ?2, 'owner')`,
 		ORG_MAIN,
@@ -876,6 +891,11 @@ try {
 	await run(
 		`INSERT INTO memberships (org_id, user_id, role) VALUES (?1, ?2, 'owner')`,
 		ORG_EMPTY,
+		USER
+	);
+	await run(
+		`INSERT INTO memberships (org_id, user_id, role) VALUES (?1, ?2, 'owner')`,
+		ORG_OTHER,
 		USER
 	);
 	await run(
@@ -1016,6 +1036,68 @@ try {
 	br = await callBrain('connect_brain', { repo: 'x/y', org: 'no-such-org' });
 	check(
 		'connect_brain refuses an org handle that matches nothing',
+		br.isError && /No organization matching/i.test(br.text),
+		br.text
+	);
+
+	// ── create_brain: the OTHER way a brain lands in an org ──────────────────
+	// Scaffolding a fresh repo goes through the Git Data API, which the offline stand-in
+	// cannot honestly fake, so the two modes assert different depths of the same thing.
+	// Offline proves the ORG RESOLUTION reached the scaffold (the failure names the
+	// resolved org's GitHub owner, and only the third org has a distinct one); --github
+	// proves the whole act.
+	if (GITHUB_MODE) {
+		br = await callBrain('create_brain', { name: 'Created By E2E', org: 'Contoso Group' });
+		check('create_brain scaffolds a new brain', !br.isError, br.text);
+		const made = (await db
+			.prepare(`SELECT brain_id, org_id, visibility, repo_name FROM brains WHERE name = ?1`)
+			.bind('Created By E2E')
+			.first()) as {
+			brain_id?: string;
+			org_id?: string;
+			visibility?: string;
+			repo_name?: string;
+		} | null;
+		if (made?.repo_name) createdRepos.push(made.repo_name);
+		check(
+			'...into the org the caller named, not the default one',
+			made?.org_id === ORG_EMPTY,
+			`org_id = ${made?.org_id}`
+		);
+		check(
+			'...PRIVATE by default, the opposite of connect_brain',
+			made?.visibility === 'private',
+			`visibility = ${made?.visibility}`
+		);
+		const grant = (await db
+			.prepare(`SELECT role FROM brain_memberships WHERE brain_id = ?1 AND user_id = ?2`)
+			.bind(made?.brain_id ?? '', USER)
+			.first()) as { role?: string } | null;
+		check(
+			'...with an explicit admin grant for its creator',
+			grant?.role === 'admin',
+			`grant = ${grant?.role}`
+		);
+		check(
+			'...and it shows in the brain list',
+			(await callBrain('brains', {})).text.includes('Created By E2E')
+		);
+	} else {
+		br = await callBrain('create_brain', { name: 'Scratch', org: 'Third Party' });
+		check(
+			'create_brain resolves the NAMED org before scaffolding',
+			br.isError && br.text.includes('other-owner-org'),
+			br.text
+		);
+		check(
+			'...and does not silently fall back to the default org',
+			!br.text.includes(repoArgs.owner),
+			br.text
+		);
+	}
+	br = await callBrain('create_brain', { name: 'Nope', org: 'no-such-org' });
+	check(
+		'create_brain refuses an org handle that matches nothing',
 		br.isError && /No organization matching/i.test(br.text),
 		br.text
 	);
