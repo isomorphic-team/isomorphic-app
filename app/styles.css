@@ -317,3 +317,67 @@ body {
 .ProseMirror.resize-cursor {
 	cursor: col-resize;
 }
+
+/* ---------- attachments ---------- */
+/* Images arrive as data URIs from read_media AFTER the markdown is rendered (the
+   iframe CSP allows no external origin, and a private brain repo has no URL we could
+   point at anyway). So an <img> spends a moment with no source: give it a settled
+   placeholder rather than letting the layout jump when each picture lands. */
+.prose img {
+	max-width: 100%;
+	height: auto;
+	border-radius: var(--r-md, 8px);
+}
+.prose img.asset-loading {
+	min-height: 4rem;
+	background: var(--c-chip);
+	/* The alt text would otherwise show as a broken-image glyph while loading. */
+	color: transparent;
+}
+/* The editor wraps each image in a container so the missing state can replace the
+   <img> rather than restyle it (same reason as the note below). The wrapper must not
+   introduce a line box of its own, or every attachment would sit lower than it did. */
+.prose .asset-node {
+	display: inline-block;
+	max-width: 100%;
+	line-height: 0;
+}
+/* A missing attachment is a SPAN, not a styled <img>: an <img> with an unresolvable
+   src keeps drawing the browser's broken-image glyph no matter what CSS says, which
+   is exactly the "this looks broken" impression the note exists to avoid. */
+.prose .asset-missing {
+	display: inline-block;
+	line-height: normal;
+	padding: 0.375rem 0.625rem;
+	border-radius: var(--r-md, 8px);
+	background: var(--c-chip);
+	color: var(--c-muted);
+	font-size: 0.8125rem;
+	font-style: italic;
+}
+
+/* Backing for a single attachment shown on its own. Checkerboard rather than a flat
+   panel: a transparent PNG on a solid background reads as an opaque white rectangle,
+   and whether the thing has transparency is one of the few reasons to open an image
+   by itself. */
+.asset-canvas {
+	--sq: 10px;
+	background-color: var(--c-chip);
+	background-image:
+		linear-gradient(45deg, rgba(128, 128, 128, 0.16) 25%, transparent 25%),
+		linear-gradient(-45deg, rgba(128, 128, 128, 0.16) 25%, transparent 25%),
+		linear-gradient(45deg, transparent 75%, rgba(128, 128, 128, 0.16) 75%),
+		linear-gradient(-45deg, transparent 75%, rgba(128, 128, 128, 0.16) 75%);
+	background-size: calc(var(--sq) * 2) calc(var(--sq) * 2);
+	background-position:
+		0 0,
+		0 var(--sq),
+		var(--sq) calc(var(--sq) * -1),
+		calc(var(--sq) * -1) 0;
+}
+
+/* A rendered attachment is clickable: it opens on its own page. zoom-in rather than
+   pointer, because the action is "look closer", not "follow a link". */
+.prose img[data-asset-path] {
+	cursor: zoom-in;
+}

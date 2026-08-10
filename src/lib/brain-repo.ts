@@ -34,6 +34,19 @@ export interface TreeEntry {
 export interface FileWrite {
 	path: string;
 	content: string;
+	// How to read `content`. Omitted means `utf-8`, which is every page write in the
+	// codebase — the field exists so a caller that holds BYTES (an uploaded image) can
+	// say so. Binary cannot ride the text path: createTree decodes inline `content` as
+	// UTF-8, so a PNG sent that way is silently mangled rather than rejected.
+	encoding?: 'utf-8' | 'base64';
+}
+
+// One stored file's bytes, base64-encoded. Deliberately separate from `readFile`,
+// which decodes to a string: the whole point here is to never turn bytes into text.
+export interface BinaryContent {
+	contentBase64: string;
+	sha: string;
+	size: number;
 }
 
 // Who a commit is attributed to. All writes go through the GitHub App installation
@@ -136,6 +149,8 @@ export interface BrainStore {
 		entries: TreeEntry[]
 	): Promise<{ pages: PageContent[]; truncated: boolean }>;
 	readFile(repo: RepoRef, path: string): Promise<{ content: string; sha: string } | null>;
+	// One file's raw bytes as base64. Backs read_media; null when absent.
+	readBinary(repo: RepoRef, path: string): Promise<BinaryContent | null>;
 	findOpenConfigPr(repo: RepoRef): Promise<string | undefined>;
 	// Recent commits, newest first, optionally scoped to one path. Backs view_activity.
 	listCommits(repo: RepoRef, opts: { limit: number; path?: string }): Promise<CommitEntry[]>;
@@ -153,6 +168,7 @@ export function githubStore(octokit: Octokit): BrainStore {
 		listTree: (repo, head, opts) => listTree(octokit, repo, head, opts),
 		fetchPages: (repo, entries) => fetchPages(octokit, repo, entries),
 		readFile: (repo, path) => readFile(octokit, repo, path),
+		readBinary: (repo, path) => readBinary(octokit, repo, path),
 		findOpenConfigPr: (repo) => findOpenConfigPr(octokit, repo),
 		listCommits: (repo, opts) => listCommits(octokit, repo, opts),
 		commitFiles: (repo, opts) => commitFiles(octokit, repo, opts),
@@ -333,6 +349,69 @@ async function readFile(
 	}
 }
 
+// One file's bytes, base64, without ever decoding them to a string. The contents API
+// carries the bytes inline for small files, which is the common case (an attachment is
+// capped well below the 1 MB inline ceiling); above that it returns metadata with the
+// content omitted, so fall through to the blob API using the sha it did return.
+async function readBinary(
+	octokit: Octokit,
+	repo: RepoRef,
+	path: string
+): Promise<BinaryContent | null> {
+	let sha: string;
+	let size: number;
+	try {
+		const { data } = await octokit.rest.repos.getContent({ ...repo, path });
+		if (Array.isArray(data) || data.type !== 'file') return null;
+		sha = data.sha;
+		size = data.size;
+		// `encoding` is 'none' when GitHub declined to inline the content.
+		if (data.encoding === 'base64' && data.content) {
+			return { contentBase64: data.content.replace(/\n/g, ''), sha, size };
+		}
+	} catch (err) {
+		if ((err as { status?: number })?.status === 404) return null;
+		throw err;
+	}
+	const { data: blob } = await octokit.rest.git.getBlob({ ...repo, file_sha: sha });
+	return { contentBase64: blob.content.replace(/\n/g, ''), sha, size };
+}
+
+type TreeParam = NonNullable<Parameters<Octokit['rest']['git']['createTree']>[0]>['tree'][number];
+
+// The tree entries for one commit's bundle, shared by both write paths so a direct
+// commit and a PR commit can never build the tree differently.
+//
+// A utf-8 write rides inline in the tree, so a whole page bundle still costs one
+// request. A base64 write cannot: createTree decodes inline `content` as UTF-8, so
+// binary has to become a blob first and be referenced by sha. That costs one extra
+// subrequest per binary file, which is bounded by how many attachments are in the
+// bundle (in practice, one).
+async function buildTreeEntries(
+	octokit: Octokit,
+	repo: RepoRef,
+	writes: FileWrite[] = [],
+	deletes: string[] = []
+): Promise<TreeParam[]> {
+	const tree: TreeParam[] = [];
+	for (const w of writes) {
+		if (w.encoding === 'base64') {
+			const { data: blob } = await octokit.rest.git.createBlob({
+				...repo,
+				content: w.content,
+				encoding: 'base64'
+			});
+			tree.push({ path: w.path, mode: '100644', type: 'blob', sha: blob.sha });
+		} else {
+			tree.push({ path: w.path, mode: '100644', type: 'blob', content: w.content });
+		}
+	}
+	for (const path of deletes) {
+		tree.push({ path, mode: '100644', type: 'blob', sha: null });
+	}
+	return tree;
+}
+
 // One atomic commit: all writes and deletes land together or not at all.
 // `deletes` entries that don't exist in the tree are ignored by GitHub.
 // The returned sha is internal plumbing — never surface it to the user.
@@ -349,21 +428,7 @@ async function commitFiles(
 ): Promise<{ sha: string; head: Head }> {
 	const head = opts.head ?? (await getHead(octokit, repo));
 
-	type TreeParam = NonNullable<Parameters<Octokit['rest']['git']['createTree']>[0]>['tree'][number];
-	const tree: TreeParam[] = [
-		...(opts.writes ?? []).map((w) => ({
-			path: w.path,
-			mode: '100644' as const,
-			type: 'blob' as const,
-			content: w.content
-		})),
-		...(opts.deletes ?? []).map((path) => ({
-			path,
-			mode: '100644' as const,
-			type: 'blob' as const,
-			sha: null
-		}))
-	];
+	const tree = await buildTreeEntries(octokit, repo, opts.writes, opts.deletes);
 
 	const { data: newTree } = await octokit.rest.git.createTree({
 		...repo,
@@ -483,21 +548,7 @@ async function commitOrPR(
 
 	// PR mode: build the identical tree/commit as commitFiles, but land it on a new
 	// branch and open a PR instead of moving the default ref.
-	type TreeParam = NonNullable<Parameters<Octokit['rest']['git']['createTree']>[0]>['tree'][number];
-	const tree: TreeParam[] = [
-		...(opts.writes ?? []).map((w) => ({
-			path: w.path,
-			mode: '100644' as const,
-			type: 'blob' as const,
-			content: w.content
-		})),
-		...(opts.deletes ?? []).map((path) => ({
-			path,
-			mode: '100644' as const,
-			type: 'blob' as const,
-			sha: null
-		}))
-	];
+	const tree = await buildTreeEntries(octokit, repo, opts.writes, opts.deletes);
 	const { data: newTree } = await octokit.rest.git.createTree({
 		...repo,
 		base_tree: head.treeSha,

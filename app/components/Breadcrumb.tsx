@@ -39,6 +39,7 @@ import {
 	openAddBrain,
 	openBrainAccess,
 	navigateTo,
+	openAsset,
 	fetchPaths,
 	ensureBrainList,
 	switchBrain
@@ -48,6 +49,7 @@ import {
 	ChevronDownIcon,
 	FolderIcon,
 	FileIcon,
+	ImageIcon,
 	ArrowLeftIcon,
 	ListIcon,
 	HistoryIcon,
@@ -96,7 +98,7 @@ function CrumbChevron({
 
 // ---------- sibling data ----------
 
-type CrumbEntry = { name: string; path: string; dir: boolean };
+type CrumbEntry = { name: string; path: string; dir: boolean; asset?: boolean };
 
 // What lives directly under `parent` ('' = the brain root): sub-folders, then pages,
 // alphabetical — the file tree's own order, so a picker and the tree can never
@@ -109,12 +111,18 @@ function entriesUnder(parent: string, data: BrowseData): CrumbEntry[] {
 	const prefix = parent ? `${parent}/` : '';
 	const folders = new Set<string>();
 	const files: CrumbEntry[] = [];
-	for (const p of data.paths) {
+	// Pages AND attachments. Listing only pages meant an assets/ folder never appeared
+	// as a peer of the pages beside it, so the folder you were standing in was missing
+	// from its own parent's picker — you could reach an image from the file tree but
+	// not by walking the breadcrumb it was displaying.
+	const assetSet = new Set(data.assets);
+	for (const p of [...data.paths, ...data.assets]) {
 		if (!p.startsWith(prefix)) continue;
 		const rest = p.slice(prefix.length);
 		const cut = rest.indexOf('/');
 		if (cut === -1) {
-			if (!isFolderNoteName(rest)) files.push({ name: rest, path: p, dir: false });
+			if (!isFolderNoteName(rest))
+				files.push({ name: rest, path: p, dir: false, asset: assetSet.has(p) });
 		} else {
 			folders.add(rest.slice(0, cut));
 		}
@@ -175,11 +183,12 @@ function SiblingRows({
 						onClick={() => {
 							close();
 							if (e.dir) openFolder(e.path);
+							else if (e.asset) openAsset(e.path);
 							else navigateTo(e.path);
 						}}
 					>
 						<span class={here ? 'text-accent' : 'text-muted'}>
-							{e.dir ? <FolderIcon /> : <FileIcon />}
+							{e.dir ? <FolderIcon /> : e.asset ? <ImageIcon /> : <FileIcon />}
 						</span>
 						<span class={`min-w-0 flex-1 truncate ${here ? 'text-accent' : ''}`} title={label}>
 							{label}

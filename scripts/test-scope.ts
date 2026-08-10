@@ -31,6 +31,8 @@ import { DatabaseSync } from 'node:sqlite';
 import { assertRole, type Role, type TenantOpts, type AccessibleBrain } from '../src/lib/orgs.ts';
 import { registerMemberTools } from '../src/tools/members.ts';
 import { registerBrainAccessTools } from '../src/tools/brain-access.ts';
+import { registerMediaTools } from '../src/tools/media.ts';
+import { DEFAULT_BRAIN_CONFIG } from '../src/lib/brain-policy.ts';
 import { registerBrainTools } from '../src/tools/brains.ts';
 import { registerAnalyticsTools } from '../src/tools/analytics.ts';
 import { registerLibrarianTools, type BrainContext } from '../src/tools/librarian.ts';
@@ -177,7 +179,10 @@ function contextFor(p: Persona) {
 			orgRole: p.orgRole,
 			orgId: 'org1',
 			actorUserId: p.userId,
-			config: {} as never,
+			// The real default config, not an empty object: the content tools run path
+			// predicates against it, and roleOf on a config with no paths throws — which
+			// would read as a denial and quietly turn a real gate test into a no-op.
+			config: DEFAULT_BRAIN_CONFIG,
 			db,
 			brainId: 'northwind/main',
 			activeBrain: { id: 'northwind/main', label: 'Main' }
@@ -190,6 +195,12 @@ function contextFor(p: Persona) {
 // ---------------------------------------------------------------------------
 // registerAppTool delegates to server.registerTool, so one method covers both.
 type Handler = (args: Record<string, unknown>) => Promise<{ isError?: boolean; content?: unknown }>;
+
+// What each org-scope resolution was asked for. The `org` argument only does anything
+// if the tool actually forwards it. A tool that accepts it and drops it silently
+// writes into the wrong organization, which no role assertion would catch.
+const orgAsks: ({ requires?: Role; org?: string } | undefined)[] = [];
+
 function toolsFor(p: Persona): Map<string, Handler> {
 	const handlers = new Map<string, Handler>();
 	const server = {
@@ -198,13 +209,31 @@ function toolsFor(p: Persona): Map<string, Handler> {
 	const getContext = contextFor(p);
 	registerMemberTools(server, getContext);
 	registerBrainAccessTools(server, getContext);
+	registerMediaTools(server, getContext);
 	registerAnalyticsTools(server, getContext);
 	registerLibrarianTools(server, getContext);
 	registerBrainTools(server, {
 		getContext,
-		orgContext: async (opts?: { requires?: Role }) => {
+		orgContext: async (opts?: { requires?: Role; org?: string }) => {
+			orgAsks.push(opts);
 			assertRole(p.orgRole, opts?.requires);
-			return { octokit, org: {} as never, role: p.orgRole, db, actorUserId: p.userId };
+			return {
+				octokit,
+				org: {
+					org_id: 'org1',
+					name: 'Northwind',
+					model: 'customer',
+					installation_id: 1,
+					brain_owner: 'northwind',
+					github_org_login: 'northwind',
+					created_by: 'u-boss',
+					created_at: '2026-01-01',
+					suspended_at: null
+				},
+				role: p.orgRole,
+				db,
+				actorUserId: p.userId
+			};
 		},
 		listBrains: async (): Promise<AccessibleBrain[]> =>
 			[
@@ -220,6 +249,24 @@ function toolsFor(p: Persona): Map<string, Handler> {
 				role: p.role,
 				org_role: p.orgRole
 			})) as AccessibleBrain[],
+		// Two orgs, one of which holds no brain at all: the case the brains payload has
+		// to carry, since the widget cannot derive it from a list of brains.
+		listOrgs: async () =>
+			[
+				{ org_id: 'org1', name: 'Northwind', brain_owner: 'northwind' },
+				{ org_id: 'org2', name: 'Contoso Group', brain_owner: 'contoso-io' }
+			].map((o) => ({
+				role: p.orgRole,
+				org: {
+					...o,
+					model: 'customer',
+					installation_id: 1,
+					github_org_login: o.brain_owner,
+					created_by: 'u-boss',
+					created_at: '2026-01-01',
+					suspended_at: null
+				}
+			})),
 		activeBrainId: () => 'northwind/main',
 		setActiveBrain: () => {},
 		invalidateConfig: () => {},
@@ -247,6 +294,17 @@ const denies = async (p: Persona, tool: string, args?: Record<string, unknown>) 
 	(await attempt(p, tool, args)).outcome === 'denied';
 const allows = async (p: Persona, tool: string, args?: Record<string, unknown>) =>
 	(await attempt(p, tool, args)).outcome === 'allowed';
+
+// The content tools run against the store, which this file replaces with a proxy that
+// throws on contact. So "reached the store" IS the signal that the gate admitted the
+// caller: it got past authorization and every in-handler guard, and died on the one
+// thing a no-network test refuses to provide. Asserting on that marker keeps the
+// admit direction real, rather than settling for only testing refusals.
+const STORE_MARKER = 'reached in a no-network test';
+async function passesGate(p: Persona, tool: string, args: Record<string, unknown> = {}) {
+	const r = await attempt(p, tool, args);
+	return r.outcome === 'allowed' || r.detail.includes(STORE_MARKER);
+}
 
 // Aimed at u-spare, never at a user another section asserts on. `remove_member` here
 // genuinely deletes the membership row.
@@ -285,6 +343,66 @@ for (const [tool, args] of ORG_MUTATIONS) {
 }
 
 // ===========================================================================
+console.log('\nThe `org` argument reaches org-scope resolution');
+// ===========================================================================
+// Both tools that place a brain must resolve the org the CALLER named. Neither can
+// route through a brain handle: the org waiting for its first repo has no brain to
+// name, which is precisely the org someone is trying to connect one into. Asserted on
+// what resolution was ASKED for, since the stub short-circuits before any write.
+// The last thing orgContext was asked for, after running one tool call.
+async function askFrom(tool: string, args: Record<string, unknown>) {
+	orgAsks.length = 0;
+	await attempt(orgBoss, tool, args);
+	return orgAsks.at(-1);
+}
+
+const connectAsk = await askFrom('connect_brain', {
+	repo: 'northwind/newrepo',
+	org: 'Contoso Group'
+});
+check(
+	'connect_brain forwards `org` to orgContext',
+	connectAsk?.org === 'Contoso Group',
+	`got ${JSON.stringify(connectAsk)}`
+);
+check('...and still gates it at admin', connectAsk?.requires === 'admin');
+
+const createAsk = await askFrom('create_brain', { name: 'Scratch', org: 'Contoso Group' });
+check(
+	'create_brain forwards `org` to orgContext',
+	createAsk?.org === 'Contoso Group',
+	`got ${JSON.stringify(createAsk)}`
+);
+check('...and still gates it at editor', createAsk?.requires === 'editor');
+
+const bareAsk = await askFrom('create_brain', { name: 'Scratch' });
+check(
+	'omitting `org` leaves the choice to resolution rather than forcing one',
+	bareAsk !== undefined && bareAsk.org === undefined
+);
+
+// The widget's org picker reads this and cannot compute it: an org with no brains has
+// no brain row to derive it from, so if the payload drops it the "connect a repo" flow
+// silently loses exactly the org someone is trying to connect their first repo into.
+const brainsPayload = (await toolsFor(orgBoss).get('brains')!({})) as {
+	structuredContent?: { orgs?: { orgId: string }[] };
+};
+check(
+	'the brains payload carries the orgs a brain can be added to',
+	JSON.stringify(brainsPayload.structuredContent?.orgs?.map((o) => o.orgId)) ===
+		JSON.stringify(['org1', 'org2']),
+	`got ${JSON.stringify(brainsPayload.structuredContent?.orgs)}`
+);
+const viewerPayload = (await toolsFor(lurker).get('brains')!({})) as {
+	structuredContent?: { orgs?: unknown[] };
+};
+check(
+	'...and offers none to someone who admins no org',
+	viewerPayload.structuredContent?.orgs?.length === 0,
+	'a picker that offers an org the click would refuse'
+);
+
+// ===========================================================================
 console.log('\nBRAIN-scope tools gate on the BRAIN role, never the org role');
 // ===========================================================================
 // The mirror invariant. Sharing is a property of the brain, so the person who was
@@ -307,10 +425,9 @@ console.log('\nContent writes gate on the BRAIN role, at editor');
 // ===========================================================================
 // Writing a page is a property of the brain, so an ORG owner who holds only viewer
 // on this brain must be refused, and someone shared the brain as editor must not be.
-// Asserted on the DETAIL rather than the verdict, because every one of these fails
-// for SOME reason under a stub context with no config and a throwing store. Only the
-// gate's own message distinguishes "refused because of your role" from "got past the
-// gate and died on the stub", and that distinction is the whole test.
+// The refusals are asserted on the gate's own MESSAGE rather than on the verdict,
+// because these tools have in-handler guards too and "denied" alone cannot tell a
+// working gate from a path check that happened to reject the same call.
 const CONTENT_WRITES: [string, Record<string, unknown>][] = [
 	['write_page', { path: 'wiki/a.md', fields: { done: 'yes' } }],
 	['move_page', { path: 'wiki/a.md', new_path: 'wiki/b.md' }],
@@ -322,11 +439,12 @@ for (const [tool, args] of CONTENT_WRITES) {
 	check(`${tool} refuses a brain viewer at the gate`, gated(viewer.detail), viewer.detail);
 	const boss = await attempt(orgBoss, tool, args);
 	check(`${tool} refuses an org OWNER who is only a brain viewer`, gated(boss.detail), boss.detail);
-	const editor = await attempt(writer, tool, args);
+	check(`${tool} admits a brain editor (it reaches the store)`, await passesGate(writer, tool, args));
+	// The share_brain mirror: content is a brain act, so a brain admin does it even
+	// as an org viewer.
 	check(
-		`${tool} admits a brain editor (it gets past the gate)`,
-		!gated(editor.detail),
-		editor.detail
+		`${tool} admits a brain admin who is only an org viewer`,
+		await passesGate(sharedAdmin, tool, args)
 	);
 }
 // A bad patch must not be the thing that stops an unauthorized caller: authorization
@@ -335,6 +453,52 @@ for (const [tool, args] of CONTENT_WRITES) {
 	const r = await attempt(lurker, 'write_page', { path: 'wiki/a.md', fields: { title: 'x' } });
 	check('write_page checks the role before it validates the patch', gated(r.detail), r.detail);
 }
+
+// ===========================================================================
+console.log('\nAttachments: writing needs editor, reading does not');
+// ===========================================================================
+// A 1x1 PNG, so attach_media gets past validateAttachment and actually reaches its
+// gate rather than failing on the payload.
+const PNG_1PX =
+	'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==';
+const ATTACH_ARGS = {
+	data: PNG_1PX,
+	filename: 'logo.png',
+	mime_type: 'image/png',
+	page: 'wiki/vendors/acme.md'
+};
+
+check(
+	'attach_media refuses a plain viewer',
+	(await denies(lurker, 'attach_media', ATTACH_ARGS)) &&
+		!(await passesGate(lurker, 'attach_media', ATTACH_ARGS))
+);
+check('attach_media admits an editor', await passesGate(writer, 'attach_media', ATTACH_ARGS));
+// The mirror of the share_brain invariant: uploading is a brain act, so the brain
+// admin does it even as an org viewer, and org rank alone does not confer it.
+check(
+	'attach_media admits a brain admin who is only an org viewer',
+	await passesGate(sharedAdmin, 'attach_media', ATTACH_ARGS)
+);
+check(
+	'attach_media refuses an org OWNER who holds only viewer on this brain',
+	!(await passesGate(orgBoss, 'attach_media', ATTACH_ARGS))
+);
+// Reading an attachment is a read: gating it on editor would mean a viewer could
+// open a page and see a broken image on it.
+check(
+	'read_media is open to a plain viewer',
+	await passesGate(lurker, 'read_media', { path: 'wiki/vendors/assets/logo.png' })
+);
+// And it must not serve anything outside the brain's content, whatever the role.
+check(
+	'read_media refuses a path outside the content roots',
+	await denies(sharedAdmin, 'read_media', { path: 'raw/secret.png' })
+);
+check(
+	'read_media refuses a non-media path rather than guessing',
+	await denies(sharedAdmin, 'read_media', { path: 'wiki/vendors/acme.md' })
+);
 
 // ===========================================================================
 console.log('\nReads stay open to viewers in both scopes');

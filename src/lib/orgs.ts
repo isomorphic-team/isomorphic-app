@@ -962,6 +962,14 @@ export function orgDisplay(b: AccessibleBrain): string {
 	return b.org_name?.trim() || b.repo_owner;
 }
 
+// The same rule as orgDisplay over an `Org` row rather than a brain's flattened copy
+// of it, for the surfaces that name an org with no brain in hand: the `org` argument's
+// "which of these did you mean" list, chiefly, where a brainless org is the whole point.
+export function orgLabel(org: Org): string {
+	if (org.model === 'platform') return 'Personal';
+	return org.name?.trim() || org.brain_owner;
+}
+
 // A label with its org named. For the one place brains are listed side by side with no
 // heading to group them: the "which of these did you mean" error. Labels are now the
 // brain's own name, so two orgs can hold a "wiki" — and a disambiguation list reading
@@ -1050,6 +1058,148 @@ export async function listAccessibleBrains(
 		});
 	}
 	return [...byId.values()];
+}
+
+// Every org a PERSON belongs to, with their role in it, INCLUDING orgs that hold no
+// brain yet. listAccessibleBrains inner-joins `brains`, so an org whose first repo has
+// not been adopted yet produces no row there and is invisible to brain-scope
+// resolution. That is right for choosing a brain to act on and wrong for choosing a
+// place to PUT one, which is the question create_brain and connect_brain ask: without
+// this, the first brain in a newly connected org was unreachable from either tool.
+//
+// Takes the person's whole id set for the same reason every brain query does: a
+// membership that hangs off one linked email has to be reachable from the others.
+// Deduped to the HIGHEST role, since two linked identities can be members at different
+// roles and the person is one human.
+export interface AccessibleOrg {
+	org: Org;
+	role: Role;
+}
+
+export async function listAccessibleOrgs(
+	db: D1Database,
+	userIds: string[]
+): Promise<AccessibleOrg[]> {
+	if (userIds.length === 0) return [];
+	const placeholders = userIds.map((_, i) => `?${i + 1}`).join(', ');
+	const { results } = await db
+		.prepare(
+			`SELECT m.role AS role, o.*
+			   FROM memberships m
+			   JOIN orgs o ON o.org_id = m.org_id
+			  WHERE m.user_id IN (${placeholders})
+			    AND o.suspended_at IS NULL
+			  ORDER BY o.created_at ASC, o.org_id ASC`
+		)
+		.bind(...userIds)
+		.all<Record<string, unknown>>();
+	const byId = new Map<string, AccessibleOrg>();
+	for (const row of results ?? []) {
+		const { role, ...rest } = row;
+		const org = rest as unknown as Org;
+		const seen = byId.get(org.org_id);
+		if (!seen) byId.set(org.org_id, { org, role: role as Role });
+		else if (roleAtLeast(role as Role, seen.role)) seen.role = role as Role;
+	}
+	return [...byId.values()];
+}
+
+// Resolve a caller-supplied `org` handle against the orgs they belong to. Same shape
+// and same priority order as matchBrain: exact handle first, then a case-insensitive
+// substring, returning { candidates } when ambiguous so the tool can ask rather than
+// guess which organization to write into. The GitHub owner is a handle too, because
+// that is the name a user reading github.com has in front of them.
+export function matchOrg(
+	orgs: AccessibleOrg[],
+	query: string
+): { org?: AccessibleOrg; candidates?: AccessibleOrg[] } {
+	const q = query.trim().toLowerCase();
+	if (!q) return {};
+	const handles = (o: AccessibleOrg) =>
+		[o.org.org_id, o.org.name, o.org.github_org_login ?? '', o.org.brain_owner]
+			.filter(Boolean)
+			.map((s) => s.toLowerCase());
+	const exact = orgs.find((o) => handles(o).includes(q));
+	if (exact) return { org: exact };
+	const subs = orgs.filter((o) => handles(o).some((h) => h.includes(q)));
+	if (subs.length === 1) return { org: subs[0] };
+	if (subs.length > 1) return { candidates: subs };
+	return {};
+}
+
+// A suspended org the person belongs to. Exists only to tell "you have no org yet"
+// apart from "your org is suspended", which listAccessibleOrgs cannot answer because
+// it drops suspended rows. That filter is right for choosing an org to act in and
+// dangerous at the empty case: without this, a member of one suspended org looks
+// brand new and gets auto-provisioned a fresh personal org instead of being told why
+// theirs stopped working.
+export async function firstSuspendedOrg(db: D1Database, userIds: string[]): Promise<Org | null> {
+	if (userIds.length === 0) return null;
+	const placeholders = userIds.map((_, i) => `?${i + 1}`).join(', ');
+	return await db
+		.prepare(
+			`SELECT o.*
+			   FROM memberships m
+			   JOIN orgs o ON o.org_id = m.org_id
+			  WHERE m.user_id IN (${placeholders})
+			    AND o.suspended_at IS NOT NULL
+			  ORDER BY o.created_at ASC, o.org_id ASC
+			  LIMIT 1`
+		)
+		.bind(...userIds)
+		.first<Org>();
+}
+
+// Which org an org-scope action lands in. Pure, and split out of the Worker's
+// orgContext so the rule can be tested: it decides where a new brain gets WRITTEN, and
+// what it replaced was a `SELECT ... LIMIT 1` with no ORDER BY, so a person in two orgs
+// got an arbitrary one that could differ between two calls in the same session.
+//
+// A named handle wins; failing that the org the caller is already working in; failing
+// that the oldest. Throws rather than guessing when a handle matches nothing or several
+// things, because the cost of guessing is a brain created in the wrong organization.
+export function chooseOrg(
+	orgs: AccessibleOrg[],
+	opts: { org?: string; activeOrgId?: string } = {}
+): AccessibleOrg {
+	if (orgs.length === 0) throw new Error('You do not belong to any organization yet.');
+	if (opts.org) {
+		const m = matchOrg(orgs, opts.org);
+		if (m.org) return m.org;
+		const names = (m.candidates ?? orgs).map((o) => orgLabel(o.org));
+		throw new Error(
+			m.candidates
+				? `"${opts.org}" matches several organizations: ${names.join(', ')}. Be more specific.`
+				: `No organization matching "${opts.org}". You belong to: ${names.join(', ')}.`
+		);
+	}
+	return orgs.find((o) => o.org.org_id === opts.activeOrgId) ?? orgs[0];
+}
+
+// The whole org-selection decision for a person, in one function a test can drive
+// against a real database. The Worker's orgContext wraps this with token minting and
+// first-touch provisioning; keeping the decision here is what makes the empty case
+// testable, and the empty case is where the subtle bug lives (see firstSuspendedOrg).
+//
+// Returns null ONLY for a person with no membership anywhere, which is the caller's
+// signal to provision. Every other failure throws with a caller-facing message.
+//
+// `activeOrgId` is a THUNK, not a value: resolving where the caller is working costs a
+// query, and it is pointless when a handle was named or there is only one org. The
+// caller should not have to know that, so the skipping decision lives here.
+export async function resolveOrgForPerson(
+	db: D1Database,
+	userIds: string[],
+	opts: { org?: string; activeOrgId?: () => Promise<string | undefined> } = {}
+): Promise<AccessibleOrg | null> {
+	const orgs = await listAccessibleOrgs(db, userIds);
+	if (orgs.length === 0) {
+		const suspended = await firstSuspendedOrg(db, userIds);
+		if (suspended) throw new Error(`Org ${suspended.org_id} is suspended. Contact your admin.`);
+		return null;
+	}
+	const activeOrgId = !opts.org && orgs.length > 1 ? await opts.activeOrgId?.() : undefined;
+	return chooseOrg(orgs, { org: opts.org, activeOrgId });
 }
 
 // Resolve a caller-supplied `brain` handle against what they can access. Matches (in

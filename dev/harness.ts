@@ -19,10 +19,12 @@ import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { BRAIN_APP_HTML } from '../src/lib/app-bundle.generated.ts';
 import { slugify, resolveRelative, parseFrontmatter } from '../src/lib/wiki.ts';
 import { DEFAULT_BRAIN_CONFIG, isContentPath } from '../src/lib/brain-policy.ts';
+import { classifyMdLink } from '../src/lib/links.ts';
+import { uniqueAttachmentPath } from '../src/lib/media.ts';
 import { renderViews, stripSnapshots, hasViews, type ViewContext } from '../src/lib/views.ts';
 // The REAL per-brain access rule (pure, no D1) so the sharing preview resolves
 // exactly like prod: org visibility + explicit grants + the org-admin floor.
-import { effectiveBrainRole, roleLabel, type Role } from '../src/lib/orgs.ts';
+import { effectiveBrainRole, roleLabel, roleAtLeast, type Role } from '../src/lib/orgs.ts';
 import {
 	dayKey,
 	shiftDay,
@@ -43,6 +45,13 @@ const PERSONAL_PAGES = PAGES as Record<string, string>;
 // exercises the "empty folder shows" + "show hidden" behavior out of the box.
 PERSONAL_PAGES['wiki/Projects/.gitkeep'] ??= '';
 
+// Seed an attachment on a page of the DEFAULT brain, so opening the preview shows a
+// rendered image without switching brains or uploading anything first. Two links: one
+// that resolves and one that does not, because the missing-attachment state is the
+// one nobody remembers to look at.
+PERSONAL_PAGES['wiki/concepts/vision.md'] +=
+	'\n![The shape of the thing](assets/vision-sketch.png)\n\n![A sketch that was moved away](assets/gone.png)\n';
+
 // Seed the config file itself so the "show hidden" toggle has the real system
 // files to reveal (mirrors prod, where every brain repo carries one).
 PERSONAL_PAGES['.isomorphic.json'] ??=
@@ -58,8 +67,11 @@ const ACME_PAGES: Record<string, string> = {
 		'---\ntitle: Acme\n---\n\nKnowledge base for **Acme**. Start with our [[mission]] and the [[onboarding]] program.\n',
 	'wiki/concepts/mission.md':
 		'---\ntitle: Mission\n---\n\nAcme builds tools for small teams. See the [[content-pipeline]] for how we publish.\n',
+	// Carries an attachment (seeded in brainAssets) plus a link to one that does not
+	// exist, so the preview shows BOTH states: a rendered image and the missing-file
+	// note. The broken case is the one nobody remembers to look at.
 	'wiki/programs/onboarding.md':
-		'---\ntitle: Onboarding\n---\n\nOur flagship customer onboarding program. Run by [[lead]].\n',
+		'---\ntitle: Onboarding\n---\n\nOur flagship customer onboarding program. Run by [[lead]].\n\n![The onboarding flow](assets/onboarding-flow.png)\n\n![A diagram that was moved away](assets/gone.png)\n',
 	'wiki/people/lead.md':
 		'---\ntitle: Team Lead\n---\n\nLeads Acme; owns the [[mission]] and the [[onboarding]] program.\n',
 	'wiki/playbooks/content-pipeline.md':
@@ -83,6 +95,32 @@ const brainContent: Record<string, Record<string, string>> = {
 // The content map for a brain (auto-vivify so a freshly connect_brain'd brain works).
 function pagesFor(id: string): Record<string, string> {
 	return (brainContent[id] ??= {});
+}
+
+// ---- attachments ----
+//
+// Stored per brain as base64, the same shape read_media returns, so the app's whole
+// image path (hydrate -> data URI -> <img>) is exercised offline. Without this the
+// preview could not show a picture at all: the iframe CSP allows no external origin,
+// so there is nowhere else the bytes could come from.
+//
+// A 64x64 palette PNG, 128 bytes. Small enough to sit inline here, and a real image
+// rather than a 1x1, so "did it render?" is answerable by looking.
+const SAMPLE_PNG =
+	'iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAMAAACdt4HsAAAADFBMVEU7StZbje+Px/fv9P+rZWLWAAAAL0lEQVR42u3MMREAIAwEsEL9e2bBwW9/iYDMAHwnJBAIeoIbEggEPcGGBAJBTfAA1t8YAcvRfzcAAAAASUVORK5CYII=';
+const brainAssets: Record<string, Record<string, { data: string; mimeType: string }>> = {
+	// Referenced by the seeded links above. The default brain gets one so the preview
+	// shows an image immediately; Acme gets one so switching brains proves attachments
+	// are per-brain rather than global.
+	'your-org/personal-wiki': {
+		'wiki/concepts/assets/vision-sketch.png': { data: SAMPLE_PNG, mimeType: 'image/png' }
+	},
+	'acme-co/acme-wiki': {
+		'wiki/programs/assets/onboarding-flow.png': { data: SAMPLE_PNG, mimeType: 'image/png' }
+	}
+};
+function assetsFor(id: string): Record<string, { data: string; mimeType: string }> {
+	return (brainAssets[id] ??= {});
 }
 // Which brain a content call targets. The app now threads the DISPLAYED brain into
 // every call (see brainArgs() in app/main.tsx), so honor an explicit `brain` arg
@@ -357,12 +395,42 @@ let brainGrants: Record<string, Record<string, PreviewRole>> = {
 	'acme-co/acme-wiki': {},
 	'northwind/northwind-wiki': { 'u-me': 'viewer' }
 };
+// The orgs I belong to, which is NOT the same list as the orgs my brains are in.
+// `org-empty` holds no brain at all, and that is the point: it cannot be derived from
+// brainsFixture, so it is the case that proves the picker reads the server's org list
+// (the `orgs` field on the brains payload) rather than deriving one. It is also the
+// only org where "connect the first repo" can be exercised end to end. Mirrors
+// listAccessibleOrgs on the server.
+let orgsFixture = [
+	{
+		orgId: 'org-personal',
+		orgLabel: 'Personal',
+		owner: 'your-org',
+		orgRole: 'owner' as PreviewRole
+	},
+	{ orgId: 'org-acme', orgLabel: 'Acme', owner: 'acme-co', orgRole: 'admin' as PreviewRole },
+	{
+		orgId: 'org-northwind',
+		orgLabel: 'Northwind',
+		owner: 'northwind',
+		orgRole: 'viewer' as PreviewRole
+	},
+	{
+		orgId: 'org-empty',
+		orgLabel: 'Contoso Group',
+		owner: 'contoso-io',
+		orgRole: 'admin' as PreviewRole
+	}
+];
+
 // Repos the "installation" can see that aren't brains yet — the connect_brain picker.
 let connectableRepos = [
 	{ id: 'acme-co/content-dist', owner: 'acme-co', repo: 'content-dist' },
 	// Under the personal org, so the picker's step 1 (choose an org) has two live
 	// branches rather than one that dead-ends in the empty state.
-	{ id: 'your-org/notes-archive', owner: 'your-org', repo: 'notes-archive' }
+	{ id: 'your-org/notes-archive', owner: 'your-org', repo: 'notes-archive' },
+	// Under the BRAINLESS org, so connecting a first repo into one is reachable here.
+	{ id: 'contoso-io/field-guide', owner: 'contoso-io', repo: 'field-guide' }
 ];
 let activeBrainId = brainsFixture[0].id;
 // The active brain's content — used by the host chrome (initial render + page selector),
@@ -442,6 +510,12 @@ function brainsResult(msg: string, withView: boolean): CallToolResult {
 	const sc: Record<string, unknown> = {
 		brains: brainRows(),
 		active: activeBrainId,
+		// The orgs a brain can be added to, admin+ only, exactly as the server sends
+		// them. The add-a-brain picker reads this rather than deriving orgs from the
+		// brains above, which is the only way an org holding no brains can be offered.
+		orgs: orgsFixture
+			.filter((o) => roleAtLeast(o.orgRole, 'admin'))
+			.map((o) => ({ orgId: o.orgId, orgLabel: o.orgLabel })),
 		// What the server registered. On here so the harness previews the nav with
 		// the Analytics row present; a real deployment sends false unless
 		// USAGE_ANALYTICS is set.
@@ -487,14 +561,22 @@ function viewCtxFor(pg: Record<string, string>): ViewContext {
 	const bySlug = new Map(pth.map((p) => [slugOf(p), p]));
 	const byTitle = new Map(pth.map((p) => [titleOf(p, pg[p]).toLowerCase(), p]));
 	const edges: { source: string; target: string; kind: 'md' | 'wiki'; cnt: number }[] = [];
+	// Links to non-page FILES (attachments), kept apart from `edges` exactly as the
+	// index keeps them. The harness used to drop them: its md-link loop skipped
+	// anything not ending in .md, so an image was referenced by nobody here.
+	const fileEdges: { source: string; target: string; kind: 'md' | 'wiki'; cnt: number }[] = [];
 	for (const p of pth) {
 		const body = stripFrontmatter(pg[p]);
 		for (const m of body.matchAll(/\]\(([^)\s]+)\)/g)) {
-			const href = m[1].split('#')[0].trim();
-			if (/^(https?:|mailto:)/i.test(href) || !href.endsWith('.md')) continue;
-			const resolved = resolveRelative(p, href);
-			if (pg[resolved] !== undefined)
-				edges.push({ source: p, target: resolved, kind: 'md', cnt: 1 });
+			// classifyMdLink is the ONE rule (src/lib/links.ts). brain-index.ts's comment
+			// says it lives there so the harness can resolve links exactly the way the
+			// index does; this is the harness actually doing that, instead of carrying
+			// the divergent copy that comment describes.
+			const c = classifyMdLink(p, m[1], DEFAULT_BRAIN_CONFIG, (path) => pg[path] !== undefined);
+			if (!c.target) continue;
+			if (c.kind === 'page') edges.push({ source: p, target: c.target, kind: 'md', cnt: 1 });
+			else if (c.kind === 'file')
+				fileEdges.push({ source: p, target: c.target, kind: 'md', cnt: 1 });
 		}
 		for (const m of body.matchAll(/\[\[([^\]|]+)(?:\|[^\]]*)?\]\]/g)) {
 			const t = bySlug.get(slugify(m[1].trim())) ?? byTitle.get(m[1].trim().toLowerCase());
@@ -502,14 +584,29 @@ function viewCtxFor(pg: Record<string, string>): ViewContext {
 		}
 	}
 	return {
-		resolved: { pages: pth.map((p) => ({ path: p, title: titleOf(p, pg[p]) })), edges, broken: [] },
+		resolved: {
+			pages: pth.map((p) => ({ path: p, title: titleOf(p, pg[p]) })),
+			edges,
+			fileEdges,
+			broken: []
+		},
 		fieldsFor: async (paths) => {
 			const out = new Map<string, Map<string, string[]>>();
 			for (const p of paths) {
 				const { frontmatter } = parseFrontmatter(pg[p] ?? '');
 				if (!frontmatter) continue;
 				const fields = new Map<string, string[]>();
-				for (const [k, v] of Object.entries(frontmatter)) fields.set(k, Array.isArray(v) ? v : [v]);
+				for (const [k, v] of Object.entries(frontmatter)) {
+					// Nested frontmatter is preserved verbatim but deliberately NOT indexed
+					// on the server, so an okf-view filter cannot see inside it. Skipping
+					// non-scalars here keeps the preview honest about that.
+					if (typeof v === 'string') fields.set(k, [v]);
+					else if (Array.isArray(v))
+						fields.set(
+							k,
+							v.filter((x) => typeof x === 'string')
+						);
+				}
 				out.set(p, fields);
 			}
 			return out;
@@ -543,6 +640,65 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
 			if (!hasViews(md)) return text(md);
 			return text((await renderViews(md, path, viewCtxFor(pg))).snapshotted);
 		}
+		case 'read_media': {
+			const asset = assetsFor(bid)[path];
+			if (!asset) return errText(`No file at "${path}".`);
+			const r = text(`${path} (${asset.mimeType})`);
+			return {
+				...r,
+				structuredContent: {
+					path,
+					mimeType: asset.mimeType,
+					size: Math.floor((asset.data.length * 3) / 4),
+					dataUri: `data:${asset.mimeType};base64,${asset.data}`
+				}
+			};
+		}
+		case 'attach_media': {
+			// Two shapes, same as the server. `page` stores the file AND appends a link
+			// (the conversational path). `path` stores it and nothing else — which is what
+			// the editor uses, because it has already inserted the image node itself and
+			// the save writes the page; appending here would duplicate the link.
+			const pagePath = String(args?.page ?? '');
+			const explicitPath = String(args?.path ?? '');
+			const filename = String(args?.filename ?? 'attachment');
+			const mimeType = String(args?.mime_type ?? '');
+			const data = String(args?.data ?? '');
+			if (!pagePath && !explicitPath) return errText('Give a `page` or a `path`.');
+
+			let target = explicitPath;
+			if (!target) {
+				const ext = filename.includes('.') ? filename.slice(filename.lastIndexOf('.') + 1) : 'bin';
+				const slug =
+					filename
+						.slice(0, filename.length - ext.length - 1)
+						.toLowerCase()
+						.replace(/[^a-z0-9]+/g, '-')
+						.replace(/^-+|-+$/g, '') || 'attachment';
+				const dir = pagePath.slice(0, pagePath.lastIndexOf('/'));
+				target = `${dir}/assets/${slug}.${ext}`;
+			}
+			// Mirrors the server: never overwrite a file that is already there, number
+			// the name instead, and report where it actually landed.
+			const store = assetsFor(bid);
+			target = uniqueAttachmentPath(target, (p) => p in store || pth.includes(p));
+			if (!target) return errText('Every numbered variant of that name is taken.');
+			store[target] = { data, mimeType };
+
+			if (pagePath) {
+				const md = pg[pagePath];
+				if (md === undefined) return errText(`No page at "${pagePath}".`);
+				const alt = String(args?.alt ?? filename);
+				const rel = target.startsWith(`${pagePath.slice(0, pagePath.lastIndexOf('/'))}/`)
+					? target.slice(pagePath.lastIndexOf('/') + 1)
+					: target;
+				pg[pagePath] = `${md.replace(/\n*$/, '')}\n\n![${alt}](${rel})\n`;
+			}
+			return {
+				...text(`Stored ${target}. The change was logged.`),
+				structuredContent: { path: target, mimeType }
+			};
+		}
 		case 'list_pages': {
 			const prefix = String(args?.prefix ?? '');
 			const listed = pth.filter((p) => p.startsWith(prefix));
@@ -550,11 +706,18 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
 			// .gitkeep, source, the log) comes back as `hidden` for the eye toggle.
 			const visible = listed.filter(isContentPage);
 			const hiddenPaths = listed.filter((p) => !isContentPage(p));
+			// Attachments live in their own map here (they are bytes, not markdown), so
+			// they have to be folded in explicitly — the server gets both from one tree
+			// walk. Reported as `assets`, never as `hidden`: they are content.
+			const assetPaths = Object.keys(assetsFor(bid))
+				.filter((p) => p.startsWith(prefix))
+				.sort();
 			const r = text(visible.join('\n'));
 			return {
 				...r,
 				structuredContent: {
 					pages: visible.map((p) => ({ path: p, title: titleOf(p, pg[p]) })),
+					assets: assetPaths,
 					hidden: hiddenPaths,
 					// Mirrors the server: this is the app's OWN navigation channel and the
 					// only tool that draws the whole tree, so its payload says whose tree it
@@ -754,9 +917,15 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
 			return { ...r, structuredContent: { view: 'graph', nodes, edges, focus, truncated: false } };
 		}
 		case 'find_inbound_links': {
+			// Two kinds of target. A PAGE is looked up in the page map and titled from its
+			// content; an ATTACHMENT lives in the asset map and is titled by its filename.
+			// Missing that split made the asset view report "no page shows this file" for
+			// an image that was plainly on a page, because the lookup errored before any
+			// scanning happened.
+			const asset = assetsFor(bid)[path];
 			const targetMd = pg[path];
-			if (targetMd === undefined) return errText(`"${path}" does not exist.`);
-			const targetTitle = titleOf(path, targetMd);
+			if (targetMd === undefined && !asset) return errText(`"${path}" does not exist.`);
+			const targetTitle = asset ? (path.split('/').pop() ?? path) : titleOf(path, targetMd);
 			const targetSlug = slugify(path.split('/').pop()!.replace(/\.md$/, ''));
 			const refs: { path: string; title: string; mdCount: number; wikiCount: number }[] = [];
 			for (const p of pth) {
@@ -764,9 +933,15 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
 				const content = pg[p];
 				let mdCount = 0;
 				let wikiCount = 0;
+				// The REAL classification rule, imported rather than approximated. This
+				// scan used to be a hand-written regex that only counted `.md` targets,
+				// so the preview reported "no page shows this file" for an image that was
+				// plainly on a page — a divergence from prod that manufactured a bug
+				// rather than revealing one. classifyMdLink is what the content index
+				// itself calls; the harness only supplies the page set.
 				for (const m of content.matchAll(/\]\(([^)]+)\)/g)) {
-					const tgt = m[1].split('#')[0].trim();
-					if (tgt.endsWith('.md') && resolveRelative(p, tgt) === path) mdCount++;
+					const c = classifyMdLink(p, m[1], DEFAULT_BRAIN_CONFIG, (q) => q in pg);
+					if ((c.kind === 'page' || c.kind === 'file') && c.target === path) mdCount++;
 				}
 				for (const m of content.matchAll(/\[\[([^\]|]+)(?:\|[^\]]*)?\]\]/g)) {
 					const t = m[1].trim();
@@ -964,12 +1139,18 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
 				structuredContent: { repos: connectableRepos }
 			};
 		case 'connect_brain': {
+			// Targeted by ORG, never by a brain inside it: an org with no brains has none
+			// to name, and that is exactly the org a first repo is being connected into.
+			// Falls back to the active brain's org, matching orgContext's default.
+			const q = String(args?.org ?? '').toLowerCase();
+			const activeOrgId = brainsFixture.find((b) => b.id === activeBrainId)?.orgId;
 			const org =
-				brainsFixture.find((b) => b.id === String(args?.brain ?? activeBrainId)) ??
-				brainsFixture[0];
-			// An org owns the repos under its GitHub owner (brain ids are `owner/repo`),
-			// so the picker is scoped the way the real installation would be.
-			const owner = org.id.split('/')[0];
+				orgsFixture.find((o) => o.orgId.toLowerCase() === q || o.orgLabel.toLowerCase() === q) ??
+				orgsFixture.find((o) => o.orgId === activeOrgId) ??
+				orgsFixture[0];
+			// An org owns the repos under its GitHub owner, so the picker is scoped the
+			// way the real installation would be.
+			const owner = org.owner;
 			const candidates = connectableRepos.filter((x) => x.owner === owner);
 			// NO `repo` ARG → return the connectable candidates instead of adopting. This
 			// branch was missing, so the add-a-brain picker's first call fell through to
@@ -1305,6 +1486,7 @@ bridge.oninitialized = async () => {
 							view: 'browse',
 							paths: apth.filter(isContentPage),
 							pages: apth.filter(isContentPage).map((p) => ({ path: p, title: titleOf(p, ap[p]) })),
+							assets: Object.keys(assetsFor(activeBrainId)).sort(),
 							hidden: apth.filter((p) => !isContentPage(p)),
 							activeBrain: brainMeta(activeBrainId)
 						}

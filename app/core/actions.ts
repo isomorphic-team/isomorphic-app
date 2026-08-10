@@ -10,6 +10,7 @@ import {
 	buildWikilinkIndex,
 	resolveWikilink as resolveWikilinkPath
 } from '../../src/lib/wiki.ts';
+import { mediaTypeOf } from '../../src/lib/media.ts';
 import type {
 	View,
 	Hit,
@@ -46,6 +47,8 @@ import {
 	setActiveBrain,
 	brainList,
 	setBrainList,
+	orgList,
+	setOrgList,
 	setFeatures,
 	applyPolicy,
 	resetPolicy,
@@ -88,6 +91,7 @@ function handleToolResult(result: CallToolResult) {
 			const data: BrowseData = {
 				paths,
 				titleByPath: pagesToTitleMap(sc.pages),
+				assets: Array.isArray(sc.assets) ? (sc.assets as string[]) : [],
 				hidden: Array.isArray(sc.hidden) ? (sc.hidden as string[]) : [],
 				needsConfig: !!sc.needsConfig
 			};
@@ -155,6 +159,7 @@ function handleToolResult(result: CallToolResult) {
 function brainsViewFromSc(sc: Record<string, unknown>): View {
 	const brains = Array.isArray(sc.brains) ? (sc.brains as BrainRow[]) : [];
 	const active = String(sc.active ?? activeBrain?.id ?? '');
+	orgsFromSc(sc);
 	if (brains.length) {
 		setBrainList(brains);
 		const a = brains.find((b) => b.id === active);
@@ -187,8 +192,10 @@ function ensureBrainList(): Promise<void> {
 			};
 			if (!Array.isArray(sc.brains)) throw new Error('brains: no list in the result');
 			setBrainList(sc.brains);
-			// Which optional server surfaces exist (today: the org Analytics tab). Rides
-			// this call because it is the one the app always makes on open.
+			// Which orgs a brain can be added to, and which optional server surfaces
+			// exist (today: the org Analytics tab). Both ride this call because it is
+			// the one the app always makes on open.
+			orgsFromSc(res.structuredContent ?? {});
 			setFeatures(sc.features);
 			const a = sc.brains.find((b) => b.id === (sc.active ?? activeBrain?.id));
 			if (a) setActiveBrain({ id: a.id, label: a.label });
@@ -235,20 +242,34 @@ function isNoBrain(s: string): boolean {
 	return /don.?t have a brain yet/i.test(s);
 }
 
-// The orgs a caller can add a brain to: deduped from the brains they already admin.
-// Derived from the brains list rather than the ACTIVE brain, so sitting in a brain
-// you only view doesn't hide an org you own. Shared by the brains view's action gate
-// and by the add-brain flow itself, which must agree on "can you add" or the header
-// offers a button that opens an empty picker.
+// The orgs a caller can add a brain to. The `brains` payload carries them, because an
+// org holding NO brain yet cannot be derived from a list of brains, and that is
+// precisely the org someone is trying to connect a first repo into.
+//
+// The derivation survives as the fallback for a server that predates the `orgs` field
+// (an older Worker against a newer bundle), where dropping the picker entirely would
+// be worse than offering the orgs that can still be named.
 function manageableOrgs(brains: BrainRow[]): OrgTarget[] {
+	if (orgList) return orgList;
 	const out: OrgTarget[] = [];
 	const seen = new Set<string>();
 	for (const b of brains) {
 		if (!b.canManage || !b.orgId || seen.has(b.orgId)) continue;
 		seen.add(b.orgId);
-		out.push({ orgId: b.orgId, orgLabel: b.orgLabel ?? b.label, brainId: b.id });
+		out.push({ orgId: b.orgId, orgLabel: b.orgLabel ?? b.label });
 	}
 	return out;
+}
+
+// The orgs field off a `brains` result. Absent (old Worker) leaves the store alone so
+// the derived fallback stays in play; present-but-empty is a real answer and is kept.
+function orgsFromSc(sc: Record<string, unknown>): void {
+	if (!Array.isArray(sc.orgs)) return;
+	setOrgList(
+		(sc.orgs as Record<string, unknown>[])
+			.filter((o) => o && typeof o.orgId === 'string')
+			.map((o) => ({ orgId: String(o.orgId), orgLabel: String(o.orgLabel ?? o.orgId) }))
+	);
 }
 
 // ---------- flows ----------
@@ -476,6 +497,40 @@ async function navigateTo(path: string) {
 	}
 }
 
+// Open one attachment on its own. The counterpart to navigateTo for files that are
+// not pages: same shape (loading -> view -> error with retry), different tool.
+//
+// It exists because assets became browsable. A tree row you can see but not open is
+// worse than one that was never listed, so making them visible obliged us to give
+// them somewhere to go.
+async function openAsset(path: string) {
+	show({ kind: 'loading', label: `Loading ${path}…` });
+	try {
+		const res = await callTool('read_media', { path, ...brainArgs() });
+		if (res.isError) throw new Error(firstText(res));
+		const sc = (res.structuredContent ?? {}) as {
+			mimeType?: string;
+			size?: number;
+			dataUri?: string;
+		};
+		show({
+			kind: 'asset',
+			path,
+			mimeType: sc.mimeType ?? '',
+			size: typeof sc.size === 'number' ? sc.size : 0,
+			dataUri: sc.dataUri ?? ''
+		});
+	} catch (e) {
+		if (isNoBrain(String(e))) return openAddBrain();
+		show({
+			kind: 'error',
+			headline: `Couldn't load ${path}`,
+			detail: String(e),
+			retry: () => openAsset(path)
+		});
+	}
+}
+
 // Build a path→title lookup from a tool's structuredContent.pages (see list_pages /
 // browse_brain, which serve titles from the content index). Tolerant of a missing or
 // malformed field so the tree still renders (falling back to filenames).
@@ -520,6 +575,7 @@ async function fetchPaths(): Promise<BrowseData> {
 	const data: BrowseData = {
 		paths,
 		titleByPath: pagesToTitleMap(sc.pages),
+		assets: Array.isArray(sc.assets) ? (sc.assets as string[]) : [],
 		hidden: Array.isArray(sc.hidden) ? (sc.hidden as string[]) : [],
 		needsConfig: !!sc.needsConfig
 	};
@@ -830,6 +886,19 @@ function renderMarkdown(body: string): string {
 // Delegated link handling for rendered markdown.
 function onProseClick(fromPath: string) {
 	return async (e: MouseEvent) => {
+		// An attachment shown on the page opens on its own. Two ways to arrive here and
+		// both were dead ends before: an embedded image is a bare <img> with no anchor
+		// at all (`![](…)` produces no link), and a markdown link to a non-page file
+		// fell through the `.md` branch below. So a picture was reachable from the file
+		// tree but not from the page displaying it, which is the opposite of how anyone
+		// navigates.
+		const img = (e.target as HTMLElement).closest('img[data-asset-path]');
+		// Unless the author wrapped it in a link themselves (`[![alt](img.png)](page.md)`),
+		// in which case their link wins and the anchor branches below handle it.
+		if (img && !img.closest('a')) {
+			e.preventDefault();
+			return openAsset(img.getAttribute('data-asset-path')!);
+		}
 		const a = (e.target as HTMLElement).closest('a');
 		if (!a) return;
 		const href = a.getAttribute('href') ?? '';
@@ -845,6 +914,10 @@ function onProseClick(fromPath: string) {
 		} else if (href.endsWith('.md') || href.includes('.md#')) {
 			e.preventDefault();
 			navigateTo(resolveRelative(fromPath, href));
+		} else if (mediaTypeOf(resolveRelative(fromPath, href))) {
+			// A link to an attachment — a PDF, or an image linked rather than embedded.
+			e.preventDefault();
+			openAsset(resolveRelative(fromPath, href));
 		}
 	};
 }
@@ -872,6 +945,7 @@ export {
 	fetchPage,
 	fetchPageList,
 	navigateTo,
+	openAsset,
 	pagesToTitleMap,
 	fetchPaths,
 	openBrowse,

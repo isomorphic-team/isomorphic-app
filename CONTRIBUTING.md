@@ -100,6 +100,21 @@ only testing your new path.
 
 ## Tests
 
+**Every feature and every fix ships with tests, in the same pull request.** Not a follow-up
+issue, not "covered by typecheck", not a manual check described in the PR body. If a change
+has no test, the reason belongs in the pull request and it should be a reason, not an
+apology. Expect a review comment otherwise.
+
+Two things this means in practice, both learned the hard way:
+
+- **A green suite proves nothing unless it touches the changed code.** Before claiming a
+  change is tested, break it on purpose and watch the test fail. A test that passes against
+  the old behavior and the new one is testing neither.
+- **Cover the thing that decides, not the thing that is easy to reach.** Where the logic
+  lives is a choice: if a rule is buried somewhere no test can call (a private method on the
+  Worker, say), move the rule rather than skipping the test. Most of the pure functions in
+  `src/lib/` are there for exactly that reason.
+
 Pure golden tests, no network, all fast. `pnpm test` runs them all.
 
 ```sh

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'preact/hooks';
+import { useEffect, useRef, useState } from 'preact/hooks';
 import { parseFrontmatter, type Frontmatter } from '../../src/lib/wiki.ts';
 import { displayFromSnapshots } from '../../src/lib/view-directives.ts';
 import { isUsableFieldKey } from '../../src/lib/page-patch.ts';
@@ -12,6 +12,7 @@ import {
 	onProseClick,
 	openEditor
 } from '../core/actions.ts';
+import { hydrateImages } from '../core/media.ts';
 import { toast } from '../core/toast.tsx';
 import { defineView } from '../core/view-registry.ts';
 import { eyebrow } from '../ui/typography.ts';
@@ -450,6 +451,20 @@ function LinkedReferences({ path }: { path: string }) {
 	);
 }
 
+// The rendered markdown, with its images filled in afterwards.
+//
+// Hydration runs in an effect rather than during render because the bytes arrive from
+// a tool call: rewriting the markdown up front would hold the whole page back until
+// the last picture landed. Keyed on the body too, so a save that changes an image
+// re-runs it.
+function MarkdownBody({ path, body }: { path: string; body: string }) {
+	const ref = useRef<HTMLDivElement>(null);
+	useEffect(() => {
+		if (ref.current) void hydrateImages(ref.current, path);
+	}, [path, body]);
+	return <div ref={ref} dangerouslySetInnerHTML={{ __html: renderMarkdown(body) }} />;
+}
+
 function PageView({ path, markdown }: { path: string; markdown: string }) {
 	const { frontmatter, body: rawBody } = parseFrontmatter(markdown);
 	// Derived views: content from read_page carries okf-view fences with freshly
@@ -464,7 +479,7 @@ function PageView({ path, markdown }: { path: string; markdown: string }) {
 			<PageProperties fm={frontmatter} path={isEditablePath(path) ? path : undefined} />
 			<article class="prose max-w-none" onClick={onProseClick(path)}>
 				{showTitle && <h1>{title}</h1>}
-				<div dangerouslySetInnerHTML={{ __html: renderMarkdown(body) }} />
+				<MarkdownBody path={path} body={body} />
 			</article>
 			<LinkedReferences path={path} />
 		</div>

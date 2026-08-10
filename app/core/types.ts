@@ -29,6 +29,9 @@ export interface Hit {
 export interface BrowseData {
 	paths: string[];
 	titleByPath: Record<string, string>;
+	// Attachments (images, PDFs). Listed apart from `hidden` because they are
+	// content someone deliberately added, not repo plumbing — see listNonPagePaths.
+	assets: string[];
 	hidden: string[];
 	needsConfig: boolean;
 }
@@ -149,13 +152,11 @@ export interface BrainRow {
 	configPrUrl?: string; // a configure PR is pending (protected repo) — show "Review PR"
 }
 
-// An org the caller can add a brain to. `brainId` is any brain they already have in
-// that org: brain-scope tools resolve the org from the brain, so it's how a call
-// targets an org the caller isn't currently sitting in.
+// An org the caller can add a brain to. Identified by its own id rather than by a
+// brain inside it: the org waiting for its FIRST repo holds no brain to name it with.
 export interface OrgTarget {
 	orgId: string;
 	orgLabel: string;
-	brainId: string;
 }
 
 // A repo the org's installation can see that isn't a brain yet (connect_brain's
@@ -230,6 +231,9 @@ export interface TreeNode {
 	// Rendered only when "show hidden" is on. Content folders persisted only by a
 	// `.gitkeep` still render (the folder itself isn't hidden, its marker is).
 	hidden: boolean;
+	// An attachment: visible like a page, opens the asset view rather than the
+	// editor. Distinct from `hidden` (plumbing) and from a page (markdown).
+	asset?: boolean;
 }
 
 // A pending inline "new note"/"new folder" input, anchored under `parent` ("" = the
