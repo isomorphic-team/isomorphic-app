@@ -152,10 +152,11 @@ export interface BrainRow {
 // An org the caller can add a brain to. `brainId` is any brain they already have in
 // that org: brain-scope tools resolve the org from the brain, so it's how a call
 // targets an org the caller isn't currently sitting in.
+// An org the caller can add a brain to. Identified by its own id rather than by a
+// brain inside it: the org waiting for its FIRST repo holds no brain to name it with.
 export interface OrgTarget {
 	orgId: string;
 	orgLabel: string;
-	brainId: string;
 }
 
 // A repo the org's installation can see that isn't a brain yet (connect_brain's

@@ -163,6 +163,10 @@ import { readFileSync } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
 import {
 	listAccessibleBrains,
+	listAccessibleOrgs,
+	linkedUserIds,
+	matchOrg,
+	chooseOrg,
 	getDefaultBrainForUser,
 	listBrainAccess,
 	setBrainGrant,
@@ -191,8 +195,8 @@ const db = { prepare: (sql: string) => shimStatement(sql) } as never;
 // access source: grandfathered org-visible, and two private ones owned by
 // different people.
 sqlite.exec(`
-  INSERT INTO orgs (org_id, name, model, installation_id, brain_owner, created_by)
-    VALUES ('org1', 'Northwind', 'customer', 1, 'northwind', 'alice');
+  INSERT INTO orgs (org_id, name, model, installation_id, brain_owner, created_by, created_at)
+    VALUES ('org1', 'Northwind', 'customer', 1, 'northwind', 'alice', '2026-01-01');
   INSERT INTO app_users (user_id, email, name) VALUES
     ('alice', 'alice@example.com', 'Alice'),
     ('bob',   'bob@example.com',   'Bob'),
@@ -317,6 +321,124 @@ check(
 	'disconnecting a brain drops every grant on it',
 	sqlite.prepare(`SELECT COUNT(*) AS n FROM brain_memberships WHERE brain_id = 'b-bob'`).get()
 		?.n === 0
+);
+
+// ---------------------------------------------------------------------------
+// Org resolution: which ORGS a person can act in.
+// ---------------------------------------------------------------------------
+// A different question from listAccessibleBrains, and the reason it needs its own
+// query: that one inner-joins `brains`, so an org holding none is invisible to it.
+// That is correct for "which brain do I act on" and wrong for "where do I PUT a new
+// one", which is the only question asked about an org that has no brains yet.
+//
+// Dave is one human with two emails: a work identity that owns the brainless org and
+// a personal identity that is a viewer in Northwind. Every org query has to see both
+// from either, which is what identity linking means.
+sqlite.exec(`
+  INSERT INTO orgs (org_id, name, model, installation_id, brain_owner, github_org_login, created_by, created_at)
+    VALUES ('org2', 'The AI Lab', 'customer', 2, 'the-ai-laboratory', 'the-ai-laboratory', 'dave-work', '2026-04-01');
+  INSERT INTO orgs (org_id, name, model, installation_id, brain_owner, created_by, created_at, suspended_at)
+    VALUES ('org3', 'Dormant', 'customer', 3, 'dormant', 'dave-work', '2026-05-01', '2026-06-01');
+  INSERT INTO app_users (user_id, email, name, person_id) VALUES
+    ('dave-home', 'dave@example.com',      'Dave', 'p-dave'),
+    ('dave-work', 'dave@thelab.example',   'Dave', 'p-dave');
+  INSERT INTO memberships (org_id, user_id, role) VALUES
+    ('org1', 'dave-home', 'viewer'),
+    ('org1', 'dave-work', 'admin'),
+    ('org2', 'dave-work', 'owner'),
+    ('org3', 'dave-work', 'owner');
+`);
+
+const orgIds = async (users: string[]) =>
+	(await listAccessibleOrgs(db, users)).map((o) => o.org.org_id).sort();
+
+console.log('\nlistAccessibleOrgs: an org with no brains is still somewhere you can act');
+check(
+	'the brainless org resolves',
+	(await orgIds(['dave-work'])).includes('org2'),
+	'the first brain in a new org would be unplaceable'
+);
+check(
+	'...while listAccessibleBrains cannot see it at all',
+	!(await listAccessibleBrains(db, ['dave-work'])).some((b) => b.org_id === 'org2')
+);
+check('a suspended org is never offered', !(await orgIds(['dave-work'])).includes('org3'));
+
+console.log('\n...and it unions across a person’s linked identities');
+check(
+	'the personal identity alone reaches only Northwind',
+	JSON.stringify(await orgIds(['dave-home'])) === JSON.stringify(['org1'])
+);
+check(
+	'the PERSON reaches the work org too',
+	JSON.stringify(await orgIds(await linkedUserIds(db, 'dave-home'))) ===
+		JSON.stringify(['org1', 'org2'])
+);
+check(
+	'a shared org resolves at the HIGHEST of the two identities’ roles',
+	(await listAccessibleOrgs(db, await linkedUserIds(db, 'dave-home'))).find(
+		(o) => o.org.org_id === 'org1'
+	)?.role === 'admin',
+	'the person was demoted to their weaker identity’s role'
+);
+check(
+	'...and each org appears once, not once per identity',
+	(await listAccessibleOrgs(db, await linkedUserIds(db, 'dave-home'))).length === 2
+);
+
+console.log('\nmatchOrg: naming an org the way a human would');
+const daveOrgs = await listAccessibleOrgs(db, await linkedUserIds(db, 'dave-home'));
+check('by display name', matchOrg(daveOrgs, 'The AI Lab').org?.org.org_id === 'org2');
+check('case-insensitively', matchOrg(daveOrgs, 'the ai lab').org?.org.org_id === 'org2');
+check('by GitHub owner', matchOrg(daveOrgs, 'the-ai-laboratory').org?.org.org_id === 'org2');
+check('by substring', matchOrg(daveOrgs, 'northwind').org?.org.org_id === 'org1');
+check('a miss returns neither an org nor candidates', !matchOrg(daveOrgs, 'acme').org);
+check('an empty handle never silently picks one', !matchOrg(daveOrgs, '   ').org);
+
+console.log('\nchooseOrg: where a new brain actually gets written');
+const threw = (fn: () => unknown) => {
+	try {
+		fn();
+		return false;
+	} catch {
+		return true;
+	}
+};
+check('a named handle wins', chooseOrg(daveOrgs, { org: 'The AI Lab' }).org.org_id === 'org2');
+check(
+	'...over the org the caller is working in',
+	chooseOrg(daveOrgs, { org: 'The AI Lab', activeOrgId: 'org1' }).org.org_id === 'org2'
+);
+check(
+	'with no handle, the org the caller is working in wins',
+	chooseOrg(daveOrgs, { activeOrgId: 'org2' }).org.org_id === 'org2'
+);
+check(
+	'with neither, the first org the query returned',
+	chooseOrg(daveOrgs, {}).org.org_id === 'org1'
+);
+// The stability the old `LIMIT 1` lacked lives in the QUERY's ORDER BY, not in the
+// pick, so it is asserted there: chooseOrg only promises to take the head.
+check(
+	'...and that order is the oldest org first, deterministically',
+	JSON.stringify(daveOrgs.map((o) => o.org.org_id)) === JSON.stringify(['org1', 'org2'])
+);
+check(
+	'an active brain in an org the caller lost access to falls back, not throws',
+	chooseOrg(daveOrgs, { activeOrgId: 'org-gone' }).org.org_id === 'org1'
+);
+check(
+	'an unmatched handle throws rather than picking one',
+	threw(() => chooseOrg(daveOrgs, { org: 'acme' }))
+);
+check(
+	'an AMBIGUOUS handle throws too (never silently takes the first)',
+	threw(() => chooseOrg(daveOrgs, { org: 'org' })),
+	'"org" is a substring of both org ids and must not resolve'
+);
+check(
+	'no orgs at all throws',
+	threw(() => chooseOrg([], {}))
 );
 
 console.log(

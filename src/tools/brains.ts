@@ -19,11 +19,13 @@ import { BRAIN_APP_URI } from './apps.ts';
 import {
 	type TenantOpts,
 	type AccessibleBrain,
+	type AccessibleOrg,
 	type OrgScope,
 	type Role,
 	brainLabel,
 	brainLabelQualified,
 	orgDisplay,
+	orgLabel,
 	matchBrain,
 	roleLabel,
 	roleAtLeast,
@@ -34,6 +36,7 @@ import {
 	getBrainByRepo
 } from '../lib/orgs.ts';
 import { createAndScaffoldBrain } from '../lib/scaffold-core.ts';
+import { githubStore } from '../lib/brain-repo.ts';
 import {
 	resetIndex,
 	detectNeedsConfig,
@@ -134,7 +137,10 @@ export function registerBrainTools(
 	server: McpServer,
 	deps: {
 		getContext: (opts?: TenantOpts) => Promise<BrainContext>;
-		orgContext: (opts?: { requires?: Role }) => Promise<OrgScope>;
+		orgContext: (opts?: { requires?: Role; org?: string }) => Promise<OrgScope>;
+		// Every org the caller belongs to, brainless ones included. Separate from
+		// listBrains because that cannot represent an org with nothing in it yet.
+		listOrgs: () => Promise<AccessibleOrg[]>;
 		listBrains: () => Promise<AccessibleBrain[]>;
 		activeBrainId: () => string | undefined;
 		setActiveBrain: (id: string) => void;
@@ -152,12 +158,22 @@ export function registerBrainTools(
 		getContext,
 		orgContext,
 		listBrains,
+		listOrgs,
 		activeBrainId,
 		setActiveBrain,
 		invalidateConfig,
 		analyticsEnabled
 	} = deps;
 	const features = { analytics: analyticsEnabled };
+
+	// The orgs the app's "add a brain" flow may target: the ones the caller can
+	// actually adopt into (connect_brain is admin+). Sent with the brains list because
+	// the widget cannot derive it. A brainless org has no brain row to derive it from,
+	// and that is the only org where the answer matters.
+	const manageableOrgs = async () =>
+		(await listOrgs())
+			.filter((o) => roleAtLeast(o.role, 'admin'))
+			.map((o) => ({ orgId: o.org.org_id, orgLabel: orgLabel(o.org) }));
 
 	// GitHub returns 422 when a repo with that name already exists on the org — used to
 	// pick the next free `name-N` slug when creating a brain.
@@ -253,7 +269,13 @@ export function registerBrainTools(
 			);
 			return {
 				content: [{ type: 'text' as const, text: rowsText(rows) }],
-				structuredContent: { view: 'brains', brains: rows, active, features }
+				structuredContent: {
+					view: 'brains',
+					brains: rows,
+					active,
+					features,
+					orgs: await manageableOrgs().catch(() => [])
+				}
 			};
 		}
 	);
@@ -271,15 +293,24 @@ export function registerBrainTools(
 			inputSchema: {
 				name: z
 					.string()
-					.describe('A name for the new brain, e.g. "Personal", "Project Atlas", "Team Wiki".')
+					.describe('A name for the new brain, e.g. "Personal", "Project Atlas", "Team Wiki".'),
+				// Without this the org was whatever resolution happened to pick first, and a
+				// person in two orgs had no way to say which, including no way to put a brain
+				// in an org that holds none yet, since every other handle is a brain.
+				org: z
+					.string()
+					.optional()
+					.describe(
+						'Which organization to create it in, by name or GitHub owner. Defaults to the organization of the brain you are in.'
+					)
 			}
 		},
-		async ({ name }) => {
+		async ({ name, org }) => {
 			// Org-scope + role gate. Rejects the legacy github/static single-tenant paths
 			// ("product accounts only") and callers below `editor`.
 			let ctx: OrgScope;
 			try {
-				ctx = await orgContext({ requires: 'editor' });
+				ctx = await orgContext({ requires: 'editor', org });
 			} catch (err) {
 				return fail(err instanceof Error ? err.message : String(err));
 			}
@@ -366,7 +397,7 @@ export function registerBrainTools(
 		{
 			title: 'Connect a repo as a brain',
 			description:
-				"Adopt an existing GitHub repository as a brain in an organization you admin, so it appears in the switcher (the brains tool). The repo must be under the org's GitHub owner and covered by the org's Isomorphic App installation. Call with no `repo` to list the repos that can become brains (candidates the installation can reach that aren't brains yet). Adds to the active org by default; pass `brain` (any brain in the target org) to add to a different org. Admin only.",
+				"Adopt an existing GitHub repository as a brain in an organization you admin, so it appears in the switcher (the brains tool). The repo must be under the org's GitHub owner and covered by the org's Isomorphic App installation. Call with no `repo` to list the repos that can become brains (candidates the installation can reach that aren't brains yet). Adds to the organization you are working in by default; pass `org` to add to a different one, including one that holds no brains yet. Admin only.",
 			inputSchema: {
 				repo: z
 					.string()
@@ -383,20 +414,29 @@ export function registerBrainTools(
 					.describe(
 						'What to call this brain in the switcher, e.g. "Editorial". Defaults to the repo name.'
 					),
-				brain: z
+				// Replaces the old `brain` argument, which named the target org by naming a
+				// brain already in it. That could never reach an org holding no brains, which
+				// is exactly the org waiting for its first repo: the chicken-and-egg that
+				// made a freshly connected GitHub org impossible to adopt anything into.
+				org: z
 					.string()
 					.optional()
 					.describe(
-						'Any brain in the target org, to pick which org to add to. Defaults to the active org.'
+						'Which organization to add it to, by name or GitHub owner. Defaults to the organization of the brain you are in.'
 					)
 			}
 		},
-		async ({ repo, brain, name: displayName }) => {
-			// ORG-scope: adopting a repo adds a brain to the organization, so it gates
-			// on the org role. Gating on the brain role would let someone who was
-			// merely shared a brain as admin add repos to the whole org.
-			const ctx = await getContext({ requiresOrg: 'admin', brain });
-			if (!ctx.orgId) return fail('Brain management is only available for organization accounts.');
+		async ({ repo, org, name: displayName }) => {
+			// ORG-scope: adopting a repo adds a brain to the organization, so it gates on
+			// the org role and resolves through orgContext. Gating on the brain role would
+			// let someone merely shared a brain as admin add repos to the whole org.
+			let ctx: OrgScope;
+			try {
+				ctx = await orgContext({ requires: 'admin', org });
+			} catch (err) {
+				return fail(err instanceof Error ? err.message : String(err));
+			}
+			const orgId = ctx.org.org_id;
 
 			// No repo → list the connectable candidates (repos the org's installation can
 			// reach that aren't brains yet). This is the picker for the connect flow.
@@ -415,7 +455,7 @@ export function registerBrainTools(
 				return { content: [{ type: 'text' as const, text }], structuredContent: { repos } };
 			}
 
-			const parts = repo.includes('/') ? repo.split('/') : [ctx.repoArgs.owner, repo];
+			const parts = repo.includes('/') ? repo.split('/') : [ctx.org.brain_owner, repo];
 			const owner = parts[0].trim();
 			const name = (parts[1] ?? '').trim();
 			if (!owner || !name) return fail(`"${repo}" is not a valid repository.`);
@@ -436,7 +476,7 @@ export function registerBrainTools(
 			const existing = await getBrainByRepo(ctx.db, owner, name);
 			if (existing) {
 				return fail(
-					existing.org_id === ctx.orgId
+					existing.org_id === orgId
 						? `${owner}/${name} is already a brain here.`
 						: `${owner}/${name} is already connected to another organization.`
 				);
@@ -449,7 +489,7 @@ export function registerBrainTools(
 			// share_brain if it should not be org-wide.
 			await createBrain(ctx.db, {
 				brain_id: brainIdFor(owner, name),
-				org_id: ctx.orgId,
+				org_id: orgId,
 				repo_owner: owner,
 				repo_name: name,
 				name: displayName?.trim() || null,
@@ -459,14 +499,16 @@ export function registerBrainTools(
 
 			// Guard: an adopted repo whose content isn't under the default layout would
 			// connect but show no pages. Detect it now so the app can offer to configure.
+			// The store is built from the org's installation client rather than taken off
+			// the context: org scope resolves no brain, so it carries no store of its own.
 			const connectedId = `${owner}/${name}`;
 			const needsConfig = await detectNeedsConfig(
-				ctx.store,
+				githubStore(githubClient(ctx)),
 				{ owner, repo: name },
 				DEFAULT_BRAIN_CONFIG
 			).catch(() => false);
 
-			const rows = brainRows(await listBrains(), ctx.activeBrain.id);
+			const rows = brainRows(await listBrains(), activeBrainId());
 			const text = needsConfig
 				? `Connected ${connectedId}, but its content isn't under the default layout, so no pages show yet. Open it and choose Auto-configure (or run configure_brain) to index it.`
 				: `Connected ${connectedId} as a brain.`;
@@ -475,7 +517,7 @@ export function registerBrainTools(
 				structuredContent: {
 					view: 'brains',
 					brains: rows,
-					active: ctx.activeBrain.id,
+					active: activeBrainId(),
 					connectedId,
 					needsConfig
 				}

@@ -114,7 +114,7 @@ Which leaves the real gap:
 Raised 2026-07-29 alongside the above. There is no active-org pointer in the model at
 all — `tenantContext` derives the org from whichever brain you chose — and everywhere org
 genuinely matters it is already an ARGUMENT at the point of decision: `AddBrainView` asks
-which organization, `connect_brain` takes a `brain` to target another org. A global picker
+which organization, and `create_brain` / `connect_brain` take an `org`. A global picker
 would add a second selection that most screens ignore, plus a real ambiguity: if the
 active org is A and the active brain lives in B, which one does `members` show?
 

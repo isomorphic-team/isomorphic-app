@@ -27,9 +27,10 @@ import { Button, Input, List, Flow, FlowNote } from '../ui/index.ts';
 type Source = 'create' | 'connect';
 
 function AddBrainView({ orgs, first }: { orgs: OrgTarget[]; first: boolean }) {
-	// Connecting needs an org you admin, and orgs are derived from the brains you
-	// already have — so on the very first brain there is nothing to connect to and
-	// nothing to choose between. Creating is always available.
+	// Connecting needs an org you admin. The list comes from the server (the `brains`
+	// payload), so an org holding no brains yet is offered like any other. It used to
+	// be derived from the brains list, which could not name one. Creating is always
+	// available, including when there is no org to connect into.
 	const canConnect = orgs.length > 0;
 	const canChoose = canConnect && !first;
 	// One admin org means there is nothing to choose — open straight on its repos.
@@ -52,7 +53,7 @@ function AddBrainView({ orgs, first }: { orgs: OrgTarget[]; first: boolean }) {
 		setRepos(null);
 		setError(null);
 		// No `repo` arg → connect_brain returns the connectable candidates instead of adopting.
-		void callTool('connect_brain', { brain: target.brainId }).then((res) => {
+		void callTool('connect_brain', { org: target.orgId }).then((res) => {
 			if (!live) return;
 			if (res.isError) return setError(firstText(res));
 			const sc = (res.structuredContent ?? {}) as { repos?: ConnectableRepo[] };
@@ -61,7 +62,7 @@ function AddBrainView({ orgs, first }: { orgs: OrgTarget[]; first: boolean }) {
 		return () => {
 			live = false;
 		};
-	}, [target?.brainId, attempt]);
+	}, [target?.orgId, attempt]);
 
 	function chooseSource(s: Source) {
 		setSource(s);
@@ -78,7 +79,7 @@ function AddBrainView({ orgs, first }: { orgs: OrgTarget[]; first: boolean }) {
 	async function adopt(repo: ConnectableRepo) {
 		if (busy || !target) return;
 		setBusy(true);
-		const res = await callTool('connect_brain', { repo: repo.id, brain: target.brainId });
+		const res = await callTool('connect_brain', { repo: repo.id, org: target.orgId });
 		setBusy(false);
 		if (res.isError) return toast(firstText(res), true);
 		toast(firstText(res));
