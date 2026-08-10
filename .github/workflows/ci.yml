@@ -94,6 +94,21 @@ jobs:
       - run: pnpm test:e2e-librarian
       - run: pnpm test:e2e-import
 
+      # The UI tests drive the REAL generated app bundle in a real browser, over the
+      # local host harness (dev/harness.ts) with its fixtures. Offline and secret-free
+      # like everything else here: the only extra requirement is the browser binary.
+      #
+      # Chromium only, and `--with-deps` for the system libraries the runner lacks.
+      # UI_STRICT=1 turns `pnpm test:ui`'s skip-green browser guard into a failure —
+      # locally a missing browser should not fail a contributor's `pnpm test`, but in
+      # CI it means the install step above it broke and the UI tests silently did not
+      # run, which is exactly the failure a green skip would hide.
+      - name: Install Chromium for the UI tests
+        run: pnpm exec playwright install --with-deps chromium
+      - run: pnpm test:ui
+        env:
+          UI_STRICT: '1'
+
       # Formatting is checked, not applied — a PR that reformats unrelated files is
       # noise, and `--check` tells the contributor exactly what to run.
       - name: Prettier formatting

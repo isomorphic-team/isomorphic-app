@@ -44,7 +44,9 @@ pnpm test:usage         # usage-analytics golden test (tool-classification cover
 pnpm test:wiring        # every test:* script is in BOTH package.json's `test` and ci.yml
 pnpm test:e2e-librarian # write tools end to end, offline against a git repo in a temp dir
 pnpm test:e2e-import    # the importer end to end, same
-pnpm typecheck          # runs all three tsconfigs (node, worker, app)
+pnpm test:ui            # the MCP App UI in a real browser, over the local host harness
+pnpm ui:baselines       # regenerate the visual baselines for THIS platform
+pnpm typecheck          # runs all four tsconfigs (node, worker, app, tests)
 pnpm format             # prettier
 ```
 
@@ -88,6 +90,23 @@ to survive or the tiles stop matching the table), and `pnpm test:wiring` (every 
 script appears in both `package.json`'s `test` and `ci.yml`, in three directions, including
 itself).
 
+**`pnpm test:ui` is the only battery that needs a browser** (Playwright + Chromium). It
+drives the REAL generated app bundle over the local host harness (`dev/harness.ts`), so it
+covers the app layer that every other battery is blind to: that each route MOUNTS, that the
+tree / folder notes / brain switching WIRE UP, that the editor round-trips, and how the app
+LOOKS in three display modes and two themes. It deliberately does not re-assert tool
+semantics — the view engine, page patches, the access rule and the analytics fold already
+have pure golden tests, and re-checking them through the DOM would be a slow duplicate.
+Two things keep it from being a burden on contributors: it **skips green** (loudly) when
+Chromium is absent or when this platform has no visual baselines, since both are setup gaps
+rather than regressions, and CI sets `UI_STRICT=1` so a broken install step cannot hide
+behind that skip. Determinism needs **two** frozen clocks (`?now=` for the harness's
+fixtures, `page.clock.setFixedTime` for the app's own relative-time rendering); freezing
+one without the other lets every "5d ago" drift daily. Visual baselines are committed,
+per-platform, and regenerated with `pnpm ui:baselines` — NOT a bare `--update-snapshots`,
+which only fills in missing ones and silently leaves a changed one alone. Details:
+[`dev/README.md`](dev/README.md).
+
 **The two END-TO-END batteries now run in CI too** (changed 2026-08-04):
 `pnpm test:e2e-librarian` and `pnpm test:e2e-import` drive the real MCP tool handlers,
 through a real content index on `node:sqlite`, against a real brain. By default that is
@@ -124,7 +143,7 @@ This repo ships **three distinct programs** sharing one `src/`:
 
 3. **Local runtime** (`src/local.ts`): Node, run via `tsx` as `pnpm try <folder>`. Serves the same content tools over a **git repository on disk** through the fs `BrainStore` (`src/local/brain-store-fs.ts`), with D1 shimmed over `node:sqlite` (`src/local/d1-sqlite.ts`). No auth (loopback only) and **no org model**, so members/sharing/invites/brain-switching are not registered. Builds a fresh `McpServer` per request for the same reason the Worker does: an `McpServer` binds to one transport. Added 2026-08-04 so a contributor reaches the real tools with no accounts, and so the write-path e2e batteries run offline in CI. `src/local/**` is Node-only and sits outside `src/lib/`. Reads come from the working tree, so its `getHead` reports a digest of that tree while `listCommits` reports git shas.
 
-The split matters for `src/lib/`. Anything imported by `worker.ts` runs on Cloudflare Workers and **cannot use `node:*` modules** (no `node:crypto`, no `node:fs`, etc.). The tsconfigs enforce this: `tsconfig.node.json` includes the bootstrap files, `src/local*`, `scripts/`, and `lib/`; `tsconfig.worker.json` includes `worker.ts` and `lib/`; `tsconfig.app.json` covers `app/`. `pnpm typecheck` runs all three. Node-only code goes in `src/local/`, `bootstrap.ts`, or a Node-only sibling, never in `lib/`.
+The split matters for `src/lib/`. Anything imported by `worker.ts` runs on Cloudflare Workers and **cannot use `node:*` modules** (no `node:crypto`, no `node:fs`, etc.). The tsconfigs enforce this: `tsconfig.node.json` includes the bootstrap files, `src/local*`, `scripts/`, and `lib/`; `tsconfig.worker.json` includes `worker.ts` and `lib/`; `tsconfig.app.json` covers `app/`; `tsconfig.tests.json` covers `tests/` + `playwright.config.ts` (Playwright transpiles specs rather than typechecking them, so without it the UI suite is the one body of code where a rename fails in a browser instead of at `pnpm typecheck`). `pnpm typecheck` runs all four. Node-only code goes in `src/local/`, `bootstrap.ts`, or a Node-only sibling, never in `lib/`.
 
 ## Auth model
 

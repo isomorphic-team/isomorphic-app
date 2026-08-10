@@ -54,6 +54,35 @@ export function Flow({ icon, title, subtitle, children, footer, class: cls }: Fl
 	);
 }
 
+/**
+ * Submit a flow when Enter is pressed in one of its inputs.
+ *
+ * NATIVE FORM SUBMISSION DOES NOT WORK HERE, and this is not a preference. The app
+ * renders in a sandboxed iframe, and a host that does not grant `allow-forms` makes
+ * the browser block submission outright:
+ *
+ *   Blocked form submission to '' because the form's frame is sandboxed and the
+ *   'allow-forms' permission is not set.
+ *
+ * Blocked means the `submit` event is never DISPATCHED, so an `onSubmit` handler does
+ * not run at all — `e.preventDefault()` inside it never gets the chance. The failure
+ * is silent to the user: the button appears to do nothing. All four add-shaped flows
+ * (invite member, share brain, connect account, add brain) were built on
+ * `<form onSubmit>` + `<Button type="submit">` and so did nothing when clicked. Found
+ * by `pnpm test:ui`, which drives the app in a sandbox exactly like a host's.
+ *
+ * So every flow drives its action from an explicit `onClick`, and keeps
+ * Enter-to-submit through this helper rather than through the form. The `<form>`
+ * element stays for semantics and autofill; nothing depends on its submit event.
+ */
+export function submitOnEnter(submit: (e: Event) => unknown) {
+	return (e: KeyboardEvent) => {
+		if (e.key !== 'Enter') return;
+		e.preventDefault();
+		void submit(e);
+	};
+}
+
 /** A bordered aside inside a flow: loading, empty, an error, or a result to act on. */
 export function FlowNote({
 	children,

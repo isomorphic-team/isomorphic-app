@@ -5,7 +5,7 @@ import { openSettings } from '../core/actions.ts';
 import { toast } from '../core/toast.tsx';
 import { LinkIcon } from '../core/icons.tsx';
 import { defineView } from '../core/view-registry.ts';
-import { Button, Input, Flow, FlowNote } from '../ui/index.ts';
+import { Button, Input, Flow, FlowNote, submitOnEnter } from '../ui/index.ts';
 
 // Link another of your own accounts. Opened from Your settings.
 //
@@ -74,7 +74,7 @@ function ConnectAccountView() {
 						<Button type="button" variant="outline" onClick={leave} disabled={busy} class="text-sm">
 							Cancel
 						</Button>
-						<Button type="submit" disabled={busy || !email.trim()} class="text-sm">
+						<Button type="button" onClick={submit} disabled={busy || !email.trim()} class="text-sm">
 							{busy ? 'Preparing…' : 'Connect'}
 						</Button>
 					</>
@@ -85,6 +85,7 @@ function ConnectAccountView() {
 					<Input
 						// eslint-disable-next-line
 						autofocus
+						onKeyDown={submitOnEnter(submit)}
 						type="email"
 						required
 						value={email}

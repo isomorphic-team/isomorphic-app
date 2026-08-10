@@ -35,6 +35,26 @@ import {
 } from '../src/lib/usage.ts';
 import PAGES from './fixtures.json';
 
+// ---- the fixtures' clock ----
+//
+// `?now=<ISO>` freezes every date the fixtures produce: the analytics window and its
+// day series, the activity feed's relative timestamps, and invite `invited_at`. Two
+// things need this. Automated tests (`pnpm test:ui`) assert on rendered dates, and a
+// visual baseline captured today has to still match tomorrow — with a live clock the
+// analytics chart re-dates itself at every UTC midnight and every snapshot rots. And
+// by hand it makes "open the analytics tab" reproducible rather than a moving target.
+//
+// Unset (the normal `pnpm app:dev` case) it stays live, so the preview still looks
+// like today to a human poking at it.
+const FROZEN_NOW = new URLSearchParams(location.search).get('now');
+const FROZEN_MS = FROZEN_NOW ? Date.parse(FROZEN_NOW) : NaN;
+if (FROZEN_NOW && Number.isNaN(FROZEN_MS))
+	console.warn(`[harness] ignoring unparseable ?now=${FROZEN_NOW}`);
+const nowMs = () => (Number.isNaN(FROZEN_MS) ? Date.now() : FROZEN_MS);
+const nowDate = () => new Date(nowMs());
+// Ids that must stay unique even when the clock does not move.
+let seq = 0;
+
 // Per-brain content. Previously a single shared `pages` map backed every brain, so
 // switching brains (or a one-shot `brain:` arg) showed identical pages and you
 // couldn't tell them apart. Now each brain has its OWN content: the Personal brain
@@ -197,7 +217,7 @@ let orgMembers: {
 // editor, one member who has never touched it (the actionable row), one departed
 // user, a quiet weekend, and a second brain nobody opened.
 function usageFixtureRows(days: number): UsageRow[] {
-	const today = dayKey(new Date());
+	const today = dayKey(nowDate());
 	const rows: UsageRow[] = [];
 	// The real brain ids, so the per-brain table joins its labels instead of falling
 	// back to raw ids and showing every fixture brain at zero.
@@ -225,7 +245,7 @@ function usageFixtureRows(days: number): UsageRow[] {
 }
 
 function analyticsResult(days: number): CallToolResult {
-	const to = dayKey(new Date());
+	const to = dayKey(nowDate());
 	const from = shiftDay(to, -(days - 1));
 	const summary = summarize({
 		rows: usageFixtureRows(days),
@@ -270,7 +290,7 @@ let orgInvites: {
 		invite_id: 'inv-1',
 		email: 'newhire@example.com',
 		role: 'editor',
-		invited_at: new Date(Date.now() - 2 * 86400e3).toISOString(),
+		invited_at: new Date(nowMs() - 2 * 86400e3).toISOString(),
 		expires_at: ''
 	}
 ];
@@ -835,7 +855,7 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
 		case 'view_activity': {
 			// Fixtures have no git history, so synthesize a plausible feed (whole brain,
 			// or one page when `path` is given) to preview the activity/audit view.
-			const now = Date.now();
+			const now = nowMs();
 			const scopePath = args?.path ? String(args.path) : undefined;
 			const seed: { author: string; login?: string; msg: string; path?: string; agoMs: number }[] =
 				[
@@ -1003,10 +1023,11 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
 				return errText(`${email} is already a member.`);
 			orgInvites = [
 				{
-					invite_id: `inv-${Date.now()}`,
+					// Seq, not the clock: a frozen `?now=` would collide two invites on one id.
+					invite_id: `inv-${++seq}`,
 					email,
 					role,
-					invited_at: new Date().toISOString(),
+					invited_at: nowDate().toISOString(),
 					expires_at: ''
 				},
 				...orgInvites
@@ -1281,12 +1302,17 @@ const INLINE_MAX_PX = 640;
 // to it (bounded), which is exactly how claude.ai grows/shrinks an inline app as
 // its content changes. Fullscreen/pip keep their fixed window, so ignore it there.
 function applyContentHeight(height?: number) {
-	const slot = document.getElementById('frame-slot')!;
-	if (activeMode !== 'inline') {
-		slot.style.height = '';
-		return;
-	}
+	// ONLY inline is content-sized. fullscreen and pip own a fixed window that
+	// presentMode already set, and presentMode clears `height` on every mode change,
+	// so there is nothing for this function to clean up.
+	//
+	// This used to clear the height here instead of returning, which undid pip's 560px
+	// on the first size-changed notification the app sent: the floating window then
+	// grew to content height from its `bottom: 20px` anchor and ran off the top of the
+	// viewport. Caught by the pip visual baseline the first time it was generated.
+	if (activeMode !== 'inline') return;
 	if (height == null || !Number.isFinite(height)) return;
+	const slot = document.getElementById('frame-slot')!;
 	slot.style.height = `${Math.min(Math.ceil(height), INLINE_MAX_PX)}px`;
 }
 // `?mode=pip` (etc.) forces the host to present a given mode regardless of what the

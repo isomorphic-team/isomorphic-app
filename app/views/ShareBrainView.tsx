@@ -7,7 +7,7 @@ import { toast } from '../core/toast.tsx';
 import { BrainGlyph } from '../core/icons.tsx';
 import { RoleSelect, BRAIN_ROLE_BLURB } from '../components/RoleSelect.tsx';
 import { defineView } from '../core/view-registry.ts';
-import { Button, Input, Flow } from '../ui/index.ts';
+import { Button, Input, Flow, submitOnEnter } from '../ui/index.ts';
 
 // Give one person access to one brain. Opened from the sharing panel's header action.
 //
@@ -55,7 +55,7 @@ function ShareBrainView({ brainId, brainLabel }: { brainId: string; brainLabel: 
 						>
 							Cancel
 						</Button>
-						<Button type="submit" disabled={busy || !email.trim()} class="text-sm">
+						<Button type="button" onClick={submit} disabled={busy || !email.trim()} class="text-sm">
 							{busy ? 'Sharing…' : 'Share'}
 						</Button>
 					</>
@@ -66,6 +66,7 @@ function ShareBrainView({ brainId, brainLabel }: { brainId: string; brainLabel: 
 					<Input
 						// eslint-disable-next-line
 						autofocus
+						onKeyDown={submitOnEnter(submit)}
 						type="email"
 						required
 						value={email}

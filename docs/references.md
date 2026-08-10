@@ -83,6 +83,20 @@ Non-obvious things confirmed against the sources above (with the "why it bit us"
   known-good host (MCPJam Inspector, VS Code Copilot) to isolate host vs. server.
 - **The iframe CSP blocks all external hosts** — no CDN, no external stylesheet/font, no
   code-splitting. Everything ships inlined in the one `ui://` resource (`pnpm gen:app`).
+- **NATIVE FORM SUBMISSION DOES NOT WORK IN THE APP IFRAME.** The frame is sandboxed, and
+  without `allow-forms` the browser blocks submission outright:
+  `Blocked form submission to '' because the form's frame is sandboxed and the
+'allow-forms' permission is not set.` **Blocked means the `submit` event is never
+  DISPATCHED**, so an `onSubmit` handler never runs at all — a correct
+  `e.preventDefault()` inside it never gets the chance, which is what makes this so easy
+  to miss in review. It takes out the keyboard too, since Enter in an input triggers the
+  same native submission. This silently killed all four add-shaped flows (invite member,
+  share brain, connect account, add brain): the button appeared to do nothing, with no
+  toast and no error. So drive every flow from an explicit `onClick`, and handle Enter
+  yourself (`submitOnEnter` in `app/ui/Flow.tsx`). Keep the `<form>` for semantics and
+  autofill; never depend on its submit event. Found by `pnpm test:ui`, which renders the
+  app in a sandbox exactly like a host's — and note the sandbox flags are the HOST's
+  choice, not something the app can request, so this is not fixable from our side.
 - **Cloudflare Worker script limit: 3 MB compressed (Free) / 10 MB (Paid), 64 MB
   uncompressed.** The app HTML is compiled _into_ the Worker, so it counts against this.
   Design the app bundle for ≤~500 KiB uncompressed for boot latency; the hard wall is
