@@ -21,7 +21,17 @@ import type { D1Database, D1PreparedStatement } from '@cloudflare/workers-types'
 import { type RepoRef, type TreeEntry, type BrainStore, MAX_SCAN_PAGES } from './brain-repo.ts';
 import { classifyMdLink } from './links.ts';
 import { type BrainConfig, CONFIG_PATH, isContentPath, loadBrainConfig } from './brain-config.ts';
-import { parseFrontmatter, extractLinks, slugify, isFrontmatterBlock, pageTitle } from './wiki.ts';
+import {
+	parseFrontmatter,
+	extractLinks,
+	resolveRelative,
+	isFrontmatterBlock,
+	pageTitle,
+	buildWikilinkIndex,
+	resolveWikilink,
+	wikilinkKey,
+	wikilinkTargetName
+} from './wiki.ts';
 
 // Version of the index's ROW SHAPE (not the D1 schema — migrations handle that).
 // Bumped when (re)indexing starts producing rows older builds lack, so brains
@@ -32,7 +42,9 @@ import { parseFrontmatter, extractLinks, slugify, isFrontmatterBlock, pageTitle 
 // those keys ("resource: /source/x.md" as a value) which a filter could still match.
 // v3: titles resolve via pageTitle (frontmatter title > body H1 > folder/filename),
 // so stored titles from v1/v2 can disagree with what the page calls itself.
-export const INDEX_SCHEMA_VERSION = 3;
+// v4: link extraction skips code spans and fenced blocks, so v1–v3 link rows hold
+// "links" that were only ever syntax examples.
+export const INDEX_SCHEMA_VERSION = 4;
 
 // ---------- shared helpers ----------
 
@@ -281,17 +293,18 @@ export async function ensureFresh(
 // Bounding it converges instead — each read advances the cursor by a slice.
 const REBUILD_PAGE_BUDGET = 300;
 
-// Rebuild the DERIVED rows — the page title and the queryable frontmatter fields —
-// for at most REBUILD_PAGE_BUDGET pages, from the content already stored in
-// brain_pages. Used on a schema_version bump, where page content is current but
-// what we compute FROM it has changed (v1: fields table added; v2: nested
-// frontmatter no longer flattened into fields; v3: titles now resolve through
-// pageTitle, so a stored title can be stale). No GitHub refetch: content is local.
+// Rebuild the DERIVED rows — the page title, its links, and the queryable
+// frontmatter fields — for at most REBUILD_PAGE_BUDGET pages, from the content
+// already stored in brain_pages. Used on a schema_version bump, where page content
+// is current but what we compute FROM it has changed (v1: fields table added;
+// v2: nested frontmatter no longer flattened into fields; v3: titles now resolve
+// through pageTitle; v4: link extraction skips code). No GitHub refetch: content
+// is local.
 //
 // Walks pages in path order starting AFTER `cursor`. Returns the cursor to resume
-// from, or null when the brain is fully rebuilt. Each page's field rows are
-// cleared per-path rather than by one brain-wide DELETE, so a partial pass leaves
-// the pages it already did intact and re-running a slice is idempotent.
+// from, or null when the brain is fully rebuilt. Each page's rows are cleared
+// per-path rather than by one brain-wide DELETE, so a partial pass leaves the
+// pages it already did intact and re-running a slice is idempotent.
 async function rebuildDerivedFromStore(
 	db: D1Database,
 	brainId: string,
@@ -314,9 +327,22 @@ async function rebuildDerivedFromStore(
 				.prepare(`UPDATE brain_pages SET title = ?3 WHERE brain_id = ?1 AND path = ?2`)
 				.bind(brainId, r.path, pageTitle(r.path, r.content)),
 			db
+				.prepare(`DELETE FROM brain_links WHERE brain_id = ?1 AND source = ?2`)
+				.bind(brainId, r.path),
+			db
 				.prepare(`DELETE FROM brain_page_fields WHERE brain_id = ?1 AND path = ?2`)
 				.bind(brainId, r.path)
 		);
+		for (const l of parseLinks(r.content)) {
+			stmts.push(
+				db
+					.prepare(
+						`INSERT OR REPLACE INTO brain_links (brain_id, source, raw_target, kind, cnt)
+						 VALUES (?1, ?2, ?3, ?4, ?5)`
+					)
+					.bind(brainId, r.path, l.rawTarget, l.kind, l.cnt)
+			);
+		}
 		for (const f of fieldRowsOf(r.content, config)) {
 			stmts.push(
 				db
@@ -490,7 +516,7 @@ export interface ResolvedGraph {
 }
 
 // Pull the brain's pages + raw links and resolve every link against the current
-// page set — markdown links via resolveRelative, [[wikilinks]] via slug/title,
+// page set — markdown links via resolveRelative, [[wikilinks]] by path/filename/title,
 // exactly as the live scan did. Two D1 queries, then in-memory resolution; no
 // GitHub content fetch. This is the shared primitive behind graph / backlinks /
 // validate.
@@ -510,8 +536,7 @@ export async function loadResolvedGraph(
 
 	const pages = pagesRes.results.map((r) => ({ path: r.path, title: r.title ?? deslug(r.path) }));
 	const pathSet = new Set(pages.map((p) => p.path));
-	const bySlug = new Map(pages.map((p) => [slugOf(p.path), p.path]));
-	const byTitle = new Map(pages.map((p) => [p.title.trim().toLowerCase(), p.path]));
+	const wikiIndex = buildWikilinkIndex(pages);
 
 	const edges: ResolvedEdge[] = [];
 	const assetEdges: ResolvedEdge[] = [];
@@ -533,13 +558,39 @@ export async function loadResolvedGraph(
 			else if (c.kind === 'broken')
 				broken.push({ source: l.source, rawTarget: l.raw_target, kind, target });
 		} else {
-			const target =
-				bySlug.get(slugify(l.raw_target)) ?? byTitle.get(l.raw_target.trim().toLowerCase());
+			// [[#Section]] is an anchor within the linking page — nothing to resolve,
+			// and not a broken link either.
+			if (!wikilinkKey(wikilinkTargetName(l.raw_target))) continue;
+			const target = resolveWikilink(wikiIndex, l.raw_target);
 			if (target) edges.push({ source: l.source, target, kind, cnt: l.cnt });
 			else broken.push({ source: l.source, rawTarget: l.raw_target, kind });
 		}
 	}
 	return { pages, edges, assetEdges, broken };
+}
+
+// Pages whose markdown links point at a NON-PAGE file: an embedded image, a PDF,
+// anything that isn't `.md`. loadResolvedGraph drops these deliberately, because
+// they are not edges in the PAGE graph and reporting them as broken would be wrong.
+// But deleting the file they point at still breaks them, and delete_page's whole
+// contract is that nothing dangles without being said out loud. One query plus an
+// in-memory resolve, the same shape loadResolvedGraph already pays for.
+// Call ensureFresh first.
+export async function inboundFileRefs(
+	db: D1Database,
+	brainId: string,
+	targetPath: string
+): Promise<string[]> {
+	const res = await db
+		.prepare(`SELECT source, raw_target FROM brain_links WHERE brain_id = ?1 AND kind = 'md'`)
+		.bind(brainId)
+		.all<{ source: string; raw_target: string }>();
+	const sources = new Set<string>();
+	for (const l of res.results) {
+		if (l.source === targetPath) continue;
+		if (resolveRelative(l.source, l.raw_target) === targetPath) sources.add(l.source);
+	}
+	return [...sources].sort();
 }
 
 // The brain's content pages with display titles, straight from the index (no link

@@ -31,29 +31,34 @@ import {
 	rewriteMdLinks,
 	rewriteWikiLinks,
 	rebaseMdLinks,
-	insertLogEntry
+	insertLogEntry,
+	wikilinkKey,
+	wikilinkTargetName
 } from '../lib/wiki.ts';
 import {
 	type RepoRef,
 	type Head,
+	type TreeEntry,
 	type PageContent,
 	type WriteOutcome,
 	type CommitAuthor,
 	type BrainStore,
-	type FileWrite,
 	MAX_SCAN_PAGES
 } from '../lib/brain-repo.ts';
 import {
 	type BrainConfig,
 	isAssetPath,
 	isContentPath,
+	isHiddenName,
 	isSourcePath,
 	isToolMaintained,
 	logPathOf
 } from '../lib/brain-config.ts';
 import {
 	type PageFields,
+	type BrokenLink,
 	ensureFresh,
+	inboundFileRefs,
 	loadResolvedGraph,
 	backlinksTo,
 	searchIndex,
@@ -63,7 +68,6 @@ import {
 import { tryRenderViews, type ViewDeps } from '../lib/views.ts';
 import { isToolPagePath, parseToolDef } from '../lib/custom-tools.ts';
 import { isFolderNoteName } from '../lib/view-directives.ts';
-import { attachmentSlug, formatBytes, isMediaPath, mediaTypeOf } from '../lib/media.ts';
 import { applyPageEdits } from '../lib/page-patch.ts';
 import { parseLedger } from '../lib/brain-import.ts';
 import type { TenantOpts, Role } from '../lib/orgs.ts';
@@ -121,7 +125,7 @@ export interface BrainContext {
 	activeBrain: { id: string; label: string };
 }
 
-// Filename stem, used to match [[Wiki Links]] against pages by slug.
+// Filename stem, which is one of the names a [[Wiki Link]] can call a page by.
 function slugOf(path: string): string {
 	return path.split('/').pop()!.replace(/\.md$/, '');
 }
@@ -337,7 +341,7 @@ function inlinedSections(content: string, known: Set<string>): string[] {
 		if (STRUCTURAL_HEADINGS.has(heading.toLowerCase())) continue;
 		if (heading.endsWith('?') || NARRATIVE_HEADING_RE.test(heading)) continue;
 		if (heading.split(/\s+/).length > MAX_CONCEPT_HEADING_WORDS) continue;
-		if (known.has(slugify(heading))) continue; // a page by this name already exists
+		if (known.has(wikilinkKey(heading))) continue; // a page by this name already exists
 		const text = s.text.join('\n');
 		if (/\]\(|\[\[/.test(text)) continue; // links out — a listing entry, working as intended
 		if (text.replace(/\s+/g, ' ').trim().length < MIN_SECTION_PROSE) continue;
@@ -353,11 +357,13 @@ export function inlinedConceptSuggestions(
 	pages: { path: string; title: string }[]
 ): string[] {
 	// Every name the brain already has a page for, so a section that merely restates
-	// an existing page isn't mistaken for a homeless concept.
+	// an existing page isn't mistaken for a homeless concept. Both sides go through
+	// wikilinkKey for the reason resolution does: a filename kept raw here never
+	// matches a heading, so every Title Case page read as homeless.
 	const known = new Set<string>();
 	for (const p of pages) {
-		known.add(slugOf(p.path));
-		if (p.title) known.add(slugify(p.title));
+		known.add(wikilinkKey(slugOf(p.path)));
+		if (p.title) known.add(wikilinkKey(p.title));
 	}
 	const out: string[] = [];
 	for (const note of notes) {
@@ -397,27 +403,129 @@ export function typeFieldSuggestions(
 	];
 }
 
-// Pages that resolve to the SAME title. `[[wikilinks]]` are matched by slug or
-// title (loadResolvedGraph), and a title map is last-one-wins, so a duplicate
-// title means every `[[That Title]]` in the brain silently lands on one arbitrary
-// page and the others become unreachable by name. Pure over the index's page list.
+// Pages a `[[wikilink]]` cannot tell apart. Resolution matches on path, then
+// filename, then title (buildWikilinkIndex), and each lane keeps the first claim,
+// so two pages sharing a title — or sharing a filename in different folders — mean
+// every `[[That Name]]` lands on one of them and the rest are unreachable by name.
+// Pure over the index's page list.
 export function ambiguousTitleSuggestions(pages: { path: string; title: string }[]): string[] {
-	const byTitle = new Map<string, string[]>();
-	for (const p of pages) {
-		const key = p.title.trim().toLowerCase();
-		if (!key) continue;
-		byTitle.set(key, [...(byTitle.get(key) ?? []), p.path]);
+	const group = (of: (p: { path: string; title: string }) => string) => {
+		const by = new Map<string, { label: string; paths: string[] }>();
+		for (const p of pages) {
+			const label = of(p);
+			const key = wikilinkKey(label);
+			if (!key) continue;
+			const entry = by.get(key) ?? { label, paths: [] };
+			entry.paths.push(p.path);
+			by.set(key, entry);
+		}
+		return [...by.entries()].filter(([, e]) => e.paths.length > 1);
+	};
+	const nameOf = (p: { path: string }) => {
+		const file = p.path.slice(p.path.lastIndexOf('/') + 1);
+		if (!isFolderNoteName(file)) return file.replace(/\.md$/, '');
+		const folder = p.path.slice(0, p.path.lastIndexOf('/'));
+		return folder.slice(folder.lastIndexOf('/') + 1);
+	};
+	const seen = new Set<string>();
+	const clashes: { label: string; paths: string[] }[] = [];
+	for (const [key, entry] of [...group((p) => p.title), ...group(nameOf)].sort(([a], [b]) =>
+		a.localeCompare(b)
+	)) {
+		if (seen.has(key)) continue;
+		seen.add(key);
+		clashes.push(entry);
 	}
-	const clashes = [...byTitle.entries()]
-		.filter(([, paths]) => paths.length > 1)
-		.sort(([a], [b]) => a.localeCompare(b));
-	if (clashes.length === 0) return [];
 	return clashes
 		.slice(0, 5)
 		.map(
-			([title, paths]) =>
-				`- ${paths.length} pages share the title "${title}", so a [[${title}]] wikilink can only reach one of them: ${paths.sort().join(', ')}. Give them distinct titles, or link these by path.`
+			({ label, paths }) =>
+				`- ${paths.length} pages answer to the name "${label}", so a [[${label}]] wikilink can only reach one of them: ${paths.sort().join(', ')}. Give them distinct titles, or link these by path.`
 		);
+}
+
+// ---------- the broken-link report ----------
+
+// Everything past punctuation and separators, for "did you mean" only. Two pages
+// whose loose forms match are NOT the same page — this is a suggestion, never a
+// resolution rule.
+const looseKey = (text: string) => text.toLowerCase().replace(/[^a-z0-9]+/g, '');
+
+// How many lines one section of the report may print before it summarizes. A
+// report long enough to scroll past is a report nobody reads, which is how the
+// genuine problems ended up buried under the noise this exists to prevent.
+const MAX_REPORT_LINES = 40;
+
+// Format the broken links for validate, SPLIT BY KIND, because the two mean
+// different things to whoever has to fix them: a markdown link names a file that
+// is not there (always actionable, and the path says where), while a wikilink is
+// a name that matched no page (often a typo or a rename, sometimes a page that was
+// never written). Wikilinks are grouped by target so one placeholder repeated
+// across thirty pages costs one line, and a near-miss names the page it probably
+// meant — which is what makes "reported broken but the page exists" diagnosable in
+// one run instead of by hand.
+export function brokenLinkReport(
+	broken: BrokenLink[],
+	pages: { path: string; title: string }[]
+): string[] {
+	const sections: string[] = [];
+
+	const md = broken
+		.filter((b) => b.kind === 'md')
+		.sort((a, b) => a.source.localeCompare(b.source) || a.rawTarget.localeCompare(b.rawTarget));
+	if (md.length) {
+		const lines = md
+			.slice(0, MAX_REPORT_LINES)
+			.map((b) => `- ${b.source}: "${b.rawTarget}" — no page at ${b.target}.`);
+		const more = md.length > MAX_REPORT_LINES ? `\n…and ${md.length - MAX_REPORT_LINES} more.` : '';
+		sections.push(
+			`${md.length} markdown link(s) point at a file that isn't there:\n${lines.join('\n')}${more}`
+		);
+	}
+
+	const wiki = broken.filter((b) => b.kind === 'wiki');
+	if (wiki.length) {
+		const byTarget = new Map<string, { target: string; sources: string[] }>();
+		for (const b of wiki) {
+			const entry = byTarget.get(b.rawTarget) ?? { target: b.rawTarget, sources: [] };
+			if (!entry.sources.includes(b.source)) entry.sources.push(b.source);
+			byTarget.set(b.rawTarget, entry);
+		}
+		const candidates = pages.map((p) => ({
+			path: p.path,
+			title: p.title,
+			loose: looseKey(p.title),
+			looseName: looseKey(p.path.slice(p.path.lastIndexOf('/') + 1).replace(/\.md$/, ''))
+		}));
+		// A page whose name contains the link's, or the other way round — the shape a
+		// typo, a truncation, or a since-renamed page leaves behind. Nothing else is
+		// close enough to be worth naming.
+		const nearMiss = (target: string) => {
+			const key = looseKey(wikilinkTargetName(target));
+			if (key.length < 4) return undefined;
+			return candidates.find(
+				(c) =>
+					(c.loose.length >= 4 && (c.loose.includes(key) || key.includes(c.loose))) ||
+					(c.looseName.length >= 4 && (c.looseName.includes(key) || key.includes(c.looseName)))
+			);
+		};
+		const entries = [...byTarget.values()].sort((a, b) => a.target.localeCompare(b.target));
+		const lines = entries.slice(0, MAX_REPORT_LINES).map(({ target, sources }) => {
+			const where = sources.slice(0, 5).join(', ');
+			const rest = sources.length > 5 ? ` and ${sources.length - 5} more page(s)` : '';
+			const hit = nearMiss(target);
+			const hint = hit ? ` — did you mean [[${hit.title}]] (${hit.path})?` : '';
+			return `- [[${target}]] in ${where}${rest}${hint}`;
+		});
+		const more =
+			entries.length > MAX_REPORT_LINES
+				? `\n…and ${entries.length - MAX_REPORT_LINES} more target(s).`
+				: '';
+		sections.push(
+			`${wiki.length} wikilink(s) match no page (${entries.length} distinct target(s)):\n${lines.join('\n')}${more}`
+		);
+	}
+	return sections;
 }
 
 // How much of the brain's link graph is written in a syntax that only resolves
@@ -696,6 +804,35 @@ async function updatePageWrite(
 	return res;
 }
 
+// What a folder move would land on top of, split by whether it actually matters.
+//
+// A folder marker (`.gitkeep`, and any other dot-prefixed scaffolding) exists to
+// persist an otherwise-empty directory in git, so the destination's own copy already
+// does that job and the source's is redundant. Treating those as collisions made
+// MERGING a folder into an existing one impossible in the case where it is most
+// wanted: every scaffolded folder has a `.gitkeep`, so the destination always
+// already had one, and archiving into an existing archive folder was refused with a
+// message naming a file the caller never wrote.
+//
+// Real content is a different answer: overwriting a page is not this tool's call to
+// make. Those are collected in full rather than reported one at a time, so the
+// caller learns the shape of the problem in one call instead of clearing it file by
+// file.
+export function folderMoveCollisions(
+	moved: string[],
+	existing: Set<string>,
+	rename: (path: string) => string
+): { blocking: string[]; scaffolding: string[] } {
+	const blocking: string[] = [];
+	const scaffolding: string[] = [];
+	for (const path of moved) {
+		if (!existing.has(rename(path))) continue;
+		if (isHiddenName(path)) scaffolding.push(path);
+		else blocking.push(path);
+	}
+	return { blocking, scaffolding };
+}
+
 // The folder-path form of move_page: move/rename a whole subtree in one atomic commit.
 // Two link classes are handled:
 //   - Moved pages' OWN outbound links: intra-subtree links are invariant (source and
@@ -703,131 +840,12 @@ async function updatePageWrite(
 //     repointed to a moved sibling first, then the body is rebased for the new location.
 //     Titles never change on a move, so [[wikilinks]] still resolve.
 //   - OUTSIDE pages linking INTO a moved page: their relative md links are repointed.
-// Move or rename an ATTACHMENT. Structurally the page move with the page parts taken
-// out: an image has no frontmatter, no title, and no outbound links to rebase, so all
-// that is left is carrying the bytes across and repointing what points AT it.
-//
-// The repointing is the reason this is worth having rather than telling people to
-// re-upload. rewriteMdLinks already matched `![](…)`, and backlinksTo now returns
-// asset referrers, so both halves were in place; without this branch a `.png` path
-// would fall through to moveFolderWrite and be treated as a subtree.
-async function moveAssetWrite(ctx: BrainContext, args: { path: string; newPath: string }) {
-	const { store, repoArgs, config, author } = ctx;
-	const { path, newPath } = args;
-
-	if (!isMediaPath(newPath))
-		return fail(`Can't move to ${newPath} — it has to keep a supported file extension.`);
-	if (mediaTypeOf(path) !== mediaTypeOf(newPath))
-		return fail(
-			`Can't move ${path} to ${newPath} — that changes the file type, which would break how it is read.`
-		);
-	if (!isContentPath(newPath, config))
-		return fail(`Can't move to ${newPath} — it's outside this brain's editable content.`);
-	if (newPath === path) return ok(`${path} is already there — nothing to move.`);
-
-	const file = await store.readBinary(repoArgs, path);
-	if (!file) return fail(`"${path}" does not exist.`);
-
-	const head = await store.getHead(repoArgs);
-	const tree = await store.listTree(repoArgs, head, { extension: '*' });
-	if (tree.some((e) => e.path === newPath)) {
-		return fail(`Can't move to ${newPath} — something already exists there.`);
-	}
-
-	const { pages, truncated } = await fetchInboundLinkers(ctx, head, path);
-	const today = todayIso();
-	const writes: FileWrite[] = [{ path: newPath, content: file.contentBase64, encoding: 'base64' }];
-	let repointedPages = 0;
-
-	for (const page of pages) {
-		if (isToolMaintained(page.path, config)) continue;
-		const md = rewriteMdLinks(page.content, page.path, path, newPath);
-		if (md.changed > 0) {
-			writes.push({ path: page.path, content: md.body });
-			repointedPages++;
-		}
-	}
-
-	const log = await store.readFile(repoArgs, logPathOf(config));
-	if (log) {
-		writes.push({
-			path: logPathOf(config),
-			content: insertLogEntry(log.content, today, `Moved \`${path}\` to \`${newPath}\`.`)
-		});
-	}
-
-	const outcome = await store.commitOrPR(repoArgs, {
-		writeMode: config.writeMode,
-		defaultBranch: config.defaultBranch,
-		author,
-		autoMerge: config.autoMerge,
-		mergeMethod: config.mergeMethod,
-		message: `Move ${path} to ${newPath}\n\nRepointed ${repointedPages} page(s). Logged in the same change.`,
-		writes,
-		deletes: [path],
-		head,
-		branchPrefix: 'isomorphic/move',
-		prTitle: `Move ${path}`,
-		prBody: `Move \`${path}\` to \`${newPath}\`. Proposed via the Isomorphic brain tools.`
-	});
-
-	return landed(
-		outcome,
-		`Moved ${path} to ${newPath}. Links in ${repointedPages} page(s) were repointed; the change was logged.${truncationNote(truncated)}`,
-		`Proposed moving ${path} to ${newPath}; links in ${repointedPages} page(s) repointed.${truncationNote(truncated)}`
-	);
-}
-
-// Delete an ATTACHMENT. The "still referenced" note matters more here than for a
-// page: a page that loses a link shows as a broken link in validate, while an image
-// that vanishes just leaves a hole on every page that displayed it.
-async function deleteAssetWrite(ctx: BrainContext, args: { path: string }) {
-	const { store, repoArgs, config, author } = ctx;
-	const { path } = args;
-
-	const file = await store.readBinary(repoArgs, path);
-	if (!file) return fail(`"${path}" does not exist.`);
-
-	const head = await store.getHead(repoArgs);
-	const { refs, truncated } = await inboundRefs(ctx, [path]);
-	const today = todayIso();
-	const writes: FileWrite[] = [];
-	const log = await store.readFile(repoArgs, logPathOf(config));
-	if (log) {
-		writes.push({
-			path: logPathOf(config),
-			content: insertLogEntry(log.content, today, `Deleted \`${path}\`.`)
-		});
-	}
-
-	const outcome = await store.commitOrPR(repoArgs, {
-		writeMode: config.writeMode,
-		defaultBranch: config.defaultBranch,
-		author,
-		autoMerge: config.autoMerge,
-		mergeMethod: config.mergeMethod,
-		message: `Delete ${path}\n\nDeletion logged.`,
-		writes,
-		deletes: [path],
-		head,
-		branchPrefix: 'isomorphic/delete',
-		prTitle: `Delete ${path}`,
-		prBody: `Delete \`${path}\`. Proposed via the Isomorphic brain tools.`
-	});
-
-	const refNote = refs.length
-		? `\n\nHeads up — ${refs.length} page(s) still show it:\n${refs.map((r) => `- ${r.path}`).join('\n')}`
-		: '';
-	return landed(
-		outcome,
-		`Deleted ${path} (${formatBytes(file.size)}). The change was logged.${refNote}${truncationNote(truncated)}`,
-		`Proposed deleting ${path}.${refNote}${truncationNote(truncated)}`
-	);
-}
-
 async function moveFolderWrite(
 	ctx: BrainContext,
-	args: { path: string; new_path?: string; new_name?: string }
+	args: { path: string; new_path?: string; new_name?: string },
+	// The caller may already have paid for these while deciding this was a folder
+	// at all; re-fetching would cost a second round trip for the same answer.
+	pre?: { head: Head; tree: TreeEntry[] }
 ) {
 	const { store, repoArgs, config, author } = ctx;
 	const { new_path, new_name } = args;
@@ -846,8 +864,8 @@ async function moveFolderWrite(
 	if (!isContentPath(`${newFolder}/.gitkeep`, config))
 		return fail(`Can't move to "${newFolder}" — it's outside this brain's editable content.`);
 
-	const head = await store.getHead(repoArgs);
-	const tree = await store.listTree(repoArgs, head, { extension: '*' });
+	const head = pre?.head ?? (await store.getHead(repoArgs));
+	const tree = pre?.tree ?? (await store.listTree(repoArgs, head, { extension: '*' }));
 	const moved = tree.filter((e) => e.path.startsWith(`${folder}/`));
 	if (moved.length === 0) return fail(`No folder "${folder}" found (it has no files).`);
 	for (const e of moved) {
@@ -858,10 +876,24 @@ async function moveFolderWrite(
 	}
 	const rename = (p: string) => `${newFolder}${p.slice(folder.length)}`;
 	const existing = new Set(tree.map((e) => e.path));
-	for (const e of moved) {
-		if (existing.has(rename(e.path)))
-			return fail(`Can't move — "${rename(e.path)}" already exists.`);
+	const { blocking, scaffolding } = folderMoveCollisions(
+		moved.map((e) => e.path),
+		existing,
+		rename
+	);
+	if (blocking.length) {
+		const shown = blocking
+			.slice(0, 10)
+			.map((p) => `"${rename(p)}"`)
+			.join(', ');
+		const more = blocking.length > 10 ? `, and ${blocking.length - 10} more` : '';
+		return fail(
+			`Can't move "${folder}" into "${newFolder}": ${blocking.length} file(s) already exist there (${shown}${more}). Move or rename those first, or pick a destination that doesn't hold them.`
+		);
 	}
+	// The destination keeps its own folder markers; the source's are dropped with the
+	// folder rather than written over the top of them.
+	const supersededScaffolding = new Set(scaffolding);
 
 	const movedMdEntries = moved.filter((e) => e.path.endsWith('.md'));
 	const movedMd = new Set(movedMdEntries.map((e) => e.path));
@@ -893,9 +925,15 @@ async function moveFolderWrite(
 		deletes.push(oldPath);
 	}
 
-	// 2. Non-markdown blobs under the folder (.gitkeep, etc.) — copy across verbatim.
+	// 2. Non-markdown blobs under the folder (.gitkeep, etc.) — copy across verbatim,
+	//    except the scaffolding the destination already carries: writing over that
+	//    would replace a file the caller never asked to touch.
 	for (const e of moved) {
 		if (movedMd.has(e.path)) continue;
+		if (supersededScaffolding.has(e.path)) {
+			deletes.push(e.path);
+			continue;
+		}
 		const file = await store.readFile(repoArgs, e.path);
 		writes.push({ path: rename(e.path), content: file?.content ?? '' });
 		deletes.push(e.path);
@@ -947,21 +985,168 @@ async function moveFolderWrite(
 		prTitle: `Move folder ${folder} → ${newFolder}`,
 		prBody: `Move folder \`${folder}\` to \`${newFolder}\`; inbound links repointed. Proposed via the Isomorphic brain tools.`
 	});
+	// Say when this was a MERGE rather than a move into empty space: the destination
+	// already existed, and a marker of the source's was dropped instead of copied.
+	const mergeNote = supersededScaffolding.size
+		? ` Merged into the existing "${newFolder}", which keeps its own ${[...supersededScaffolding]
+				.map((p) => p.split('/').pop())
+				.join(', ')}.`
+		: '';
 	return landed(
 		outcome,
-		`Moved folder "${folder}" to ${newFolder}. Links in ${repointedPages} page(s) were repointed; the change was logged.${truncationNote(truncated)}${toolRosterNote(folder, newFolder)}`,
-		`Proposed moving folder "${folder}" to ${newFolder}; links in ${repointedPages} page(s) repointed.${truncationNote(truncated)}${toolRosterNote(folder, newFolder)}`
+		`Moved folder "${folder}" to ${newFolder}.${mergeNote} Links in ${repointedPages} page(s) were repointed; the change was logged.${truncationNote(truncated)}${toolRosterNote(folder, newFolder)}`,
+		`Proposed moving folder "${folder}" to ${newFolder}.${mergeNote} Links in ${repointedPages} page(s) repointed.${truncationNote(truncated)}${toolRosterNote(folder, newFolder)}`
+	);
+}
+
+// The non-markdown file form of move_page: move or rename one blob that isn't a page.
+//
+// This exists because a path like "wiki/Todos/.gitkeep" used to route to the FOLDER
+// mover (anything without a .md extension did), which found no files under it and
+// answered "no folder found (it has no files)" about a file that plainly existed. So
+// a non-page file could block a folder move and could not be addressed to clear it.
+//
+// No link repointing: markdown links whose target isn't .md are deliberately outside
+// the resolved graph (loadResolvedGraph skips them), so there is nothing pointing at
+// this file for the index to know about.
+async function moveFileWrite(
+	ctx: BrainContext,
+	head: Head,
+	tree: TreeEntry[],
+	args: { path: string; new_path?: string; new_name?: string }
+) {
+	const { store, repoArgs, config, author } = ctx;
+	const path = args.path.trim().replace(/^\/+/, '');
+	const { new_path, new_name } = args;
+	if (!new_path && !new_name?.trim())
+		return fail('Give a new_path (move/rename) or a new_title (rename in place).');
+	if (isSourcePath(path, config)) return fail(`"${path}" is source material — it can't be moved.`);
+	if (isToolMaintained(path, config)) return fail(`"${path}" is maintained automatically.`);
+	if (!isContentPath(path, config))
+		return fail(`"${path}" is outside this brain's editable content.`);
+
+	const parent = path.includes('/') ? path.slice(0, path.lastIndexOf('/')) : '';
+	const newPath = (
+		new_path ? new_path.trim() : parent ? `${parent}/${new_name!.trim()}` : new_name!.trim()
+	).replace(/^\/+/, '');
+	if (!newPath) return fail('The new path is empty.');
+	if (newPath === path) return ok(`"${path}" is already there — nothing to move.`);
+	if (!isContentPath(newPath, config))
+		return fail(`Can't move to "${newPath}" — it's outside this brain's editable content.`);
+	if (tree.some((e) => e.path === newPath))
+		return fail(`Can't move to "${newPath}" — a file already exists there.`);
+
+	const file = await store.readFile(repoArgs, path);
+	if (!file) return fail(`"${path}" does not exist.`);
+	// Blobs reach us base64-decoded as UTF-8 text, so anything that isn't text has
+	// already lost bytes by the time we could write it back. Refuse rather than
+	// commit a corrupted copy over the original.
+	if (/[\u0000\uFFFD]/.test(file.content))
+		return fail(
+			`"${path}" isn't a text file, so it can't be moved through these tools without corrupting it. Move it with git, or on github.com.`
+		);
+
+	const today = todayIso();
+	const writes = [{ path: newPath, content: file.content }];
+	const log = await store.readFile(repoArgs, logPathOf(config));
+	if (log) {
+		writes.push({
+			path: logPathOf(config),
+			content: insertLogEntry(log.content, today, `Moved \`${path}\` to \`${newPath}\`.`)
+		});
+	}
+
+	const outcome = await store.commitOrPR(repoArgs, {
+		writeMode: config.writeMode,
+		defaultBranch: config.defaultBranch,
+		author,
+		autoMerge: config.autoMerge,
+		mergeMethod: config.mergeMethod,
+		message: `Move ${path} -> ${newPath}`,
+		writes,
+		deletes: [path],
+		head,
+		branchPrefix: 'isomorphic/move',
+		prTitle: `Move ${path} → ${newPath}`,
+		prBody: `Move \`${path}\` to \`${newPath}\`. Proposed via the Isomorphic brain tools.`
+	});
+	return landed(
+		outcome,
+		`Moved "${path}" to ${newPath}. It isn't a page, so no links needed repointing; the change was logged.`,
+		`Proposed moving "${path}" to ${newPath}.`
 	);
 }
 
 // The folder-path form of delete_page: delete a whole subtree and everything under it.
-async function deleteFolderWrite(ctx: BrainContext, args: { path: string }) {
+// The non-markdown file form of delete_page, and the twin of moveFileWrite: before
+// this, a path like "wiki/assets/logo.png" routed to the FOLDER deleter and came
+// back as "No folder found" about a file that existed.
+//
+// Inbound references are checked differently to a page's. A link to a non-page file
+// is not an edge in the resolved page graph, so inboundRefs cannot see it, and
+// deleting an embedded image would otherwise break every page showing it in silence.
+async function deleteFileWrite(ctx: BrainContext, head: Head, args: { path: string }) {
+	const { store, repoArgs, config, author, db, brainId } = ctx;
+	const path = args.path.trim().replace(/^\/+/, '');
+	if (isSourcePath(path, config))
+		return fail(`"${path}" is source material — it can't be deleted.`);
+	if (isToolMaintained(path, config)) return fail(`"${path}" is maintained automatically.`);
+	if (!isContentPath(path, config))
+		return fail(`"${path}" is outside this brain's editable content.`);
+
+	const { truncated } = await ensureFresh(db, store, repoArgs, brainId, config);
+	const refs = await inboundFileRefs(db, brainId, path);
+
+	const today = todayIso();
+	const writes: { path: string; content: string }[] = [];
+	const log = await store.readFile(repoArgs, logPathOf(config));
+	if (log) {
+		writes.push({
+			path: logPathOf(config),
+			content: insertLogEntry(log.content, today, `Deleted \`${path}\`.`)
+		});
+	}
+
+	const outcome = await store.commitOrPR(repoArgs, {
+		writeMode: config.writeMode,
+		defaultBranch: config.defaultBranch,
+		author,
+		autoMerge: config.autoMerge,
+		mergeMethod: config.mergeMethod,
+		message: `Delete ${path}\n\nDeletion logged.`,
+		writes,
+		deletes: [path],
+		head,
+		branchPrefix: 'isomorphic/delete',
+		prTitle: `Delete ${path}`,
+		prBody: `Delete \`${path}\`. Proposed via the Isomorphic brain tools.`
+	});
+
+	const refNote = refs.length
+		? `\n\nHeads up — ${refs.length} page(s) still link to it:\n${refs
+				.slice(0, 20)
+				.map((p) => `- ${p}`)
+				.join('\n')}${refs.length > 20 ? `\n…and ${refs.length - 20} more.` : ''}`
+		: '';
+	return landed(
+		outcome,
+		`Deleted "${path}". The deletion was logged.${refNote}${truncationNote(truncated)}`,
+		`Proposed deleting "${path}".${refNote}${truncationNote(truncated)}`
+	);
+}
+
+async function deleteFolderWrite(
+	ctx: BrainContext,
+	args: { path: string },
+	// Already fetched by the router that decided this was a folder (see move's twin).
+	pre?: { head: Head; tree: TreeEntry[] }
+) {
 	const { store, repoArgs, config, author } = ctx;
 	const folder = normFolderPath(args.path);
 	if (!folder) return fail('Give a folder path, e.g. "wiki/Projects".');
 
-	const head = await store.getHead(repoArgs);
-	const tree = await store.listTree(repoArgs, head, { extension: '*' });
+	const head = pre?.head ?? (await store.getHead(repoArgs));
+	const tree = pre?.tree ?? (await store.listTree(repoArgs, head, { extension: '*' }));
 	const doomed = tree.filter((e) => e.path.startsWith(`${folder}/`));
 	if (doomed.length === 0) return fail(`No folder "${folder}" found.`);
 	for (const e of doomed) {
@@ -1211,13 +1396,13 @@ export function registerLibrarianTools(
 		{
 			title: 'Move or rename a page or folder',
 			description:
-				"Move a page (or a whole folder and everything under it) to a different location and/or rename it. Every link pointing at the moved page(s) — from other pages and the index — is repointed in the same save, and the moved content's own links keep working. Nothing dangles. Pass a folder path (no .md extension) to move or rename an entire subtree.",
+				"Move a page (or a whole folder and everything under it) to a different location and/or rename it. Every link pointing at the moved page(s) — from other pages and the index — is repointed in the same save, and the moved content's own links keep working. Nothing dangles. Pass a folder path (no .md extension) to move or rename an entire subtree; moving a folder ONTO an existing one merges them, and is refused only if a page would be overwritten.",
 			inputSchema: {
 				brain: brainArg,
 				path: z
 					.string()
 					.describe(
-						'Current page or folder path, e.g. "wiki/customers/acme.md" or "wiki/Projects".'
+						'Current page, folder, or file path, e.g. "wiki/customers/acme.md", "wiki/Projects", or "wiki/Projects/.gitkeep".'
 					),
 				new_path: z
 					.string()
@@ -1235,24 +1420,24 @@ export function registerLibrarianTools(
 		},
 		async ({ path, new_path, new_title, brain }) => {
 			const ctx = await getContext({ requires: 'editor', brain });
-			const normPath = path.trim().replace(/^\/+/, '');
-			// Three shapes share this tool. Attachments are checked FIRST: they have no
-			// .md extension, so without this they would fall through to the folder branch
-			// and `wiki/assets/logo.png` would be treated as a subtree to move.
-			if (!normPath.endsWith('.md') && isAssetPath(normPath, ctx.config)) {
-				const dir = normPath.includes('/') ? normPath.slice(0, normPath.lastIndexOf('/')) : '';
-				const renamed = new_title ? attachmentSlug(new_title) : '';
-				const newPath = new_path
-					? new_path.trim().replace(/^\/+/, '')
-					: renamed && (dir ? `${dir}/${renamed}` : renamed);
-				if (!newPath)
-					return fail('Give a new_path (move/rename) or a new_title (rename in place).');
-				return moveAssetWrite(ctx, { path: normPath, newPath });
-			}
-			// A path without a .md extension is a folder: move/rename the whole subtree
-			// (new_title renames the folder in place, kept as typed).
-			if (!normPath.endsWith('.md')) {
-				return moveFolderWrite(ctx, { path, new_path, new_name: new_title });
+			// A path without a .md extension is a folder OR a non-page file, and the
+			// name cannot tell them apart (".gitkeep" is a file, ".obsidian" a folder).
+			// Ask the tree instead of guessing, then hand the answer to the mover that
+			// fits. Guessing "folder" is what made a dotfile unaddressable: it reported
+			// "no folder found (it has no files)" about a file that was right there.
+			//
+			// This supersedes an attachment-specific branch that routed on isAssetPath:
+			// the tree answers the same question for EVERY non-page file, so an
+			// attachment needs no case of its own.
+			if (!path.trim().replace(/^\/+/, '').endsWith('.md')) {
+				const cleaned = path.trim().replace(/^\/+/, '').replace(/\/+$/, '');
+				const head = await ctx.store.getHead(ctx.repoArgs);
+				const tree = await ctx.store.listTree(ctx.repoArgs, head, { extension: '*' });
+				if (tree.some((e) => e.path === cleaned))
+					return moveFileWrite(ctx, head, tree, { path: cleaned, new_path, new_name: new_title });
+				if (tree.some((e) => e.path.startsWith(`${cleaned}/`)))
+					return moveFolderWrite(ctx, { path, new_path, new_name: new_title }, { head, tree });
+				return fail(`No file or folder "${cleaned}" found.`);
 			}
 			const { store, repoArgs, config, author } = ctx;
 			if (!new_path && !new_title)
@@ -1265,10 +1450,10 @@ export function registerLibrarianTools(
 			if (!existing) return fail(`"${path}" does not exist.`);
 
 			const { frontmatter, body } = parseFrontmatter(existing.content);
-			const oldTitle =
-				typeof frontmatter?.title === 'string' && frontmatter.title.trim()
-					? frontmatter.title
-					: slugOf(path).replace(/-/g, ' ');
+			// pageTitle is the single title resolver (frontmatter > H1 > filename); a
+			// second copy here would repoint links to a name the rest of the system
+			// doesn't call this page.
+			const oldTitle = pageTitle(path, existing.content);
 			const newPath = new_path
 				? new_path.trim().replace(/^\/+/, '')
 				: `${path.slice(0, path.lastIndexOf('/'))}/${slugify(new_title!)}.md`;
@@ -1301,6 +1486,14 @@ export function registerLibrarianTools(
 				changed += md.changed;
 				if (newTitle !== oldTitle) {
 					const wl = rewriteWikiLinks(content, oldTitle, newTitle);
+					content = wl.body;
+					changed += wl.changed;
+				}
+				// A wikilink can also name a page by its FILENAME, so a rename orphans
+				// those unless they move with it (the title lane above only catches the
+				// ones written as the title).
+				if (wikilinkKey(slugOf(newPath)) !== wikilinkKey(slugOf(path))) {
+					const wl = rewriteWikiLinks(content, slugOf(path), slugOf(newPath));
 					content = wl.body;
 					changed += wl.changed;
 				}
@@ -1357,28 +1550,31 @@ export function registerLibrarianTools(
 		{
 			title: 'Delete a page or folder',
 			description:
-				'Remove a page (or a whole folder and everything under it) from the wiki. The deletion is logged. If other pages still link into what you deleted, they are listed so the references can be cleaned up. Pass a folder path (no .md extension) to delete an entire subtree.',
+				'Remove a page (or a whole folder and everything under it) from the wiki. The deletion is logged. If other pages still link into what you deleted, they are listed so the references can be cleaned up. Pass a folder path (no .md extension) to delete an entire subtree, or the path of a non-page file (an image, a folder marker) to delete just that file.',
 			inputSchema: {
 				brain: brainArg,
 				path: z
 					.string()
-					.describe('Page or folder path, e.g. "wiki/projects/old.md" or "wiki/Projects".')
+					.describe(
+						'Page, folder, or file path, e.g. "wiki/projects/old.md", "wiki/Projects", or "wiki/assets/logo.png".'
+					)
 			}
 		},
 		async ({ path, brain }) => {
 			const ctx = await getContext({ requires: 'editor', brain });
-			const normPath = path.trim().replace(/^\/+/, '');
-			// Attachments first, for the same reason as move_page: an image path has no
-			// .md extension, and letting it reach the folder branch would delete the
-			// directory it lives in rather than the one file that was asked for.
-			if (!normPath.endsWith('.md') && isAssetPath(normPath, ctx.config)) {
-				if (isSourcePath(normPath, ctx.config))
-					return fail(`"${normPath}" is source material — it can't be deleted.`);
-				return deleteAssetWrite(ctx, { path: normPath });
-			}
-			// A path without a .md extension is a folder: delete the whole subtree.
-			if (!normPath.endsWith('.md')) {
-				return deleteFolderWrite(ctx, { path });
+			// A path without a .md extension is a folder OR a non-page file; the tree
+			// says which, for the same reason it does in move_page. Guessing "folder"
+			// answered "No folder found" about files that were plainly there. This
+			// supersedes an attachment-specific branch, exactly as in move_page.
+			if (!path.trim().replace(/^\/+/, '').endsWith('.md')) {
+				const cleaned = path.trim().replace(/^\/+/, '').replace(/\/+$/, '');
+				const head = await ctx.store.getHead(ctx.repoArgs);
+				const tree = await ctx.store.listTree(ctx.repoArgs, head, { extension: '*' });
+				if (tree.some((e) => e.path === cleaned))
+					return deleteFileWrite(ctx, head, { path: cleaned });
+				if (tree.some((e) => e.path.startsWith(`${cleaned}/`)))
+					return deleteFolderWrite(ctx, { path }, { head, tree });
+				return fail(`No file or folder "${cleaned}" found.`);
 			}
 			const { store, repoArgs, config, author } = ctx;
 			if (isSourcePath(path, config))
@@ -1518,13 +1714,10 @@ export function registerLibrarianTools(
 			const { truncated } = await ensureFresh(db, store, repoArgs, brainId, config);
 			const resolved = await loadResolvedGraph(db, brainId, config);
 
-			// Every link that resolved to no page (see loadResolvedGraph) — md links
-			// whose target page is missing, and [[wikilinks]] matching no slug/title.
-			const problems = resolved.broken.map((b) =>
-				b.kind === 'md'
-					? `- ${b.source}: broken link "${b.rawTarget}" (no page at ${b.target}).`
-					: `- ${b.source}: wikilink [[${b.rawTarget}]] doesn't match any page.`
-			);
+			// Every link that resolved to no page (see loadResolvedGraph), reported in
+			// two sections: files that aren't there, and names that match no page.
+			const problemSections = brokenLinkReport(resolved.broken, resolved.pages);
+			const problemCount = resolved.broken.length;
 			const pageCount = resolved.pages.length;
 
 			// Pending import decisions: the last sync's unanswered questions, persisted
@@ -1635,11 +1828,11 @@ export function registerLibrarianTools(
 			}
 
 			const extras = `${truncationNote(truncated)}${pendingText}${toolText}${folderNoteText}${structureText}`;
-			if (problems.length === 0) {
-				return ok(`Checked ${pageCount} page(s) — no problems found.${extras}`);
+			if (problemCount === 0) {
+				return ok(`Checked ${pageCount} page(s) — no broken links.${extras}`);
 			}
 			return ok(
-				`Checked ${pageCount} page(s) — ${problems.length} problem(s):\n${problems.join('\n')}${extras}`
+				`Checked ${pageCount} page(s) — ${problemCount} broken link(s):\n\n${problemSections.join('\n\n')}${extras}`
 			);
 		}
 	);

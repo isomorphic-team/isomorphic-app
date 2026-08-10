@@ -252,18 +252,121 @@ export interface PageLink {
 
 const MD_LINK_RE = /!?\[([^\]]*)\]\(([^)\s]+)(?:\s+"[^"]*")?\)/g;
 const WIKI_LINK_RE = /\[\[([^\]|]+)(?:\|[^\]]*)?\]\]/g;
+const FENCE_RE = /^[ \t]*(```+|~~~+)/;
+const INLINE_CODE_RE = /(`+)(?:(?!\1)[\s\S])*?\1/g;
+
+// Blank out fenced blocks and code spans, keeping every other character (and every
+// newline) where it was. Link syntax inside code is a code sample — `[[Name]]` on a
+// conventions page teaching the syntax is not a link to a page called "Name", and
+// reporting it as broken is noise no one can ever clear.
+//
+// Fences are scanned line by line rather than matched by one regex: an unterminated
+// fence has to swallow the rest of the document, and expressing that as a regex
+// alternation on `$` silently ends the block at the first line break under /m.
+function maskCode(md: string): string {
+	const blank = (s: string) => s.replace(/[^\n]/g, ' ');
+	let fence: string | null = null;
+	const lines = md.split('\n').map((line) => {
+		const m = line.match(FENCE_RE);
+		if (fence !== null) {
+			// A closing fence is the same character, at least as long as the opener.
+			if (m && m[1][0] === fence[0] && m[1].length >= fence.length) fence = null;
+			return blank(line);
+		}
+		if (m) {
+			fence = m[1];
+			return blank(line);
+		}
+		return line;
+	});
+	return lines.join('\n').replace(INLINE_CODE_RE, blank);
+}
 
 export function extractLinks(body: string): PageLink[] {
+	const scannable = maskCode(body);
 	const links: PageLink[] = [];
-	for (const m of body.matchAll(MD_LINK_RE)) {
+	for (const m of scannable.matchAll(MD_LINK_RE)) {
 		const href = m[2];
 		if (/^(https?:|mailto:|#)/i.test(href)) continue;
 		links.push({ kind: 'md', target: href, raw: m[0] });
 	}
-	for (const m of body.matchAll(WIKI_LINK_RE)) {
+	for (const m of scannable.matchAll(WIKI_LINK_RE)) {
 		links.push({ kind: 'wiki', target: m[1].trim(), raw: m[0] });
 	}
 	return links;
+}
+
+// ---------- wikilink resolution ----------
+//
+// A [[wikilink]] is written from memory, so its text is whatever the author calls
+// the page: its title, its filename, either one in a different case, hyphens where
+// the other has spaces, sometimes a folder path or a #heading. One key covers all
+// of those, and BOTH SIDES of every comparison go through it. That symmetry is the
+// point: the bug this replaces built its lookup table from raw filenames and then
+// queried it with slugified link text, so a page whose filename was not already
+// slug-shaped ("2026-06-26 Weekly Sync.md") could never be found by name.
+
+// The comparable form of one link target or page name. Empty when there is nothing
+// left to match on (an anchor-only link, punctuation).
+export function wikilinkKey(text: string): string {
+	return text
+		.split('/')
+		.map((seg) => slugify(seg, ''))
+		.filter(Boolean)
+		.join('/');
+}
+
+// The name part of a raw wikilink target: no #heading or #^block anchor, no ./
+// prefix, no .md extension.
+export function wikilinkTargetName(rawTarget: string): string {
+	return rawTarget.split('#')[0].trim().replace(/^\.\//, '').replace(/\.md$/i, '').trim();
+}
+
+export interface WikilinkIndex {
+	byPath: Map<string, string>;
+	byName: Map<string, string>;
+	byTitle: Map<string, string>;
+}
+
+// Build the three lookup lanes, most specific first: path, filename, title. Pages
+// are walked in path order and the FIRST claim on a key wins, so two pages sharing
+// a name resolve the same way on every read (validate's ambiguousTitleSuggestions
+// is what tells the author about the collision).
+//
+// The path lane holds every multi-segment SUFFIX of a page's path, not just the
+// whole thing: a path-form link is written from wherever the author thinks the
+// content root is, so [[Meetings/Weekly Sync]] has to reach
+// wiki/Meetings/Weekly Sync.md without knowing about the wiki/ prefix.
+export function buildWikilinkIndex(pages: { path: string; title: string }[]): WikilinkIndex {
+	const byPath = new Map<string, string>();
+	const byName = new Map<string, string>();
+	const byTitle = new Map<string, string>();
+	const claim = (map: Map<string, string>, key: string, path: string) => {
+		if (key && !map.has(key)) map.set(key, path);
+	};
+	for (const p of [...pages].sort((a, b) => a.path.localeCompare(b.path))) {
+		const noExt = p.path.replace(/\.md$/i, '');
+		const segs = noExt.split('/');
+		const file = segs[segs.length - 1];
+		// A folder note IS its folder: [[Atlas]] and [[Projects/Atlas]] mean this page.
+		// Its literal filename ("index") is a key every folder in the brain would
+		// claim, so it never becomes one — but its literal path still resolves.
+		const isNote = isFolderNoteName(`${file}.md`);
+		if (isNote) claim(byPath, wikilinkKey(noExt), p.path);
+		const own = isNote ? segs.slice(0, -1) : segs;
+		for (let i = 0; i < own.length - 1; i++)
+			claim(byPath, wikilinkKey(own.slice(i).join('/')), p.path);
+		if (own.length) claim(byName, wikilinkKey(own[own.length - 1]), p.path);
+		claim(byTitle, wikilinkKey(p.title), p.path);
+	}
+	return { byPath, byName, byTitle };
+}
+
+// The page a [[wikilink]] points at, or undefined when nothing matches.
+export function resolveWikilink(index: WikilinkIndex, rawTarget: string): string | undefined {
+	const key = wikilinkKey(wikilinkTargetName(rawTarget));
+	if (!key) return undefined; // [[#Section]] — an anchor on this page, not a link out
+	return index.byPath.get(key) ?? index.byName.get(key) ?? index.byTitle.get(key);
 }
 
 // Resolve a relative href written in `fromPath` to a repo-root path.
@@ -324,17 +427,26 @@ export function rebaseMdLinks(body: string, oldPath: string, newPath: string): s
 	});
 }
 
-// Rewrite [[Old Title]] / [[Old Title|label]] wikilinks to a new title.
+// Repoint every wikilink that referred to `oldTarget` at `newTarget`, whatever
+// spelling it was written in. Matching goes through wikilinkKey, so it covers the
+// same forms resolution does — a rename that only repointed the exact old title
+// would leave the filename-spelled links behind, pointing at nothing.
+// #anchors and |aliases are preserved; the replacement is a function so a `$&` in
+// the new name stays literal (see docs/references.md).
 export function rewriteWikiLinks(
 	body: string,
-	oldTitle: string,
-	newTitle: string
+	oldTarget: string,
+	newTarget: string
 ): { body: string; changed: number } {
+	const oldKey = wikilinkKey(wikilinkTargetName(oldTarget));
+	if (!oldKey) return { body, changed: 0 };
+	const replacement = newTarget.trim();
 	let changed = 0;
-	const out = body.replace(WIKI_LINK_RE, (raw, title: string) => {
-		if (title.trim().toLowerCase() !== oldTitle.trim().toLowerCase()) return raw;
+	const out = body.replace(WIKI_LINK_RE, (raw, target: string) => {
+		const [name, ...anchor] = target.split('#');
+		if (wikilinkKey(wikilinkTargetName(name)) !== oldKey) return raw;
 		changed++;
-		return raw.replace(title, newTitle);
+		return raw.replace(target, () => [replacement, ...anchor].join('#'));
 	});
 	return { body: out, changed };
 }

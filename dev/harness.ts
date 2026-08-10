@@ -650,7 +650,12 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
 				structuredContent: {
 					pages: visible.map((p) => ({ path: p, title: titleOf(p, pg[p]) })),
 					assets: assetPaths,
-					hidden: hiddenPaths
+					hidden: hiddenPaths,
+					// Mirrors the server: this is the app's OWN navigation channel and the
+					// only tool that draws the whole tree, so its payload says whose tree it
+					// is. Without it the trail's root crumb cannot name the brain when
+					// nothing else has (see #cold).
+					activeBrain: brainMeta(bid)
 				}
 			};
 		}
@@ -1296,6 +1301,13 @@ const browseEmptyMode = hashMode === 'browse-empty';
 // `#nobrains` previews the first-touch "create your first brain" state: start with an
 // empty brain set so the brains lookup routes the app to the create form.
 const noBrainsMode = hashMode === 'nobrains';
+// `#cold` delivers NO opening tool result, so the app self-boots (connectToHost opens
+// the tree itself after 1200ms). A real host does this whenever the result is slower
+// than the handshake or never replayed at all, and it is the one path where the app
+// draws a brain's tree without a single app-tool payload to learn the brain from —
+// so it is where the trail's root crumb and its brain picker have to stand on their
+// own. Everything after the handshake still answers normally.
+const coldMode = hashMode === 'cold';
 if (noBrainsMode) {
 	brainsFixture = [];
 	activeBrainId = '';
@@ -1312,6 +1324,11 @@ bridge.oninitialized = async () => {
 		displayMode: initialMode,
 		availableDisplayModes: AVAILABLE
 	});
+	// No opening result at all: the app is on its own from here (see coldMode).
+	if (coldMode) {
+		document.getElementById('status')!.textContent = 'connected · cold (no tool result)';
+		return;
+	}
 	// announce the input, then deliver the result (sendToolInput once, then sendToolResult).
 	const mode = brainsMode
 		? 'brains'

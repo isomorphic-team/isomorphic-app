@@ -5,7 +5,11 @@
 
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { marked } from 'marked';
-import { slugify, resolveRelative } from '../../src/lib/wiki.ts';
+import {
+	resolveRelative,
+	buildWikilinkIndex,
+	resolveWikilink as resolveWikilinkPath
+} from '../../src/lib/wiki.ts';
 import { mediaTypeOf } from '../../src/lib/media.ts';
 import type {
 	View,
@@ -452,6 +456,11 @@ async function fetchPageList(): Promise<string[]> {
 	return (browseCache ?? (await fetchPaths())).paths;
 }
 
+async function fetchPageIndex(): Promise<{ path: string; title: string }[]> {
+	const data = browseCache ?? (await fetchPaths());
+	return data.paths.map((path) => ({ path, title: data.titleByPath[path] ?? '' }));
+}
+
 // ---------- navigation ----------
 
 async function navigateTo(path: string) {
@@ -535,6 +544,11 @@ async function fetchPaths(): Promise<BrowseData> {
 	// apply the path policy here or the tree keeps whatever policy the last
 	// host-initiated result left behind (a different brain's, or the wiki/ default).
 	applyPolicy(sc);
+	// Same reasoning, and it is what keeps the trail's root crumb honest: this call can
+	// be the FIRST thing the app does (the self-boot in connectToHost, when no tool
+	// result opened the widget), in which case nothing else has said which brain the
+	// tree belongs to and the crumb would name a view instead of a brain.
+	applyBrainContext(sc);
 	const paths = firstText(result)
 		.split('\n')
 		.map((l) => l.trim())
@@ -826,10 +840,12 @@ async function openEditor(path: string) {
 	}
 }
 
+// Same resolver the server uses (src/lib/wiki.ts), over the page list the tree
+// already holds — so a link the viewer refuses to open is one validate reports too,
+// rather than the two disagreeing about what [[Weekly Sync]] means.
 async function resolveWikilink(target: string): Promise<string | null> {
-	const slug = slugify(target);
-	const pages = await fetchPageList();
-	return pages.find((p) => p.split('/').pop()!.replace(/\.md$/, '') === slug) ?? null;
+	const pages = await fetchPageIndex();
+	return resolveWikilinkPath(buildWikilinkIndex(pages), target) ?? null;
 }
 
 // ---------- markdown rendering (viewer) ----------

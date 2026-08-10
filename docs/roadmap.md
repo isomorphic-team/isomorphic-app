@@ -263,6 +263,46 @@ Derived 2026-07-06 from commit-history analysis of two production AI-maintained 
 - **Draft to publish lifecycle.** `status: draft | published` in frontmatter as a first-class act. Draft pages visible to tools but flagged; a publish act flips status and logs it. Keeps the "proposed changes" review lane separate from the fast direct-save lane.
 - **Open-questions page**: a living page whose bullets get struck through and linked when a later page resolves them. Add to the brain template.
 
+# TODO: set frontmatter without rewriting the body
+
+Filed as the "Related" half of issue #14, by a user archiving ~44 completed todos: once
+they were moved, marking each one `done:` had no route that left the body alone.
+
+`write_page`'s `edits` and `append` operate on the BODY only (`page-patch.ts`), and
+`content` replaces the whole body, so setting one arbitrary key means reading the page,
+reconstructing its text, and writing it back. That is the read-then-rewrite cycle
+`edits`/`append` were built to remove, and an agent that cannot read first is one call away
+from clobbering the page. The workaround in the field was `sync_records` with
+`adopt_existing: true`, which does write frontmatter in bulk but binds every page it touches
+to an import source (a `source_key` plus a ledger entry): a permanent side effect for a
+one-off field update.
+
+The mechanism is already there. `updatePageWrite` keeps the existing body verbatim when a
+call carries neither `content` nor a patch, which is how `write_page(path, status:)` works
+today. What is missing is that only four metadata keys are exposed (`title`, `type`,
+`description`, `status`), so `done:` cannot be said at all. The shape is a `fields` object
+on `write_page`, merged through the managed-frontmatter path.
+
+Decisions to make before building it:
+
+- **Removing a key.** An object of keys can only set them. Clearing one needs a stated
+  convention (an explicit null) or a second argument.
+- **Collision with the managed keys.** `fields: { status: ... }` and the `status` argument
+  can disagree within one call. One has to win, by decision rather than by accident of
+  merge order.
+- **Nested frontmatter has to survive.** OKF's `sources:` / `generated:` blocks are held
+  verbatim and re-emitted byte for byte (`FrontmatterBlock` in `wiki.ts`). A new writer that
+  flattens them on the way through reintroduces exactly the data-loss bug that type exists
+  to prevent.
+- **Whether this is per-page at all.** The reported case is 44 pages, and arbitrary keys on
+  `write_page` still cost 44 calls. If the real need is "set a field across a set of pages",
+  that is a different tool: `sync_records` already has the batch shape, and the objection to
+  it was the import binding, not the arity. Building the single-page version first may
+  answer the wrong question.
+
+Indexing needs nothing: `brain_page_fields` already indexes every scalar frontmatter key, so
+a new key becomes queryable by `okf-view` `filter:` and `group-by:` on the next read.
+
 # TODO: brain schema migrations (fleet-wide template/schema updates)
 
 How template and schema changes reach every customer brain after they're scaffolded. Today this is manual, which doesn't scale past a handful of tenants.
@@ -736,7 +776,7 @@ and unbounded, so these are optimizations or new surfaces):
 ~~Obsidian-style graph of pages as nodes and wikilinks/markdown-links as edges.~~
 **Built.** Server tool `view_graph` (`src/tools/apps.ts`) builds the adjacency
 list from the SAME link extraction as `validate` / `find_inbound_links` (markdown
-links via `resolveRelative`, wikilinks via slug/title), deduped undirected,
+links via `resolveRelative`, wikilinks by path/filename/title), deduped undirected,
 nodes carrying a `degree`. Returns `{ view:'graph', nodes, edges, focus?, truncated }`
 in `structuredContent`. Rendered by `GraphView` (`app/main.tsx`), a dependency-free
 canvas force layout (O(n²) springs, fine at the scan ceiling): repulsion +

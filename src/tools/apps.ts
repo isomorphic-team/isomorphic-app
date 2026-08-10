@@ -114,7 +114,7 @@ interface GraphLink {
 }
 
 // Build the brain's link graph from the content index. loadResolvedGraph resolves
-// markdown links via resolveRelative and [[wikilinks]] via slug/title — the SAME
+// markdown links via resolveRelative and [[wikilinks]] by path/filename/title — the SAME
 // resolution the backlinks panel uses, so the graph can't disagree with it. Edges
 // are undirected-deduped (A-B once, regardless of link direction/kind); nodes carry
 // a degree so the renderer can size hubs. ensureFresh reconciles the index with the

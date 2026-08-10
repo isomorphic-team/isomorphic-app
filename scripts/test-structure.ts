@@ -7,6 +7,7 @@
 // held twelve event franchises as prose sections instead of giving each its own
 // page, in a brain whose other folders were already one-file-per-entity.
 import {
+	folderMoveCollisions,
 	inlinedConceptSuggestions,
 	typeFieldSuggestions,
 	ambiguousTitleSuggestions,
@@ -144,6 +145,27 @@ const EVENTS = [
 	const out = inlinedConceptSuggestions([{ path: 'wiki/events/index.md', content: body }], pages);
 	check(
 		'existing pages: sections with a real page are not flagged',
+		out.length === 0,
+		JSON.stringify(out)
+	);
+}
+
+{
+	// The same listing, but the pages are found by FILENAME rather than title (their
+	// titles come from an H1 that says something longer). Both sides of this lookup
+	// go through wikilinkKey, so a Title Case filename matches — keeping the raw
+	// filename here reported every one of these pages as homeless.
+	const body = EVENTS.map(
+		(e) =>
+			`## ${e}\n\nA recurring franchise held each year for hospital executives, with a dedicated sponsorship tier structure.\n`
+	).join('\n');
+	const pages = [
+		{ path: 'wiki/events/index.md', title: 'Events' },
+		...EVENTS.map((e) => ({ path: `wiki/events/${e}.md`, title: `${e} (annual series)` }))
+	];
+	const out = inlinedConceptSuggestions([{ path: 'wiki/events/index.md', content: body }], pages);
+	check(
+		'existing pages: matched by filename, not only by title',
 		out.length === 0,
 		JSON.stringify(out)
 	);
@@ -419,6 +441,53 @@ Body text.
 		'backlinks: split still available',
 		refs[0]?.mdCount === 2 && refs[0]?.wikiCount === 3,
 		JSON.stringify(refs[0])
+	);
+}
+
+// ---------- folder-move collisions ----------
+
+{
+	const rename = (p: string) => `Archive/Todos${p.slice('Todos'.length)}`;
+	const existing = new Set([
+		'Archive/Todos/.gitkeep',
+		'Archive/Todos/old-task.md',
+		'Todos/.gitkeep',
+		'Todos/task-one.md'
+	]);
+	const moved = ['Todos/.gitkeep', 'Todos/task-one.md'];
+	const only = folderMoveCollisions(moved, existing, rename);
+	check(
+		'collisions: a folder marker alone does not block a merge',
+		only.blocking.length === 0 && only.scaffolding.length === 1,
+		JSON.stringify(only)
+	);
+
+	const clash = folderMoveCollisions(
+		['Todos/.gitkeep', 'Todos/old-task.md', 'Todos/other.md'],
+		existing,
+		rename
+	);
+	check(
+		'collisions: a real page still blocks',
+		clash.blocking.length === 1 && clash.blocking[0] === 'Todos/old-task.md',
+		JSON.stringify(clash)
+	);
+
+	const many = folderMoveCollisions(
+		['Todos/a.md', 'Todos/b.md'],
+		new Set(['Archive/Todos/a.md', 'Archive/Todos/b.md']),
+		rename
+	);
+	check(
+		'collisions: every blocker is collected, not just the first',
+		many.blocking.length === 2,
+		JSON.stringify(many)
+	);
+
+	const clean = folderMoveCollisions(['Todos/a.md'], new Set(['Archive/Todos/b.md']), rename);
+	check(
+		'collisions: nothing in the way means nothing reported',
+		clean.blocking.length === 0 && clean.scaffolding.length === 0
 	);
 }
 
