@@ -24,7 +24,7 @@
 import { Fragment } from 'preact';
 import type { ComponentChildren } from 'preact';
 import { useEffect, useState } from 'preact/hooks';
-import type { View, BrowseData } from '../core/types.ts';
+import type { View, BrowseData, BrainRow } from '../core/types.ts';
 import { isFolderNoteName, groupBrainsByOrg } from '../core/util.ts';
 import { browseCache, brainList, activeBrain, features, goBack, backKind } from '../core/store.ts';
 import {
@@ -40,6 +40,7 @@ import {
 	openBrainAccess,
 	navigateTo,
 	fetchPaths,
+	ensureBrainList,
 	switchBrain
 } from '../core/actions.ts';
 import {
@@ -193,15 +194,96 @@ function SiblingRows({
 
 // ---------- the crumbs ----------
 
+// The rows of the brain picker. Same shape as SiblingRows, and for the same reason: a
+// cold list is FETCHED WHEN THE PICKER OPENS rather than being a precondition for the
+// picker existing at all.
+//
+// This crumb used to render as a plain label with no chevron whenever `brainList` was
+// null, on the grounds that UNKNOWN IS NOT ZERO — which is right about the label and
+// wrong about the control. The list is only ever fetched by handleToolResult, so a
+// widget that came up any other way (the self-boot in connectToHost) or a single failed
+// `brains` call left the one control that switches brains permanently absent, with no
+// error and no retry. Unknown is still not zero: the ADD row waits for real rows, so
+// "you have no brains" is never implied by a list we haven't loaded.
+function BrainRows({ close }: { close: () => void }) {
+	const [rows, setRows] = useState<BrainRow[] | null>(brainList);
+	const [failed, setFailed] = useState(false);
+	useEffect(() => {
+		if (rows) return;
+		let live = true;
+		// ensureBrainList swallows its own errors and leaves the list null, so the store
+		// is what says whether it worked.
+		void ensureBrainList().then(() => {
+			if (!live) return;
+			if (brainList) setRows(brainList);
+			else setFailed(true);
+		});
+		return () => {
+			live = false;
+		};
+	}, []);
+	if (failed) return <MenuNote>Couldn’t load your brains.</MenuNote>;
+	if (!rows) return <MenuNote>Loading…</MenuNote>;
+	return (
+		<>
+			{/* Grouped by org, which is what carries the org name now that the label
+			    no longer prepends it. The heading appears only when there are two orgs
+			    to tell apart; with one, every row is in it and it says nothing. */}
+			{groupBrainsByOrg(rows).map((g) => (
+				<Fragment key={g.org ?? '·'}>
+					{g.org && <div class={`px-3 pb-0.5 pt-1 ${eyebrow}`}>{g.org}</div>}
+					{g.rows.map((b) => (
+						<MenuRow
+							key={b.id}
+							onClick={() => {
+								close();
+								switchBrain(b.id);
+							}}
+						>
+							<span class={b.active ? 'text-accent' : 'text-muted'}>
+								<BrainGlyph />
+							</span>
+							<span class="min-w-0 flex-1">
+								<span class="block truncate text-fg" title={b.label}>
+									{b.label}
+								</span>
+								<span class="block text-xs text-muted">
+									{b.role}
+									{b.configPrUrl ? ' · setup pending' : b.needsConfig ? ' · not configured' : ''}
+								</span>
+							</span>
+							{b.active && <span class="shrink-0 text-accent">✓</span>}
+						</MenuRow>
+					))}
+				</Fragment>
+			))}
+			<MenuSeparator />
+			<MenuRow
+				class="text-muted hover:text-fg"
+				onClick={() => {
+					close();
+					openAddBrain();
+				}}
+			>
+				<span class="shrink-0 text-[15px] leading-none">＋</span>
+				<span class="min-w-0 flex-1 truncate">Add a brain</span>
+			</MenuRow>
+		</>
+	);
+}
+
 // The root crumb: which brain you are in. The label opens its file tree (the way home
 // from every view, exactly as ⌂ was); the picker switches brains or adds one.
 //
-// Three states, and the middle one matters: `brainList === null` is UNKNOWN, not zero,
-// so it renders a plain label with no picker rather than implying you have no brains
-// (see ensureBrainList in core/actions).
+// The label NAMES A BRAIN and nothing else. It used to fall back to "Files" — the old
+// ⌂ home button's word, kept when the brain crumb absorbed it — so a brain we could not
+// name rendered the trail as "Files / Files": the root crumb answering with the name of
+// a VIEW, which is the one thing the two halves of this bar exist to keep apart. Every
+// payload that draws brain content now carries `activeBrain` (list_pages included), so
+// this fallback means we genuinely do not know yet, and it says so generically rather
+// than borrowing a destination's name.
 function BrainCrumb({ inert }: { inert?: boolean }) {
-	const rows = brainList;
-	const label = activeBrain?.label ?? (rows && rows.length === 0 ? 'No brain' : 'Files');
+	const label = activeBrain?.label ?? (brainList?.length === 0 ? 'No brain' : 'Brain');
 	// The glyph carries its own trailing space rather than the row carrying a `gap`:
 	// a gap would apply to the CHEVRON too, on top of the ml-0.5 every crumb's chevron
 	// already has, and the brain crumb would sit its picker 4× further from its label
@@ -235,13 +317,6 @@ function BrainCrumb({ inert }: { inert?: boolean }) {
 				{label}
 			</button>
 		);
-	if (!rows)
-		return (
-			<span class="flex min-w-0 max-w-[44vw] shrink items-center">
-				{glyph}
-				{name()}
-			</span>
-		);
 	return (
 		<Menu
 			label="Brains"
@@ -255,56 +330,7 @@ function BrainCrumb({ inert }: { inert?: boolean }) {
 				</span>
 			)}
 		>
-			{(close) => (
-				<>
-					{/* Grouped by org, which is what carries the org name now that the label
-					    no longer prepends it. The heading appears only when there are two orgs
-					    to tell apart; with one, every row is in it and it says nothing. */}
-					{groupBrainsByOrg(rows).map((g) => (
-						<Fragment key={g.org ?? '·'}>
-							{g.org && <div class={`px-3 pb-0.5 pt-1 ${eyebrow}`}>{g.org}</div>}
-							{g.rows.map((b) => (
-								<MenuRow
-									key={b.id}
-									onClick={() => {
-										close();
-										switchBrain(b.id);
-									}}
-								>
-									<span class={b.active ? 'text-accent' : 'text-muted'}>
-										<BrainGlyph />
-									</span>
-									<span class="min-w-0 flex-1">
-										<span class="block truncate text-fg" title={b.label}>
-											{b.label}
-										</span>
-										<span class="block text-xs text-muted">
-											{b.role}
-											{b.configPrUrl
-												? ' · setup pending'
-												: b.needsConfig
-													? ' · not configured'
-													: ''}
-										</span>
-									</span>
-									{b.active && <span class="shrink-0 text-accent">✓</span>}
-								</MenuRow>
-							))}
-						</Fragment>
-					))}
-					<MenuSeparator />
-					<MenuRow
-						class="text-muted hover:text-fg"
-						onClick={() => {
-							close();
-							openAddBrain();
-						}}
-					>
-						<span class="shrink-0 text-[15px] leading-none">＋</span>
-						<span class="min-w-0 flex-1 truncate">Add a brain</span>
-					</MenuRow>
-				</>
-			)}
+			{(close) => <BrainRows close={close} />}
 		</Menu>
 	);
 }
