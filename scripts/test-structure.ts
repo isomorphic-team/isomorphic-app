@@ -7,6 +7,7 @@
 // held twelve event franchises as prose sections instead of giving each its own
 // page, in a brain whose other folders were already one-file-per-entity.
 import {
+	folderMoveCollisions,
 	inlinedConceptSuggestions,
 	typeFieldSuggestions,
 	ambiguousTitleSuggestions,
@@ -439,6 +440,53 @@ Body text.
 		'backlinks: split still available',
 		refs[0]?.mdCount === 2 && refs[0]?.wikiCount === 3,
 		JSON.stringify(refs[0])
+	);
+}
+
+// ---------- folder-move collisions ----------
+
+{
+	const rename = (p: string) => `Archive/Todos${p.slice('Todos'.length)}`;
+	const existing = new Set([
+		'Archive/Todos/.gitkeep',
+		'Archive/Todos/old-task.md',
+		'Todos/.gitkeep',
+		'Todos/task-one.md'
+	]);
+	const moved = ['Todos/.gitkeep', 'Todos/task-one.md'];
+	const only = folderMoveCollisions(moved, existing, rename);
+	check(
+		'collisions: a folder marker alone does not block a merge',
+		only.blocking.length === 0 && only.scaffolding.length === 1,
+		JSON.stringify(only)
+	);
+
+	const clash = folderMoveCollisions(
+		['Todos/.gitkeep', 'Todos/old-task.md', 'Todos/other.md'],
+		existing,
+		rename
+	);
+	check(
+		'collisions: a real page still blocks',
+		clash.blocking.length === 1 && clash.blocking[0] === 'Todos/old-task.md',
+		JSON.stringify(clash)
+	);
+
+	const many = folderMoveCollisions(
+		['Todos/a.md', 'Todos/b.md'],
+		new Set(['Archive/Todos/a.md', 'Archive/Todos/b.md']),
+		rename
+	);
+	check(
+		'collisions: every blocker is collected, not just the first',
+		many.blocking.length === 2,
+		JSON.stringify(many)
+	);
+
+	const clean = folderMoveCollisions(['Todos/a.md'], new Set(['Archive/Todos/b.md']), rename);
+	check(
+		'collisions: nothing in the way means nothing reported',
+		clean.blocking.length === 0 && clean.scaffolding.length === 0
 	);
 }
 

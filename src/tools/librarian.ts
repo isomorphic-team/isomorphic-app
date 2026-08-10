@@ -38,6 +38,7 @@ import {
 import {
 	type RepoRef,
 	type Head,
+	type TreeEntry,
 	type PageContent,
 	type WriteOutcome,
 	type CommitAuthor,
@@ -47,6 +48,7 @@ import {
 import {
 	type BrainConfig,
 	isContentPath,
+	isHiddenName,
 	isSourcePath,
 	isToolMaintained,
 	logPathOf
@@ -800,6 +802,35 @@ async function updatePageWrite(
 	return res;
 }
 
+// What a folder move would land on top of, split by whether it actually matters.
+//
+// A folder marker (`.gitkeep`, and any other dot-prefixed scaffolding) exists to
+// persist an otherwise-empty directory in git, so the destination's own copy already
+// does that job and the source's is redundant. Treating those as collisions made
+// MERGING a folder into an existing one impossible in the case where it is most
+// wanted: every scaffolded folder has a `.gitkeep`, so the destination always
+// already had one, and archiving into an existing archive folder was refused with a
+// message naming a file the caller never wrote.
+//
+// Real content is a different answer: overwriting a page is not this tool's call to
+// make. Those are collected in full rather than reported one at a time, so the
+// caller learns the shape of the problem in one call instead of clearing it file by
+// file.
+export function folderMoveCollisions(
+	moved: string[],
+	existing: Set<string>,
+	rename: (path: string) => string
+): { blocking: string[]; scaffolding: string[] } {
+	const blocking: string[] = [];
+	const scaffolding: string[] = [];
+	for (const path of moved) {
+		if (!existing.has(rename(path))) continue;
+		if (isHiddenName(path)) scaffolding.push(path);
+		else blocking.push(path);
+	}
+	return { blocking, scaffolding };
+}
+
 // The folder-path form of move_page: move/rename a whole subtree in one atomic commit.
 // Two link classes are handled:
 //   - Moved pages' OWN outbound links: intra-subtree links are invariant (source and
@@ -809,7 +840,10 @@ async function updatePageWrite(
 //   - OUTSIDE pages linking INTO a moved page: their relative md links are repointed.
 async function moveFolderWrite(
 	ctx: BrainContext,
-	args: { path: string; new_path?: string; new_name?: string }
+	args: { path: string; new_path?: string; new_name?: string },
+	// The caller may already have paid for these while deciding this was a folder
+	// at all; re-fetching would cost a second round trip for the same answer.
+	pre?: { head: Head; tree: TreeEntry[] }
 ) {
 	const { store, repoArgs, config, author } = ctx;
 	const { new_path, new_name } = args;
@@ -828,8 +862,8 @@ async function moveFolderWrite(
 	if (!isContentPath(`${newFolder}/.gitkeep`, config))
 		return fail(`Can't move to "${newFolder}" — it's outside this brain's editable content.`);
 
-	const head = await store.getHead(repoArgs);
-	const tree = await store.listTree(repoArgs, head, { extension: '*' });
+	const head = pre?.head ?? (await store.getHead(repoArgs));
+	const tree = pre?.tree ?? (await store.listTree(repoArgs, head, { extension: '*' }));
 	const moved = tree.filter((e) => e.path.startsWith(`${folder}/`));
 	if (moved.length === 0) return fail(`No folder "${folder}" found (it has no files).`);
 	for (const e of moved) {
@@ -840,10 +874,24 @@ async function moveFolderWrite(
 	}
 	const rename = (p: string) => `${newFolder}${p.slice(folder.length)}`;
 	const existing = new Set(tree.map((e) => e.path));
-	for (const e of moved) {
-		if (existing.has(rename(e.path)))
-			return fail(`Can't move — "${rename(e.path)}" already exists.`);
+	const { blocking, scaffolding } = folderMoveCollisions(
+		moved.map((e) => e.path),
+		existing,
+		rename
+	);
+	if (blocking.length) {
+		const shown = blocking
+			.slice(0, 10)
+			.map((p) => `"${rename(p)}"`)
+			.join(', ');
+		const more = blocking.length > 10 ? `, and ${blocking.length - 10} more` : '';
+		return fail(
+			`Can't move "${folder}" into "${newFolder}": ${blocking.length} file(s) already exist there (${shown}${more}). Move or rename those first, or pick a destination that doesn't hold them.`
+		);
 	}
+	// The destination keeps its own folder markers; the source's are dropped with the
+	// folder rather than written over the top of them.
+	const supersededScaffolding = new Set(scaffolding);
 
 	const movedMdEntries = moved.filter((e) => e.path.endsWith('.md'));
 	const movedMd = new Set(movedMdEntries.map((e) => e.path));
@@ -875,9 +923,15 @@ async function moveFolderWrite(
 		deletes.push(oldPath);
 	}
 
-	// 2. Non-markdown blobs under the folder (.gitkeep, etc.) — copy across verbatim.
+	// 2. Non-markdown blobs under the folder (.gitkeep, etc.) — copy across verbatim,
+	//    except the scaffolding the destination already carries: writing over that
+	//    would replace a file the caller never asked to touch.
 	for (const e of moved) {
 		if (movedMd.has(e.path)) continue;
+		if (supersededScaffolding.has(e.path)) {
+			deletes.push(e.path);
+			continue;
+		}
 		const file = await store.readFile(repoArgs, e.path);
 		writes.push({ path: rename(e.path), content: file?.content ?? '' });
 		deletes.push(e.path);
@@ -929,10 +983,95 @@ async function moveFolderWrite(
 		prTitle: `Move folder ${folder} → ${newFolder}`,
 		prBody: `Move folder \`${folder}\` to \`${newFolder}\`; inbound links repointed. Proposed via the Isomorphic brain tools.`
 	});
+	// Say when this was a MERGE rather than a move into empty space: the destination
+	// already existed, and a marker of the source's was dropped instead of copied.
+	const mergeNote = supersededScaffolding.size
+		? ` Merged into the existing "${newFolder}", which keeps its own ${[...supersededScaffolding]
+				.map((p) => p.split('/').pop())
+				.join(', ')}.`
+		: '';
 	return landed(
 		outcome,
-		`Moved folder "${folder}" to ${newFolder}. Links in ${repointedPages} page(s) were repointed; the change was logged.${truncationNote(truncated)}${toolRosterNote(folder, newFolder)}`,
-		`Proposed moving folder "${folder}" to ${newFolder}; links in ${repointedPages} page(s) repointed.${truncationNote(truncated)}${toolRosterNote(folder, newFolder)}`
+		`Moved folder "${folder}" to ${newFolder}.${mergeNote} Links in ${repointedPages} page(s) were repointed; the change was logged.${truncationNote(truncated)}${toolRosterNote(folder, newFolder)}`,
+		`Proposed moving folder "${folder}" to ${newFolder}.${mergeNote} Links in ${repointedPages} page(s) repointed.${truncationNote(truncated)}${toolRosterNote(folder, newFolder)}`
+	);
+}
+
+// The non-markdown file form of move_page: move or rename one blob that isn't a page.
+//
+// This exists because a path like "wiki/Todos/.gitkeep" used to route to the FOLDER
+// mover (anything without a .md extension did), which found no files under it and
+// answered "no folder found (it has no files)" about a file that plainly existed. So
+// a non-page file could block a folder move and could not be addressed to clear it.
+//
+// No link repointing: markdown links whose target isn't .md are deliberately outside
+// the resolved graph (loadResolvedGraph skips them), so there is nothing pointing at
+// this file for the index to know about.
+async function moveFileWrite(
+	ctx: BrainContext,
+	head: Head,
+	tree: TreeEntry[],
+	args: { path: string; new_path?: string; new_name?: string }
+) {
+	const { store, repoArgs, config, author } = ctx;
+	const path = args.path.trim().replace(/^\/+/, '');
+	const { new_path, new_name } = args;
+	if (!new_path && !new_name?.trim())
+		return fail('Give a new_path (move/rename) or a new_title (rename in place).');
+	if (isSourcePath(path, config)) return fail(`"${path}" is source material — it can't be moved.`);
+	if (isToolMaintained(path, config)) return fail(`"${path}" is maintained automatically.`);
+	if (!isContentPath(path, config))
+		return fail(`"${path}" is outside this brain's editable content.`);
+
+	const parent = path.includes('/') ? path.slice(0, path.lastIndexOf('/')) : '';
+	const newPath = (
+		new_path ? new_path.trim() : parent ? `${parent}/${new_name!.trim()}` : new_name!.trim()
+	).replace(/^\/+/, '');
+	if (!newPath) return fail('The new path is empty.');
+	if (newPath === path) return ok(`"${path}" is already there — nothing to move.`);
+	if (!isContentPath(newPath, config))
+		return fail(`Can't move to "${newPath}" — it's outside this brain's editable content.`);
+	if (tree.some((e) => e.path === newPath))
+		return fail(`Can't move to "${newPath}" — a file already exists there.`);
+
+	const file = await store.readFile(repoArgs, path);
+	if (!file) return fail(`"${path}" does not exist.`);
+	// Blobs reach us base64-decoded as UTF-8 text, so anything that isn't text has
+	// already lost bytes by the time we could write it back. Refuse rather than
+	// commit a corrupted copy over the original.
+	if (/[\u0000\uFFFD]/.test(file.content))
+		return fail(
+			`"${path}" isn't a text file, so it can't be moved through these tools without corrupting it. Move it with git, or on github.com.`
+		);
+
+	const today = todayIso();
+	const writes = [{ path: newPath, content: file.content }];
+	const log = await store.readFile(repoArgs, logPathOf(config));
+	if (log) {
+		writes.push({
+			path: logPathOf(config),
+			content: insertLogEntry(log.content, today, `Moved \`${path}\` to \`${newPath}\`.`)
+		});
+	}
+
+	const outcome = await store.commitOrPR(repoArgs, {
+		writeMode: config.writeMode,
+		defaultBranch: config.defaultBranch,
+		author,
+		autoMerge: config.autoMerge,
+		mergeMethod: config.mergeMethod,
+		message: `Move ${path} -> ${newPath}`,
+		writes,
+		deletes: [path],
+		head,
+		branchPrefix: 'isomorphic/move',
+		prTitle: `Move ${path} → ${newPath}`,
+		prBody: `Move \`${path}\` to \`${newPath}\`. Proposed via the Isomorphic brain tools.`
+	});
+	return landed(
+		outcome,
+		`Moved "${path}" to ${newPath}. It isn't a page, so no links needed repointing; the change was logged.`,
+		`Proposed moving "${path}" to ${newPath}.`
 	);
 }
 
@@ -1193,13 +1332,13 @@ export function registerLibrarianTools(
 		{
 			title: 'Move or rename a page or folder',
 			description:
-				"Move a page (or a whole folder and everything under it) to a different location and/or rename it. Every link pointing at the moved page(s) — from other pages and the index — is repointed in the same save, and the moved content's own links keep working. Nothing dangles. Pass a folder path (no .md extension) to move or rename an entire subtree.",
+				"Move a page (or a whole folder and everything under it) to a different location and/or rename it. Every link pointing at the moved page(s) — from other pages and the index — is repointed in the same save, and the moved content's own links keep working. Nothing dangles. Pass a folder path (no .md extension) to move or rename an entire subtree; moving a folder ONTO an existing one merges them, and is refused only if a page would be overwritten.",
 			inputSchema: {
 				brain: brainArg,
 				path: z
 					.string()
 					.describe(
-						'Current page or folder path, e.g. "wiki/customers/acme.md" or "wiki/Projects".'
+						'Current page, folder, or file path, e.g. "wiki/customers/acme.md", "wiki/Projects", or "wiki/Projects/.gitkeep".'
 					),
 				new_path: z
 					.string()
@@ -1217,10 +1356,20 @@ export function registerLibrarianTools(
 		},
 		async ({ path, new_path, new_title, brain }) => {
 			const ctx = await getContext({ requires: 'editor', brain });
-			// A path without a .md extension is a folder: move/rename the whole subtree
-			// (new_title renames the folder in place, kept as typed).
+			// A path without a .md extension is a folder OR a non-page file, and the
+			// name cannot tell them apart (".gitkeep" is a file, ".obsidian" a folder).
+			// Ask the tree instead of guessing, then hand the answer to the mover that
+			// fits. Guessing "folder" is what made a dotfile unaddressable: it reported
+			// "no folder found (it has no files)" about a file that was right there.
 			if (!path.trim().replace(/^\/+/, '').endsWith('.md')) {
-				return moveFolderWrite(ctx, { path, new_path, new_name: new_title });
+				const cleaned = path.trim().replace(/^\/+/, '').replace(/\/+$/, '');
+				const head = await ctx.store.getHead(ctx.repoArgs);
+				const tree = await ctx.store.listTree(ctx.repoArgs, head, { extension: '*' });
+				if (tree.some((e) => e.path === cleaned))
+					return moveFileWrite(ctx, head, tree, { path: cleaned, new_path, new_name: new_title });
+				if (tree.some((e) => e.path.startsWith(`${cleaned}/`)))
+					return moveFolderWrite(ctx, { path, new_path, new_name: new_title }, { head, tree });
+				return fail(`No file or folder "${cleaned}" found.`);
 			}
 			const { store, repoArgs, config, author } = ctx;
 			if (!new_path && !new_title)
