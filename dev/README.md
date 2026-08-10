@@ -129,10 +129,11 @@ What the suite covers, and deliberately does not:
 
 - **Covers**: that every route mounts (`smoke`), that the tree / folder notes / brain
   switching / search behave (`navigation`), that the editor round-trips and Cancel
-  discards (`editor`), that the sharing panel puts the access rule on screen and gates
-  its controls on the BRAIN role (`sharing`), that analytics is anchored to a frozen
-  clock (`analytics`), and how it all looks in three display modes and two themes
-  (`visual`).
+  discards (`editor`), that the four add-shaped flows run to COMPLETION (`flows`),
+  that the org roster's mutations and lockout guardrails hold (`members`), that the
+  sharing panel puts the access rule on screen and gates its controls on the BRAIN
+  role (`sharing`), that analytics is anchored to a frozen clock (`analytics`), and
+  how it all looks in three display modes and two themes (`visual`).
 - **Does not cover**: tool semantics. The view engine, page patches, the access rule
   and the analytics fold are pinned by pure golden tests (`test:views`, `test:patch`,
   `test:access`, `test:usage`) that run in milliseconds. Re-asserting those through the
