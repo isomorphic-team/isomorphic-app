@@ -1,14 +1,15 @@
-// Non-destructive body edits for write_page: `append` and `edits` (find/replace).
+// Partial page updates for write_page: `append` and `edits` change part of the
+// BODY, `fields` changes part of the FRONTMATTER.
 //
 // Why this exists: write_page's `content` argument replaces the whole body, so
 // changing one line of a page you haven't read means destroying the rest of it.
 // That forced a read-the-whole-page-then-rewrite-it cycle for every small edit,
 // and an agent that can't read first is one clobber away from data loss. These
-// two arguments change part of a page without needing the rest of it in context.
+// arguments change part of a page without needing the rest of it in context.
 //
 // Pure: no octokit, no D1, no index. Golden test: pnpm test:patch.
 //
-// Two rules make this safe to call blind:
+// Two rules make the body edits safe to call blind:
 //   1. A `find` string must match EXACTLY ONCE. Zero matches or several is an
 //      error, never a guess. Ambiguity fails loudly instead of editing the wrong
 //      paragraph.
@@ -17,6 +18,7 @@
 //      there would be silently reverted on the very same write. Anchoring on a
 //      snapshot is a mistake worth naming, so it gets its own error message.
 
+import { isFrontmatterBlock, type Frontmatter, type FrontmatterValue } from './wiki.ts';
 import { SNAPSHOT_BEGIN, SNAPSHOT_END } from './view-directives.ts';
 
 export interface PageEdit {
@@ -140,4 +142,140 @@ export function applyPageEdits(
 		};
 	}
 	return { ok: true, body: next, summary: notes.join(', ') };
+}
+
+// ---------- frontmatter fields (`fields`) ----------
+//
+// The body's twin: set or remove individual frontmatter keys without rewriting
+// the page. Semantics are JSON Merge Patch (RFC 7386): a key present in the patch
+// is set, an explicit null removes it, an absent key is left alone.
+//
+// Three rules, each forced by something elsewhere in the codebase:
+//
+//   1. Key names must match what parseFrontmatter can read back. Its FM_KEY_RE
+//      accepts [A-Za-z0-9_-] only, and it SKIPS lines it cannot match, so a key
+//      with a space or a dot would be written successfully and then disappear on
+//      the next read. A writer must not be able to produce files our own reader
+//      loses.
+//   2. Keys write_page manages itself are refused, with a pointer to the argument
+//      that owns them. `title` is the reason this is a rule rather than a
+//      preference: retitling repoints every inbound wikilink in the same save, so
+//      a title set through here would break links silently. `updated` is stamped
+//      on every write.
+//   3. A key currently holding nested YAML is refused, for set AND for remove.
+//      Those runs are held verbatim as FrontmatterBlock and replayed byte for
+//      byte (OKF `sources:`/`generated:` provenance). Flattening one destroys
+//      structure the caller has not read, and not having to read first is the
+//      whole point of this argument. Same invariant `edits` enforces: you cannot
+//      destroy what you have not seen.
+
+export const MANAGED_FIELD_KEYS = ['title', 'type', 'description', 'status', 'updated'] as const;
+
+const FIELD_KEY_RE = /^[A-Za-z0-9_-]+$/;
+
+// Exported so the app's properties panel refuses exactly what the tool refuses.
+// Two copies of this rule would let the UI offer a key the write then rejects.
+export function isUsableFieldKey(key: string): boolean {
+	return FIELD_KEY_RE.test(key) && !(MANAGED_FIELD_KEYS as readonly string[]).includes(key);
+}
+
+// The argument to reach for instead, per managed key. `updated` has none: it is
+// stamped by the writer on every save and is not the caller's to set.
+const MANAGED_FIELD_ADVICE: Record<string, string> = {
+	title: 'Use the "title" argument (it also repoints inbound links).',
+	type: 'Use the "type" argument.',
+	description: 'Use the "description" argument.',
+	status: 'Use the "status" argument.',
+	updated: 'It is stamped automatically on every save.'
+};
+
+export type FieldValue = string | number | boolean | Array<string | number> | null;
+export type FieldPatch = Record<string, FieldValue>;
+
+export type FieldPatchResult =
+	| { ok: true; frontmatter: Frontmatter; summary: string; changed: number }
+	| { ok: false; error: string };
+
+function normalize(value: Exclude<FieldValue, null>): FrontmatterValue {
+	return Array.isArray(value) ? value.map((v) => String(v)) : String(value);
+}
+
+// Compared post-normalization so `2` and `"2"` are the same value, which is what
+// they become in the file. Lets a caller re-run a patch without touching pages
+// that already say what it asks for.
+function sameValue(a: FrontmatterValue | undefined, b: FrontmatterValue): boolean {
+	if (a === undefined) return false;
+	if (isFrontmatterBlock(a)) return false;
+	return JSON.stringify(a) === JSON.stringify(b);
+}
+
+/**
+ * Context-free checks on a patch: key names and managed keys. Separate from
+ * applyFieldPatch so a batch caller can reject a bad patch before fetching any
+ * page, rather than discovering it on page 1 of 200.
+ *
+ * Returns an error string, or null when the patch is well-formed.
+ */
+export function validateFieldPatch(patch: FieldPatch): string | null {
+	const keys = Object.keys(patch);
+	if (keys.length === 0) {
+		return 'Nothing to set: "fields" is empty. Pass at least one key, or null to remove one.';
+	}
+	for (const key of keys) {
+		if (!FIELD_KEY_RE.test(key)) {
+			return `"${key}" is not a usable frontmatter key: use letters, digits, underscores and dashes only (e.g. "due_date"). Other characters are dropped when the page is read back.`;
+		}
+		if ((MANAGED_FIELD_KEYS as readonly string[]).includes(key)) {
+			return `"${key}" is managed by write_page and cannot be set through "fields". ${MANAGED_FIELD_ADVICE[key]}`;
+		}
+		const value = patch[key];
+		if (value !== null && typeof value === 'object' && !Array.isArray(value)) {
+			return `The value for "${key}" must be text, a number, true/false, a list of those, or null to remove it.`;
+		}
+	}
+	return null;
+}
+
+/**
+ * Apply a field patch to a page's parsed frontmatter. `changed` is the number of
+ * keys whose value actually moved, so a caller can skip writing a page that
+ * already says what the patch asks for.
+ */
+export function applyFieldPatch(fm: Frontmatter, patch: FieldPatch): FieldPatchResult {
+	const invalid = validateFieldPatch(patch);
+	if (invalid) return { ok: false, error: invalid };
+
+	const next: Frontmatter = { ...fm };
+	const set: string[] = [];
+	const removed: string[] = [];
+
+	for (const [key, value] of Object.entries(patch)) {
+		if (isFrontmatterBlock(fm[key])) {
+			return {
+				ok: false,
+				error: `"${key}" holds nested YAML on this page, which this tool keeps exactly as written rather than rewriting. Read the page and use "content" if you really mean to replace it.`
+			};
+		}
+		if (value === null) {
+			if (key in next) {
+				delete next[key];
+				removed.push(key);
+			}
+			continue;
+		}
+		const normalized = normalize(value);
+		if (sameValue(fm[key], normalized)) continue;
+		next[key] = normalized;
+		set.push(key);
+	}
+
+	const notes: string[] = [];
+	if (set.length) notes.push(`set ${set.join(', ')}`);
+	if (removed.length) notes.push(`removed ${removed.join(', ')}`);
+	return {
+		ok: true,
+		frontmatter: next,
+		changed: set.length + removed.length,
+		summary: notes.length ? notes.join('; ') : 'no field changes (already up to date)'
+	};
 }

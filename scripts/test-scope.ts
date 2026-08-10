@@ -33,7 +33,7 @@ import { registerMemberTools } from '../src/tools/members.ts';
 import { registerBrainAccessTools } from '../src/tools/brain-access.ts';
 import { registerBrainTools } from '../src/tools/brains.ts';
 import { registerAnalyticsTools } from '../src/tools/analytics.ts';
-import type { BrainContext } from '../src/tools/librarian.ts';
+import { registerLibrarianTools, type BrainContext } from '../src/tools/librarian.ts';
 
 let failures = 0;
 function check(label: string, cond: boolean, detail = '') {
@@ -199,6 +199,7 @@ function toolsFor(p: Persona): Map<string, Handler> {
 	registerMemberTools(server, getContext);
 	registerBrainAccessTools(server, getContext);
 	registerAnalyticsTools(server, getContext);
+	registerLibrarianTools(server, getContext);
 	registerBrainTools(server, {
 		getContext,
 		orgContext: async (opts?: { requires?: Role }) => {
@@ -300,6 +301,41 @@ check(
 	'share_brain refuses an org OWNER who holds only viewer on this brain',
 	await denies(orgBoss, 'share_brain', { email: 'lurker@example.com', access: 'viewer' })
 );
+
+// ===========================================================================
+console.log('\nContent writes gate on the BRAIN role, at editor');
+// ===========================================================================
+// Writing a page is a property of the brain, so an ORG owner who holds only viewer
+// on this brain must be refused, and someone shared the brain as editor must not be.
+// Asserted on the DETAIL rather than the verdict, because every one of these fails
+// for SOME reason under a stub context with no config and a throwing store. Only the
+// gate's own message distinguishes "refused because of your role" from "got past the
+// gate and died on the stub", and that distinction is the whole test.
+const CONTENT_WRITES: [string, Record<string, unknown>][] = [
+	['write_page', { path: 'wiki/a.md', fields: { done: 'yes' } }],
+	['set_fields', { paths: ['wiki/a.md'], fields: { done: 'yes' } }],
+	['move_page', { path: 'wiki/a.md', new_path: 'wiki/b.md' }],
+	['delete_page', { path: 'wiki/a.md' }]
+];
+const gated = (detail: string) => /requires editor access/.test(detail);
+for (const [tool, args] of CONTENT_WRITES) {
+	const viewer = await attempt(lurker, tool, args);
+	check(`${tool} refuses a brain viewer at the gate`, gated(viewer.detail), viewer.detail);
+	const boss = await attempt(orgBoss, tool, args);
+	check(`${tool} refuses an org OWNER who is only a brain viewer`, gated(boss.detail), boss.detail);
+	const editor = await attempt(writer, tool, args);
+	check(
+		`${tool} admits a brain editor (it gets past the gate)`,
+		!gated(editor.detail),
+		editor.detail
+	);
+}
+// A bad patch must not be the thing that stops an unauthorized caller: authorization
+// has to come first, or the error text tells a stranger which keys exist.
+{
+	const r = await attempt(lurker, 'set_fields', { paths: ['wiki/a.md'], fields: { title: 'x' } });
+	check('set_fields checks the role before it validates the patch', gated(r.detail), r.detail);
+}
 
 // ===========================================================================
 console.log('\nReads stay open to viewers in both scopes');

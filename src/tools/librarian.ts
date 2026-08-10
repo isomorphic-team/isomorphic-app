@@ -62,12 +62,18 @@ import {
 	backlinksTo,
 	searchIndex,
 	loadAllFields,
-	loadPageContents
+	loadPageContents,
+	MAX_FIELD_KEYS_PER_PAGE
 } from '../lib/brain-index.ts';
 import { tryRenderViews, type ViewDeps } from '../lib/views.ts';
 import { isToolPagePath, parseToolDef } from '../lib/custom-tools.ts';
 import { isFolderNoteName } from '../lib/view-directives.ts';
-import { applyPageEdits } from '../lib/page-patch.ts';
+import {
+	applyPageEdits,
+	applyFieldPatch,
+	validateFieldPatch,
+	type FieldPatch
+} from '../lib/page-patch.ts';
 import { parseLedger } from '../lib/brain-import.ts';
 import type { TenantOpts, Role } from '../lib/orgs.ts';
 
@@ -77,6 +83,24 @@ const brainArg = z
 	.string()
 	.optional()
 	.describe('Which brain to target (name/handle). Defaults to the active brain.');
+
+// Shared by write_page (one page) and set_fields (many). Frontmatter keys are
+// free-form and brain-owned, exactly like folders and `type:` values, so this
+// takes whatever the brain calls things rather than a fixed list.
+const fieldsArg = z
+	.record(
+		z.union([
+			z.string(),
+			z.number(),
+			z.boolean(),
+			z.array(z.union([z.string(), z.number()])),
+			z.null()
+		])
+	)
+	.optional()
+	.describe(
+		'Frontmatter fields to set on the page, as {key: value}. The BODY IS LEFT ALONE, so you do not need to read the page first: use this for any metadata the brain tracks its own way ("done", "owner", "due", "priority", "client"). A value may be text, a number, true/false, or a list. Pass null to REMOVE a key. Keys use letters, digits, dashes and underscores only. Every key set here becomes filterable by okf-view. Not for title / type / description / status: those have their own arguments, because setting them does more than write a value.'
+	);
 
 export interface BrainContext {
 	// Where this brain's content lives, and the only way the content tools reach it.
@@ -141,6 +165,10 @@ function ok(text: string) {
 
 function fail(text: string) {
 	return { isError: true as const, content: [{ type: 'text' as const, text }] };
+}
+
+function plural(n: number, one: string, many = `${one}s`): string {
+	return `${n} ${n === 1 ? one : many}`;
 }
 
 // Shape a write response to match how the change actually landed:
@@ -455,6 +483,11 @@ const looseKey = (text: string) => text.toLowerCase().replace(/[^a-z0-9]+/g, '')
 // genuine problems ended up buried under the noise this exists to prevent.
 const MAX_REPORT_LINES = 40;
 
+// How many pages one set_fields call may touch. Matches sync_records' batch size:
+// both land as ONE commit bundle, and both are bounded by what a single Worker
+// request can fetch and commit rather than by anything about the brain.
+const MAX_SET_FIELDS_PAGES = 200;
+
 // Format the broken links for validate, SPLIT BY KIND, because the two mean
 // different things to whoever has to fix them: a markdown link names a file that
 // is not there (always actionable, and the path says where), while a wikilink is
@@ -601,11 +634,12 @@ async function createPageWrite(
 		title?: string;
 		type?: string;
 		description?: string;
+		fields?: FieldPatch;
 		sources?: string[];
 	}
 ) {
 	const { store, repoArgs, config, author } = ctx;
-	const { target, content, title, type, description, sources } = args;
+	const { target, content, title, type, description, fields, sources } = args;
 	// Fall back through the SAME chain the rest of the system resolves titles by
 	// (pageTitle): a `title:` in the caller's own content, then the body's `# H1`,
 	// then the filename — or the folder's name for a folder note. Deriving straight
@@ -636,7 +670,15 @@ async function createPageWrite(
 		// `sources` argument was absent, which is exactly how provenance went missing.
 		...Object.fromEntries(Object.entries(provided.fm).filter(([k]) => !(k in managed)))
 	};
-	const newContent = await withFreshSnapshots(ctx, target, withFrontmatter(fm, provided.body));
+	// A create can carry `fields` too, so a page can be born with the brain's own
+	// metadata instead of needing a second call to add it.
+	let finalFm = fm;
+	if (fields) {
+		const patched = applyFieldPatch(fm, fields);
+		if (!patched.ok) return fail(patched.error);
+		finalFm = patched.frontmatter;
+	}
+	const newContent = await withFreshSnapshots(ctx, target, withFrontmatter(finalFm, provided.body));
 	const writes = [{ path: target, content: newContent }];
 	const log = await store.readFile(repoArgs, logPathOf(config));
 	if (log) {
@@ -681,11 +723,13 @@ async function updatePageWrite(
 		type?: string;
 		description?: string;
 		status?: 'draft' | 'published';
+		fields?: FieldPatch;
 		sha?: string;
 	}
 ) {
 	const { store, repoArgs, config, author } = ctx;
-	const { path, content, rawBody, changeSummary, title, type, description, status, sha } = args;
+	const { path, content, rawBody, changeSummary, title, type, description, status, fields, sha } =
+		args;
 	const old = parseFrontmatter(existing.content);
 	// Three ways to arrive here, in precedence order: `rawBody` is an
 	// already-patched body (append/edits — frontmatter was split off by the
@@ -709,11 +753,14 @@ async function updatePageWrite(
 		title !== undefined ||
 		type !== undefined ||
 		description !== undefined ||
-		status !== undefined;
+		status !== undefined ||
+		fields !== undefined;
 
 	let newContent: string;
+	let fieldSummary: string | undefined;
+	let fieldCount = 0;
 	if (manageFm) {
-		const fm: Frontmatter = {
+		let fm: Frontmatter = {
 			...(old.frontmatter ?? {}),
 			...provided.fm,
 			...(newTitle ? { title: newTitle } : {}),
@@ -722,6 +769,13 @@ async function updatePageWrite(
 			...(status ? { status } : {}),
 			updated: today
 		};
+		if (fields) {
+			const patched = applyFieldPatch(fm, fields);
+			if (!patched.ok) return fail(patched.error);
+			fm = patched.frontmatter;
+			fieldSummary = patched.summary;
+			fieldCount = Object.keys(fm).length;
+		}
 		newContent = withFrontmatter(fm, provided.body);
 	} else {
 		newContent = provided.body;
@@ -741,6 +795,17 @@ async function updatePageWrite(
 		notes.push(
 			`replaced the whole body (was ${count(old.body)} lines, now ${count(provided.body)})`
 		);
+	}
+	if (fieldSummary) {
+		notes.push(fieldSummary);
+		// Past the cap the indexer stops reading keys, so the field would be set in
+		// the file and invisible to okf-view filter:/group-by:. Say so here rather
+		// than letting it surface later as a view that misses pages.
+		if (fieldCount > MAX_FIELD_KEYS_PER_PAGE) {
+			notes.push(
+				`heads up: this page now has ${fieldCount} frontmatter keys and only the first ${MAX_FIELD_KEYS_PER_PAGE} are indexed, so the last ones cannot be filtered on`
+			);
+		}
 	}
 
 	// Retitling breaks [[Old Title]] wikilinks — repoint them in the same save. Only the
@@ -1208,7 +1273,7 @@ export function registerLibrarianTools(
 		{
 			title: 'Write a brain page',
 			description:
-				'Create a new page, or change an existing one, at a content path you choose (folders are free-form). ONE PAGE = ONE CONCEPT: anything another page should be able to link to — a person, vendor, system, event series, project — gets its own file, never a section inside a bigger page. If you are about to write a heading per item, write a page per item instead. To change PART of a page use `edits` (exact find/replace; each anchor must match exactly once) or `append` (add to the end): both leave the rest of the page untouched, so you do not have to read it first and cannot destroy text you have not seen. `content` REPLACES the entire body, so pass it only for a new page or a deliberate full rewrite, and read the page first (read_page) if you did not just write it. A new page starts as a draft; on an existing page frontmatter is preserved and merged, the "updated" date is bumped, a retitle repoints inbound links, and passing none of content/edits/append changes only metadata (e.g. status: "published" to publish a draft). Every change is logged. Pass mode: "create" to require a new path (fails if it exists) or "update" to require an existing one.',
+				'Create a new page, or change an existing one, at a content path you choose (folders are free-form). ONE PAGE = ONE CONCEPT: anything another page should be able to link to — a person, vendor, system, event series, project — gets its own file, never a section inside a bigger page. If you are about to write a heading per item, write a page per item instead. To change PART of a page use `edits` (exact find/replace; each anchor must match exactly once) or `append` (add to the end): both leave the rest of the page untouched, so you do not have to read it first and cannot destroy text you have not seen. To change METADATA rather than page text, use `fields` (set or remove any frontmatter key the brain tracks, e.g. done/owner/due) or the title/type/description/status arguments: those leave the body untouched. To set a field on MANY pages at once, use set_fields instead of calling this repeatedly. `content` REPLACES the entire body, so pass it only for a new page or a deliberate full rewrite, and read the page first (read_page) if you did not just write it. A new page starts as a draft; on an existing page frontmatter is preserved and merged, the "updated" date is bumped, a retitle repoints inbound links, and passing none of content/edits/append changes only metadata (e.g. status: "published" to publish a draft). Every change is logged. Pass mode: "create" to require a new path (fails if it exists) or "update" to require an existing one.',
 			inputSchema: {
 				brain: brainArg,
 				path: z
@@ -1260,6 +1325,7 @@ export function registerLibrarianTools(
 					.enum(['draft', 'published'])
 					.optional()
 					.describe('Lifecycle status. New pages default to draft; set "published" to publish.'),
+				fields: fieldsArg,
 				sources: z
 					.array(z.string())
 					.optional()
@@ -1289,6 +1355,7 @@ export function registerLibrarianTools(
 			type,
 			description,
 			status,
+			fields,
 			sources,
 			mode,
 			sha,
@@ -1310,6 +1377,12 @@ export function registerLibrarianTools(
 			}
 			if (isSourcePath(target, config)) return fail(`"${target}" is immutable source material.`);
 			if (isToolMaintained(target, config)) return fail(`"${target}" is maintained automatically.`);
+			// Key names and managed keys are context-free, so reject a bad patch before
+			// touching the repo rather than after reading the blob.
+			if (fields) {
+				const invalid = validateFieldPatch(fields);
+				if (invalid) return fail(invalid);
+			}
 
 			const head = await store.getHead(repoArgs);
 			const existing = await store.readFile(repoArgs, target);
@@ -1336,6 +1409,7 @@ export function registerLibrarianTools(
 					title,
 					type,
 					description,
+					fields,
 					sources
 				});
 			}
@@ -1358,10 +1432,11 @@ export function registerLibrarianTools(
 				title === undefined &&
 				type === undefined &&
 				description === undefined &&
-				status === undefined
+				status === undefined &&
+				fields === undefined
 			) {
 				return fail(
-					'Nothing to update: pass append / edits (to change part of the page) or content (to replace the body), or a title / type / description / status change.'
+					'Nothing to update: pass append / edits (to change part of the page) or content (to replace the body), or a fields / title / type / description / status change.'
 				);
 			}
 
@@ -1384,6 +1459,7 @@ export function registerLibrarianTools(
 				type,
 				description,
 				status,
+				fields,
 				sha
 			});
 		}
@@ -1618,6 +1694,183 @@ export function registerLibrarianTools(
 				outcome,
 				`Deleted "${title}" (${path}). The change was logged.${refNote}${truncationNote(truncated)}${toolRosterNote(path)}`,
 				`Proposed deleting "${title}" (${path}).${refNote}${truncationNote(truncated)}${toolRosterNote(path)}`
+			);
+		}
+	);
+
+	// ---------- set_fields ----------
+	//
+	// The batch twin of write_page's `fields`. It exists because the reported need
+	// was 44 pages at once ("mark the todos I just archived done"), and doing that
+	// one call at a time is 44 commits and 44 changelog bullets for a single act.
+	// The changelog is a product surface: one intent should read as one line in it.
+	//
+	// Never half-applied, like write_page's `edits`: anything wrong with the request
+	// (a missing path, a page outside the editable area, a key holding nested YAML)
+	// fails the whole call naming every offender, so a caller fixes the list once
+	// instead of discovering the next problem on the next run.
+	server.registerTool(
+		'set_fields',
+		{
+			title: 'Set frontmatter fields on many pages',
+			description:
+				'Set or remove frontmatter fields across a LIST of pages in one atomic change, without touching any page body. Use this whenever the same metadata applies to several pages ("mark these 12 done", "set owner on everything in this folder"): it lands as one commit and one changelog entry, where calling write_page repeatedly would land one of each per page. Pages that already carry the values are skipped, so re-running the same call is a no-op rather than a churn of empty edits. For a single page, use write_page\'s `fields` argument instead.',
+			inputSchema: {
+				brain: brainArg,
+				paths: z
+					.array(z.string())
+					.describe(
+						`The pages to change, e.g. ["wiki/todos/ship-importer.md", "wiki/todos/fix-index.md"]. Every path must be an existing .md page; if any is not, nothing is written and the offenders are named. Use list_pages or search_pages to gather them. At most ${MAX_SET_FIELDS_PAGES} per call.`
+					),
+				fields: z
+					.record(
+						z.union([
+							z.string(),
+							z.number(),
+							z.boolean(),
+							z.array(z.union([z.string(), z.number()])),
+							z.null()
+						])
+					)
+					.describe(
+						'The fields to set on every listed page, as {key: value}. A value may be text, a number, true/false, or a list; null REMOVES the key. Keys use letters, digits, dashes and underscores only. Not for title / type / description / status: those have their own arguments on write_page, and title in particular repoints inbound links when it changes.'
+					)
+			}
+		},
+		async ({ paths, fields, brain }) => {
+			const ctx = await getContext({ requires: 'editor', brain });
+			const { store, repoArgs, config, author } = ctx;
+
+			const invalid = validateFieldPatch(fields);
+			if (invalid) return fail(invalid);
+
+			const targets = [...new Set(paths.map((p) => p.trim().replace(/^\/+/, '')).filter(Boolean))];
+			if (targets.length === 0) return fail('Pass at least one page path in "paths".');
+			if (targets.length > MAX_SET_FIELDS_PAGES) {
+				return fail(
+					`That is ${targets.length} pages; at most ${MAX_SET_FIELDS_PAGES} can be changed in one call. Split the list.`
+				);
+			}
+
+			const list = (items: string[]) =>
+				items
+					.slice(0, 10)
+					.map((p) => `- ${p}`)
+					.join('\n') + (items.length > 10 ? `\n...and ${items.length - 10} more` : '');
+
+			const notPages = targets.filter((p) => !p.endsWith('.md'));
+			if (notPages.length) {
+				return fail(
+					`set_fields writes page frontmatter, so every path must end in .md. These do not:\n${list(notPages)}`
+				);
+			}
+			const offLimits = targets.filter(
+				(p) => isSourcePath(p, config) || isToolMaintained(p, config) || !isContentPath(p, config)
+			);
+			if (offLimits.length) {
+				return fail(
+					`These paths are outside this brain's editable content, or are maintained automatically:\n${list(offLimits)}`
+				);
+			}
+
+			const head = await store.getHead(repoArgs);
+			const tree = await store.listTree(repoArgs, head, { extension: '.md' });
+			const entries = new Map(tree.map((e) => [e.path, e]));
+			const missing = targets.filter((p) => !entries.has(p));
+			if (missing.length) {
+				return fail(
+					`Nothing was written. These pages do not exist:\n${list(missing)}\nCheck the paths with list_pages, or create them with write_page.`
+				);
+			}
+
+			const { pages } = await store.fetchPages(
+				repoArgs,
+				targets.map((p) => entries.get(p)!)
+			);
+			const byPath = new Map(pages.map((p) => [p.path, p.content]));
+
+			const writes: { path: string; content: string }[] = [];
+			const unchanged: string[] = [];
+			const blocked: string[] = [];
+			for (const path of targets) {
+				const original = byPath.get(path);
+				if (original === undefined) {
+					return fail(`Nothing was written: "${path}" could not be read.`);
+				}
+				const { frontmatter, body } = parseFrontmatter(original);
+				const patched = applyFieldPatch(frontmatter ?? {}, fields);
+				if (!patched.ok) {
+					blocked.push(`${path}: ${patched.error}`);
+					continue;
+				}
+				if (patched.changed === 0) {
+					unchanged.push(path);
+					continue;
+				}
+				const merged = withFrontmatter({ ...patched.frontmatter, updated: todayIso() }, body);
+				writes.push({ path, content: await withFreshSnapshots(ctx, path, merged) });
+			}
+			if (blocked.length) {
+				return fail(
+					`Nothing was written. These pages could not take the change:\n${blocked
+						.slice(0, 10)
+						.map((b) => `- ${b}`)
+						.join('\n')}${blocked.length > 10 ? `\n...and ${blocked.length - 10} more` : ''}`
+				);
+			}
+			if (writes.length === 0) {
+				return ok(
+					`No change: all ${plural(targets.length, 'page')} already carry those values. Nothing was written.`
+				);
+			}
+
+			const keys = Object.keys(fields);
+			const setKeys = keys.filter((k) => fields[k] !== null);
+			const removedKeys = keys.filter((k) => fields[k] === null);
+			const what = [
+				setKeys.length ? `set ${setKeys.map((k) => `\`${k}\``).join(', ')}` : '',
+				removedKeys.length ? `removed ${removedKeys.map((k) => `\`${k}\``).join(', ')}` : ''
+			]
+				.filter(Boolean)
+				.join(' and ');
+
+			// Counted before the changelog joins the bundle, so every message below says
+			// how many PAGES changed rather than how many files were committed.
+			const changedPages = writes.length;
+			const today = todayIso();
+			const log = await store.readFile(repoArgs, logPathOf(config));
+			if (log) {
+				writes.push({
+					path: logPathOf(config),
+					content: insertLogEntry(
+						log.content,
+						today,
+						`Updated fields on ${plural(changedPages, 'page')}: ${what}.`
+					)
+				});
+			}
+
+			const outcome = await store.commitOrPR(repoArgs, {
+				writeMode: config.writeMode,
+				defaultBranch: config.defaultBranch,
+				author,
+				autoMerge: config.autoMerge,
+				mergeMethod: config.mergeMethod,
+				message: `Set fields on ${plural(changedPages, 'page')}\n\n${what}. Page bodies unchanged.`,
+				writes,
+				head,
+				branchPrefix: 'isomorphic/fields',
+				prTitle: `Set fields on ${plural(changedPages, 'page')}`,
+				prBody: `${what} on ${plural(changedPages, 'page')}; bodies unchanged. Proposed via the Isomorphic brain tools.`
+			});
+
+			const skipped = unchanged.length
+				? ` ${plural(unchanged.length, 'page')} already had those values and ${unchanged.length === 1 ? 'was' : 'were'} left alone.`
+				: '';
+			return landed(
+				outcome,
+				`Updated ${plural(changedPages, 'page')}: ${what}. Page bodies were not touched.${skipped} The change was logged.`,
+				`Proposed updating ${plural(changedPages, 'page')}: ${what}.${skipped}`
 			);
 		}
 	);

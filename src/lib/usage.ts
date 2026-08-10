@@ -47,6 +47,7 @@ export const TOOL_KINDS: Record<string, UsageKind> = {
 
 	// Writes: anything that changes brain content.
 	write_page: 'write',
+	set_fields: 'write',
 	move_page: 'write',
 	delete_page: 'write',
 	sync_records: 'write',
