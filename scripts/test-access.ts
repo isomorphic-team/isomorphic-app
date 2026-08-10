@@ -163,6 +163,12 @@ import { readFileSync } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
 import {
 	listAccessibleBrains,
+	listAccessibleOrgs,
+	firstSuspendedOrg,
+	resolveOrgForPerson,
+	linkedUserIds,
+	matchOrg,
+	chooseOrg,
 	getDefaultBrainForUser,
 	listBrainAccess,
 	setBrainGrant,
@@ -191,8 +197,8 @@ const db = { prepare: (sql: string) => shimStatement(sql) } as never;
 // access source: grandfathered org-visible, and two private ones owned by
 // different people.
 sqlite.exec(`
-  INSERT INTO orgs (org_id, name, model, installation_id, brain_owner, created_by)
-    VALUES ('org1', 'Northwind', 'customer', 1, 'northwind', 'alice');
+  INSERT INTO orgs (org_id, name, model, installation_id, brain_owner, created_by, created_at)
+    VALUES ('org1', 'Northwind', 'customer', 1, 'northwind', 'alice', '2026-01-01');
   INSERT INTO app_users (user_id, email, name) VALUES
     ('alice', 'alice@example.com', 'Alice'),
     ('bob',   'bob@example.com',   'Bob'),
@@ -317,6 +323,205 @@ check(
 	'disconnecting a brain drops every grant on it',
 	sqlite.prepare(`SELECT COUNT(*) AS n FROM brain_memberships WHERE brain_id = 'b-bob'`).get()
 		?.n === 0
+);
+
+// ---------------------------------------------------------------------------
+// Org resolution: which ORGS a person can act in.
+// ---------------------------------------------------------------------------
+// A different question from listAccessibleBrains, and the reason it needs its own
+// query: that one inner-joins `brains`, so an org holding none is invisible to it.
+// That is correct for "which brain do I act on" and wrong for "where do I PUT a new
+// one", which is the only question asked about an org that has no brains yet.
+//
+// Dave is one human with two emails: a work identity that owns the brainless org and
+// a personal identity that is a viewer in Northwind. Every org query has to see both
+// from either, which is what identity linking means.
+sqlite.exec(`
+  INSERT INTO orgs (org_id, name, model, installation_id, brain_owner, github_org_login, created_by, created_at)
+    VALUES ('org2', 'Contoso Group', 'customer', 2, 'contoso-io', 'contoso-io', 'dave-work', '2026-04-01');
+  INSERT INTO orgs (org_id, name, model, installation_id, brain_owner, created_by, created_at, suspended_at)
+    VALUES ('org3', 'Dormant', 'customer', 3, 'dormant', 'dave-work', '2026-05-01', '2026-06-01');
+  INSERT INTO app_users (user_id, email, name, person_id) VALUES
+    ('dave-home', 'dave@example.com',      'Dave', 'p-dave'),
+    ('dave-work', 'dave@thelab.example',   'Dave', 'p-dave');
+  INSERT INTO app_users (user_id, email, name) VALUES
+    ('erin', 'erin@example.com', 'Erin');
+  INSERT INTO memberships (org_id, user_id, role) VALUES
+    ('org1', 'dave-home', 'viewer'),
+    ('org1', 'dave-work', 'admin'),
+    ('org2', 'dave-work', 'owner'),
+    ('org3', 'dave-work', 'owner'),
+    ('org3', 'erin',      'owner');
+`);
+
+const orgIds = async (users: string[]) =>
+	(await listAccessibleOrgs(db, users)).map((o) => o.org.org_id).sort();
+
+console.log('\nlistAccessibleOrgs: an org with no brains is still somewhere you can act');
+check(
+	'the brainless org resolves',
+	(await orgIds(['dave-work'])).includes('org2'),
+	'the first brain in a new org would be unplaceable'
+);
+check(
+	'...while listAccessibleBrains cannot see it at all',
+	!(await listAccessibleBrains(db, ['dave-work'])).some((b) => b.org_id === 'org2')
+);
+check('a suspended org is never offered', !(await orgIds(['dave-work'])).includes('org3'));
+
+// Erin belongs to ONE org and it is suspended, so listAccessibleOrgs returns nothing
+// for her and she is indistinguishable from a brand-new user by that call alone.
+// orgContext must not read that as "first touch" and provision her a fresh personal
+// org: suspension has to keep meaning suspension.
+check(
+	'someone whose only org is suspended resolves to no orgs',
+	(await orgIds(['erin'])).length === 0
+);
+check(
+	'...but is NOT a new user: the suspended org is still findable',
+	(await firstSuspendedOrg(db, ['erin']))?.org_id === 'org3',
+	'a suspension would auto-provision a replacement org instead of erroring'
+);
+check(
+	'...and someone with a working org reports no suspension',
+	(await firstSuspendedOrg(db, ['dave-home'])) === null
+);
+check(
+	'a genuinely new user reports none either',
+	(await firstSuspendedOrg(db, ['nobody'])) === null
+);
+
+console.log('\n...and it unions across a person’s linked identities');
+check(
+	'the personal identity alone reaches only Northwind',
+	JSON.stringify(await orgIds(['dave-home'])) === JSON.stringify(['org1'])
+);
+check(
+	'the PERSON reaches the work org too',
+	JSON.stringify(await orgIds(await linkedUserIds(db, 'dave-home'))) ===
+		JSON.stringify(['org1', 'org2'])
+);
+check(
+	'a shared org resolves at the HIGHEST of the two identities’ roles',
+	(await listAccessibleOrgs(db, await linkedUserIds(db, 'dave-home'))).find(
+		(o) => o.org.org_id === 'org1'
+	)?.role === 'admin',
+	'the person was demoted to their weaker identity’s role'
+);
+check(
+	'...and each org appears once, not once per identity',
+	(await listAccessibleOrgs(db, await linkedUserIds(db, 'dave-home'))).length === 2
+);
+
+console.log('\nmatchOrg: naming an org the way a human would');
+const daveOrgs = await listAccessibleOrgs(db, await linkedUserIds(db, 'dave-home'));
+check('by display name', matchOrg(daveOrgs, 'Contoso Group').org?.org.org_id === 'org2');
+check('case-insensitively', matchOrg(daveOrgs, 'contoso group').org?.org.org_id === 'org2');
+check('by GitHub owner', matchOrg(daveOrgs, 'contoso-io').org?.org.org_id === 'org2');
+check('by substring', matchOrg(daveOrgs, 'ontoso').org?.org.org_id === 'org2');
+check('a miss returns neither an org nor candidates', !matchOrg(daveOrgs, 'acme').org);
+check('an empty handle never silently picks one', !matchOrg(daveOrgs, '   ').org);
+
+console.log('\nchooseOrg: where a new brain actually gets written');
+const threw = (fn: () => unknown) => {
+	try {
+		fn();
+		return false;
+	} catch {
+		return true;
+	}
+};
+check('a named handle wins', chooseOrg(daveOrgs, { org: 'Contoso Group' }).org.org_id === 'org2');
+check(
+	'...over the org the caller is working in',
+	chooseOrg(daveOrgs, { org: 'Contoso Group', activeOrgId: 'org1' }).org.org_id === 'org2'
+);
+check(
+	'with no handle, the org the caller is working in wins',
+	chooseOrg(daveOrgs, { activeOrgId: 'org2' }).org.org_id === 'org2'
+);
+check(
+	'with neither, the first org the query returned',
+	chooseOrg(daveOrgs, {}).org.org_id === 'org1'
+);
+// The stability the old `LIMIT 1` lacked lives in the QUERY's ORDER BY, not in the
+// pick, so it is asserted there: chooseOrg only promises to take the head.
+check(
+	'...and that order is the oldest org first, deterministically',
+	JSON.stringify(daveOrgs.map((o) => o.org.org_id)) === JSON.stringify(['org1', 'org2'])
+);
+check(
+	'an active brain in an org the caller lost access to falls back, not throws',
+	chooseOrg(daveOrgs, { activeOrgId: 'org-gone' }).org.org_id === 'org1'
+);
+check(
+	'an unmatched handle throws rather than picking one',
+	threw(() => chooseOrg(daveOrgs, { org: 'acme' }))
+);
+check(
+	'an AMBIGUOUS handle throws too (never silently takes the first)',
+	threw(() => chooseOrg(daveOrgs, { org: 'org' })),
+	'"org" is a substring of both org ids and must not resolve'
+);
+check(
+	'no orgs at all throws',
+	threw(() => chooseOrg([], {}))
+);
+
+console.log('\nresolveOrgForPerson: the whole decision, against the real schema');
+// This is what the Worker's orgContext calls. It lives here rather than inline in the
+// Worker so the empty case is drivable, because empty is where the subtlety is:
+// "brand new" and "your only org is suspended" look identical to listAccessibleOrgs
+// and must not produce the same outcome.
+const threwAsync = async (p: Promise<unknown>) => {
+	try {
+		await p;
+		return false;
+	} catch {
+		return true;
+	}
+};
+const daveIds = await linkedUserIds(db, 'dave-home');
+check(
+	'a person with no membership anywhere returns null (the caller provisions)',
+	(await resolveOrgForPerson(db, ['nobody'])) === null
+);
+check(
+	'someone whose only org is suspended THROWS instead of returning null',
+	await threwAsync(resolveOrgForPerson(db, ['erin'])),
+	'a suspension would be provisioned past, replacing their org with a new one'
+);
+check(
+	'a named org resolves across linked identities',
+	(await resolveOrgForPerson(db, daveIds, { org: 'Contoso Group' }))?.org.org_id === 'org2'
+);
+check(
+	'an unknown org name throws rather than falling back to a default',
+	await threwAsync(resolveOrgForPerson(db, daveIds, { org: 'acme' })),
+	'writing into the wrong org is worse than refusing'
+);
+
+// The active-org lookup is a real query in the Worker, so it must not run when it
+// cannot change the answer. Counting the thunk pins that, and pins that it IS used
+// when it can.
+let thunkCalls = 0;
+const activeOrgId = async () => {
+	thunkCalls++;
+	return 'org2';
+};
+check(
+	'with no handle, the org the caller is working in wins',
+	(await resolveOrgForPerson(db, daveIds, { activeOrgId }))?.org.org_id === 'org2' &&
+		thunkCalls === 1
+);
+thunkCalls = 0;
+await resolveOrgForPerson(db, daveIds, { org: 'Contoso Group', activeOrgId });
+check('...and is not even asked for when a handle was named', thunkCalls === 0);
+thunkCalls = 0;
+check(
+	'...nor when the person belongs to exactly one org',
+	(await resolveOrgForPerson(db, ['dave-home'], { activeOrgId }))?.org.org_id === 'org1' &&
+		thunkCalls === 0
 );
 
 console.log(

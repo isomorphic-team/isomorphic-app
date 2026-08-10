@@ -195,6 +195,12 @@ function contextFor(p: Persona) {
 // ---------------------------------------------------------------------------
 // registerAppTool delegates to server.registerTool, so one method covers both.
 type Handler = (args: Record<string, unknown>) => Promise<{ isError?: boolean; content?: unknown }>;
+
+// What each org-scope resolution was asked for. The `org` argument only does anything
+// if the tool actually forwards it. A tool that accepts it and drops it silently
+// writes into the wrong organization, which no role assertion would catch.
+const orgAsks: ({ requires?: Role; org?: string } | undefined)[] = [];
+
 function toolsFor(p: Persona): Map<string, Handler> {
 	const handlers = new Map<string, Handler>();
 	const server = {
@@ -207,9 +213,26 @@ function toolsFor(p: Persona): Map<string, Handler> {
 	registerAnalyticsTools(server, getContext);
 	registerBrainTools(server, {
 		getContext,
-		orgContext: async (opts?: { requires?: Role }) => {
+		orgContext: async (opts?: { requires?: Role; org?: string }) => {
+			orgAsks.push(opts);
 			assertRole(p.orgRole, opts?.requires);
-			return { octokit, org: {} as never, role: p.orgRole, db, actorUserId: p.userId };
+			return {
+				octokit,
+				org: {
+					org_id: 'org1',
+					name: 'Northwind',
+					model: 'customer',
+					installation_id: 1,
+					brain_owner: 'northwind',
+					github_org_login: 'northwind',
+					created_by: 'u-boss',
+					created_at: '2026-01-01',
+					suspended_at: null
+				},
+				role: p.orgRole,
+				db,
+				actorUserId: p.userId
+			};
 		},
 		listBrains: async (): Promise<AccessibleBrain[]> =>
 			[
@@ -225,6 +248,24 @@ function toolsFor(p: Persona): Map<string, Handler> {
 				role: p.role,
 				org_role: p.orgRole
 			})) as AccessibleBrain[],
+		// Two orgs, one of which holds no brain at all: the case the brains payload has
+		// to carry, since the widget cannot derive it from a list of brains.
+		listOrgs: async () =>
+			[
+				{ org_id: 'org1', name: 'Northwind', brain_owner: 'northwind' },
+				{ org_id: 'org2', name: 'Contoso Group', brain_owner: 'contoso-io' }
+			].map((o) => ({
+				role: p.orgRole,
+				org: {
+					...o,
+					model: 'customer',
+					installation_id: 1,
+					github_org_login: o.brain_owner,
+					created_by: 'u-boss',
+					created_at: '2026-01-01',
+					suspended_at: null
+				}
+			})),
 		activeBrainId: () => 'northwind/main',
 		setActiveBrain: () => {},
 		invalidateConfig: () => {},
@@ -288,6 +329,66 @@ for (const [tool, args] of ORG_MUTATIONS) {
 	const r = await attempt(orgBoss, tool, args);
 	check(`${tool} admits ${orgBoss.label}`, r.outcome === 'allowed', r.detail);
 }
+
+// ===========================================================================
+console.log('\nThe `org` argument reaches org-scope resolution');
+// ===========================================================================
+// Both tools that place a brain must resolve the org the CALLER named. Neither can
+// route through a brain handle: the org waiting for its first repo has no brain to
+// name, which is precisely the org someone is trying to connect one into. Asserted on
+// what resolution was ASKED for, since the stub short-circuits before any write.
+// The last thing orgContext was asked for, after running one tool call.
+async function askFrom(tool: string, args: Record<string, unknown>) {
+	orgAsks.length = 0;
+	await attempt(orgBoss, tool, args);
+	return orgAsks.at(-1);
+}
+
+const connectAsk = await askFrom('connect_brain', {
+	repo: 'northwind/newrepo',
+	org: 'Contoso Group'
+});
+check(
+	'connect_brain forwards `org` to orgContext',
+	connectAsk?.org === 'Contoso Group',
+	`got ${JSON.stringify(connectAsk)}`
+);
+check('...and still gates it at admin', connectAsk?.requires === 'admin');
+
+const createAsk = await askFrom('create_brain', { name: 'Scratch', org: 'Contoso Group' });
+check(
+	'create_brain forwards `org` to orgContext',
+	createAsk?.org === 'Contoso Group',
+	`got ${JSON.stringify(createAsk)}`
+);
+check('...and still gates it at editor', createAsk?.requires === 'editor');
+
+const bareAsk = await askFrom('create_brain', { name: 'Scratch' });
+check(
+	'omitting `org` leaves the choice to resolution rather than forcing one',
+	bareAsk !== undefined && bareAsk.org === undefined
+);
+
+// The widget's org picker reads this and cannot compute it: an org with no brains has
+// no brain row to derive it from, so if the payload drops it the "connect a repo" flow
+// silently loses exactly the org someone is trying to connect their first repo into.
+const brainsPayload = (await toolsFor(orgBoss).get('brains')!({})) as {
+	structuredContent?: { orgs?: { orgId: string }[] };
+};
+check(
+	'the brains payload carries the orgs a brain can be added to',
+	JSON.stringify(brainsPayload.structuredContent?.orgs?.map((o) => o.orgId)) ===
+		JSON.stringify(['org1', 'org2']),
+	`got ${JSON.stringify(brainsPayload.structuredContent?.orgs)}`
+);
+const viewerPayload = (await toolsFor(lurker).get('brains')!({})) as {
+	structuredContent?: { orgs?: unknown[] };
+};
+check(
+	'...and offers none to someone who admins no org',
+	viewerPayload.structuredContent?.orgs?.length === 0,
+	'a picker that offers an org the click would refuse'
+);
 
 // ===========================================================================
 console.log('\nBRAIN-scope tools gate on the BRAIN role, never the org role');

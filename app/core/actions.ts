@@ -47,6 +47,8 @@ import {
 	setActiveBrain,
 	brainList,
 	setBrainList,
+	orgList,
+	setOrgList,
 	setFeatures,
 	applyPolicy,
 	resetPolicy,
@@ -157,6 +159,7 @@ function handleToolResult(result: CallToolResult) {
 function brainsViewFromSc(sc: Record<string, unknown>): View {
 	const brains = Array.isArray(sc.brains) ? (sc.brains as BrainRow[]) : [];
 	const active = String(sc.active ?? activeBrain?.id ?? '');
+	orgsFromSc(sc);
 	if (brains.length) {
 		setBrainList(brains);
 		const a = brains.find((b) => b.id === active);
@@ -189,8 +192,10 @@ function ensureBrainList(): Promise<void> {
 			};
 			if (!Array.isArray(sc.brains)) throw new Error('brains: no list in the result');
 			setBrainList(sc.brains);
-			// Which optional server surfaces exist (today: the org Analytics tab). Rides
-			// this call because it is the one the app always makes on open.
+			// Which orgs a brain can be added to, and which optional server surfaces
+			// exist (today: the org Analytics tab). Both ride this call because it is
+			// the one the app always makes on open.
+			orgsFromSc(res.structuredContent ?? {});
 			setFeatures(sc.features);
 			const a = sc.brains.find((b) => b.id === (sc.active ?? activeBrain?.id));
 			if (a) setActiveBrain({ id: a.id, label: a.label });
@@ -237,20 +242,34 @@ function isNoBrain(s: string): boolean {
 	return /don.?t have a brain yet/i.test(s);
 }
 
-// The orgs a caller can add a brain to: deduped from the brains they already admin.
-// Derived from the brains list rather than the ACTIVE brain, so sitting in a brain
-// you only view doesn't hide an org you own. Shared by the brains view's action gate
-// and by the add-brain flow itself, which must agree on "can you add" or the header
-// offers a button that opens an empty picker.
+// The orgs a caller can add a brain to. The `brains` payload carries them, because an
+// org holding NO brain yet cannot be derived from a list of brains, and that is
+// precisely the org someone is trying to connect a first repo into.
+//
+// The derivation survives as the fallback for a server that predates the `orgs` field
+// (an older Worker against a newer bundle), where dropping the picker entirely would
+// be worse than offering the orgs that can still be named.
 function manageableOrgs(brains: BrainRow[]): OrgTarget[] {
+	if (orgList) return orgList;
 	const out: OrgTarget[] = [];
 	const seen = new Set<string>();
 	for (const b of brains) {
 		if (!b.canManage || !b.orgId || seen.has(b.orgId)) continue;
 		seen.add(b.orgId);
-		out.push({ orgId: b.orgId, orgLabel: b.orgLabel ?? b.label, brainId: b.id });
+		out.push({ orgId: b.orgId, orgLabel: b.orgLabel ?? b.label });
 	}
 	return out;
+}
+
+// The orgs field off a `brains` result. Absent (old Worker) leaves the store alone so
+// the derived fallback stays in play; present-but-empty is a real answer and is kept.
+function orgsFromSc(sc: Record<string, unknown>): void {
+	if (!Array.isArray(sc.orgs)) return;
+	setOrgList(
+		(sc.orgs as Record<string, unknown>[])
+			.filter((o) => o && typeof o.orgId === 'string')
+			.map((o) => ({ orgId: String(o.orgId), orgLabel: String(o.orgLabel ?? o.orgId) }))
+	);
 }
 
 // ---------- flows ----------

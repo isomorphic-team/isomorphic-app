@@ -4,7 +4,7 @@
 // modules reassign are exposed with a setter (a `let` live-binding can be READ across
 // modules but only WRITTEN in its home).
 
-import type { View, BrainRow, BrainPolicy, BrowseData } from './types.ts';
+import type { View, BrainRow, BrainPolicy, BrowseData, OrgTarget } from './types.ts';
 import {
 	DEFAULT_BRAIN_CONFIG,
 	PATH_ROLES,
@@ -26,11 +26,18 @@ function setBrowseCache(v: BrowseData | null): void {
 // the switcher needs it — the switcher only appears when there are 2+ brains.
 let activeBrain: { id: string; label: string } | null = null;
 let brainList: BrainRow[] | null = null;
+// The orgs the caller can add a brain to, as the SERVER reports them. Derived from
+// the brains list this could never include an org holding no brains yet, which is
+// exactly the org someone is trying to put a first repo into.
+let orgList: OrgTarget[] | null = null;
 function setActiveBrain(v: { id: string; label: string } | null): void {
 	activeBrain = v;
 }
 function setBrainList(v: BrainRow[] | null): void {
 	brainList = v;
+}
+function setOrgList(v: OrgTarget[] | null): void {
+	orgList = v;
 }
 function applyBrainContext(sc: Record<string, unknown>): void {
 	const ab = sc.activeBrain as { id?: string; label?: string } | undefined;
@@ -163,8 +170,10 @@ export {
 	setBrowseCache,
 	activeBrain,
 	brainList,
+	orgList,
 	setActiveBrain,
 	setBrainList,
+	setOrgList,
 	applyBrainContext,
 	features,
 	setFeatures,
