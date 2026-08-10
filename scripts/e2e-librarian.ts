@@ -607,6 +607,35 @@ try {
 	check('a missing file reports what was looked for', r.isError, r.text);
 	check('no phantom "folder has no files"', !/it has no files/.test(r.text), r.text);
 
+	// ══ delete_page on a non-page FILE: same routing, plus a reference check. ═══
+	await store.commitFiles(repoArgs, {
+		message: 'add an asset to delete',
+		writes: [{ path: 'wiki/assets/logo.svg', content: '<svg/>\n' }]
+	});
+	await call('write_page', {
+		path: 'wiki/brand.md',
+		title: 'Brand',
+		content: '# Brand\n\n![Logo](assets/logo.svg)\n'
+	});
+	await settledHead();
+
+	r = await call('delete_page', { path: 'wiki/nope/.gitkeep' });
+	check('delete_page: a missing file says what it looked for', r.isError, r.text);
+	check('delete_page: no phantom "no folder found"', !/No folder/.test(r.text), r.text);
+
+	before = await commitCount();
+	r = await call('delete_page', { path: 'wiki/assets/logo.svg' });
+	check('delete_page deletes a non-page file', !r.isError, r.text);
+	check('delete_page warns that a page still embeds it', /wiki\/brand\.md/.test(r.text), r.text);
+	await assertOneCommit('delete_page file', before);
+	check(
+		'the file is gone',
+		(await eventually(
+			() => fileText('wiki/assets/logo.svg'),
+			(t) => t === null
+		)) === null
+	);
+
 	// The brain is still internally consistent after the move.
 	r = await call('validate', {});
 	check('validate clean after move_page (folder)', /no broken links/.test(r.text), r.text);

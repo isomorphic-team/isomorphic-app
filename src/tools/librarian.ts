@@ -57,6 +57,7 @@ import {
 	type PageFields,
 	type BrokenLink,
 	ensureFresh,
+	inboundFileRefs,
 	loadResolvedGraph,
 	backlinksTo,
 	searchIndex,
@@ -1076,13 +1077,75 @@ async function moveFileWrite(
 }
 
 // The folder-path form of delete_page: delete a whole subtree and everything under it.
-async function deleteFolderWrite(ctx: BrainContext, args: { path: string }) {
+// The non-markdown file form of delete_page, and the twin of moveFileWrite: before
+// this, a path like "wiki/assets/logo.png" routed to the FOLDER deleter and came
+// back as "No folder found" about a file that existed.
+//
+// Inbound references are checked differently to a page's. A link to a non-page file
+// is not an edge in the resolved page graph, so inboundRefs cannot see it, and
+// deleting an embedded image would otherwise break every page showing it in silence.
+async function deleteFileWrite(ctx: BrainContext, head: Head, args: { path: string }) {
+	const { store, repoArgs, config, author, db, brainId } = ctx;
+	const path = args.path.trim().replace(/^\/+/, '');
+	if (isSourcePath(path, config))
+		return fail(`"${path}" is source material — it can't be deleted.`);
+	if (isToolMaintained(path, config)) return fail(`"${path}" is maintained automatically.`);
+	if (!isContentPath(path, config))
+		return fail(`"${path}" is outside this brain's editable content.`);
+
+	const { truncated } = await ensureFresh(db, store, repoArgs, brainId, config);
+	const refs = await inboundFileRefs(db, brainId, path);
+
+	const today = todayIso();
+	const writes: { path: string; content: string }[] = [];
+	const log = await store.readFile(repoArgs, logPathOf(config));
+	if (log) {
+		writes.push({
+			path: logPathOf(config),
+			content: insertLogEntry(log.content, today, `Deleted \`${path}\`.`)
+		});
+	}
+
+	const outcome = await store.commitOrPR(repoArgs, {
+		writeMode: config.writeMode,
+		defaultBranch: config.defaultBranch,
+		author,
+		autoMerge: config.autoMerge,
+		mergeMethod: config.mergeMethod,
+		message: `Delete ${path}\n\nDeletion logged.`,
+		writes,
+		deletes: [path],
+		head,
+		branchPrefix: 'isomorphic/delete',
+		prTitle: `Delete ${path}`,
+		prBody: `Delete \`${path}\`. Proposed via the Isomorphic brain tools.`
+	});
+
+	const refNote = refs.length
+		? `\n\nHeads up — ${refs.length} page(s) still link to it:\n${refs
+				.slice(0, 20)
+				.map((p) => `- ${p}`)
+				.join('\n')}${refs.length > 20 ? `\n…and ${refs.length - 20} more.` : ''}`
+		: '';
+	return landed(
+		outcome,
+		`Deleted "${path}". The deletion was logged.${refNote}${truncationNote(truncated)}`,
+		`Proposed deleting "${path}".${refNote}${truncationNote(truncated)}`
+	);
+}
+
+async function deleteFolderWrite(
+	ctx: BrainContext,
+	args: { path: string },
+	// Already fetched by the router that decided this was a folder (see move's twin).
+	pre?: { head: Head; tree: TreeEntry[] }
+) {
 	const { store, repoArgs, config, author } = ctx;
 	const folder = normFolderPath(args.path);
 	if (!folder) return fail('Give a folder path, e.g. "wiki/Projects".');
 
-	const head = await store.getHead(repoArgs);
-	const tree = await store.listTree(repoArgs, head, { extension: '*' });
+	const head = pre?.head ?? (await store.getHead(repoArgs));
+	const tree = pre?.tree ?? (await store.listTree(repoArgs, head, { extension: '*' }));
 	const doomed = tree.filter((e) => e.path.startsWith(`${folder}/`));
 	if (doomed.length === 0) return fail(`No folder "${folder}" found.`);
 	for (const e of doomed) {
@@ -1482,19 +1545,30 @@ export function registerLibrarianTools(
 		{
 			title: 'Delete a page or folder',
 			description:
-				'Remove a page (or a whole folder and everything under it) from the wiki. The deletion is logged. If other pages still link into what you deleted, they are listed so the references can be cleaned up. Pass a folder path (no .md extension) to delete an entire subtree.',
+				'Remove a page (or a whole folder and everything under it) from the wiki. The deletion is logged. If other pages still link into what you deleted, they are listed so the references can be cleaned up. Pass a folder path (no .md extension) to delete an entire subtree, or the path of a non-page file (an image, a folder marker) to delete just that file.',
 			inputSchema: {
 				brain: brainArg,
 				path: z
 					.string()
-					.describe('Page or folder path, e.g. "wiki/projects/old.md" or "wiki/Projects".')
+					.describe(
+						'Page, folder, or file path, e.g. "wiki/projects/old.md", "wiki/Projects", or "wiki/assets/logo.png".'
+					)
 			}
 		},
 		async ({ path, brain }) => {
 			const ctx = await getContext({ requires: 'editor', brain });
-			// A path without a .md extension is a folder: delete the whole subtree.
+			// A path without a .md extension is a folder OR a non-page file; the tree
+			// says which, for the same reason it does in move_page. Guessing "folder"
+			// answered "No folder found" about files that were plainly there.
 			if (!path.trim().replace(/^\/+/, '').endsWith('.md')) {
-				return deleteFolderWrite(ctx, { path });
+				const cleaned = path.trim().replace(/^\/+/, '').replace(/\/+$/, '');
+				const head = await ctx.store.getHead(ctx.repoArgs);
+				const tree = await ctx.store.listTree(ctx.repoArgs, head, { extension: '*' });
+				if (tree.some((e) => e.path === cleaned))
+					return deleteFileWrite(ctx, head, { path: cleaned });
+				if (tree.some((e) => e.path.startsWith(`${cleaned}/`)))
+					return deleteFolderWrite(ctx, { path }, { head, tree });
+				return fail(`No file or folder "${cleaned}" found.`);
 			}
 			const { store, repoArgs, config, author } = ctx;
 			if (isSourcePath(path, config))

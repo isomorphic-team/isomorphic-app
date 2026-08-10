@@ -561,6 +561,30 @@ export async function loadResolvedGraph(
 	return { pages, edges, broken };
 }
 
+// Pages whose markdown links point at a NON-PAGE file: an embedded image, a PDF,
+// anything that isn't `.md`. loadResolvedGraph drops these deliberately, because
+// they are not edges in the PAGE graph and reporting them as broken would be wrong.
+// But deleting the file they point at still breaks them, and delete_page's whole
+// contract is that nothing dangles without being said out loud. One query plus an
+// in-memory resolve, the same shape loadResolvedGraph already pays for.
+// Call ensureFresh first.
+export async function inboundFileRefs(
+	db: D1Database,
+	brainId: string,
+	targetPath: string
+): Promise<string[]> {
+	const res = await db
+		.prepare(`SELECT source, raw_target FROM brain_links WHERE brain_id = ?1 AND kind = 'md'`)
+		.bind(brainId)
+		.all<{ source: string; raw_target: string }>();
+	const sources = new Set<string>();
+	for (const l of res.results) {
+		if (l.source === targetPath) continue;
+		if (resolveRelative(l.source, l.raw_target) === targetPath) sources.add(l.source);
+	}
+	return [...sources].sort();
+}
+
 // The brain's content pages with display titles, straight from the index (no link
 // resolution). Backs list_pages / browse_brain so the file tree can show titles.
 // Call ensureFresh first so the list reflects the current repo.
