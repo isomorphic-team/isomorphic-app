@@ -26,6 +26,7 @@ import {
 } from './core/host.ts';
 import {
 	handleToolResult,
+	ensureBrainList,
 	openBrowse,
 	openGraph,
 	openActivity,
@@ -397,7 +398,16 @@ function connectToHost() {
 			const ctx = app.getHostContext();
 			if (ctx) applyHostContext(ctx); // may auto-request fullscreen (see applyHostContext)
 			setTimeout(() => {
-				if (currentView.kind === 'loading') openBrowse();
+				// SELF-BOOT: no tool result arrived, so open the tree ourselves — and fetch
+				// the nav's own data too, which handleToolResult would otherwise have been
+				// the only thing to ask for. Without this the app came up with no brain
+				// list: no brain picker, and the Analytics row silently absent because
+				// `features` rides on that same payload. Safe to fire only here, where by
+				// definition no result is coming to name a brain first.
+				if (currentView.kind === 'loading') {
+					void ensureBrainList();
+					openBrowse();
+				}
 			}, 1200);
 		})
 		.catch((e) => {
