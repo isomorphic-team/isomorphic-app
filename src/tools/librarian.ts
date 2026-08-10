@@ -43,6 +43,7 @@ import {
 	type WriteOutcome,
 	type CommitAuthor,
 	type BrainStore,
+	type FileWrite,
 	MAX_SCAN_PAGES
 } from '../lib/brain-repo.ts';
 import {
@@ -65,6 +66,7 @@ import {
 	loadAllFields,
 	loadPageContents
 } from '../lib/brain-index.ts';
+import { isMediaPath, mediaTypeOf } from '../lib/media.ts';
 import { tryRenderViews, type ViewDeps } from '../lib/views.ts';
 import { isToolPagePath, parseToolDef } from '../lib/custom-tools.ts';
 import { isFolderNoteName } from '../lib/view-directives.ts';
@@ -1035,19 +1037,37 @@ async function moveFileWrite(
 		return fail(`Can't move to "${newPath}" — it's outside this brain's editable content.`);
 	if (tree.some((e) => e.path === newPath))
 		return fail(`Can't move to "${newPath}" — a file already exists there.`);
-
-	const file = await store.readFile(repoArgs, path);
-	if (!file) return fail(`"${path}" does not exist.`);
-	// Blobs reach us base64-decoded as UTF-8 text, so anything that isn't text has
-	// already lost bytes by the time we could write it back. Refuse rather than
-	// commit a corrupted copy over the original.
-	if (/[\u0000\uFFFD]/.test(file.content))
+	// Renaming a `.png` to `.jpg` converts nothing; it leaves a file whose extension
+	// lies about its bytes, and the extension is what every later reader goes on.
+	if (isMediaPath(path) && mediaTypeOf(path) !== mediaTypeOf(newPath))
 		return fail(
-			`"${path}" isn't a text file, so it can't be moved through these tools without corrupting it. Move it with git, or on github.com.`
+			`Can't move ${path} to ${newPath} — that changes the file type, which would break how it is read.`
 		);
 
+	// Read as BYTES, not as text. Blobs reach readFile base64-decoded as UTF-8, so a
+	// PNG arrives already mangled and writing it back would commit a corrupted copy
+	// over the original — which is why this used to refuse a non-text file outright.
+	// readBinary plus a base64 FileWrite carries the bytes through untouched, so an
+	// attachment now moves like anything else.
+	const file = await store.readBinary(repoArgs, path);
+	if (!file) return fail(`"${path}" does not exist.`);
+
+	// Repoint what points AT it. This was skipped on the grounds that non-`.md`
+	// targets sit outside the resolved graph. They no longer do — assetEdges records
+	// them — so a moved attachment no longer rots every page displaying it.
+	const { pages, truncated } = await fetchInboundLinkers(ctx, head, path);
+	let repointedPages = 0;
+
 	const today = todayIso();
-	const writes = [{ path: newPath, content: file.content }];
+	const writes: FileWrite[] = [{ path: newPath, content: file.contentBase64, encoding: 'base64' }];
+	for (const page of pages) {
+		if (isToolMaintained(page.path, config)) continue;
+		const md = rewriteMdLinks(page.content, page.path, path, newPath);
+		if (md.changed > 0) {
+			writes.push({ path: page.path, content: md.body });
+			repointedPages++;
+		}
+	}
 	const log = await store.readFile(repoArgs, logPathOf(config));
 	if (log) {
 		writes.push({
@@ -1062,7 +1082,7 @@ async function moveFileWrite(
 		author,
 		autoMerge: config.autoMerge,
 		mergeMethod: config.mergeMethod,
-		message: `Move ${path} -> ${newPath}`,
+		message: `Move ${path} -> ${newPath}\n\nRepointed ${repointedPages} page(s).`,
 		writes,
 		deletes: [path],
 		head,
@@ -1072,8 +1092,8 @@ async function moveFileWrite(
 	});
 	return landed(
 		outcome,
-		`Moved "${path}" to ${newPath}. It isn't a page, so no links needed repointing; the change was logged.`,
-		`Proposed moving "${path}" to ${newPath}.`
+		`Moved "${path}" to ${newPath}. Links in ${repointedPages} page(s) were repointed; the change was logged.${truncationNote(truncated)}`,
+		`Proposed moving "${path}" to ${newPath}; links in ${repointedPages} page(s) repointed.${truncationNote(truncated)}`
 	);
 }
 

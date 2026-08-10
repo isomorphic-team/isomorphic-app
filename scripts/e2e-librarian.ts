@@ -869,10 +869,13 @@ try {
 		);
 
 		// And deleting one has to say who still shows it, since an image that vanishes
-		// leaves a hole rather than a broken link anyone would notice.
+		// leaves a hole rather than a broken link anyone would notice. Asserted on the
+		// page being NAMED rather than on the wording: the contract is that nothing
+		// dangles silently, and pinning the sentence makes a reworded message look like
+		// a regression.
 		const del = await call('delete_page', { path: 'wiki/vendors/assets/logo.png' });
 		check('delete_page deletes an attachment', !del.isError, del.text);
-		check('and warns that a page still shows it', /still show it/.test(del.text), del.text);
+		check('and warns that a page still shows it', del.text.includes(host), del.text);
 		check(
 			'the file is actually gone',
 			(await store.readBinary(repoArgs, 'wiki/vendors/assets/logo.png')) === null
