@@ -10,6 +10,7 @@ import { history as pmHistory, undo, redo } from 'prosemirror-history';
 import { columnResizing, tableEditing } from 'prosemirror-tables';
 import { editorSchema, parseMarkdown, serializeMarkdown } from '../editor-markdown.ts';
 import { parseFrontmatter } from '../../src/lib/wiki.ts';
+import { ImageNodeView, mediaHandlers, uploadsInFlight } from '../core/editor-media.ts';
 import type { EditorApi } from '../core/types.ts';
 import { callTool, firstText } from '../core/host.ts';
 import { bump, show, brainArgs } from '../core/store.ts';
@@ -275,9 +276,13 @@ function EditorToolbar({ view }: { view: EditorView | null }) {
 
 function MarkdownEditor({
 	initialMarkdown,
+	pagePath,
 	apiRef
 }: {
 	initialMarkdown: string;
+	/** The page being edited: attachments land beside it, and relative image hrefs
+	    resolve against it. */
+	pagePath: string;
 	apiRef: { current: EditorApi | null };
 }) {
 	const hostRef = useRef<HTMLDivElement>(null);
@@ -306,8 +311,13 @@ function MarkdownEditor({
 			: EditorState.create({ schema: editorSchema, plugins });
 		const view = new EditorView(hostRef.current!, {
 			state,
+			// Paste and drop, Obsidian-style: no widget, the editor itself is the target.
+			...mediaHandlers(pagePath),
 			nodeViews: {
-				list_item: (node, v, getPos) => new ListItemView(node, v, getPos)
+				list_item: (node, v, getPos) => new ListItemView(node, v, getPos),
+				// Without this every image in the editor is a broken glyph: the markdown
+				// carries a RELATIVE href and the iframe has no origin serving the brain.
+				image: (node) => new ImageNodeView(node, pagePath)
 			},
 			// bump() re-renders the navbar toolbar so its active states track the selection.
 			dispatchTransaction(tr) {
@@ -341,6 +351,12 @@ function EditView({ state }: { state: { path: string; markdown: string; sha: str
 	const apiRef = useRef<EditorApi | null>(null);
 	const [saving, setSaving] = useState(false);
 	async function save() {
+		// The real guard, not just a disabled button: Save also lives in the navbar, and
+		// a page saved mid-upload links to a file the brain does not have yet.
+		if (uploadsInFlight()) {
+			toast('Still adding an image — try again in a moment.', true);
+			return;
+		}
 		setSaving(true);
 		try {
 			const result = await callTool('write_page', {
@@ -387,19 +403,29 @@ function EditView({ state }: { state: { path: string; markdown: string; sha: str
 		bump();
 	}, [saving, state.path, state.sha]);
 
+	// Re-read on every render; the root subscribes to the store and uploadOne bumps it.
+	const uploading = uploadsInFlight();
+
 	return (
 		<div>
 			<PageProperties fm={frontmatter} />
-			<MarkdownEditor initialMarkdown={body} apiRef={apiRef} />
+			<MarkdownEditor initialMarkdown={body} pagePath={state.path} apiRef={apiRef} />
 			{/* A matching Save at the end for long pages — plain buttons, no boxed footer. */}
 			<div class="mt-8 flex items-center gap-1">
-				<Button variant="subtle" size="sm" onClick={save} disabled={saving}>
-					{saving ? 'Saving…' : 'Save'}
+				{/* Saving is blocked while an attachment is still uploading. The image node
+				    is already in the document, so a save now would commit a page linking to
+				    a file the brain does not have yet. */}
+				<Button variant="subtle" size="sm" onClick={save} disabled={saving || uploading}>
+					{saving ? 'Saving…' : uploading ? 'Adding image…' : 'Save'}
 				</Button>
 				<Button variant="ghost" size="sm" onClick={cancel}>
 					Cancel
 				</Button>
 			</div>
+			{/* One line, not a widget. Obsidian needs no affordance because dragging a file
+			    into a document is desktop muscle memory; an iframe inside a chat client has
+			    not earned that assumption, so it says so once and takes no space. */}
+			<p class="mt-2 text-xs text-muted">Paste or drop an image to add it to this page.</p>
 		</div>
 	);
 }

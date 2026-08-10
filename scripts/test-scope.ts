@@ -31,6 +31,8 @@ import { DatabaseSync } from 'node:sqlite';
 import { assertRole, type Role, type TenantOpts, type AccessibleBrain } from '../src/lib/orgs.ts';
 import { registerMemberTools } from '../src/tools/members.ts';
 import { registerBrainAccessTools } from '../src/tools/brain-access.ts';
+import { registerMediaTools } from '../src/tools/media.ts';
+import { DEFAULT_BRAIN_CONFIG } from '../src/lib/brain-policy.ts';
 import { registerBrainTools } from '../src/tools/brains.ts';
 import { registerAnalyticsTools } from '../src/tools/analytics.ts';
 import type { BrainContext } from '../src/tools/librarian.ts';
@@ -177,7 +179,10 @@ function contextFor(p: Persona) {
 			orgRole: p.orgRole,
 			orgId: 'org1',
 			actorUserId: p.userId,
-			config: {} as never,
+			// The real default config, not an empty object: the content tools run path
+			// predicates against it, and roleOf on a config with no paths throws — which
+			// would read as a denial and quietly turn a real gate test into a no-op.
+			config: DEFAULT_BRAIN_CONFIG,
 			db,
 			brainId: 'northwind/main',
 			activeBrain: { id: 'northwind/main', label: 'Main' }
@@ -204,6 +209,7 @@ function toolsFor(p: Persona): Map<string, Handler> {
 	const getContext = contextFor(p);
 	registerMemberTools(server, getContext);
 	registerBrainAccessTools(server, getContext);
+	registerMediaTools(server, getContext);
 	registerAnalyticsTools(server, getContext);
 	registerBrainTools(server, {
 		getContext,
@@ -400,6 +406,63 @@ check(
 check(
 	'share_brain refuses an org OWNER who holds only viewer on this brain',
 	await denies(orgBoss, 'share_brain', { email: 'lurker@example.com', access: 'viewer' })
+);
+
+// ===========================================================================
+console.log('\nAttachments: writing needs editor, reading does not');
+// ===========================================================================
+// A 1x1 PNG, so attach_media gets past validateAttachment and actually reaches its
+// gate rather than failing on the payload.
+const PNG_1PX =
+	'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==';
+const ATTACH_ARGS = {
+	data: PNG_1PX,
+	filename: 'logo.png',
+	mime_type: 'image/png',
+	page: 'wiki/vendors/acme.md'
+};
+
+// The content tools run against the store, which this file replaces with a proxy that
+// throws on contact. So "reached the store" IS the signal that the gate admitted the
+// caller: it got past authorization and every in-handler guard, and died on the one
+// thing a no-network test refuses to provide. Asserting on that marker keeps the
+// admit direction real, rather than settling for only testing refusals.
+const STORE_MARKER = 'reached in a no-network test';
+async function passesGate(p: Persona, tool: string, args: Record<string, unknown> = {}) {
+	const r = await attempt(p, tool, args);
+	return r.outcome === 'allowed' || r.detail.includes(STORE_MARKER);
+}
+
+check(
+	'attach_media refuses a plain viewer',
+	(await denies(lurker, 'attach_media', ATTACH_ARGS)) &&
+		!(await passesGate(lurker, 'attach_media', ATTACH_ARGS))
+);
+check('attach_media admits an editor', await passesGate(writer, 'attach_media', ATTACH_ARGS));
+// The mirror of the share_brain invariant: uploading is a brain act, so the brain
+// admin does it even as an org viewer, and org rank alone does not confer it.
+check(
+	'attach_media admits a brain admin who is only an org viewer',
+	await passesGate(sharedAdmin, 'attach_media', ATTACH_ARGS)
+);
+check(
+	'attach_media refuses an org OWNER who holds only viewer on this brain',
+	!(await passesGate(orgBoss, 'attach_media', ATTACH_ARGS))
+);
+// Reading an attachment is a read: gating it on editor would mean a viewer could
+// open a page and see a broken image on it.
+check(
+	'read_media is open to a plain viewer',
+	await passesGate(lurker, 'read_media', { path: 'wiki/vendors/assets/logo.png' })
+);
+// And it must not serve anything outside the brain's content, whatever the role.
+check(
+	'read_media refuses a path outside the content roots',
+	await denies(sharedAdmin, 'read_media', { path: 'raw/secret.png' })
+);
+check(
+	'read_media refuses a non-media path rather than guessing',
+	await denies(sharedAdmin, 'read_media', { path: 'wiki/vendors/acme.md' })
 );
 
 // ===========================================================================

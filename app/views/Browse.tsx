@@ -20,7 +20,7 @@ import {
 	isEditablePath,
 	bump
 } from '../core/store.ts';
-import { navigateTo, refreshBrowse } from '../core/actions.ts';
+import { navigateTo, openAsset, refreshBrowse } from '../core/actions.ts';
 import { FOLDER_NOTE_NAMES } from '../core/util.ts';
 import { toast, askConfirm } from '../core/toast.tsx';
 import { Button } from '../ui/index.ts';
@@ -28,6 +28,7 @@ import {
 	ChevronIcon,
 	FolderIcon,
 	FileIcon,
+	ImageIcon,
 	PencilIcon,
 	TrashIcon,
 	NewNoteIcon,
@@ -75,10 +76,16 @@ const treeCtl: {
 // list; a FOLDER is hidden iff no content page could live under it (source/
 // ignored/dot-named) — so a content folder persisted only by a `.gitkeep` still
 // shows, while raw/ appears only with "show hidden" on.
-function buildTree(paths: string[], hidden: string[], sortDesc: boolean): TreeNode[] {
+function buildTree(
+	paths: string[],
+	assets: string[],
+	hidden: string[],
+	sortDesc: boolean
+): TreeNode[] {
 	const hiddenSet = new Set(hidden);
+	const assetSet = new Set(assets);
 	const root: TreeNode = { name: '', path: '', dir: true, children: [], hidden: false };
-	for (const p of [...paths, ...hidden]) {
+	for (const p of [...paths, ...assets, ...hidden]) {
 		const parts = p.split('/').filter(Boolean);
 		let node = root;
 		parts.forEach((part, i) => {
@@ -93,8 +100,13 @@ function buildTree(paths: string[], hidden: string[], sortDesc: boolean): TreeNo
 					children: [],
 					hidden: isFile
 						? hiddenSet.has(path)
-						: isHiddenName(part) || !isEditablePath(`${path}/x.md`)
+						: isHiddenName(part) || !isEditablePath(`${path}/x.md`),
+					// An assets/ folder is not hidden: it holds content, and the folder
+					// predicate below would otherwise mark it hidden for containing no
+					// page (no .md can live in it).
+					asset: isFile ? assetSet.has(path) : undefined
 				};
+				if (!isFile && assets.some((a) => a.startsWith(`${path}/`))) child.hidden = false;
 				node.children.push(child);
 			}
 			node = child;
@@ -421,32 +433,39 @@ function TreeItem({
 	}
 
 	// ---- file row ----
-	// Non-page files (.gitkeep, .isomorphic.json, source assets) render as inert
-	// rows: nothing to open, drag, or act on — they're just visible under "show
-	// hidden" so the repo's full shape is browsable.
+	// Three kinds of file row. A PAGE opens the viewer and can be dragged. An
+	// ATTACHMENT opens the asset view (and is draggable too, so it can be filed into
+	// another folder like anything else). Everything else — .gitkeep,
+	// .isomorphic.json, source material — stays inert: visible under "show hidden" so
+	// the repo's full shape is browsable, but with nothing to open or act on.
 	const isPage = node.path.endsWith('.md');
+	const isAsset = !!node.asset;
+	const openable = isPage || isAsset;
+	const open = () => (isPage ? navigateTo(node.path) : isAsset ? openAsset(node.path) : undefined);
 	const pad = `${6 + depth * 14 + 18}px`;
 	const dim = node.hidden || !editable;
 	return (
 		<div class="group flex items-center rounded pr-2 hover:bg-chip">
 			{/* The file icon is the drag handle; clicking it (or the name) opens the page. */}
 			<span
-				draggable={editable && isPage}
-				onDragStart={() => isPage && actions.onDragStart(node.path, false)}
+				draggable={editable && openable}
+				onDragStart={() => openable && actions.onDragStart(node.path, false)}
 				onDragEnd={actions.onDragEnd}
-				onClick={() => isPage && navigateTo(node.path)}
+				onClick={open}
 				style={{ paddingLeft: pad }}
-				class={`flex shrink-0 items-center py-1 ${editable && isPage ? 'cursor-grab' : ''}`}
+				class={`flex shrink-0 items-center py-1 ${editable && openable ? 'cursor-grab' : ''}`}
 			>
-				<FileIcon />
+				{isAsset ? <ImageIcon /> : <FileIcon />}
 			</span>
 			<button
 				type="button"
-				onClick={() => isPage && navigateTo(node.path)}
-				class={`flex min-w-0 flex-1 items-center gap-1.5 py-1 pl-1.5 text-left text-sm ${isPage ? 'hover:text-accent' : 'cursor-default'}`}
+				onClick={open}
+				class={`flex min-w-0 flex-1 items-center gap-1.5 py-1 pl-1.5 text-left text-sm ${openable ? 'hover:text-accent' : 'cursor-default'}`}
 			>
 				<span class={`truncate ${dim ? 'text-muted' : ''}`}>
-					{titleByPath[node.path] ?? node.name.replace(/\.md$/, '')}
+					{/* An attachment keeps its extension: the filename IS its identity, and
+					    stripping it would make logo.png and logo.svg the same row. */}
+					{titleByPath[node.path] ?? (isAsset ? node.name : node.name.replace(/\.md$/, ''))}
 				</span>
 				{!editable && <LockIcon />}
 			</button>
@@ -476,19 +495,24 @@ function TreeItem({
 function FileTree({
 	paths,
 	titleByPath = {},
+	assets = [],
 	hidden = [],
 	needsConfig = false,
 	focus
 }: {
 	paths: string[];
 	titleByPath?: Record<string, string>;
+	assets?: string[];
 	hidden?: string[];
 	needsConfig?: boolean;
 	focus?: string;
 }) {
 	const [sortDesc, setSortDesc] = useState(false);
 	const [showHidden, setShowHidden] = useState(false);
-	const tree = useMemo(() => buildTree(paths, hidden, sortDesc), [paths, hidden, sortDesc]);
+	const tree = useMemo(
+		() => buildTree(paths, assets, hidden, sortDesc),
+		[paths, assets, hidden, sortDesc]
+	);
 	const allFolders = useMemo(() => collectFolders(tree), [tree]);
 
 	// Start collapsed — a fully-expanded tree is very tall (and inline would fill the
@@ -818,6 +842,7 @@ declare module '../core/view-registry.ts' {
 		browse: {
 			paths: string[];
 			titleByPath?: Record<string, string>;
+			assets?: string[];
 			hidden?: string[];
 			needsConfig?: boolean;
 			// Folder to reveal on open (breadcrumb click on a folder with no folder note).
@@ -832,6 +857,7 @@ export default defineView(
 		<FileTree
 			paths={v.paths}
 			titleByPath={v.titleByPath}
+			assets={v.assets}
 			hidden={v.hidden}
 			needsConfig={v.needsConfig}
 			focus={v.focus}

@@ -9,7 +9,7 @@ import { z } from 'zod';
 import type { BrainContext } from './librarian.ts';
 import type { TenantOpts } from '../lib/orgs.ts';
 import { ensureFresh, listIndexedPages, detectNeedsConfig } from '../lib/brain-index.ts';
-import { listHiddenPaths, pathPolicyOf, isContentPath } from '../lib/brain-config.ts';
+import { listNonPagePaths, pathPolicyOf, isContentPath } from '../lib/brain-config.ts';
 import { tryRenderViews } from '../lib/views.ts';
 
 export function registerCoreTools(
@@ -44,9 +44,10 @@ export function registerCoreTools(
 			if (!prefix) {
 				await ensureFresh(db, store, repoArgs, brainId, config);
 				const pages = await listIndexedPages(db, brainId);
-				// Everything that's NOT a content page (system files, .gitkeep markers,
-				// source, the log): the app shows these only when "show hidden" is on.
-				const hidden = await listHiddenPaths(store, repoArgs, config);
+				// Attachments are listed separately from genuinely-hidden files: an image
+				// somebody uploaded is content, and burying it behind "show hidden" beside
+				// .gitkeep markers meant the brain stored things it would not show you.
+				const { assets, hidden } = await listNonPagePaths(store, repoArgs, config);
 				// Empty could mean a fresh brain OR an adopted repo whose content isn't under
 				// the configured roots — flag the latter so the app can offer to auto-configure.
 				// Only content-AREA files count as "something to show" here: the hidden list
@@ -80,6 +81,7 @@ export function registerCoreTools(
 					// brain this is.
 					structuredContent: {
 						pages,
+						assets,
 						hidden,
 						needsConfig,
 						config: pathPolicyOf(config),

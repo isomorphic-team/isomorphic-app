@@ -31,6 +31,18 @@ const FileIcon = () => (
 	</svg>
 );
 
+// An attachment. Same 16-box and muted tone as FileIcon so the tree reads as one
+// set of rows; the mountain-and-sun silhouette is what makes an image row
+// scannable at a glance without adding colour.
+const ImageIcon = () => (
+	<svg viewBox="0 0 16 16" width="15" height="15" class="shrink-0 text-muted" aria-hidden="true">
+		<path
+			fill="currentColor"
+			d="M1.5 2.5A1.5 1.5 0 013 1h10a1.5 1.5 0 011.5 1.5v11A1.5 1.5 0 0113 15H3a1.5 1.5 0 01-1.5-1.5zm1.5 0v8.1l3.1-3.1a1 1 0 011.4 0l2.2 2.2 1.3-1.3a1 1 0 011.4 0l1.1 1.1V2.5zM11 4a1.2 1.2 0 100 2.4A1.2 1.2 0 0011 4z"
+		/>
+	</svg>
+);
+
 const PencilIcon = () => (
 	<svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true">
 		<path
@@ -365,6 +377,7 @@ export {
 	ChevronIcon,
 	FolderIcon,
 	FileIcon,
+	ImageIcon,
 	PencilIcon,
 	TrashIcon,
 	CloseIcon,

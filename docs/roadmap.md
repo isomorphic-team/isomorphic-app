@@ -342,6 +342,113 @@ The MCP spec has a `resources` primitive distinct from tools: read-only, URI-add
 - Token-size guards: refuse to serve resources above a per-resource cap (or annotate `mimeType` and size so clients can choose). One user attaching 30 wiki pages should not silently blow the context window.
 - Privacy via path: filter private paths out of `resources/list` results, mirroring the existing path-as-ACL convention.
 
+# TODO: media attachments (upload, view, and pass images through MCP). **DONE 2026-08-05**
+
+Images (and PDFs) live in a brain, render in the app, and can be handed to Claude to
+look at. Full design: [`docs/design/media-attachments.md`](design/media-attachments.md).
+
+**The constraint that set the shape: the model cannot hand us bytes.** Tool arguments
+are JSON produced by the model, and a model shown an image holds visual tokens, not
+base64. No host passes a conversation attachment into a tool call. So "Claude, save
+this screenshot" cannot be made to work by any tool design, and the upload surface is
+the **app iframe** (a real browser context with a real file input). The conversation is
+where images are read, not written. `attach_media`'s own description says so, because
+that is where an agent hunting for the tool will look.
+
+What shipped:
+
+- ~~**Binary storage.** `FileWrite` grew an `encoding`; binary becomes a blob referenced
+  by sha, because `createTree`'s inline `content` decodes as UTF-8 and silently mangles
+  a PNG. Both write paths now build trees through one shared helper. The fs adapter got
+  the same rule plus a rollback fix (it captured prior contents as a utf8 _string_, so
+  undoing a half-written bundle would have corrupted any binary it restored).~~
+- ~~**Attachments in the link graph.** `MD_LINK_RE` always matched `![](…)`, but
+  `loadResolvedGraph` dropped non-`.md` targets, so `backlinksTo` reported an image as
+  referenced by nobody — `move_page` would repoint nothing and `delete_page` would call
+  a still-used image unreferenced. Asset links now resolve into a separate `assetEdges`
+  list (separate because the graph view builds nodes from `pages`). They still never
+  count as `broken`: the index has no asset inventory, and guessing makes `validate` cry
+  wolf.~~
+- ~~**Tools:** `attach_media`, `read_media`, plus attachment branches in `move_page` /
+  `delete_page` rather than media twins. Both treated "no `.md`" as "folder", so an image
+  path would have been handled as a _subtree_ — the asset check runs first in both.~~
+- ~~**App:** images hydrate as `data:` URIs after render (the iframe CSP is
+  `img-src 'self' data:`, and a private brain repo has no URL to point at); drop-target
+  upload with client-side downscale to a 2576px long edge; attachments browsable in the
+  file tree with their own asset view showing preview, metadata, and which pages use it.~~
+- ~~**One rule for link classification** (`src/lib/links.ts`). It used to be inlined in
+  `loadResolvedGraph`, so nothing outside D1 could reuse it and the dev harness carried a
+  divergent copy — which made the preview report "no references" for an image that was
+  plainly on a page. A preview wrong in a _different direction_ than prod is worse than
+  no preview: it manufactures bugs and conceals real ones.~~
+
+Decisions worth not relitigating: **data URIs, not a CSP allowlist** (brain repos are
+private, so raw GitHub URLs need expiring signed redirects to a host you would not
+naturally declare); **5 MiB cap** (git keeps every version forever in a repo the customer
+clones); **co-located `assets/`** (so `move_page` on a folder carries its pictures, and
+plain markdown readers resolve the link); **images embed, documents link** (`![](…)` on a
+PDF is a broken image everywhere, including github.com).
+
+Not built, in rough priority order:
+
+- **Phase 0 host verification, still open.** Whether a sandboxed MCP App iframe in Claude
+  permits `<input type="file">` and drag-drop. Everything above stands either way, but if
+  it is blocked the upload _entry point_ needs rethinking. Verify before building further
+  on it.
+- Making the dev harness run the real server (its own section below).
+- An orphan advisory in `validate` (an attachment nothing references is invisible in the
+  app yet still in every clone forever), a brain-wide `assets/` option for shared images,
+  URL ingest (`attach_media` fetching a URL the model found), returning PDFs to the model
+  (unverified whether this host turns an embedded resource blob into a document block),
+  and retention/pruning.
+
+# TODO: make `pnpm app:dev` run the real server, not a reimplementation of it
+
+The dev harness (`dev/harness.ts`) loads the REAL app bytes and drives them over the
+REAL `AppBridge`, so the app side is production code. But it answers every tool call
+itself, from fixtures. That second half is roughly 1,400 lines reimplementing the
+server, and it is the largest remaining source of "works in the preview, differs in
+prod".
+
+It bit us on 2026-08-05. The harness scanned links with its own regex that only counted
+`.md` targets, so the asset view reported "no page shows this file" for an image that
+was plainly on a page — while production answered correctly. **A preview that is wrong
+in a different direction than prod is worse than no preview: it manufactures bugs that
+do not exist and conceals ones that do.** The immediate fix extracted the rule to
+`src/lib/links.ts` so both call the same function, but that is one rule out of many;
+`list_pages`, `read_page`, `find_inbound_links`, `search_pages`, the write tools and the
+members/analytics surfaces all still have a hand-written twin in there.
+
+Why the stubs exist: the harness runs **in a browser tab**, and the real read path needs
+a `BrainStore` (octokit or `node:fs`) plus D1 for the content index. Neither exists in a
+browser, so it imports the pure libs it can (`renderViews`, `effectiveBrainRole`,
+`classifyMdLink`, `resolveRelative`) and fakes the rest.
+
+That reason expired with the local-first work (**DONE 2026-08-04**). `pnpm try <folder>`
+already serves the real MCP tools over a git repo on disk, with a real store and D1 over
+`node:sqlite`. So the harness no longer needs to fake a server — it needs to _talk_ to
+one:
+
+- `scripts/app-dev.ts` boots a `pnpm try` server on a scratch brain seeded from
+  `dev/fixtures.json`, and the browser-side harness forwards `callServerTool` to it over
+  HTTP instead of answering from a `switch`.
+- The AppBridge/iframe/host-context half stays exactly as it is. That part is already
+  faithful and is not what drifts.
+- Delete the tool `switch` and the fixture-shaped duplicates of server logic. The seeded
+  brain becomes ordinary markdown files in a temp directory, which is also easier to
+  extend than a JSON blob.
+
+Payoff: the preview exercises the same handlers, gates, and index as prod, so divergence
+stops being a category of bug. It also makes the harness the natural place to reproduce a
+reported issue. Cost: `app:dev` gains a server process and a scratch directory, and the
+offline-with-no-setup property has to survive (`pnpm try` is already offline, so it
+should).
+
+Keep one escape hatch: some previews are _states_, not data — `#nobrains`, the
+"adopted repo, no content configured" empty state, a brain with 3,000 pages. Those want
+seeded fixtures or flags, not a live server, so the harness should still be able to
+force a state without pretending to be a server.
+
 # TODO: derived views & non-destructive sync
 
 Full PRD: [`design/derived-views-and-sync-prd.md`](design/derived-views-and-sync-prd.md).

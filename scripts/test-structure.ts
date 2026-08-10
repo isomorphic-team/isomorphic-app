@@ -431,6 +431,7 @@ Body text.
 			{ source: 'a.md', target: 'b.md', kind: 'md' as const, cnt: 2 },
 			{ source: 'a.md', target: 'b.md', kind: 'wiki' as const, cnt: 3 }
 		],
+		fileEdges: [],
 		broken: []
 	};
 	const refs = backlinksTo(graph, 'b.md');

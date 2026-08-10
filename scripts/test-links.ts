@@ -22,6 +22,7 @@ import { githubStore } from '../src/lib/brain-repo.ts';
 import { applyMigrations } from '../src/local/d1-sqlite.ts';
 import { DEFAULT_BRAIN_CONFIG, type BrainConfig } from '../src/lib/brain-policy.ts';
 import { extractLinks, rewriteWikiLinks, wikilinkKey } from '../src/lib/wiki.ts';
+import { classifyMdLink } from '../src/lib/links.ts';
 import { brokenLinkReport } from '../src/tools/librarian.ts';
 
 let failures = 0;
@@ -359,6 +360,42 @@ console.log('\nLink resolution — how a [[wikilink]] finds its page\n');
 		report
 	);
 	check('report: nothing broken produces nothing', brokenLinkReport([], pages).length === 0);
+}
+
+// ---- what a MARKDOWN link means, as a pure rule ----
+//
+// classifyMdLink is the single authority: the content index calls it per stored
+// link and the dev harness calls it while scanning fixtures, so a disagreement
+// here is a preview that manufactures bugs prod does not have. It was only ever
+// covered THROUGH loadResolvedGraph, which cannot reach the cases D1 never stores
+// (an external href, an unresolvable target) — so the rule gets its own checks.
+{
+	console.log('\nmarkdown link classification');
+	const cfg = DEFAULT_BRAIN_CONFIG;
+	const src = 'wiki/vendors/acme.md';
+	const known = (p: string) => p === 'wiki/index.md';
+	const kindOf = (href: string) => classifyMdLink(src, href, cfg, known).kind;
+
+	check('a link to a known page is an edge', kindOf('../index.md') === 'page');
+	check('a link to a missing page is broken', kindOf('./nope.md') === 'broken');
+	check('an image is a file reference', kindOf('./assets/logo.png') === 'file');
+	// The widening: the app cannot preview a .csv, but the brain can still lose it.
+	check('so is a non-media content file', kindOf('./data/pricing.csv') === 'file');
+	check('source material is ignored, never broken', kindOf('../../raw/notes.md') === 'ignore');
+
+	// Extraction already drops http/mailto/#, so these only arrive via a caller that
+	// does its own scanning — which is exactly what the harness is. tel: and data:
+	// are NOT filtered upstream, so this is the only thing standing between a
+	// `data:` URI and resolveRelative.
+	for (const href of ['https://example.com/a.md', 'mailto:a@example.com', '#section']) {
+		check(`external href is ignored: ${href}`, kindOf(href) === 'ignore');
+	}
+	check('a tel: link is ignored', kindOf('tel:+15550100') === 'ignore');
+	check('a data: URI is ignored', kindOf('data:text/plain;base64,AAAA') === 'ignore');
+
+	// A hidden file is not content anyone links to on purpose, and treating
+	// `.gitkeep` as a reference would make every scaffolded folder look load-bearing.
+	check('a dotfile is not a file reference', kindOf('./.gitkeep') === 'ignore');
 }
 
 console.log(failures === 0 ? '\nAll link checks passed.' : `\n${failures} check(s) failed.`);
