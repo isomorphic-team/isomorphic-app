@@ -226,3 +226,295 @@ export function attachmentMarkdown(pagePath: string, assetPath: string, alt: str
 export function isEmbeddable(path: string): boolean {
 	return (mediaTypeOf(path) ?? '').startsWith('image/');
 }
+
+// ---------------------------------------------------------------------------
+// URL ingest: the one path by which a MODEL can attach a file.
+//
+// The rest of this file assumes bytes originate in the app, because a model shown an
+// image holds visual tokens rather than base64. A URL is the exception: the model
+// names a location, the server does the downloading, and the bytes never pass through
+// the model's output. Issue #20 is what this answers.
+//
+// Fetching a caller-supplied URL from the server makes the Worker a fetch client for
+// anyone with `editor` on a brain, so the guards below are the security boundary, not
+// hygiene. Their honest limit: they check the URL, and a public hostname that resolves
+// to a private address defeats a hostname check. Cloudflare's fetch egresses to the
+// public internet rather than into any network of ours, and the local runtime binds to
+// loopback, so that residual case reaches nothing either deployment owns.
+// ---------------------------------------------------------------------------
+
+// Type -> canonical extension, inverted from MEDIA_TYPES with first-wins, so
+// image/jpeg yields `jpg` and neither map can drift from the other.
+const EXTENSION_FOR_TYPE: Readonly<Record<string, string>> = (() => {
+	const out: Record<string, string> = {};
+	for (const [ext, type] of Object.entries(MEDIA_TYPES)) if (!(type in out)) out[type] = ext;
+	return out;
+})();
+
+export function extensionForType(mimeType: string): string | undefined {
+	return EXTENSION_FOR_TYPE[mimeType];
+}
+
+// A Content-Type header reduced to a bare type: parameters dropped, lowercased, and
+// `image/jpg` folded onto `image/jpeg` (not a registered type, but widely served).
+export function normalizeContentType(header: string | null | undefined): string {
+	const bare = (header ?? '').split(';')[0].trim().toLowerCase();
+	return bare === 'image/jpg' ? 'image/jpeg' : bare;
+}
+
+// Hostnames that name something local no matter what they resolve to.
+const BLOCKED_HOSTS: ReadonlySet<string> = new Set([
+	'localhost',
+	'metadata',
+	'metadata.google.internal',
+	'instance-data'
+]);
+
+const BLOCKED_SUFFIXES = ['.local', '.localhost', '.internal', '.home.arpa'];
+
+function isPrivateIPv4(host: string): boolean {
+	const parts = host.split('.');
+	if (parts.length !== 4) return false;
+	const n = parts.map((p) => Number(p));
+	if (n.some((x) => !Number.isInteger(x) || x < 0 || x > 255)) return false;
+	const [a, b] = n;
+	return (
+		a === 0 || // this network
+		a === 10 || // private
+		a === 127 || // loopback
+		(a === 169 && b === 254) || // link-local, incl. cloud metadata at 169.254.169.254
+		(a === 172 && b >= 16 && b <= 31) || // private
+		(a === 192 && b === 168) || // private
+		(a === 192 && b === 0) || // protocol assignments
+		(a === 100 && b >= 64 && b <= 127) || // carrier-grade NAT
+		(a === 198 && (b === 18 || b === 19)) || // benchmarking
+		a >= 224 // multicast and reserved
+	);
+}
+
+// An IPv6 address as its eight 16-bit groups, or null if it is not one. Expanded
+// rather than pattern-matched because the URL parser rewrites what it is given:
+// `[::ffff:127.0.0.1]` arrives as `[::ffff:7f00:1]`, so matching on the dotted form
+// would miss the mapped-loopback spelling entirely.
+function ipv6Groups(raw: string): number[] | null {
+	let text = raw.replace(/^\[|\]$/g, '').toLowerCase();
+	if (!text.includes(':')) return null;
+	// A trailing dotted quad is the low 32 bits written the other way round.
+	const dotted = /(\d+\.\d+\.\d+\.\d+)$/.exec(text);
+	if (dotted) {
+		const p = dotted[1].split('.').map(Number);
+		if (p.some((n) => !Number.isInteger(n) || n < 0 || n > 255)) return null;
+		const hi = ((p[0] << 8) | p[1]).toString(16);
+		const lo = ((p[2] << 8) | p[3]).toString(16);
+		text = `${text.slice(0, dotted.index)}${hi}:${lo}`;
+	}
+	const halves = text.split('::');
+	if (halves.length > 2) return null;
+	const toGroups = (s: string) => (s === '' ? [] : s.split(':').map((g) => parseInt(g, 16)));
+	const head = toGroups(halves[0]);
+	const tail = halves.length === 2 ? toGroups(halves[1]) : [];
+	const groups =
+		halves.length === 2
+			? [...head, ...Array(Math.max(0, 8 - head.length - tail.length)).fill(0), ...tail]
+			: head;
+	if (groups.length !== 8) return null;
+	if (groups.some((g) => !Number.isInteger(g) || g < 0 || g > 0xffff)) return null;
+	return groups;
+}
+
+function isPrivateIPv6(host: string): boolean {
+	const g = ipv6Groups(host);
+	if (!g) return false;
+	if (g.every((x) => x === 0)) return true; // :: unspecified
+	if (g.slice(0, 7).every((x) => x === 0) && g[7] === 1) return true; // ::1 loopback
+	// IPv4-mapped (::ffff:a.b.c.d) is an IPv4 destination wearing IPv6 syntax, so it
+	// gets the IPv4 ranges rather than a second copy of them.
+	if (g.slice(0, 5).every((x) => x === 0) && g[5] === 0xffff) {
+		return isPrivateIPv4([g[6] >> 8, g[6] & 0xff, g[7] >> 8, g[7] & 0xff].join('.'));
+	}
+	if ((g[0] & 0xfe00) === 0xfc00) return true; // fc00::/7 unique local
+	if ((g[0] & 0xffc0) === 0xfe80) return true; // fe80::/10 link-local
+	return false;
+}
+
+// Why this URL cannot be fetched, or null when it can be. Split out from the fetch so
+// every redirect hop is checked by the same rule the original URL was.
+export function fetchUrlProblem(raw: string): string | null {
+	let url: URL;
+	try {
+		url = new URL(raw.trim());
+	} catch {
+		return `"${raw}" is not a valid URL. Give a full https:// address.`;
+	}
+	if (url.protocol !== 'https:') {
+		return `Attachments can only be fetched over https, and "${raw}" is ${url.protocol.replace(':', '')}.`;
+	}
+	if (url.username || url.password) {
+		return 'The URL carries credentials. Attachments are fetched from public URLs only.';
+	}
+	// The WHATWG parser normalizes decimal, octal, and hex IPv4 forms to dotted quads,
+	// so http://2130706433/ arrives here as 127.0.0.1 and the range check below sees it.
+	const host = url.hostname.toLowerCase();
+	if (BLOCKED_HOSTS.has(host) || BLOCKED_SUFFIXES.some((s) => host.endsWith(s))) {
+		return `"${host}" is a local address. Attachments are fetched from public URLs only.`;
+	}
+	if (isPrivateIPv4(host) || isPrivateIPv6(host)) {
+		return `"${host}" is a private address. Attachments are fetched from public URLs only.`;
+	}
+	return null;
+}
+
+// The filename a URL implies: its last path segment, percent-decoded. '' when the path
+// names no file, in which case the caller derives a name from the served type.
+export function filenameFromUrl(raw: string): string {
+	let url: URL;
+	try {
+		url = new URL(raw);
+	} catch {
+		return '';
+	}
+	const last = url.pathname.split('/').filter(Boolean).pop() ?? '';
+	try {
+		return decodeURIComponent(last).trim();
+	} catch {
+		return last.trim();
+	}
+}
+
+// Base64 without Buffer (Worker) and without blowing the argument limit: 32 KiB of
+// char codes per spread, which a 5 MiB file crosses 160 times.
+export function base64FromBytes(bytes: Uint8Array): string {
+	const CHUNK = 0x8000;
+	let binary = '';
+	for (let i = 0; i < bytes.length; i += CHUNK) {
+		binary += String.fromCharCode(...bytes.subarray(i, i + CHUNK));
+	}
+	return btoa(binary);
+}
+
+export interface FetchedAttachment {
+	data: string; // base64, no data: prefix
+	bytes: number;
+	mimeType: string;
+	filename: string;
+}
+
+const MAX_REDIRECTS = 3;
+const FETCH_TIMEOUT_MS = 15_000;
+
+// Read a response body, stopping the moment it exceeds `limit`. Content-Length is
+// checked first because an honest server saves the download entirely, but a header is
+// a claim: this is the check that holds when the claim is absent or false.
+async function readCapped(res: Response, limit: number): Promise<Uint8Array | { error: string }> {
+	const tooBig = {
+		error: `The file is larger than the ${formatBytes(limit)} limit. Resize or compress it first, or attach a smaller version.`
+	};
+	if (!res.body) {
+		const buf = new Uint8Array(await res.arrayBuffer());
+		return buf.byteLength > limit ? tooBig : buf;
+	}
+	const reader = res.body.getReader();
+	const chunks: Uint8Array[] = [];
+	let total = 0;
+	for (;;) {
+		const { done, value } = await reader.read();
+		if (done) break;
+		if (!value) continue;
+		total += value.byteLength;
+		if (total > limit) {
+			await reader.cancel().catch(() => {});
+			return tooBig;
+		}
+		chunks.push(value);
+	}
+	const out = new Uint8Array(total);
+	let at = 0;
+	for (const chunk of chunks) {
+		out.set(chunk, at);
+		at += chunk.byteLength;
+	}
+	return out;
+}
+
+// Download an attachment the caller named by URL. Redirects are followed by hand so
+// that each hop passes fetchUrlProblem: `redirect: 'follow'` would validate the first
+// URL and then let a 302 point anywhere.
+//
+// `fetchImpl` is injectable so the golden test can drive every branch without network.
+export async function fetchRemoteAttachment(
+	raw: string,
+	opts: { filename?: string; fetchImpl?: typeof fetch } = {}
+): Promise<FetchedAttachment | { error: string }> {
+	const doFetch = opts.fetchImpl ?? fetch;
+	let current = raw.trim();
+	let res: Response | undefined;
+
+	for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
+		const problem = fetchUrlProblem(current);
+		if (problem) return { error: problem };
+		let hopRes: Response;
+		try {
+			hopRes = await doFetch(current, {
+				redirect: 'manual',
+				signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+				headers: { accept: 'image/*,application/pdf' }
+			});
+		} catch (e) {
+			return { error: `Could not fetch ${current}: ${e instanceof Error ? e.message : String(e)}` };
+		}
+		if (hopRes.status >= 300 && hopRes.status < 400) {
+			const location = hopRes.headers.get('location');
+			if (!location) return { error: `${current} redirected without saying where.` };
+			try {
+				current = new URL(location, current).toString();
+			} catch {
+				return { error: `${current} redirected to something that is not a URL.` };
+			}
+			continue;
+		}
+		res = hopRes;
+		break;
+	}
+	if (!res) return { error: `${raw} redirected more than ${MAX_REDIRECTS} times.` };
+	if (!res.ok) {
+		return {
+			error: `Fetching ${raw} returned ${res.status}${res.statusText ? ` ${res.statusText}` : ''}.`
+		};
+	}
+
+	const declared = Number(res.headers.get('content-length'));
+	if (Number.isFinite(declared) && declared > MAX_ATTACHMENT_BYTES) {
+		return {
+			error: `${raw} is ${formatBytes(declared)}, over the ${formatBytes(MAX_ATTACHMENT_BYTES)} limit. Resize or compress it first, or attach a smaller version.`
+		};
+	}
+
+	const body = await readCapped(res, MAX_ATTACHMENT_BYTES);
+	if ('error' in body) return body;
+	if (body.byteLength === 0) return { error: `${raw} returned an empty file.` };
+
+	// The served type and the name have to agree, the same rule validateAttachment
+	// applies to an upload. A URL that answers with an HTML login wall or error page is
+	// the common case this catches, and it catches it before anything is committed.
+	const served = normalizeContentType(res.headers.get('content-type'));
+	let filename = (opts.filename ?? '').trim() || filenameFromUrl(current);
+	let mimeType = mediaTypeOf(filename) ?? '';
+
+	if (!mimeType) {
+		const ext = served ? extensionForType(served) : undefined;
+		if (!ext) {
+			const what = served ? `is served as ${served}` : 'does not say what type it is';
+			return {
+				error: `${raw} ${what} and its name gives no usable extension, so there is nothing to store it as. Supported: ${[...new Set(Object.values(MEDIA_TYPES))].sort().join(', ')}.`
+			};
+		}
+		filename = `${filename || 'attachment'}.${ext}`;
+		mimeType = served;
+	} else if (served && served !== mimeType) {
+		return {
+			error: `${raw} is served as ${served} but is named like ${mimeType}. Pass an explicit \`path\` with the right extension if the server is mislabelling it.`
+		};
+	}
+
+	return { data: base64FromBytes(body), bytes: body.byteLength, mimeType, filename };
+}

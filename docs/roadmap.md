@@ -417,9 +417,49 @@ Not built, in rough priority order:
 - Making the dev harness run the real server (its own section below).
 - An orphan advisory in `validate` (an attachment nothing references is invisible in the
   app yet still in every clone forever), a brain-wide `assets/` option for shared images,
-  URL ingest (`attach_media` fetching a URL the model found), returning PDFs to the model
-  (unverified whether this host turns an embedded resource blob into a document block),
-  and retention/pruning.
+  returning PDFs to the model (unverified whether this host turns an embedded resource
+  blob into a document block), and retention/pruning.
+- **Attaching a file the agent MADE.** URL ingest (below) covers anything with a public
+  address; it does not cover bytes that exist only on the agent's own disk, which is the
+  literal case in issue #20 (a PDF page rendered to PNG and cropped). The candidate is a
+  two-step upload: a call returning a short-lived signed URL, the agent POSTs the bytes
+  out-of-band, the token redeems them. Verify first, in the Phase 0 shape: whether an
+  agent sandbox can POST to the Worker at all. The reporter's sandbox had egress
+  restrictions that would decide this either way.
+
+# TODO: URL ingest for attachments. **DONE 2026-08-10**
+
+`attach_media` takes `url` as an alternative to `data`: the server downloads the file, so
+the bytes never cross the model's output. This is the answer to issue #20, where an agent
+could find, fetch, crop and compress a floor plan and then had no way to hand over 14 KB
+of PNG. It attempted the base64 by hand, mis-transcribed the tail, and failed.
+
+It is a partial answer on purpose. The reported file existed only on the agent's disk, and
+the crop meant even a source handle from another connector would have carried the wrong
+bytes; what `url` buys is the larger population around that case, in one call with no human
+in the loop. It also routes around something the app path cannot: the fetch runs on the
+Worker, so a domain the agent's own sandbox is blocked from is still reachable.
+
+The guards are the work, not the fetch, because this makes the Worker fetch a
+caller-supplied URL for anyone with `editor` on a brain: https only, no credentials in the
+URL, a refused-address list (loopback, private ranges, link-local and therefore cloud
+metadata, the IPv6 spellings including IPv4-mapped, `.local` / `.internal`), redirects
+followed by hand so each hop is re-checked, a `Content-Length` refusal plus a streaming cap
+because a header is only a claim, a served-type/filename agreement check (which mostly
+catches URLs answering with an HTML login wall), and a 15s timeout. All in `src/lib/media.ts`
+with an injected fetch, so `pnpm test:media` covers every branch offline.
+
+Same change, unrelated half: **`read_media`'s data URI is now opt-in** (`include_data`, set
+by the app). Hosts put `structuredContent` in front of the model, so every image was also
+being spent as a second and larger copy in text, long enough to truncate the response it
+was attached to. Also issue #20.
+
+Decisions worth not relitigating: **https only** (one rule, no per-deployment allowlist);
+**hostname guards, not a resolver check** (a public name resolving to a private address
+defeats them, and Cloudflare's fetch egresses to the public internet rather than into
+anything of ours, so what remains reaches nothing either deployment owns); **manual
+redirects** (`redirect: 'follow'` validates the first address and then lets a 302 point
+anywhere).
 
 # TODO: make `pnpm app:dev` run the real server, not a reimplementation of it
 

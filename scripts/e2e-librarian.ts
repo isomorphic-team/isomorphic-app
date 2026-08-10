@@ -974,9 +974,22 @@ try {
 		check('read_media returns an image content block', !!img, JSON.stringify(raw.content));
 		check('with the same bytes it stored', img?.data === PNG_1PX);
 		check('and the right mime type', img?.mimeType === 'image/png');
+		// The bytes are for the APP, and only when it asks. A host puts
+		// structuredContent in front of the model next to the content blocks, so
+		// sending them unasked spends a second and larger copy of the image as text
+		// beside the image block it can already see (issue #20).
 		check(
-			'and a data URI for the app to render under the iframe CSP',
-			raw.structuredContent?.dataUri === `data:image/png;base64,${PNG_1PX}`
+			'and NO data URI by default, since the model already has the picture',
+			raw.structuredContent?.dataUri === undefined,
+			JSON.stringify(raw.structuredContent)
+		);
+		const forApp = (await client.callTool({
+			name: 'read_media',
+			arguments: { path: assetPath, include_data: true }
+		})) as { structuredContent?: { dataUri?: string } };
+		check(
+			'include_data returns the data URI the app renders under the iframe CSP',
+			forApp.structuredContent?.dataUri === `data:image/png;base64,${PNG_1PX}`
 		);
 
 		// find_inbound_links has to work on an ATTACHMENT, not just a page. It is what
@@ -1037,6 +1050,33 @@ try {
 			data: PNG_1PX
 		});
 		check('attach_media refuses an unsupported type', badType.isError, badType.text);
+
+		// URL ingest, as far as it can be driven with no network: that the argument is
+		// wired through to the guards at all, and that the guards refuse before any
+		// request goes out. The fetch itself is covered branch by branch against an
+		// injected stub in pnpm test:media.
+		const noSource = await call('attach_media', { page: host, filename: 'a.png' });
+		check('attach_media needs a url or data', noSource.isError, noSource.text);
+		const bothSources = await call('attach_media', {
+			page: host,
+			filename: 'a.png',
+			mime_type: 'image/png',
+			data: PNG_1PX,
+			url: 'https://example.com/a.png'
+		});
+		check('attach_media refuses url and data together', bothSources.isError, bothSources.text);
+		const localUrl = await call('attach_media', { page: host, url: 'https://127.0.0.1/a.png' });
+		check(
+			'attach_media refuses a url pointing at a local address',
+			localUrl.isError && /private address/i.test(localUrl.text),
+			localUrl.text
+		);
+		const insecureUrl = await call('attach_media', { page: host, url: 'http://example.com/a.png' });
+		check(
+			'attach_media refuses a plain-http url',
+			insecureUrl.isError && /https/i.test(insecureUrl.text),
+			insecureUrl.text
+		);
 
 		// Storing must never write over a file that is already there. This is the one
 		// failure mode with no visible symptom: the second upload succeeds, the path is

@@ -27,12 +27,18 @@ import {
 	attachmentMarkdown,
 	attachmentSlug,
 	base64Bytes,
+	base64FromBytes,
 	defaultAttachmentPath,
+	extensionForType,
+	fetchRemoteAttachment,
+	fetchUrlProblem,
+	filenameFromUrl,
 	formatBytes,
 	isEmbeddable,
 	isModelViewable,
 	isValidBase64,
 	mediaTypeOf,
+	normalizeContentType,
 	uniqueAttachmentPath,
 	validateAttachment
 } from '../src/lib/media.ts';
@@ -308,6 +314,263 @@ console.log('\nisAssetPath (what the index will record as an attachment link)');
 
 	const wholeRepo = { paths: parsePaths({ contentRoots: ['.'], sourceRoots: [], logPath: '' }) };
 	check('whole-repo brain: root image is an asset', isAssetPath('logo.png', wholeRepo));
+}
+
+// ---------------------------------------------------------------------------
+// URL ingest. The fetch is driven through an injected stub, so this stays a pure
+// offline test while still covering the branches that matter most: the address
+// guards (this is the one place a caller's string becomes an outbound request from
+// our server) and the size cap (the only thing between a 5 MiB rule and an arbitrary
+// download into a 128 MB isolate).
+// ---------------------------------------------------------------------------
+
+console.log('\nfetchUrlProblem (which addresses the server will fetch)');
+{
+	const ok = (u: string) => fetchUrlProblem(u) === null;
+	check('a public https url is allowed', ok('https://example.com/floor-plan.png'));
+	check('a port is not itself disqualifying', ok('https://example.com:8443/a.png'));
+	check('http is refused', !ok('http://example.com/a.png'));
+	check('file: is refused', !ok('file:///etc/passwd'));
+	check('gibberish is refused', !ok('not a url'));
+	check('credentials in the url are refused', !ok('https://user:pw@example.com/a.png'));
+
+	check('localhost is refused', !ok('https://localhost/a.png'));
+	check('127.0.0.1 is refused', !ok('https://127.0.0.1/a.png'));
+	check('a .local host is refused', !ok('https://printer.local/a.png'));
+	check('a .internal host is refused', !ok('https://vault.internal/a.png'));
+	check('10/8 is refused', !ok('https://10.1.2.3/a.png'));
+	check('172.16/12 is refused', !ok('https://172.20.0.5/a.png'));
+	check('172.32 is NOT in that range', ok('https://172.32.0.5/a.png'));
+	check('192.168/16 is refused', !ok('https://192.168.1.1/a.png'));
+	check('carrier-grade NAT is refused', !ok('https://100.64.0.1/a.png'));
+	// The one address that turns "fetch a URL" into a credential leak on most clouds.
+	check('link-local metadata is refused', !ok('https://169.254.169.254/latest/meta-data/'));
+	// The WHATWG parser normalizes these to dotted quads before we see them, which is
+	// why the range check alone is enough and there is no decoding to do here.
+	check('decimal-encoded 127.0.0.1 is refused', !ok('https://2130706433/a.png'));
+	check('hex-encoded 127.0.0.1 is refused', !ok('https://0x7f000001/a.png'));
+	check('ipv6 loopback is refused', !ok('https://[::1]/a.png'));
+	check('ipv6 unique-local is refused', !ok('https://[fc00::1]/a.png'));
+	check('ipv6 link-local is refused', !ok('https://[fe80::1]/a.png'));
+	check('ipv4-mapped ipv6 loopback is refused', !ok('https://[::ffff:127.0.0.1]/a.png'));
+	check('ipv4-mapped private space is refused', !ok('https://[::ffff:192.168.0.1]/a.png'));
+	check('loopback written out in full is refused', !ok('https://[0:0:0:0:0:0:0:1]/a.png'));
+	check('a public ipv6 address is allowed', ok('https://[2606:4700::1111]/a.png'));
+	check('an ipv4-mapped PUBLIC address is allowed', ok('https://[::ffff:8.8.8.8]/a.png'));
+}
+
+console.log('\nfilename and type derivation');
+{
+	check(
+		'filename from the path',
+		filenameFromUrl('https://e.com/a/floor-plan.png') === 'floor-plan.png'
+	);
+	check('query string is not part of it', filenameFromUrl('https://e.com/a.png?v=2') === 'a.png');
+	check(
+		'percent escapes are decoded',
+		filenameFromUrl('https://e.com/floor%20plan.png') === 'floor plan.png'
+	);
+	check('a bare host has no filename', filenameFromUrl('https://e.com/') === '');
+	check('type -> extension picks jpg over jpeg', extensionForType('image/jpeg') === 'jpg');
+	check('type -> extension for png', extensionForType('image/png') === 'png');
+	check('an unknown type has no extension', extensionForType('text/html') === undefined);
+	check(
+		'content-type parameters are dropped',
+		normalizeContentType('image/png; charset=binary') === 'image/png'
+	);
+	check('content-type case is normalized', normalizeContentType('IMAGE/PNG') === 'image/png');
+	check('image/jpg folds onto image/jpeg', normalizeContentType('image/jpg') === 'image/jpeg');
+	check('a missing content-type is empty', normalizeContentType(null) === '');
+
+	const bytes = new Uint8Array([0, 1, 2, 253, 254, 255]);
+	check(
+		'base64FromBytes round-trips',
+		base64FromBytes(bytes) === Buffer.from(bytes).toString('base64')
+	);
+	// The chunking exists so a multi-MB file does not spread past the argument limit.
+	const big = new Uint8Array(200_000).map((_, i) => i % 251);
+	check(
+		'base64FromBytes survives a large buffer',
+		base64FromBytes(big) === Buffer.from(big).toString('base64')
+	);
+}
+
+console.log('\nfetchRemoteAttachment');
+{
+	const PNG_BYTES = Buffer.from(PNG_1PX, 'base64');
+
+	// A stub standing in for the network. Records what was requested, so a test can
+	// assert the guards ran BEFORE anything went out.
+	function stub(routes: Record<string, () => Response>) {
+		const seen: string[] = [];
+		const impl = (async (input: string | URL) => {
+			const u = String(input);
+			seen.push(u);
+			const make = routes[u];
+			if (!make) throw new Error(`unrouted: ${u}`);
+			return make();
+		}) as unknown as typeof fetch;
+		return { impl, seen };
+	}
+	const png = (headers: Record<string, string> = {}) =>
+		new Response(PNG_BYTES, { status: 200, headers: { 'content-type': 'image/png', ...headers } });
+	const streamed = (chunks: Uint8Array[], headers: Record<string, string> = {}) =>
+		new Response(
+			new ReadableStream({
+				start(c) {
+					for (const chunk of chunks) c.enqueue(chunk);
+					c.close();
+				}
+			}),
+			{ status: 200, headers: { 'content-type': 'image/png', ...headers } }
+		);
+
+	{
+		const { impl } = stub({ 'https://e.com/plan.png': () => png() });
+		const r = await fetchRemoteAttachment('https://e.com/plan.png', { fetchImpl: impl });
+		check('a plain png comes back', !('error' in r), JSON.stringify(r));
+		if (!('error' in r)) {
+			check('bytes match the source', r.data === PNG_1PX);
+			check('size is the decoded length', r.bytes === PNG_BYTES.length);
+			check('type comes from the response', r.mimeType === 'image/png');
+			check('filename comes from the url', r.filename === 'plan.png');
+		}
+	}
+	{
+		// No extension in the URL: the served type has to name the file.
+		const { impl } = stub({ 'https://e.com/download?id=9': () => png() });
+		const r = await fetchRemoteAttachment('https://e.com/download?id=9', { fetchImpl: impl });
+		check(
+			'an extensionless url is named from its content-type',
+			!('error' in r) && r.filename === 'download.png'
+		);
+	}
+	{
+		const { impl } = stub({ 'https://e.com/plan.png': () => png() });
+		const r = await fetchRemoteAttachment('https://e.com/plan.png', {
+			fetchImpl: impl,
+			filename: 'venue-floor-plan.png'
+		});
+		check(
+			'a caller-supplied filename wins',
+			!('error' in r) && r.filename === 'venue-floor-plan.png'
+		);
+	}
+	{
+		// The common failure: a URL that answers with a login wall or an error page.
+		const { impl } = stub({
+			'https://e.com/plan.png': () =>
+				new Response('<html>sign in</html>', {
+					status: 200,
+					headers: { 'content-type': 'text/html' }
+				})
+		});
+		const r = await fetchRemoteAttachment('https://e.com/plan.png', { fetchImpl: impl });
+		check('html served as a .png is refused', 'error' in r, JSON.stringify(r));
+	}
+	{
+		const { impl } = stub({
+			'https://e.com/a': () =>
+				new Response('nope', { status: 404, headers: { 'content-type': 'text/plain' } })
+		});
+		const r = await fetchRemoteAttachment('https://e.com/a', { fetchImpl: impl });
+		check('a 404 is reported, not stored', 'error' in r && r.error.includes('404'));
+	}
+	{
+		const { impl } = stub({
+			'https://e.com/empty.png': () =>
+				new Response(new Uint8Array(0), { status: 200, headers: { 'content-type': 'image/png' } })
+		});
+		const r = await fetchRemoteAttachment('https://e.com/empty.png', { fetchImpl: impl });
+		check('an empty response is refused', 'error' in r);
+	}
+	{
+		// Content-Length tells the truth: refuse without downloading.
+		const { impl } = stub({
+			'https://e.com/huge.png': () => png({ 'content-length': String(MAX_ATTACHMENT_BYTES + 1) })
+		});
+		const r = await fetchRemoteAttachment('https://e.com/huge.png', { fetchImpl: impl });
+		check('an oversized content-length is refused up front', 'error' in r);
+	}
+	{
+		// Content-Length is absent, so only the streaming cap stands between us and the
+		// whole file. Six 1 MiB chunks against a 5 MiB limit.
+		const chunk = new Uint8Array(1024 * 1024);
+		const { impl } = stub({
+			'https://e.com/big.png': () => streamed([chunk, chunk, chunk, chunk, chunk, chunk])
+		});
+		const r = await fetchRemoteAttachment('https://e.com/big.png', { fetchImpl: impl });
+		check('a body that outgrows the cap mid-stream is refused', 'error' in r, JSON.stringify(r));
+	}
+	{
+		const chunk = new Uint8Array(1024);
+		const { impl } = stub({ 'https://e.com/small.png': () => streamed([chunk, chunk]) });
+		const r = await fetchRemoteAttachment('https://e.com/small.png', { fetchImpl: impl });
+		check('a streamed body under the cap is assembled', !('error' in r) && r.bytes === 2048);
+	}
+	{
+		const { impl, seen } = stub({
+			'https://e.com/go': () =>
+				new Response(null, { status: 302, headers: { location: '/real/plan.png' } }),
+			'https://e.com/real/plan.png': () => png()
+		});
+		const r = await fetchRemoteAttachment('https://e.com/go', { fetchImpl: impl });
+		check('a redirect is followed', !('error' in r), JSON.stringify(r));
+		// The name comes from where it landed, not from where it was asked for, or a
+		// redirect through a share link stores the file as "go".
+		check('the filename comes from the final url', !('error' in r) && r.filename === 'plan.png');
+		check('both hops were fetched', seen.length === 2);
+	}
+	{
+		// The reason redirects are followed by hand: `redirect: 'follow'` would check
+		// the first address and then let a 302 point anywhere it liked.
+		const { impl, seen } = stub({
+			'https://e.com/go': () =>
+				new Response(null, {
+					status: 302,
+					headers: { location: 'https://169.254.169.254/latest/meta-data/' }
+				})
+		});
+		const r = await fetchRemoteAttachment('https://e.com/go', { fetchImpl: impl });
+		check('a redirect into link-local is refused', 'error' in r);
+		check('the redirect target was never requested', seen.length === 1, seen.join(', '));
+	}
+	{
+		const { impl } = stub({
+			'https://e.com/a': () => new Response(null, { status: 302, headers: { location: '/b' } }),
+			'https://e.com/b': () => new Response(null, { status: 302, headers: { location: '/c' } }),
+			'https://e.com/c': () => new Response(null, { status: 302, headers: { location: '/d' } }),
+			'https://e.com/d': () => new Response(null, { status: 302, headers: { location: '/e' } }),
+			'https://e.com/e': () => png()
+		});
+		const r = await fetchRemoteAttachment('https://e.com/a', { fetchImpl: impl });
+		check('a redirect chain is bounded', 'error' in r);
+	}
+	{
+		const { impl, seen } = stub({});
+		const r = await fetchRemoteAttachment('https://127.0.0.1/a.png', { fetchImpl: impl });
+		check('a blocked address never reaches the network', 'error' in r && seen.length === 0);
+	}
+	{
+		const { impl } = stub({
+			'https://e.com/x.png': () => {
+				throw new Error('getaddrinfo ENOTFOUND');
+			}
+		});
+		const r = await fetchRemoteAttachment('https://e.com/x.png', { fetchImpl: impl });
+		check('a transport failure is an error, not a throw', 'error' in r);
+	}
+	{
+		// The fetched file still has to satisfy the same rule an upload does, because
+		// the destination path is what every later reader goes by.
+		const { impl } = stub({ 'https://e.com/plan.png': () => png() });
+		const r = await fetchRemoteAttachment('https://e.com/plan.png', { fetchImpl: impl });
+		const problem =
+			'error' in r
+				? 'fetch failed'
+				: validateAttachment({ path: 'wiki/assets/plan.png', mimeType: r.mimeType, data: r.data });
+		check('a fetched attachment passes validateAttachment', problem === null, String(problem));
+	}
 }
 
 console.log(failures === 0 ? '\nAll media checks passed.\n' : `\n${failures} check(s) FAILED.\n`);

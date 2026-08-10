@@ -664,13 +664,17 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
 			const asset = assetsFor(bid)[path];
 			if (!asset) return errText(`No file at "${path}".`);
 			const r = text(`${path} (${asset.mimeType})`);
+			// The bytes are opt-in on the server (they are for the app, not the model),
+			// so they are opt-in here. A harness that hands them over unasked would let
+			// the app forget to ask and still work in dev.
+			const includeData = args?.include_data === true;
 			return {
 				...r,
 				structuredContent: {
 					path,
 					mimeType: asset.mimeType,
 					size: Math.floor((asset.data.length * 3) / 4),
-					dataUri: `data:${asset.mimeType};base64,${asset.data}`
+					...(includeData ? { dataUri: `data:${asset.mimeType};base64,${asset.data}` } : {})
 				}
 			};
 		}
