@@ -30,6 +30,16 @@ Edit anything in `app/` (or `src/lib/wiki.ts`) and the browser live-reloads:
 | `/#brains`                                            | the brain switcher / list       |
 | `/#members`                                           | the org roster                  |
 | `/#access`                                            | the per-brain sharing panel     |
+| `/#cold`                                              | no opening tool result (below)  |
+
+`/#cold` connects and then sends nothing, so the app self-boots: `connectToHost`
+opens the file tree itself 1200ms after the handshake. A real host does this
+whenever the opening result is slower than the handshake or is never replayed
+(a widget re-mounted from scrollback). It is the only path where the app draws a
+brain's tree with no app-tool payload to learn the brain from, so it is where the
+trail's root crumb and its brain picker have to stand on their own: the crumb
+should name the brain (from `list_pages`, which carries `activeBrain`) and its
+picker should load the brain list when opened.
 
 ### Derived-views demo (okf-view)
 

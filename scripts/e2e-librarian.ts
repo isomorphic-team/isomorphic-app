@@ -590,6 +590,116 @@ try {
 		refAfter
 	);
 
+	// ══ move_page (folder path) MERGING into a folder that already exists. ══════
+	// The reported dead end (issue #14): every scaffolded folder carries a
+	// .gitkeep, so the destination always already had one, and the move was
+	// refused over a file the caller never wrote. Archiving into an existing
+	// archive is exactly the case where the destination is never empty.
+	await call('write_page', {
+		path: 'wiki/todos/task-one.md',
+		title: 'Task One',
+		content: '# Task One\n\nOpen.\n'
+	});
+	await call('write_page', {
+		path: 'wiki/archive/todos/old-task.md',
+		title: 'Old Task',
+		content: '# Old Task\n\nDone long ago.\n'
+	});
+	// Folder markers on BOTH sides, written raw: no tool creates a dotfile.
+	await store.commitFiles(repoArgs, {
+		message: 'scaffold folder markers',
+		writes: [
+			{ path: 'wiki/todos/.gitkeep', content: '' },
+			{ path: 'wiki/archive/todos/.gitkeep', content: '' }
+		]
+	});
+	await settledHead();
+
+	before = await commitCount();
+	r = await call('move_page', { path: 'wiki/todos', new_path: 'wiki/archive/todos' });
+	check('move_page merges into an existing folder', !r.isError, r.text);
+	check('merge is reported as a merge', /Merged into the existing/.test(r.text), r.text);
+	await assertOneCommit('move_page folder merge', before);
+
+	const mergedTask = await eventually(
+		() => fileText('wiki/archive/todos/task-one.md'),
+		(t) => t !== null
+	);
+	check('moved page landed in the existing folder', mergedTask !== null);
+	check(
+		'the folder that was already there kept its pages',
+		(await fileText('wiki/archive/todos/old-task.md')) !== null
+	);
+	check(
+		"destination's own folder marker survived",
+		(await fileText('wiki/archive/todos/.gitkeep')) !== null
+	);
+	check('source folder is gone', (await fileText('wiki/todos/task-one.md')) === null);
+	check("source's folder marker is gone", (await fileText('wiki/todos/.gitkeep')) === null);
+
+	// A REAL collision still stops the move, and names what collided.
+	await call('write_page', {
+		path: 'wiki/inbox/old-task.md',
+		title: 'Old Task',
+		content: '# Old Task\n\nA different page with a colliding filename.\n'
+	});
+	await settledHead();
+	r = await call('move_page', { path: 'wiki/inbox', new_path: 'wiki/archive/todos' });
+	check('a real content collision still refuses', r.isError, r.text);
+	check(
+		'the refusal names the colliding path',
+		/wiki\/archive\/todos\/old-task\.md/.test(r.text),
+		r.text
+	);
+
+	// ══ move_page on a non-page FILE: addressable, not mistaken for a folder. ═══
+	before = await commitCount();
+	r = await call('move_page', {
+		path: 'wiki/archive/todos/.gitkeep',
+		new_path: 'wiki/inbox/.gitkeep'
+	});
+	check('move_page moves a dotfile', !r.isError, r.text);
+	await assertOneCommit('move_page dotfile', before);
+	check(
+		'dotfile landed at its new path',
+		(await eventually(
+			() => fileText('wiki/inbox/.gitkeep'),
+			(t) => t !== null
+		)) !== null
+	);
+	r = await call('move_page', { path: 'wiki/nope/.gitkeep', new_path: 'wiki/inbox/x.gitkeep' });
+	check('a missing file reports what was looked for', r.isError, r.text);
+	check('no phantom "folder has no files"', !/it has no files/.test(r.text), r.text);
+
+	// ══ delete_page on a non-page FILE: same routing, plus a reference check. ═══
+	await store.commitFiles(repoArgs, {
+		message: 'add an asset to delete',
+		writes: [{ path: 'wiki/assets/logo.svg', content: '<svg/>\n' }]
+	});
+	await call('write_page', {
+		path: 'wiki/brand.md',
+		title: 'Brand',
+		content: '# Brand\n\n![Logo](assets/logo.svg)\n'
+	});
+	await settledHead();
+
+	r = await call('delete_page', { path: 'wiki/nope/.gitkeep' });
+	check('delete_page: a missing file says what it looked for', r.isError, r.text);
+	check('delete_page: no phantom "no folder found"', !/No folder/.test(r.text), r.text);
+
+	before = await commitCount();
+	r = await call('delete_page', { path: 'wiki/assets/logo.svg' });
+	check('delete_page deletes a non-page file', !r.isError, r.text);
+	check('delete_page warns that a page still embeds it', /wiki\/brand\.md/.test(r.text), r.text);
+	await assertOneCommit('delete_page file', before);
+	check(
+		'the file is gone',
+		(await eventually(
+			() => fileText('wiki/assets/logo.svg'),
+			(t) => t === null
+		)) === null
+	);
+
 	// The brain is still internally consistent after the move.
 	r = await call('validate', {});
 	check('validate clean after move_page (folder)', /no broken links/.test(r.text), r.text);
