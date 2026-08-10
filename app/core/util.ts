@@ -22,6 +22,25 @@ export function relativeTime(iso: string): string {
 	return iso.slice(0, 10);
 }
 
+// A host that refuses a tool call substitutes its own text for the result, so what
+// reaches the widget is several paragraphs of instructions addressed to the MODEL
+// ("you *may* attempt to accomplish this action using other tools…"). Rendering that
+// verbatim tells the reader nothing they can act on and reads as an Isomorphic
+// failure, when the call never left the client.
+//
+// The patterns are the host's own wording, deliberately narrow: a server-side
+// authorization error ("requires editor") is a real answer from the brain and must
+// keep its own text.
+const HOST_DENIALS = [
+	/permission for this action was denied/i,
+	/requested permissions? to use/i,
+	/doesn.?t want to proceed with this tool use/i
+];
+
+export function isHostDenial(detail: string | undefined): boolean {
+	return !!detail && HOST_DENIALS.some((re) => re.test(detail));
+}
+
 // Brains grouped by the org that owns them, in the order the server sent (oldest
 // first), for the two surfaces that list brains: the crumb's brain picker and Manage
 // brains. The org heading is what lets brainLabel drop the "Org — " prefix it used to
