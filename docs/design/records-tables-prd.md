@@ -115,15 +115,21 @@ machine-generated series of dated events.
 
 ### FR-1: Records tables
 
-**FR-1a: A table is declared by a page.** The folder note of a records folder carries the
-schema in a fenced `okf-table` block, following the precedent set by `okf-view` and `tool`:
-a small line grammar, not YAML, so it survives the flat frontmatter parser and ProseMirror
-round-trips.
+**FR-1a: A table is declared by an ordinary concept document**, at `records/<table>.md`, with
+its rows in the sibling folder `records/<table>/`. The schema goes under a `# Schema` heading,
+which is OKF's conventional heading for exactly this (OKF §13.2).
+
+Two things about the placement are forced by the spec rather than chosen. The declaration is
+**not** a folder note: OKF reserves `index.md` and `log.md`, which "MUST NOT be used for
+concept documents", and permits frontmatter in an index file only for `okf_version` at a
+bundle root. A typed, titled table declaration is a concept document and cannot live there.
+Putting it one level up as `records/<table>.md` keeps it conformant and reads better anyway.
 
 ````markdown
 ---
 type: Record Table
 title: Interactions
+description: Contact between our staff and tracked sources
 ---
 
 # Interactions
@@ -131,6 +137,8 @@ title: Interactions
 Every substantive contact between our staff and a tracked source. One row per
 conversation, not per message in a thread. A row is valid with only a date, a
 subject, and a kind; everything else is optional.
+
+# Schema
 
 ```okf-table
 key:   id (string) source-derived dedupe key
@@ -143,6 +151,13 @@ link:  unit (page, under: stories/) what it was for
 field: gist (text) one line
 ```
 ````
+
+The fence sits *under* the conventional heading rather than replacing it. OKF illustrates
+`# Schema` with a plain markdown table (Column / Type / Description), which is more readable
+but ambiguous to parse once link targets and enums are involved. Keeping the heading satisfies
+the convention and keeps a reader oriented; keeping the fence keeps the payload unambiguous and
+consistent with `okf-view` and `tool`. Field declarations use OKF's own typed-parameter
+vocabulary (`name`, `type`, `required`) from OKF §10 rather than inventing a parallel one.
 
 The body matters as much as the fence. The definition of what counts sits beside the schema,
 written by whoever owns it, and it is what an agent reads before proposing rows. Schema and
@@ -277,12 +292,27 @@ naive choice usually rewards volume over quality. Counting **distinct (subject, 
 pairs** rather than raw events is the general form that resists this: it rewards breadth
 without rewarding repeat-contacting the same list.
 
-**FR-4b: Provenance per row.** Whether a record was detected from a source artifact or asserted
-by hand. Detected is stronger evidence precisely because it is not self-reported, which is an
-integrity argument for automated capture rather than merely a convenience one.
+**FR-4b: Provenance per row, in OKF's existing vocabulary.** Whether a record was detected from
+a source artifact or asserted by hand. Detected is stronger evidence precisely because it is not
+self-reported, which is an integrity argument for automated capture rather than merely a
+convenience one.
+
+Do not invent a field for this. OKF §5.2 already carries `generated: { by, at }` and
+`verified: [{ by, at }]`, and they map onto FR-3's propose-and-admit flow exactly: the agent
+that proposed a row writes `generated`, and the human who admitted it appends a `verified`
+entry. A row with `generated` and no `verified` is a proposal; a row with both is admitted
+evidence; a row with only `verified` was entered by hand. That is the whole provenance model,
+already specified, already something an outside OKF consumer understands.
 
 **FR-4c: Periods close.** Once a period closes its number must not move. Closing is an explicit
 action writing a dated page holding the final table, committed to git with a sha and timestamp.
+
+The closed-period page is naturally an OKF **Attested Computation** (OKF §10): it is a number
+produced by a sanctioned computation over a known input range. Expressing it that way gets a
+specified vocabulary for free (`runtime`, `parameters` for the window, `executor`, `attester`)
+instead of an Isomorphic-only convention, and it makes the artifact independently checkable by
+anything that reads OKF. Worth doing if FR-4 is built at all, since the entire value of the
+layer is that someone outside the system trusts the number.
 
 Deliberately **not** reusing the `okf-view` snapshot mechanism, even though it fits
 mechanically. Snapshots are documented as cosmetic, allowed to go stale, and regenerated on any
@@ -364,7 +394,75 @@ A useful heuristic: **a records table should have at least one `link:` field.** 
 references nothing in the brain is a spreadsheet, and the brain is the wrong home for it. The
 value of putting records here at all is that they join the concept graph.
 
-## 10. Phasing
+### 9.1 The third option OKF already specifies
+
+The table above is missing a column, and OKF supplies it. A concept document may carry a
+`resource` URI identifying "the underlying asset the concept describes", and OKF's model is
+that concepts **point at** structured data rather than contain it: the `# Schema` section
+describes columns of a dataset that lives in a warehouse, not rows stored in the bundle.
+
+That is the right answer whenever the records already have a home. A table declaration with a
+`resource` and a `# Schema` but **no rows folder** is a fully conformant way to say "this data
+exists, here is its shape, here is where it lives" without copying anything into the brain.
+Rows belong in the repo only when the brain is the *only* home for them, which is the actual
+condition in most of §3 (nobody runs a warehouse for reporter outreach or interview panels) and
+is not the condition for anything already flowing through a data platform.
+
+So a records table has two backings behind one declaration:
+
+| Backing | When | What the brain stores |
+|---|---|---|
+| Repo rows | The brain is the only home for this activity | The rows |
+| `resource` pointer | The data already lives in a warehouse or SaaS system | The schema and the pointer |
+
+Both should present the same `# Schema` and, eventually, the same view syntax. Only the
+repo-backed form is in scope for v1, but the declaration format must not preclude the pointer
+form, because the first customer with an existing warehouse will need it and retrofitting a
+second declaration syntax would be the wrong outcome.
+
+## 10. OKF conformance
+
+Brains target the Open Knowledge Format, so a new storage shape has to be checked against it
+rather than assumed compatible. Four findings, in descending order of how much they changed
+this design.
+
+**The spec has no granularity rule, so record-per-section and sharded files are fine.** OKF says
+nothing about file granularity, dated entries, or whether collections split across files; that
+is explicitly a producer's choice. The "one concept per file" rule that governs pages is about
+*concepts*, and a record is not one. Nothing in FR-1b or FR-1c conflicts with the spec.
+
+**Reserved filenames constrain where a table is declared** (drove FR-1a). `index.md` and
+`log.md` "MUST NOT be used for concept documents", and frontmatter in an index file is permitted
+only for `okf_version` at a bundle root. The first draft of this PRD put a typed, titled table
+declaration in a folder note and was wrong on both counts.
+
+Worth noting this is a **pre-existing divergence**, not one introduced here: Isomorphic's folder
+notes routinely carry frontmatter and act as concept documents in `index.md`. That is a
+conformance gap the platform already has and should decide about on its own merits. This PRD
+just declines to deepen it.
+
+**OKF already has vocabulary for three things this PRD needed** and would otherwise have
+invented:
+
+| Need | OKF supplies | Where |
+|---|---|---|
+| Declaring a table's fields | `# Schema` conventional heading | OKF §13.2 |
+| Typed field declarations | `parameters: [{ name, type, required }]` | OKF §10 |
+| Detected vs. asserted provenance | `generated: { by, at }`, `verified: [{ by, at }]` | OKF §5.2 |
+| Attesting a computed number | `runtime`, `executor`, `attester` | OKF §10 |
+
+The `generated`/`verified` pair is the happiest of these: it maps onto propose-and-admit with no
+adaptation at all, and it means an outside OKF consumer can tell a proposed row from an admitted
+one without knowing anything about Isomorphic.
+
+**Concepts point at structured data; they do not contain it.** This is the one genuinely
+awkward finding, and §9.1 is the response. OKF's native model is a concept document carrying a
+`resource` URI and a `# Schema` describing a dataset that lives elsewhere. Records-in-repo is a
+departure from that, justified only when the brain is the sole home for the activity. Where it
+is not, the pointer form is both more conformant and better engineering, which is why the
+declaration format has to support both from the start.
+
+## 11. Phasing
 
 **Phase 0: Characterize an existing corpus. No platform work.**
 Before designing a schema, run an extraction pass over whatever the target team records today.
@@ -382,7 +480,7 @@ that depends on it.
 **Phase 3: Attested counts.** Items 9, only once a counting rule is decided (FR-4a) and Phase 2
 has produced enough periods to sanity-check against whatever the count is replacing.
 
-## 11. Risks
+## 12. Risks
 
 - **The review does not get run.** The whole capture design assumes a human cadence. Mitigation
   is FR-3b; the test is Phase 2, deliberately sequenced before anything expensive depends on it.
@@ -397,7 +495,7 @@ has produced enough periods to sanity-check against whatever the count is replac
   Usage analytics) applies, and applies harder wherever FR-4 is in use. Decide the visibility
   rule before the first period closes; retrofitting it is painful.
 
-## 12. Open questions
+## 13. Open questions
 
 1. **Records referencing records.** Out of scope for v1, but several domains want it (an action
    item belonging to an incident, a follow-up belonging to a conversation). The storage format
@@ -409,4 +507,16 @@ has produced enough periods to sanity-check against whatever the count is replac
    yearly. Configurable in `okf-table`, or inferred from row rate?
 4. **Sum as an aggregate.** Count covers most of §3, but amounts, durations, and hours all want
    sum. Cheap to add with count; deferred only to keep v1 narrow.
-5. **Who sees per-actor counts.** See §11. Likely mirrors the existing `orgRole` gate.
+5. **Who sees per-actor counts.** See §12. Likely mirrors the existing `orgRole` gate.
+
+### Raised by the OKF review (§10)
+
+6. **Should the platform close its folder-note conformance gap?** `index.md` carrying
+   frontmatter and acting as a concept document is a pre-existing divergence this PRD works
+   around rather than fixes. Fixing it is a migration affecting every brain; not fixing it means
+   the reserved-name rule is honored in new surfaces and violated in old ones.
+7. **Should a records table be expressible as an Attested Computation** rather than only
+   producing one at period close? OKF §10 would let a whole derived table be declared as a
+   sanctioned computation with typed parameters, which is close to what `okf-view` already does
+   informally. Possibly a unification, possibly scope creep; worth one pass before the format
+   sets.
