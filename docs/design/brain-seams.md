@@ -5,6 +5,7 @@
 - Date: 2026-08-10
 - Audience: the engineering session that picks this up, and Jon deciding whether it should exist
 - Related: `docs/design/derived-views-and-sync-prd.md` (FR-3 importer, FR-4 source of truth),
+  `docs/design/records-tables-prd.md` (which owns motivating flow 1, see §3),
   `docs/design/brain-level-permissions.md`, `docs/roadmap.md` (bulk page updates),
   `CLAUDE.md` (Brain model, Content index, Bulk import)
 
@@ -59,6 +60,14 @@ but **who needs it**:
 Flow 3 is entirely the first kind. Flow 2 is entirely the second. Flow 1 is mixed and mostly the
 first: the person wants to _see_ their client to-dos while in the client brain, which is a read
 across a boundary they already have, unless the client is meant to see them too.
+
+**Flow 1 has a third answer that is probably the right one**, and it is not in this document.
+Time entries and dated to-dos against a client are activity records, not pages, which is the
+subject of `docs/design/records-tables-prd.md`. Modeled there, the cross-brain question stops
+being "does this page cross" and becomes "can an aggregate over records cross a seam", which is a
+sharper and smaller question: a client is owed the rollup ("14 hours this month against the
+engagement"), not the underlying entries. Neither this document nor that one answers it yet, and
+whichever is built second should.
 
 Naming the mechanism **publication** rather than **sync** keeps this straight, and puts the
 question that actually matters (who is now able to read this) in the name of the feature.
