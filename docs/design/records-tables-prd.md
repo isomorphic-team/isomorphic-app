@@ -438,8 +438,9 @@ declaration in a folder note and was wrong on both counts.
 
 Worth noting this is a **pre-existing divergence**, not one introduced here: Isomorphic's folder
 notes routinely carry frontmatter and act as concept documents in `index.md`. That is a
-conformance gap the platform already has and should decide about on its own merits. This PRD
-just declines to deepen it.
+conformance gap the platform already has, now written up separately in
+[`docs/design/folder-notes-and-okf-conformance.md`](folder-notes-and-okf-conformance.md). This
+PRD just declines to deepen it, and neither depends on the other.
 
 **OKF already has vocabulary for three things this PRD needed** and would otherwise have
 invented:
@@ -511,10 +512,11 @@ has produced enough periods to sanity-check against whatever the count is replac
 
 ### Raised by the OKF review (§10)
 
-6. **Should the platform close its folder-note conformance gap?** `index.md` carrying
-   frontmatter and acting as a concept document is a pre-existing divergence this PRD works
-   around rather than fixes. Fixing it is a migration affecting every brain; not fixing it means
-   the reserved-name rule is honored in new surfaces and violated in old ones.
+6. ~~Should the platform close its folder-note conformance gap?~~ **Split out into its own
+   PRD:** [`docs/design/folder-notes-and-okf-conformance.md`](folder-notes-and-okf-conformance.md).
+   The fix turned out to be smaller than assumed (the platform creates the violations, existing
+   brains are mostly conformant) and the strongest argument for it is untangling a shared git
+   history rather than conformance. Independent of this PRD; no ordering dependency either way.
 7. **Should a records table be expressible as an Attested Computation** rather than only
    producing one at period close? OKF §10 would let a whole derived table be declared as a
    sanctioned computation with typed parameters, which is close to what `okf-view` already does
