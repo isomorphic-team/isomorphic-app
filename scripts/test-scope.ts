@@ -268,7 +268,7 @@ function toolsFor(p: Persona): Map<string, Handler> {
 				}
 			})),
 		activeBrainId: () => 'northwind/main',
-		setActiveBrain: () => {},
+		setActiveBrain: async () => {},
 		invalidateConfig: () => {},
 		analyticsEnabled: true
 	});

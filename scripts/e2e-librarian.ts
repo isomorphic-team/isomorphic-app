@@ -1236,7 +1236,7 @@ try {
 		listOrgs: () => listAccessibleOrgs(db, [USER]),
 		listBrains: () => listAccessibleBrains(db, [USER]),
 		activeBrainId: () => activeId,
-		setActiveBrain: (id: string) => {
+		setActiveBrain: async (id: string) => {
 			activeId = id;
 		},
 		invalidateConfig: () => {},

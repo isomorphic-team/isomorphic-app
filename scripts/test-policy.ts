@@ -24,12 +24,17 @@
 import { readFileSync } from 'node:fs';
 import { parsePaths } from '../src/lib/brain-config.ts';
 import { pathPolicyOf, isContentPath, isHiddenName } from '../src/lib/brain-policy.ts';
+import { browseSummary, treeFitsInline, MAX_INLINE_TREE_CHARS } from '../src/lib/browse.ts';
 import {
 	applyPolicy,
 	resetPolicy,
 	isEditablePath,
 	applyBrainContext,
-	activeBrain
+	activeBrain,
+	browseCache,
+	setBrowseCache,
+	setActiveBrain,
+	pickShownBrain
 } from '../app/core/store.ts';
 
 let failures = 0;
@@ -204,6 +209,141 @@ console.log('\nbrain identity rides the same payload');
 
 	applyBrainContext({ activeBrain: { id: 'northwind/brain-nw', label: 'Northwind' } });
 	check('a switch is adopted in full', activeBrain?.id === 'northwind/brain-nw');
+}
+
+// ---------------------------------------------------------------------------
+// Which brain the widget is SHOWING (issue #26).
+//
+// The model can aim any view tool at a named brain (`view_page(brain: X)`), and the
+// panel rendered a different one: the crumb, the file tree and the picker's checkmark
+// all followed the CONNECTION's active-brain pointer, which the app re-read on every
+// open and which lags the request that just moved it. So the tool reported one brain
+// while the user was looking at another.
+// ---------------------------------------------------------------------------
+
+const A = { id: 'acme/brain-acme', label: 'Acme' };
+const B = { id: 'northwind/brain-nw', label: 'Northwind' };
+const rows = [
+	{ id: A.id, label: A.label, active: true },
+	{ id: B.id, label: B.label, active: false }
+];
+const someTree = {
+	paths: ['wiki/a.md'],
+	titleByPath: {},
+	assets: [],
+	hidden: [],
+	needsConfig: false
+};
+
+console.log('\nopening a named brain retargets the whole widget');
+{
+	setActiveBrain(A);
+	setBrowseCache(someTree);
+	applyPolicy(deliver(wholeRepo)); // brain A is a whole-repo brain
+
+	// A view_page/browse_brain the MODEL aimed at another brain. Nothing about this
+	// path goes near switchBrain, which is where the invalidation used to live.
+	applyBrainContext({ activeBrain: B });
+	check('the widget follows the brain the result names', activeBrain?.id === B.id);
+	check('brain A’s file tree is dropped', browseCache === null);
+	check('…and so is its path policy', !isEditablePath('README.md'));
+
+	// Same brain again: nothing to invalidate, and re-fetching the tree on every
+	// result would undo the cache's whole purpose.
+	setBrowseCache(someTree);
+	applyBrainContext({ activeBrain: B });
+	check('a result for the SAME brain keeps the cached tree', browseCache !== null);
+}
+
+console.log('\nthe connection’s pointer never overrides the brain on screen');
+{
+	setActiveBrain(B); // the widget was opened on Northwind by name
+
+	// The brain list the app fetches on every open. `active` is the pointer, written
+	// fire-and-forget by the request that opened us and read back here — this is the
+	// stale answer that used to retarget the widget.
+	const picked = pickShownBrain(rows, A.id, false);
+	check('a plain brains list does not move the widget', picked?.id === B.id);
+	check('…and refreshes the label from the list row', picked?.label === 'Northwind');
+
+	// A deliberate change of brain (switch_brain / create_brain, which set `switched`)
+	// IS the answer to this question, and must win.
+	const switched = pickShownBrain(rows, A.id, true);
+	check('a switch_brain result moves the widget', switched?.id === A.id);
+
+	// The self-boot: no result has named a brain, so the pointer is all there is.
+	setActiveBrain(null);
+	check(
+		'with nothing on screen yet, the pointer wins',
+		pickShownBrain(rows, A.id, false)?.id === A.id
+	);
+
+	// A brain we can no longer see (unshared, disconnected) is not a destination.
+	setActiveBrain(B);
+	check(
+		'a shown brain missing from the list falls back to the pointer',
+		pickShownBrain([rows[0]], A.id, false)?.id === A.id
+	);
+	check('a list naming neither leaves the widget alone', pickShownBrain([], A.id, false) === null);
+}
+
+// ---------------------------------------------------------------------------
+// What browse_brain carries (the same issue's second half).
+//
+// It returned every path twice — text plus structuredContent, with a title per page —
+// which on a 556-page brain came to 83,708 characters and was refused as a tool result.
+// The tree now rides along only while it is small; over budget the app fetches it with
+// list_pages, which is the `else openBrowse()` branch of handleToolResult.
+// ---------------------------------------------------------------------------
+
+function fakeBrain(n: number) {
+	const folders = ['people', 'projects', 'customers', 'meetings'];
+	const paths = Array.from(
+		{ length: n },
+		(_, i) => `wiki/${folders[i % folders.length]}/page-${i}-with-a-realistic-name.md`
+	);
+	return {
+		paths,
+		pages: paths.map((path, i) => ({ path, title: `Page ${i} With A Realistic Title` })),
+		assets: [],
+		hidden: []
+	};
+}
+
+console.log('\nbrowse_brain fits in a tool result');
+{
+	const big = fakeBrain(556); // the reported brain
+	check('a few hundred pages no longer ride inline', !treeFitsInline(big));
+	check('a small brain still does', treeFitsInline(fakeBrain(20)));
+	check(
+		'the budget is the serialized payload, not a page count',
+		JSON.stringify(fakeBrain(20)).length <= MAX_INLINE_TREE_CHARS &&
+			JSON.stringify(big).length > MAX_INLINE_TREE_CHARS
+	);
+
+	const summary = browseSummary('Acme', big);
+	check('the summary names the brain', summary.includes('Acme'));
+	check('…and how many pages it has', summary.includes('556'));
+	check('…and tallies the folders below the shared root', /people \(139\)/.test(summary));
+	check('…not the one root they all share', !/\bwiki \(/.test(summary));
+	check('…and says where the full list lives', summary.includes('list_pages'));
+	check(
+		'the summary is a fraction of the payload it replaces',
+		summary.length < JSON.stringify(big).length / 10
+	);
+
+	// Every path directly under the root: there is no folder to tally, and "(top level)"
+	// is not a folder anyone can open, so it is counted apart.
+	const flat = { paths: ['a.md', 'b.md'], pages: [], assets: [], hidden: [] };
+	check(
+		'a flat brain counts its pages, not a folder',
+		/\(top level\) \(2\)/.test(browseSummary('Flat', flat))
+	);
+	check(
+		'an empty brain says so plainly',
+		browseSummary('Fresh', { paths: [], pages: [], assets: [], hidden: [] }) ===
+			'Fresh has no pages yet.'
+	);
 }
 
 console.log(
