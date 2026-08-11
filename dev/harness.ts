@@ -526,7 +526,12 @@ function resolveBrainArg(arg: unknown): string | undefined {
 	return brainsFixture.find((b) => b.id.toLowerCase() === q || b.label.toLowerCase().includes(q))
 		?.id;
 }
-function brainsResult(msg: string, withView: boolean): CallToolResult {
+// `switched` marks a result that CHANGED the active brain, exactly as switch_brain and
+// create_brain do server-side. The app treats the brain a result names as authoritative
+// over the connection's pointer, and this flag is how it tells a deliberate move from a
+// plain listing (see pickShownBrain in app/core/store.ts) — so a harness that omits it
+// previews a switch that does not switch.
+function brainsResult(msg: string, withView: boolean, switched = false): CallToolResult {
 	const sc: Record<string, unknown> = {
 		brains: brainRows(),
 		active: activeBrainId,
@@ -542,6 +547,7 @@ function brainsResult(msg: string, withView: boolean): CallToolResult {
 		features: { analytics: true }
 	};
 	if (withView) sc.view = 'brains';
+	if (switched) sc.switched = true;
 	return { content: [{ type: 'text', text: msg }], structuredContent: sc };
 }
 // {id,label} for a brain — the `activeBrain` shape every app-tool result carries so the
@@ -1116,7 +1122,7 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
 			// Point the host chrome's page selector at the newly-active brain's pages.
 			openPath = Object.keys(pagesFor(activeBrainId))[0] ?? openPath;
 			rebuildSelector();
-			return brainsResult(`Switched to ${hit.label}.`, true);
+			return brainsResult(`Switched to ${hit.label}.`, true, true);
 		}
 		case 'create_brain': {
 			// Scaffold a fresh (empty) named brain under the "personal" org and switch to it.
@@ -1412,6 +1418,15 @@ const noBrainsMode = hashMode === 'nobrains';
 // so it is where the trail's root crumb and its brain picker have to stand on their
 // own. Everything after the handshake still answers normally.
 const coldMode = hashMode === 'cold';
+// `#other-brain` is issue #26: the MODEL opened a brain by name (browse_brain /
+// view_page with `brain:`), so the opening result is about that brain while the
+// connection's active-brain pointer — which the app re-reads through `brains` on every
+// open — still answers with the previous one. The harness deliberately does NOT move
+// its own pointer here, because the real one lags for the same reason: it is written by
+// the request that opened the widget and read by the next one.
+const otherBrainMode = hashMode === 'other-brain';
+// A brain that is NOT the active one, with content of its own to tell them apart.
+const OTHER_BRAIN = 'northwind/northwind-wiki';
 if (noBrainsMode) {
 	brainsFixture = [];
 	activeBrainId = '';
@@ -1463,11 +1478,27 @@ bridge.oninitialized = async () => {
 			settingsMode ||
 			connectedMode ||
 			browseEmptyMode ||
-			noBrainsMode
+			noBrainsMode ||
+			otherBrainMode
 				? {}
 				: { path: openPath }
 	});
-	if (browseEmptyMode) {
+	if (otherBrainMode) {
+		// browse_brain's payload for the NAMED brain, pointer left where it was.
+		const other = pagesFor(OTHER_BRAIN);
+		const paths = Object.keys(other).filter(isContentPage);
+		bridge.sendToolResult({
+			content: [{ type: 'text', text: `Opened Northwind in the viewer: ${paths.length} page(s).` }],
+			structuredContent: {
+				view: 'browse',
+				paths,
+				pages: paths.map((p) => ({ path: p, title: titleOf(p, other[p]) })),
+				assets: [],
+				hidden: [],
+				activeBrain: brainMeta(OTHER_BRAIN)
+			}
+		});
+	} else if (browseEmptyMode) {
 		// Preview the "adopted repo, no content configured" empty state + auto-configure.
 		bridge.sendToolResult({
 			content: [{ type: 'text', text: 'No markdown pages found.' }],

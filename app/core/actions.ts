@@ -45,13 +45,13 @@ import {
 	setBrowseCache,
 	activeBrain,
 	setActiveBrain,
+	pickShownBrain,
 	brainList,
 	setBrainList,
 	orgList,
 	setOrgList,
 	setFeatures,
 	applyPolicy,
-	resetPolicy,
 	applyBrainContext,
 	bump
 } from './store.ts';
@@ -76,8 +76,11 @@ function handleToolResult(result: CallToolResult) {
 		return;
 	}
 	const sc = (result.structuredContent ?? {}) as Record<string, unknown>;
-	applyPolicy(sc);
+	// Brain FIRST: adopting a different brain drops what was cached for the old one,
+	// including its path policy, so applying this result's policy before that would
+	// hand the new brain the wiki/ default (see setActiveBrain in the store).
 	applyBrainContext(sc);
+	applyPolicy(sc);
 	// Learn the brain list once, lazily, so the switcher knows whether to appear.
 	void ensureBrainList();
 	const view = typeof sc.view === 'string' ? sc.view : 'page';
@@ -154,18 +157,28 @@ function handleToolResult(result: CallToolResult) {
 		);
 }
 
-// Build a brains View from a tool result (view_brains / switch_brain). Also refreshes
-// the cached brain list + active brain so the header switcher stays in sync.
-function brainsViewFromSc(sc: Record<string, unknown>): View {
+// Build a brains View from a tool result (brains / switch_brain / create_brain /
+// connect_brain). Also refreshes the cached brain list + shown brain so the header
+// switcher stays in sync.
+//
+// Only a result that CHANGED the brain overrides the brain the widget is showing. A
+// plain list does not, and neither does connect_brain, which adopts a repo without
+// moving anyone into it (the app switches afterwards, through switch_brain). See
+// pickShownBrain. Two ways to know: the caller asked for the switch itself, or the
+// result says `switched` (switch_brain / create_brain), which is the only signal
+// available when the MODEL made the call and the widget is just rendering it.
+function brainsViewFromSc(sc: Record<string, unknown>, switched = false): View {
 	const brains = Array.isArray(sc.brains) ? (sc.brains as BrainRow[]) : [];
-	const active = String(sc.active ?? activeBrain?.id ?? '');
+	const deliberate = switched || !!sc.switched;
 	orgsFromSc(sc);
 	if (brains.length) {
 		setBrainList(brains);
-		const a = brains.find((b) => b.id === active);
-		if (a) setActiveBrain({ id: a.id, label: a.label });
+		const picked = pickShownBrain(brains, sc.active ? String(sc.active) : undefined, deliberate);
+		if (picked) setActiveBrain(picked);
 	}
-	return { kind: 'brains', brains, active };
+	// The list highlights the brain the widget is IN, so the checkmark and the crumb
+	// above it can never name two different brains.
+	return { kind: 'brains', brains, active: activeBrain?.id ?? String(sc.active ?? '') };
 }
 
 // Fetch the caller's brain list once (idempotent). The switcher only appears when
@@ -197,8 +210,12 @@ function ensureBrainList(): Promise<void> {
 			// the one the app always makes on open.
 			orgsFromSc(res.structuredContent ?? {});
 			setFeatures(sc.features);
-			const a = sc.brains.find((b) => b.id === (sc.active ?? activeBrain?.id));
-			if (a) setActiveBrain({ id: a.id, label: a.label });
+			// NOT a brain change: this call asks what brains exist, and it runs on every
+			// open — including the open that a `brain:`-targeted view_page or
+			// browse_brain just aimed at a specific brain. Adopting its `active` here is
+			// what pointed the whole widget back at the previously active brain.
+			const picked = pickShownBrain(sc.brains, sc.active, false);
+			if (picked) setActiveBrain(picked);
 			bump();
 		} catch {
 			// Stay unknown: the header keeps its neutral Files button rather than claiming
@@ -221,9 +238,9 @@ async function switchBrain(id: string) {
 	try {
 		const res = await callTool('switch_brain', { brain: id });
 		if (res.isError) throw new Error(firstText(res));
-		brainsViewFromSc((res.structuredContent ?? {}) as Record<string, unknown>);
-		setBrowseCache(null); // the file tree belongs to the old brain
-		resetPolicy(); // and so does its path policy — list_pages delivers the new one
+		// Adopting the new brain is what drops the old one's file tree and path policy
+		// (setActiveBrain in the store) — one seam, so no path into a brain can forget.
+		brainsViewFromSc((res.structuredContent ?? {}) as Record<string, unknown>, true);
 		openBrowse();
 	} catch (e) {
 		show({
@@ -356,11 +373,9 @@ async function submitCreateBrain(name: string) {
 	try {
 		const res = await callTool('create_brain', { name: trimmed });
 		if (res.isError) throw new Error(firstText(res));
-		const fresh = brainsViewFromSc((res.structuredContent ?? {}) as Record<string, unknown>);
+		const fresh = brainsViewFromSc((res.structuredContent ?? {}) as Record<string, unknown>, true);
 		refreshStale('brains', fresh); // ...and if that screen was the brains list, it is now stale
-		setBrowseCache(null);
-		resetPolicy();
-		openBrowse();
+		openBrowse(); // the new brain's (empty) tree — the switch already dropped the old one's
 	} catch (e) {
 		show({
 			kind: 'error',
@@ -562,14 +577,15 @@ async function fetchPaths(): Promise<BrowseData> {
 		needsConfig?: boolean;
 	};
 	// This is a WIDGET-initiated call, so it never passes through handleToolResult —
-	// apply the path policy here or the tree keeps whatever policy the last
+	// name the brain and apply the path policy here or the tree keeps whatever the last
 	// host-initiated result left behind (a different brain's, or the wiki/ default).
-	applyPolicy(sc);
-	// Same reasoning, and it is what keeps the trail's root crumb honest: this call can
-	// be the FIRST thing the app does (the self-boot in connectToHost, when no tool
-	// result opened the widget), in which case nothing else has said which brain the
-	// tree belongs to and the crumb would name a view instead of a brain.
+	// Naming the brain also keeps the trail's root crumb honest: this call can be the
+	// FIRST thing the app does (the self-boot in connectToHost, when no tool result
+	// opened the widget), in which case nothing else has said which brain the tree
+	// belongs to and the crumb would name a view instead of a brain. Brain before
+	// policy, for the reason in handleToolResult.
 	applyBrainContext(sc);
+	applyPolicy(sc);
 	const paths = firstText(result)
 		.split('\n')
 		.map((l) => l.trim())

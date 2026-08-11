@@ -63,6 +63,21 @@ test('switching brains swaps the content, not just the label', async ({ page }) 
 	await expect(app.getByRole('button', { name: 'facilities', exact: true })).toBeVisible();
 });
 
+test('a brain opened BY NAME is not retargeted by the brain list', async ({ page }) => {
+	// Issue #26. The result opens Northwind; the connection's active-brain pointer still
+	// says Personal, and the app re-reads that pointer through `brains` on every open.
+	// It used to win, so the panel showed the previous brain's tree under a crumb naming
+	// it, while the model reported the brain it had actually opened.
+	const app = await openApp(page, 'other-brain');
+	await expectView(app, 'browse');
+	// The root crumb NAMES the brain (inert on the tree's own view, so it is text
+	// rather than a link).
+	await expect(app.locator('header').getByText('Northwind', { exact: true })).toBeVisible();
+	await app.getByRole('button', { name: 'Expand all' }).click();
+	// Northwind's own tree, not Personal's: `facilities` exists in no other fixture brain.
+	await expect(app.getByRole('button', { name: 'facilities', exact: true })).toBeVisible();
+});
+
 test('search runs from the header and lands on the search view', async ({ page }) => {
 	const app = await openApp(page, 'browse');
 	// The header button swaps itself for the input; the search only runs on Enter.
