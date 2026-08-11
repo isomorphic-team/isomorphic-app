@@ -1,7 +1,14 @@
 /* Tailwind v4 entry for the Brain MCP App. Generated to a single CSS string at
    build time (scripts/gen-app.ts) and inlined into the ui:// resource — the
    iframe CSP blocks external stylesheets, so nothing here can be a URL import. */
-@import 'tailwindcss';
+/* `source(none)` disables Tailwind v4's automatic content detection, which scans
+   outward from the CLI's cwd — the repo ROOT here (scripts/gen-app.ts runs it there
+   so the @source glob below resolves). Without it, Tailwind reads every file in the
+   repo and emits a utility for any English word that happens to match one: a design
+   doc containing the word "invert" added `.invert` and its whole filter chain to the
+   bundle, which both bloats the ui:// payload and makes `pnpm gen:app` output depend
+   on prose. The explicit @source below is the only intended input. */
+@import 'tailwindcss' source(none);
 
 /* Scan the app sources for utility classes. */
 @source './**/*.{ts,tsx}';
