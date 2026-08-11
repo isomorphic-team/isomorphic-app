@@ -30,8 +30,46 @@ let brainList: BrainRow[] | null = null;
 // the brains list this could never include an org holding no brains yet, which is
 // exactly the org someone is trying to put a first repo into.
 let orgList: OrgTarget[] | null = null;
+// THE one place the widget changes which brain it is showing, and therefore the one
+// place everything scoped to a brain gets dropped: the cached file tree (which also
+// backs folder-note lookup and wikilink resolution) and the path policy. Both used to
+// be cleared by hand in switchBrain alone, so a brain reached any OTHER way — a
+// view_page / browse_brain the MODEL aimed at another brain with `brain:` — left the
+// previous brain's tree in place under the new brain's pages.
 function setActiveBrain(v: { id: string; label: string } | null): void {
+	if (v && activeBrain && activeBrain.id !== v.id) {
+		browseCache = null;
+		resetPolicy();
+	}
 	activeBrain = v;
+}
+
+// Which brain a `brains`-shaped payload (brains / switch_brain / create_brain /
+// connect_brain) leaves the widget showing.
+//
+// Its `active` field is the CONNECTION's pointer, which is a different question from
+// "which brain is this widget showing". A widget opened by view_page or browse_brain
+// with an explicit `brain:` is showing THAT brain, while the pointer is written by the
+// request that opened us and read back by a later one — so the brain list the app fetches
+// on every open (ensureBrainList) could answer with the previous brain and retarget
+// the crumb, the tree, and every subsequent widget call to it, while the model
+// reported the brain it actually opened (issue #26).
+//
+// So the pointer wins only when it is an answer to this question: the widget has no
+// brain of its own yet (the self-boot, where nothing else has said), or the call was a
+// deliberate change of brain — which switch_brain and create_brain declare with
+// `switched`, and connect_brain does not, since adopting a repo moves nobody into it.
+function pickShownBrain(
+	rows: BrainRow[],
+	payloadActive: string | undefined,
+	deliberate: boolean
+): { id: string; label: string } | null {
+	const wanted = deliberate ? [payloadActive] : [activeBrain?.id, payloadActive];
+	for (const id of wanted) {
+		const row = id ? rows.find((b) => b.id === id) : undefined;
+		if (row) return { id: row.id, label: row.label };
+	}
+	return null;
 }
 function setBrainList(v: BrainRow[] | null): void {
 	brainList = v;
@@ -39,10 +77,14 @@ function setBrainList(v: BrainRow[] | null): void {
 function setOrgList(v: OrgTarget[] | null): void {
 	orgList = v;
 }
+// The brain a result says it is about. Every payload that draws brain content carries
+// it, including the ones the MODEL aimed at another brain with `brain:` — which is why
+// this goes through setActiveBrain rather than assigning: arriving in a brain is
+// arriving in a brain, however the widget got there.
 function applyBrainContext(sc: Record<string, unknown>): void {
 	const ab = sc.activeBrain as { id?: string; label?: string } | undefined;
 	if (ab && typeof ab.id === 'string' && typeof ab.label === 'string') {
-		activeBrain = { id: ab.id, label: ab.label };
+		setActiveBrain({ id: ab.id, label: ab.label });
 	}
 }
 // What the SERVER registered, learned from the `brains` payload alongside the list
@@ -172,6 +214,7 @@ export {
 	brainList,
 	orgList,
 	setActiveBrain,
+	pickShownBrain,
 	setBrainList,
 	setOrgList,
 	applyBrainContext,

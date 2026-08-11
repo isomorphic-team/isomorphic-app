@@ -241,29 +241,37 @@ function BrainRows({ close }: { close: () => void }) {
 			{groupBrainsByOrg(rows).map((g) => (
 				<Fragment key={g.org ?? '·'}>
 					{g.org && <div class={`px-3 pb-0.5 pt-1 ${eyebrow}`}>{g.org}</div>}
-					{g.rows.map((b) => (
-						<MenuRow
-							key={b.id}
-							onClick={() => {
-								close();
-								switchBrain(b.id);
-							}}
-						>
-							<span class={b.active ? 'text-accent' : 'text-muted'}>
-								<BrainGlyph />
-							</span>
-							<span class="min-w-0 flex-1">
-								<span class="block truncate text-fg" title={b.label}>
-									{b.label}
+					{g.rows.map((b) => {
+						// Ticked = the brain the CRUMB above this picker names, not the row's
+						// own `active` flag. That flag is the connection's pointer as the
+						// server saw it when the list was fetched, and a widget opened on an
+						// explicitly named brain sat one row away from it: the panel showed
+						// one brain and the checkmark another (issue #26).
+						const here = b.id === activeBrain?.id;
+						return (
+							<MenuRow
+								key={b.id}
+								onClick={() => {
+									close();
+									switchBrain(b.id);
+								}}
+							>
+								<span class={here ? 'text-accent' : 'text-muted'}>
+									<BrainGlyph />
 								</span>
-								<span class="block text-xs text-muted">
-									{b.role}
-									{b.configPrUrl ? ' · setup pending' : b.needsConfig ? ' · not configured' : ''}
+								<span class="min-w-0 flex-1">
+									<span class="block truncate text-fg" title={b.label}>
+										{b.label}
+									</span>
+									<span class="block text-xs text-muted">
+										{b.role}
+										{b.configPrUrl ? ' · setup pending' : b.needsConfig ? ' · not configured' : ''}
+									</span>
 								</span>
-							</span>
-							{b.active && <span class="shrink-0 text-accent">✓</span>}
-						</MenuRow>
-					))}
+								{here && <span class="shrink-0 text-accent">✓</span>}
+							</MenuRow>
+						);
+					})}
 				</Fragment>
 			))}
 			<MenuSeparator />

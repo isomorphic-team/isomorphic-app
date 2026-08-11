@@ -32,6 +32,8 @@ export const ROUTES = {
 	connected: 'settings',
 	'browse-empty': 'browse',
 	nobrains: 'add-brain',
+	// An opening result about a brain the connection's pointer does not name yet.
+	'other-brain': 'browse',
 	// No opening tool result at all: the app self-boots into the tree after 1200ms.
 	cold: 'browse'
 } as const;

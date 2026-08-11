@@ -143,7 +143,10 @@ export function registerBrainTools(
 		listOrgs: () => Promise<AccessibleOrg[]>;
 		listBrains: () => Promise<AccessibleBrain[]>;
 		activeBrainId: () => string | undefined;
-		setActiveBrain: (id: string) => void;
+		// Awaited: the pointer is read back by the caller's NEXT request (the app fetches
+		// its brain list the moment a widget opens), so a write still in flight answers
+		// with the previous brain. See setActiveBrain in worker.ts.
+		setActiveBrain: (id: string) => Promise<void>;
 		invalidateConfig: (owner: string, repo: string) => void;
 		// Whether this deployment registered the org `analytics` tool (USAGE_ANALYTICS).
 		// Rides on this payload because the app fetches the brain list on every open
@@ -210,7 +213,7 @@ export function registerBrainTools(
 						: `No brain matching "${brain}". You have access to: ${names.join(', ')}.`
 				);
 			}
-			setActiveBrain(m.brain.id);
+			await setActiveBrain(m.brain.id);
 			const rows = brainRows(brains, m.brain.id);
 			const label = rows.find((r) => r.id === m.brain!.id)?.label ?? m.brain.id;
 			return {
@@ -368,7 +371,7 @@ export function registerBrainTools(
 			}
 
 			const id = `${created.owner}/${created.name}`;
-			setActiveBrain(id); // land the caller in the new brain
+			await setActiveBrain(id); // land the caller in the new brain
 			const rows = brainRows(await listBrains(), id);
 			return {
 				content: [
@@ -652,7 +655,7 @@ export function registerBrainTools(
 			// If we removed the active brain, fall the active pointer back to a survivor.
 			if (target.id === ctx.activeBrain.id) {
 				const survivor = all.find((b) => b.id !== target.id);
-				if (survivor) setActiveBrain(survivor.id);
+				if (survivor) await setActiveBrain(survivor.id);
 			}
 			const rows = brainRows(await listBrains(), ctx.activeBrain.id);
 			return {
