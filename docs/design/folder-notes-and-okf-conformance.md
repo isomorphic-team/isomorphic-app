@@ -35,7 +35,7 @@ sections with linked entries and descriptions." A bundle-root `index.md` may car
 `okf_version`, "the sole exception permitting frontmatter in index files." Both files are
 optional.
 
-So OKF's `index.md` is navigation. Isomorphic's folder note is a concept: the page that *is*
+So OKF's `index.md` is navigation. Isomorphic's folder note is a concept: the page that _is_
 the folder, which the app opens on folder click and which `kind: folders` views link to.
 Different things wearing one filename.
 
@@ -59,7 +59,7 @@ Different things wearing one filename.
   and once a page has frontmatter, `updated:` is re-stamped on every subsequent write.
 - **That `title` is redundant.** `pageTitle` (`src/lib/wiki.ts:228`) already resolves declared
   `title:` → first `# H1` → filename, with an explicit folder-note case (`:235`) returning the
-  *folder's* name. Seeding an `# H1` instead of passing `title` produces an identical
+  _folder's_ name. Seeding an `# H1` instead of passing `title` produces an identical
   user-visible result from a conformant file.
 - **Reserved names are indexed as ordinary concepts.** `src/lib/brain-index.ts` has no exclusion
   for `index.md` or `log.md`. They are listed by `list_pages`, returned by `search_pages`,
@@ -153,10 +153,12 @@ Create the page, set `type: Vendor`, and link the signed contract.
 # Vendors
 
 ## Active
+
 - [Acme](acme.md) - Payments processor
 - [Northwind](northwind.md) - Data warehouse
 
 ## In review
+
 - [Contoso](contoso.md) - Identity provider
 ```
 
@@ -186,7 +188,7 @@ own file is what makes it safe this time.
 Without this, generating a listing into every folder creates a duplicate shadow page per folder
 that pollutes search and competes for `[[Vendors]]`. With it, the rule is principled rather than
 a special case: OKF says reserved names are not concept documents, so they do not belong in a
-concept index. It also slightly *reduces* page count, which is a small assist to the ceiling
+concept index. It also slightly _reduces_ page count, which is a small assist to the ceiling
 discussed in the records PRD.
 
 **This step is only safe after FR-1 and a migration**, because today `index.md` legitimately
@@ -215,14 +217,14 @@ and OKF granularity are already communicated.
 
 ## 5. Sequencing (the order is forced)
 
-| # | Step | Safe today? |
-|---|---|---|
-| 1 | FR-5: stop stamping frontmatter | Yes. Additive, no migration. |
-| 2 | FR-1: add `overview.md` to the folder-note names | Yes. Purely additive. |
-| 3 | FR-2 + FR-3: generate `index.md`, mark it tool-maintained | After 1 and 2 |
-| 4 | FR-6: the inverse `validate` advisory | After 2 |
-| 5 | Migration: brains move authored content to `overview.md` | Advisory, ongoing |
-| 6 | FR-4: reserved names leave the concept index | **Only after 5** |
+| #   | Step                                                      | Safe today?                  |
+| --- | --------------------------------------------------------- | ---------------------------- |
+| 1   | FR-5: stop stamping frontmatter                           | Yes. Additive, no migration. |
+| 2   | FR-1: add `overview.md` to the folder-note names          | Yes. Purely additive.        |
+| 3   | FR-2 + FR-3: generate `index.md`, mark it tool-maintained | After 1 and 2                |
+| 4   | FR-6: the inverse `validate` advisory                     | After 2                      |
+| 5   | Migration: brains move authored content to `overview.md`  | Advisory, ongoing            |
+| 6   | FR-4: reserved names leave the concept index              | **Only after 5**             |
 
 Step 6 done early is the failure mode: it removes real, authored content from search and from
 wikilink resolution in every brain that still keeps its overview in `index.md`.

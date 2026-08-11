@@ -600,7 +600,7 @@ A brain has one content primitive, the page, which models a **concept**. There i
 for a **record**: a dated occurrence that points at concepts. Concepts are stable and few;
 activity against them is dated and unbounded, and forcing the second into the first evicts
 concept data from the index. A page per event on a ~4,000-page brain crosses `MAX_SCAN_PAGES`
-within months, at which point the *concepts* become unfindable.
+within months, at which point the _concepts_ become unfindable.
 
 Shape: brain-declared tables (`records/<table>.md` carrying an `okf-table` schema under
 OKF's conventional `# Schema` heading), rows stored record-per-section in monthly shards
@@ -650,7 +650,7 @@ are: clicking a folder still renders overview prose with the listing computed li
 wherever the author put the fence.
 
 Two findings from reading the code. Existing brains are mostly conformant already; the
-*platform* is what introduces violations, because `folderNoteSeed` (`app/views/Browse.tsx`)
+_platform_ is what introduces violations, because `folderNoteSeed` (`app/views/Browse.tsx`)
 passes a `title` into `write_page`, which forces frontmatter into every app-created
 `index.md`. That `title` is redundant, since `pageTitle` already derives a folder note's name
 from its folder. Dropping it and seeding an `# H1` instead is roughly three lines and is

@@ -9,7 +9,7 @@
 
 ## 1. Summary
 
-A brain has exactly one content primitive: the **page**, which models a *concept*. There is
+A brain has exactly one content primitive: the **page**, which models a _concept_. There is
 no home for a **record**: a dated occurrence that points at concepts. This PRD asks for one.
 
 Concepts are stable and few. Activity against them is dated, high-volume, and unbounded.
@@ -32,16 +32,16 @@ Four capabilities:
 
 Across every use case surveyed in §3, an activity record has the same four roles:
 
-| Role | What it is | In the brain |
-|---|---|---|
-| **Subject** | the concept the activity is *about* | an existing page |
-| **Actor** | who did it, on our side | an existing page (a person) |
-| **Work unit** | what the activity serves, and the axis it groups by | a page, **often missing today** |
-| **Record** | the dated occurrence: when, what kind, what outcome, what was said | new |
+| Role          | What it is                                                         | In the brain                    |
+| ------------- | ------------------------------------------------------------------ | ------------------------------- |
+| **Subject**   | the concept the activity is _about_                                | an existing page                |
+| **Actor**     | who did it, on our side                                            | an existing page (a person)     |
+| **Work unit** | what the activity serves, and the axis it groups by                | a page, **often missing today** |
+| **Record**    | the dated occurrence: when, what kind, what outcome, what was said | new                             |
 
-The work unit is the interesting one. Teams consistently track activity against *entities*,
-because the systems they use are entity-shaped, and consistently fail to track it against *the
-work*, because there is no field for it. That is where the value concentrates: "who is
+The work unit is the interesting one. Teams consistently track activity against _entities_,
+because the systems they use are entity-shaped, and consistently fail to track it against _the
+work_, because there is no field for it. That is where the value concentrates: "who is
 outstanding on this piece", "which candidates are still in this req", "what happened during
 this incident" are all work-unit questions and none of them are answerable from an
 entity-keyed notes field.
@@ -51,16 +51,16 @@ valid instantiation.
 
 ## 3. Use cases
 
-| Domain | Subject | Actor | Work unit | Record | Count that matters |
-|---|---|---|---|---|---|
-| Editorial | source | reporter | story | outreach, response, interview | touches per contributor |
-| Recruiting | candidate | interviewer | requisition | screen, interview, reference | panel load, time in stage |
-| User research | participant | researcher | study | session | participants per study; over-research |
-| Sales / BD | account contact | rep | opportunity | conversation | activity per rep, stage aging |
-| Legal | matter party | attorney | matter | activity | **billable hours, which get invoiced** |
-| Incident response | service | responder | incident | timeline event | incidents per service |
-| Grantmaking | grantee | program officer | grant | site visit, report | reporting compliance |
-| Personal | person | (the owner) | *(none)* | interaction | who has gone cold |
+| Domain            | Subject         | Actor           | Work unit   | Record                        | Count that matters                     |
+| ----------------- | --------------- | --------------- | ----------- | ----------------------------- | -------------------------------------- |
+| Editorial         | source          | reporter        | story       | outreach, response, interview | touches per contributor                |
+| Recruiting        | candidate       | interviewer     | requisition | screen, interview, reference  | panel load, time in stage              |
+| User research     | participant     | researcher      | study       | session                       | participants per study; over-research  |
+| Sales / BD        | account contact | rep             | opportunity | conversation                  | activity per rep, stage aging          |
+| Legal             | matter party    | attorney        | matter      | activity                      | **billable hours, which get invoiced** |
+| Incident response | service         | responder       | incident    | timeline event                | incidents per service                  |
+| Grantmaking       | grantee         | program officer | grant       | site visit, report            | reporting compliance                   |
+| Personal          | person          | (the owner)     | _(none)_    | interaction                   | who has gone cold                      |
 
 The variation across these rows is **entirely in the schema**, which is why the schema has to
 be brain-defined rather than shipped. The mechanics (dated rows, links into the page graph,
@@ -76,11 +76,11 @@ not a hypothetical.
 
 - **Page per record** blows the index. A brain at ~4,000 concept pages taking on even 12,000
   records a year crosses `MAX_SCAN_PAGES` (5,000) within months, at which point event data
-  evicts concept data and *the concepts themselves* become unfindable. It also breaks the
+  evicts concept data and _the concepts themselves_ become unfindable. It also breaks the
   human-review premise: nobody reviews a diff of 200 machine-written files.
 - **Frontmatter on the subject page** holds a summary (`last_contact`, `contact_count`) but
   not the history, and `MAX_FIELD_KEYS_PER_PAGE` (24) bounds how much summary fits.
-- **`sync_records`** is the right *shape* (upsert by key, source-owned fields, human edits
+- **`sync_records`** is the right _shape_ (upsert by key, source-owned fields, human edits
   sacred, no-resurrection ledger) but its target is pages, so it inherits the page problem.
 - **A markdown table inside a page** works up to a few hundred rows and then stops: it is not
   queryable by `okf-view`, and a cell cannot hold a payload with newlines.
@@ -152,7 +152,7 @@ field: gist (text) one line
 ```
 ````
 
-The fence sits *under* the conventional heading rather than replacing it. OKF illustrates
+The fence sits _under_ the conventional heading rather than replacing it. OKF illustrates
 `# Schema` with a plain markdown table (Column / Type / Description), which is more readable
 but ambiguous to parse once link targets and enums are involved. Keeping the heading satisfies
 the convention and keeps a reader oriented; keeping the fence keeps the payload unambiguous and
@@ -169,6 +169,7 @@ one H2 section: a heading carrying the key, a list of scalar and link fields, th
 
 ```markdown
 ## mail:CAF%3D9x2k...@example.com
+
 - occurred_at: 2026-08-07
 - kind: response
 - outcome: responded
@@ -204,7 +205,7 @@ becomes a broken link, reported by the tooling that already reports broken links
 `page[]` (a list) carries multi-participant records without duplicating the row. This matters
 more than it looks: in every entity-keyed notes field examined, the observable defect was the
 same record pasted onto each participant, because there was no way to express one occurrence
-with several subjects. The duplicates *are* the missing many-to-many.
+with several subjects. The duplicates _are_ the missing many-to-many.
 
 **FR-1e: Records index into D1 as a derived cache.** New tables (`brain_records`,
 `brain_record_links`), populated by the same `ensureFresh` path pages use, rebuilt lazily from
@@ -259,11 +260,11 @@ under-merging is visible and fixable.
 **FR-3d: Declines are durable, in three states.** If a review re-proposes the same declined
 items every run, it will be abandoned inside a month.
 
-| Reviewer says | Row written | Key remembered | Payload kept |
-|---|---|---|---|
-| Yes | yes | yes (it is the row) | yes |
-| Not a record | no | yes | no |
-| Excluded | no | yes | **no** |
+| Reviewer says | Row written | Key remembered      | Payload kept |
+| ------------- | ----------- | ------------------- | ------------ |
+| Yes           | yes         | yes (it is the row) | yes          |
+| Not a record  | no          | yes                 | no           |
+| Excluded      | no          | yes                 | **no**       |
 
 The third state suppresses re-proposal without recording what the occurrence was. Domains that
 need it: journalism (source protection), HR and legal (privilege), health (consent). The
@@ -284,7 +285,7 @@ deployment with no such count can ignore this section; nothing here is on by def
 **FR-4a: The counting rule is configuration, stated in the table's own page and versioned with
 the repo.** This is the requirement most often skipped and most expensive to skip. The first
 time a number is disputed, the definition is what gets argued about, and it needs to have been
-written down *before* the dispute, by the person accountable for it.
+written down _before_ the dispute, by the person accountable for it.
 
 The rule is also an incentive design, not just a measurement one. Whether a single outreach to
 fifteen people counts as fifteen events or one changes behavior toward the metric, and the
@@ -340,20 +341,20 @@ platform ships one domain's schema it inherits every other domain's request to e
 
 ## 8. Platform changes required
 
-| # | Change | Size | Notes |
-|---|---|---|---|
-| 1 | `okf-table` parse layer | S | Pure, mirrors `view-directives.ts`, golden-tested |
-| 2 | Record storage format, shard convention, append path | S | Reuses `write_page` append and `commitFiles` |
-| 3 | Record indexing into D1 + freshness | M | Reuses `ensureFresh`, budget/cursor pattern |
-| 4 | `kind: records` source in `okf-view` | M | |
-| 5 | Group-by on a link column | S | |
-| 6 | Date-window predicates (FR-2c) | M | New expression in the directive grammar |
-| 7 | Record→page links in the graph | S | Extends existing link resolution |
-| 8 | Propose/admit tools + tombstone ledger | M | `sync_records`'s ledger is the template |
-| 9 | Attested counts (FR-4) | S | Only where a deployment needs it |
-| 10 | App rendering of record views | M | No existing surface |
-| 11 | `validate` integration | S | |
-| 12 | **Raise `MAX_SCAN_PAGES`** | S code, M verification | Below; independent of records but unblocked here |
+| #   | Change                                               | Size                   | Notes                                             |
+| --- | ---------------------------------------------------- | ---------------------- | ------------------------------------------------- |
+| 1   | `okf-table` parse layer                              | S                      | Pure, mirrors `view-directives.ts`, golden-tested |
+| 2   | Record storage format, shard convention, append path | S                      | Reuses `write_page` append and `commitFiles`      |
+| 3   | Record indexing into D1 + freshness                  | M                      | Reuses `ensureFresh`, budget/cursor pattern       |
+| 4   | `kind: records` source in `okf-view`                 | M                      |                                                   |
+| 5   | Group-by on a link column                            | S                      |                                                   |
+| 6   | Date-window predicates (FR-2c)                       | M                      | New expression in the directive grammar           |
+| 7   | Record→page links in the graph                       | S                      | Extends existing link resolution                  |
+| 8   | Propose/admit tools + tombstone ledger               | M                      | `sync_records`'s ledger is the template           |
+| 9   | Attested counts (FR-4)                               | S                      | Only where a deployment needs it                  |
+| 10  | App rendering of record views                        | M                      | No existing surface                               |
+| 11  | `validate` integration                               | S                      |                                                   |
+| 12  | **Raise `MAX_SCAN_PAGES`**                           | S code, M verification | Below; independent of records but unblocked here  |
 
 ### 8.1 On `MAX_SCAN_PAGES`
 
@@ -383,11 +384,11 @@ What raising it costs, and what needs verifying before it ships:
 Records serve **views over a brain's own concepts**. The pressure to grow them into a general
 database will be constant and should be refused at a stated line:
 
-| Belongs in records | Belongs in a warehouse |
-|---|---|
-| "Who is outstanding on this work unit" | Cross-source joins |
-| "When did we last contact this subject" | Aggregation beyond count and sum |
-| "How many events per actor this quarter" | Anything spanning systems the brain does not own |
+| Belongs in records                                             | Belongs in a warehouse                              |
+| -------------------------------------------------------------- | --------------------------------------------------- |
+| "Who is outstanding on this work unit"                         | Cross-source joins                                  |
+| "When did we last contact this subject"                        | Aggregation beyond count and sum                    |
+| "How many events per actor this quarter"                       | Anything spanning systems the brain does not own    |
 | Anything answerable by filtering one table and following links | Anything needing a second table joined to the first |
 
 A useful heuristic: **a records table should have at least one `link:` field.** A table that
@@ -404,15 +405,15 @@ describes columns of a dataset that lives in a warehouse, not rows stored in the
 That is the right answer whenever the records already have a home. A table declaration with a
 `resource` and a `# Schema` but **no rows folder** is a fully conformant way to say "this data
 exists, here is its shape, here is where it lives" without copying anything into the brain.
-Rows belong in the repo only when the brain is the *only* home for them, which is the actual
+Rows belong in the repo only when the brain is the _only_ home for them, which is the actual
 condition in most of §3 (nobody runs a warehouse for reporter outreach or interview panels) and
 is not the condition for anything already flowing through a data platform.
 
 So a records table has two backings behind one declaration:
 
-| Backing | When | What the brain stores |
-|---|---|---|
-| Repo rows | The brain is the only home for this activity | The rows |
+| Backing            | When                                                 | What the brain stores      |
+| ------------------ | ---------------------------------------------------- | -------------------------- |
+| Repo rows          | The brain is the only home for this activity         | The rows                   |
 | `resource` pointer | The data already lives in a warehouse or SaaS system | The schema and the pointer |
 
 Both should present the same `# Schema` and, eventually, the same view syntax. Only the
@@ -429,7 +430,7 @@ this design.
 **The spec has no granularity rule, so record-per-section and sharded files are fine.** OKF says
 nothing about file granularity, dated entries, or whether collections split across files; that
 is explicitly a producer's choice. The "one concept per file" rule that governs pages is about
-*concepts*, and a record is not one. Nothing in FR-1b or FR-1c conflicts with the spec.
+_concepts_, and a record is not one. Nothing in FR-1b or FR-1c conflicts with the spec.
 
 **Reserved filenames constrain where a table is declared** (drove FR-1a). `index.md` and
 `log.md` "MUST NOT be used for concept documents", and frontmatter in an index file is permitted
@@ -445,12 +446,12 @@ PRD just declines to deepen it, and neither depends on the other.
 **OKF already has vocabulary for three things this PRD needed** and would otherwise have
 invented:
 
-| Need | OKF supplies | Where |
-|---|---|---|
-| Declaring a table's fields | `# Schema` conventional heading | OKF §13.2 |
-| Typed field declarations | `parameters: [{ name, type, required }]` | OKF §10 |
-| Detected vs. asserted provenance | `generated: { by, at }`, `verified: [{ by, at }]` | OKF §5.2 |
-| Attesting a computed number | `runtime`, `executor`, `attester` | OKF §10 |
+| Need                             | OKF supplies                                      | Where     |
+| -------------------------------- | ------------------------------------------------- | --------- |
+| Declaring a table's fields       | `# Schema` conventional heading                   | OKF §13.2 |
+| Typed field declarations         | `parameters: [{ name, type, required }]`          | OKF §10   |
+| Detected vs. asserted provenance | `generated: { by, at }`, `verified: [{ by, at }]` | OKF §5.2  |
+| Attesting a computed number      | `runtime`, `executor`, `attester`                 | OKF §10   |
 
 The `generated`/`verified` pair is the happiest of these: it maps onto propose-and-admit with no
 adaptation at all, and it means an outside OKF consumer can tell a proposed row from an admitted
