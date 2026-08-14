@@ -63,6 +63,27 @@ app.onhostcontextchanged = applyHostContext;
 app.onerror = (e) => toast(String(e), true);
 app.ontoolresult = handleToolResult;
 
+// A RESULT IS COMING. The host announces the tool call that opened this widget when the
+// call STARTS and delivers its result when the tool FINISHES, so silence at the
+// self-boot deadline below means "the tool is still running", not "nothing is coming" —
+// and view_page on a large brain (a cold Worker, an index catch-up) is routinely slower
+// than the deadline. Self-booting into the file tree there is what made the app flash
+// the right page and then replace it with the tree: the tree fetch went out FIRST and
+// answered LAST, so it landed on top of the page that had arrived meanwhile.
+//
+// These are one-shot events, so the handlers are registered here at module scope, before
+// connect() — the host may send them the moment the handshake completes.
+let resultPending = false;
+function noteResultComing() {
+	resultPending = true;
+}
+app.ontoolinput = noteResultComing;
+app.ontoolinputpartial = noteResultComing;
+// Cancelled means the result is NOT coming after all, so stop holding the screen for it.
+app.ontoolcancelled = () => {
+	resultPending = false;
+};
+
 // ---------- chrome ----------
 
 // The single overflow menu (⋯) that holds everything secondary, so the top bar stays
@@ -381,6 +402,13 @@ function Root() {
 
 // ---------- connect ----------
 
+// How long the app waits for an opening tool result before drawing something itself.
+// The short one is the ordinary case (no call announced); the long one bounds the wait
+// when the host HAS announced a call, so a tool that never returns still ends with a
+// usable app rather than a permanent spinner.
+const SELF_BOOT_MS = 1200;
+const SELF_BOOT_MAX_MS = 30_000;
+
 function connectToHost() {
 	show({ kind: 'loading', label: 'Connecting…' }, { push: false });
 	const timeout = setTimeout(() => {
@@ -403,18 +431,29 @@ function connectToHost() {
 			clearTimeout(timeout);
 			const ctx = app.getHostContext();
 			if (ctx) applyHostContext(ctx); // may auto-request fullscreen (see applyHostContext)
-			setTimeout(() => {
-				// SELF-BOOT: no tool result arrived, so open the tree ourselves — and fetch
-				// the nav's own data too, which handleToolResult would otherwise have been
-				// the only thing to ask for. Without this the app came up with no brain
-				// list: no brain picker, and the Analytics row silently absent because
-				// `features` rides on that same payload. Safe to fire only here, where by
-				// definition no result is coming to name a brain first.
-				if (currentView.kind === 'loading') {
-					void ensureBrainList();
-					openBrowse();
+			// SELF-BOOT: no tool result arrived, so open the tree ourselves — and fetch the
+			// nav's own data too, which handleToolResult would otherwise have been the only
+			// thing to ask for. Without this the app came up with no brain list: no brain
+			// picker, and the Analytics row silently absent because `features` rides on that
+			// same payload.
+			//
+			// Two deadlines, because "nothing yet" means two different things. If the host
+			// never announced a call, none is coming (a widget reopened from history, a host
+			// that does not replay) and the tree is the right thing to draw. If it DID
+			// announce one, the result is what belongs on screen and the app waits for it —
+			// but not forever: a hung tool must still leave something usable behind.
+			let waited = 0;
+			const selfBoot = () => {
+				if (currentView.kind !== 'loading') return; // a result landed, or we moved on
+				waited += SELF_BOOT_MS;
+				if (resultPending && waited < SELF_BOOT_MAX_MS) {
+					setTimeout(selfBoot, SELF_BOOT_MS);
+					return;
 				}
-			}, 1200);
+				void ensureBrainList();
+				openBrowse();
+			};
+			setTimeout(selfBoot, SELF_BOOT_MS);
 		})
 		.catch((e) => {
 			clearTimeout(timeout);
