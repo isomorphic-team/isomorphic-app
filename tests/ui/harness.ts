@@ -35,7 +35,11 @@ export const ROUTES = {
 	// An opening result about a brain the connection's pointer does not name yet.
 	'other-brain': 'browse',
 	// No opening tool result at all: the app self-boots into the tree after 1200ms.
-	cold: 'browse'
+	cold: 'browse',
+	// A result SLOWER than that deadline, with and without the host announcing the call
+	// it is waiting on. Both must land on the page the tool opened.
+	'slow-result': 'page',
+	'pending-input': 'page'
 } as const;
 
 /**
