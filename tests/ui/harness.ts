@@ -37,7 +37,11 @@ export const ROUTES = {
 	// A page that is edited behind the widget's back right after it renders.
 	stale: 'page',
 	// No opening tool result at all: the app self-boots into the tree after 1200ms.
-	cold: 'browse'
+	cold: 'browse',
+	// A result SLOWER than that deadline, with and without the host announcing the call
+	// it is waiting on. Both must land on the page the tool opened.
+	'slow-result': 'page',
+	'pending-input': 'page'
 } as const;
 
 /**

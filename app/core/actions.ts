@@ -630,16 +630,6 @@ async function fetchPaths(): Promise<BrowseData> {
 		hidden?: unknown;
 		needsConfig?: boolean;
 	};
-	// This is a WIDGET-initiated call, so it never passes through handleToolResult —
-	// name the brain and apply the path policy here or the tree keeps whatever the last
-	// host-initiated result left behind (a different brain's, or the wiki/ default).
-	// Naming the brain also keeps the trail's root crumb honest: this call can be the
-	// FIRST thing the app does (the self-boot in connectToHost, when no tool result
-	// opened the widget), in which case nothing else has said which brain the tree
-	// belongs to and the crumb would name a view instead of a brain. Brain before
-	// policy, for the reason in handleToolResult.
-	applyBrainContext(sc);
-	applyPolicy(sc);
 	const paths = firstText(result)
 		.split('\n')
 		.map((l) => l.trim())
@@ -651,8 +641,28 @@ async function fetchPaths(): Promise<BrowseData> {
 		hidden: Array.isArray(sc.hidden) ? (sc.hidden as string[]) : [],
 		needsConfig: !!sc.needsConfig
 	};
-	setBrowseCache(data);
-	browseFetchedAt = Date.now();
+	// This is a WIDGET-initiated call, so it never passes through handleToolResult —
+	// name the brain and apply the path policy here or the tree keeps whatever the last
+	// host-initiated result left behind (a different brain's, or the wiki/ default).
+	// Naming the brain also keeps the trail's root crumb honest: this call can be the
+	// FIRST thing the app does (the self-boot in connectToHost, when no tool result
+	// opened the widget), in which case nothing else has said which brain the tree
+	// belongs to and the crumb would name a view instead of a brain. Brain before
+	// policy, for the reason in handleToolResult.
+	//
+	// ONLY IF IT IS STILL AN ANSWER TO THE QUESTION WE ASKED. A self-boot fetch goes out
+	// with no brain named, so it answers about the CONNECTION's brain — and an opening
+	// result can land while it is in flight, naming a different one (a `brain:`-targeted
+	// view_page). Adopting the stale answer then would rename the crumb, reset the path
+	// policy, and cache another brain's page list behind the page on screen, which is
+	// issue #26's shape reached through the back door.
+	const answered = (sc.activeBrain as { id?: string } | undefined)?.id;
+	if (!activeBrain || !answered || answered === activeBrain.id) {
+		applyBrainContext(sc);
+		applyPolicy(sc);
+		setBrowseCache(data);
+		browseFetchedAt = Date.now();
+	}
 	return data;
 }
 
@@ -670,9 +680,19 @@ async function openBrowse(focus?: string) {
 		return;
 	}
 	show({ kind: 'loading', label: 'Loading files…' });
+	// The view this call is standing on. A cold tree fetch is the app's slowest open,
+	// and the one it makes UNATTENDED (the self-boot in connectToHost), so it is the one
+	// most likely to be overtaken: the host can deliver the opening tool result at any
+	// point while list_pages is in flight. Whatever landed meanwhile is a real answer to
+	// a real request — showing the tree on top of it is what made a slow view_page flash
+	// its page and then fall back to the file tree. Same guard revalidateBrowse uses.
+	const opened = currentView;
 	try {
-		show({ kind: 'browse', ...(await fetchPaths()), focus });
+		const data = await fetchPaths();
+		if (currentView !== opened) return;
+		show({ kind: 'browse', ...data, focus });
 	} catch (e) {
+		if (currentView !== opened) return;
 		if (isNoBrain(String(e))) return openAddBrain();
 		show({
 			kind: 'error',

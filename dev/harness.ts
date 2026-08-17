@@ -1300,8 +1300,18 @@ const bridge = new AppBridge(
 	{ openLinks: {}, serverTools: {}, logging: {} }
 );
 
-bridge.oncalltool = async (params) =>
-	handleTool(params.name, (params.arguments ?? {}) as Record<string, unknown>);
+bridge.oncalltool = async (params) => {
+	// Every tool the app calls itself, in order, for tests that assert on what it did
+	// NOT ask for (see `#pending-input`: an app waiting for a result it knows is coming
+	// must not fetch the tree). Nothing in the preview reads this.
+	((window as unknown as { __toolCalls?: string[] }).__toolCalls ??= []).push(params.name);
+	// The slow-result routes need the app's OWN tree fetch to still be in flight when
+	// the opening result lands — that overlap is the whole scenario, and an instant
+	// answer here would close it (see slowResultMode).
+	if ((slowResultMode || pendingInputMode) && params.name === 'list_pages')
+		await new Promise((r) => setTimeout(r, SLOW_LIST_MS));
+	return handleTool(params.name, (params.arguments ?? {}) as Record<string, unknown>);
+};
 bridge.onopenlink = async () => ({}); // no-op; links would open a tab in a real host
 bridge.onloggingmessage = async () => ({});
 // The app's autoResize reports content-height changes here; in inline mode we
@@ -1438,8 +1448,28 @@ const coldMode = hashMode === 'cold';
 // its own pointer here, because the real one lags for the same reason: it is written by
 // the request that opened the widget and read by the next one.
 const otherBrainMode = hashMode === 'other-brain';
+// `#slow-result` and `#pending-input` are the opposite of #cold: a result IS coming, it
+// is just slower than the app's self-boot deadline. A host announces a tool call when it
+// STARTS and delivers the result when the tool FINISHES, and view_page on a large brain
+// (cold Worker, index catch-up) routinely takes longer than 1200ms.
+//
+//   #slow-result    the host says nothing until the result lands, so the app self-boots
+//                   into the tree and its list_pages is still in flight when the page
+//                   arrives. The result names ANOTHER brain, the way a `brain:`-targeted
+//                   view_page does, so the stale answer is about the wrong brain too.
+//   #pending-input  the host announces the call first (sendToolInput), which is the
+//                   app's signal that a result is coming and it should keep waiting.
+const slowResultMode = hashMode === 'slow-result';
+const pendingInputMode = hashMode === 'pending-input';
+// Past the app's 1200ms deadline, with the tree fetch that deadline kicks off answering
+// after the page — so the page is on screen when the stale tree lands.
+const SLOW_RESULT_MS = 1800;
+const SLOW_LIST_MS = 1600;
 // A brain that is NOT the active one, with content of its own to tell them apart.
 const OTHER_BRAIN = 'northwind/northwind-wiki';
+// One of its pages, so `#slow-result`'s opening result is unmistakably about the brain
+// the model named rather than the one the connection's pointer still holds.
+const OTHER_BRAIN_PAGE = 'wiki/facilities/headquarters.md';
 // `#stale` is issue #29's second case: somebody else edited the page after the widget
 // rendered it. The opening result is sent from the content as it was, and the stored
 // page is then changed, so the widget is holding a render the brain has moved past
@@ -1474,6 +1504,30 @@ bridge.oninitialized = async () => {
 	// No opening result at all: the app is on its own from here (see coldMode).
 	if (coldMode) {
 		document.getElementById('status')!.textContent = 'connected · cold (no tool result)';
+		return;
+	}
+	// A result that is slower than the app's self-boot deadline (see slowResultMode).
+	// `#pending-input` announces the call first; `#slow-result` says nothing at all,
+	// which is the harder case and the one that used to lose the page.
+	if (slowResultMode || pendingInputMode) {
+		const brain = slowResultMode ? OTHER_BRAIN : activeBrainId;
+		const path = slowResultMode ? OTHER_BRAIN_PAGE : openPath;
+		if (pendingInputMode) bridge.sendToolInput({ arguments: { path } });
+		document.getElementById('status')!.textContent = `connected · ${hashMode} (result pending)`;
+		setTimeout(async () => {
+			const markdown = await displayPage(pagesFor(brain), path);
+			bridge.sendToolResult({
+				content: [{ type: 'text', text: markdown }],
+				structuredContent: {
+					view: 'page',
+					path,
+					markdown,
+					sha: pageSha(pagesFor(brain)[path]),
+					activeBrain: brainMeta(brain)
+				}
+			});
+			document.getElementById('status')!.textContent = `connected · ${hashMode}`;
+		}, SLOW_RESULT_MS);
 		return;
 	}
 	// announce the input, then deliver the result (sendToolInput once, then sendToolResult).
