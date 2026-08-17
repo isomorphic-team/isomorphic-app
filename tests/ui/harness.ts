@@ -34,6 +34,8 @@ export const ROUTES = {
 	nobrains: 'add-brain',
 	// An opening result about a brain the connection's pointer does not name yet.
 	'other-brain': 'browse',
+	// A page that is edited behind the widget's back right after it renders.
+	stale: 'page',
 	// No opening tool result at all: the app self-boots into the tree after 1200ms.
 	cold: 'browse',
 	// A result SLOWER than that deadline, with and without the host announcing the call
@@ -69,7 +71,7 @@ export function appFrame(page: Page): FrameLocator {
 export async function openApp(
 	page: Page,
 	route: Route = '',
-	opts: { mode?: DisplayMode; now?: string } = {}
+	opts: { mode?: DisplayMode; now?: string; advanceable?: boolean } = {}
 ): Promise<FrameLocator> {
 	const now = opts.now ?? FROZEN_NOW;
 
@@ -88,7 +90,15 @@ export async function openApp(
 	//
 	// setFixedTime, not install(): install() also freezes TIMERS, and the app's cold
 	// self-boot is a 1200ms setTimeout that would then never fire.
-	await page.clock.setFixedTime(new Date(now));
+	//
+	// `advanceable` opts into install() for the one kind of test that has to make time
+	// PASS rather than merely hold still: anything asserting how the app reports the
+	// age of what it is showing. runFor() needs an installed clock, and a fixed one
+	// leaves Date.now() answering the same value forever, so every age reads as zero.
+	// Only for routes whose view arrives from a tool result — a route that self-boots
+	// on a timer will not start under a frozen one.
+	if (opts.advanceable) await page.clock.install({ time: new Date(now) });
+	else await page.clock.setFixedTime(new Date(now));
 
 	const params = new URLSearchParams();
 	params.set('now', now);

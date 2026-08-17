@@ -35,7 +35,7 @@ import type {
 	UsageBrain
 } from './types.ts';
 import { app, callTool, firstText } from './host.ts';
-import { FOLDER_NOTE_NAMES } from './util.ts';
+import { FOLDER_NOTE_NAMES, refreshOutcome } from './util.ts';
 import {
 	show,
 	history,
@@ -108,7 +108,8 @@ function handleToolResult(result: CallToolResult) {
 				kind: 'edit',
 				path: String(sc.path ?? ''),
 				markdown: String(sc.markdown ?? ''),
-				sha: String(sc.sha ?? '')
+				sha: String(sc.sha ?? ''),
+				fetchedAt: Date.now()
 			},
 			{ push: false }
 		);
@@ -152,7 +153,13 @@ function handleToolResult(result: CallToolResult) {
 		);
 	else
 		show(
-			{ kind: 'page', path: String(sc.path ?? ''), markdown: String(sc.markdown ?? '') },
+			{
+				kind: 'page',
+				path: String(sc.path ?? ''),
+				markdown: String(sc.markdown ?? ''),
+				sha: typeof sc.sha === 'string' ? sc.sha : undefined,
+				fetchedAt: Date.now()
+			},
 			{ push: false }
 		);
 }
@@ -480,10 +487,22 @@ function finishShareBrain(sc: Record<string, unknown>) {
 	show(fresh, { push: false });
 }
 
-async function fetchPage(path: string): Promise<string> {
+// One page's current content, plus the blob sha it is a render OF. The sha is what
+// lets a later fetch answer "is this still what the branch holds", which nothing in
+// the app could ask before: a render carried its text and no notion of which version
+// the text was.
+async function fetchPage(path: string): Promise<{ markdown: string; sha: string }> {
 	const result = await callTool('read_page', { path, ...brainArgs() });
 	if (result.isError) throw new Error(firstText(result));
-	return firstText(result);
+	const sc = (result.structuredContent ?? {}) as { sha?: string };
+	return { markdown: firstText(result), sha: typeof sc.sha === 'string' ? sc.sha : '' };
+}
+
+// Build a page view from freshly fetched content. Every page render is stamped with
+// the moment it was fetched, so the viewer can say how old it is rather than
+// presenting a snapshot as though it were live.
+function pageView(path: string, page: { markdown: string; sha: string }): View {
+	return { kind: 'page', path, markdown: page.markdown, sha: page.sha, fetchedAt: Date.now() };
 }
 
 async function fetchPageList(): Promise<string[]> {
@@ -500,7 +519,7 @@ async function fetchPageIndex(): Promise<{ path: string; title: string }[]> {
 async function navigateTo(path: string) {
 	show({ kind: 'loading', label: `Loading ${path}…` });
 	try {
-		show({ kind: 'page', path, markdown: await fetchPage(path) });
+		show(pageView(path, await fetchPage(path)));
 	} catch (e) {
 		if (isNoBrain(String(e))) return openAddBrain();
 		show({
@@ -509,6 +528,41 @@ async function navigateTo(path: string) {
 			detail: String(e),
 			retry: () => navigateTo(path)
 		});
+	}
+}
+
+// Re-fetch the page on screen and swap it in place.
+//
+// The viewer had no way to do this at all: a render was a snapshot of a page that
+// keeps moving, with no control to reload it and nothing recording how old it was
+// (issue #29). The reader could only reopen the page from the conversation, which
+// costs a round trip and still gives no way to tell current from stale.
+//
+// Deliberately quiet. No loading state, because the content already on screen is a
+// better thing to look at during the fetch than a spinner, and a failure leaves the
+// stale render up rather than blanking a page over a refresh blip. The toast is
+// where the answer goes, including when the answer is "nothing moved" — a refresh
+// that repaints identical bytes and says nothing is indistinguishable from one that
+// silently failed, which is the confusion this control exists to end.
+async function refreshPage() {
+	const before = currentView;
+	if (before.kind !== 'page') return;
+	try {
+		const fresh = await fetchPage(before.path);
+		// An await is long enough for the reader to navigate away; repainting the page
+		// they left would be worse than not refreshing at all.
+		if (currentView.kind !== 'page' || currentView.path !== before.path) return;
+		show(pageView(before.path, fresh), { push: false });
+		const outcome = refreshOutcome(before.sha, fresh.sha);
+		toast(
+			outcome === 'updated'
+				? 'Updated to the latest version'
+				: outcome === 'current'
+					? 'Already up to date'
+					: 'Refreshed'
+		);
+	} catch (e) {
+		toast(`Couldn't refresh: ${e}`, true);
 	}
 }
 
@@ -890,7 +944,8 @@ async function openEditor(path: string) {
 			kind: 'edit',
 			path: String(sc.path ?? path),
 			markdown: String(sc.markdown ?? ''),
-			sha: String(sc.sha ?? '')
+			sha: String(sc.sha ?? ''),
+			fetchedAt: Date.now()
 		});
 	} catch (e) {
 		toast(`Couldn't open editor: ${e}`, true);
@@ -981,6 +1036,8 @@ export {
 	openShareBrain,
 	finishShareBrain,
 	fetchPage,
+	pageView,
+	refreshPage,
 	fetchPageList,
 	navigateTo,
 	openAsset,

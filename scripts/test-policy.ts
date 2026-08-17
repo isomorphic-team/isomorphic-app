@@ -36,6 +36,7 @@ import {
 	setActiveBrain,
 	pickShownBrain
 } from '../app/core/store.ts';
+import { renderAge, refreshOutcome } from '../app/core/util.ts';
 
 let failures = 0;
 function check(label: string, cond: boolean, detail = '') {
@@ -285,6 +286,55 @@ console.log('\nthe connection’s pointer never overrides the brain on screen');
 		pickShownBrain([rows[0]], A.id, false)?.id === A.id
 	);
 	check('a list naming neither leaves the widget alone', pickShownBrain([], A.id, false) === null);
+}
+
+// ---------------------------------------------------------------------------
+// What the page viewer is allowed to say about its own render (issue #29).
+//
+// A render was a snapshot of a page that keeps moving, with no control to reload it
+// and nothing recording which version or which moment it came from. Both rules below
+// decide what the reader is TOLD, which is the part that can be wrong in a way no
+// type catches: a control that reports an age reports a false one just as readily as
+// a true one, and a refresh that claims "no change" on a page that did change is
+// worse than the silence it replaced.
+// ---------------------------------------------------------------------------
+
+console.log('\nhow old a render says it is');
+{
+	const now = Date.parse('2026-08-17T12:00:00Z');
+	const ago = (ms: number) => now - ms;
+
+	check('a render with no fetch time claims no age', renderAge(undefined, now) === null);
+	check('nor does one stamped zero', renderAge(0, now) === null);
+	// Under the threshold the honest answer is silence, not "0m": a control that
+	// announces an age on a one-second-old render teaches the reader to ignore it.
+	check('a fresh render says nothing', renderAge(ago(1_000), now) === null);
+	check('…still nothing at 59s', renderAge(ago(59_000), now) === null);
+	check('one minute is where it starts speaking', renderAge(ago(60_000), now) === '1m');
+	check('minutes below the hour', renderAge(ago(45 * 60_000), now) === '45m');
+	check(
+		'…and 59m does not round up to an hour',
+		renderAge(ago(59 * 60_000 + 59_000), now) === '59m'
+	);
+	check('hours below the day', renderAge(ago(3 * 3600_000), now) === '3h');
+	check('…and 23h stays hours', renderAge(ago(23 * 3600_000 + 59 * 60_000), now) === '23h');
+	check('a day and beyond', renderAge(ago(50 * 3600_000), now) === '2d');
+	// A clock that moved backwards under us would otherwise produce a negative age
+	// and, once floored, a confident "0m" on a render from the future.
+	check('a backwards clock claims nothing', renderAge(now + 60_000, now) === null);
+}
+
+console.log('\nwhat a finished refresh may claim');
+{
+	check('the same blob means nothing moved', refreshOutcome('abc', 'abc') === 'current');
+	check('a different blob means it did', refreshOutcome('abc', 'def') === 'updated');
+	// Either side missing is a real case (a Worker that predates the sha), and the
+	// answer is to withhold the claim rather than guess one. Guessing 'updated' cries
+	// wolf on every refresh; guessing 'current' hides the edit the reader came for.
+	check('no sha before means no claim', refreshOutcome(undefined, 'def') === 'unknown');
+	check('no sha after means no claim', refreshOutcome('abc', undefined) === 'unknown');
+	check('neither side means no claim', refreshOutcome(undefined, undefined) === 'unknown');
+	check('an empty sha is missing, not equal', refreshOutcome('', '') === 'unknown');
 }
 
 // ---------------------------------------------------------------------------

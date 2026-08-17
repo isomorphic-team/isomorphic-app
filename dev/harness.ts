@@ -568,6 +568,17 @@ function stripFrontmatter(md: string): string {
 	return m ? md.slice(m[0].length) : md;
 }
 
+// A stand-in for the git blob sha the real store reports. Any function of the
+// content will do, and being a function of the content is the whole property the
+// viewer depends on: the same page reads back the same value, and a page that was
+// written reads back a different one. Not a real hash and not trying to be.
+function pageSha(md: string | undefined): string {
+	if (md === undefined) return '';
+	let h = 0;
+	for (let i = 0; i < md.length; i++) h = (Math.imul(h, 31) + md.charCodeAt(i)) | 0;
+	return `sha-${(h >>> 0).toString(16)}`;
+}
+
 // A page's display title (frontmatter title, else de-slugged filename) — a small
 // stand-in for the server's titleOf, enough to preview the backlinks panel.
 function titleOf(p: string, md: string): string {
@@ -663,8 +674,10 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
 			if (md === undefined) return errText(`"${path}" does not exist.`);
 			// Mirror the server: agents (and the app's navigate path) get the fence
 			// plus a freshly computed snapshot; the app unwraps it for display.
-			if (!hasViews(md)) return text(md);
-			return text((await renderViews(md, path, viewCtxFor(pg))).snapshotted);
+			// `sha` rides along the same way, so the refresh control can tell a page
+			// that moved from one that did not (issue #29).
+			const body = hasViews(md) ? (await renderViews(md, path, viewCtxFor(pg))).snapshotted : md;
+			return { ...text(body), structuredContent: { path, sha: pageSha(md) } };
 		}
 		case 'read_media': {
 			const asset = assetsFor(bid)[path];
@@ -1457,6 +1470,21 @@ const OTHER_BRAIN = 'northwind/northwind-wiki';
 // One of its pages, so `#slow-result`'s opening result is unmistakably about the brain
 // the model named rather than the one the connection's pointer still holds.
 const OTHER_BRAIN_PAGE = 'wiki/facilities/headquarters.md';
+// `#stale` is issue #29's second case: somebody else edited the page after the widget
+// rendered it. The opening result is sent from the content as it was, and the stored
+// page is then changed, so the widget is holding a render the brain has moved past
+// with nothing on screen saying so. Refreshing is the only way to find out, which is
+// the whole point of the control.
+//
+// The edit lands AFTER the opening result rather than before, because the order is
+// the scenario: a render that was correct when it was taken and is not any more.
+const staleMode = hashMode === 'stale';
+function editPageBehindTheWidget() {
+	const pages = activePages();
+	const md = pages[openPath];
+	if (md === undefined) return;
+	pages[openPath] = `${md}\n\nAdded by somebody else while you were reading.\n`;
+}
 if (noBrainsMode) {
 	brainsFixture = [];
 	activeBrainId = '';
@@ -1494,6 +1522,7 @@ bridge.oninitialized = async () => {
 					view: 'page',
 					path,
 					markdown,
+					sha: pageSha(pagesFor(brain)[path]),
 					activeBrain: brainMeta(brain)
 				}
 			});
@@ -1622,11 +1651,13 @@ bridge.oninitialized = async () => {
 								view: 'page',
 								path: openPath,
 								markdown: await displayPage(ap, openPath),
+								sha: pageSha(ap[openPath]),
 								activeBrain: brainMeta(activeBrainId)
 							}
 						}
 		);
 	}
+	if (staleMode) editPageBehindTheWidget();
 	document.getElementById('status')!.textContent = `connected · ${mode}`;
 };
 
@@ -1673,6 +1704,7 @@ sel.addEventListener('change', async () => {
 			view: 'page',
 			path: openPath,
 			markdown,
+			sha: pageSha(activePages()[openPath]),
 			activeBrain: brainMeta(activeBrainId)
 		}
 	});

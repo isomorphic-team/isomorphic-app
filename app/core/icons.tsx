@@ -348,6 +348,27 @@ function PlusIcon() {
 	);
 }
 
+// Circular arrow, the conventional glyph for "fetch this again". Drawn as an arc
+// with a gap rather than a full circle so the arrowhead reads as direction; a closed
+// ring with a head on it looks like a loading spinner frozen mid-spin.
+function RefreshIcon() {
+	return (
+		<svg
+			width="16"
+			height="16"
+			viewBox="0 0 16 16"
+			fill="none"
+			stroke="currentColor"
+			stroke-width="1.6"
+			stroke-linecap="round"
+			stroke-linejoin="round"
+		>
+			<path d="M13.2 7.3a5.3 5.3 0 1 0-.7 3.6" />
+			<path d="M13.4 4.1v3.3h-3.3" />
+		</svg>
+	);
+}
+
 // A small initials avatar in a stable, name-derived tint. Deliberately NOT a
 // GitHub avatar image — the iframe CSP blocks external hosts, so remote images
 // can't load; initials keep attribution legible without a network fetch.
@@ -402,5 +423,6 @@ export {
 	ExpandCollapseIcon,
 	EyeIcon,
 	LockIcon,
+	RefreshIcon,
 	InitialsAvatar
 };
