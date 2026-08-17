@@ -235,6 +235,12 @@ export function registerBrainApp(
 					view: 'page',
 					path,
 					markdown,
+					// The blob sha of what this render is OF. readFile already returns it
+					// and every write path already treats a page as versioned (write_page
+					// refuses a save against a stale sha); only the read path threw the
+					// version away, which is why the viewer could not tell a current render
+					// from one the branch had moved past. Costs nothing extra to send.
+					sha: file.sha,
 					config: editPolicy(config),
 					activeBrain
 				}

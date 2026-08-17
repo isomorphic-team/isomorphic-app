@@ -75,6 +75,14 @@ function ConfirmDialog() {
 	);
 }
 
+// How long a success toast stays up. It used to be a flat 2.5s, which was sized for
+// "Saved ✓" and is not enough for a sentence: the editor now shows what the server
+// actually reported about a write, and a message nobody can finish reading is worth
+// no more than the checkmark it replaced. Errors keep their own longer, flat budget.
+export function successMs(text: string): number {
+	return Math.min(8000, 2500 + text.length * 25);
+}
+
 function Toast() {
 	const [state, setState] = useState<{ text: string; error: boolean; show: boolean }>({
 		text: '',
@@ -88,7 +96,7 @@ function Toast() {
 			clearTimeout(timer.current);
 			timer.current = window.setTimeout(
 				() => setState((s) => ({ ...s, show: false })),
-				error ? 6000 : 2500
+				error ? 6000 : successMs(text)
 			);
 		};
 	}, []);

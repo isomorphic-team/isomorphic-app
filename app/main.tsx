@@ -227,9 +227,16 @@ function SearchBox() {
 function HeaderAction({ action }: { action: ViewAction }) {
 	if (action.icon)
 		return (
+			// An icon action MAY also carry a label, and then wears both: the page's
+			// refresh control reports the render's age beside its glyph, which is a
+			// property of the action rather than a second control, and splitting them
+			// into two header slots would read as two things to press. `xs` rather than
+			// the default size so a labelled icon button stays the same height as the
+			// bare glyphs beside it. `aria-label` stays the title either way, since the
+			// visible text is a value ("4m") and not the name of what the button does.
 			<Button
 				variant="ghost"
-				size="icon"
+				size={action.label ? 'xs' : 'icon'}
 				title={action.title}
 				aria-label={action.title}
 				disabled={action.disabled}
@@ -238,6 +245,7 @@ function HeaderAction({ action }: { action: ViewAction }) {
 				class={action.active ? 'text-accent' : undefined}
 			>
 				{action.icon}
+				{action.label && <span class="tabular-nums">{action.label}</span>}
 			</Button>
 		);
 	// A LABELLED action lights up exactly like an icon one. This branch used to drop

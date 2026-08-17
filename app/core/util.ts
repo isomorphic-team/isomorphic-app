@@ -22,6 +22,48 @@ export function relativeTime(iso: string): string {
 	return iso.slice(0, 10);
 }
 
+// How old a render is, in the compact form the refresh control wears as its label
+// ("4m", "2h", "3d"). `now` is passed in rather than read off the clock so the rule
+// can be pinned by a pure test.
+//
+// Null means "new enough that saying so would be noise", and that is the point of
+// the threshold: a control that announces an age on a render one second old trains
+// the reader to ignore it, and this label only earns its space in the header when
+// the answer is not obvious. Null is also what an unknown fetch time reports, since
+// a render whose age we cannot vouch for must not claim one — including the case
+// where a clock moved backwards under us.
+const AGE_VISIBLE_AFTER_MS = 60_000;
+
+export function renderAge(fetchedAt: number | undefined, now: number): string | null {
+	if (!fetchedAt) return null;
+	const ms = now - fetchedAt;
+	if (ms < AGE_VISIBLE_AFTER_MS) return null;
+	const mins = Math.floor(ms / 60_000);
+	if (mins < 60) return `${mins}m`;
+	const hrs = Math.floor(mins / 60);
+	if (hrs < 24) return `${hrs}h`;
+	return `${Math.floor(hrs / 24)}d`;
+}
+
+// What a completed refresh is allowed to claim, decided on blob shas alone.
+//
+// Comparing the MARKDOWN instead would be wrong here even though it looks equivalent:
+// view_page serves a page with its okf-view fences replaced by live results, while
+// read_page serves the same page with the cached snapshot beneath the fence, so the
+// two spellings of an unchanged page differ by construction and every refresh of a
+// page holding a view would announce a change that never happened.
+//
+// 'unknown' is the honest answer when either side has no sha (an older Worker, a
+// backend that does not report one). The page is still swapped for the fresh copy;
+// what is withheld is the claim about whether anything moved.
+export function refreshOutcome(
+	before: string | undefined,
+	after: string | undefined
+): 'updated' | 'current' | 'unknown' {
+	if (!before || !after) return 'unknown';
+	return before === after ? 'current' : 'updated';
+}
+
 // A host that refuses a tool call substitutes its own text for the result, so what
 // reaches the widget is several paragraphs of instructions addressed to the MODEL
 // ("you *may* attempt to accomplish this action using other tools…"). Rendering that

@@ -45,6 +45,8 @@ import {
 	type Role
 } from '../src/lib/orgs.ts';
 import { registerMediaTools } from '../src/tools/media.ts';
+import { registerCoreTools } from '../src/tools/core.ts';
+import { registerBrainApp } from '../src/tools/apps.ts';
 import { loadCustomToolDefs, registerCustomTools } from '../src/tools/custom.ts';
 import { installationOctokit } from '../src/lib/github.ts';
 import { createAndScaffoldBrain, buildScaffoldFiles } from '../src/lib/scaffold-core.ts';
@@ -190,6 +192,11 @@ const getContext = async () => ({
 });
 registerLibrarianTools(server, getContext);
 registerMediaTools(server, getContext);
+// The two READ tools the app renders a page from. Registered here for the version
+// contract below: only a real store hands out real blob shas, so a stub could not
+// tell whether the sha a render reports is the one that page actually has.
+registerCoreTools(server, getContext);
+registerBrainApp(server, getContext);
 const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
 await server.connect(serverTransport);
 const client = new Client({ name: 'e2e', version: '0.0.0' });
@@ -228,6 +235,21 @@ async function call(tool: string, args: Record<string, unknown>) {
 		content: { type: string; text: string }[];
 	};
 	return { isError: !!res.isError, text: res.content.map((c) => c.text).join('\n') };
+}
+// Same call, keeping structuredContent. Most assertions here read the text block,
+// which is what an agent sees; the app reads the structured half, so the fields it
+// navigates and refreshes on need a way to be asserted too.
+async function callSc(tool: string, args: Record<string, unknown>) {
+	const res = (await client.callTool({ name: tool, arguments: args })) as {
+		isError?: boolean;
+		content: { type: string; text: string }[];
+		structuredContent?: Record<string, unknown>;
+	};
+	return {
+		isError: !!res.isError,
+		text: res.content.map((c) => c.text).join('\n'),
+		sc: res.structuredContent ?? {}
+	};
 }
 async function headSha(): Promise<string> {
 	return (await store.getHead(repoArgs)).commitSha;
@@ -923,6 +945,60 @@ try {
 	// `encoding` is that the inline-content path decodes as UTF-8 and would corrupt
 	// these bytes silently, so a round-trip that compares base64 exactly is the
 	// assertion that would have caught it.
+	// Issue #29: a render must carry the version it is a render OF. The viewer had no
+	// way to reload a page and no way to tell a current render from one the branch had
+	// moved past, because the read tools returned content and dropped the blob sha
+	// readFile already hands them. Both read paths report it, and they must agree:
+	// the app opens a page through view_page and refreshes it through read_page, so
+	// two different answers would make every refresh look like someone else's edit.
+	console.log('\npage version (issue #29)');
+	{
+		const path = 'wiki/vendors/versioned.md';
+		await call('write_page', { path, content: '# Versioned\n\nFirst.\n', title: 'Versioned' });
+
+		const stored = await store.readFile(repoArgs, path);
+		const read = await callSc('read_page', { path });
+		const viewed = await callSc('view_page', { path });
+
+		check('read_page reports the page blob sha', read.sc.sha === stored?.sha, String(read.sc.sha));
+		check(
+			'view_page reports the same sha for the same page',
+			!!viewed.sc.sha && viewed.sc.sha === read.sc.sha,
+			`${String(viewed.sc.sha)} vs ${String(read.sc.sha)}`
+		);
+
+		// The assertion the refresh control rests on. Without it the sha could be any
+		// stable string (the path, a constant) and every comparison would report "no
+		// change" forever, which is the failure the reader would never see through.
+		const beforeSha = read.sc.sha;
+		await call('write_page', { path, append: '\nSecond.\n' });
+		const after = await callSc('read_page', { path });
+		check(
+			'the sha moves when the page is written',
+			after.sc.sha !== beforeSha,
+			String(after.sc.sha)
+		);
+		check(
+			'and still matches what the store holds',
+			after.sc.sha === (await store.readFile(repoArgs, path))?.sha,
+			String(after.sc.sha)
+		);
+
+		// A write to a DIFFERENT page must not move this one's sha, or the viewer would
+		// announce an update on every page each time anything in the brain changed.
+		await call('write_page', {
+			path: 'wiki/vendors/other.md',
+			content: '# Other\n',
+			title: 'Other'
+		});
+		const untouched = await callSc('read_page', { path });
+		check(
+			'an unrelated write leaves it alone',
+			untouched.sc.sha === after.sc.sha,
+			String(untouched.sc.sha)
+		);
+	}
+
 	console.log('\nattachments');
 	{
 		// A 1x1 transparent PNG. Small, but real: it contains bytes that are not valid
