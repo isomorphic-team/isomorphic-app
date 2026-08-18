@@ -74,6 +74,8 @@ import {
 	applyPageEdits,
 	applyFieldPatch,
 	validateFieldPatch,
+	OKF_PAGE_STATUSES,
+	type OkfPageStatus,
 	type FieldPatch
 } from '../lib/page-patch.ts';
 import { parseLedger } from '../lib/brain-import.ts';
@@ -616,7 +618,7 @@ async function withFreshSnapshots(ctx: BrainContext, path: string, content: stri
 // write_page's two internal paths. write_page validates the path and decides which to
 // run from whether the page already exists; each path builds one atomic commit bundle.
 
-// Create a brand-new page: generate fresh frontmatter (status: draft) and log it. The
+// Create a brand-new page: generate fresh frontmatter and log it. The
 // caller guarantees `target` is free, ends in .md, and is inside the editable area.
 async function createPageWrite(
 	ctx: BrainContext,
@@ -627,12 +629,13 @@ async function createPageWrite(
 		title?: string;
 		type?: string;
 		description?: string;
+		status?: OkfPageStatus;
 		fields?: FieldPatch;
 		sources?: string[];
 	}
 ) {
 	const { store, repoArgs, config, author } = ctx;
-	const { target, content, title, type, description, fields, sources } = args;
+	const { target, content, title, type, description, status, fields, sources } = args;
 	// Fall back through the SAME chain the rest of the system resolves titles by
 	// (pageTitle): a `title:` in the caller's own content, then the body's `# H1`,
 	// then the filename — or the folder's name for a folder note. Deriving straight
@@ -651,7 +654,7 @@ async function createPageWrite(
 		...(finalType ? { type: finalType } : {}),
 		title: finalTitle,
 		...(description ? { description } : {}),
-		status: 'draft',
+		...(status ? { status } : {}),
 		updated: today,
 		...(sources?.length ? { sources } : {})
 	};
@@ -671,6 +674,8 @@ async function createPageWrite(
 		if (!patched.ok) return fail(patched.error);
 		finalFm = patched.frontmatter;
 	}
+	const finalStatus = typeof finalFm.status === 'string' ? finalFm.status : undefined;
+	const statusNote = finalStatus ? ` with status ${finalStatus}` : '';
 	const newContent = await withFreshSnapshots(ctx, target, withFrontmatter(finalFm, provided.body));
 	const writes = [{ path: target, content: newContent }];
 	const log = await store.readFile(repoArgs, logPathOf(config));
@@ -686,7 +691,7 @@ async function createPageWrite(
 		author,
 		autoMerge: config.autoMerge,
 		mergeMethod: config.mergeMethod,
-		message: `Add ${finalTitle} (${target})\n\nNew draft page${description ? `: ${description}` : ''}. Logged in the same change.`,
+		message: `Add ${finalTitle} (${target})\n\nNew page${statusNote}${description ? `: ${description}` : ''}. Logged in the same change.`,
 		writes,
 		head,
 		branchPrefix: 'isomorphic/create',
@@ -695,8 +700,8 @@ async function createPageWrite(
 	});
 	return landed(
 		outcome,
-		`Created "${finalTitle}" as a draft at ${target}. The change was logged.${toolRosterNote(target)}`,
-		`Proposed a new page "${finalTitle}" at ${target}.${toolRosterNote(target)}`
+		`Created "${finalTitle}" at ${target}${statusNote}. The change was logged.${toolRosterNote(target)}`,
+		`Proposed a new page "${finalTitle}" at ${target}${statusNote}.${toolRosterNote(target)}`
 	);
 }
 
@@ -715,7 +720,7 @@ async function updatePageWrite(
 		title?: string;
 		type?: string;
 		description?: string;
-		status?: 'draft' | 'published';
+		status?: OkfPageStatus;
 		fields?: FieldPatch;
 		sha?: string;
 	}
@@ -1286,7 +1291,7 @@ export function registerLibrarianTools(
 		{
 			title: 'Write a brain page',
 			description:
-				'Create a new page, or change an existing one, at a content path you choose (folders are free-form). ONE PAGE = ONE CONCEPT: anything another page should be able to link to — a person, vendor, system, event series, project — gets its own file, never a section inside a bigger page. If you are about to write a heading per item, write a page per item instead. To change PART of a page use `edits` (exact find/replace; each anchor must match exactly once) or `append` (add to the end): both leave the rest of the page untouched, so you do not have to read it first and cannot destroy text you have not seen. To change METADATA rather than page text, use `fields` (set or remove any frontmatter key the brain tracks, e.g. done/owner/due) or the title/type/description/status arguments: those leave the body untouched. `content` REPLACES the entire body, so pass it only for a new page or a deliberate full rewrite, and read the page first (read_page) if you did not just write it. A new page starts as a draft; on an existing page frontmatter is preserved and merged, the "updated" date is bumped, a retitle repoints inbound links, and passing none of content/edits/append changes only metadata (e.g. status: "published" to publish a draft). Every change is logged. Pass mode: "create" to require a new path (fails if it exists) or "update" to require an existing one.',
+				'Create a new page, or change an existing one, at a content path you choose (folders are free-form). ONE PAGE = ONE CONCEPT: anything another page should be able to link to — a person, vendor, system, event series, project — gets its own file, never a section inside a bigger page. If you are about to write a heading per item, write a page per item instead. To change PART of a page use `edits` (exact find/replace; each anchor must match exactly once) or `append` (add to the end): both leave the rest of the page untouched, so you do not have to read it first and cannot destroy text you have not seen. To change METADATA rather than page text, use `fields` (set or remove any frontmatter key the brain tracks, e.g. done/owner/due) or the title/type/description/status arguments: those leave the body untouched. `content` REPLACES the entire body, so pass it only for a new page or a deliberate full rewrite, and read the page first (read_page) if you did not just write it. OKF lifecycle status is optional: absent means stable; set draft, stable, or deprecated only when the distinction should be explicit. On an existing page frontmatter is preserved and merged, the "updated" date is bumped, a retitle repoints inbound links, and passing none of content/edits/append changes only metadata. Every change is logged. Pass mode: "create" to require a new path (fails if it exists) or "update" to require an existing one.',
 			inputSchema: {
 				brain: brainArg,
 				path: z
@@ -1335,9 +1340,11 @@ export function registerLibrarianTools(
 					),
 				description: z.string().optional().describe('One-line summary for the index.'),
 				status: z
-					.enum(['draft', 'published'])
+					.enum(OKF_PAGE_STATUSES)
 					.optional()
-					.describe('Lifecycle status. New pages default to draft; set "published" to publish.'),
+					.describe(
+						'Optional OKF lifecycle status: draft (not yet reviewed), stable (ready for consumption), or deprecated (kept for links/history but no longer current). Absence means stable.'
+					),
 				fields: fieldsArg,
 				sources: z
 					.array(z.string())
@@ -1422,6 +1429,7 @@ export function registerLibrarianTools(
 					title,
 					type,
 					description,
+					status,
 					fields,
 					sources
 				});

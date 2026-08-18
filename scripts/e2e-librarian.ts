@@ -307,7 +307,45 @@ try {
 	});
 	check('write_page (create) succeeds', !r.isError, r.text);
 	check('write_page speaks wiki, not git', !/commit|sha|branch/i.test(r.text), r.text);
+	const acmeCreated = await eventually(
+		() => fileText('wiki/customers/acme.md'),
+		(t) => !!t && /They buy rockets/.test(t)
+	);
+	check(
+		'write_page leaves default-stable status absent on create',
+		!/^status:/m.test(acmeCreated ?? ''),
+		acmeCreated ?? ''
+	);
 	await assertOneCommit('write_page create', before);
+
+	// A caller can make the OKF lifecycle state explicit in the create call instead
+	// of paying for a second write.
+	await settledHead();
+	before = await commitCount();
+	r = await call('write_page', {
+		path: 'wiki/customers/northwind.md',
+		title: 'Northwind',
+		content: '# Northwind\n\nA stable customer page.\n',
+		status: 'stable'
+	});
+	check('write_page (create with status) succeeds', !r.isError, r.text);
+	check('write_page (create with status) reports it', /status stable/.test(r.text), r.text);
+	const northwindStable = await eventually(
+		() => fileText('wiki/customers/northwind.md'),
+		(t) => !!t && /status:\s*stable/.test(t)
+	);
+	check(
+		'write_page honors OKF status on create',
+		/status:\s*stable/.test(northwindStable ?? ''),
+		northwindStable ?? ''
+	);
+	await assertOneCommit('write_page create with status', before);
+	r = await call('write_page', {
+		path: 'wiki/customers/nonstandard.md',
+		content: '# Nonstandard\n',
+		status: 'published'
+	});
+	check('write_page refuses the old non-OKF status on new writes', r.isError, r.text);
 
 	// ── write_page mode guards: create refuses an existing path; update refuses
 	//    a missing one; upsert (default) does either. ─────────────────────────
@@ -332,27 +370,27 @@ try {
 		r.text
 	);
 
-	// ── write_page (metadata-only): omit content to publish — status flips to
-	//    published and the body is untouched. (Absorbed the old publish_page.) ─
+	// ── write_page (metadata-only): an OKF lifecycle transition leaves the body
+	//    untouched. ───────────────────────────────────────────────────────────
 	await settledHead();
 	before = await commitCount();
-	r = await call('write_page', { path: 'wiki/customers/acme.md', status: 'published' });
-	check('write_page (publish) succeeds', !r.isError, r.text);
-	const acmePublished = await eventually(
+	r = await call('write_page', { path: 'wiki/customers/acme.md', status: 'deprecated' });
+	check('write_page (lifecycle update) succeeds', !r.isError, r.text);
+	const acmeDeprecated = await eventually(
 		() => fileText('wiki/customers/acme.md'),
-		(t) => !!t && /status:\s*published/.test(t)
+		(t) => !!t && /status:\s*deprecated/.test(t)
 	);
 	check(
-		'publish flipped status to published',
-		/status:\s*published/.test(acmePublished ?? ''),
-		acmePublished ?? ''
+		'lifecycle update set status to deprecated',
+		/status:\s*deprecated/.test(acmeDeprecated ?? ''),
+		acmeDeprecated ?? ''
 	);
 	check(
-		'publish left the body untouched',
-		(acmePublished ?? '').includes('They buy rockets.'),
-		acmePublished ?? ''
+		'lifecycle update left the body untouched',
+		(acmeDeprecated ?? '').includes('They buy rockets.'),
+		acmeDeprecated ?? ''
 	);
-	await assertOneCommit('write_page publish (metadata-only)', before);
+	await assertOneCommit('write_page lifecycle update (metadata-only)', before);
 
 	// ── OKF conformance, against real blobs ──────────────────────────────────
 	//
@@ -398,6 +436,9 @@ try {
 		'---',
 		'type: Meeting Note',
 		'title: Kickoff',
+		// Persisted brains may carry the old Isomorphic value. Reads and unrelated
+		// writes preserve it even though new status transitions use OKF values.
+		'status: published',
 		'sources:',
 		'  - resource: /source/kickoff.md',
 		'    title: Kickoff transcript',
@@ -413,11 +454,11 @@ try {
 	r = await call('write_page', { path: 'wiki/notes/kickoff.md', content: nested });
 	check('write_page accepts nested OKF frontmatter', !r.isError, r.text);
 	// Re-save it (metadata-only) so the frontmatter goes through serialize again.
-	r = await call('write_page', { path: 'wiki/notes/kickoff.md', status: 'published' });
+	r = await call('write_page', { path: 'wiki/notes/kickoff.md', description: 'Kickoff notes' });
 	check('re-save of a nested-frontmatter page succeeds', !r.isError, r.text);
 	const kickoff = await eventually(
 		() => fileText('wiki/notes/kickoff.md'),
-		(t) => !!t && /status:\s*published/.test(t)
+		(t) => !!t && /description:\s*Kickoff notes/.test(t)
 	);
 	check(
 		'nested sources[].resource survives a re-save',
@@ -432,6 +473,11 @@ try {
 	check(
 		'nested generated.by/at survive',
 		/by:\s*e2e/.test(kickoff ?? '') && /at:\s*2026-07-24/.test(kickoff ?? ''),
+		kickoff ?? ''
+	);
+	check(
+		'legacy published status survives an unrelated write',
+		/status:\s*published/.test(kickoff ?? ''),
 		kickoff ?? ''
 	);
 
@@ -482,7 +528,7 @@ try {
 		(appended ?? '').includes('They buy rockets.'),
 		appended ?? ''
 	);
-	check('append kept frontmatter', /status:\s*published/.test(appended ?? ''), appended ?? '');
+	check('append kept frontmatter', /status:\s*deprecated/.test(appended ?? ''), appended ?? '');
 	check(
 		'append landed at the end',
 		(appended ?? '').trimEnd().endsWith('- Wile E. Coyote'),

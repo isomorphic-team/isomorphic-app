@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'preact/hooks';
 import { parseFrontmatter, type Frontmatter } from '../../src/lib/wiki.ts';
 import { displayFromSnapshots } from '../../src/lib/view-directives.ts';
-import { isUsableFieldKey } from '../../src/lib/page-patch.ts';
+import { isUsableFieldKey, OKF_PAGE_STATUSES } from '../../src/lib/page-patch.ts';
 import type { Backref } from '../core/types.ts';
 import { callTool, firstText } from '../core/host.ts';
 import { brainArgs, bump, isEditablePath, show } from '../core/store.ts';
@@ -299,23 +299,30 @@ function PageProperties({ fm, path }: { fm: Frontmatter | null; path?: string })
 
 	if (fm) {
 		if (typeof fm.status === 'string' && fm.status.trim()) {
-			const published = fm.status === 'published';
+			const knownStatus = (OKF_PAGE_STATUSES as readonly string[]).includes(fm.status);
+			const legacyPublished = fm.status === 'published';
+			const statusColor =
+				fm.status === 'draft'
+					? 'bg-[#b05c00]'
+					: fm.status === 'stable' || fm.status === 'published'
+						? 'bg-[#0a7d33]'
+						: 'bg-[#737373]';
 			add(
 				'status',
 				'Status',
 				<span class="inline-flex items-center gap-1.5">
-					<span class={`h-1.5 w-1.5 rounded-full ${published ? 'bg-[#0a7d33]' : 'bg-[#b05c00]'}`} />
+					<span class={`h-1.5 w-1.5 rounded-full ${statusColor}`} />
 					<span class="capitalize">{fm.status}</span>
 				</span>,
-				// write_page's status argument takes draft|published. A brain using some
-				// other vocabulary here is shown its value and left alone rather than
-				// offered a control that would fail.
-				published || fm.status === 'draft'
+				// Legacy `published` remains editable only as a migration source: keeping
+				// it in the options lets the select represent its current value, while any
+				// actual change lands on an OKF status. Other vocabularies stay read-only.
+				knownStatus || legacyPublished
 					? {
 							key: 'status',
 							value: fm.status,
 							kind: 'arg',
-							options: ['draft', 'published']
+							options: [...(legacyPublished ? ['published'] : []), ...OKF_PAGE_STATUSES]
 						}
 					: undefined
 			);

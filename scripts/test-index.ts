@@ -90,7 +90,7 @@ function makePages(n: number, rev = 0): FakePage[] {
 		const content = [
 			'---',
 			`type: Note`,
-			`status: ${i % 2 === 0 ? 'draft' : 'published'}`,
+			`status: ${i % 2 === 0 ? 'draft' : 'stable'}`,
 			`rank: ${i}`,
 			'---',
 			'',
