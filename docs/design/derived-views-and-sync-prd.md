@@ -50,8 +50,9 @@ What broke:
 
 ### What the app does / does not do today (verified in source)
 
-- **Auto-maintained on a page write** (`src/tools/librarian.ts`): `title`/`status`/`updated`
-  frontmatter on the written page (other frontmatter keys preserved & merged); inbound-link
+- **Auto-maintained on a page write** (`src/tools/librarian.ts`): `title`/`updated` plus any
+  explicitly requested lifecycle `status` on the written page (other frontmatter keys preserved
+  & merged); inbound-link
   repointing on move/rename; dangling-link flagging on delete; the changelog **only** if
   `logPath` is set. `isToolMaintained` (`src/lib/brain-config.ts`) protects **only** `logPath`.
 - **No auto index, no entity types, no derived anything** (`CLAUDE.md` → "Brain model"):

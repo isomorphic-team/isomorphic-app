@@ -34,6 +34,7 @@ import {
 	detectNeedsConfig
 } from '../lib/brain-index.ts';
 import { tryRenderViews, stripSnapshots } from '../lib/views.ts';
+import { browseSummary, treeFitsInline } from '../lib/browse.ts';
 import type { BrainContext } from './librarian.ts';
 import {
 	type BrainConfig,
@@ -234,6 +235,12 @@ export function registerBrainApp(
 					view: 'page',
 					path,
 					markdown,
+					// The blob sha of what this render is OF. readFile already returns it
+					// and every write path already treats a page as versioned (write_page
+					// refuses a save against a stale sha); only the read path threw the
+					// version away, which is why the viewer could not tell a current render
+					// from one the branch had moved past. Costs nothing extra to send.
+					sha: file.sha,
 					config: editPolicy(config),
 					activeBrain
 				}
@@ -264,7 +271,6 @@ export function registerBrainApp(
 			const paths = pages.map((p) => p.path);
 			// Attachments listed apart from hidden files — see listNonPagePaths.
 			const { assets, hidden } = await listNonPagePaths(store, repoArgs, config);
-			const text = paths.length ? paths.join('\n') : 'The brain is empty.';
 			// Empty could be a fresh brain or an adopted repo whose content isn't under the
 			// configured roots — flag the latter so the app can offer to auto-configure.
 			// Only content-AREA files count as "something to show": the hidden list now
@@ -273,14 +279,17 @@ export function registerBrainApp(
 				paths.length === 0 &&
 				!hidden.some((p) => isContentPath(p, config)) &&
 				(await detectNeedsConfig(store, repoArgs, config));
+			// The tree rides along only while it is small (see src/lib/browse.ts). Over
+			// budget it is left out entirely and the app fetches it with list_pages, which
+			// is a widget-initiated call and costs the conversation nothing. That fallback
+			// is the `else openBrowse()` branch of handleToolResult and predates this.
+			const tree = { paths, pages, assets, hidden };
+			const inline = treeFitsInline(tree);
 			return {
-				content: [{ type: 'text' as const, text }],
+				content: [{ type: 'text' as const, text: browseSummary(activeBrain.label, tree) }],
 				structuredContent: {
 					view: 'browse',
-					paths,
-					pages,
-					assets,
-					hidden,
+					...(inline ? tree : {}),
 					config: editPolicy(config),
 					activeBrain,
 					needsConfig

@@ -256,11 +256,11 @@ Derived 2026-07-06 from commit-history analysis of two production AI-maintained 
 **Status 2026-07-06: all bullets below landed** (`src/tools/librarian.ts` + `src/lib/wiki.ts` + `src/lib/brain-repo.ts`), verified end-to-end by `scripts/e2e-librarian.ts` (manual, real-GitHub). Remaining follow-up: tools' read-modify-write pairs (e.g. publish's idempotency check) read GitHub's eventually-consistent contents API, so a sub-second double-call can act on a stale read. Harmless today (idempotent content); revisit with a storage cache.
 
 - **Atomic bundle commits.** Rework the write tools onto a shared Git Data API `commitFiles()` primitive (one tree, one commit) so page + index entry + `wiki/log.md` entry land together. Reuses the tree-commit machinery already in `scaffold-core.ts`.
-- **Structured frontmatter + type routing.** `write_page` takes `title` / `description` / `type` instead of a raw path; the tool generates schema-valid frontmatter (`updated` auto-set, `status: draft` default) and derives the kebab-case slug. Invariants validated at write time. Evidence: both wikis treat frontmatter as a machine-checked contract.
+- **Structured frontmatter + type routing.** `write_page` takes `title` / `description` / `type` instead of a raw path; the tool generates schema-valid frontmatter (`updated` auto-set) and derives the kebab-case slug. Invariants validated at write time. Evidence: both wikis treat frontmatter as a machine-checked contract.
 - **`move_page` / `delete_page` with link integrity.** Move/rename rewrites all inbound relative links in the same commit; delete surfaces (or fixes) dangling inbound links and index entries. Evidence: real knowledge-base restructures touched 17-22 files each, hand-repointing links; deletions always bundled link cleanup. Hard rule borrowed: never change a published slug.
 - **`find_inbound_links` (backlinks).** Given a page, list every page linking to it. Substitute for the backlink index neither wiki has; feeds move/delete and the lint agent.
 - **`validate` tool.** Broken relative links, malformed frontmatter, index entries pointing nowhere. A predecessor knowledge base's hand-written `validate` script is the model: validation as executable spec, runnable by the agent before and after writes.
-- **Draft to publish lifecycle.** `status: draft | published` in frontmatter as a first-class act. Draft pages visible to tools but flagged; a publish act flips status and logs it. Keeps the "proposed changes" review lane separate from the fast direct-save lane.
+- **OKF lifecycle.** Optional `status: draft | stable | deprecated` frontmatter is a first-class metadata change and is logged. Absence means `stable`, per OKF, so ordinary page creation does not stamp a lifecycle field.
 - **Open-questions page**: a living page whose bullets get struck through and linked when a later page resolves them. Add to the brain template.
 
 # TODO: bulk page updates (batch field writes, and find/replace across pages)
@@ -321,6 +321,34 @@ Design questions to settle before building:
   here for a specific reason: it binds every page it touches to an import source
   (`source_key` plus a ledger entry), a permanent side effect for a one-off update.
   The objection was the binding, not the batching.
+
+# TODO: the seam between brains (publishing across a brain boundary)
+
+One person reaches several brains, and work in one belongs partly in another: a
+client engagement, a personal to-do list tracking that client's work, a venture
+brain holding the methodology the client should receive. The only transport today
+is a human copying text, and nothing records that the copy happened.
+
+The design splits the want in two, and the split is the point. **"I need to find
+it"** is a reader who already has access to both brains, and copying is the wrong
+answer: what is missing is cross-brain search and cross-brain wikilinks, a READ
+feature. **"Someone who cannot reach my brain needs to see it"** is a client, and
+content genuinely has to cross into a repository they can read. That second half is
+publishing, and it is the only case where a copy is correct. Naming it publishing
+rather than sync puts the question that matters (who can now read this) in the name.
+
+Most of the machinery exists. `sync_records`' planner is already non-destructive,
+key-addressed, idempotent, ledger-backed, with proposed-not-applied deletions and a
+no-resurrection rule. What is actually new: two brains resolved in one request (the
+first code to legitimately cross the `brainId` isolation line), a `body: source-owned`
+policy the importer deliberately does not have (its bodies belong to humans; a
+publication's body IS the payload), link flattening at the published set's horizon,
+and a publication/subscription handshake declared in BOTH repos so neither end can
+open a channel alone. Identity is a key, never a path, or a routine `move_page` on
+either side becomes a delete plus a create.
+
+Full design: [`docs/design/brain-seams.md`](design/brain-seams.md). Unresolved there:
+whether cross-brain READ is the higher-value build and this is the smaller half.
 
 # TODO: brain schema migrations (fleet-wide template/schema updates)
 
@@ -592,6 +620,79 @@ Related: the content-index section below, the librarian tool suite (write bundle
 repointing the importer reuses), and brain schema migrations (the clobber-policy classification is
 the same problem).
 
+# TODO: records tables (dated activity against a brain's concepts)
+
+Full PRD: [`design/records-tables-prd.md`](design/records-tables-prd.md).
+
+A brain has one content primitive, the page, which models a **concept**. There is no home
+for a **record**: a dated occurrence that points at concepts. Concepts are stable and few;
+activity against them is dated and unbounded, and forcing the second into the first evicts
+concept data from the index. A page per event on a ~4,000-page brain crosses `MAX_SCAN_PAGES`
+within months, at which point the _concepts_ become unfindable.
+
+Shape: brain-declared tables (`records/<table>.md` carrying an `okf-table` schema under
+OKF's conventional `# Schema` heading), rows stored record-per-section in monthly shards
+under `records/<table>/`, indexed into D1 as a derived cache exactly the way pages are.
+**Row-to-page references are wikilinks, not a new foreign key.** That one decision means
+backlinks, `validate`, the graph view, and `move_page`'s inbound repointing all cover
+records with no new machinery.
+
+Four capabilities: the tables themselves; aggregation in `okf-view` (`kind: records`,
+group-by a link column, and date-window predicates, which is the one genuinely new
+expression the engine needs); a propose-and-admit ledger so an agent can draft rows from an
+external signal and a human admits them per item with durable declines; and an optional
+attested-counting layer for deployments where a count is consequential outside the system
+(billable hours, contributor compensation, audit evidence).
+
+The PRD surveys eight domains that share the same four roles (subject, actor, optional work
+unit, record) and vary only in schema, which is why schemas are brain-defined and none ship
+with the platform. Two things it deliberately does NOT ask for: work-unit pages (a story, a
+requisition, a matter) are ordinary pages and need no platform feature, and cross-table joins
+belong in a warehouse. §9 states that line, and §9.1 notes OKF's own answer for data that
+already has a home elsewhere: a table declaration with a `resource` pointer and a schema but
+no rows.
+
+Depends on nothing already in flight, but overlaps two items here: **bulk page updates**
+(the find/replace half, since records are an alternative answer to some of the same
+pressure) and **raising `MAX_SCAN_PAGES`**, which the PRD scopes in §8.1 (the ceiling is a
+sanity bound, not a platform limit; the resumable rebuild budgets are what actually make a
+large brain work).
+
+# TODO: folder notes and OKF conformance (split the listing from the overview)
+
+Full PRD: [`design/folder-notes-and-okf-conformance.md`](design/folder-notes-and-okf-conformance.md).
+
+A folder note does two jobs in one file: it holds an **authored overview** (frontmatter, a
+type, narrative) and a **generated listing** (an `okf-view` fence plus its regenerated
+snapshot). OKF forbids the combination, since `index.md` is reserved and "MUST NOT be used
+for concept documents". But the better argument has nothing to do with conformance:
+regenerating the listing rewrites the file holding the prose, so adding one page under
+`vendors/` produces a diff in `vendors/index.md` that nobody authored. Every listing regen
+dirties the authored document and its `git log` is mostly noise.
+
+Split them. The overview moves to `overview.md` (additive: `FOLDER_NOTE_NAMES` gains it at
+the front, no existing brain changes behavior) and keeps the view directive; `index.md`
+becomes a tool-maintained materialization of that directive, like `log.md` already is.
+**Composition needs no new machinery**, since a page containing a view is what pages already
+are: clicking a folder still renders overview prose with the listing computed live in place,
+wherever the author put the fence.
+
+Two findings from reading the code. Existing brains are mostly conformant already; the
+_platform_ is what introduces violations, because `folderNoteSeed` (`app/views/Browse.tsx`)
+passes a `title` into `write_page`, which forces frontmatter into every app-created
+`index.md`. That `title` is redundant, since `pageTitle` already derives a folder note's name
+from its folder. Dropping it and seeding an `# H1` instead is roughly three lines and is
+worth doing on its own, ahead of everything else here.
+
+The sequencing is forced and getting it wrong is destructive: reserved names can only leave
+the concept index (so a generated listing per folder does not shadow real pages in search and
+wikilink resolution) **after** brains have moved authored content out of `index.md`. Doing
+that step early silently removes real content from search. §5 of the PRD has the order.
+
+Migration is advisory, never forced, like every other OKF rule here: one `move_page` per
+folder, surfaced by pointing the existing `folderNoteSuggestions` advisory the other way.
+Fleet-wide, it fits the **brain schema migrations** item above rather than a bespoke tool.
+
 # Design: WYSIWYG markdown editor (MCP Apps)
 
 A rich editor for brain pages surfaced inside the MCP host (MCP Apps / SEP-1865), with
@@ -825,9 +926,28 @@ and unbounded, so these are optimizations or new surfaces):
   subscription) reindexing on push would keep the index fresh _before_ a read reconciles,
   removing the per-read `getRef` and the post-external-edit reindex spike. Pure freshness
   optimization; the HEAD guard already covers correctness. Manifest change means orgs re-approve.
-- **sha-check TTL cache + write-through.** Cache the HEAD-sha check per brain (~30-60s) to drop
+- ~~**Write-through.**~~ **DONE 2026-08-14** (issue #31): a successful DIRECT commit folds the
+  pages it touched into the index in place (`writeThroughIndex` in `brain-index.ts`, via the
+  `commitBundle` chokepoint in `librarian.ts`) and advances `indexed_commit_sha` — but only when
+  the index was already current at the commit's base, never on the PR path, and swallowing its
+  own failures. The verifying read after a write is now one `getRef`, not an incremental reindex.
+  `invalidateIndex()` remains exported for the TTL cache below.
+- **sha-check TTL cache.** Cache the HEAD-sha check per brain (~30-60s) to drop
   the per-read `getRef` in steady state; on our own writes call `invalidateIndex()` (already
   exported) so the just-edited state reflects immediately.
+- **Idempotency keys for writes** (issue #31, suggestion 1 — deliberately deferred). A
+  client-supplied request id making a repeated write a no-op returning the original result.
+  Deferred because every piece of it is harder than it looks: the id only helps if the MODEL
+  repeats it on retry (tool-description guidance, unenforceable); the client gives up at 60s
+  while the Worker may still be running, so a dedupe record must exist BEFORE the commit or the
+  retry races the in-flight original; and that means a durable TTL store keyed by id. Today's
+  backstop is cheaper and covers the reported cases: writes are read-before-retry (the write
+  tools' descriptions say so), a retried create fails with "already exists" if the first attempt
+  landed, and move/delete are atomic (land whole or not at all).
+- **Installation-token cache.** Every request builds a fresh `App`/octokit and mints an
+  installation token on first use (and tenant resolution runs twice per request: preamble +
+  handler). Caching the token in KV against its 1h TTL would drop one GitHub round trip and the
+  token-mint rate pressure from EVERY tool call.
 - **Report index truncation past 1500 pages** in the graph payload (search and validate already do).
 
 # TODO: graph view (link graph of the brain). **DONE 2026-07-13**

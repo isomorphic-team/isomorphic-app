@@ -26,6 +26,10 @@ export interface ViewAction {
 	 * Text label. PREFERRED for infrequent or non-obvious actions: a bare "＋" is
 	 * self-evident on a file tree and not at all self-evident for "invite a person
 	 * to your organization".
+	 *
+	 * Set alongside `icon` to give a glyph a value that belongs to it (the page's
+	 * refresh control and the render's age). Reserve that pairing for a value the
+	 * action REPORTS; a label that merely names the action duplicates `title`.
 	 */
 	label?: string;
 	/** Icon, for frequent actions with a conventional glyph. Requires `title`. */

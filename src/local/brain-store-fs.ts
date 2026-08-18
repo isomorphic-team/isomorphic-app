@@ -221,6 +221,8 @@ export function fsBrainStore(opts: FsStoreOptions): BrainStore {
 	};
 
 	return {
+		// The branch name selects nothing here (every branch is the same working
+		// tree); the parameter exists so the GitHub adapter can skip a round trip.
 		getHead: () => head(),
 
 		// Every branch is the same working tree here, so the branch name selects nothing.
@@ -314,6 +316,10 @@ export function fsBrainStore(opts: FsStoreOptions): BrainStore {
 				);
 			}
 			await commit(repo, o);
+			// The local revision is a digest of the mutable working tree, not the git
+			// commit this call created. An external edit can enter that digest without
+			// being in this bundle, so local writes reconcile on the next read instead
+			// of claiming a safe write-through revision.
 			return {};
 		}
 	};

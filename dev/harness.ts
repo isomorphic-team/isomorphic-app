@@ -17,7 +17,7 @@
 import { AppBridge, PostMessageTransport } from '@modelcontextprotocol/ext-apps/app-bridge';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { BRAIN_APP_HTML } from '../src/lib/app-bundle.generated.ts';
-import { slugify, resolveRelative, parseFrontmatter } from '../src/lib/wiki.ts';
+import { slugify, resolveRelative, parseFrontmatter, withFrontmatter } from '../src/lib/wiki.ts';
 import { DEFAULT_BRAIN_CONFIG, isContentPath } from '../src/lib/brain-policy.ts';
 import { classifyMdLink } from '../src/lib/links.ts';
 import { uniqueAttachmentPath } from '../src/lib/media.ts';
@@ -526,7 +526,12 @@ function resolveBrainArg(arg: unknown): string | undefined {
 	return brainsFixture.find((b) => b.id.toLowerCase() === q || b.label.toLowerCase().includes(q))
 		?.id;
 }
-function brainsResult(msg: string, withView: boolean): CallToolResult {
+// `switched` marks a result that CHANGED the active brain, exactly as switch_brain and
+// create_brain do server-side. The app treats the brain a result names as authoritative
+// over the connection's pointer, and this flag is how it tells a deliberate move from a
+// plain listing (see pickShownBrain in app/core/store.ts) — so a harness that omits it
+// previews a switch that does not switch.
+function brainsResult(msg: string, withView: boolean, switched = false): CallToolResult {
 	const sc: Record<string, unknown> = {
 		brains: brainRows(),
 		active: activeBrainId,
@@ -542,6 +547,7 @@ function brainsResult(msg: string, withView: boolean): CallToolResult {
 		features: { analytics: true }
 	};
 	if (withView) sc.view = 'brains';
+	if (switched) sc.switched = true;
 	return { content: [{ type: 'text', text: msg }], structuredContent: sc };
 }
 // {id,label} for a brain — the `activeBrain` shape every app-tool result carries so the
@@ -560,6 +566,17 @@ const errText = (t: string): CallToolResult => ({
 function stripFrontmatter(md: string): string {
 	const m = md.match(/^---\n[\s\S]*?\n---\n?/);
 	return m ? md.slice(m[0].length) : md;
+}
+
+// A stand-in for the git blob sha the real store reports. Any function of the
+// content will do, and being a function of the content is the whole property the
+// viewer depends on: the same page reads back the same value, and a page that was
+// written reads back a different one. Not a real hash and not trying to be.
+function pageSha(md: string | undefined): string {
+	if (md === undefined) return '';
+	let h = 0;
+	for (let i = 0; i < md.length; i++) h = (Math.imul(h, 31) + md.charCodeAt(i)) | 0;
+	return `sha-${(h >>> 0).toString(16)}`;
 }
 
 // A page's display title (frontmatter title, else de-slugged filename) — a small
@@ -657,8 +674,12 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
 			if (md === undefined) return errText(`"${path}" does not exist.`);
 			// Mirror the server: agents (and the app's navigate path) get the fence
 			// plus a freshly computed snapshot; the app unwraps it for display.
-			if (!hasViews(md)) return text(md);
-			return text((await renderViews(md, path, viewCtxFor(pg))).snapshotted);
+			// Both `markdown` and `sha` mirror the server response.
+			const body = hasViews(md) ? (await renderViews(md, path, viewCtxFor(pg))).snapshotted : md;
+			return {
+				...text(body),
+				structuredContent: { path, markdown: body, sha: pageSha(md) }
+			};
 		}
 		case 'read_media': {
 			const asset = assetsFor(bid)[path];
@@ -826,12 +847,23 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
 			if (exists && args?.mode === 'create') return errText(`"${p}" already exists.`);
 			const content = String(args?.content ?? '');
 			if (exists) {
-				// Keep the existing frontmatter, exactly like the server's body-only save.
-				const fm = pg[p].match(/^---\n[\s\S]*?\n---\n?/)?.[0] ?? '';
-				pg[p] = fm + content;
+				const parsed = parseFrontmatter(pg[p]);
+				if (args?.content !== undefined) {
+					// Keep the existing frontmatter, exactly like the server's body-only save.
+					const fm = pg[p].match(/^---\n[\s\S]*?\n---\n?/)?.[0] ?? '';
+					pg[p] = fm + content;
+				} else {
+					// Property-panel writes carry metadata only. Mirror the server enough for
+					// the app to reload and observe the field it just changed.
+					const fm = { ...(parsed.frontmatter ?? {}) };
+					for (const key of ['title', 'type', 'description', 'status'] as const) {
+						if (typeof args?.[key] === 'string') fm[key] = args[key];
+					}
+					pg[p] = withFrontmatter(fm, parsed.body);
+				}
 			} else {
 				const title = String(args?.title ?? p.split('/').pop()!.replace(/\.md$/, ''));
-				pg[p] = `---\ntitle: ${title}\nstatus: draft\n---\n\n${content}`;
+				pg[p] = `---\ntitle: ${title}\n---\n\n${content}`;
 			}
 			// Mirror the server: snapshots regenerate as content lands in the file.
 			if (hasViews(pg[p])) pg[p] = (await renderViews(pg[p], p, viewCtxFor(pg))).snapshotted;
@@ -1116,7 +1148,7 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
 			// Point the host chrome's page selector at the newly-active brain's pages.
 			openPath = Object.keys(pagesFor(activeBrainId))[0] ?? openPath;
 			rebuildSelector();
-			return brainsResult(`Switched to ${hit.label}.`, true);
+			return brainsResult(`Switched to ${hit.label}.`, true, true);
 		}
 		case 'create_brain': {
 			// Scaffold a fresh (empty) named brain under the "personal" org and switch to it.
@@ -1281,8 +1313,18 @@ const bridge = new AppBridge(
 	{ openLinks: {}, serverTools: {}, logging: {} }
 );
 
-bridge.oncalltool = async (params) =>
-	handleTool(params.name, (params.arguments ?? {}) as Record<string, unknown>);
+bridge.oncalltool = async (params) => {
+	// Every tool the app calls itself, in order, for tests that assert on what it did
+	// NOT ask for (see `#pending-input`: an app waiting for a result it knows is coming
+	// must not fetch the tree). Nothing in the preview reads this.
+	((window as unknown as { __toolCalls?: string[] }).__toolCalls ??= []).push(params.name);
+	// The slow-result routes need the app's OWN tree fetch to still be in flight when
+	// the opening result lands — that overlap is the whole scenario, and an instant
+	// answer here would close it (see slowResultMode).
+	if ((slowResultMode || pendingInputMode) && params.name === 'list_pages')
+		await new Promise((r) => setTimeout(r, SLOW_LIST_MS));
+	return handleTool(params.name, (params.arguments ?? {}) as Record<string, unknown>);
+};
 bridge.onopenlink = async () => ({}); // no-op; links would open a tab in a real host
 bridge.onloggingmessage = async () => ({});
 // The app's autoResize reports content-height changes here; in inline mode we
@@ -1412,6 +1454,50 @@ const noBrainsMode = hashMode === 'nobrains';
 // so it is where the trail's root crumb and its brain picker have to stand on their
 // own. Everything after the handshake still answers normally.
 const coldMode = hashMode === 'cold';
+// `#other-brain` is issue #26: the MODEL opened a brain by name (browse_brain /
+// view_page with `brain:`), so the opening result is about that brain while the
+// connection's active-brain pointer — which the app re-reads through `brains` on every
+// open — still answers with the previous one. The harness deliberately does NOT move
+// its own pointer here, because the real one lags for the same reason: it is written by
+// the request that opened the widget and read by the next one.
+const otherBrainMode = hashMode === 'other-brain';
+// `#slow-result` and `#pending-input` are the opposite of #cold: a result IS coming, it
+// is just slower than the app's self-boot deadline. A host announces a tool call when it
+// STARTS and delivers the result when the tool FINISHES, and view_page on a large brain
+// (cold Worker, index catch-up) routinely takes longer than 1200ms.
+//
+//   #slow-result    the host says nothing until the result lands, so the app self-boots
+//                   into the tree and its list_pages is still in flight when the page
+//                   arrives. The result names ANOTHER brain, the way a `brain:`-targeted
+//                   view_page does, so the stale answer is about the wrong brain too.
+//   #pending-input  the host announces the call first (sendToolInput), which is the
+//                   app's signal that a result is coming and it should keep waiting.
+const slowResultMode = hashMode === 'slow-result';
+const pendingInputMode = hashMode === 'pending-input';
+// Past the app's 1200ms deadline, with the tree fetch that deadline kicks off answering
+// after the page — so the page is on screen when the stale tree lands.
+const SLOW_RESULT_MS = 1800;
+const SLOW_LIST_MS = 1600;
+// A brain that is NOT the active one, with content of its own to tell them apart.
+const OTHER_BRAIN = 'northwind/northwind-wiki';
+// One of its pages, so `#slow-result`'s opening result is unmistakably about the brain
+// the model named rather than the one the connection's pointer still holds.
+const OTHER_BRAIN_PAGE = 'wiki/facilities/headquarters.md';
+// `#stale` is issue #29's second case: somebody else edited the page after the widget
+// rendered it. The opening result is sent from the content as it was, and the stored
+// page is then changed, so the widget is holding a render the brain has moved past
+// with nothing on screen saying so. Refreshing is the only way to find out, which is
+// the whole point of the control.
+//
+// The edit lands AFTER the opening result rather than before, because the order is
+// the scenario: a render that was correct when it was taken and is not any more.
+const staleMode = hashMode === 'stale';
+function editPageBehindTheWidget() {
+	const pages = activePages();
+	const md = pages[openPath];
+	if (md === undefined) return;
+	pages[openPath] = `${md}\n\nAdded by somebody else while you were reading.\n`;
+}
 if (noBrainsMode) {
 	brainsFixture = [];
 	activeBrainId = '';
@@ -1431,6 +1517,30 @@ bridge.oninitialized = async () => {
 	// No opening result at all: the app is on its own from here (see coldMode).
 	if (coldMode) {
 		document.getElementById('status')!.textContent = 'connected · cold (no tool result)';
+		return;
+	}
+	// A result that is slower than the app's self-boot deadline (see slowResultMode).
+	// `#pending-input` announces the call first; `#slow-result` says nothing at all,
+	// which is the harder case and the one that used to lose the page.
+	if (slowResultMode || pendingInputMode) {
+		const brain = slowResultMode ? OTHER_BRAIN : activeBrainId;
+		const path = slowResultMode ? OTHER_BRAIN_PAGE : openPath;
+		if (pendingInputMode) bridge.sendToolInput({ arguments: { path } });
+		document.getElementById('status')!.textContent = `connected · ${hashMode} (result pending)`;
+		setTimeout(async () => {
+			const markdown = await displayPage(pagesFor(brain), path);
+			bridge.sendToolResult({
+				content: [{ type: 'text', text: markdown }],
+				structuredContent: {
+					view: 'page',
+					path,
+					markdown,
+					sha: pageSha(pagesFor(brain)[path]),
+					activeBrain: brainMeta(brain)
+				}
+			});
+			document.getElementById('status')!.textContent = `connected · ${hashMode}`;
+		}, SLOW_RESULT_MS);
 		return;
 	}
 	// announce the input, then deliver the result (sendToolInput once, then sendToolResult).
@@ -1463,11 +1573,27 @@ bridge.oninitialized = async () => {
 			settingsMode ||
 			connectedMode ||
 			browseEmptyMode ||
-			noBrainsMode
+			noBrainsMode ||
+			otherBrainMode
 				? {}
 				: { path: openPath }
 	});
-	if (browseEmptyMode) {
+	if (otherBrainMode) {
+		// browse_brain's payload for the NAMED brain, pointer left where it was.
+		const other = pagesFor(OTHER_BRAIN);
+		const paths = Object.keys(other).filter(isContentPage);
+		bridge.sendToolResult({
+			content: [{ type: 'text', text: `Opened Northwind in the viewer: ${paths.length} page(s).` }],
+			structuredContent: {
+				view: 'browse',
+				paths,
+				pages: paths.map((p) => ({ path: p, title: titleOf(p, other[p]) })),
+				assets: [],
+				hidden: [],
+				activeBrain: brainMeta(OTHER_BRAIN)
+			}
+		});
+	} else if (browseEmptyMode) {
 		// Preview the "adopted repo, no content configured" empty state + auto-configure.
 		bridge.sendToolResult({
 			content: [{ type: 'text', text: 'No markdown pages found.' }],
@@ -1538,11 +1664,13 @@ bridge.oninitialized = async () => {
 								view: 'page',
 								path: openPath,
 								markdown: await displayPage(ap, openPath),
+								sha: pageSha(ap[openPath]),
 								activeBrain: brainMeta(activeBrainId)
 							}
 						}
 		);
 	}
+	if (staleMode) editPageBehindTheWidget();
 	document.getElementById('status')!.textContent = `connected · ${mode}`;
 };
 
@@ -1589,6 +1717,7 @@ sel.addEventListener('change', async () => {
 			view: 'page',
 			path: openPath,
 			markdown,
+			sha: pageSha(activePages()[openPath]),
 			activeBrain: brainMeta(activeBrainId)
 		}
 	});

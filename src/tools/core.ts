@@ -92,7 +92,7 @@ export function registerCoreTools(
 
 			// A prefix can target anything (including non-content like raw/), which the
 			// index doesn't hold, so keep the live tree walk for that case.
-			const head = await store.getHead(repoArgs);
+			const head = await store.getHead(repoArgs, config.defaultBranch);
 			const paths = (await store.listTree(repoArgs, head))
 				.map((e) => e.path)
 				.filter((p) => p.startsWith(prefix))
@@ -146,7 +146,15 @@ export function registerCoreTools(
 			// directive (so they don't hand-edit derived content). Falls back to
 			// the raw file if computing fails.
 			const views = await tryRenderViews(text, path, { db, store, repoArgs, brainId, config });
-			return { content: [{ type: 'text', text: views?.snapshotted ?? text }] };
+			// `path`, `markdown`, and `sha` form the structured read result for the app.
+			// `markdown` mirrors the text fallback exactly, so either MCP result channel
+			// carries the same page and version. No `view` key, so this stays a quiet
+			// read and never routes the MCP App.
+			const markdown = views?.snapshotted ?? text;
+			return {
+				content: [{ type: 'text' as const, text: markdown }],
+				structuredContent: { path, markdown, sha: file.sha }
+			};
 		}
 	);
 }

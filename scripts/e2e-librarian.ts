@@ -45,6 +45,8 @@ import {
 	type Role
 } from '../src/lib/orgs.ts';
 import { registerMediaTools } from '../src/tools/media.ts';
+import { registerCoreTools } from '../src/tools/core.ts';
+import { registerBrainApp } from '../src/tools/apps.ts';
 import { loadCustomToolDefs, registerCustomTools } from '../src/tools/custom.ts';
 import { installationOctokit } from '../src/lib/github.ts';
 import { createAndScaffoldBrain, buildScaffoldFiles } from '../src/lib/scaffold-core.ts';
@@ -190,6 +192,11 @@ const getContext = async () => ({
 });
 registerLibrarianTools(server, getContext);
 registerMediaTools(server, getContext);
+// The two READ tools the app renders a page from. Registered here for the version
+// contract below: only a real store hands out real blob shas, so a stub could not
+// tell whether the sha a render reports is the one that page actually has.
+registerCoreTools(server, getContext);
+registerBrainApp(server, getContext);
 const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
 await server.connect(serverTransport);
 const client = new Client({ name: 'e2e', version: '0.0.0' });
@@ -229,8 +236,33 @@ async function call(tool: string, args: Record<string, unknown>) {
 	};
 	return { isError: !!res.isError, text: res.content.map((c) => c.text).join('\n') };
 }
+// Same call, keeping structuredContent. Most assertions here read the text block,
+// which is what an agent sees; the app reads the structured half, so the fields it
+// navigates and refreshes on need a way to be asserted too.
+async function callSc(tool: string, args: Record<string, unknown>) {
+	const res = (await client.callTool({ name: tool, arguments: args })) as {
+		isError?: boolean;
+		content: { type: string; text: string }[];
+		structuredContent?: Record<string, unknown>;
+	};
+	return {
+		isError: !!res.isError,
+		text: res.content.map((c) => c.text).join('\n'),
+		sc: res.structuredContent ?? {}
+	};
+}
 async function headSha(): Promise<string> {
 	return (await store.getHead(repoArgs)).commitSha;
+}
+// The commit the content index believes it reflects. GitHub writes can advance it
+// synchronously; the fs backend deliberately cannot because its revision token is a
+// digest of a mutable working tree rather than one immutable commit.
+async function indexedSha(): Promise<string | null> {
+	const row = await db
+		.prepare(`SELECT indexed_commit_sha FROM brain_index_meta WHERE brain_id = ?1`)
+		.bind(brainId)
+		.first<{ indexed_commit_sha: string | null }>();
+	return row?.indexed_commit_sha ?? null;
 }
 async function fileText(path: string): Promise<string | null> {
 	return (await store.readFile(repoArgs, path))?.content ?? null;
@@ -285,7 +317,45 @@ try {
 	});
 	check('write_page (create) succeeds', !r.isError, r.text);
 	check('write_page speaks wiki, not git', !/commit|sha|branch/i.test(r.text), r.text);
+	const acmeCreated = await eventually(
+		() => fileText('wiki/customers/acme.md'),
+		(t) => !!t && /They buy rockets/.test(t)
+	);
+	check(
+		'write_page leaves default-stable status absent on create',
+		!/^status:/m.test(acmeCreated ?? ''),
+		acmeCreated ?? ''
+	);
 	await assertOneCommit('write_page create', before);
+
+	// A caller can make the OKF lifecycle state explicit in the create call instead
+	// of paying for a second write.
+	await settledHead();
+	before = await commitCount();
+	r = await call('write_page', {
+		path: 'wiki/customers/northwind.md',
+		title: 'Northwind',
+		content: '# Northwind\n\nA stable customer page.\n',
+		status: 'stable'
+	});
+	check('write_page (create with status) succeeds', !r.isError, r.text);
+	check('write_page (create with status) reports it', /status stable/.test(r.text), r.text);
+	const northwindStable = await eventually(
+		() => fileText('wiki/customers/northwind.md'),
+		(t) => !!t && /status:\s*stable/.test(t)
+	);
+	check(
+		'write_page honors OKF status on create',
+		/status:\s*stable/.test(northwindStable ?? ''),
+		northwindStable ?? ''
+	);
+	await assertOneCommit('write_page create with status', before);
+	r = await call('write_page', {
+		path: 'wiki/customers/nonstandard.md',
+		content: '# Nonstandard\n',
+		status: 'published'
+	});
+	check('write_page refuses the old non-OKF status on new writes', r.isError, r.text);
 
 	// ── write_page mode guards: create refuses an existing path; update refuses
 	//    a missing one; upsert (default) does either. ─────────────────────────
@@ -310,27 +380,124 @@ try {
 		r.text
 	);
 
-	// ── write_page (metadata-only): omit content to publish — status flips to
-	//    published and the body is untouched. (Absorbed the old publish_page.) ─
+	// The target blob must be read only after HEAD is captured. Delay getHead so the
+	// formerly-parallel implementation deterministically starts readFile first and
+	// fails this assertion; ordered reads pass and pin the blob to that commit.
+	const underlyingStore = store;
+	let capturedHead: string | null = null;
+	let targetReadBeforeHead = false;
+	let targetReadRef: string | undefined;
+	store = {
+		...underlyingStore,
+		getHead: async (repo, branch) => {
+			await sleep(30);
+			const head = await underlyingStore.getHead(repo, branch);
+			capturedHead = head.commitSha;
+			return head;
+		},
+		readFile: async (repo, path, ref) => {
+			if (path === 'wiki/customers/acme.md') {
+				if (!capturedHead) targetReadBeforeHead = true;
+				targetReadRef = ref;
+			}
+			return underlyingStore.readFile(repo, path, ref);
+		}
+	};
+	try {
+		r = await call('write_page', {
+			path: 'wiki/customers/acme.md',
+			fields: { ordering_probe: 'safe' },
+			mode: 'update'
+		});
+	} finally {
+		store = underlyingStore;
+	}
+	check('the ordered-read probe write succeeds', !r.isError, r.text);
+	check(
+		'target content is read after HEAD and pinned to it',
+		!targetReadBeforeHead && !!capturedHead && targetReadRef === capturedHead,
+		`beforeHead=${targetReadBeforeHead} ref=${targetReadRef} head=${capturedHead}`
+	);
+
+	// ── write-through: a landed write advances the content index itself ──────
+	//
+	// Issue #31: writes left the index stale at the pre-write HEAD, so the read an
+	// agent runs to VERIFY the write paid an incremental reindex — often the slowest
+	// call of the session. A direct commit now folds its own pages into the index
+	// (writeThroughIndex). Warm the index with a read, then prove a write advances
+	// it with NO read in between.
+	await settledHead();
+	r = await call('search_pages', { query: 'rockets' });
+	check('search warms the index', !r.isError, r.text);
+	check(
+		'index is fresh at HEAD after a read',
+		(await indexedSha()) === (await headSha()),
+		`indexed=${await indexedSha()} head=${await headSha()}`
+	);
+	r = await call('write_page', {
+		path: 'wiki/notes/write-through-probe.md',
+		title: 'Write Through Probe',
+		content: '# Write Through Probe\n\nUniquely probe-xylophonic content.\n'
+	});
+	check('write_page (write-through probe) succeeds', !r.isError, r.text);
+	await settledHead();
+	check(
+		GITHUB_MODE
+			? 'the create advanced the index with no read in between'
+			: 'the mutable fs backend leaves the index for reconciliation',
+		GITHUB_MODE
+			? (await indexedSha()) === (await headSha())
+			: (await indexedSha()) !== (await headSha()),
+		`indexed=${await indexedSha()} head=${await headSha()}`
+	);
+	r = await call('search_pages', { query: 'xylophonic' });
+	check('the verifying search finds the new page', /write-through-probe\.md/.test(r.text), r.text);
+
+	// A move upserts the new path AND deletes the old one — both must be written
+	// through, or the index would keep listing a page that no longer exists.
+	r = await call('move_page', {
+		path: 'wiki/notes/write-through-probe.md',
+		new_path: 'wiki/notes/write-through-probe-moved.md'
+	});
+	check('move_page (write-through probe) succeeds', !r.isError, r.text);
+	await settledHead();
+	check(
+		GITHUB_MODE
+			? 'the move advanced the index with no read in between'
+			: 'the fs move leaves the index for reconciliation',
+		GITHUB_MODE
+			? (await indexedSha()) === (await headSha())
+			: (await indexedSha()) !== (await headSha()),
+		`indexed=${await indexedSha()} head=${await headSha()}`
+	);
+	r = await call('search_pages', { query: 'xylophonic' });
+	check(
+		'search sees the moved path and not the old one',
+		/write-through-probe-moved\.md/.test(r.text) && !/write-through-probe\.md:/.test(r.text),
+		r.text
+	);
+
+	// ── write_page (metadata-only): an OKF lifecycle transition leaves the body
+	//    untouched. ───────────────────────────────────────────────────────────
 	await settledHead();
 	before = await commitCount();
-	r = await call('write_page', { path: 'wiki/customers/acme.md', status: 'published' });
-	check('write_page (publish) succeeds', !r.isError, r.text);
-	const acmePublished = await eventually(
+	r = await call('write_page', { path: 'wiki/customers/acme.md', status: 'deprecated' });
+	check('write_page (lifecycle update) succeeds', !r.isError, r.text);
+	const acmeDeprecated = await eventually(
 		() => fileText('wiki/customers/acme.md'),
-		(t) => !!t && /status:\s*published/.test(t)
+		(t) => !!t && /status:\s*deprecated/.test(t)
 	);
 	check(
-		'publish flipped status to published',
-		/status:\s*published/.test(acmePublished ?? ''),
-		acmePublished ?? ''
+		'lifecycle update set status to deprecated',
+		/status:\s*deprecated/.test(acmeDeprecated ?? ''),
+		acmeDeprecated ?? ''
 	);
 	check(
-		'publish left the body untouched',
-		(acmePublished ?? '').includes('They buy rockets.'),
-		acmePublished ?? ''
+		'lifecycle update left the body untouched',
+		(acmeDeprecated ?? '').includes('They buy rockets.'),
+		acmeDeprecated ?? ''
 	);
-	await assertOneCommit('write_page publish (metadata-only)', before);
+	await assertOneCommit('write_page lifecycle update (metadata-only)', before);
 
 	// ── OKF conformance, against real blobs ──────────────────────────────────
 	//
@@ -376,6 +543,9 @@ try {
 		'---',
 		'type: Meeting Note',
 		'title: Kickoff',
+		// Persisted brains may carry the old Isomorphic value. Reads and unrelated
+		// writes preserve it even though new status transitions use OKF values.
+		'status: published',
 		'sources:',
 		'  - resource: /source/kickoff.md',
 		'    title: Kickoff transcript',
@@ -391,11 +561,11 @@ try {
 	r = await call('write_page', { path: 'wiki/notes/kickoff.md', content: nested });
 	check('write_page accepts nested OKF frontmatter', !r.isError, r.text);
 	// Re-save it (metadata-only) so the frontmatter goes through serialize again.
-	r = await call('write_page', { path: 'wiki/notes/kickoff.md', status: 'published' });
+	r = await call('write_page', { path: 'wiki/notes/kickoff.md', description: 'Kickoff notes' });
 	check('re-save of a nested-frontmatter page succeeds', !r.isError, r.text);
 	const kickoff = await eventually(
 		() => fileText('wiki/notes/kickoff.md'),
-		(t) => !!t && /status:\s*published/.test(t)
+		(t) => !!t && /description:\s*Kickoff notes/.test(t)
 	);
 	check(
 		'nested sources[].resource survives a re-save',
@@ -410,6 +580,11 @@ try {
 	check(
 		'nested generated.by/at survive',
 		/by:\s*e2e/.test(kickoff ?? '') && /at:\s*2026-07-24/.test(kickoff ?? ''),
+		kickoff ?? ''
+	);
+	check(
+		'legacy published status survives an unrelated write',
+		/status:\s*published/.test(kickoff ?? ''),
 		kickoff ?? ''
 	);
 
@@ -460,7 +635,7 @@ try {
 		(appended ?? '').includes('They buy rockets.'),
 		appended ?? ''
 	);
-	check('append kept frontmatter', /status:\s*published/.test(appended ?? ''), appended ?? '');
+	check('append kept frontmatter', /status:\s*deprecated/.test(appended ?? ''), appended ?? '');
 	check(
 		'append landed at the end',
 		(appended ?? '').trimEnd().endsWith('- Wile E. Coyote'),
@@ -923,6 +1098,66 @@ try {
 	// `encoding` is that the inline-content path decodes as UTF-8 and would corrupt
 	// these bytes silently, so a round-trip that compares base64 exactly is the
 	// assertion that would have caught it.
+	// Issue #29: a render must carry the version it is a render OF. The viewer had no
+	// way to reload a page and no way to tell a current render from one the branch had
+	// moved past, because the read tools returned content and dropped the blob sha
+	// readFile already hands them. Both read paths report it, and they must agree:
+	// the app opens a page through view_page and refreshes it through read_page, so
+	// two different answers would make every refresh look like someone else's edit.
+	console.log('\npage version (issue #29)');
+	{
+		const path = 'wiki/vendors/versioned.md';
+		await call('write_page', { path, content: '# Versioned\n\nFirst.\n', title: 'Versioned' });
+
+		const stored = await store.readFile(repoArgs, path);
+		const read = await callSc('read_page', { path });
+		const viewed = await callSc('view_page', { path });
+		const structuredMarkdown = typeof read.sc.markdown === 'string' ? read.sc.markdown : '';
+		check(
+			'read_page carries the complete page in structuredContent',
+			structuredMarkdown === read.text && structuredMarkdown.includes('First.'),
+			JSON.stringify(read.sc)
+		);
+
+		check('read_page reports the page blob sha', read.sc.sha === stored?.sha, String(read.sc.sha));
+		check(
+			'view_page reports the same sha for the same page',
+			!!viewed.sc.sha && viewed.sc.sha === read.sc.sha,
+			`${String(viewed.sc.sha)} vs ${String(read.sc.sha)}`
+		);
+
+		// The assertion the refresh control rests on. Without it the sha could be any
+		// stable string (the path, a constant) and every comparison would report "no
+		// change" forever, which is the failure the reader would never see through.
+		const beforeSha = read.sc.sha;
+		await call('write_page', { path, append: '\nSecond.\n' });
+		const after = await callSc('read_page', { path });
+		check(
+			'the sha moves when the page is written',
+			after.sc.sha !== beforeSha,
+			String(after.sc.sha)
+		);
+		check(
+			'and still matches what the store holds',
+			after.sc.sha === (await store.readFile(repoArgs, path))?.sha,
+			String(after.sc.sha)
+		);
+
+		// A write to a DIFFERENT page must not move this one's sha, or the viewer would
+		// announce an update on every page each time anything in the brain changed.
+		await call('write_page', {
+			path: 'wiki/vendors/other.md',
+			content: '# Other\n',
+			title: 'Other'
+		});
+		const untouched = await callSc('read_page', { path });
+		check(
+			'an unrelated write leaves it alone',
+			untouched.sc.sha === after.sc.sha,
+			String(untouched.sc.sha)
+		);
+	}
+
 	console.log('\nattachments');
 	{
 		// A 1x1 transparent PNG. Small, but real: it contains bytes that are not valid
@@ -1236,7 +1471,7 @@ try {
 		listOrgs: () => listAccessibleOrgs(db, [USER]),
 		listBrains: () => listAccessibleBrains(db, [USER]),
 		activeBrainId: () => activeId,
-		setActiveBrain: (id: string) => {
+		setActiveBrain: async (id: string) => {
 			activeId = id;
 		},
 		invalidateConfig: () => {},

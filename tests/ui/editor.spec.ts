@@ -79,3 +79,15 @@ test('the same page renders its view live outside the editor', async ({ page }) 
 	const main = app.locator('main[data-view="page"]');
 	await expect(main).not.toContainText('okf-view:snapshot');
 });
+
+test('a legacy published status can migrate to an OKF lifecycle value', async ({ page }) => {
+	const app = await openApp(page, '');
+	await expectView(app, 'page');
+
+	await app.getByText('published', { exact: true }).click();
+	const status = app.getByRole('combobox');
+	await expect(status.locator('option')).toHaveText(['published', 'draft', 'stable', 'deprecated']);
+	await status.selectOption('stable');
+
+	await expect(app.getByText('stable', { exact: true })).toBeVisible();
+});

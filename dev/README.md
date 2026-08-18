@@ -20,17 +20,34 @@ Edit anything in `app/` (or `src/lib/wiki.ts`) and the browser live-reloads:
 
 ### Views (URL controls)
 
-| URL                                                   | Shows                           |
-| ----------------------------------------------------- | ------------------------------- |
-| `/`                                                   | opens a page (default: Vision)  |
-| `/#browse`                                            | the file tree                   |
-| `/#edit`                                              | the editor for the default page |
-| `/#edit=wiki/playbooks/brand-voice.md`                | edit a specific page (tables)   |
-| `/?mode=pip` (or `?mode=inline` / `?mode=fullscreen`) | force a display mode            |
-| `/#brains`                                            | the brain switcher / list       |
-| `/#members`                                           | the org roster                  |
-| `/#access`                                            | the per-brain sharing panel     |
-| `/#cold`                                              | no opening tool result (below)  |
+| URL                                                   | Shows                            |
+| ----------------------------------------------------- | -------------------------------- |
+| `/`                                                   | opens a page (default: Vision)   |
+| `/#browse`                                            | the file tree                    |
+| `/#edit`                                              | the editor for the default page  |
+| `/#edit=wiki/playbooks/brand-voice.md`                | edit a specific page (tables)    |
+| `/?mode=pip` (or `?mode=inline` / `?mode=fullscreen`) | force a display mode             |
+| `/#brains`                                            | the brain switcher / list        |
+| `/#members`                                           | the org roster                   |
+| `/#access`                                            | the per-brain sharing panel      |
+| `/#cold`                                              | no opening tool result (below)   |
+| `/#other-brain`                                       | a brain opened BY NAME (below)   |
+| `/#stale`                                             | a page edited behind you (below) |
+
+`/#other-brain` delivers a browse result for a brain that is NOT the one the
+connection's active-brain pointer names — what happens when the model calls
+`browse_brain` / `view_page` with an explicit `brain:`. The pointer lags because it is
+written by the request that opened the widget and read by the next one, and the app
+re-reads it through `brains` on every open, so this is where the panel used to swap
+itself to the previous brain while the model reported the one it opened (issue #26).
+The crumb, the tree and the picker's tick all have to name the brain the RESULT names.
+
+`/#stale` opens a page and then changes it, so the widget is holding a render the
+brain has already moved past with nothing on screen saying so (issue #29). This is the
+case the page viewer's refresh control exists for and the one no amount of care on our
+own write path prevents: another person, another agent, or an edit made on github.com.
+Pressing Refresh has to both replace the content and SAY the page moved, since a
+refresh that repaints in silence cannot be told apart from one that failed.
 
 `/#cold` connects and then sends nothing, so the app self-boots: `connectToHost`
 opens the file tree itself 1200ms after the handshake. A real host does this

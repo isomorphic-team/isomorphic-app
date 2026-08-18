@@ -140,7 +140,10 @@ export interface CommitOrPROpts extends CommitOpts {
 }
 
 export interface BrainStore {
-	getHead(repo: RepoRef): Promise<Head>;
+	// branch: resolve THIS branch instead of asking the platform for the default
+	// (callers pass config.defaultBranch), saving one round trip. Implementations
+	// fall back to discovery when the named branch does not exist.
+	getHead(repo: RepoRef, branch?: string): Promise<Head>;
 	branchCommitSha(repo: RepoRef, branch: string): Promise<string>;
 	repoWritePolicy(repo: RepoRef): Promise<RepoWritePolicy>;
 	listTree(repo: RepoRef, head: Head, opts?: { extension?: string }): Promise<TreeEntry[]>;
@@ -148,7 +151,13 @@ export interface BrainStore {
 		repo: RepoRef,
 		entries: TreeEntry[]
 	): Promise<{ pages: PageContent[]; truncated: boolean }>;
-	readFile(repo: RepoRef, path: string): Promise<{ content: string; sha: string } | null>;
+	// `ref` pins the read to one branch/commit. Write paths normally capture HEAD
+	// first so every blob they derive a commit from belongs to that revision.
+	readFile(
+		repo: RepoRef,
+		path: string,
+		ref?: string
+	): Promise<{ content: string; sha: string } | null>;
 	// One file's raw bytes as base64. Backs read_media; null when absent.
 	readBinary(repo: RepoRef, path: string): Promise<BinaryContent | null>;
 	findOpenConfigPr(repo: RepoRef): Promise<string | undefined>;
@@ -162,12 +171,12 @@ export interface BrainStore {
 // An App installation token and a plain access token work the same here.
 export function githubStore(octokit: Octokit): BrainStore {
 	return {
-		getHead: (repo) => getHead(octokit, repo),
+		getHead: (repo, branch) => getHead(octokit, repo, branch),
 		branchCommitSha: (repo, branch) => branchCommitSha(octokit, repo, branch),
 		repoWritePolicy: (repo) => repoWritePolicy(octokit, repo),
 		listTree: (repo, head, opts) => listTree(octokit, repo, head, opts),
 		fetchPages: (repo, entries) => fetchPages(octokit, repo, entries),
-		readFile: (repo, path) => readFile(octokit, repo, path),
+		readFile: (repo, path, ref) => readFile(octokit, repo, path, ref),
 		readBinary: (repo, path) => readBinary(octokit, repo, path),
 		findOpenConfigPr: (repo) => findOpenConfigPr(octokit, repo),
 		listCommits: (repo, opts) => listCommits(octokit, repo, opts),
@@ -176,15 +185,31 @@ export function githubStore(octokit: Octokit): BrainStore {
 	};
 }
 
-async function getHead(octokit: Octokit, repo: RepoRef): Promise<Head> {
+// branch: skip the repos.get default-branch discovery and resolve the named branch
+// directly (callers pass config.defaultBranch, which the write-policy probe already
+// learned). A 404 on the named branch falls back to discovery — the repo's default
+// was renamed, or the probe failed earlier and config guessed 'main'.
+async function getHead(octokit: Octokit, repo: RepoRef, branch?: string): Promise<Head> {
+	if (branch) {
+		try {
+			const { data: ref } = await octokit.rest.git.getRef({ ...repo, ref: `heads/${branch}` });
+			const { data: commit } = await octokit.rest.git.getCommit({
+				...repo,
+				commit_sha: ref.object.sha
+			});
+			return { branch, commitSha: ref.object.sha, treeSha: commit.tree.sha };
+		} catch (err) {
+			if ((err as { status?: number })?.status !== 404) throw err;
+		}
+	}
 	const { data: repoData } = await octokit.rest.repos.get(repo);
-	const branch = repoData.default_branch;
-	const { data: ref } = await octokit.rest.git.getRef({ ...repo, ref: `heads/${branch}` });
+	const resolved = repoData.default_branch;
+	const { data: ref } = await octokit.rest.git.getRef({ ...repo, ref: `heads/${resolved}` });
 	const { data: commit } = await octokit.rest.git.getCommit({
 		...repo,
 		commit_sha: ref.object.sha
 	});
-	return { branch, commitSha: ref.object.sha, treeSha: commit.tree.sha };
+	return { branch: resolved, commitSha: ref.object.sha, treeSha: commit.tree.sha };
 }
 
 // The commit a named branch points at. getHead resolves the repo's DEFAULT branch;
@@ -337,10 +362,11 @@ async function fetchPages(
 async function readFile(
 	octokit: Octokit,
 	repo: RepoRef,
-	path: string
+	path: string,
+	ref?: string
 ): Promise<{ content: string; sha: string } | null> {
 	try {
-		const { data } = await octokit.rest.repos.getContent({ ...repo, path });
+		const { data } = await octokit.rest.repos.getContent({ ...repo, path, ...(ref && { ref }) });
 		if (Array.isArray(data) || data.type !== 'file') return null;
 		return { content: base64ToUtf8(data.content), sha: data.sha };
 	} catch (err) {
@@ -464,6 +490,13 @@ export interface WriteOutcome {
 	// pending), and/or did we arm GitHub auto-merge (merges when checks go green)?
 	merged?: boolean;
 	autoMergeEnabled?: boolean;
+	// Direct mode only: the revision the branch now points at, in the SAME
+	// identifier space branchCommitSha reports (a commit sha on GitHub, the
+	// working-tree digest on the fs backend). The write-through index update
+	// records it (writeThroughIndex in brain-index.ts). Absent on the PR path:
+	// the default branch has not moved, or moved via a merge commit this call
+	// does not know — the next read reconciles there, as before.
+	commitSha?: string;
 }
 
 // Arm GitHub auto-merge on a freshly-opened PR: it merges automatically once the
@@ -534,16 +567,16 @@ async function commitOrPR(
 		author?: CommitAuthor;
 	}
 ): Promise<WriteOutcome> {
-	const head = opts.head ?? (await getHead(octokit, repo));
+	const head = opts.head ?? (await getHead(octokit, repo, opts.defaultBranch));
 	if (opts.writeMode === 'direct') {
-		await commitFiles(octokit, repo, {
+		const res = await commitFiles(octokit, repo, {
 			message: opts.message,
 			writes: opts.writes,
 			deletes: opts.deletes,
 			head,
 			author: opts.author
 		});
-		return {};
+		return { commitSha: res.head.commitSha };
 	}
 
 	// PR mode: build the identical tree/commit as commitFiles, but land it on a new

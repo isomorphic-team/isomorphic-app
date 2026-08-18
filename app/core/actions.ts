@@ -35,7 +35,7 @@ import type {
 	UsageBrain
 } from './types.ts';
 import { app, callTool, firstText } from './host.ts';
-import { FOLDER_NOTE_NAMES } from './util.ts';
+import { FOLDER_NOTE_NAMES, refreshOutcome } from './util.ts';
 import {
 	show,
 	history,
@@ -45,13 +45,13 @@ import {
 	setBrowseCache,
 	activeBrain,
 	setActiveBrain,
+	pickShownBrain,
 	brainList,
 	setBrainList,
 	orgList,
 	setOrgList,
 	setFeatures,
 	applyPolicy,
-	resetPolicy,
 	applyBrainContext,
 	bump
 } from './store.ts';
@@ -76,8 +76,11 @@ function handleToolResult(result: CallToolResult) {
 		return;
 	}
 	const sc = (result.structuredContent ?? {}) as Record<string, unknown>;
-	applyPolicy(sc);
+	// Brain FIRST: adopting a different brain drops what was cached for the old one,
+	// including its path policy, so applying this result's policy before that would
+	// hand the new brain the wiki/ default (see setActiveBrain in the store).
 	applyBrainContext(sc);
+	applyPolicy(sc);
 	// Learn the brain list once, lazily, so the switcher knows whether to appear.
 	void ensureBrainList();
 	const view = typeof sc.view === 'string' ? sc.view : 'page';
@@ -105,7 +108,8 @@ function handleToolResult(result: CallToolResult) {
 				kind: 'edit',
 				path: String(sc.path ?? ''),
 				markdown: String(sc.markdown ?? ''),
-				sha: String(sc.sha ?? '')
+				sha: String(sc.sha ?? ''),
+				fetchedAt: Date.now()
 			},
 			{ push: false }
 		);
@@ -149,23 +153,39 @@ function handleToolResult(result: CallToolResult) {
 		);
 	else
 		show(
-			{ kind: 'page', path: String(sc.path ?? ''), markdown: String(sc.markdown ?? '') },
+			{
+				kind: 'page',
+				path: String(sc.path ?? ''),
+				markdown: String(sc.markdown ?? ''),
+				sha: typeof sc.sha === 'string' ? sc.sha : undefined,
+				fetchedAt: Date.now()
+			},
 			{ push: false }
 		);
 }
 
-// Build a brains View from a tool result (view_brains / switch_brain). Also refreshes
-// the cached brain list + active brain so the header switcher stays in sync.
-function brainsViewFromSc(sc: Record<string, unknown>): View {
+// Build a brains View from a tool result (brains / switch_brain / create_brain /
+// connect_brain). Also refreshes the cached brain list + shown brain so the header
+// switcher stays in sync.
+//
+// Only a result that CHANGED the brain overrides the brain the widget is showing. A
+// plain list does not, and neither does connect_brain, which adopts a repo without
+// moving anyone into it (the app switches afterwards, through switch_brain). See
+// pickShownBrain. Two ways to know: the caller asked for the switch itself, or the
+// result says `switched` (switch_brain / create_brain), which is the only signal
+// available when the MODEL made the call and the widget is just rendering it.
+function brainsViewFromSc(sc: Record<string, unknown>, switched = false): View {
 	const brains = Array.isArray(sc.brains) ? (sc.brains as BrainRow[]) : [];
-	const active = String(sc.active ?? activeBrain?.id ?? '');
+	const deliberate = switched || !!sc.switched;
 	orgsFromSc(sc);
 	if (brains.length) {
 		setBrainList(brains);
-		const a = brains.find((b) => b.id === active);
-		if (a) setActiveBrain({ id: a.id, label: a.label });
+		const picked = pickShownBrain(brains, sc.active ? String(sc.active) : undefined, deliberate);
+		if (picked) setActiveBrain(picked);
 	}
-	return { kind: 'brains', brains, active };
+	// The list highlights the brain the widget is IN, so the checkmark and the crumb
+	// above it can never name two different brains.
+	return { kind: 'brains', brains, active: activeBrain?.id ?? String(sc.active ?? '') };
 }
 
 // Fetch the caller's brain list once (idempotent). The switcher only appears when
@@ -197,8 +217,12 @@ function ensureBrainList(): Promise<void> {
 			// the one the app always makes on open.
 			orgsFromSc(res.structuredContent ?? {});
 			setFeatures(sc.features);
-			const a = sc.brains.find((b) => b.id === (sc.active ?? activeBrain?.id));
-			if (a) setActiveBrain({ id: a.id, label: a.label });
+			// NOT a brain change: this call asks what brains exist, and it runs on every
+			// open — including the open that a `brain:`-targeted view_page or
+			// browse_brain just aimed at a specific brain. Adopting its `active` here is
+			// what pointed the whole widget back at the previously active brain.
+			const picked = pickShownBrain(sc.brains, sc.active, false);
+			if (picked) setActiveBrain(picked);
 			bump();
 		} catch {
 			// Stay unknown: the header keeps its neutral Files button rather than claiming
@@ -221,9 +245,9 @@ async function switchBrain(id: string) {
 	try {
 		const res = await callTool('switch_brain', { brain: id });
 		if (res.isError) throw new Error(firstText(res));
-		brainsViewFromSc((res.structuredContent ?? {}) as Record<string, unknown>);
-		setBrowseCache(null); // the file tree belongs to the old brain
-		resetPolicy(); // and so does its path policy — list_pages delivers the new one
+		// Adopting the new brain is what drops the old one's file tree and path policy
+		// (setActiveBrain in the store) — one seam, so no path into a brain can forget.
+		brainsViewFromSc((res.structuredContent ?? {}) as Record<string, unknown>, true);
 		openBrowse();
 	} catch (e) {
 		show({
@@ -356,11 +380,9 @@ async function submitCreateBrain(name: string) {
 	try {
 		const res = await callTool('create_brain', { name: trimmed });
 		if (res.isError) throw new Error(firstText(res));
-		const fresh = brainsViewFromSc((res.structuredContent ?? {}) as Record<string, unknown>);
+		const fresh = brainsViewFromSc((res.structuredContent ?? {}) as Record<string, unknown>, true);
 		refreshStale('brains', fresh); // ...and if that screen was the brains list, it is now stale
-		setBrowseCache(null);
-		resetPolicy();
-		openBrowse();
+		openBrowse(); // the new brain's (empty) tree — the switch already dropped the old one's
 	} catch (e) {
 		show({
 			kind: 'error',
@@ -465,10 +487,22 @@ function finishShareBrain(sc: Record<string, unknown>) {
 	show(fresh, { push: false });
 }
 
-async function fetchPage(path: string): Promise<string> {
+// One page's current content, plus the blob sha it is a render OF. The sha is what
+// lets a later fetch answer "is this still what the branch holds", which nothing in
+// the app could ask before: a render carried its text and no notion of which version
+// the text was.
+async function fetchPage(path: string): Promise<{ markdown: string; sha: string }> {
 	const result = await callTool('read_page', { path, ...brainArgs() });
 	if (result.isError) throw new Error(firstText(result));
-	return firstText(result);
+	const sc = (result.structuredContent ?? {}) as { sha?: string };
+	return { markdown: firstText(result), sha: typeof sc.sha === 'string' ? sc.sha : '' };
+}
+
+// Build a page view from freshly fetched content. Every page render is stamped with
+// the moment it was fetched, so the viewer can say how old it is rather than
+// presenting a snapshot as though it were live.
+function pageView(path: string, page: { markdown: string; sha: string }): View {
+	return { kind: 'page', path, markdown: page.markdown, sha: page.sha, fetchedAt: Date.now() };
 }
 
 async function fetchPageList(): Promise<string[]> {
@@ -485,7 +519,7 @@ async function fetchPageIndex(): Promise<{ path: string; title: string }[]> {
 async function navigateTo(path: string) {
 	show({ kind: 'loading', label: `Loading ${path}…` });
 	try {
-		show({ kind: 'page', path, markdown: await fetchPage(path) });
+		show(pageView(path, await fetchPage(path)));
 	} catch (e) {
 		if (isNoBrain(String(e))) return openAddBrain();
 		show({
@@ -494,6 +528,41 @@ async function navigateTo(path: string) {
 			detail: String(e),
 			retry: () => navigateTo(path)
 		});
+	}
+}
+
+// Re-fetch the page on screen and swap it in place.
+//
+// The viewer had no way to do this at all: a render was a snapshot of a page that
+// keeps moving, with no control to reload it and nothing recording how old it was
+// (issue #29). The reader could only reopen the page from the conversation, which
+// costs a round trip and still gives no way to tell current from stale.
+//
+// Deliberately quiet. No loading state, because the content already on screen is a
+// better thing to look at during the fetch than a spinner, and a failure leaves the
+// stale render up rather than blanking a page over a refresh blip. The toast is
+// where the answer goes, including when the answer is "nothing moved" — a refresh
+// that repaints identical bytes and says nothing is indistinguishable from one that
+// silently failed, which is the confusion this control exists to end.
+async function refreshPage() {
+	const before = currentView;
+	if (before.kind !== 'page') return;
+	try {
+		const fresh = await fetchPage(before.path);
+		// An await is long enough for the reader to navigate away; repainting the page
+		// they left would be worse than not refreshing at all.
+		if (currentView.kind !== 'page' || currentView.path !== before.path) return;
+		show(pageView(before.path, fresh), { push: false });
+		const outcome = refreshOutcome(before.sha, fresh.sha);
+		toast(
+			outcome === 'updated'
+				? 'Updated to the latest version'
+				: outcome === 'current'
+					? 'Already up to date'
+					: 'Refreshed'
+		);
+	} catch (e) {
+		toast(`Couldn't refresh: ${e}`, true);
 	}
 }
 
@@ -561,15 +630,6 @@ async function fetchPaths(): Promise<BrowseData> {
 		hidden?: unknown;
 		needsConfig?: boolean;
 	};
-	// This is a WIDGET-initiated call, so it never passes through handleToolResult —
-	// apply the path policy here or the tree keeps whatever policy the last
-	// host-initiated result left behind (a different brain's, or the wiki/ default).
-	applyPolicy(sc);
-	// Same reasoning, and it is what keeps the trail's root crumb honest: this call can
-	// be the FIRST thing the app does (the self-boot in connectToHost, when no tool
-	// result opened the widget), in which case nothing else has said which brain the
-	// tree belongs to and the crumb would name a view instead of a brain.
-	applyBrainContext(sc);
 	const paths = firstText(result)
 		.split('\n')
 		.map((l) => l.trim())
@@ -581,8 +641,28 @@ async function fetchPaths(): Promise<BrowseData> {
 		hidden: Array.isArray(sc.hidden) ? (sc.hidden as string[]) : [],
 		needsConfig: !!sc.needsConfig
 	};
-	setBrowseCache(data);
-	browseFetchedAt = Date.now();
+	// This is a WIDGET-initiated call, so it never passes through handleToolResult —
+	// name the brain and apply the path policy here or the tree keeps whatever the last
+	// host-initiated result left behind (a different brain's, or the wiki/ default).
+	// Naming the brain also keeps the trail's root crumb honest: this call can be the
+	// FIRST thing the app does (the self-boot in connectToHost, when no tool result
+	// opened the widget), in which case nothing else has said which brain the tree
+	// belongs to and the crumb would name a view instead of a brain. Brain before
+	// policy, for the reason in handleToolResult.
+	//
+	// ONLY IF IT IS STILL AN ANSWER TO THE QUESTION WE ASKED. A self-boot fetch goes out
+	// with no brain named, so it answers about the CONNECTION's brain — and an opening
+	// result can land while it is in flight, naming a different one (a `brain:`-targeted
+	// view_page). Adopting the stale answer then would rename the crumb, reset the path
+	// policy, and cache another brain's page list behind the page on screen, which is
+	// issue #26's shape reached through the back door.
+	const answered = (sc.activeBrain as { id?: string } | undefined)?.id;
+	if (!activeBrain || !answered || answered === activeBrain.id) {
+		applyBrainContext(sc);
+		applyPolicy(sc);
+		setBrowseCache(data);
+		browseFetchedAt = Date.now();
+	}
 	return data;
 }
 
@@ -600,9 +680,19 @@ async function openBrowse(focus?: string) {
 		return;
 	}
 	show({ kind: 'loading', label: 'Loading files…' });
+	// The view this call is standing on. A cold tree fetch is the app's slowest open,
+	// and the one it makes UNATTENDED (the self-boot in connectToHost), so it is the one
+	// most likely to be overtaken: the host can deliver the opening tool result at any
+	// point while list_pages is in flight. Whatever landed meanwhile is a real answer to
+	// a real request — showing the tree on top of it is what made a slow view_page flash
+	// its page and then fall back to the file tree. Same guard revalidateBrowse uses.
+	const opened = currentView;
 	try {
-		show({ kind: 'browse', ...(await fetchPaths()), focus });
+		const data = await fetchPaths();
+		if (currentView !== opened) return;
+		show({ kind: 'browse', ...data, focus });
 	} catch (e) {
+		if (currentView !== opened) return;
 		if (isNoBrain(String(e))) return openAddBrain();
 		show({
 			kind: 'error',
@@ -854,7 +944,8 @@ async function openEditor(path: string) {
 			kind: 'edit',
 			path: String(sc.path ?? path),
 			markdown: String(sc.markdown ?? ''),
-			sha: String(sc.sha ?? '')
+			sha: String(sc.sha ?? ''),
+			fetchedAt: Date.now()
 		});
 	} catch (e) {
 		toast(`Couldn't open editor: ${e}`, true);
@@ -945,6 +1036,8 @@ export {
 	openShareBrain,
 	finishShareBrain,
 	fetchPage,
+	pageView,
+	refreshPage,
 	fetchPageList,
 	navigateTo,
 	openAsset,

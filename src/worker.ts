@@ -268,7 +268,7 @@ class McpSession {
 
 	// The connection's active brain. Preloaded once per request from KV
 	// (loadActiveBrain) so the many synchronous readers below keep working, and
-	// written back fire-and-forget on change. This used to be per-connection DO
+	// written back on change (awaited — see setActiveBrain). This used to be per-connection DO
 	// state; it is now per-USER (KV key) preference, which is the intended
 	// semantic change of the stateless move.
 	private _activeBrainId?: string;
@@ -306,9 +306,17 @@ class McpSession {
 		return this._activeBrainId;
 	}
 
-	private setActiveBrain(id: string): void {
+	// AWAITED, not waitUntil. The pointer's next reader is usually the very next
+	// request — the widget fetches its brain list the moment it opens, and the model's
+	// next bare call resolves through this key — and a fire-and-forget write may not
+	// have STARTED by then, so the read came back with the PREVIOUS brain. Failure is
+	// swallowed: a KV blip must not turn a successful read into an error; the pointer
+	// just doesn't move. (KV is still eventually consistent across locations, so the
+	// app treats the brain a RESULT names as authoritative over this pointer — see
+	// pickShownBrain in app/core/store.ts.)
+	private async setActiveBrain(id: string): Promise<void> {
 		this._activeBrainId = id;
-		this.ctx.waitUntil(this.env.OAUTH_KV.put('active_brain:' + this.userKey(), id));
+		await this.env.OAUTH_KV.put('active_brain:' + this.userKey(), id).catch(() => {});
 	}
 
 	// The org (and brain, if any) the last resolution in this request landed on.
@@ -362,8 +370,8 @@ class McpSession {
 	// the two "current brain" pointers into one: viewing/editing a brain in the widget
 	// moves the connection's active brain, so the model's subsequent bare calls and the
 	// widget's own bare actions all target the brain the user is looking at.
-	private maybeStick(brainId: string, opts?: TenantOpts): void {
-		if (opts?.sticky && brainId !== this.activeBrainId) this.setActiveBrain(brainId);
+	private async maybeStick(brainId: string, opts?: TenantOpts): Promise<void> {
+		if (opts?.sticky && brainId !== this.activeBrainId) await this.setActiveBrain(brainId);
 	}
 
 	// The set of user ids that make up the CALLER as a person: the signed-in user plus
@@ -434,7 +442,7 @@ class McpSession {
 				);
 				assertRole(ctx.role, opts?.requires);
 				assertRole(ctx.orgRole, opts?.requiresOrg);
-				this.maybeStick(ctx.activeBrain.id, opts);
+				await this.maybeStick(ctx.activeBrain.id, opts);
 				return ctx;
 			}
 			// GitHub identity (legacy/admin path): the flat, gh_user_id-keyed tenants
@@ -461,7 +469,7 @@ class McpSession {
 					const ctx = await this.resolveProductContext(linked.user_id, linked.email, opts?.brain);
 					assertRole(ctx.role, opts?.requires);
 					assertRole(ctx.orgRole, opts?.requiresOrg);
-					this.maybeStick(ctx.activeBrain.id, opts);
+					await this.maybeStick(ctx.activeBrain.id, opts);
 					return ctx;
 				}
 			}
@@ -881,8 +889,8 @@ class McpSession {
 
 		// ---------- librarian suite ----------
 		// write_page / move_page / delete_page / find_inbound_links / validate /
-		// search_pages. write_page creates or updates (and publishes via
-		// status: 'published', and backs the editor's sha-guarded save); move_page /
+		// search_pages. write_page creates or updates (including optional OKF lifecycle
+		// status, and backs the editor's sha-guarded save); move_page /
 		// delete_page also take a folder path to move or delete a whole subtree. All
 		// writes are atomic bundles (page + changelog, plus any repointed links, in one
 		// commit) and all responses speak in wiki terms, never git terms. See

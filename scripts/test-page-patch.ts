@@ -9,7 +9,8 @@ import {
 	applyPageEdits,
 	applyFieldPatch,
 	validateFieldPatch,
-	MANAGED_FIELD_KEYS
+	MANAGED_FIELD_KEYS,
+	OKF_PAGE_STATUSES
 } from '../src/lib/page-patch.ts';
 import { parseFrontmatter, withFrontmatter, type Frontmatter } from '../src/lib/wiki.ts';
 import { SNAPSHOT_BEGIN, SNAPSHOT_END } from '../src/lib/view-directives.ts';
@@ -210,6 +211,11 @@ check('empty edits array is an error', !applyPageEdits(BODY, { edits: [] }).ok);
 // =====================================================================
 // fields: frontmatter merge-patch
 // =====================================================================
+
+check(
+	'OKF lifecycle vocabulary is shared by the tool and app',
+	OKF_PAGE_STATUSES.join('|') === 'draft|stable|deprecated'
+);
 
 const PAGE = `---
 title: Ship the importer

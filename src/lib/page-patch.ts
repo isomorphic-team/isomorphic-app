@@ -170,6 +170,8 @@ export function applyPageEdits(
 //      destroy what you have not seen.
 
 export const MANAGED_FIELD_KEYS = ['title', 'type', 'description', 'status', 'updated'] as const;
+export const OKF_PAGE_STATUSES = ['draft', 'stable', 'deprecated'] as const;
+export type OkfPageStatus = (typeof OKF_PAGE_STATUSES)[number];
 
 const FIELD_KEY_RE = /^[A-Za-z0-9_-]+$/;
 

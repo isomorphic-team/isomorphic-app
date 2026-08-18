@@ -14,7 +14,7 @@ import { ImageNodeView, mediaHandlers, uploadsInFlight } from '../core/editor-me
 import type { EditorApi } from '../core/types.ts';
 import { callTool, firstText } from '../core/host.ts';
 import { bump, show, brainArgs } from '../core/store.ts';
-import { fetchPage } from '../core/actions.ts';
+import { fetchPage, pageView } from '../core/actions.ts';
 import { toast } from '../core/toast.tsx';
 import { PageProperties } from './PageView.tsx';
 import { defineView } from '../core/view-registry.ts';
@@ -344,7 +344,11 @@ function MarkdownEditor({
 	);
 }
 
-function EditView({ state }: { state: { path: string; markdown: string; sha: string } }) {
+function EditView({
+	state
+}: {
+	state: { path: string; markdown: string; sha: string; fetchedAt?: number };
+}) {
 	// Edit the body only; frontmatter is split off and re-attached server-side, but
 	// still shown (Notion-style) as a bare properties block at the top for context.
 	const { frontmatter, body } = parseFrontmatter(state.markdown);
@@ -370,15 +374,29 @@ function EditView({ state }: { state: { path: string; markdown: string; sha: str
 				setSaving(false);
 				return;
 			}
-			toast('Saved ✓');
+			// What the server actually said, rather than a checkmark of our own. write_page
+			// reports more than the fact of a write: the notes it attached, that inbound
+			// links were repointed by a retitle, and on a brain whose branch is protected
+			// that the change was PROPOSED and is not live yet. Asserting "Saved ✓" over
+			// that text discarded all of it, and in the protected case told the author
+			// their edit had landed moments before the re-fetch below took it back off
+			// the screen.
+			toast(firstText(result) || 'Saved');
 			// Swap to the page only once the fresh content is in hand — keep the editor
 			// on screen during the brief re-fetch so there's no loading spinner / blink.
 			try {
-				const fresh = await fetchPage(state.path);
-				show({ kind: 'page', path: state.path, markdown: fresh }, { push: false });
+				show(pageView(state.path, await fetchPage(state.path)), { push: false });
 			} catch {
+				// The editor's own text, with no sha to vouch for it: the page shows what
+				// was written and the refresh control declines to claim it matches the
+				// branch, which is exactly what we know here.
 				show(
-					{ kind: 'page', path: state.path, markdown: apiRef.current?.getMarkdown() ?? body },
+					{
+						kind: 'page',
+						path: state.path,
+						markdown: apiRef.current?.getMarkdown() ?? body,
+						fetchedAt: Date.now()
+					},
 					{ push: false }
 				);
 			}
@@ -391,7 +409,21 @@ function EditView({ state }: { state: { path: string; markdown: string; sha: str
 		// Instant return to the page from the content we already hold — no re-fetch, so
 		// no loading spinner / breadcrumb blink. (Edits are discarded, so the original
 		// markdown we opened with is exactly what the page should show.)
-		show({ kind: 'page', path: state.path, markdown: state.markdown }, { push: false });
+		//
+		// It carries the age it actually has, from when the editor opened, not the
+		// moment of the cancel: an edit abandoned after twenty minutes returns a
+		// twenty-minute-old render, and stamping it "now" would be the viewer claiming a
+		// freshness it never had.
+		show(
+			{
+				kind: 'page',
+				path: state.path,
+				markdown: state.markdown,
+				sha: state.sha,
+				fetchedAt: state.fetchedAt
+			},
+			{ push: false }
+		);
 	}
 
 	// Publish save/cancel + the saving flag to the navbar (which renders the top Save
@@ -444,7 +476,9 @@ export {
 
 declare module '../core/view-registry.ts' {
 	interface ViewProps {
-		edit: { path: string; markdown: string; sha: string };
+		// `fetchedAt` is when the content behind this editor was read, carried so a
+		// cancelled edit returns a page render that reports its real age.
+		edit: { path: string; markdown: string; sha: string; fetchedAt?: number };
 	}
 }
 
