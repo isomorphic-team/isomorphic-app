@@ -43,37 +43,67 @@ name: Deploy Worker
 # Without them the job skips with a warning rather than deploying a Worker named
 # after the template defaults.
 #
+# HOW A MERGE REACHES PRODUCTION
+# ------------------------------
+# This job no longer calls `wrangler deploy`. It uploads a VERSION, checks it, and
+# only then points traffic at it, so that a bad merge can be undone by the pipeline
+# that shipped it:
+#
+#   1. apply D1 migrations (schema-first, as before)
+#   2. record the currently-live version id, which is the rollback target
+#   3. `versions upload` -> new version, serving no traffic
+#   4. smoke check its preview URL, when Cloudflare issued one, and stop here if it
+#      fails; nothing has taken traffic yet, so there is nothing to undo
+#   5. `versions deploy <id>@100%` to promote
+#   6. smoke check the production origin
+#   7. on failure: `wrangler rollback <recorded id>`, re-check, and fail the run red
+#
+# The checks are in scripts/smoke.ts and are covered by `pnpm test:smoke`. They are
+# deliberately testable rather than inline shell: this is the logic that decides
+# whether a merge stays in production, and it fails expensively in both directions
+# (too strict reverts healthy deploys, too loose never fires).
+#
+# WHAT THE ROLLBACK DOES NOT COVER, stated plainly:
+#   - Applied D1 migrations. Code reverts; schema does not. See the migration step.
+#   - A wrong PUBLIC_BASE_URL. @cloudflare/workers-oauth-provider builds its metadata
+#     from the request origin, not from the configured base URL, so every assertion
+#     passes on any hostname. Nothing here catches that.
+#   - Anything an unauthenticated read cannot see. A full authenticated `initialize`
+#     plus `tools/list` needs a magic-link round trip and is not scripted.
+#
 # THE `production` ENVIRONMENT GATE
 # ---------------------------------
-# This job runs in the `production` environment, which is what stands between a
-# merged pull request and a live deploy. It does three things:
+# The job runs in the `production` environment, which does three things:
 #
-#   1. Required reviewers — the job waits in "Waiting" until a maintainer approves
-#      it. Merging stays automatic; shipping does not. This is the point of the
-#      gate: with outside contributions, a merge you want to re-read should not be
-#      in production before you have finished re-reading it.
-#   2. Secret scoping — once CLOUDFLARE_API_TOKEN lives in this environment rather
-#      than at repository level, no other workflow can reach it, including one
-#      added by a pull request. Environment secrets take precedence over repository
-#      secrets, so moving it is a drop-in.
-#   3. Deployment branch policy — deployments are restricted to protected branches,
+#   1. Required reviewers - the job waits in "Waiting" until a maintainer approves.
+#   2. Secret scoping - CLOUDFLARE_API_TOKEN lives in this environment rather than at
+#      repository level, so no other workflow can reach it, including one added by a
+#      pull request. Environment secrets take precedence over repository secrets.
+#   3. Deployment branch policy - deployments are restricted to protected branches,
 #      so a `workflow_dispatch` from a random branch cannot ship.
 #
-# Environment protection rules are FREE on public repositories and unavailable on
-# private ones regardless of plan (the API rejects a required-reviewer rule with a
-# billing error). So the reviewer rule gets added when the repo goes public:
+# Points 2 and 3 are permanent. Point 1 is the one the rollout above is meant to
+# replace: the reviewer rule exists because nothing else stood between a merge and
+# production, and steps 4 through 7 now do. Merges to `main` already carry a green
+# `check` context on exactly the merged content (branch protection requires it, with
+# `strict: true`), so the human click is re-reading code that CI has already run.
+#
+# To make merges ship without waiting, once a rollback has been seen to work
+# (docs/ops/deploy-and-rollback.md has the drill), drop ONLY the reviewer rule and
+# keep the other two:
 #
 #   gh api -X PUT repos/isomorphic-team/isomorphic-app/environments/production \
 #     --input - <<JSON
-#   { "wait_timer": 0, "prevent_self_review": false,
-#     "reviewers": [{"type":"User","id":$(gh api users/isomorphic-12 --jq .id)}],
+#   { "wait_timer": 0,
 #     "deployment_branch_policy": {"protected_branches": true,
 #                                  "custom_branch_policies": false} }
 #   JSON
 #
-# `prevent_self_review` must stay false while there is one maintainer, or nobody
-# can ever approve a deploy. Flip it when there are two. Full reasoning and the
-# rest of the hardening checklist: docs/ops/repo-protection.md
+# To put it back, add the reviewers array again:
+#     "reviewers": [{"type":"User","id":$(gh api users/isomorphic-12 --jq .id)}],
+# with `prevent_self_review` false while there is one maintainer, or nobody can
+# approve a deploy at all. Full reasoning and the rest of the hardening checklist:
+# docs/ops/repo-protection.md
 
 on:
   push:
@@ -99,6 +129,10 @@ permissions:
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    # `concurrency: deploy-worker` has cancel-in-progress false, so a job that hangs holds
+    # the group and every later merge queues behind it. Bounded well above a normal run,
+    # which is about a minute of work plus however long the environment gate waits.
+    timeout-minutes: 30
     # The gate. See the note at the top of this file. `url` makes the deployed
     # origin a clickable link on the run and in the Deployments tab; it reads the
     # same variable the Worker is configured with, so the two cannot drift.
@@ -174,10 +208,15 @@ jobs:
 
       # Apply pending D1 migrations BEFORE deploying the code that depends on them
       # (schema-first). Idempotent: wrangler tracks applied migrations in the
-      # d1_migrations table, so only new ones run. Migrations must be backward-
-      # compatible with the still-running old code for the deploy window (additive;
-      # renames/drops need expand-then-contract). The token needs D1 edit permission.
-      # If this step fails, the deploy below is skipped (main stays on the old code).
+      # d1_migrations table, so only new ones run. The token needs D1 edit permission.
+      # If this step fails, everything below is skipped and main stays on the old code.
+      #
+      # ROLLBACK DOES NOT UNDO THIS. The automated rollback below reverts CODE, by
+      # repointing traffic at the previous Worker version; applied migrations stay
+      # applied. That is why migrations must be backward-compatible with the
+      # still-running old code (additive; renames and drops go expand-then-contract).
+      # That rule already existed for the deploy window. It is now what makes the
+      # rollback safe, so it is load-bearing rather than tidy.
       - name: Apply D1 migrations (prod)
         if: steps.guard.outputs.ready == 'true'
         run: pnpm exec wrangler d1 migrations apply "${D1_DATABASE_NAME:-platform-db}" --remote
@@ -186,9 +225,156 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
 
-      - name: Deploy to Cloudflare
+      # THE ROLLBACK TARGET, read before anything changes.
+      #
+      # `wrangler rollback` with no argument picks the previous deployment itself, but
+      # an explicit id is what makes the rollback auditable: the job log names the
+      # version it will return to, before it has any reason to. Recording it after a
+      # failure would mean reading state we no longer trust.
+      #
+      # A first-ever deploy has no live version. That is not an error; it just means
+      # there is nothing to roll back to, and the guard below turns a failed smoke
+      # check into a red run without a rollback attempt.
+      - name: Record the currently-live version
+        id: live
         if: steps.guard.outputs.ready == 'true'
-        run: pnpm worker:deploy
+        env:
+          WORKER_NAME: ${{ vars.WORKER_NAME }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          status=$(pnpm exec wrangler deployments status --json 2>/dev/null || true)
+          previous=$(printf '%s' "$status" | jq -r '[.versions[]? | select(.percentage == 100) | .version_id] | first // empty' 2>/dev/null || true)
+          if [ -n "$previous" ]; then
+            echo "Rollback target: $previous"
+          else
+            echo "::warning::No currently-live version found (first deploy?). A failed smoke check will fail the run without rolling back."
+          fi
+          echo "previous=$previous" >> "$GITHUB_OUTPUT"
+
+      # UPLOAD, DO NOT DEPLOY. `versions upload` publishes the code as a new version
+      # that serves NO traffic. Secrets set with `wrangler secret put` carry over: they
+      # are only replaced when `--secrets-file` is passed, which nothing here does.
+      #
+      # WRANGLER_OUTPUT_FILE_DIRECTORY makes wrangler write a machine-readable ndjson
+      # record of what it did, so the version id and preview URL are read from a
+      # documented field rather than scraped out of human-facing stdout.
+      - name: Upload the new version
+        id: upload
+        if: steps.guard.outputs.ready == 'true'
+        env:
+          WRANGLER_OUTPUT_FILE_DIRECTORY: ${{ runner.temp }}/wrangler-output
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$WRANGLER_OUTPUT_FILE_DIRECTORY"
+
+          pnpm exec wrangler versions upload \
+            --tag "${GITHUB_SHA::7}" \
+            --message "$(git log -1 --pretty=%s | cut -c1-100)"
+
+          # wrangler writes one or more ndjson files here. `jq -s` slurps them into an
+          # array; the last version-upload entry is this run's.
+          files=$(find "$WRANGLER_OUTPUT_FILE_DIRECTORY" -type f -name '*.json')
+          if [ -z "$files" ]; then
+            echo "::error::wrangler wrote no output file, so the new version cannot be identified. Refusing to promote."
+            exit 1
+          fi
+          entry=$(cat $files | jq -s '[.[] | select(.type == "version-upload")] | last')
+          version=$(printf '%s' "$entry" | jq -r '.version_id // empty')
+          preview=$(printf '%s' "$entry" | jq -r '.preview_url // empty')
+
+          if [ -z "$version" ]; then
+            echo "::error::wrangler reported no version id; refusing to promote something unidentified."
+            exit 1
+          fi
+          echo "Uploaded version $version"
+          [ -n "$preview" ] && echo "Preview URL: $preview" || true
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "preview=$preview" >> "$GITHUB_OUTPUT"
+
+      # SMOKE THE VERSION BEFORE IT TAKES TRAFFIC, when Cloudflare gave us a URL for it.
+      #
+      # This is the good path: a version that cannot boot never serves a single user
+      # request, and no rollback is needed because no rollout happened. Cloudflare
+      # decides whether a version gets a preview URL and reports it as
+      # `metadata.has_preview` on the upload, so this branches on the answer rather
+      # than assuming one. This Worker DOES get them: preview URLs are withheld from
+      # Workers implementing a Durable Object, and the append-only `migrations` array
+      # naming the deleted IsomorphicMindMcp class turns out not to count, since every
+      # version since number 77 reports has_preview true (checked 2026-08-18, see
+      # docs/ops/deploy-and-rollback.md). The branch stays because adding a Durable
+      # Object binding would silently take it away, and a pipeline that quietly stopped
+      # checking before promoting is worse than one that says so.
+      #
+      # A preview URL of the PRODUCTION Worker shares production's bindings. That is
+      # wrong for a feature preview and exactly right here: it is prod, one promotion
+      # early. Every assertion in scripts/smoke.ts is an unauthenticated read.
+      - name: Smoke check the version before promoting it
+        id: presmoke
+        if: steps.guard.outputs.ready == 'true' && steps.upload.outputs.preview != ''
+        run: pnpm exec tsx scripts/smoke.ts "${{ steps.upload.outputs.preview }}"
+
+      - name: Note that pre-promotion smoke was unavailable
+        if: steps.guard.outputs.ready == 'true' && steps.upload.outputs.preview == ''
+        run: |
+          echo "::warning::Cloudflare returned no preview URL for this version, so it could not be smoke checked before promotion. Falling back to promote, smoke, and roll back on failure."
+
+      # PROMOTE. Only reached if the pre-promotion smoke passed, or if there was no
+      # preview URL to run it against.
+      - name: Promote the version to 100% of traffic
+        id: promote
+        if: steps.guard.outputs.ready == 'true'
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          pnpm exec wrangler versions deploy "${{ steps.upload.outputs.version }}@100%" \
+            --message "Deploy ${GITHUB_SHA::7} from ${GITHUB_REF_NAME}" \
+            --yes
+
+      # THE SAFETY VALVE. Smoke the real origin after the rollout.
+      #
+      # `continue-on-error` so a failure does not end the job here: the rollback below
+      # has to run, and then the run has to go red. A failed smoke check that merely
+      # stopped the job would leave the bad version serving traffic.
+      - name: Smoke check production
+        id: smoke
+        if: steps.guard.outputs.ready == 'true' && steps.promote.outcome == 'success'
+        continue-on-error: true
+        run: pnpm exec tsx scripts/smoke.ts "${{ vars.PUBLIC_BASE_URL }}"
+
+      - name: Roll back
+        id: rollback
+        if: steps.smoke.outcome == 'failure' && steps.live.outputs.previous != ''
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          echo "::error::Production smoke check failed. Rolling back to ${{ steps.live.outputs.previous }}."
+          pnpm exec wrangler rollback "${{ steps.live.outputs.previous }}" \
+            --message "Automated rollback: smoke check failed for ${GITHUB_SHA::7}" \
+            --yes
+
+      # Rolling back and then not checking would be a guess, and the failure mode it
+      # hides is the worst one available: production down, pipeline reporting that it
+      # handled things. If this fails, the run says so in the loudest terms it has.
+      - name: Verify the rollback restored a working origin
+        if: steps.rollback.outcome == 'success'
+        run: |
+          if pnpm exec tsx scripts/smoke.ts "${{ vars.PUBLIC_BASE_URL }}"; then
+            echo "::error::Rolled back to ${{ steps.live.outputs.previous }} and production is healthy again. The merged commit did NOT ship."
+          else
+            echo "::error::ROLLBACK DID NOT RESTORE A HEALTHY ORIGIN. Production is still failing its smoke check and needs a human now."
+            exit 1
+          fi
+
+      # Turn the run red. Everything above this point was arranged so the rollback
+      # could happen first; the job must still fail, or a rolled-back deploy shows up
+      # as a green checkmark on main and nobody looks at it.
+      - name: Fail the run if the deploy did not stick
+        if: steps.smoke.outcome == 'failure'
+        run: |
+          echo "::error::Deploy of ${GITHUB_SHA::7} failed its smoke check and was rolled back. main is running the previous version."
+          exit 1

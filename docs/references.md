@@ -55,12 +55,36 @@ We use `@modelcontextprotocol/ext-apps`: `/server` (registerAppTool / registerAp
 
 - **Cloudflare Workers limits (script size, etc.):** https://developers.cloudflare.com/workers/platform/limits/
 - Wrangler: https://developers.cloudflare.com/workers/wrangler/
+- **Gradual deployments / versions / rollback:** https://developers.cloudflare.com/workers/configuration/versions-and-deployments/
+- **Preview URLs:** https://developers.cloudflare.com/workers/configuration/previews/
 
 ---
 
 ## Verified facts worth remembering
 
 Non-obvious things confirmed against the sources above (with the "why it bit us"):
+
+- **`wrangler versions upload` inherits the Worker's secrets; `wrangler deploy` is what you
+  give up to get a rollback.** Verified against wrangler 4.85 on 2026-08-18. Secrets set with
+  `wrangler secret put` carry into a new version and are only replaced when `--secrets-file`
+  is passed, so splitting `deploy` into `versions upload` + `versions deploy` costs nothing in
+  secret handling. Machine-readable output comes from `WRANGLER_OUTPUT_FILE_DIRECTORY`, which
+  makes wrangler write ndjson records; the `version-upload` entry carries `version_id`,
+  `preview_url`, and `preview_alias_url`, so nothing has to scrape stdout. `deployments status
+--json` gives the live version as `.versions[] | select(.percentage == 100) | .version_id`,
+  and `versions list --json` is **ascending**, so the second-newest is `.[-2]`, not `.[1]`.
+
+- **This Worker DOES get preview URLs, despite the Durable Object migrations array.**
+  Cloudflare withholds them from Workers implementing a DO, and `wrangler.template.jsonc`
+  still carries the append-only `migrations` array declaring `IsomorphicMindMcp` new in v1 and
+  deleted in v2, which looked like it might disqualify us and would have sunk both the deploy
+  pipeline's pre-promotion check and the preview-environments design. It does not: the check
+  keys off bindings, not that array. The verdict is per version, reported by the server as
+  `metadata.has_preview`, and it is `true` on every version from number 77 onward, which is
+  when `preview_urls: true` entered the config. Read it with
+  `wrangler versions list --json | jq '[.[] | {number, preview: .metadata.has_preview}]'`.
+  **Adding a Durable Object binding takes this away silently**, so anything depending on it
+  should branch on `has_preview` rather than assume.
 
 - **`server._registeredTools[name]` stores the function as `handler`, NOT `callback`**
   (SDK 1.29, verified against the installed package). Two things in `src/worker.ts`

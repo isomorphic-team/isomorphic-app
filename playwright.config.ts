@@ -38,7 +38,11 @@ export default defineConfig({
 	forbidOnly: !!process.env.CI,
 	retries: process.env.CI ? 1 : 0,
 	workers: process.env.CI ? 2 : undefined,
-	reporter: process.env.CI ? [['github'], ['list']] : [['list']],
+	// The html reporter is CI-only, and exists to be UPLOADED: ci.yml collects
+	// playwright-report/ and test-results/ on failure. Without it the retained traces
+	// below are written and then discarded with the runner. `open: 'never'` because
+	// nothing on a runner can open a browser.
+	reporter: process.env.CI ? [['github'], ['list'], ['html', { open: 'never' }]] : [['list']],
 	use: {
 		baseURL: `http://localhost:${UI_TEST_PORT}`,
 		trace: 'retain-on-failure',

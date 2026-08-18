@@ -195,6 +195,39 @@ deployment's identity.
   in a hostname; the Worker's install-callback page derives the host from the request URL.
   Both used to be hardcoded, which silently registered our domain on a self-hoster's App.
 
+## Deploys are versioned, and roll themselves back
+
+`deploy.yml` does **not** call `wrangler deploy`. That command uploads code and points
+traffic at it in one step, which leaves nothing to fall back to. The job splits them:
+record the live version id, `versions upload` (serving no traffic), smoke check the
+version's own preview URL, `versions deploy <id>@100%`, smoke check production, and on
+failure `wrangler rollback` to the recorded id and fail the run red. Runbook and the
+drill to run before trusting it: [`docs/ops/deploy-and-rollback.md`](docs/ops/deploy-and-rollback.md).
+
+- **The checks live in `scripts/smoke.ts`, not in a `run:` block, and `pnpm test:smoke`
+  pins them.** This is the code that decides whether a merge stays in production, and it
+  fails expensively in both directions: too strict reverts healthy deploys until `main`
+  stops shipping, too loose never fires at all. Same rule as everywhere else in this repo:
+  test the thing that DECIDES. The four assertions are unauthenticated reads (`/health`,
+  an unauthenticated `POST /mcp` that must be `401` with a Bearer challenge, and both
+  OAuth metadata documents pointing back at the origin that served them), so they are safe
+  against an origin sharing production's bindings.
+- **A rollback reverts CODE, never SCHEMA.** Migrations applied in the step before are
+  still applied afterward. The additive / expand-then-contract rule already required for
+  the deploy window is now what keeps the previous version runnable at any moment.
+- **The pre-promotion smoke depends on a fact that could change.** Cloudflare withholds
+  preview URLs from Workers implementing a Durable Object and reports the verdict per
+  version as `metadata.has_preview`. This Worker gets them today (verified 2026-08-18:
+  true on every version since number 77, so the append-only `migrations` array naming the
+  deleted `IsomorphicMindMcp` class does not disqualify it). **Adding a Durable Object
+  binding would silently drop the pipeline onto promote-then-roll-back**, where a bad
+  version serves real traffic for the length of a smoke check. The workflow warns rather
+  than going quiet, but that is the trade being made.
+- **What none of it catches:** a wrong `PUBLIC_BASE_URL`. `@cloudflare/workers-oauth-provider`
+  builds its metadata from the request origin, not from the configured value, so every
+  assertion passes on any hostname. The value is read where there is no request to derive
+  an origin from (`src/manifest.ts`, the connected-accounts `/link/start` URL).
+
 ## Non-obvious wrangler bits
 
 - **No `routes` block, ever.** A custom domain is bound in the Cloudflare **dashboard**, independently of the config. A `routes` entry with `custom_domain: true` makes `wrangler dev` rewrite `request.url`'s host, which breaks the OAuth provider's host-based routing and forces a comment-out dance on every local run. The template says so too; don't re-add one.
@@ -340,8 +373,10 @@ unbounded and ~10× faster.
 - **Schema ships via CI now (don't apply --remote by hand):** the D1 schema is managed by the
   **wrangler migrations framework** (`migrations/`, canonical baseline `migrations/0001_init.sql`;
   `src/db/*.sql` are reference only). The deploy workflow runs `wrangler d1 migrations apply
-platform-db --remote` **before** `wrangler deploy` (schema-first), so a merge to `main` ships
-  schema + code together — never run `--remote` manually. Locally: `pnpm db:migrate` (apply),
+platform-db --remote` **before** the code ships (schema-first), so a merge to `main` ships
+  schema + code together — never run `--remote` manually. Migrations are the half a
+  **rollback cannot undo** (see the deploy section below), which is what makes the
+  backward-compatibility rule below load-bearing rather than tidy. Locally: `pnpm db:migrate` (apply),
   `pnpm db:migrate:list`, `pnpm db:migrate:new <name>` (create the next `NNNN_<name>.sql`).
   Migrations must be backward-compatible with the still-running old code for the deploy window
   (additive; renames/drops → expand-then-contract). Existing brains self-populate the content
