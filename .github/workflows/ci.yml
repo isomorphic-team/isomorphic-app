@@ -30,8 +30,9 @@ jobs:
     # GitHub's 6-hour default: on 2026-08-18 the apt half of the Playwright install stalled
     # on an unresponsive Ubuntu mirror and sat there for 32 minutes before a human noticed,
     # holding a runner and showing the pull request a check that was neither passing nor
-    # failing. Generous enough that a slow-but-working run is never killed.
-    timeout-minutes: 25
+    # failing. Generous enough that a slow-but-working run is never killed: the dependency
+    # step alone can spend 15 minutes across its three attempts before giving up.
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
 
@@ -137,11 +138,21 @@ jobs:
       # and retried instead of eating the whole budget. apt itself has no timeout: on
       # 2026-08-18 it sat on an unresponsive noble-security for 32 minutes without a word.
       # The step timeout below is a second backstop in case the retry loop misbehaves.
+      #
+      # PER-ATTEMPT CAP: the point is to cut a HANG without cutting a slow success, and the
+      # gap between those is narrower than it looks. Three measurements from 2026-08-18:
+      # a healthy run took 51s; a run against a degraded mirror took 148s, fetching 21 MB at
+      # 154 kB/s; and the hang ran past 32 minutes with no output at all. The first version
+      # of this loop used 180s, which is 32 seconds of headroom over an install that WORKED,
+      # so a slightly worse mirror would have had it killing a healthy run and retrying into
+      # the same slow mirror three times. 300s is twice the worst observed success. Raise it
+      # if a run is ever killed here while apt was still making progress; the log shows the
+      # transfer rate.
       - name: Install Chromium system dependencies
-        timeout-minutes: 12
+        timeout-minutes: 16
         run: |
           for attempt in 1 2 3; do
-            if timeout 180 pnpm exec playwright install-deps chromium; then exit 0; fi
+            if timeout 300 pnpm exec playwright install-deps chromium; then exit 0; fi
             echo "::warning::playwright install-deps failed or stalled (attempt ${attempt}/3). Ubuntu mirrors are the usual cause. Retrying."
             sleep 15
           done
