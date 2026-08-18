@@ -1,8 +1,20 @@
 # Design: preview environments
 
-Status: **proposed** (2026-08-10). Nothing here is built. `wrangler.template.jsonc` already
-carries `"preview_urls": true`, so the platform capability is on; what is missing is an
-isolated place for a preview to run and a workflow to put it there.
+Status: **proposed** (2026-08-10; updated 2026-08-18). The preview environment itself is not
+built. `wrangler.template.jsonc` already carries `"preview_urls": true`, so the platform
+capability is on; what is missing is an isolated place for a preview to run and a workflow to
+put it there.
+
+Two things changed on 2026-08-18, both from the versioned-deploy work in `deploy.yml`:
+
+- **The blocking open question is answered, and the answer is yes.** This Worker gets preview
+  URLs despite the Durable Object migrations array. That was the item that could have sunk the
+  whole design; see Limitations below.
+- **The promotion half is built.** `deploy.yml` runs `versions upload` and `versions deploy`
+  instead of `wrangler deploy`, with a smoke check and an automated rollback. So the version
+  machinery this design assumed now exists in production, and the remaining cost of previews is
+  the isolated resources, not the workflow shape. See
+  [`../ops/deploy-and-rollback.md`](../ops/deploy-and-rollback.md).
 
 ## The problem
 
@@ -23,8 +35,12 @@ bridge, or the `initialize` result is tested by merging it and watching prod.
 
 | Stage        | Trigger        | Covers                                                                                                            | Blind to                         |
 | ------------ | -------------- | ----------------------------------------------------------------------------------------------------------------- | -------------------------------- |
-| `ci.yml`     | every PR       | codegen sync, typecheck, 15 golden batteries, both e2e batteries, UI suite, prettier, D1 migrations apply locally | anything needing a real origin   |
-| `deploy.yml` | push to `main` | D1 migrations `--remote`, then `wrangler deploy`, behind the `production` environment gate                        | pre-merge verification of either |
+| `ci.yml`     | every PR       | codegen sync, typecheck, every golden battery, both e2e batteries, UI suite, prettier, D1 migrations apply locally | anything needing a real origin   |
+| `deploy.yml` | push to `main` | D1 migrations `--remote`, version upload, smoke check, promote, automated rollback, behind the `production` gate  | pre-merge verification of either |
+
+The `deploy.yml` row changed on 2026-08-18 (see Promotion below). It now checks a real origin,
+which is the first thing in this pipeline that ever did, but only after the code has merged.
+The blind spot this design exists to close is unchanged: verification before a merge.
 
 The shape is good. `ci.yml` is deliberately secret-free so a fork PR gets the same signal a
 maintainer's branch does, and `deploy.yml` holds everything that needs a token. A preview
@@ -188,13 +204,30 @@ every assertion above and then emails a tester a link into prod. Either assert i
 reading it back out of a tool response, or accept it as a known hole and keep the value derived
 from `github.event.number` in one place.
 
-### Promotion, optionally
+### Promotion (built 2026-08-18, ahead of the rest of this design)
 
-Once versions exist for previews, `deploy.yml` could upload a version and promote it with
-`wrangler versions deploy` rather than calling `wrangler deploy`. That would make the artifact
-that ships on `main` the same artifact that was previewed, and it makes gradual rollout and
-instant rollback available. It is not required by anything above, and it changes the one
-workflow currently protecting production, so it belongs in a separate change.
+This section proposed that `deploy.yml` could upload a version and promote it with `wrangler
+versions deploy` rather than calling `wrangler deploy`, and said it belonged in a separate
+change because it touches the one workflow protecting production. It was done as that separate
+change, and it landed first, because the value did not depend on previews existing: the
+automated rollback was worth having on its own.
+
+What shipped: record the live version, `versions upload`, smoke check the version's preview URL,
+`versions deploy <id>@100%`, smoke check production, and roll back to the recorded version if
+that fails. The assertions live in `scripts/smoke.ts` and are covered by `pnpm test:smoke`.
+
+Two consequences for this design:
+
+- **The pre-promotion smoke check is the same idea as a preview, aimed at production.** It reuses
+  the preview-URL mechanism described above, which is how the `has_preview` question got settled
+  without standing up any of the infrastructure below.
+- **`scripts/smoke.ts` is reusable as-is for step 6 of the workflow shape.** It takes a base URL
+  and asserts nothing about which deployment it is talking to, so the preview workflow should
+  call it rather than growing a second copy of the same four assertions.
+
+Gradual rollout (`@10%` then `@100%`) is available and deliberately not used: with traffic split,
+a smoke request hits a random version, so the check becomes probabilistic and can pass while the
+bad version is live.
 
 ## Setup cost
 
@@ -237,13 +270,24 @@ Verified against the Preview URLs docs on 2026-08-10.
   the single largest weakness of the whole approach and it has no workaround short of promoting
   the version onto a real deployment.
 - **workers.dev only.** No custom domain on a preview URL.
-- **No Durable Objects.** "Preview URLs are not generated for Workers that implement a Durable
-  Object." This repository binds no DO and exports no DO class, so it should be clear, but
-  `wrangler.template.jsonc` still carries the append-only `migrations` array declaring
-  `IsomorphicMindMcp` as new in `v1` and deleted in `v2`. Whether Cloudflare's check keys off the
-  bindings or off that array is unverified and is the first thing to test, because if it keys off
-  the array the entire design fails and nothing else here matters. `wrangler versions upload
---dry-run` will not answer it; a real upload to a scratch Worker will.
+- **No Durable Objects. RESOLVED 2026-08-18: this Worker is clear.** "Preview URLs are not
+  generated for Workers that implement a Durable Object." This repository binds no DO and exports
+  no DO class, but `wrangler.template.jsonc` still carries the append-only `migrations` array
+  declaring `IsomorphicMindMcp` as new in `v1` and deleted in `v2`, and whether Cloudflare's check
+  keys off the bindings or off that array decided whether this design was possible at all.
+
+  It keys off the bindings. Cloudflare returns the verdict per version as `metadata.has_preview`,
+  and it is `true` on every version from number 77 onward, which is when `preview_urls: true`
+  entered the config. No scratch Worker was needed; the answer was already sitting in the version
+  list:
+
+  ```sh
+  pnpm exec wrangler versions list --json | jq '[.[] | {number, preview: .metadata.has_preview}]'
+  ```
+
+  **Adding a Durable Object binding takes this away silently**, so the preview workflow should
+  read `preview_url` off the upload output and say so when it is absent, exactly as `deploy.yml`
+  does, rather than assuming a URL it was given last time.
 - **Alias naming:** lowercase letters, numbers, dashes, beginning with a letter, and alias plus
   Worker name under 63 characters. `pr-123-isomorphic-mcp-preview` is 29.
 - **1000 most recent aliases retained.** No cleanup job needed.
@@ -269,29 +313,47 @@ Verified against the Preview URLs docs on 2026-08-10.
 
 ## Separate from this design: CI gaps that need no infrastructure
 
-Found while reading `ci.yml` on 2026-08-10. Independent of everything above, and cheaper:
+Found while reading `ci.yml` on 2026-08-10. Independent of everything above, and cheaper.
+The first two were done on 2026-08-18 alongside the promotion work; the last two are still open.
 
-- **Playwright traces are captured and discarded.** `playwright.config.ts` sets
-  `trace: 'retain-on-failure'` and `screenshot: 'only-on-failure'`, and `ci.yml` uploads no
-  artifact, so the runner is destroyed with the evidence on it. A UI failure in CI currently
-  reports that it failed and nothing about why. An `actions/upload-artifact` step on
-  `if: failure()` is the whole fix.
-- **Chromium is downloaded on every run.** No cache keyed on the Playwright version.
-- **`test:e2e-librarian --github` runs nowhere automatic.** It is the only coverage of the GitHub
-  adapter itself, and it is maintainer-run by hand. A nightly schedule, or a `run-github-e2e`
-  label, would gate `githubStore` changes without touching fork safety.
-- **No path to regenerate Linux visual baselines.** `dev/README.md` documents a Docker
+- ~~**Playwright traces are captured and discarded.**~~ **Done 2026-08-18.** `playwright.config.ts`
+  set `trace: 'retain-on-failure'` and `screenshot: 'only-on-failure'` while `ci.yml` uploaded no
+  artifact, so the runner was destroyed with the evidence on it and a UI failure reported that it
+  failed and nothing about why. `ci.yml` now uploads on `if: failure()`, and the html reporter was
+  added under CI so the artifact is browsable rather than a directory of raw traces.
+- ~~**Chromium is downloaded on every run.**~~ **Done 2026-08-18**, cached on the resolved
+  Playwright version rather than a lockfile hash, so an unrelated dependency bump does not evict a
+  browser that is still correct.
+
+  Worth knowing for anything else that touches this step: the cache does **not** help the half
+  that actually broke. On 2026-08-18 CI on this very pull request hung for 32 minutes inside
+  `playwright install --with-deps`, and the cause was `apt-get` losing an Ubuntu mirror, not the
+  browser download. `--with-deps` couples a flaky root apt call to a reliable CDN fetch; they are
+  split now, each attempt bounded by `timeout` and retried, with `timeout-minutes` on both jobs.
+  apt has no timeout of its own, and neither workflow had one, so the step would have run to
+  GitHub's six-hour default.
+- **`test:e2e-librarian --github` runs nowhere automatic.** Still open. It is the only coverage of
+  the GitHub adapter itself, and it is maintainer-run by hand. A nightly schedule, or a
+  `run-github-e2e` label, would gate `githubStore` changes without touching fork safety.
+- **No path to regenerate Linux visual baselines.** Still open. `dev/README.md` documents a Docker
   incantation. A `workflow_dispatch` job running `pnpm ui:baselines` on the CI runner and
   committing the result would remove the container step and guarantee the baselines match the
   platform that checks them.
 
 ## Open questions
 
-1. Does the append-only `migrations` array disqualify this Worker from preview URLs? Blocking;
-   test first.
+1. ~~Does the append-only `migrations` array disqualify this Worker from preview URLs? Blocking;
+   test first.~~ **Answered 2026-08-18: no.** Cloudflare keys off the bindings, and reports the
+   verdict per version as `metadata.has_preview`, true on every version since number 77. This was
+   the question that could have ended the design, so it is worth being precise about what it does
+   and does not license: preview URLs exist for this Worker, which is necessary for the plan above
+   and not sufficient for any of it. Everything in Setup cost is still unbuilt.
 2. Does the preview Worker justify a second Resend sending domain, or does it share production's
-   verified domain with a different From address?
-3. Should `deploy.yml` move to `versions upload` plus `versions deploy` so the shipped artifact is
-   the previewed artifact, or stay on `wrangler deploy`?
+   verified domain with a different From address? **Still open.**
+3. ~~Should `deploy.yml` move to `versions upload` plus `versions deploy` so the shipped artifact
+   is the previewed artifact, or stay on `wrangler deploy`?~~ **Answered 2026-08-18: it moved**,
+   and shipped ahead of this design. See Promotion above.
 4. Is `AUTO_PROVISION=true` right for preview, given it silently accumulates repositories, or
-   should preview be invite-only with one seeded test org?
+   should preview be invite-only with one seeded test org? **Still open**, and now the largest
+   unanswered question here, since it is the one that decides whether the preview environment
+   needs a cleanup job on day one.
