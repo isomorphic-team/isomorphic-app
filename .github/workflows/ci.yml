@@ -26,6 +26,12 @@ concurrency:
 jobs:
   check:
     runs-on: ubuntu-latest
+    # A successful run takes 3 to 5 minutes. Without this, a step that hangs runs until
+    # GitHub's 6-hour default: on 2026-08-18 the apt half of the Playwright install stalled
+    # on an unresponsive Ubuntu mirror and sat there for 32 minutes before a human noticed,
+    # holding a runner and showing the pull request a check that was neither passing nor
+    # failing. Generous enough that a slow-but-working run is never killed.
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
 
@@ -121,11 +127,31 @@ jobs:
           path: ~/.cache/ms-playwright
           key: playwright-${{ runner.os }}-${{ steps.pw.outputs.version }}
 
-      # --with-deps installs system libraries into the runner, which the cache above
-      # does not carry, so it runs on a cache hit too. The browser download is what
-      # gets skipped.
-      - name: Install Chromium for the UI tests
-        run: pnpm exec playwright install --with-deps chromium
+      # SPLIT ON PURPOSE. `playwright install --with-deps` does two unrelated things:
+      # apt-get as root against Ubuntu's mirrors, and a browser download from Playwright's
+      # CDN. Only the first is flaky, and coupling them meant a mirror outage looked like
+      # "Chromium won't install". It also defeats the cache above, which skips the download
+      # but can do nothing about apt.
+      #
+      # `timeout` bounds each ATTEMPT rather than the step, so a stalled mirror is cut loose
+      # and retried instead of eating the whole budget. apt itself has no timeout: on
+      # 2026-08-18 it sat on an unresponsive noble-security for 32 minutes without a word.
+      # The step timeout below is a second backstop in case the retry loop misbehaves.
+      - name: Install Chromium system dependencies
+        timeout-minutes: 12
+        run: |
+          for attempt in 1 2 3; do
+            if timeout 180 pnpm exec playwright install-deps chromium; then exit 0; fi
+            echo "::warning::playwright install-deps failed or stalled (attempt ${attempt}/3). Ubuntu mirrors are the usual cause. Retrying."
+            sleep 15
+          done
+          echo "::error::Could not install the Chromium system dependencies after 3 attempts."
+          exit 1
+
+      # The cached half. On a cache hit this is close to a no-op.
+      - name: Install Chromium
+        timeout-minutes: 8
+        run: pnpm exec playwright install chromium
       - run: pnpm test:ui
         env:
           UI_STRICT: '1'

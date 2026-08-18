@@ -129,6 +129,10 @@ permissions:
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    # `concurrency: deploy-worker` has cancel-in-progress false, so a job that hangs holds
+    # the group and every later merge queues behind it. Bounded well above a normal run,
+    # which is about a minute of work plus however long the environment gate waits.
+    timeout-minutes: 30
     # The gate. See the note at the top of this file. `url` makes the deployed
     # origin a clickable link on the run and in the Deployments tab; it reads the
     # same variable the Worker is configured with, so the two cannot drift.
