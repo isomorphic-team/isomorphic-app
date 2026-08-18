@@ -926,9 +926,28 @@ and unbounded, so these are optimizations or new surfaces):
   subscription) reindexing on push would keep the index fresh _before_ a read reconciles,
   removing the per-read `getRef` and the post-external-edit reindex spike. Pure freshness
   optimization; the HEAD guard already covers correctness. Manifest change means orgs re-approve.
-- **sha-check TTL cache + write-through.** Cache the HEAD-sha check per brain (~30-60s) to drop
+- ~~**Write-through.**~~ **DONE 2026-08-14** (issue #31): a successful DIRECT commit folds the
+  pages it touched into the index in place (`writeThroughIndex` in `brain-index.ts`, via the
+  `commitBundle` chokepoint in `librarian.ts`) and advances `indexed_commit_sha` — but only when
+  the index was already current at the commit's base, never on the PR path, and swallowing its
+  own failures. The verifying read after a write is now one `getRef`, not an incremental reindex.
+  `invalidateIndex()` remains exported for the TTL cache below.
+- **sha-check TTL cache.** Cache the HEAD-sha check per brain (~30-60s) to drop
   the per-read `getRef` in steady state; on our own writes call `invalidateIndex()` (already
   exported) so the just-edited state reflects immediately.
+- **Idempotency keys for writes** (issue #31, suggestion 1 — deliberately deferred). A
+  client-supplied request id making a repeated write a no-op returning the original result.
+  Deferred because every piece of it is harder than it looks: the id only helps if the MODEL
+  repeats it on retry (tool-description guidance, unenforceable); the client gives up at 60s
+  while the Worker may still be running, so a dedupe record must exist BEFORE the commit or the
+  retry races the in-flight original; and that means a durable TTL store keyed by id. Today's
+  backstop is cheaper and covers the reported cases: writes are read-before-retry (the write
+  tools' descriptions say so), a retried create fails with "already exists" if the first attempt
+  landed, and move/delete are atomic (land whole or not at all).
+- **Installation-token cache.** Every request builds a fresh `App`/octokit and mints an
+  installation token on first use (and tenant resolution runs twice per request: preamble +
+  handler). Caching the token in KV against its 1h TTL would drop one GitHub round trip and the
+  token-mint rate pressure from EVERY tool call.
 - **Report index truncation past 1500 pages** in the graph payload (search and validate already do).
 
 # TODO: graph view (link graph of the brain). **DONE 2026-07-13**

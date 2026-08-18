@@ -41,6 +41,7 @@ import {
 	type TreeEntry,
 	type PageContent,
 	type WriteOutcome,
+	type CommitOrPROpts,
 	type CommitAuthor,
 	type BrainStore,
 	type FileWrite,
@@ -64,6 +65,7 @@ import {
 	searchIndex,
 	loadAllFields,
 	loadPageContents,
+	writeThroughIndex,
 	MAX_FIELD_KEYS_PER_PAGE
 } from '../lib/brain-index.ts';
 import { isMediaPath, mediaTypeOf } from '../lib/media.ts';
@@ -191,6 +193,30 @@ function truncationNote(truncated: boolean): string {
 		: '';
 }
 
+// The one write chokepoint for the librarian tools: commitOrPR plus a write-through
+// index update. A direct commit reports the revision that landed, and the bundle
+// already holds the exact content of every page it touched, so the index advances in
+// place — the read an agent makes to verify the write costs one getRef instead of an
+// incremental reindex (which is what used to make the first read after a write the
+// slow call in the session — issue #31). PR mode leaves the index alone (the branch
+// has not moved), and a write-through failure is swallowed: the commit landed
+// regardless, and the next read reconciles, as it always did.
+async function commitBundle(ctx: BrainContext, opts: CommitOrPROpts): Promise<WriteOutcome> {
+	const outcome = await ctx.store.commitOrPR(ctx.repoArgs, opts);
+	if (outcome.commitSha && opts.head) {
+		await writeThroughIndex(
+			ctx.db,
+			ctx.brainId,
+			ctx.config,
+			opts.head.commitSha,
+			outcome.commitSha,
+			opts.writes ?? [],
+			opts.deletes ?? []
+		).catch(() => {});
+	}
+	return outcome;
+}
+
 // Does this path touch the tools/ area (a file or a folder under tools/)? Files use
 // the precise isToolPagePath; folder paths (no .md) match any `tools` segment.
 function touchesToolsArea(path: string): boolean {
@@ -221,7 +247,10 @@ async function fetchInboundLinkersForPaths(
 	ctx: BrainContext,
 	head: Head,
 	targetPaths: string[],
-	exclude: Set<string>
+	exclude: Set<string>,
+	// The caller often already fetched the tree (a collision check); reusing it
+	// saves a second listTree round trip for the same answer.
+	tree?: TreeEntry[]
 ): Promise<{ pages: PageContent[]; truncated: boolean }> {
 	const { store, repoArgs, config, db, brainId } = ctx;
 	const { truncated } = await ensureFresh(db, store, repoArgs, brainId, config);
@@ -233,7 +262,9 @@ async function fetchInboundLinkersForPaths(
 		}
 	}
 	if (linkerPaths.size === 0) return { pages: [], truncated };
-	const entries = (await store.listTree(repoArgs, head)).filter((e) => linkerPaths.has(e.path));
+	const entries = (tree ?? (await store.listTree(repoArgs, head))).filter((e) =>
+		linkerPaths.has(e.path)
+	);
 	const { pages } = await store.fetchPages(repoArgs, entries);
 	return { pages, truncated };
 }
@@ -242,9 +273,10 @@ async function fetchInboundLinkersForPaths(
 async function fetchInboundLinkers(
 	ctx: BrainContext,
 	head: Head,
-	targetPath: string
+	targetPath: string,
+	tree?: TreeEntry[]
 ): Promise<{ pages: PageContent[]; truncated: boolean }> {
-	return fetchInboundLinkersForPaths(ctx, head, [targetPath], new Set([targetPath]));
+	return fetchInboundLinkersForPaths(ctx, head, [targetPath], new Set([targetPath]), tree);
 }
 
 // Folder-note advisory for validate. A folder's overview page has to be named index.md
@@ -676,16 +708,20 @@ async function createPageWrite(
 	}
 	const finalStatus = typeof finalFm.status === 'string' ? finalFm.status : undefined;
 	const statusNote = finalStatus ? ` with status ${finalStatus}` : '';
-	const newContent = await withFreshSnapshots(ctx, target, withFrontmatter(finalFm, provided.body));
+	// The snapshot refresh (which may touch the index) and the changelog read are
+	// independent — run them together rather than back to back.
+	const [newContent, log] = await Promise.all([
+		withFreshSnapshots(ctx, target, withFrontmatter(finalFm, provided.body)),
+		store.readFile(repoArgs, logPathOf(config))
+	]);
 	const writes = [{ path: target, content: newContent }];
-	const log = await store.readFile(repoArgs, logPathOf(config));
 	if (log) {
 		writes.push({
 			path: logPathOf(config),
 			content: insertLogEntry(log.content, today, `Created "${finalTitle}" (\`${target}\`).`)
 		});
 	}
-	const outcome = await store.commitOrPR(repoArgs, {
+	const outcome = await commitBundle(ctx, {
 		writeMode: config.writeMode,
 		defaultBranch: config.defaultBranch,
 		author,
@@ -728,6 +764,12 @@ async function updatePageWrite(
 	const { store, repoArgs, config, author } = ctx;
 	const { path, content, rawBody, changeSummary, title, type, description, status, fields, sha } =
 		args;
+	// The changelog read is independent of everything below (snapshot refresh, link
+	// repointing) — start it first so it overlaps them instead of chaining on. The
+	// detached catch keeps an early return below (a field-patch refusal) from leaving
+	// an unhandled rejection; the await still rethrows a real failure.
+	const logPromise = store.readFile(repoArgs, logPathOf(config));
+	logPromise.catch(() => {});
 	const old = parseFrontmatter(existing.content);
 	// Three ways to arrive here, in precedence order: `rawBody` is an
 	// already-patched body (append/edits — frontmatter was split off by the
@@ -824,7 +866,7 @@ async function updatePageWrite(
 		if (truncated) notes.push(`only the first ${MAX_SCAN_PAGES} pages were indexed for links`);
 	}
 
-	const log = await store.readFile(repoArgs, logPathOf(config));
+	const log = await logPromise;
 	if (log) {
 		const label = newTitle ?? path;
 		const bullet =
@@ -834,7 +876,7 @@ async function updatePageWrite(
 		writes.push({ path: logPathOf(config), content: insertLogEntry(log.content, today, bullet) });
 	}
 
-	const outcome = await store.commitOrPR(repoArgs, {
+	const outcome = await commitBundle(ctx, {
 		writeMode: config.writeMode,
 		defaultBranch: config.defaultBranch,
 		author,
@@ -926,7 +968,7 @@ async function moveFolderWrite(
 	if (!isContentPath(`${newFolder}/.gitkeep`, config))
 		return fail(`Can't move to "${newFolder}" — it's outside this brain's editable content.`);
 
-	const head = pre?.head ?? (await store.getHead(repoArgs));
+	const head = pre?.head ?? (await store.getHead(repoArgs, config.defaultBranch));
 	const tree = pre?.tree ?? (await store.listTree(repoArgs, head, { extension: '*' }));
 	const moved = tree.filter((e) => e.path.startsWith(`${folder}/`));
 	if (moved.length === 0) return fail(`No folder "${folder}" found (it has no files).`);
@@ -959,10 +1001,24 @@ async function moveFolderWrite(
 
 	const movedMdEntries = moved.filter((e) => e.path.endsWith('.md'));
 	const movedMd = new Set(movedMdEntries.map((e) => e.path));
-	// The moved pages' own content, fetched by known path (bounded by folder size)
-	// rather than a whole-brain scan, needed to rebase their outbound links.
-	const { pages: movedPages } = await store.fetchPages(repoArgs, movedMdEntries);
-	const movedContent = new Map(movedPages.map((p) => [p.path, p.content]));
+	// Non-markdown blobs to copy across, minus the scaffolding the destination already
+	// carries: writing over that would replace a file the caller never asked to touch,
+	// so those are dropped with the folder instead (delete-only).
+	const copiedNonMd = moved.filter(
+		(e) => !movedMd.has(e.path) && !supersededScaffolding.has(e.path)
+	);
+	// Four independent reads at the same head, run together: the moved pages' content
+	// (by known path, bounded by folder size, needed to rebase their outbound links),
+	// the non-markdown blobs, the outside linkers (discovered via the content index,
+	// bounded by inbound-link count and uncapped, reusing the tree above), and the
+	// changelog.
+	const [movedRes, nonMdFiles, linkersRes, log] = await Promise.all([
+		store.fetchPages(repoArgs, movedMdEntries),
+		Promise.all(copiedNonMd.map((e) => store.readFile(repoArgs, e.path))),
+		fetchInboundLinkersForPaths(ctx, head, [...movedMd], movedMd, tree),
+		store.readFile(repoArgs, logPathOf(config))
+	]);
+	const movedContent = new Map(movedRes.pages.map((p) => [p.path, p.content]));
 	const today = todayIso();
 	const writes: { path: string; content: string }[] = [];
 	const deletes: string[] = [];
@@ -987,29 +1043,16 @@ async function moveFolderWrite(
 		deletes.push(oldPath);
 	}
 
-	// 2. Non-markdown blobs under the folder (.gitkeep, etc.) — copy across verbatim,
-	//    except the scaffolding the destination already carries: writing over that
-	//    would replace a file the caller never asked to touch.
-	for (const e of moved) {
-		if (movedMd.has(e.path)) continue;
-		if (supersededScaffolding.has(e.path)) {
-			deletes.push(e.path);
-			continue;
-		}
-		const file = await store.readFile(repoArgs, e.path);
-		writes.push({ path: rename(e.path), content: file?.content ?? '' });
+	// 2. Non-markdown blobs under the folder (.gitkeep, etc.) — copied across verbatim
+	//    (contents fetched above); the superseded scaffolding is delete-only.
+	copiedNonMd.forEach((e, i) => {
+		writes.push({ path: rename(e.path), content: nonMdFiles[i]?.content ?? '' });
 		deletes.push(e.path);
-	}
+	});
+	for (const e of supersededScaffolding) deletes.push(e);
 
-	// 3. Outside pages linking INTO a moved page — repoint their md links. Discover the
-	//    linkers via the content index (bounded by inbound-link count, not brain size,
-	//    and uncapped), excluding the moved pages themselves.
-	const { pages: linkers, truncated } = await fetchInboundLinkersForPaths(
-		ctx,
-		head,
-		[...movedMd],
-		movedMd
-	);
+	// 3. Outside pages linking INTO a moved page — repoint their md links.
+	const { pages: linkers, truncated } = linkersRes;
 	for (const page of linkers) {
 		if (isToolMaintained(page.path, config)) continue;
 		let content = page.content;
@@ -1025,7 +1068,6 @@ async function moveFolderWrite(
 		}
 	}
 
-	const log = await store.readFile(repoArgs, logPathOf(config));
 	if (log) {
 		writes.push({
 			path: logPathOf(config),
@@ -1033,7 +1075,7 @@ async function moveFolderWrite(
 		});
 	}
 
-	const outcome = await store.commitOrPR(repoArgs, {
+	const outcome = await commitBundle(ctx, {
 		writeMode: config.writeMode,
 		defaultBranch: config.defaultBranch,
 		author,
@@ -1109,13 +1151,20 @@ async function moveFileWrite(
 	// over the original — which is why this used to refuse a non-text file outright.
 	// readBinary plus a base64 FileWrite carries the bytes through untouched, so an
 	// attachment now moves like anything else.
-	const file = await store.readBinary(repoArgs, path);
+	//
+	// The blob, the pages linking it, and the changelog are independent reads at the
+	// same head — run them together (the linker fetch reuses the router's tree).
+	const [file, linkersRes, log] = await Promise.all([
+		store.readBinary(repoArgs, path),
+		fetchInboundLinkers(ctx, head, path, tree),
+		store.readFile(repoArgs, logPathOf(config))
+	]);
 	if (!file) return fail(`"${path}" does not exist.`);
 
 	// Repoint what points AT it. This was skipped on the grounds that non-`.md`
 	// targets sit outside the resolved graph. They no longer do — assetEdges records
 	// them — so a moved attachment no longer rots every page displaying it.
-	const { pages, truncated } = await fetchInboundLinkers(ctx, head, path);
+	const { pages, truncated } = linkersRes;
 	let repointedPages = 0;
 
 	const today = todayIso();
@@ -1128,7 +1177,6 @@ async function moveFileWrite(
 			repointedPages++;
 		}
 	}
-	const log = await store.readFile(repoArgs, logPathOf(config));
 	if (log) {
 		writes.push({
 			path: logPathOf(config),
@@ -1136,7 +1184,7 @@ async function moveFileWrite(
 		});
 	}
 
-	const outcome = await store.commitOrPR(repoArgs, {
+	const outcome = await commitBundle(ctx, {
 		writeMode: config.writeMode,
 		defaultBranch: config.defaultBranch,
 		author,
@@ -1177,11 +1225,15 @@ async function deleteFileWrite(ctx: BrainContext, head: Head, args: { path: stri
 	if (!isContentPath(path, config))
 		return fail(`"${path}" is outside this brain's editable content.`);
 
-	const { refs, truncated } = await inboundRefs(ctx, [path]);
+	// The reference count and the changelog are independent reads — run them together.
+	const [refsRes, log] = await Promise.all([
+		inboundRefs(ctx, [path]),
+		store.readFile(repoArgs, logPathOf(config))
+	]);
+	const { refs, truncated } = refsRes;
 
 	const today = todayIso();
 	const writes: { path: string; content: string }[] = [];
-	const log = await store.readFile(repoArgs, logPathOf(config));
 	if (log) {
 		writes.push({
 			path: logPathOf(config),
@@ -1189,7 +1241,7 @@ async function deleteFileWrite(ctx: BrainContext, head: Head, args: { path: stri
 		});
 	}
 
-	const outcome = await store.commitOrPR(repoArgs, {
+	const outcome = await commitBundle(ctx, {
 		writeMode: config.writeMode,
 		defaultBranch: config.defaultBranch,
 		author,
@@ -1227,7 +1279,7 @@ async function deleteFolderWrite(
 	const folder = normFolderPath(args.path);
 	if (!folder) return fail('Give a folder path, e.g. "wiki/Projects".');
 
-	const head = pre?.head ?? (await store.getHead(repoArgs));
+	const head = pre?.head ?? (await store.getHead(repoArgs, config.defaultBranch));
 	const tree = pre?.tree ?? (await store.listTree(repoArgs, head, { extension: '*' }));
 	const doomed = tree.filter((e) => e.path.startsWith(`${folder}/`));
 	if (doomed.length === 0) return fail(`No folder "${folder}" found.`);
@@ -1240,14 +1292,18 @@ async function deleteFolderWrite(
 	const doomedMd = new Set(doomed.filter((e) => e.path.endsWith('.md')).map((e) => e.path));
 
 	// References from OUTSIDE the folder into any deleted page, from the content index
-	// (md + wikilinks, bounded by inbound-link count rather than brain size).
-	const { refs, truncated } = await inboundRefs(ctx, [...doomedMd]);
+	// (md + wikilinks, bounded by inbound-link count rather than brain size). The
+	// changelog read is independent — run them together.
+	const [refsRes, log] = await Promise.all([
+		inboundRefs(ctx, [...doomedMd]),
+		store.readFile(repoArgs, logPathOf(config))
+	]);
+	const { refs, truncated } = refsRes;
 
 	const today = todayIso();
 	const mdCount = doomedMd.size;
 	const label = `${mdCount} page${mdCount === 1 ? '' : 's'}`;
 	const writes: { path: string; content: string }[] = [];
-	const log = await store.readFile(repoArgs, logPathOf(config));
 	if (log) {
 		writes.push({
 			path: logPathOf(config),
@@ -1255,7 +1311,7 @@ async function deleteFolderWrite(
 		});
 	}
 
-	const outcome = await store.commitOrPR(repoArgs, {
+	const outcome = await commitBundle(ctx, {
 		writeMode: config.writeMode,
 		defaultBranch: config.defaultBranch,
 		author,
@@ -1291,7 +1347,7 @@ export function registerLibrarianTools(
 		{
 			title: 'Write a brain page',
 			description:
-				'Create a new page, or change an existing one, at a content path you choose (folders are free-form). ONE PAGE = ONE CONCEPT: anything another page should be able to link to — a person, vendor, system, event series, project — gets its own file, never a section inside a bigger page. If you are about to write a heading per item, write a page per item instead. To change PART of a page use `edits` (exact find/replace; each anchor must match exactly once) or `append` (add to the end): both leave the rest of the page untouched, so you do not have to read it first and cannot destroy text you have not seen. To change METADATA rather than page text, use `fields` (set or remove any frontmatter key the brain tracks, e.g. done/owner/due) or the title/type/description/status arguments: those leave the body untouched. `content` REPLACES the entire body, so pass it only for a new page or a deliberate full rewrite, and read the page first (read_page) if you did not just write it. OKF lifecycle status is optional: absent means stable; set draft, stable, or deprecated only when the distinction should be explicit. On an existing page frontmatter is preserved and merged, the "updated" date is bumped, a retitle repoints inbound links, and passing none of content/edits/append changes only metadata. Every change is logged. Pass mode: "create" to require a new path (fails if it exists) or "update" to require an existing one.',
+				'Create a new page, or change an existing one, at a content path you choose (folders are free-form). ONE PAGE = ONE CONCEPT: anything another page should be able to link to — a person, vendor, system, event series, project — gets its own file, never a section inside a bigger page. If you are about to write a heading per item, write a page per item instead. To change PART of a page use `edits` (exact find/replace; each anchor must match exactly once) or `append` (add to the end): both leave the rest of the page untouched, so you do not have to read it first and cannot destroy text you have not seen. To change METADATA rather than page text, use `fields` (set or remove any frontmatter key the brain tracks, e.g. done/owner/due) or the title/type/description/status arguments: those leave the body untouched. `content` REPLACES the entire body, so pass it only for a new page or a deliberate full rewrite, and read the page first (read_page) if you did not just write it. OKF lifecycle status is optional: absent means stable; set draft, stable, or deprecated only when the distinction should be explicit. On an existing page frontmatter is preserved and merged, the "updated" date is bumped, a retitle repoints inbound links, and passing none of content/edits/append changes only metadata. Every change is logged. Pass mode: "create" to require a new path (fails if it exists) or "update" to require an existing one. If this call TIMES OUT, its outcome is ambiguous — read the page before retrying: a retried create fails if the first attempt landed, and a retried append would duplicate the text.',
 			inputSchema: {
 				brain: brainArg,
 				path: z
@@ -1404,8 +1460,11 @@ export function registerLibrarianTools(
 				if (invalid) return fail(invalid);
 			}
 
-			const head = await store.getHead(repoArgs);
-			const existing = await store.readFile(repoArgs, target);
+			// Capture the commit base before reading authoritative content. If the
+			// branch moves afterwards, updateRef rejects this write instead of letting
+			// content read from an older revision overwrite the newer commit.
+			const head = await store.getHead(repoArgs, config.defaultBranch);
+			const existing = await store.readFile(repoArgs, target, head.commitSha);
 			const wantMode = mode ?? 'upsert';
 
 			// New path → create. Guard against an "update"-only intent and confirm editability.
@@ -1492,7 +1551,7 @@ export function registerLibrarianTools(
 		{
 			title: 'Move or rename a page or folder',
 			description:
-				"Move a page (or a whole folder and everything under it) to a different location and/or rename it. Every link pointing at the moved page(s) — from other pages and the index — is repointed in the same save, and the moved content's own links keep working. Nothing dangles. Pass a folder path (no .md extension) to move or rename an entire subtree; moving a folder ONTO an existing one merges them, and is refused only if a page would be overwritten.",
+				"Move a page (or a whole folder and everything under it) to a different location and/or rename it. Every link pointing at the moved page(s) — from other pages and the index — is repointed in the same save, and the moved content's own links keep working. Nothing dangles. Pass a folder path (no .md extension) to move or rename an entire subtree; moving a folder ONTO an existing one merges them, and is refused only if a page would be overwritten. If this call TIMES OUT, check whether the page is already at the destination before retrying — a move lands whole or not at all.",
 			inputSchema: {
 				brain: brainArg,
 				path: z
@@ -1527,7 +1586,7 @@ export function registerLibrarianTools(
 			// attachment needs no case of its own.
 			if (!path.trim().replace(/^\/+/, '').endsWith('.md')) {
 				const cleaned = path.trim().replace(/^\/+/, '').replace(/\/+$/, '');
-				const head = await ctx.store.getHead(ctx.repoArgs);
+				const head = await ctx.store.getHead(ctx.repoArgs, ctx.config.defaultBranch);
 				const tree = await ctx.store.listTree(ctx.repoArgs, head, { extension: '*' });
 				if (tree.some((e) => e.path === cleaned))
 					return moveFileWrite(ctx, head, tree, { path: cleaned, new_path, new_name: new_title });
@@ -1542,7 +1601,8 @@ export function registerLibrarianTools(
 				return fail(`"${path}" is source material — it can't be moved.`);
 			if (isToolMaintained(path, config)) return fail(`"${path}" is maintained automatically.`);
 
-			const existing = await store.readFile(repoArgs, path);
+			const head = await store.getHead(repoArgs, config.defaultBranch);
+			const existing = await store.readFile(repoArgs, path, head.commitSha);
 			if (!existing) return fail(`"${path}" does not exist.`);
 
 			const { frontmatter, body } = parseFrontmatter(existing.content);
@@ -1559,15 +1619,19 @@ export function registerLibrarianTools(
 			const newTitle = new_title ?? oldTitle;
 			if (newPath === path) return ok(`"${oldTitle}" is already at ${path} — nothing to move.`);
 
-			const head = await store.getHead(repoArgs);
 			const tree = await store.listTree(repoArgs, head);
 			if (tree.some((e) => e.path === newPath)) {
 				return fail(`Can't move to ${newPath} — a page already exists there.`);
 			}
 
 			// Only the pages that link to the moving page are fetched (discovered via the
-			// content index), not the whole brain — bounded by inbound-link count.
-			const { pages, truncated } = await fetchInboundLinkers(ctx, head, path);
+			// content index), not the whole brain — bounded by inbound-link count. The
+			// linker fetch reuses the tree above, and runs alongside the changelog read.
+			const [linkersRes, log] = await Promise.all([
+				fetchInboundLinkers(ctx, head, path, tree),
+				store.readFile(repoArgs, logPathOf(config))
+			]);
+			const { pages, truncated } = linkersRes;
 			const today = todayIso();
 			const writes: { path: string; content: string }[] = [];
 			let repointedPages = 0;
@@ -1606,7 +1670,6 @@ export function registerLibrarianTools(
 				content: withFrontmatter(fm, rebaseMdLinks(body, path, newPath))
 			});
 
-			const log = await store.readFile(repoArgs, logPathOf(config));
 			if (log) {
 				const bullet =
 					newTitle !== oldTitle
@@ -1618,7 +1681,7 @@ export function registerLibrarianTools(
 				});
 			}
 
-			const outcome = await store.commitOrPR(repoArgs, {
+			const outcome = await commitBundle(ctx, {
 				writeMode: config.writeMode,
 				defaultBranch: config.defaultBranch,
 				author,
@@ -1646,7 +1709,7 @@ export function registerLibrarianTools(
 		{
 			title: 'Delete a page or folder',
 			description:
-				'Remove a page (or a whole folder and everything under it) from the wiki. The deletion is logged. If other pages still link into what you deleted, they are listed so the references can be cleaned up. Pass a folder path (no .md extension) to delete an entire subtree, or the path of a non-page file (an image, a folder marker) to delete just that file.',
+				'Remove a page (or a whole folder and everything under it) from the wiki. The deletion is logged. If other pages still link into what you deleted, they are listed so the references can be cleaned up. Pass a folder path (no .md extension) to delete an entire subtree, or the path of a non-page file (an image, a folder marker) to delete just that file. If this call TIMES OUT, check whether the path still exists before retrying — a delete lands whole or not at all.',
 			inputSchema: {
 				brain: brainArg,
 				path: z
@@ -1664,7 +1727,7 @@ export function registerLibrarianTools(
 			// supersedes an attachment-specific branch, exactly as in move_page.
 			if (!path.trim().replace(/^\/+/, '').endsWith('.md')) {
 				const cleaned = path.trim().replace(/^\/+/, '').replace(/\/+$/, '');
-				const head = await ctx.store.getHead(ctx.repoArgs);
+				const head = await ctx.store.getHead(ctx.repoArgs, ctx.config.defaultBranch);
 				const tree = await ctx.store.listTree(ctx.repoArgs, head, { extension: '*' });
 				if (tree.some((e) => e.path === cleaned))
 					return deleteFileWrite(ctx, head, { path: cleaned });
@@ -1679,16 +1742,20 @@ export function registerLibrarianTools(
 			if (!isContentPath(path, config))
 				return fail(`"${path}" is outside this brain's editable content.`);
 
-			const existing = await store.readFile(repoArgs, path);
+			const head = await store.getHead(repoArgs, config.defaultBranch);
+			const existing = await store.readFile(repoArgs, path, head.commitSha);
 			if (!existing) return fail(`"${path}" does not exist.`);
 
-			const head = await store.getHead(repoArgs);
 			const title = pageTitle(path, existing.content);
-			const { refs, truncated } = await inboundRefs(ctx, [path]);
+			// The reference count and the changelog are independent — run them together.
+			const [refsRes, log] = await Promise.all([
+				inboundRefs(ctx, [path]),
+				store.readFile(repoArgs, logPathOf(config))
+			]);
+			const { refs, truncated } = refsRes;
 
 			const today = todayIso();
 			const writes: { path: string; content: string }[] = [];
-			const log = await store.readFile(repoArgs, logPathOf(config));
 			if (log) {
 				writes.push({
 					path: logPathOf(config),
@@ -1696,7 +1763,7 @@ export function registerLibrarianTools(
 				});
 			}
 
-			const outcome = await store.commitOrPR(repoArgs, {
+			const outcome = await commitBundle(ctx, {
 				writeMode: config.writeMode,
 				defaultBranch: config.defaultBranch,
 				author,
@@ -1822,7 +1889,7 @@ export function registerLibrarianTools(
 			// resolve_import; a decision stays listed here until someone answers it.
 			const pendingSections: string[] = [];
 			try {
-				const head = await store.getHead(repoArgs);
+				const head = await store.getHead(repoArgs, config.defaultBranch);
 				// listTree defaults to .md — ledgers are .json.
 				const tree = await store.listTree(repoArgs, head, { extension: '.json' });
 				const ledgers = tree.filter((e) => /^\.isomorphic\/imports\/[^/]+\.json$/.test(e.path));

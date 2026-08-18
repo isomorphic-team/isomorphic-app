@@ -254,6 +254,16 @@ async function callSc(tool: string, args: Record<string, unknown>) {
 async function headSha(): Promise<string> {
 	return (await store.getHead(repoArgs)).commitSha;
 }
+// The commit the content index believes it reflects. GitHub writes can advance it
+// synchronously; the fs backend deliberately cannot because its revision token is a
+// digest of a mutable working tree rather than one immutable commit.
+async function indexedSha(): Promise<string | null> {
+	const row = await db
+		.prepare(`SELECT indexed_commit_sha FROM brain_index_meta WHERE brain_id = ?1`)
+		.bind(brainId)
+		.first<{ indexed_commit_sha: string | null }>();
+	return row?.indexed_commit_sha ?? null;
+}
 async function fileText(path: string): Promise<string | null> {
 	return (await store.readFile(repoArgs, path))?.content ?? null;
 }
@@ -367,6 +377,103 @@ try {
 	check(
 		'write_page mode:update refuses a missing path',
 		r.isError && /does not exist/i.test(r.text),
+		r.text
+	);
+
+	// The target blob must be read only after HEAD is captured. Delay getHead so the
+	// formerly-parallel implementation deterministically starts readFile first and
+	// fails this assertion; ordered reads pass and pin the blob to that commit.
+	const underlyingStore = store;
+	let capturedHead: string | null = null;
+	let targetReadBeforeHead = false;
+	let targetReadRef: string | undefined;
+	store = {
+		...underlyingStore,
+		getHead: async (repo, branch) => {
+			await sleep(30);
+			const head = await underlyingStore.getHead(repo, branch);
+			capturedHead = head.commitSha;
+			return head;
+		},
+		readFile: async (repo, path, ref) => {
+			if (path === 'wiki/customers/acme.md') {
+				if (!capturedHead) targetReadBeforeHead = true;
+				targetReadRef = ref;
+			}
+			return underlyingStore.readFile(repo, path, ref);
+		}
+	};
+	try {
+		r = await call('write_page', {
+			path: 'wiki/customers/acme.md',
+			fields: { ordering_probe: 'safe' },
+			mode: 'update'
+		});
+	} finally {
+		store = underlyingStore;
+	}
+	check('the ordered-read probe write succeeds', !r.isError, r.text);
+	check(
+		'target content is read after HEAD and pinned to it',
+		!targetReadBeforeHead && !!capturedHead && targetReadRef === capturedHead,
+		`beforeHead=${targetReadBeforeHead} ref=${targetReadRef} head=${capturedHead}`
+	);
+
+	// ── write-through: a landed write advances the content index itself ──────
+	//
+	// Issue #31: writes left the index stale at the pre-write HEAD, so the read an
+	// agent runs to VERIFY the write paid an incremental reindex — often the slowest
+	// call of the session. A direct commit now folds its own pages into the index
+	// (writeThroughIndex). Warm the index with a read, then prove a write advances
+	// it with NO read in between.
+	await settledHead();
+	r = await call('search_pages', { query: 'rockets' });
+	check('search warms the index', !r.isError, r.text);
+	check(
+		'index is fresh at HEAD after a read',
+		(await indexedSha()) === (await headSha()),
+		`indexed=${await indexedSha()} head=${await headSha()}`
+	);
+	r = await call('write_page', {
+		path: 'wiki/notes/write-through-probe.md',
+		title: 'Write Through Probe',
+		content: '# Write Through Probe\n\nUniquely probe-xylophonic content.\n'
+	});
+	check('write_page (write-through probe) succeeds', !r.isError, r.text);
+	await settledHead();
+	check(
+		GITHUB_MODE
+			? 'the create advanced the index with no read in between'
+			: 'the mutable fs backend leaves the index for reconciliation',
+		GITHUB_MODE
+			? (await indexedSha()) === (await headSha())
+			: (await indexedSha()) !== (await headSha()),
+		`indexed=${await indexedSha()} head=${await headSha()}`
+	);
+	r = await call('search_pages', { query: 'xylophonic' });
+	check('the verifying search finds the new page', /write-through-probe\.md/.test(r.text), r.text);
+
+	// A move upserts the new path AND deletes the old one — both must be written
+	// through, or the index would keep listing a page that no longer exists.
+	r = await call('move_page', {
+		path: 'wiki/notes/write-through-probe.md',
+		new_path: 'wiki/notes/write-through-probe-moved.md'
+	});
+	check('move_page (write-through probe) succeeds', !r.isError, r.text);
+	await settledHead();
+	check(
+		GITHUB_MODE
+			? 'the move advanced the index with no read in between'
+			: 'the fs move leaves the index for reconciliation',
+		GITHUB_MODE
+			? (await indexedSha()) === (await headSha())
+			: (await indexedSha()) !== (await headSha()),
+		`indexed=${await indexedSha()} head=${await headSha()}`
+	);
+	r = await call('search_pages', { query: 'xylophonic' });
+	check(
+		'search sees the moved path and not the old one',
+		/write-through-probe-moved\.md/.test(r.text) && !/write-through-probe\.md:/.test(r.text),
 		r.text
 	);
 

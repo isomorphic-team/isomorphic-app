@@ -570,7 +570,7 @@ export function registerBrainTools(
 			const body =
 				JSON.stringify({ paths: Object.fromEntries(roots.map((r) => [r, 'content'])) }, null, 2) +
 				'\n';
-			const head = await ctx.store.getHead(ctx.repoArgs);
+			const head = await ctx.store.getHead(ctx.repoArgs, ctx.config.defaultBranch);
 			const outcome = await ctx.store.commitOrPR(ctx.repoArgs, {
 				writeMode: ctx.config.writeMode,
 				defaultBranch: ctx.config.defaultBranch,

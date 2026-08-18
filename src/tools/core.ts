@@ -92,7 +92,7 @@ export function registerCoreTools(
 
 			// A prefix can target anything (including non-content like raw/), which the
 			// index doesn't hold, so keep the live tree walk for that case.
-			const head = await store.getHead(repoArgs);
+			const head = await store.getHead(repoArgs, config.defaultBranch);
 			const paths = (await store.listTree(repoArgs, head))
 				.map((e) => e.path)
 				.filter((p) => p.startsWith(prefix))

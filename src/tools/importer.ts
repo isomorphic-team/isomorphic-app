@@ -156,7 +156,7 @@ export function registerImportTools(
 			const matchedPaths = new Set(
 				[...claimsByPath].filter(([, keys]) => keys.some((k) => recordKeys.has(k))).map(([p]) => p)
 			);
-			const head = await store.getHead(repoArgs);
+			const head = await store.getHead(repoArgs, config.defaultBranch);
 			const tree = await store.listTree(repoArgs, head);
 			const treePaths = new Set(tree.map((e) => e.path));
 			const existingPaths = new Set([...treePaths].filter((p) => isContentPath(p, config)));
@@ -358,7 +358,7 @@ export function registerImportTools(
 			// Alias targets may carry no key claims yet — include them regardless.
 			for (const t of aliasTargets) relevant.add(t);
 
-			const head = await store.getHead(repoArgs);
+			const head = await store.getHead(repoArgs, config.defaultBranch);
 			const tree = await store.listTree(repoArgs, head);
 			const { pages } = await store.fetchPages(
 				repoArgs,
