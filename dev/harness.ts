@@ -674,10 +674,12 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
 			if (md === undefined) return errText(`"${path}" does not exist.`);
 			// Mirror the server: agents (and the app's navigate path) get the fence
 			// plus a freshly computed snapshot; the app unwraps it for display.
-			// `sha` rides along the same way, so the refresh control can tell a page
-			// that moved from one that did not (issue #29).
+			// Both `markdown` and `sha` mirror the server response.
 			const body = hasViews(md) ? (await renderViews(md, path, viewCtxFor(pg))).snapshotted : md;
-			return { ...text(body), structuredContent: { path, sha: pageSha(md) } };
+			return {
+				...text(body),
+				structuredContent: { path, markdown: body, sha: pageSha(md) }
+			};
 		}
 		case 'read_media': {
 			const asset = assetsFor(bid)[path];
