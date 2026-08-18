@@ -16,7 +16,8 @@ import {
 	ensureFresh,
 	INDEX_SCHEMA_VERSION,
 	listIndexedPages,
-	loadResolvedGraph
+	loadResolvedGraph,
+	writeThroughIndex
 } from '../src/lib/brain-index.ts';
 import { githubStore } from '../src/lib/brain-repo.ts';
 import { applyMigrations } from '../src/local/d1-sqlite.ts';
@@ -110,6 +111,7 @@ function makePages(n: number, rev = 0): FakePage[] {
 let currentPages: FakePage[] = [];
 let currentHead = 'commit-0';
 let graphqlCalls = 0;
+let reposGetCalls = 0;
 
 const octokit = {
 	graphql: async (_query: string, variables: Record<string, string>) => {
@@ -125,9 +127,12 @@ const octokit = {
 	},
 	rest: {
 		repos: {
-			get: async () => ({
-				data: { default_branch: 'main', allow_squash_merge: true, allow_merge_commit: true }
-			}),
+			get: async () => {
+				reposGetCalls++;
+				return {
+					data: { default_branch: 'main', allow_squash_merge: true, allow_merge_commit: true }
+				};
+			},
 			getBranch: async () => ({ data: { protected: false } }),
 			// No .isomorphic.json — the brain uses DEFAULT_BRAIN_CONFIG (wiki/ content).
 			getContent: async () => {
@@ -135,7 +140,13 @@ const octokit = {
 			}
 		},
 		git: {
-			getRef: async () => ({ data: { object: { sha: currentHead } } }),
+			// `heads/missing` 404s so the getHead fallback has a real branch to try.
+			getRef: async ({ ref }: { ref: string }) => {
+				if (ref === 'heads/missing') {
+					throw Object.assign(new Error('Not Found'), { status: 404 });
+				}
+				return { data: { object: { sha: currentHead } } };
+			},
 			getCommit: async () => ({ data: { tree: { sha: `tree-${currentHead}` } } }),
 			getTree: async () => ({
 				data: { tree: currentPages.map((p) => ({ type: 'blob', path: p.path, sha: p.sha })) }
@@ -484,6 +495,135 @@ console.log('\nContent index — bounded, resumable ensureFresh\n');
 		'page backlinks still work and do not pick up assets',
 		pageRefs.length === 1 && pageRefs[0].path === 'wiki/vendors/acme.md',
 		JSON.stringify(pageRefs)
+	);
+}
+
+// ---------------------------------------------------------------- scenario 6
+// getHead with a named branch: the write path's hottest call used to pay a
+// repos.get just to learn the default branch that config already holds.
+{
+	console.log('\ngetHead with a named branch');
+	const before = reposGetCalls;
+	const h = await store.getHead(repo, 'main');
+	check('named branch skips the repos.get discovery', reposGetCalls === before);
+	check(
+		'named branch resolves head',
+		h.branch === 'main' && h.commitSha === currentHead && !!h.treeSha,
+		JSON.stringify(h)
+	);
+	const h2 = await store.getHead(repo, 'missing');
+	check(
+		'a missing branch falls back to discovery',
+		reposGetCalls === before + 1 && h2.branch === 'main',
+		JSON.stringify(h2)
+	);
+}
+
+// ---------------------------------------------------------------- scenario 7
+// Write-through: a direct commit folds its own pages into a FRESH index and
+// advances the recorded sha, so the read an agent makes to verify the write is
+// the cheap fresh path instead of an incremental reindex (issue #31). Also the
+// guard rails: a write based on a stale index must not advance it, deletes
+// remove rows, and non-content files in the bundle are ignored.
+{
+	console.log('\nwrite-through after a direct commit');
+	resetDb();
+	currentPages = makePages(20);
+	currentHead = 'commit-wt-0';
+	await ensureFresh(db, store, repo, brainId, config);
+	check('precondition: index fresh at HEAD', meta()?.indexed_commit_sha === currentHead);
+
+	// Simulate a write_page create landing on top: one new page + the changelog.
+	const newPage = {
+		path: 'wiki/new-page.md',
+		content: '---\ntitle: New Page\n---\n\n# New Page\n\nBody text.\n'
+	};
+	currentPages = [
+		...currentPages,
+		{ path: newPage.path, sha: 'sha-new-1', content: newPage.content }
+	];
+	currentHead = 'commit-wt-1';
+	const advanced = await writeThroughIndex(
+		db,
+		brainId,
+		config,
+		'commit-wt-0',
+		'commit-wt-1',
+		[newPage, { path: 'wiki/log.md', content: '- created new-page' }],
+		[]
+	);
+	check('write-through advanced a fresh index', advanced === true);
+	check('meta records the landed commit', meta()?.indexed_commit_sha === 'commit-wt-1');
+	const pages = await listIndexedPages(db, brainId);
+	check(
+		'the new page is indexed without a reconcile',
+		pages.some((p) => p.path === 'wiki/new-page.md' && p.title === 'New Page'),
+		JSON.stringify(pages.slice(-2))
+	);
+	check('the changelog is not indexed', !pages.some((p) => p.path === 'wiki/log.md'));
+
+	// The payoff: the verifying read does no GitHub fetch and writes no batches.
+	resetCounters();
+	const graphqlBefore = graphqlCalls;
+	await ensureFresh(db, store, repo, brainId, config);
+	check(
+		'the verifying read is the cheap fresh path',
+		graphqlCalls === graphqlBefore && batchCount === 0,
+		`graphql=${graphqlCalls - graphqlBefore} batches=${batchCount}`
+	);
+
+	// A write whose BASE does not match the indexed sha must not advance it —
+	// other pages may have changed under it; the next read reconciles.
+	const refused = await writeThroughIndex(
+		db,
+		brainId,
+		config,
+		'commit-wt-0',
+		'commit-wt-2',
+		[newPage],
+		[]
+	);
+	check(
+		'a write based on a stale index is refused',
+		refused === false && meta()?.indexed_commit_sha === 'commit-wt-1'
+	);
+
+	// Deletes remove rows (the delete half of a move).
+	currentHead = 'commit-wt-3';
+	const deleted = await writeThroughIndex(
+		db,
+		brainId,
+		config,
+		'commit-wt-1',
+		'commit-wt-3',
+		[],
+		['wiki/new-page.md']
+	);
+	check(
+		'a delete write-through removes the row',
+		deleted === true &&
+			!(await listIndexedPages(db, brainId)).some((p) => p.path === 'wiki/new-page.md')
+	);
+
+	// The stored blob sha is the REAL git object id, so a later incremental
+	// reindex diffs it as unchanged instead of refetching it.
+	currentHead = 'commit-wt-4';
+	await writeThroughIndex(
+		db,
+		brainId,
+		config,
+		'commit-wt-3',
+		'commit-wt-4',
+		[{ path: 'wiki/empty.md', content: '' }],
+		[]
+	);
+	const row = sqlite
+		.prepare(`SELECT blob_sha FROM brain_pages WHERE brain_id = ? AND path = ?`)
+		.get(brainId, 'wiki/empty.md') as { blob_sha: string };
+	check(
+		'blob sha matches git (empty blob)',
+		row.blob_sha === 'e69de29bb2d1d6434b8b29ae775ad8c2e48c5391',
+		row.blob_sha
 	);
 }
 

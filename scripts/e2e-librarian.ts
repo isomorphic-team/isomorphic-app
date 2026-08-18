@@ -254,6 +254,16 @@ async function callSc(tool: string, args: Record<string, unknown>) {
 async function headSha(): Promise<string> {
 	return (await store.getHead(repoArgs)).commitSha;
 }
+// The commit the content index believes it reflects. The write-through assertions
+// below compare this to headSha(): equal means a write advanced the index itself,
+// with no read (and therefore no reconcile) in between.
+async function indexedSha(): Promise<string | null> {
+	const row = await db
+		.prepare(`SELECT indexed_commit_sha FROM brain_index_meta WHERE brain_id = ?1`)
+		.bind(brainId)
+		.first<{ indexed_commit_sha: string | null }>();
+	return row?.indexed_commit_sha ?? null;
+}
 async function fileText(path: string): Promise<string | null> {
 	return (await store.readFile(repoArgs, path))?.content ?? null;
 }
@@ -367,6 +377,56 @@ try {
 	check(
 		'write_page mode:update refuses a missing path',
 		r.isError && /does not exist/i.test(r.text),
+		r.text
+	);
+
+	// ── write-through: a landed write advances the content index itself ──────
+	//
+	// Issue #31: writes left the index stale at the pre-write HEAD, so the read an
+	// agent runs to VERIFY the write paid an incremental reindex — often the slowest
+	// call of the session. A direct commit now folds its own pages into the index
+	// (writeThroughIndex). Warm the index with a read, then prove a write advances
+	// it with NO read in between.
+	await settledHead();
+	r = await call('search_pages', { query: 'rockets' });
+	check('search warms the index', !r.isError, r.text);
+	check(
+		'index is fresh at HEAD after a read',
+		(await indexedSha()) === (await headSha()),
+		`indexed=${await indexedSha()} head=${await headSha()}`
+	);
+	r = await call('write_page', {
+		path: 'wiki/notes/write-through-probe.md',
+		title: 'Write Through Probe',
+		content: '# Write Through Probe\n\nUniquely probe-xylophonic content.\n'
+	});
+	check('write_page (write-through probe) succeeds', !r.isError, r.text);
+	await settledHead();
+	check(
+		'the create advanced the index with no read in between',
+		(await indexedSha()) === (await headSha()),
+		`indexed=${await indexedSha()} head=${await headSha()}`
+	);
+	r = await call('search_pages', { query: 'xylophonic' });
+	check('the verifying search finds the new page', /write-through-probe\.md/.test(r.text), r.text);
+
+	// A move upserts the new path AND deletes the old one — both must be written
+	// through, or the index would keep listing a page that no longer exists.
+	r = await call('move_page', {
+		path: 'wiki/notes/write-through-probe.md',
+		new_path: 'wiki/notes/write-through-probe-moved.md'
+	});
+	check('move_page (write-through probe) succeeds', !r.isError, r.text);
+	await settledHead();
+	check(
+		'the move advanced the index with no read in between',
+		(await indexedSha()) === (await headSha()),
+		`indexed=${await indexedSha()} head=${await headSha()}`
+	);
+	r = await call('search_pages', { query: 'xylophonic' });
+	check(
+		'search sees the moved path and not the old one',
+		/write-through-probe-moved\.md/.test(r.text) && !/write-through-probe\.md:/.test(r.text),
 		r.text
 	);
 

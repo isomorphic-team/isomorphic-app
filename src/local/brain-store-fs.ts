@@ -221,6 +221,8 @@ export function fsBrainStore(opts: FsStoreOptions): BrainStore {
 	};
 
 	return {
+		// The branch name selects nothing here (every branch is the same working
+		// tree); the parameter exists so the GitHub adapter can skip a round trip.
 		getHead: () => head(),
 
 		// Every branch is the same working tree here, so the branch name selects nothing.
@@ -313,8 +315,10 @@ export function fsBrainStore(opts: FsStoreOptions): BrainStore {
 					'This brain is configured for pull-request writes, which a local brain cannot open. Set writes.mode to "direct" in .isomorphic.json, or serve this brain from GitHub.'
 				);
 			}
-			await commit(repo, o);
-			return {};
+			const res = await commit(repo, o);
+			// The tree digest, matching what branchCommitSha reports — the identifier
+			// the write-through index update records (see WriteOutcome.commitSha).
+			return { commitSha: res.head.commitSha };
 		}
 	};
 }

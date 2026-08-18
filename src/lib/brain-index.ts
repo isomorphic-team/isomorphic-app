@@ -20,7 +20,7 @@
 import type { D1Database, D1PreparedStatement } from '@cloudflare/workers-types';
 import { type RepoRef, type TreeEntry, type BrainStore, MAX_SCAN_PAGES } from './brain-repo.ts';
 import { classifyMdLink } from './links.ts';
-import { type BrainConfig, CONFIG_PATH, isContentPath, loadBrainConfig } from './brain-config.ts';
+import { type BrainConfig, CONFIG_PATH, isContentPath } from './brain-config.ts';
 import {
 	parseFrontmatter,
 	extractLinks,
@@ -229,14 +229,15 @@ export async function ensureFresh(
 	}
 
 	// Stale (or never built) → (re)index. getHead gives the tree sha listTree needs.
-	const head = await store.getHead(repo);
-	// HEAD moved, which may mean .isomorphic.json changed (e.g. a merged "configure"
-	// PR). Re-read the config fresh here — rather than trusting a possibly-stale
-	// caller-side cache — so a content-shape change takes effect on the very next read,
-	// no reconnect needed. Falls back to the passed config on error.
-	const freshConfig = await loadBrainConfig(store, repo).catch(() => config);
+	// The caller's config is trusted as-is: every runtime loads it fresh per request
+	// (Worker session cache, local runtime, tests), so a merged "configure" PR is
+	// already reflected by the time this runs. The stale path used to re-read
+	// .isomorphic.json + the write policy here — three GitHub calls on every stale
+	// read — to catch a config commit landing MID-request, which the next read
+	// picks up anyway.
+	const head = await store.getHead(repo, config.defaultBranch);
 	const entries = (await store.listTree(repo, head)).filter(
-		(e) => e.path.endsWith('.md') && isContentPath(e.path, freshConfig)
+		(e) => e.path.endsWith('.md') && isContentPath(e.path, config)
 	);
 	const truncated = entries.length > MAX_SCAN_PAGES;
 
@@ -256,20 +257,15 @@ export async function ensureFresh(
 		// that its initial index can't be built in one request would otherwise fail,
 		// write no meta row, and take the !meta path again on the next read — wedged
 		// before it ever had an index, with nothing recorded to resume from.
-		const built = await fullBuild(db, store, repo, brainId, entries, freshConfig);
+		const built = await fullBuild(db, store, repo, brainId, entries, config);
 		if (!built) indexedSha = null;
 	} else {
-		const reconciled = await incrementalReindex(db, store, repo, brainId, entries, freshConfig);
+		const reconciled = await incrementalReindex(db, store, repo, brainId, entries, config);
 		if (!reconciled) indexedSha = meta.indexed_commit_sha;
 		// The incremental pass only rewrote CHANGED pages' rows; on a row-shape bump
 		// the unchanged pages still need their new rows built from stored content.
 		if ((meta.schema_version ?? 0) < INDEX_SCHEMA_VERSION) {
-			rebuildCursor = await rebuildDerivedFromStore(
-				db,
-				brainId,
-				freshConfig,
-				meta.rebuild_cursor ?? ''
-			);
+			rebuildCursor = await rebuildDerivedFromStore(db, brainId, config, meta.rebuild_cursor ?? '');
 			if (rebuildCursor !== null) schemaVersion = meta.schema_version ?? 0;
 		}
 	}
@@ -448,6 +444,85 @@ async function incrementalReindex(
 	return complete;
 }
 
+// A git blob's object id for content we already hold, so write-through can store
+// the SAME sha a tree walk reports — blob shas are what incrementalReindex diffs
+// against, and a wrong one would merely cost a harmless refetch later. Worker-safe:
+// Web Crypto SHA-1, no node:crypto.
+async function gitBlobSha(content: string): Promise<string> {
+	const body = new TextEncoder().encode(content);
+	const header = new TextEncoder().encode(`blob ${body.byteLength}\0`);
+	const buf = new Uint8Array(header.byteLength + body.byteLength);
+	buf.set(header, 0);
+	buf.set(body, header.byteLength);
+	const digest = await crypto.subtle.digest('SHA-1', buf);
+	return Array.from(new Uint8Array(digest))
+		.map((b) => b.toString(16).padStart(2, '0'))
+		.join('');
+}
+
+// Write-through: fold one of our own commits into the index instead of leaving the
+// next read to reconcile it. The caller holds the revision the write was based on,
+// the one it landed, and the exact content of every page the bundle touched, so this
+// upserts those rows and advances indexed_commit_sha. The read an agent makes to
+// verify a write then costs one getRef instead of an incremental reindex — which is
+// also what used to make the FIRST read after a write the slow one (issue #31).
+//
+// Only when provably safe: the index must already be CURRENT at the write's base
+// revision (otherwise other pages changed under us and the next read reconciles as
+// usual) and not mid schema-rebuild. Never applies on the PR path — the caller only
+// receives a commitSha for a direct commit. Returns whether the index advanced.
+// Fail-open by contract: the commit has landed regardless, and callers swallow
+// errors; a missed write-through only costs one reconcile.
+export async function writeThroughIndex(
+	db: D1Database,
+	brainId: string,
+	config: BrainConfig,
+	baseSha: string,
+	landedSha: string,
+	writes: { path: string; content: string; encoding?: string }[],
+	deletes: string[]
+): Promise<boolean> {
+	const meta = await db
+		.prepare(
+			`SELECT indexed_commit_sha, schema_version, rebuild_cursor
+			 FROM brain_index_meta WHERE brain_id = ?1`
+		)
+		.bind(brainId)
+		.first<{
+			indexed_commit_sha: string | null;
+			schema_version: number;
+			rebuild_cursor: string | null;
+		}>();
+	if (!meta || meta.indexed_commit_sha !== baseSha) return false;
+	if ((meta.schema_version ?? 0) < INDEX_SCHEMA_VERSION || meta.rebuild_cursor) return false;
+
+	// Only content pages are indexed rows; the log, config, ledgers and attachments
+	// in the same bundle are invisible to the index, so they need no rows — the sha
+	// still advances past them.
+	const isPage = (p: string) => p.endsWith('.md') && isContentPath(p, config);
+	const stmts: D1PreparedStatement[] = [];
+	for (const w of writes) {
+		if (!isPage(w.path) || w.encoding === 'base64') continue;
+		stmts.push(...pageUpsert(db, brainId, w.path, w.content, await gitBlobSha(w.content), config));
+	}
+	for (const p of deletes) {
+		if (!isPage(p)) continue;
+		stmts.push(
+			db.prepare(`DELETE FROM brain_pages WHERE brain_id = ?1 AND path = ?2`).bind(brainId, p),
+			db.prepare(`DELETE FROM brain_links WHERE brain_id = ?1 AND source = ?2`).bind(brainId, p),
+			db.prepare(`DELETE FROM brain_page_fields WHERE brain_id = ?1 AND path = ?2`).bind(brainId, p)
+		);
+	}
+	if (stmts.length) await runBatched(db, stmts);
+	await db
+		.prepare(
+			`UPDATE brain_index_meta SET indexed_commit_sha = ?2, updated_at = ?3 WHERE brain_id = ?1`
+		)
+		.bind(brainId, landedSha, Date.now())
+		.run();
+	return true;
+}
+
 // Mark a brain's index stale so the next read forces a reconcile against HEAD.
 // (No-op in the always-check design — HEAD is compared every read — but exposed so
 // a future sha-check TTL cache / write-through path can invalidate explicitly.)
@@ -481,7 +556,7 @@ export async function detectNeedsConfig(
 	repo: RepoRef,
 	config: BrainConfig
 ): Promise<boolean> {
-	const head = await store.getHead(repo);
+	const head = await store.getHead(repo, config.defaultBranch);
 	const tree = await store.listTree(repo, head);
 	if (tree.some((e) => e.path === CONFIG_PATH)) return false; // author configured it explicitly
 	const md = tree.filter((e) => e.path.endsWith('.md'));

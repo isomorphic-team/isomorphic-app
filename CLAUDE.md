@@ -354,6 +354,17 @@ platform-db --remote` **before** `wrangler deploy` (schema-first), so a merge to
   Bounded by inbound-link count rather than brain size, and uncapped: a linker beyond the
   old `MAX_SCAN_PAGES` ceiling is no longer silently missed. (The whole-brain `scanContent`
   helper is gone as of this change.)
+- **Writes are WRITE-THROUGH** (issue #31). A successful DIRECT commit upserts the index rows
+  for exactly the pages its bundle touched (`writeThroughIndex` in `brain-index.ts`, called from
+  the `commitBundle` chokepoint in `librarian.ts`) and advances `indexed_commit_sha`, so the
+  read an agent makes to verify a write costs one `getRef`, not an incremental reindex. Three
+  guard rails: only when the index was already CURRENT at the commit's base revision (otherwise
+  other pages changed under it and the next read reconciles as usual), never on the PR path (the
+  branch hasn't moved — `WriteOutcome.commitSha` is direct-mode only), and failures are swallowed
+  (the commit landed regardless). Blob shas are computed with Web Crypto SHA-1 (`gitBlobSha`),
+  so the fs backend's token shas simply self-heal on a later reindex. The write tools'
+  descriptions also carry the timeout-retry guidance (read before retry; a retried create fails
+  if it landed). Idempotency keys were considered and deferred — see `docs/roadmap.md`.
 - **Queryable frontmatter** (`brain_page_fields`, Phase 1 of the derived-views PRD): every
   scalar/list-of-scalar frontmatter key is indexed per page (hard caps in `brain-index.ts`;
   optional `indexedFields` in `.isomorphic.json` restricts). `brain_index_meta.schema_version`
