@@ -83,25 +83,21 @@ packages permissions.** `ci.yml` already declares `permissions: contents: read` 
 but the repo-wide default should be the safe one so a future workflow does not silently
 inherit write.
 
-### 4. The environment gate on the deploy (partly done)
+### 4. The environment gate on the deploy (done, and the reviewer rule is now optional)
 
 `deploy.yml` runs on push to `main`, so **a merged pull request deploys to production
 immediately**. That was fine when every commit was yours. With outside contributions it means a
 merge you regret is live before you have finished reading the diff again.
 
-This is the single change that most reduces the blast radius of accepting outside code, and it
-costs one click per release.
+**Done:** the `production` environment exists, with all three rules live. The deployment branch
+policy limits it to protected branches, the `deploy` job declares `environment: production`, and
+the required-reviewer rule holds each deploy until a maintainer approves it. Runs appear under
+the repo's Deployments tab with the deployed origin attached.
 
-**Done already:** the `production` environment exists with a deployment branch policy limiting
-it to protected branches, and the `deploy` job declares `environment: production`. The run now
-appears under the repo's Deployments tab with the deployed origin attached.
-
-**Blocked until the repo is public:** the required-reviewer rule. Environment protection rules
-are free on public repositories and unavailable on private ones whatever the plan. The API is
-blunt about it, rejecting the rule with `Failed to create the environment protection rule.
-Please ensure the billing plan supports the required reviewers protection rule.` even on a Team
-org. So run this the moment you flip visibility, and not before, because until then the gate
-records deployments without holding them:
+The reviewer rule was applied once the repo went public. Environment protection rules are free
+on public repositories and unavailable on private ones whatever the plan; the API is blunt about
+it, rejecting the rule with `Failed to create the environment protection rule. Please ensure the
+billing plan supports the required reviewers protection rule.` even on a Team org.
 
 ```sh
 gh api -X PUT repos/isomorphic-team/isomorphic-app/environments/production --input - <<JSON
@@ -116,6 +112,33 @@ JSON
 
 `prevent_self_review` must stay `false` while there is one maintainer, or nobody can ever
 approve a deploy and `main` becomes undeployable. Flip it to `true` when there are two of you.
+
+**Whether to keep the reviewer rule is now a real choice**, because the thing it was standing in
+for got built. `deploy.yml` no longer calls `wrangler deploy`: it uploads a version, smoke checks
+it before promoting, and rolls back automatically if the promoted version fails its checks. The
+click is no longer the only thing between a merge and production.
+
+Two arguments for dropping it, one for keeping it:
+
+- Merges already carry a green `check` context on exactly the merged content, since branch
+  protection requires it with `strict: true`. The approval was re-reading code CI had run.
+- It costs real time. Two of the deploys in August waited 1h27m and 1h41m in "Waiting", which is
+  the gap between merging and shipping for a one-maintainer project.
+- Against: the rollback covers a version that fails a smoke check, not a merge that is simply
+  wrong. Bad code that boots and answers correctly still ships instantly.
+
+Drop **only** the reviewer rule, keeping the branch policy and the secret scoping, by re-PUTting
+the payload above without the `reviewers` key and without `prevent_self_review`. Run the drill in
+[`deploy-and-rollback.md`](deploy-and-rollback.md#the-drill-prove-the-rollback-before-removing-the-gate)
+first, because until a rollback has been seen to work on this account with this token, removing
+the gate trades a proven control for an unproven one.
+
+**One hole this does not close.** `enforce_admins` is deliberately `false` (see the ruleset table
+above: with one maintainer, enforcing on admins locks you out of a hotfix). A direct push to
+`main` therefore skips the pull request, skips CI, and now deploys on its own. The smoke check
+and rollback still run on that push, so a version that does not boot is still caught and undone;
+what nobody checks is whether the code was any good. Keep using pull requests for anything that
+is not an emergency, and revisit when there are two of you.
 
 **Still to do, and it needs your hands because a secret cannot be read back:** move the
 Cloudflare token from repository scope into the environment, so no other workflow can reach it,

@@ -83,6 +83,9 @@ jobs:
       - run: pnpm test:feedback
       - run: pnpm test:usage
       - run: pnpm test:media
+      # The assertions the deploy runs against a live origin before it decides whether
+      # to keep a merge in production. Offline here: driven against stub responses.
+      - run: pnpm test:smoke
       # Lints the two lists above against package.json, so the instruction in the
       # comment stops depending on anyone reading the comment.
       - run: pnpm test:wiring
@@ -103,11 +106,44 @@ jobs:
       # locally a missing browser should not fail a contributor's `pnpm test`, but in
       # CI it means the install step above it broke and the UI tests silently did not
       # run, which is exactly the failure a green skip would hide.
+      # Chromium was re-downloaded on every run. The cache is keyed on the RESOLVED
+      # Playwright version rather than on the lockfile hash, so an unrelated dependency
+      # bump does not evict a browser that is still the right one, and a Playwright
+      # bump does not restore one that is now wrong.
+      - name: Resolve the Playwright version
+        id: pw
+        run: echo "version=$(pnpm exec playwright --version | awk '{print $2}')" >> "$GITHUB_OUTPUT"
+
+      - name: Cache the Playwright browser
+        id: pw-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ steps.pw.outputs.version }}
+
+      # --with-deps installs system libraries into the runner, which the cache above
+      # does not carry, so it runs on a cache hit too. The browser download is what
+      # gets skipped.
       - name: Install Chromium for the UI tests
         run: pnpm exec playwright install --with-deps chromium
       - run: pnpm test:ui
         env:
           UI_STRICT: '1'
+
+      # playwright.config.ts sets `trace: 'retain-on-failure'` and
+      # `screenshot: 'only-on-failure'`, and nothing collected them, so the runner was
+      # destroyed with the evidence on it: a UI failure in CI reported THAT it failed
+      # and nothing about why. Only on failure, so a green run uploads nothing.
+      - name: Upload the Playwright report
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: |
+            playwright-report/
+            test-results/
+          retention-days: 14
+          if-no-files-found: ignore
 
       # Formatting is checked, not applied — a PR that reformats unrelated files is
       # noise, and `--check` tells the contributor exactly what to run.
