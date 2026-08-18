@@ -17,7 +17,7 @@
 import { AppBridge, PostMessageTransport } from '@modelcontextprotocol/ext-apps/app-bridge';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { BRAIN_APP_HTML } from '../src/lib/app-bundle.generated.ts';
-import { slugify, resolveRelative, parseFrontmatter } from '../src/lib/wiki.ts';
+import { slugify, resolveRelative, parseFrontmatter, withFrontmatter } from '../src/lib/wiki.ts';
 import { DEFAULT_BRAIN_CONFIG, isContentPath } from '../src/lib/brain-policy.ts';
 import { classifyMdLink } from '../src/lib/links.ts';
 import { uniqueAttachmentPath } from '../src/lib/media.ts';
@@ -845,12 +845,23 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
 			if (exists && args?.mode === 'create') return errText(`"${p}" already exists.`);
 			const content = String(args?.content ?? '');
 			if (exists) {
-				// Keep the existing frontmatter, exactly like the server's body-only save.
-				const fm = pg[p].match(/^---\n[\s\S]*?\n---\n?/)?.[0] ?? '';
-				pg[p] = fm + content;
+				const parsed = parseFrontmatter(pg[p]);
+				if (args?.content !== undefined) {
+					// Keep the existing frontmatter, exactly like the server's body-only save.
+					const fm = pg[p].match(/^---\n[\s\S]*?\n---\n?/)?.[0] ?? '';
+					pg[p] = fm + content;
+				} else {
+					// Property-panel writes carry metadata only. Mirror the server enough for
+					// the app to reload and observe the field it just changed.
+					const fm = { ...(parsed.frontmatter ?? {}) };
+					for (const key of ['title', 'type', 'description', 'status'] as const) {
+						if (typeof args?.[key] === 'string') fm[key] = args[key];
+					}
+					pg[p] = withFrontmatter(fm, parsed.body);
+				}
 			} else {
 				const title = String(args?.title ?? p.split('/').pop()!.replace(/\.md$/, ''));
-				pg[p] = `---\ntitle: ${title}\nstatus: draft\n---\n\n${content}`;
+				pg[p] = `---\ntitle: ${title}\n---\n\n${content}`;
 			}
 			// Mirror the server: snapshots regenerate as content lands in the file.
 			if (hasViews(pg[p])) pg[p] = (await renderViews(pg[p], p, viewCtxFor(pg))).snapshotted;

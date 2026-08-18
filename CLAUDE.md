@@ -501,9 +501,8 @@ None of this reintroduces a taxonomy: `type` is a free-form string, and folders 
   reader cannot follow — informational, since a brain may be deliberately Obsidian-first).
 - **Known divergences from OKF, accepted deliberately:** `[[wikilinks]]` are an Isomorphic
   extension no outside OKF reader resolves (markdown links are the portable form);
-  `status: draft|published` vs the spec's `draft|stable|deprecated` (unknown values must be
-  tolerated, so this is legal, just non-standard); `README.md` as a folder-note fallback is not
-  an OKF reserved name, so such a page is technically a concept document owing a `type`.
+  `README.md` as a folder-note fallback is not an OKF reserved name, so such a page is
+  technically a concept document owing a `type`.
 
 ## Writing frontmatter (`fields` and the properties panel)
 

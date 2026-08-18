@@ -45,6 +45,12 @@ We use `@modelcontextprotocol/ext-apps`: `/server` (registerAppTool / registerAp
 - Preact (React-compat runtime, via `preact/compat`): https://preactjs.com/
 - Tailwind CSS v4 (CSS-first): https://tailwindcss.com/docs
 
+## Open Knowledge Format
+
+- **OKF v0.2 specification:** https://github.com/GoogleCloudPlatform/knowledge-catalog/blob/main/okf/SPEC.md
+- `status` is an optional lifecycle field with values `draft | stable | deprecated`;
+  absence means `stable`. `type` is the only always-required frontmatter key.
+
 ## Deploy target
 
 - **Cloudflare Workers limits (script size, etc.):** https://developers.cloudflare.com/workers/platform/limits/

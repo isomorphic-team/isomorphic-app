@@ -889,8 +889,8 @@ class McpSession {
 
 		// ---------- librarian suite ----------
 		// write_page / move_page / delete_page / find_inbound_links / validate /
-		// search_pages. write_page creates or updates (and publishes via
-		// status: 'published', and backs the editor's sha-guarded save); move_page /
+		// search_pages. write_page creates or updates (including optional OKF lifecycle
+		// status, and backs the editor's sha-guarded save); move_page /
 		// delete_page also take a folder path to move or delete a whole subtree. All
 		// writes are atomic bundles (page + changelog, plus any repointed links, in one
 		// commit) and all responses speak in wiki terms, never git terms. See

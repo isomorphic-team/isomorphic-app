@@ -165,7 +165,7 @@ Sending brain, `wiki/clients/gordon-brothers/deliverables/2026-08-10 Kickoff Pla
 
 ```yaml
 type: Deliverable
-status: published
+status: stable
 publish_to: gb-engagement
 ```
 
@@ -174,7 +174,7 @@ Receiving brain, subscription `into: "wiki/from-ai-lab/"`, first run creates
 
 ```yaml
 type: Deliverable
-status: published
+status: stable
 source_key: 01J9X…
 source: gb-engagement
 updated: 2026-08-10

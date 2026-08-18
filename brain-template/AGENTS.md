@@ -57,7 +57,6 @@ Frontmatter is free-form and every key but one is optional. When a page has it, 
 type: Customer # the one field OKF requires — see below
 title: Acme Corp
 description: Rocket-parts customer, mid-market, US west
-status: draft # draft | published — publishing is a deliberate act, not an edit
 updated: 2026-07-06 # bumped automatically on every save
 sources:
   - source/2026-04-26-acme-pricing.md
@@ -82,7 +81,7 @@ Links: `[[Other Page]]` wikilinks (matched against a page's path, filename, or t
 
 ## Lifecycle
 
-Pages can carry `status: draft` (not yet settled) vs `published` (the trusted layer). To publish, set `status: published` (via `write_page`). Prefer editing published pages over forking new drafts of the same thing.
+OKF lifecycle status is optional: absent means `stable` (ready for consumption). Set `status: draft` for content that is not yet reviewed, `status: stable` when making that state explicit, or `status: deprecated` when a page remains for links and history but is no longer current. Existing non-standard values are preserved on unrelated edits rather than rewritten.
 
 ## Workflows
 
