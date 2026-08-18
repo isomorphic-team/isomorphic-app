@@ -146,14 +146,14 @@ export function registerCoreTools(
 			// directive (so they don't hand-edit derived content). Falls back to
 			// the raw file if computing fails.
 			const views = await tryRenderViews(text, path, { db, store, repoArgs, brainId, config });
-			// `sha` rides along for the app, which reads pages through this tool for its
-			// own navigation and refresh (fetchPage in app/core/actions.ts). It is the
-			// same blob sha view_page reports, so a render fetched either way can be
-			// compared against what the branch holds now. No `view` key, so this stays a
-			// quiet read and never routes anywhere in the widget.
+			// `path`, `markdown`, and `sha` form the structured read result for the app.
+			// `markdown` mirrors the text fallback exactly, so either MCP result channel
+			// carries the same page and version. No `view` key, so this stays a quiet
+			// read and never routes the MCP App.
+			const markdown = views?.snapshotted ?? text;
 			return {
-				content: [{ type: 'text', text: views?.snapshotted ?? text }],
-				structuredContent: { path, sha: file.sha }
+				content: [{ type: 'text' as const, text: markdown }],
+				structuredContent: { path, markdown, sha: file.sha }
 			};
 		}
 	);

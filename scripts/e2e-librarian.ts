@@ -1112,6 +1112,12 @@ try {
 		const stored = await store.readFile(repoArgs, path);
 		const read = await callSc('read_page', { path });
 		const viewed = await callSc('view_page', { path });
+		const structuredMarkdown = typeof read.sc.markdown === 'string' ? read.sc.markdown : '';
+		check(
+			'read_page carries the complete page in structuredContent',
+			structuredMarkdown === read.text && structuredMarkdown.includes('First.'),
+			JSON.stringify(read.sc)
+		);
 
 		check('read_page reports the page blob sha', read.sc.sha === stored?.sha, String(read.sc.sha));
 		check(
