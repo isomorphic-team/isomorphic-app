@@ -99,26 +99,35 @@ Then confirm, rather than assuming:
 pnpm exec tsx scripts/smoke.ts https://<production origin>
 ```
 
-## The drill: prove the rollback before removing the gate
+## The drill
 
-Both parts run against real production and neither ever serves broken code. Do them in
-order; part A is also the first exercise of the new workflow.
+**Part A is done.** The merge of the pull request that introduced this workflow triggered it,
+and the whole path ran on 2026-08-18 in 43 seconds:
 
-**A. The happy path, end to end.** Run the workflow by hand on `main` with nothing changed:
-
-```sh
-gh workflow run deploy.yml --ref main
-gh run watch
+```
+Rollback target: ff88abe2-84e4-4938-b8fc-91db3503cecf
+Worker Version ID: 6687bc0c-a70d-4a53-813a-88b0875ec606
+Version Preview URL: https://6687bc0c-<worker>.<subdomain>.workers.dev
+pre-promotion smoke: All smoke checks passed
+promoted to 100%
+production smoke: All smoke checks passed
 ```
 
-What this proves: the API token can upload a version, promote it, and read deployment
-status. Token permission is the most likely first failure, because the token was scoped for
-`wrangler deploy` (Workers Scripts edit plus D1 edit) and this job calls three commands it
-never called before. Also read the log for the pre-promotion smoke step, which is where you
-find out whether this Worker gets preview URLs.
+What that settled, both of which were open questions rather than formalities:
 
-**B. The rollback round trip.** Roll production back one version and then forward again.
-Both versions are known good, so nothing is ever broken:
+- **The pre-promotion check is the real path, not the fallback.** The step ran rather than
+  skipping, so Cloudflare issued a preview URL for a version of this Worker in practice and not
+  merely in the version metadata. Bad code is checked before it takes traffic.
+- **The API token can do all three new things.** Reading deployment status, uploading a version,
+  and promoting one. It had been scoped for `wrangler deploy`, so this was the likeliest first
+  failure and turned out to be a non-issue.
+
+**Part B, the rollback round trip, has NOT been run.** `wrangler rollback` is the one command in
+this pipeline that has still never executed against this account. It is also the one whose
+failure you would discover during an incident. Rolling back to a known-good version and forward
+again never breaks production, so the drill is close to free:
+
+Roll production back one version and then forward again. Both versions are known good:
 
 ```sh
 live=$(pnpm exec wrangler deployments status --json | jq -r '.versions[0].version_id')
@@ -138,11 +147,11 @@ conditions, which have no test and are read rather than run. That is the residua
 removing the approval gate, and it is bounded: the worst case is a bad version that stays up
 until someone reads the red run.
 
-**Then remove the reviewer rule**, keeping secret scoping and the branch policy. The exact
-command is in the header of `deploy.yml`, and the reasoning is in
-[`repo-protection.md`](repo-protection.md#4-the-environment-gate-on-the-deploy-partly-done).
+The reviewer rule was removed on 2026-08-18, so merging `main` now ships with no human step.
+What that did and did not change, including who can still reach production, is in
+[`repo-protection.md`](repo-protection.md).
 
-## Why this is safe enough without the click
+## Why this is safe enough without the click (the reviewer rule was removed 2026-08-18)
 
 Every merge to `main` already carries a green `check` context on exactly the content being
 merged: branch protection requires it with `strict: true`, so a pull request must be up to

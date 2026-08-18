@@ -71,39 +71,52 @@ name: Deploy Worker
 #   - Anything an unauthenticated read cannot see. A full authenticated `initialize`
 #     plus `tools/list` needs a magic-link round trip and is not scripted.
 #
-# THE `production` ENVIRONMENT GATE
-# ---------------------------------
-# The job runs in the `production` environment, which does three things:
+# THE `production` ENVIRONMENT
+# --------------------------
+# The job runs in the `production` environment, which now does two things:
 #
-#   1. Required reviewers - the job waits in "Waiting" until a maintainer approves.
-#   2. Secret scoping - CLOUDFLARE_API_TOKEN lives in this environment rather than at
+#   1. Secret scoping - CLOUDFLARE_API_TOKEN lives in this environment rather than at
 #      repository level, so no other workflow can reach it, including one added by a
 #      pull request. Environment secrets take precedence over repository secrets.
-#   3. Deployment branch policy - deployments are restricted to protected branches,
+#   2. Deployment branch policy - deployments are restricted to protected branches,
 #      so a `workflow_dispatch` from a random branch cannot ship.
 #
-# Points 2 and 3 are permanent. Point 1 is the one the rollout above is meant to
-# replace: the reviewer rule exists because nothing else stood between a merge and
-# production, and steps 4 through 7 now do. Merges to `main` already carry a green
-# `check` context on exactly the merged content (branch protection requires it, with
-# `strict: true`), so the human click is re-reading code that CI has already run.
+# It used to do a third: a required-reviewer rule that held every deploy until a
+# maintainer clicked approve. **That was removed on 2026-08-18.** Merging `main` now
+# ships, with no human step.
 #
-# To make merges ship without waiting, once a rollback has been seen to work
-# (docs/ops/deploy-and-rollback.md has the drill), drop ONLY the reviewer rule and
-# keep the other two:
+# Why that is safe enough, in the order the arguments actually matter:
+#
+#   - Nothing reaches `main` without a code-owner review. `.github/CODEOWNERS` makes
+#     the maintainer the owner of `*`, and `require_code_owner_reviews` is on, so every
+#     pull request from anyone on any path needs that review before it can merge. That
+#     is the control that keeps outside contributions out of production, and it is
+#     untouched by removing the deploy gate. The gate was asking for a second approval
+#     of code the same person had already approved as a reviewer.
+#   - Nothing reaches `main` on a red or stale check any more, INCLUDING from an admin.
+#     The ruleset "main: required checks are not bypassable" carries an empty
+#     bypass_actors list, so `check` and `cla` must pass and the branch must be up to
+#     date. `enforce_admins` could not do this: it is all-or-nothing and would also
+#     apply the review requirement to the sole code owner, who cannot approve their own
+#     pull request. See docs/ops/repo-protection.md.
+#   - The rollout below checks itself and undoes itself. That covers a version that
+#     fails to boot or fails its OAuth surface. It does NOT cover a merge that is
+#     simply wrong, which is what review is for.
+#
+# To put the gate back, add a required-reviewer rule to the environment:
 #
 #   gh api -X PUT repos/isomorphic-team/isomorphic-app/environments/production \
 #     --input - <<JSON
-#   { "wait_timer": 0,
+#   { "wait_timer": 0, "prevent_self_review": false,
+#     "reviewers": [{"type":"User","id":$(gh api users/isomorphic-12 --jq .id)}],
 #     "deployment_branch_policy": {"protected_branches": true,
 #                                  "custom_branch_policies": false} }
 #   JSON
 #
-# To put it back, add the reviewers array again:
-#     "reviewers": [{"type":"User","id":$(gh api users/isomorphic-12 --jq .id)}],
-# with `prevent_self_review` false while there is one maintainer, or nobody can
-# approve a deploy at all. Full reasoning and the rest of the hardening checklist:
-# docs/ops/repo-protection.md
+# `prevent_self_review` must stay false while there is one maintainer, or nobody can
+# approve a deploy at all. Note that omitting the `reviewers` key does NOT clear an
+# existing rule; pass an explicit empty array. Full reasoning and the rest of the
+# hardening checklist: docs/ops/repo-protection.md
 
 on:
   push:

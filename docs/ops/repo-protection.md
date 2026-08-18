@@ -45,7 +45,7 @@ Turn on:
 | Require branches to be up to date       | Catches a change that passes alone and fails against current `main`.                                                     |
 | Require conversation resolution         | Cheap, and stops a review comment being merged past.                                                                     |
 | Block force pushes and deletions        | Already on.                                                                                                              |
-| Do not include administrators (for now) | With one maintainer, enforcing on admins means locking yourself out of a hotfix. Revisit when there are two of you.      |
+| Do not include administrators (for now) | See the note directly below. This stays off, and a separate ruleset covers what it was wanted for.                       |
 
 ```sh
 gh api -X PUT repos/isomorphic-team/isomorphic-app/branches/main/protection \
@@ -66,6 +66,55 @@ gh api -X PUT repos/isomorphic-team/isomorphic-app/branches/main/protection \
 JSON
 ```
 
+**"Include administrators" is a trap here, and the ruleset below is the way around it**
+(applied 2026-08-18). The reason to want it is narrow: required status checks should apply to
+the maintainer too. On 2026-08-18 a pull request was merged 54 seconds after a push, while its
+check was still running, and `main` went red. That is exactly what enforcing on admins would
+prevent.
+
+It also cannot be used. `enforce_admins` is all or nothing: it applies EVERY rule above to
+admins, including `required_approving_review_count: 1` with `require_code_owner_reviews: true`.
+`CODEOWNERS` names one person, GitHub does not allow approving your own pull request, and there
+is no second code owner. So turning it on does not tighten the checks; it makes the repository
+unmergeable by the only person who can merge.
+
+Rulesets do not have that problem. They apply to admins **by default**, and exemptions are
+per-ruleset via `bypass_actors` rather than a single repo-wide switch. So one narrow ruleset
+carrying only the status-check rule, with an empty bypass list, gets the half that was wanted
+and leaves reviews alone:
+
+```sh
+gh api -X POST repos/isomorphic-team/isomorphic-app/rulesets --input - <<'JSON'
+{
+  "name": "main: required checks are not bypassable",
+  "target": "branch",
+  "enforcement": "active",
+  "bypass_actors": [],
+  "conditions": { "ref_name": { "include": ["~DEFAULT_BRANCH"], "exclude": [] } },
+  "rules": [
+    { "type": "required_status_checks",
+      "parameters": {
+        "strict_required_status_checks_policy": true,
+        "required_status_checks": [{ "context": "check" }, { "context": "cla" }]
+      } }
+  ]
+}
+JSON
+```
+
+Confirm it binds you rather than politely suggesting: the response carries
+`"current_user_can_bypass": "never"`.
+
+Rulesets and classic branch protection stack, and the most restrictive wins. That layering is
+the entire point: classic protection keeps `enforce_admins: false` so the maintainer merges
+without a self-approval, while the ruleset makes the checks unskippable for everyone including
+the maintainer. Neither mechanism can express that on its own.
+
+The one cost is `strict_required_status_checks_policy`, which now binds the maintainer too: a
+branch must be up to date with `main` before it merges, with no override. That is the tax for
+"CI ran on exactly the merged content" being true rather than nearly true. Drop that one field
+if it becomes tiresome; keep the rest.
+
 ### 2. Actions: require approval for outside contributors
 
 **Settings → Actions → General → Fork pull request workflows from outside collaborators.**
@@ -83,76 +132,67 @@ packages permissions.** `ci.yml` already declares `permissions: contents: read` 
 but the repo-wide default should be the safe one so a future workflow does not silently
 inherit write.
 
-### 4. The environment gate on the deploy (done, and the reviewer rule is now optional)
+### 4. The environment gate on the deploy (reviewer rule removed 2026-08-18)
 
 `deploy.yml` runs on push to `main`, so **a merged pull request deploys to production
-immediately**. That was fine when every commit was yours. With outside contributions it means a
-merge you regret is live before you have finished reading the diff again.
+immediately, with no human step.** That is deliberate as of 2026-08-18.
 
-**Done:** the `production` environment exists, with all three rules live. The deployment branch
-policy limits it to protected branches, the `deploy` job declares `environment: production`, and
-the required-reviewer rule holds each deploy until a maintainer approves it. Runs appear under
-the repo's Deployments tab with the deployed origin attached.
+**What the `production` environment still does**, and these are permanent:
 
-The reviewer rule was applied once the repo went public. Environment protection rules are free
-on public repositories and unavailable on private ones whatever the plan; the API is blunt about
-it, rejecting the rule with `Failed to create the environment protection rule. Please ensure the
-billing plan supports the required reviewers protection rule.` even on a Team org.
+- **Secret scoping.** `CLOUDFLARE_API_TOKEN` lives in the environment, not at repository level,
+  so no other workflow can reach it, including one added by a pull request.
+- **Deployment branch policy.** Restricted to protected branches, so a `workflow_dispatch` from
+  an arbitrary branch cannot ship.
+
+**What it no longer does:** hold each deploy for a maintainer's approval. That rule was added
+when the repo went public and removed once `deploy.yml` gained a smoke check and an automated
+rollback. Two facts decided it. The click was a second approval of code the same person had
+already approved as a reviewer, and it was expensive: deploys on 2026-08-11 waited 1h27m and
+1h41m in "Waiting" before shipping.
+
+Removing it, keeping the other two:
 
 ```sh
-gh api -X PUT repos/isomorphic-team/isomorphic-app/environments/production --input - <<JSON
+gh api -X PUT repos/isomorphic-team/isomorphic-app/environments/production --input - <<'JSON'
 {
   "wait_timer": 0,
-  "prevent_self_review": false,
-  "reviewers": [{ "type": "User", "id": $(gh api users/isomorphic-12 --jq .id) }],
+  "reviewers": [],
   "deployment_branch_policy": { "protected_branches": true, "custom_branch_policies": false }
 }
 JSON
 ```
 
-`prevent_self_review` must stay `false` while there is one maintainer, or nobody can ever
-approve a deploy and `main` becomes undeployable. Flip it to `true` when there are two of you.
+**Pass `"reviewers": []` explicitly.** Omitting the key leaves an existing rule in place: the
+PUT succeeds, reports success, and changes nothing. Verify with
+`gh api repos/OWNER/REPO/environments/production --jq '[.protection_rules[].type]'`, which
+should return `["branch_policy"]` alone.
 
-**Whether to keep the reviewer rule is now a real choice**, because the thing it was standing in
-for got built. `deploy.yml` no longer calls `wrangler deploy`: it uploads a version, smoke checks
-it before promoting, and rolls back automatically if the promoted version fails its checks. The
-click is no longer the only thing between a merge and production.
+To restore the rule, PUT the same payload with a `reviewers` array and
+`"prevent_self_review": false`, which must stay false while there is one maintainer or nobody
+can approve a deploy at all.
 
-Two arguments for dropping it, one for keeping it:
+#### What stands between a stranger and production now
 
-- Merges already carry a green `check` context on exactly the merged content, since branch
-  protection requires it with `strict: true`. The approval was re-reading code CI had run.
-- It costs real time. Two of the deploys in August waited 1h27m and 1h41m in "Waiting", which is
-  the gap between merging and shipping for a one-maintainer project.
-- Against: the rollback covers a version that fails a smoke check, not a merge that is simply
-  wrong. Bad code that boots and answers correctly still ships instantly.
+Worth being precise about, because "we removed the deploy approval" sounds like more than it is.
+The deploy gate was never what kept outside contributions out; it sat one step later than the
+control that does.
 
-Drop **only** the reviewer rule, keeping the branch policy and the secret scoping, by re-PUTting
-the payload above without the `reviewers` key and without `prevent_self_review`. Run the drill in
-[`deploy-and-rollback.md`](deploy-and-rollback.md#the-drill-prove-the-rollback-before-removing-the-gate)
-first, because until a rollback has been seen to work on this account with this token, removing
-the gate trades a proven control for an unproven one.
+| Path to production       | Who can take it                                                                                                                                                                     |
+| ------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Merge a pull request     | Requires `check` + `cla` green, branch up to date, **and a code-owner review**. `CODEOWNERS` makes the maintainer the owner of `*`, so that means every pull request on every path. |
+| `workflow_dispatch`      | Repository collaborators with write access. Redeploys whatever is on `main`; it cannot ship unreviewed code.                                                                        |
+| Pull request from a fork | Nobody. `deploy.yml` has no `pull_request` trigger and fork pull requests receive no secrets.                                                                                       |
+| Direct push to `main`    | Nobody. A pull request is required.                                                                                                                                                 |
 
-**One hole this does not close.** `enforce_admins` is deliberately `false` (see the ruleset table
-above: with one maintainer, enforcing on admins locks you out of a hotfix). A direct push to
-`main` therefore skips the pull request, skips CI, and now deploys on its own. The smoke check
-and rollback still run on that push, so a version that does not boot is still caught and undone;
-what nobody checks is whether the code was any good. Keep using pull requests for anything that
-is not an emergency, and revisit when there are two of you.
+So the answer to "who can deploy" is "whoever can get a commit onto `main`", and that is the
+maintainer, via a review they were already performing.
 
-**Still to do, and it needs your hands because a secret cannot be read back:** move the
-Cloudflare token from repository scope into the environment, so no other workflow can reach it,
-including one introduced by a pull request.
-
-```sh
-gh secret set CLOUDFLARE_API_TOKEN --env production   # paste the same token
-gh secret delete CLOUDFLARE_API_TOKEN                 # only after the env one is set
-```
-
-Order matters. Environment secrets take precedence over repository secrets, so setting the
-environment one first means the deploy keeps working throughout and the delete is the last step
-rather than a window of breakage. Verify with a `workflow_dispatch` run before deleting the
-repository-scoped copy.
+**The residual risk is the maintainer's own merges, not contributors'.** With one code owner,
+a self-merge is reviewed by nobody and now ships instantly. The rollout's smoke check and
+rollback cover a version that fails to boot or loses its OAuth surface; they do not cover a
+change that boots fine and is wrong. That is the trade, and it is worth re-reading the day a
+second maintainer exists, at which point `prevent_self_review` and a real second review become
+available for free.
 
 ## What CI already defends against
 
