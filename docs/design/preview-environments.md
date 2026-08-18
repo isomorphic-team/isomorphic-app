@@ -33,10 +33,10 @@ bridge, or the `initialize` result is tested by merging it and watching prod.
 
 ## What the pipeline covers today
 
-| Stage        | Trigger        | Covers                                                                                                            | Blind to                         |
-| ------------ | -------------- | ----------------------------------------------------------------------------------------------------------------- | -------------------------------- |
+| Stage        | Trigger        | Covers                                                                                                             | Blind to                         |
+| ------------ | -------------- | ------------------------------------------------------------------------------------------------------------------ | -------------------------------- |
 | `ci.yml`     | every PR       | codegen sync, typecheck, every golden battery, both e2e batteries, UI suite, prettier, D1 migrations apply locally | anything needing a real origin   |
-| `deploy.yml` | push to `main` | D1 migrations `--remote`, version upload, smoke check, promote, automated rollback, behind the `production` gate  | pre-merge verification of either |
+| `deploy.yml` | push to `main` | D1 migrations `--remote`, version upload, smoke check, promote, automated rollback, behind the `production` gate   | pre-merge verification of either |
 
 The `deploy.yml` row changed on 2026-08-18 (see Promotion below). It now checks a real origin,
 which is the first thing in this pipeline that ever did, but only after the code has merged.
@@ -288,6 +288,7 @@ Verified against the Preview URLs docs on 2026-08-10.
   **Adding a Durable Object binding takes this away silently**, so the preview workflow should
   read `preview_url` off the upload output and say so when it is absent, exactly as `deploy.yml`
   does, rather than assuming a URL it was given last time.
+
 - **Alias naming:** lowercase letters, numbers, dashes, beginning with a letter, and alias plus
   Worker name under 63 characters. `pr-123-isomorphic-mcp-preview` is 29.
 - **1000 most recent aliases retained.** No cleanup job needed.
@@ -332,6 +333,7 @@ The first two were done on 2026-08-18 alongside the promotion work; the last two
   split now, each attempt bounded by `timeout` and retried, with `timeout-minutes` on both jobs.
   apt has no timeout of its own, and neither workflow had one, so the step would have run to
   GitHub's six-hour default.
+
 - **`test:e2e-librarian --github` runs nowhere automatic.** Still open. It is the only coverage of
   the GitHub adapter itself, and it is maintainer-run by hand. A nightly schedule, or a
   `run-github-e2e` label, would gate `githubStore` changes without touching fork safety.
