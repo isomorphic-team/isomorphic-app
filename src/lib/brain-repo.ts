@@ -151,7 +151,13 @@ export interface BrainStore {
 		repo: RepoRef,
 		entries: TreeEntry[]
 	): Promise<{ pages: PageContent[]; truncated: boolean }>;
-	readFile(repo: RepoRef, path: string): Promise<{ content: string; sha: string } | null>;
+	// `ref` pins the read to one branch/commit. Write paths normally capture HEAD
+	// first so every blob they derive a commit from belongs to that revision.
+	readFile(
+		repo: RepoRef,
+		path: string,
+		ref?: string
+	): Promise<{ content: string; sha: string } | null>;
 	// One file's raw bytes as base64. Backs read_media; null when absent.
 	readBinary(repo: RepoRef, path: string): Promise<BinaryContent | null>;
 	findOpenConfigPr(repo: RepoRef): Promise<string | undefined>;
@@ -170,7 +176,7 @@ export function githubStore(octokit: Octokit): BrainStore {
 		repoWritePolicy: (repo) => repoWritePolicy(octokit, repo),
 		listTree: (repo, head, opts) => listTree(octokit, repo, head, opts),
 		fetchPages: (repo, entries) => fetchPages(octokit, repo, entries),
-		readFile: (repo, path) => readFile(octokit, repo, path),
+		readFile: (repo, path, ref) => readFile(octokit, repo, path, ref),
 		readBinary: (repo, path) => readBinary(octokit, repo, path),
 		findOpenConfigPr: (repo) => findOpenConfigPr(octokit, repo),
 		listCommits: (repo, opts) => listCommits(octokit, repo, opts),
@@ -356,10 +362,11 @@ async function fetchPages(
 async function readFile(
 	octokit: Octokit,
 	repo: RepoRef,
-	path: string
+	path: string,
+	ref?: string
 ): Promise<{ content: string; sha: string } | null> {
 	try {
-		const { data } = await octokit.rest.repos.getContent({ ...repo, path });
+		const { data } = await octokit.rest.repos.getContent({ ...repo, path, ...(ref && { ref }) });
 		if (Array.isArray(data) || data.type !== 'file') return null;
 		return { content: base64ToUtf8(data.content), sha: data.sha };
 	} catch (err) {

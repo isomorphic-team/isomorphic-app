@@ -357,12 +357,15 @@ platform-db --remote` **before** `wrangler deploy` (schema-first), so a merge to
 - **Writes are WRITE-THROUGH** (issue #31). A successful DIRECT commit upserts the index rows
   for exactly the pages its bundle touched (`writeThroughIndex` in `brain-index.ts`, called from
   the `commitBundle` chokepoint in `librarian.ts`) and advances `indexed_commit_sha`, so the
-  read an agent makes to verify a write costs one `getRef`, not an incremental reindex. Three
-  guard rails: only when the index was already CURRENT at the commit's base revision (otherwise
-  other pages changed under it and the next read reconciles as usual), never on the PR path (the
-  branch hasn't moved — `WriteOutcome.commitSha` is direct-mode only), and failures are swallowed
-  (the commit landed regardless). Blob shas are computed with Web Crypto SHA-1 (`gitBlobSha`),
-  so the fs backend's token shas simply self-heal on a later reindex. The write tools'
+  read an agent makes to verify a write costs one `getRef`, not an incremental reindex. The
+  replacement and freshness marker land in ONE conditional D1 transaction: every statement
+  requires the index to still be at the commit's base revision and exact row-shape version, so
+  a concurrent reconcile/write makes the whole batch a no-op rather than mixing generations.
+  Bundles over the conservative 40-statement transaction budget skip write-through and reconcile
+  normally on the next read. PR writes do too (the branch has not moved), as does the fs backend:
+  its revision is a digest of the mutable working tree, not an immutable commit this bundle alone
+  produced. Failures are swallowed because the source-of-truth commit already landed. Blob shas
+  are computed with Web Crypto SHA-1 (`gitBlobSha`). The write tools'
   descriptions also carry the timeout-retry guidance (read before retry; a retried create fails
   if it landed). Idempotency keys were considered and deferred — see `docs/roadmap.md`.
 - **Queryable frontmatter** (`brain_page_fields`, Phase 1 of the derived-views PRD): every

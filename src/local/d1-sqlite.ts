@@ -5,8 +5,8 @@
 // test-index each carried a near-identical copy of this shim; this is the one copy.
 //
 // Only the surface the index and the org tables use: prepare/bind, first, all, run,
-// batch. `batch` is sequential rather than transactional, matching how the tools use
-// it (idempotent upserts).
+// batch. D1 batches are transactional, so the shim is too; write-through relies on
+// all page rows and the freshness marker committing or rolling back together.
 
 import { DatabaseSync } from 'node:sqlite';
 import { readFileSync, readdirSync } from 'node:fs';
@@ -42,8 +42,8 @@ export function localD1(path = ':memory:'): LocalDb {
 			first: async () => sqlite.prepare(sql).get(...(params as [])) ?? null,
 			all: async () => ({ results: sqlite.prepare(sql).all(...(params as [])) }),
 			run: async () => {
-				sqlite.prepare(sql).run(...(params as []));
-				return { success: true };
+				const result = sqlite.prepare(sql).run(...(params as []));
+				return { success: true, meta: { changes: Number(result.changes) } };
 			}
 		};
 	}
@@ -51,8 +51,16 @@ export function localD1(path = ':memory:'): LocalDb {
 	const db = {
 		prepare: (sql: string) => statement(sql),
 		batch: async (stmts: { run: () => Promise<unknown> }[]) => {
-			for (const s of stmts) await s.run();
-			return [];
+			const results: unknown[] = [];
+			sqlite.exec('BEGIN');
+			try {
+				for (const s of stmts) results.push(await s.run());
+				sqlite.exec('COMMIT');
+				return results;
+			} catch (err) {
+				sqlite.exec('ROLLBACK');
+				throw err;
+			}
 		}
 	} as unknown as D1Database;
 

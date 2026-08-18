@@ -1460,11 +1460,11 @@ export function registerLibrarianTools(
 				if (invalid) return fail(invalid);
 			}
 
-			// Independent reads at the same head — run them together.
-			const [head, existing] = await Promise.all([
-				store.getHead(repoArgs, config.defaultBranch),
-				store.readFile(repoArgs, target)
-			]);
+			// Capture the commit base before reading authoritative content. If the
+			// branch moves afterwards, updateRef rejects this write instead of letting
+			// content read from an older revision overwrite the newer commit.
+			const head = await store.getHead(repoArgs, config.defaultBranch);
+			const existing = await store.readFile(repoArgs, target, head.commitSha);
 			const wantMode = mode ?? 'upsert';
 
 			// New path → create. Guard against an "update"-only intent and confirm editability.
@@ -1601,11 +1601,8 @@ export function registerLibrarianTools(
 				return fail(`"${path}" is source material — it can't be moved.`);
 			if (isToolMaintained(path, config)) return fail(`"${path}" is maintained automatically.`);
 
-			// Independent reads — run them together.
-			const [existing, head] = await Promise.all([
-				store.readFile(repoArgs, path),
-				store.getHead(repoArgs, config.defaultBranch)
-			]);
+			const head = await store.getHead(repoArgs, config.defaultBranch);
+			const existing = await store.readFile(repoArgs, path, head.commitSha);
 			if (!existing) return fail(`"${path}" does not exist.`);
 
 			const { frontmatter, body } = parseFrontmatter(existing.content);
@@ -1745,11 +1742,8 @@ export function registerLibrarianTools(
 			if (!isContentPath(path, config))
 				return fail(`"${path}" is outside this brain's editable content.`);
 
-			// Independent reads — run them together.
-			const [existing, head] = await Promise.all([
-				store.readFile(repoArgs, path),
-				store.getHead(repoArgs, config.defaultBranch)
-			]);
+			const head = await store.getHead(repoArgs, config.defaultBranch);
+			const existing = await store.readFile(repoArgs, path, head.commitSha);
 			if (!existing) return fail(`"${path}" does not exist.`);
 
 			const title = pageTitle(path, existing.content);

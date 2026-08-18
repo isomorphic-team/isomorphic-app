@@ -315,10 +315,12 @@ export function fsBrainStore(opts: FsStoreOptions): BrainStore {
 					'This brain is configured for pull-request writes, which a local brain cannot open. Set writes.mode to "direct" in .isomorphic.json, or serve this brain from GitHub.'
 				);
 			}
-			const res = await commit(repo, o);
-			// The tree digest, matching what branchCommitSha reports — the identifier
-			// the write-through index update records (see WriteOutcome.commitSha).
-			return { commitSha: res.head.commitSha };
+			await commit(repo, o);
+			// The local revision is a digest of the mutable working tree, not the git
+			// commit this call created. An external edit can enter that digest without
+			// being in this bundle, so local writes reconcile on the next read instead
+			// of claiming a safe write-through revision.
+			return {};
 		}
 	};
 }

@@ -20,7 +20,7 @@
 import type { D1Database, D1PreparedStatement } from '@cloudflare/workers-types';
 import { type RepoRef, type TreeEntry, type BrainStore, MAX_SCAN_PAGES } from './brain-repo.ts';
 import { classifyMdLink } from './links.ts';
-import { type BrainConfig, CONFIG_PATH, isContentPath } from './brain-config.ts';
+import { type BrainConfig, CONFIG_PATH, isContentPath, loadIndexConfig } from './brain-config.ts';
 import {
 	parseFrontmatter,
 	extractLinks,
@@ -228,16 +228,15 @@ export async function ensureFresh(
 		return { truncated: !!meta.truncated };
 	}
 
-	// Stale (or never built) → (re)index. getHead gives the tree sha listTree needs.
-	// The caller's config is trusted as-is: every runtime loads it fresh per request
-	// (Worker session cache, local runtime, tests), so a merged "configure" PR is
-	// already reflected by the time this runs. The stale path used to re-read
-	// .isomorphic.json + the write policy here — three GitHub calls on every stale
-	// read — to catch a config commit landing MID-request, which the next read
-	// picks up anyway.
+	// Stale (or never built) → (re)index. Read the content-shape config from this
+	// exact revision: a config commit can land after the request context was built,
+	// and recording that commit with rows derived under the prior config would make
+	// the mismatch look permanently fresh. This is one pinned blob read, not the old
+	// three-call config + write-policy reload.
 	const head = await store.getHead(repo, config.defaultBranch);
+	const freshConfig = await loadIndexConfig(store, repo, head.commitSha, config);
 	const entries = (await store.listTree(repo, head)).filter(
-		(e) => e.path.endsWith('.md') && isContentPath(e.path, config)
+		(e) => e.path.endsWith('.md') && isContentPath(e.path, freshConfig)
 	);
 	const truncated = entries.length > MAX_SCAN_PAGES;
 
@@ -257,15 +256,20 @@ export async function ensureFresh(
 		// that its initial index can't be built in one request would otherwise fail,
 		// write no meta row, and take the !meta path again on the next read — wedged
 		// before it ever had an index, with nothing recorded to resume from.
-		const built = await fullBuild(db, store, repo, brainId, entries, config);
+		const built = await fullBuild(db, store, repo, brainId, entries, freshConfig);
 		if (!built) indexedSha = null;
 	} else {
-		const reconciled = await incrementalReindex(db, store, repo, brainId, entries, config);
+		const reconciled = await incrementalReindex(db, store, repo, brainId, entries, freshConfig);
 		if (!reconciled) indexedSha = meta.indexed_commit_sha;
 		// The incremental pass only rewrote CHANGED pages' rows; on a row-shape bump
 		// the unchanged pages still need their new rows built from stored content.
 		if ((meta.schema_version ?? 0) < INDEX_SCHEMA_VERSION) {
-			rebuildCursor = await rebuildDerivedFromStore(db, brainId, config, meta.rebuild_cursor ?? '');
+			rebuildCursor = await rebuildDerivedFromStore(
+				db,
+				brainId,
+				freshConfig,
+				meta.rebuild_cursor ?? ''
+			);
 			if (rebuildCursor !== null) schemaVersion = meta.schema_version ?? 0;
 		}
 	}
@@ -494,7 +498,7 @@ export async function writeThroughIndex(
 			rebuild_cursor: string | null;
 		}>();
 	if (!meta || meta.indexed_commit_sha !== baseSha) return false;
-	if ((meta.schema_version ?? 0) < INDEX_SCHEMA_VERSION || meta.rebuild_cursor) return false;
+	if (meta.schema_version !== INDEX_SCHEMA_VERSION || meta.rebuild_cursor) return false;
 
 	// Only content pages are indexed rows; the log, config, ledgers and attachments
 	// in the same bundle are invisible to the index, so they need no rows — the sha
@@ -503,24 +507,132 @@ export async function writeThroughIndex(
 	const stmts: D1PreparedStatement[] = [];
 	for (const w of writes) {
 		if (!isPage(w.path) || w.encoding === 'base64') continue;
-		stmts.push(...pageUpsert(db, brainId, w.path, w.content, await gitBlobSha(w.content), config));
+		const blobSha = await gitBlobSha(w.content);
+		// Every mutation carries the same generation guard. D1 executes one batch as
+		// one transaction, so a concurrent reconcile/write either leaves this base
+		// current and the whole replacement lands, or makes every statement a no-op.
+		stmts.push(
+			db
+				.prepare(
+					`INSERT OR REPLACE INTO brain_pages (brain_id, path, title, blob_sha, content)
+					 SELECT ?1, ?2, ?3, ?4, ?5 WHERE EXISTS (
+					   SELECT 1 FROM brain_index_meta
+					   WHERE brain_id = ?1 AND indexed_commit_sha = ?6
+					     AND schema_version = ?7 AND rebuild_cursor IS NULL
+					 )`
+				)
+				.bind(
+					brainId,
+					w.path,
+					pageTitle(w.path, w.content),
+					blobSha,
+					w.content,
+					baseSha,
+					INDEX_SCHEMA_VERSION
+				),
+			db
+				.prepare(
+					`DELETE FROM brain_links WHERE brain_id = ?1 AND source = ?2 AND EXISTS (
+					   SELECT 1 FROM brain_index_meta
+					   WHERE brain_id = ?1 AND indexed_commit_sha = ?3
+					     AND schema_version = ?4 AND rebuild_cursor IS NULL
+					 )`
+				)
+				.bind(brainId, w.path, baseSha, INDEX_SCHEMA_VERSION),
+			db
+				.prepare(
+					`DELETE FROM brain_page_fields WHERE brain_id = ?1 AND path = ?2 AND EXISTS (
+					   SELECT 1 FROM brain_index_meta
+					   WHERE brain_id = ?1 AND indexed_commit_sha = ?3
+					     AND schema_version = ?4 AND rebuild_cursor IS NULL
+					 )`
+				)
+				.bind(brainId, w.path, baseSha, INDEX_SCHEMA_VERSION)
+		);
+		for (const l of parseLinks(w.content)) {
+			stmts.push(
+				db
+					.prepare(
+						`INSERT OR REPLACE INTO brain_links (brain_id, source, raw_target, kind, cnt)
+						 SELECT ?1, ?2, ?3, ?4, ?5 WHERE EXISTS (
+						   SELECT 1 FROM brain_index_meta
+						   WHERE brain_id = ?1 AND indexed_commit_sha = ?6
+						     AND schema_version = ?7 AND rebuild_cursor IS NULL
+						 )`
+					)
+					.bind(brainId, w.path, l.rawTarget, l.kind, l.cnt, baseSha, INDEX_SCHEMA_VERSION)
+			);
+		}
+		for (const f of fieldRowsOf(w.content, config)) {
+			stmts.push(
+				db
+					.prepare(
+						`INSERT OR REPLACE INTO brain_page_fields (brain_id, path, key, value, value_num)
+						 SELECT ?1, ?2, ?3, ?4, ?5 WHERE EXISTS (
+						   SELECT 1 FROM brain_index_meta
+						   WHERE brain_id = ?1 AND indexed_commit_sha = ?6
+						     AND schema_version = ?7 AND rebuild_cursor IS NULL
+						 )`
+					)
+					.bind(brainId, w.path, f.key, f.value, f.num, baseSha, INDEX_SCHEMA_VERSION)
+			);
+		}
 	}
 	for (const p of deletes) {
 		if (!isPage(p)) continue;
 		stmts.push(
-			db.prepare(`DELETE FROM brain_pages WHERE brain_id = ?1 AND path = ?2`).bind(brainId, p),
-			db.prepare(`DELETE FROM brain_links WHERE brain_id = ?1 AND source = ?2`).bind(brainId, p),
-			db.prepare(`DELETE FROM brain_page_fields WHERE brain_id = ?1 AND path = ?2`).bind(brainId, p)
+			db
+				.prepare(
+					`DELETE FROM brain_pages WHERE brain_id = ?1 AND path = ?2 AND EXISTS (
+					   SELECT 1 FROM brain_index_meta
+					   WHERE brain_id = ?1 AND indexed_commit_sha = ?3
+					     AND schema_version = ?4 AND rebuild_cursor IS NULL
+					 )`
+				)
+				.bind(brainId, p, baseSha, INDEX_SCHEMA_VERSION),
+			db
+				.prepare(
+					`DELETE FROM brain_links WHERE brain_id = ?1 AND source = ?2 AND EXISTS (
+					   SELECT 1 FROM brain_index_meta
+					   WHERE brain_id = ?1 AND indexed_commit_sha = ?3
+					     AND schema_version = ?4 AND rebuild_cursor IS NULL
+					 )`
+				)
+				.bind(brainId, p, baseSha, INDEX_SCHEMA_VERSION),
+			db
+				.prepare(
+					`DELETE FROM brain_page_fields WHERE brain_id = ?1 AND path = ?2 AND EXISTS (
+					   SELECT 1 FROM brain_index_meta
+					   WHERE brain_id = ?1 AND indexed_commit_sha = ?3
+					     AND schema_version = ?4 AND rebuild_cursor IS NULL
+					 )`
+				)
+				.bind(brainId, p, baseSha, INDEX_SCHEMA_VERSION)
 		);
 	}
-	if (stmts.length) await runBatched(db, stmts);
-	await db
-		.prepare(
-			`UPDATE brain_index_meta SET indexed_commit_sha = ?2, updated_at = ?3 WHERE brain_id = ?1`
-		)
-		.bind(brainId, landedSha, Date.now())
-		.run();
-	return true;
+	stmts.push(
+		db
+			.prepare(
+				`UPDATE brain_index_meta
+				 SET indexed_commit_sha = ?2,
+				     truncated = CASE WHEN (
+				       SELECT COUNT(*) FROM brain_pages WHERE brain_id = ?1
+				     ) > ?3 THEN 1 ELSE 0 END,
+				     updated_at = ?4
+				 WHERE brain_id = ?1 AND indexed_commit_sha = ?5
+				   AND schema_version = ?6 AND rebuild_cursor IS NULL`
+			)
+			.bind(brainId, landedSha, MAX_SCAN_PAGES, Date.now(), baseSha, INDEX_SCHEMA_VERSION)
+	);
+
+	// A single D1 batch is one transaction. Never split write-through across
+	// transactions: a partial page replacement whose blob sha already advanced can
+	// look unchanged to incremental reconciliation. Oversized bundles simply retain
+	// the old behavior and reconcile on the next read.
+	if (stmts.length > BATCH_CHUNK) return false;
+	const results = await db.batch(stmts);
+	const final = results[results.length - 1] as { meta?: { changes?: number } } | undefined;
+	return (final?.meta?.changes ?? 0) > 0;
 }
 
 // Mark a brain's index stale so the next read forces a reconcile against HEAD.

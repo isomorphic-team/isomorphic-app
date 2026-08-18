@@ -173,3 +173,37 @@ export async function loadBrainConfig(store: BrainStore, repo: RepoRef): Promise
 		sourceOfTruth: raw.sourceOfTruth === 'source' ? 'source' : 'app'
 	};
 }
+
+// Reload only the settings that shape the derived content index, pinned to the
+// exact commit whose tree will be indexed. The caller already resolved branch
+// protection and merge policy; repeating that work here used to cost two extra
+// GitHub calls on every stale read. A missing config at this revision means the
+// defaults, while a failed read keeps the caller's known-good config.
+export async function loadIndexConfig(
+	store: BrainStore,
+	repo: RepoRef,
+	ref: string,
+	fallback: BrainConfig
+): Promise<BrainConfig> {
+	let file: Awaited<ReturnType<BrainStore['readFile']>>;
+	try {
+		file = await store.readFile(repo, CONFIG_PATH, ref);
+	} catch {
+		return fallback;
+	}
+	let raw: ConfigFile = {};
+	if (file) {
+		try {
+			raw = JSON.parse(file.content) as ConfigFile;
+		} catch {
+			raw = {};
+		}
+	}
+	const rawFields = raw.index?.fields ?? raw.indexedFields;
+	return {
+		...fallback,
+		paths: parsePaths(raw),
+		indexedFields: Array.isArray(rawFields) ? stringList(rawFields, []) : null,
+		sourceOfTruth: raw.sourceOfTruth === 'source' ? 'source' : 'app'
+	};
+}
