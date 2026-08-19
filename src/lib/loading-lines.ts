@@ -62,9 +62,8 @@ const MAX_SUBJECT = 36;
 
 const SLOT_RE = /\{(brain|org|orgs|subject|pages)\}/g;
 
-// Lines that name something real. Ordered before the pool below, so the rotation gets
-// specific before it gets playful: the second thing you read is about YOUR brain, and
-// only a wait that outlasts that earns a joke.
+// Lines that name something real. One of these opens the rotation, and every other
+// line after that is one, alternating with the library lines below.
 const WARM: Record<LoadingTask, string[]> = {
 	connect: ['Finding {brain}…', 'Shaking hands…', 'Opening a line to {brain}…'],
 	page: ['Finding {subject}…', 'Turning to {subject}…', 'Fetching {subject} from {brain}…'],
@@ -93,66 +92,69 @@ const WARM: Record<LoadingTask, string[]> = {
 	generic: ['Asking {brain}…', 'Reading {pages} pages…']
 };
 
-// The tail every task falls back to: brain-shaped, name-free, and safe anywhere.
-// Deliberately librarian rather than machine. This product's job is a wiki someone
-// else has to keep, and "compiling" would be a lie about what is happening.
-// Long on purpose. A rotation shows at most three or four of these, and a person who
-// waits several times in a session should not meet the same joke twice.
+// The name-free half of every rotation, interleaved with the specific lines above
+// rather than waiting behind them (see loadingLines). Librarian rather than machine:
+// this product's job is a wiki someone else has to keep, and "compiling" would be a
+// lie about what is happening.
+//
+// The joke has to land on somebody who has only ever been a library PATRON, so the
+// vocabulary stops at what a person meets from the public side of the desk. The
+// archival trade words that were here first (finding aids, cotton gloves, folder
+// ribbons, microfiche) named real things and read as showing off.
+//
+// Long on purpose. A rotation shows two or three of these, and somebody who waits
+// several times in one session should not meet the same joke twice.
 const POOL: string[] = [
-	// The librarian, and the reading room
+	// The desk. Most of what a librarian actually does is answer the same questions.
 	'Consulting the librarian…',
 	'Asking at the reference desk…',
 	'The librarian is looking it up…',
+	'Asking whether you tried the catalogue…',
+	'Whispering the answer…',
 	'Keeping our voice down…',
-	'Tiptoeing past the reading room…',
-	'Asking around…',
-	// The stacks
+	'Shushing somebody…',
+	// The patron. Every one of these is a thing that happens to a library daily.
+	'It had a blue cover, apparently…',
+	'Somebody shelved it wrong…',
+	'Somebody else has it out…',
+	'Quietly waiving your late fee…',
+	'Checking how overdue this is…',
+	'It came back in the book drop…',
+	'Unjamming the printer…',
+	'Sharpening a very small pencil…',
+	'The returns cart is never empty…',
+	// The stacks.
 	'Following a wikilink into the stacks…',
 	'Retrieving it from the stacks…',
 	'Second shelf from the top…',
 	'Following the spine labels…',
-	'Somewhere in the periodicals…',
-	'Behind the glass, with the rare books…',
+	'Somewhere in the 300s…',
 	'Shelving a stray thought…',
 	'Reshelving as we go…',
-	'Checking the returns cart…',
-	// The catalogue
+	// The catalogue.
 	'Checking the index cards…',
 	'Consulting the card catalogue…',
 	'Filed under something sensible…',
 	'Looking for the misfiled one…',
 	'Cross-referencing…',
 	'Untangling the backlinks…',
-	// The archive proper
-	'Dusting off the archive…',
-	'Waking the archivist…',
-	'Pulling the box from storage…',
-	'Untying the folder ribbon…',
-	'Putting the cotton gloves on…',
-	'Rewinding the microfiche…',
-	'Consulting the finding aid…',
-	// The book itself
+	// The book itself.
 	'Chasing a footnote…',
 	'Reading the margins…',
-	'Reading someone else’s underlining…',
-	'Checking the errata…',
-	'Turning to the appendix…',
+	'Reading somebody else’s underlining…',
 	'Unfolding the map at the back…',
 	'Finding where the bookmark went…',
 	'Blowing the dust off the spine…',
+	'Stamping the due date…',
 	'Squinting at the handwriting…',
+	'Dusting off the archive…',
 	'Turning the page…'
 ];
 
-// A couple of tasks want a tail of their own, because the generic one would be about
-// the wrong thing entirely.
+// A few tasks want library lines of their own, because the general ones would be
+// about the wrong thing entirely. Mixed into the same queue as POOL.
 const POOL_BY_TASK: Partial<Record<LoadingTask, string[]>> = {
-	graph: [
-		'Pulling the threads apart…',
-		'Letting the nodes settle…',
-		'Drawing the concordance…',
-		'Untangling the backlinks…'
-	],
+	graph: ['Pulling the threads apart…', 'Letting the nodes settle…', 'Untangling the backlinks…'],
 	create: [
 		'Deciding where it lives…',
 		'Choosing a good name…',
@@ -161,7 +163,7 @@ const POOL_BY_TASK: Partial<Record<LoadingTask, string[]>> = {
 	],
 	// A circulation desk is what this tab is: who borrowed what, how often.
 	analytics: ['Checking the circulation records…', 'Carrying the one…', 'Squaring the columns…'],
-	activity: ['Reading the accession log…', 'Checking the date stamps…'],
+	activity: ['Reading the due-date card…', 'Checking the date stamps…', 'Who had this out…'],
 	members: ['Counting the library cards…', 'Reading the sign-in book…'],
 	sharing: ['Seeing who holds a card…', 'Checking the lending rules…']
 };
@@ -246,24 +248,39 @@ function render(template: string, values: Record<string, string | undefined>): s
 }
 
 /**
- * The phrases that FOLLOW the caller's own label, warmest first.
+ * The phrases that FOLLOW the caller's own label.
  *
- * Never empty (the pool names nothing and is always eligible), never contains the
- * label itself, and never contains a line with an unfilled slot.
+ * ALTERNATING: one line about this brain, then one about the library, then back.
+ * The library lines are not a fallback the rotation reaches only after the specific
+ * ones run out — that ordering spent the whole of a normal wait on facts and put the
+ * humor somewhere almost nobody got to. Interleaving means a rotation reads as one
+ * voice that happens to know your brain's name, rather than a personalized part
+ * followed by a generic part.
+ *
+ * It still OPENS specific, because the second thing read (the label is first) should
+ * be about the thing being waited on. With no facts at all, the specific queue is
+ * empty and the whole rotation comes from the library, which is the cold-open case.
+ *
+ * Never empty, never contains the label itself, never contains an unfilled slot.
  */
 export function loadingLines(task: LoadingTask, facts: LoadingFacts = {}, seed = 0): string[] {
 	const values = slotValues(facts);
 	const next = rng(hashSeed(`${task}|${facts.subject ?? ''}|${facts.brain ?? ''}`) ^ (seed | 0));
 
-	const warm = shuffled(WARM[task] ?? WARM.generic, next)
+	const specific = shuffled(WARM[task] ?? WARM.generic, next)
 		.map((t) => render(t, values))
 		.filter((l): l is string => l !== null);
-	const tail = shuffled([...(POOL_BY_TASK[task] ?? []), ...POOL], next);
+	const library = shuffled([...(POOL_BY_TASK[task] ?? []), ...POOL], next);
 
 	const out: string[] = [];
-	for (const line of [...warm, ...tail]) {
-		if (out.length >= MAX_LINES) break;
-		if (!out.includes(line)) out.push(line);
+	const queues = [specific, library];
+	let turn = 0;
+	while (out.length < MAX_LINES && (queues[0].length || queues[1].length)) {
+		// Take from the other queue when this one is spent, so a task with two specific
+		// lines still fills a rotation instead of stopping at two.
+		const line = (queues[turn].length ? queues[turn] : queues[1 - turn]).shift();
+		if (line && !out.includes(line)) out.push(line);
+		turn = 1 - turn;
 	}
 	return out;
 }

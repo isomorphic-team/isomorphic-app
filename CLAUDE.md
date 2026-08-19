@@ -813,9 +813,13 @@ the caller's own literal label first and then rotates through phrases from
 - **The label leads, always.** The rotation starts 2.4s in, so a load that resolves
   quickly reads exactly as it did before: nothing whimsical is ever the only thing on
   screen while someone waits for an answer, and the personality is spent only on waits
-  long enough to feel like waits. The lines then go specific before playful, so the
-  second thing read names the user's own brain and only a longer wait reaches the
-  library jokes.
+  long enough to feel like waits.
+- **The two kinds of line ALTERNATE**, one naming this brain and the next naming the
+  library, opening on a specific one. The name-free lines were a fallback queued behind
+  the specific ones at first, which spent a normal-length wait entirely on facts and put
+  the humor past where almost anybody got to. Interleaved, a rotation reads as one voice
+  that happens to know the brain's name. `pnpm test:loading` pins the SLSLSL shape, so a
+  change back to appending fails rather than quietly draining the humor out.
 - **A slot is a REQUIREMENT.** A template naming `{brain}` / `{org}` / `{subject}` /
   `{pages}` is ineligible when that value is unknown, rather than rendering blank. This
   is structural rather than a pile of conditionals because the state with the fewest

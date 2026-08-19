@@ -119,8 +119,14 @@ console.log('\nWhen the facts ARE there, the lines use them:');
 	check('a page wait names the page', page.includes('Weekly Sync'), page);
 	const files = loadingLines('files', FULL).join(' | ');
 	check('a tree wait names the brain', files.includes('Acme Ops'), files);
-	check('and the page count, grouped', files.includes('1,234'), files);
-	check('and the org, possessively', files.includes('Acme Labs’'), files);
+	// Across seeds, not in one rotation. Alternating leaves three specific slots, and
+	// `files` has four specific lines, so any single rotation drops one of them — which
+	// one is the shuffle's business, not this test's.
+	const overSeeds = Array.from({ length: 12 }, (_, i) => loadingLines('files', FULL, i))
+		.flat()
+		.join(' | ');
+	check('the page count is grouped when it appears', overSeeds.includes('1,234'), overSeeds);
+	check('the org is possessive when it appears', overSeeds.includes('Acme Labs’'), overSeeds);
 	const search = loadingLines('search', { ...FULL, subject: 'quarterly planning' }).join(' | ');
 	check('a search names the query', search.includes('quarterly planning'), search);
 }
@@ -137,11 +143,35 @@ console.log('\nShape of a rotation:');
 			lines.join(' | ')
 		);
 	}
-	// Specific before playful: the second thing a user reads should be about their own
-	// brain, not a joke about a library. Only a wait that outlives that earns the pool.
+	// It OPENS specific: the second thing read (the label is first) is about the thing
+	// being waited on, not a joke about a library.
 	const first = loadingLines('page', FULL)[0];
 	check('the first line after the label is the specific one', first.includes('Weekly Sync'), first);
 	check('the pool is never reached first when a fact is known', !POOL.includes(first), first);
+
+	// ...and then ALTERNATES. The library lines are woven through the rotation rather
+	// than queued behind it: appending them meant a normal-length wait was entirely
+	// facts and the humor sat past where almost anybody got to. Checked on the tasks
+	// with enough specific lines to alternate all the way through a full rotation.
+	const isLibrary = (line: string, task: LoadingTask) =>
+		POOL.includes(line) || (POOL_BY_TASK[task] ?? []).includes(line);
+	for (const task of ['page', 'files', 'search', 'graph'] as const) {
+		const lines = loadingLines(task, FULL);
+		const pattern = lines.map((l) => (isLibrary(l, task) ? 'L' : 'S')).join('');
+		check(
+			`${task}: alternates specific and library (${pattern})`,
+			/^(SL)+S?$/.test(pattern),
+			lines.join(' | ')
+		);
+	}
+	// With nothing known there is no specific queue, so the whole rotation is library
+	// lines rather than a short one that gives up.
+	const cold = loadingLines('page', {});
+	check(
+		'a cold open fills the rotation from the library alone',
+		cold.length === MAX_LINES && cold.every((l) => isLibrary(l, 'page')),
+		cold.join(' | ')
+	);
 }
 
 console.log('\nDeterminism:');
@@ -184,13 +214,38 @@ console.log('\nAn empty brain says nothing about its size:');
 	// 0 is a number, and a template that trusted `typeof pages === 'number'` would
 	// cheerfully render "Counting 0 pages…" over a brain that is simply new: the
 	// screen where the app most needs to look competent.
-	for (const pages of [0, -3, undefined]) {
-		const lines = loadingLines('files', { brain: 'Fresh', pages: pages as number | undefined });
-		check(
-			`pages=${pages}: no count is claimed`,
-			!lines.some((l) => /\d/.test(l)),
-			lines.join(' | ')
+	//
+	// Matched per TEMPLATE rather than by hunting for a digit. "No digit anywhere" was
+	// the first version and it was a proxy for the wrong thing: it failed the moment a
+	// name-free joke legitimately contained a number ("Somewhere in the 300s…"), which
+	// claims no count and is exactly the kind of line the pool is for. Turning each
+	// {pages} template into a pattern asserts the real invariant and cannot be tripped
+	// by prose.
+	const counted = [...WARM.files, ...WARM.search, ...WARM.graph, ...WARM.generic]
+		.filter((t) => t.includes('{pages}'))
+		.map(
+			(t) =>
+				new RegExp(
+					`^${t
+						.split('{pages}')
+						.map((part) => part.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
+						.join('[\\d,]+')}$`
+				)
 		);
+	check(`${counted.length} template(s) claim a page count`, counted.length >= 3);
+	for (const pages of [0, -3, undefined]) {
+		for (const task of ['files', 'search', 'graph', 'generic'] as const) {
+			const lines = loadingLines(task, {
+				brain: 'Fresh',
+				subject: 'Anything',
+				pages: pages as number | undefined
+			});
+			check(
+				`${task} at pages=${pages}: no count is claimed`,
+				!lines.some((l) => counted.some((re) => re.test(l))),
+				lines.join(' | ')
+			);
+		}
 	}
 }
 
