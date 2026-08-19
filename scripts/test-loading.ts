@@ -18,7 +18,7 @@
 // naming anything the user is looking at, which is invisible in review and invisible in
 // a screenshot.
 
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import {
 	loadingLines,
 	possessive,
@@ -40,6 +40,27 @@ function check(label: string, cond: boolean, detail = '') {
 		failures++;
 		console.log(`  ✗ ${label}${detail ? `: ${detail}` : ''}`);
 	}
+}
+
+// Comments out, so PROSE about a loading state is never mistaken for one. The walk
+// below found `{ kind: 'loading' }` inside LoadingView's own header comment on its
+// first run, which would have been a permanent red with nothing to fix.
+//
+// Crude on purpose: a `//` inside a string truncates that line, which can only ever
+// hide a call site rather than invent one, and this file's own assertion on the total
+// count catches a strip that starts eating real code.
+function stripComments(src: string): string {
+	return src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '');
+}
+
+// Every TypeScript source under app/. The app is the only place a loading view can be
+// shown from: src/lib is pure and the Worker has no DOM.
+function appSources(): string[] {
+	const root = new URL('../app/', import.meta.url);
+	return readdirSync(root, { recursive: true, encoding: 'utf8' })
+		.filter((f) => /\.tsx?$/.test(f) && !f.endsWith('.generated.ts'))
+		.map((f) => `app/${f}`)
+		.sort();
 }
 
 const TASKS = Object.keys(WARM) as LoadingTask[];
@@ -253,11 +274,17 @@ console.log('\nWiring: every loading state in the app declares its task:');
 {
 	// `task` is optional on the view, so an omission typechecks. This is the check that
 	// makes a missing one loud.
-	const sources = ['app/core/actions.ts', 'app/main.tsx', 'app/core/store.ts'];
+	//
+	// WALKED, not listed. The first version named the three files that happened to hold
+	// every call site the day it was written, which quietly made it a test of those
+	// files rather than of the app: a `show({ kind: 'loading' })` added in any view or
+	// component would have been invisible to it, and a loading state nobody knows about
+	// is exactly what this check exists to prevent.
+	const sources = appSources();
 	let sites = 0;
 	const untasked: string[] = [];
 	for (const file of sources) {
-		const src = readFileSync(new URL(`../${file}`, import.meta.url), 'utf8');
+		const src = stripComments(readFileSync(new URL(`../${file}`, import.meta.url), 'utf8'));
 		for (const m of src.matchAll(/kind: 'loading'/g)) {
 			sites++;
 			// The object literal a loading view is built from, generously bounded: every
@@ -272,7 +299,7 @@ console.log('\nWiring: every loading state in the app declares its task:');
 	// And every task the app names is one the engine has phrases for.
 	const named = new Set<string>();
 	for (const file of sources) {
-		const src = readFileSync(new URL(`../${file}`, import.meta.url), 'utf8');
+		const src = stripComments(readFileSync(new URL(`../${file}`, import.meta.url), 'utf8'));
 		for (const m of src.matchAll(/\btask: '([a-z]+)'/g)) named.add(m[1]);
 	}
 	const unknown = [...named].filter((t) => !TASKS.includes(t as LoadingTask));

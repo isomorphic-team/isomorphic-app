@@ -850,6 +850,17 @@ the caller's own literal label first and then rotates through phrases from
   the swapped line naming the brain and the page, the announcement staying put, and
   reduced motion holding one phrase. Note `test.use({ reducedMotion })` at describe
   level does NOT reach this page; the spec calls `page.emulateMedia` instead.
+- **Three other kinds of wait exist and deliberately do NOT rotate.** (1) Button busy
+  labels: `Creating…` (AddBrainView), `Saving…` / `Adding image…` (EditView), `Sharing…`
+  (ShareBrainView). Those are a control reporting its own state, and a button whose text
+  cycles jokes while a save is in flight is a broken control, not a charming one. (2) The
+  two `<MenuNote>Loading…</MenuNote>` in `Breadcrumb.tsx` (folder entries, the brain
+  list): a popover the reader is currently aiming at, where text moving under the cursor
+  is hostile. (3) `.asset-loading` in `app/styles.css`, the placeholder an `<img>` sits in
+  while its bytes arrive, which is a skeleton rather than a status line and is the one
+  place the shimmer could extend to. Several paths are also deliberately SILENT and
+  should stay that way: `refreshPage`, `revalidateBrowse`, `refreshBrowse`, and entering
+  or leaving the editor, all of which keep real content on screen instead of flashing.
 - **Not built:** skeleton shells for the page/tree/graph, which are the other half of
   this and are still on `docs/roadmap.md`.
 
