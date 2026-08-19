@@ -53,9 +53,47 @@ import {
 	setFeatures,
 	applyPolicy,
 	applyBrainContext,
+	editDirty,
+	setEditDirty,
 	bump
 } from './store.ts';
-import { toast } from './toast.tsx';
+import { toast, askConfirm } from './toast.tsx';
+
+// LEAVING AN OPEN EDITOR. Every destination in the app abandons an in-progress edit,
+// and the bar's answer used to be to HIDE the destinations while editing — which cost
+// the user their navigation and protected nothing, because the breadcrumb sitting
+// beside the hidden controls was still linked and still switching brains.
+//
+// So the controls stay live and this is the guard instead. It is a no-op unless there
+// is an editor open that has actually been typed in, which is why the nav surfaces can
+// route every click through it without asking anyone a question they do not need.
+//
+// It clears the flag on a YES: the caller is about to navigate, and the session it was
+// protecting is over. A NO leaves the flag set and the caller does nothing.
+async function confirmLeaveEdit(): Promise<boolean> {
+	if (currentView.kind !== 'edit' || !editDirty) return true;
+	const ok = await askConfirm({
+		title: 'Discard your changes?',
+		body: 'This page has edits that have not been saved.',
+		confirmLabel: 'Discard'
+	});
+	if (ok) setEditDirty(false);
+	return ok;
+}
+
+/**
+ * Wrap a navigation click so it asks before abandoning an unsaved edit. Returns a
+ * handler, so a call site reads `onClick={guardNav(() => openBrowse())}` — the guard
+ * belongs at the point a PERSON chose to go somewhere, not inside the openers, which
+ * are also called by the tool-result router on the model's behalf.
+ */
+function guardNav(fn: () => void): () => void {
+	return () => {
+		void confirmLeaveEdit().then((ok) => {
+			if (ok) fn();
+		});
+	};
+}
 
 // The central tool-result router: the host feeds every opening tool result here via
 // app.ontoolresult (wired in main.tsx).
@@ -952,7 +990,16 @@ async function refreshBrowse() {
 	}
 }
 
+// Arrive at the search PAGE, empty. The field lives on the view (SearchView), so this
+// is an ordinary destination like Files or Graph rather than a control that opens a
+// widget: press it, you are somewhere, and the rail lights.
+function openSearch() {
+	show({ kind: 'search', query: '', hits: [] });
+}
+
 async function runSearch(query: string) {
+	// An empty submit is a no-op rather than a search for nothing, and it leaves the
+	// page as it is: you are already ON the search view, with the field in front of you.
 	if (!query.trim()) return;
 	show({ kind: 'loading', label: `Searching for “${query}”…`, task: 'search', subject: query });
 	try {
@@ -1058,6 +1105,8 @@ function onProseClick(fromPath: string) {
 
 export {
 	handleToolResult,
+	confirmLeaveEdit,
+	guardNav,
 	brainsViewFromSc,
 	ensureBrainList,
 	switchBrain,
@@ -1095,6 +1144,7 @@ export {
 	openSettings,
 	openGraph,
 	refreshBrowse,
+	openSearch,
 	runSearch,
 	openEditor,
 	resolveWikilink,

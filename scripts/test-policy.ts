@@ -37,6 +37,7 @@ import {
 	pickShownBrain
 } from '../app/core/store.ts';
 import { renderAge, refreshOutcome } from '../app/core/util.ts';
+import { DEST_META, destinationsIn, activeDestination } from '../app/core/nav.ts';
 
 let failures = 0;
 function check(label: string, cond: boolean, detail = '') {
@@ -394,6 +395,71 @@ console.log('\nbrowse_brain fits in a tool result');
 		browseSummary('Fresh', { paths: [], pages: [], assets: [], hidden: [] }) ===
 			'Fresh has no pages yet.'
 	);
+}
+
+// ---------- the nav's destinations ----------
+//
+// The bar's right-hand cluster and the ⋯ menu are two renderings of ONE list, which is
+// the point of app/core/nav.ts: they used to be two hand-written lists that had already
+// drifted. What is pinned here is the pair of decisions the renderings make no judgement
+// about — which destinations a given deployment actually has, and which view counts as
+// standing on one. A destination offered where its tool is not registered comes back
+// "unknown tool" on click, and one that lights up on the wrong view tells the user they
+// are somewhere they are not.
+console.log('\nnav destinations');
+{
+	const full = { analytics: true, canManageBrains: true };
+	const bare = { analytics: false, canManageBrains: false };
+
+	check(
+		'the brain cluster is the four views OF a brain, in bar order',
+		destinationsIn('brain', full).join() === 'files,graph,activity,sharing'
+	);
+	check(
+		'…and none of them is gated — every one is open to anyone who can reach the brain',
+		destinationsIn('brain', bare).join() === 'files,graph,activity,sharing'
+	);
+	check(
+		'a deployment with USAGE_ANALYTICS off never offers Analytics',
+		destinationsIn('org', bare).join() === 'members' &&
+			destinationsIn('org', full).join() === 'members,analytics'
+	);
+	check(
+		'Manage brains appears only for an admin of some org',
+		destinationsIn('account', bare).join() === 'settings' &&
+			destinationsIn('account', full).join() === 'brains,settings'
+	);
+	// Every destination is filed under exactly one scope, so the three lists partition
+	// the set: a destination missing from all three is unreachable, and one in two of
+	// them appears twice in the same menu.
+	const partitioned = (['brain', 'org', 'account'] as const).flatMap((s) =>
+		destinationsIn(s, full)
+	);
+	check(
+		'the three scopes partition the whole destination list',
+		partitioned.length === Object.keys(DEST_META).length &&
+			new Set(partitioned).size === partitioned.length
+	);
+	check(
+		'every destination has a scope the cluster or the menu will render',
+		(Object.keys(DEST_META) as (keyof typeof DEST_META)[]).every((k) =>
+			['brain', 'org', 'account'].includes(DEST_META[k].scope)
+		)
+	);
+
+	check('a view that IS a destination marks it', activeDestination('browse') === 'files');
+	check('…including the org ones', activeDestination('members') === 'members');
+	// A pushed flow has not left the destination it was opened from, so the control that
+	// got you there stays lit rather than going dark mid-flow.
+	check('a flow step counts as its parent destination', activeDestination('invite-member') === 'members');
+	check('…the sharing one too', activeDestination('share-brain') === 'sharing');
+	// Marking Files while reading a page would claim you are looking at the tree.
+	check('a page is not a destination', activeDestination('page') === null);
+	check('nor is the editor', activeDestination('edit') === null);
+	check('nor a search result', activeDestination('search') === null);
+	// The cluster only ever lights a destination that is IN it. An unknown kind (a view
+	// added later without a mapping) must read as "nowhere", never as the previous view.
+	check('an unmapped view marks nothing', activeDestination('brand-new-view') === null);
 }
 
 console.log(
