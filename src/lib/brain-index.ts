@@ -37,6 +37,8 @@ import {
 	rankPages,
 	searchCorpus,
 	tokenizeQuery,
+	mergeBrainResults,
+	type BrainSearchHit,
 	type PageSignal,
 	type SearchResult
 } from './search.ts';
@@ -965,6 +967,49 @@ export async function searchIndex(
 	// known. It only refines the phase-1 order (frequency is one saturating term of a
 	// score coverage dominates), so a page cannot leapfrog a strictly better match.
 	return searchCorpus(pages, query, { max, perPage }, signals.length - chosen.length);
+}
+
+// The same search over a SET of brains. Each brain runs through searchIndex on its own,
+// with its own budget, and the global ceiling is spent by mergeBrainResults, which is
+// where the round-robin lives so pnpm test:search can pin it without a database.
+//
+// What fan-out costs is not here. Every brain's index lives in the same D1 and the
+// phase-1 query is a handful of booleans per matching page, so N brains are N cheap
+// statements. The cost is FRESHNESS: ensureFresh is one branchCommitSha per brain plus
+// a full reindex for any whose HEAD moved, which for a rarely-opened brain is the common
+// case. So the caller decides which brains to bring up to date (search_pages does only
+// the active one) rather than this function doing it for all of them.
+//
+// `perBrain` results ride along keyed by brain, so a caller can still answer a
+// per-brain question (the `expect` probe, an elision note) about the brain it is in.
+export interface BrainSearch {
+	hits: BrainSearchHit[];
+	terms: string[];
+	pagesMatched: number;
+	budgetHit: boolean;
+	perBrain: Map<string, SearchResult>;
+}
+
+export async function searchBrains(
+	db: D1Database,
+	brainIds: string[],
+	query: string,
+	prefix: string | undefined,
+	limits: { perBrain: number; total: number; perPage?: number }
+): Promise<BrainSearch> {
+	const perPage = limits.perPage ?? DEFAULT_SEARCH_OPTIONS.perPage;
+	const results = await Promise.all(
+		brainIds.map(async (brainId) => ({
+			brainId,
+			result: await searchIndex(db, brainId, query, prefix, limits.perBrain, perPage)
+		}))
+	);
+	const merged = mergeBrainResults(results, limits.total);
+	return {
+		...merged,
+		terms: results[0]?.result.terms ?? tokenizeQuery(query).terms,
+		perBrain: new Map(results.map((r) => [r.brainId, r.result]))
+	};
 }
 
 // Escape LIKE wildcards so a query containing % or _ is matched literally.
