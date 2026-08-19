@@ -26,8 +26,8 @@
 //
 //   pnpm test:scope
 
-import { readFileSync } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
+import { applyMigrations } from '../src/local/d1-sqlite.ts';
 import { assertRole, type Role, type TenantOpts, type AccessibleBrain } from '../src/lib/orgs.ts';
 import { registerMemberTools } from '../src/tools/members.ts';
 import { registerBrainAccessTools } from '../src/tools/brain-access.ts';
@@ -51,10 +51,11 @@ function check(label: string, cond: boolean, detail = '') {
 // ---------------------------------------------------------------------------
 // Same shim shape as test-access.ts and the e2e batteries. Kept local rather than
 // shared so each golden test still runs as one self-contained file.
+// The REAL migrations, not src/db/auth-schema.sql, which is a reference copy that can
+// drift from what a deployment actually runs. Same reasoning as test-index, and it also
+// picks up usage_daily (which the analytics tool reads) without naming it here.
 const sqlite = new DatabaseSync(':memory:');
-sqlite.exec(readFileSync(new URL('../src/db/auth-schema.sql', import.meta.url), 'utf8'));
-// The analytics tool reads usage_daily, so the scope test needs its table too.
-sqlite.exec(readFileSync(new URL('../migrations/0006_usage_daily.sql', import.meta.url), 'utf8'));
+applyMigrations(sqlite);
 function shimStatement(sql: string, params: unknown[] = []) {
 	return {
 		bind: (...p: unknown[]) => shimStatement(sql, p),

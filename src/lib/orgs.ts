@@ -449,7 +449,7 @@ export async function getDefaultBrainForUser(
 			   FROM brains b
 			   LEFT JOIN brain_memberships bm
 			          ON bm.brain_id = b.brain_id AND bm.user_id = ?2
-			  WHERE b.org_id = ?1
+			  WHERE b.org_id = ?1 AND b.archived_at IS NULL
 			  ORDER BY b.created_at ASC, b.brain_id ASC`
 		)
 		.bind(orgId, userId)
@@ -988,6 +988,12 @@ export function brainLabelQualified(b: AccessibleBrain): string {
 // row is then admitted or dropped by the pure rule. Keeping the policy out of the
 // WHERE clause is what lets `pnpm test:access` pin it exhaustively: a filter
 // expressed twice (here and in getAccessibleBrain) is a filter that will disagree.
+//
+// `archived_at IS NULL` is the deliberate exception, and it is not policy: a brain that
+// has been archived does not EXIST for the product any more, which is not a question
+// about who the caller is. Threading it through the pure rule would double that
+// function's input space purely to express "gone things are not visible", so it stays
+// here, in the one query every consumer of the accessible set reads from.
 export async function listAccessibleBrains(
 	db: D1Database,
 	userIds: string[]
@@ -1008,6 +1014,7 @@ export async function listAccessibleBrains(
 			          ON bm.brain_id = b.brain_id AND bm.user_id = m.user_id
 			  WHERE m.user_id IN (${placeholders})
 			    AND o.suspended_at IS NULL
+			    AND b.archived_at IS NULL
 			  ORDER BY b.created_at ASC, b.brain_id ASC`
 		)
 		.bind(...userIds)

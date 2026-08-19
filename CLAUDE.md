@@ -39,6 +39,7 @@ pnpm test:structure     # OKF conformance golden test (granularity, type:, neste
 pnpm test:search        # cross-brain search: which brains, and the per-brain hit budget
 pnpm test:links         # wikilink resolution + the broken-link report golden test
 pnpm test:access        # per-brain access rule (effectiveBrainRole) golden test
+pnpm test:connections   # the connection lifecycle: anchors, joining, ending, mirrors
 pnpm test:scope         # org-vs-brain scope: which role each tool gates on
 pnpm test:feedback      # submit_feedback composition golden test (redaction, nothing identifying published)
 pnpm test:usage         # usage-analytics golden test (tool-classification coverage, the summary fold)
@@ -68,6 +69,13 @@ rules that make the difference between coverage and its appearance:
   pattern to copy is: pure or db-only function in `lib/`, thin wiring in the
   Worker.
 
+**Schema in tests comes from `migrations/`, never from `src/db/*.sql`.** Those are
+reference copies of the resulting shape and they drift; when they do, the drift surfaces
+as a red test in an unrelated battery rather than as anything about the change that
+caused it. `test-index`, `test-access`, `test-scope`, and `test-connections` all call
+`applyMigrations` (`src/local/d1-sqlite.ts`), which is the same ordered set a deployment
+runs, so a migration that fails in CI would have failed a deploy too.
+
 **Tests.** All offline, all fork-safe, all wired into CI and into the `test` script
 (`pnpm test` runs everything): `pnpm test:roundtrip` (editor markdown round-trip),
 `pnpm test:views` (okf-view engine), `pnpm test:import` (import planner),
@@ -82,6 +90,10 @@ answer may contain, and `searchIndex`'s per-brain hit budget, whose failure mode
 fan-out where the first brain fills a global cap and every later one silently reports
 nothing), `pnpm test:policy` (the path-policy wire contract between Worker and app),
 `pnpm test:access` (the per-brain access rule: every input to `effectiveBrainRole`),
+`pnpm test:connections` (the connection lifecycle, where most of what is worth asserting
+is an INTERRUPTED state: that access stops before any copying, that a half-finished end
+stays in the retry queue rather than declaring itself done with a copy missing, and that
+a second caller racing the first loses cleanly),
 `pnpm test:scope` (which role each TOOL gates on: the real handlers over a stub server
 and a fake `getContext`, asserting org-scope tools read `orgRole` and brain-scope tools
 read `role`, plus the `share_brain` and lockout guardrails that live in the tool rather

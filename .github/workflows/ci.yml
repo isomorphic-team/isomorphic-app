@@ -87,6 +87,7 @@ jobs:
       - run: pnpm test:links
       - run: pnpm test:policy
       - run: pnpm test:access
+      - run: pnpm test:connections
       - run: pnpm test:scope
       - run: pnpm test:feedback
       - run: pnpm test:usage
