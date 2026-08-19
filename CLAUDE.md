@@ -39,6 +39,7 @@ pnpm test:structure     # OKF conformance golden test (granularity, type:, neste
 pnpm test:links         # wikilink resolution + the broken-link report golden test
 pnpm test:access        # per-brain access rule (effectiveBrainRole) golden test
 pnpm test:scope         # org-vs-brain scope: which role each tool gates on
+pnpm test:loading       # loading-line engine: slot eligibility + per-task wiring
 pnpm test:feedback      # submit_feedback composition golden test (redaction, nothing identifying published)
 pnpm test:usage         # usage-analytics golden test (tool-classification coverage, the summary fold)
 pnpm test:wiring        # every test:* script is in BOTH package.json's `test` and ci.yml
@@ -78,6 +79,9 @@ broken-link report says about the ones that match nothing), `pnpm test:index`
 (content-index freshness guard: bounded, resumable work per read; wraps an octokit
 stub in the REAL `githubStore` so it still covers `fetchPages`'s GraphQL batching),
 `pnpm test:policy` (the path-policy wire contract between Worker and app),
+`pnpm test:loading` (the loading-line engine: that a phrase naming a fact the widget
+does not have is never eligible, and that every loading state in the app declares a
+task, which is optional in the type and so invisible to typecheck),
 `pnpm test:access` (the per-brain access rule: every input to `effectiveBrainRole`),
 `pnpm test:scope` (which role each TOOL gates on: the real handlers over a stub server
 and a fake `getContext`, asserting org-scope tools read `orgRole` and brain-scope tools
@@ -803,6 +807,78 @@ UI is `app/views/AnalyticsView.tsx`, an ORG-scope destination beside Members.
 - **Not built:** retention/pruning (rows are small, but nothing deletes them),
   a CSV export, per-brain analytics (this is deliberately org-scope), and any
   notion of a session or of time-on-page.
+
+## Loading states (the rotating status line)
+
+Every `{ kind: 'loading' }` in the app renders through one `LoadingView`, which shows
+the caller's own literal label first and then rotates through phrases from
+`src/lib/loading-lines.ts` (pure, `pnpm test:loading`). Built 2026-08-18.
+
+- **The label leads, always.** The rotation starts 2.4s in, so a load that resolves
+  quickly reads exactly as it did before: nothing whimsical is ever the only thing on
+  screen while someone waits for an answer, and the personality is spent only on waits
+  long enough to feel like waits.
+- **The two kinds of line ALTERNATE**, one naming this brain and the next naming the
+  library, opening on a specific one. The name-free lines were a fallback queued behind
+  the specific ones at first, which spent a normal-length wait entirely on facts and put
+  the humor past where almost anybody got to. Interleaved, a rotation reads as one voice
+  that happens to know the brain's name. `pnpm test:loading` pins the SLSLSL shape, so a
+  change back to appending fails rather than quietly draining the humor out.
+- **A slot is a REQUIREMENT.** A template naming `{brain}` / `{org}` / `{subject}` /
+  `{pages}` is ineligible when that value is unknown, rather than rendering blank. This
+  is structural rather than a pile of conditionals because the state with the fewest
+  facts (a cold self-boot: no brain list, no tree, no org) is both the most common and
+  the least likely to get tested by hand, and its failure mode is a customer reading
+  "Asking undefined…". `pnpm test:loading` walks every template's own slots to prove it.
+- **Personalization is LOCAL and free.** The facts come from what the widget already
+  holds: the brain it is showing, that brain's org label, the page/folder/query it was
+  asked for, and the size of the cached tree. Nothing calls a tool to decorate a wait,
+  since the alternative to a wait cannot be a second wait. Nothing reaches for a
+  person's name or email either: identity is fetched by one screen on request, and a
+  colleague's name is not chrome.
+- **`task` is optional on the view and so invisible to typecheck.** An omitted one is
+  not an error, it is a screen that quietly stops naming anything the user is looking
+  at. The golden test scans `actions.ts` / `main.tsx` / `store.ts` for every
+  `kind: 'loading'` and fails on any without a `task`, the same way `pnpm test:usage`
+  scans for unclassified tools.
+- **Motion is off under `prefers-reduced-motion`**, in CSS (both the fade and the
+  shimmer sweep in `app/styles.css`) and in JS (the timer never starts, so one phrase
+  holds: the label). Only the label is announced, from an element that never remounts;
+  the rotating span is `aria-hidden`, since a live region re-reading a new phrase every
+  three seconds is noise.
+- **The VIEW is covered too**, unusually for the app layer: `tests/ui/loading.spec.ts`
+  drives the real bundle over the `#loading` harness route, which opens the tree and
+  then holds the app's own fetches open forever so a wait stays on screen. It pins the
+  label leading, a swap happening, the swapped line naming the brain and the page, the
+  announcement staying put, and reduced motion holding one phrase.
+- **A rotation cannot be STEPPED, only watched**, so that spec records the line with a
+  MutationObserver INSIDE the frame and reads the result back at the end. `page.clock.install()` does not pause
+  timers here: probed directly, a `setTimeout` in the main frame AND in the app's iframe
+  both fire with no `runFor`, so an installed clock moves only what `Date.now()` reports
+  while a `setTimeout` chain keeps running on the wall clock. (`advanceable` is still
+  right for `refresh.spec.ts`, which asserts on a rendered AGE.) The first version of the
+  loading spec asserted at fixed moments and so raced the machine: it checked "still the
+  label" after a click plus three awaits, which passed locally and failed on CI, where
+  the runner had already spent the 2.4s the label holds for. The second version polled
+  `textContent({ timeout: 100 })` from the test and was worse, because it failed
+  SILENTLY: under CI load every one of those calls timed out, so it recorded nothing and
+  reported an empty sequence rather than a wrong one. Recording in the page is what
+  finally held, because runner speed then changes when the answer arrives rather than
+  what it says. Assert on ORDER, never on what is on screen at a given millisecond. Also note `test.use({ reducedMotion })`
+  at describe level does NOT reach this page; the spec calls `page.emulateMedia`.
+- **Three other kinds of wait exist and deliberately do NOT rotate.** (1) Button busy
+  labels: `Creating…` (AddBrainView), `Saving…` / `Adding image…` (EditView), `Sharing…`
+  (ShareBrainView). Those are a control reporting its own state, and a button whose text
+  cycles jokes while a save is in flight is a broken control, not a charming one. (2) The
+  two `<MenuNote>Loading…</MenuNote>` in `Breadcrumb.tsx` (folder entries, the brain
+  list): a popover the reader is currently aiming at, where text moving under the cursor
+  is hostile. (3) `.asset-loading` in `app/styles.css`, the placeholder an `<img>` sits in
+  while its bytes arrive, which is a skeleton rather than a status line and is the one
+  place the shimmer could extend to. Several paths are also deliberately SILENT and
+  should stay that way: `refreshPage`, `revalidateBrowse`, `refreshBrowse`, and entering
+  or leaving the editor, all of which keep real content on screen instead of flashing.
+- **Not built:** skeleton shells for the page/tree/graph, which are the other half of
+  this and are still on `docs/roadmap.md`.
 
 ## Brain templates
 

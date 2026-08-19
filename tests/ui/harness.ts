@@ -41,7 +41,12 @@ export const ROUTES = {
 	// A result SLOWER than that deadline, with and without the host announcing the call
 	// it is waiting on. Both must land on the page the tool opened.
 	'slow-result': 'page',
-	'pending-input': 'page'
+	'pending-input': 'page',
+	// Opens the tree like `#browse` and then never answers the fetches the app starts
+	// for itself, so a wait stays on screen long enough to assert on. The loading view
+	// it draws is `loading.spec.ts`; what belongs here is that the route still boots
+	// into the tree, since everything that test does starts from there.
+	loading: 'browse'
 } as const;
 
 /**

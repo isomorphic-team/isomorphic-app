@@ -92,6 +92,7 @@ jobs:
       - run: pnpm test:index
       - run: pnpm test:links
       - run: pnpm test:policy
+      - run: pnpm test:loading
       - run: pnpm test:access
       - run: pnpm test:scope
       - run: pnpm test:feedback

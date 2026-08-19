@@ -388,3 +388,69 @@ body {
 .prose img[data-asset-path] {
 	cursor: zoom-in;
 }
+
+/* The loading line (app/views/LoadingView.tsx). Two effects, both motion, both off
+   under prefers-reduced-motion, where the line holds one phrase and simply sits in
+   the muted color it would have had anyway.
+
+   The shimmer is a gradient swept across the TEXT (background-clip), not a box behind
+   it: the wait is a sentence, and a pulsing block would be a skeleton for content that
+   is a single line long. */
+@keyframes iso-loading-in {
+	from {
+		opacity: 0;
+		transform: translateY(2px);
+	}
+	to {
+		opacity: 1;
+		transform: none;
+	}
+}
+.loading-line {
+	animation: iso-loading-in 420ms ease-out both;
+}
+/* One TILE, in px, repeating. A percentage-sized no-repeat gradient leaves part of a
+   long line unpainted at the ends of the sweep, and unpainted means INVISIBLE here:
+   the glyph fill is transparent and the background is the only thing drawing the text.
+   The first version of this did exactly that and swallowed the last few characters of
+   every phrase as the highlight passed. Repeating a fixed tile covers any width, and
+   travelling exactly one tile makes the loop seamless. */
+@keyframes iso-loading-shimmer {
+	from {
+		background-position: 0 0;
+	}
+	to {
+		background-position: 280px 0;
+	}
+}
+.loading-shimmer {
+	/* Muted at both ends so the tiles meet without a seam. */
+	background-image: linear-gradient(
+		100deg,
+		var(--c-muted) 0%,
+		var(--c-muted) 34%,
+		var(--c-fg) 50%,
+		var(--c-muted) 66%,
+		var(--c-muted) 100%
+	);
+	background-size: 280px 100%;
+	background-repeat: repeat-x;
+	-webkit-background-clip: text;
+	background-clip: text;
+	color: transparent;
+	/* Safari paints the glyph fill from this rather than from `color`, so without it
+	   the gradient is drawn and then covered by solid text. */
+	-webkit-text-fill-color: transparent;
+	animation: iso-loading-shimmer 3.2s linear infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+	.loading-line {
+		animation: none;
+	}
+	.loading-shimmer {
+		background-image: none;
+		color: var(--c-muted);
+		-webkit-text-fill-color: currentColor;
+		animation: none;
+	}
+}
