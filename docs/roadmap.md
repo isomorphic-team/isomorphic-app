@@ -345,11 +345,19 @@ history if the third case turns out to matter.
 The whole mechanism is **one new primitive: a brain reachable by someone who is not
 a member of its organization.** `listAccessibleBrains` resolves `FROM memberships
 JOIN orgs JOIN brains`, so a `brain_memberships` grant can only raise a role on a
-brain already visible. `effectiveBrainRole` already takes `grant` as an additive
-source, so the policy rule survives with `orgRole` widened to nullable. The risk is
-concentrated in the same place: a grant-only caller must not reach the org roster or
-the per-person analytics table, and a grant that hangs off no membership has no
-existing teardown path.
+brain already visible.
+
+**Access is derived, not granted.** Each side anchors a connection to one of its own
+brains, and anyone who can reach that anchor reaches the connection, capped at
+editor. So each party governs who is in the room by governing its own brain's access
+list, and no cross-organization user administration exists at all. Individual
+cross-org grants were the earlier design and are rejected: the row hangs off nothing,
+so it needs its own teardown (`deleteUserBrainGrantsInOrg` is scoped by
+`brains.org_id`, so a person removed from their own org would keep the client room)
+and its own outsider-marking everywhere a brain's audience is shown. The policy rule
+survives either way, with `orgRole` widened to nullable plus a cap. The risk stays
+concentrated in one place: a caller with no org role must not reach the org roster or
+the per-person analytics table.
 
 Two decisions sit on top of it, both about power rather than storage. The repository
 lives in the **platform org**, where every auto-provisioned brain already lives,
@@ -361,13 +369,14 @@ inherits the original, and each gets a read-only **mirror** in their own brain l
 That is what stops the revoke button being a weapon. The mirror protects you from
 your counterparty, never from us; that concern needs an export, which is separate.
 
-The other half is product shape. If every relationship is a brain, the list sprawls,
-so a connection brain is in scope only when you are in a brain it connects to, and
-the file tree is never merged across brains.
+The other half is product shape. A connection is **not a brain in the switcher**: it
+is reached from the brain it is joined to, and nowhere else, with a smaller chrome
+(files and recent changes, not graph or analytics or sharing). The file tree is never
+merged across brains.
 
 Full design: [`docs/design/brain-seams.md`](design/brain-seams.md). Unresolved there:
-whether cross-organization grants need a two-sided handshake, and what a departing
-party keeps when a relationship ends.
+export, and how a party learns a connection is waiting for them, since nothing in
+this system sends mail.
 
 # TODO: brain schema migrations (fleet-wide template/schema updates)
 
