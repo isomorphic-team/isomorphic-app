@@ -221,11 +221,20 @@ console.log('\nconnectionForBrain: the guard disconnect_brain and share_brain ne
 
 console.log('\nRule 1: a connection is in scope from the brain it is joined to');
 {
-	// Nobody can reach a pending connection, including the side that created it: it is
-	// not a room until both parties are in it.
+	// The side that CREATED it can reach it, because they have to be able to put
+	// something in the room before inviting anyone to look at it.
+	const mine = await connectionsForAnchors(db, ['acme-co/client-work']);
+	check('the initiator can reach it while it is still pending', mine.length === 1);
 	check(
-		'a pending connection is in scope for nobody',
-		(await connectionsForAnchors(db, ['acme-co/client-work'])).length === 0
+		'and it says it is waiting',
+		mine[0]?.connection.state === 'pending',
+		mine[0]?.connection.state
+	);
+	// The far side cannot, and not because of a state filter: they have no anchor yet,
+	// which is the same thing that stops them the moment a connection ends.
+	check(
+		'the far side cannot, having no anchor yet',
+		(await connectionsForAnchors(db, ['northwind/wiki'])).length === 0
 	);
 }
 
@@ -429,9 +438,11 @@ console.log('\nending: access stops before any copying');
 	await detachAnchors(db, 'c1');
 	// Detaching the anchor IS the revocation, because access was derived from it. There
 	// are no grant rows to hunt down and none to forget.
+	const reachable = await connectionsForAnchors(db, ['acme-co/client-work', 'northwind/wiki']);
 	check(
 		'neither side can reach it any more',
-		(await connectionsForAnchors(db, ['acme-co/client-work', 'northwind/wiki'])).length === 0
+		!reachable.some((r) => r.connection.connection_id === 'c1'),
+		JSON.stringify(reachable.map((r) => r.connection.connection_id))
 	);
 	await detachAnchors(db, 'c1');
 	check(

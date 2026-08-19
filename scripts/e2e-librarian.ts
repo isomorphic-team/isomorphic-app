@@ -1475,7 +1475,8 @@ try {
 			activeId = id;
 		},
 		invalidateConfig: () => {},
-		analyticsEnabled: false
+		analyticsEnabled: false,
+		connectionsEnabled: true
 	});
 	const [brainCT, brainST] = InMemoryTransport.createLinkedPair();
 	await brainServer.connect(brainST);

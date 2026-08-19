@@ -202,8 +202,11 @@ export interface ConnectionWithParties {
 // by the degree of the brain they are in rather than by how many relationships exist.
 // One indexed lookup on connection_parties_anchor_idx, no traversal.
 //
-// 'live' only. A pending connection has no second party and nobody on the far side can
-// reach it; an ending or ended one has had its anchors detached already.
+// Pending as well as live. The side that CREATED a connection has to be able to put
+// something in the room before inviting anyone to look at it, so hiding it until the
+// other party joins would make the flow "create an empty room, wait, then start work".
+// The far side is not reachable this way regardless: they have no anchor until they
+// join. An ending or ended connection has had its anchors detached already.
 export async function connectionsForAnchors(
 	db: D1Database,
 	brainIds: string[]
@@ -214,7 +217,7 @@ export async function connectionsForAnchors(
 		.prepare(
 			`SELECT DISTINCT c.* FROM connection_parties p
 			   JOIN connections c ON c.connection_id = p.connection_id
-			  WHERE p.anchor_brain_id IN (${ph}) AND c.state = 'live'
+			  WHERE p.anchor_brain_id IN (${ph}) AND c.state IN ('pending', 'live')
 			  ORDER BY c.created_at ASC, c.connection_id ASC`
 		)
 		.bind(...brainIds)
@@ -261,6 +264,40 @@ export async function pendingPartiesForEmail(
 		)
 		.bind(email.toLowerCase(), now)
 		.all<ConnectionParty>();
+	return results ?? [];
+}
+
+// Invitations waiting for a PERSON, across every address they sign in under. Plural
+// because identity linking means one human can hold several emails and an invitation
+// sent to one of them has to be visible from all of them.
+//
+// Carries the connection's name, because the invitee cannot resolve the connection any
+// other way: they have no anchor yet, so it is absent from every brain list they can
+// see, which is the whole point of joining being a deliberate act.
+export interface PendingInvitation extends ConnectionParty {
+	connectionName: string;
+}
+
+export async function pendingPartiesForEmails(
+	db: D1Database,
+	emails: string[],
+	now: string
+): Promise<PendingInvitation[]> {
+	if (emails.length === 0) return [];
+	const lowered = emails.map((e) => e.toLowerCase());
+	const ph = lowered.map((_, i) => `?${i + 1}`).join(', ');
+	const { results } = await db
+		.prepare(
+			`SELECT p.*, c.name AS connectionName FROM connection_parties p
+			   JOIN connections c ON c.connection_id = p.connection_id
+			  WHERE p.invited_email IN (${ph})
+			    AND p.org_id IS NULL
+			    AND c.state = 'pending'
+			    AND (p.expires_at IS NULL OR p.expires_at > ?${lowered.length + 1})
+			  ORDER BY c.created_at ASC, p.party_id ASC`
+		)
+		.bind(...lowered, now)
+		.all<PendingInvitation>();
 	return results ?? [];
 }
 

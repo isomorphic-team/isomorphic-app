@@ -1173,7 +1173,8 @@ async function addConnectionBrains(
 			   LEFT JOIN brain_memberships abm
 			          ON abm.brain_id = ab.brain_id AND abm.user_id = m.user_id
 			   JOIN connection_parties p ON p.anchor_brain_id = ab.brain_id
-			   JOIN connections c ON c.connection_id = p.connection_id AND c.state = 'live'
+			   JOIN connections c ON c.connection_id = p.connection_id
+			                     AND c.state IN ('pending', 'live')
 			   JOIN brains b ON b.brain_id = c.brain_id AND b.archived_at IS NULL
 			   JOIN orgs o   ON o.org_id = b.org_id
 			  WHERE m.user_id IN (${placeholders})

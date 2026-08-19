@@ -156,6 +156,10 @@ export function registerBrainTools(
 		// deployment with usage recording off never shows a destination whose click
 		// would come back "unknown tool".
 		analyticsEnabled: boolean;
+		// Whether this deployment registered the connection tools. A widget cannot list
+		// the host's tools, so the payload is the only way the nav learns which
+		// destinations exist, and a picker must never offer one whose click is refused.
+		connectionsEnabled: boolean;
 	}
 ) {
 	const {
@@ -166,9 +170,10 @@ export function registerBrainTools(
 		activeBrainId,
 		setActiveBrain,
 		invalidateConfig,
-		analyticsEnabled
+		analyticsEnabled,
+		connectionsEnabled
 	} = deps;
-	const features = { analytics: analyticsEnabled };
+	const features = { analytics: analyticsEnabled, connections: connectionsEnabled };
 
 	// The orgs the app's "add a brain" flow may target: the ones the caller can
 	// actually adopt into (connect_brain is admin+). Sent with the brains list because

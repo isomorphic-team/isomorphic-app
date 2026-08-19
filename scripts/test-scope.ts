@@ -36,6 +36,7 @@ import { DEFAULT_BRAIN_CONFIG } from '../src/lib/brain-policy.ts';
 import { registerBrainTools } from '../src/tools/brains.ts';
 import { registerAnalyticsTools } from '../src/tools/analytics.ts';
 import { registerLibrarianTools, type BrainContext } from '../src/tools/librarian.ts';
+import { registerConnectionTools } from '../src/tools/connections.ts';
 
 let failures = 0;
 function check(label: string, cond: boolean, detail = '') {
@@ -229,6 +230,54 @@ function toolsFor(p: Persona): Map<string, Handler> {
 	registerMediaTools(server, getContext);
 	registerAnalyticsTools(server, getContext);
 	registerLibrarianTools(server, getContext);
+	registerConnectionTools(server, {
+		getContext,
+		orgContext: async (opts?: { requires?: Role; org?: string }) => {
+			orgAsks.push(opts);
+			assertRole(p.orgRole, opts?.requires);
+			if (!p.orgRole) throw new Error('You are not a member of this organization.');
+			return {
+				octokit,
+				org: {
+					org_id: 'org1',
+					name: 'Northwind',
+					model: 'customer',
+					installation_id: 1,
+					brain_owner: 'northwind',
+					github_org_login: 'northwind',
+					created_by: 'u-boss',
+					created_at: '2026-01-01',
+					suspended_at: null
+				},
+				role: p.orgRole,
+				db,
+				actorUserId: p.userId
+			};
+		},
+		// Creating the repository is the first thing past the gate, so a persona that
+		// gets this far dies here and `passesGate` reads that as admitted. Same trick
+		// as the store Proxy, for the same reason: proving the ALLOW direction without
+		// a network.
+		platformContext: async () => {
+			throw new Error(`platform octokit ${STORE_MARKER}`);
+		},
+		// One brain of the caller's own, because a connection has to hang off one: the
+		// anchor is what confers access, so create_connection refuses before it reaches
+		// the network if you have none.
+		listBrains: async (): Promise<AccessibleBrain[]> =>
+			[{ id: 'northwind/main', brain_id: 'b-main', repo_name: 'main', name: 'Main' }].map((b) => ({
+				...b,
+				org_id: 'org1',
+				org_name: 'Northwind',
+				org_model: 'customer',
+				installation_id: 1,
+				repo_owner: 'northwind',
+				role: p.role,
+				org_role: p.orgRole
+			})) as AccessibleBrain[],
+		personEmails: async () => [`${p.userId}@example.com`],
+		now: () => '2026-08-19T12:00:00Z'
+	});
 	registerBrainTools(server, {
 		getContext,
 		orgContext: async (opts?: { requires?: Role; org?: string }) => {
@@ -296,7 +345,8 @@ function toolsFor(p: Persona): Map<string, Handler> {
 		activeBrainId: () => 'northwind/main',
 		setActiveBrain: async () => {},
 		invalidateConfig: () => {},
-		analyticsEnabled: true
+		analyticsEnabled: true,
+		connectionsEnabled: true
 	});
 	return handlers;
 }
@@ -712,6 +762,57 @@ console.log('\nA CONNECTION GUEST reaches the brain and nothing around it');
 		JSON.stringify(payload.people)
 	);
 	check('and says so', payload.canSeePeople === false, String(payload.canSeePeople));
+}
+// ---------------------------------------------------------------------------
+console.log('\nConnections are ORG-scope, and brain admin does not confer them');
+// ---------------------------------------------------------------------------
+// Starting a connection exposes a surface carrying your organization's name to an
+// outside party, so it gates on the ORG role. sharedAdmin is the whole reason that
+// distinction exists: they hold ADMIN on this brain because it was shared with them,
+// and viewer in the organization. If either tool read ctx.role they would pass.
+{
+	for (const tool of ['create_connection', 'accept_connection']) {
+		const args =
+			tool === 'create_connection'
+				? { name: 'Northwind engagement', with: 'them@northwind.example' }
+				: { connection: 'Northwind engagement', about: 'main' };
+		// Each check asserts the refusal came from the ORG GATE, not merely that
+		// something went wrong: `attempt` counts any isError result as a denial, so a
+		// bare outcome check would pass even for a caller who sailed through
+		// authorization and died reaching for the network.
+		const shared = await attempt(sharedAdmin, tool, args);
+		check(
+			`${tool}: brain ADMIN + org viewer is refused by the org gate`,
+			shared.outcome === 'denied' && /requires admin/.test(shared.detail),
+			shared.detail
+		);
+		const edit = await attempt(writer, tool, args);
+		check(
+			`${tool}: an org editor is refused by the org gate too`,
+			edit.outcome === 'denied' && /requires admin/.test(edit.detail),
+			edit.detail
+		);
+	}
+
+	// The allow direction. An org owner gets past the gate and dies reaching for the
+	// platform client, which is the first thing a real call would do.
+	check(
+		'create_connection: an org OWNER is admitted',
+		await passesGate(orgBoss, 'create_connection', {
+			name: 'Northwind engagement',
+			with: 'them@northwind.example'
+		})
+	);
+
+	// Reading is open to anyone who can reach the brain, like brain_access: knowing who
+	// your brain is connected to is not privileged, and the connection itself is not
+	// reachable through this tool.
+	const read = await attempt(lurker, 'connections', {});
+	check('connections is readable by a plain viewer', read.outcome === 'allowed', read.detail);
+	// A connection guest can see what the room they are in is joined to. They cannot see
+	// anything about the ORGANIZATION on the other side of it.
+	const guestRead = await attempt(connectionGuest, 'connections', {});
+	check('and by a connection guest', guestRead.outcome === 'allowed', guestRead.detail);
 }
 
 if (failures) {
