@@ -45,6 +45,7 @@ import {
 	linkedUserIds,
 	getAppUserByGithubUserId,
 	listAccessibleOrgs,
+	getOrgById,
 	resolveOrgForPerson,
 	matchBrain,
 	brainLabel,
@@ -697,6 +698,34 @@ class McpSession {
 		};
 	}
 
+	// A writer for one organization's OWN GitHub namespace, minted from that
+	// organization's installation rather than the platform's.
+	//
+	// This is the second token a mirror needs, and the reason it is a seam at all: the
+	// copy is READ with the platform installation, which is the only one that can see a
+	// connection's repository, and WRITTEN with the receiving organization's, which is
+	// the only one that can create a repository in theirs. For a personal org the two
+	// happen to be the same installation, which is exactly why the distinction is easy
+	// to miss until a customer-model party fails.
+	private async orgWriter(orgId: string) {
+		const org = await getOrgById(this.env.PLATFORM_DB, orgId);
+		if (!org) return null;
+		const octokit = await installationOctokit(appCreds(this.env), org.installation_id);
+		return {
+			store: githubStore(octokit),
+			createRepo: async (name: string, description: string) => {
+				const { data } = await octokit.rest.repos.createInOrg({
+					org: org.brain_owner,
+					name,
+					description,
+					private: true,
+					auto_init: true
+				});
+				return { owner: data.owner.login, repo: data.name };
+			}
+		};
+	}
+
 	// Every email this person signs in under. A connection is invited BY EMAIL and
 	// claimed at sign-in, so the claim has to look at the whole identity class or an
 	// invitation sent to one of someone's addresses would be invisible from another.
@@ -1010,6 +1039,8 @@ class McpSession {
 				getContext: (opts) => this.tenantContext(opts),
 				orgContext: (opts) => this.orgContext(opts),
 				platformContext: () => this.platformContext(),
+				platformStore: async () => githubStore((await this.platformContext()).octokit),
+				orgWriter: (orgId) => this.orgWriter(orgId),
 				listBrains: () => this.listAccessibleBrainsForCaller(),
 				listOrgs: async () =>
 					this.props?.user_id

@@ -434,6 +434,65 @@ export async function finishEndConnection(db: D1Database, connectionId: string):
 	return true;
 }
 
+// The brains row for a mirror. Not createBrain, because the two differ in exactly the
+// ways that matter: a mirror is org-visible (the party is an ORGANIZATION, so the copy
+// belongs to all of it rather than to whoever happened to hold access on the last day),
+// it is read_only, and it carries the connection it came from so a reader a year later
+// can find out what it is.
+export async function createMirrorBrain(
+	db: D1Database,
+	b: {
+		brain_id: string;
+		org_id: string;
+		repo_owner: string;
+		repo_name: string;
+		name: string;
+		connection_id: string;
+		created_by?: string | null;
+	}
+): Promise<void> {
+	await db
+		.prepare(
+			`INSERT INTO brains
+			   (brain_id, org_id, repo_owner, repo_name, name, created_by, visibility, read_only, mirror_of)
+			 VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'org', 1, ?7)
+			 ON CONFLICT(repo_owner, repo_name) DO NOTHING`
+		)
+		.bind(
+			b.brain_id,
+			b.org_id,
+			b.repo_owner,
+			b.repo_name,
+			b.name,
+			b.created_by ?? null,
+			b.connection_id
+		)
+		.run();
+}
+
+// A connection an admin of one of its parties may still act on even though nobody can
+// reach its ROOM any more. Those are different questions: the anchors are gone, so the
+// brain resolves for nobody, but the copies still have to be finished and somebody has
+// to be able to drive that. Without this the end sequence would be unresumable, because
+// the only way to name a connection is through the anchors it no longer has.
+export async function endingConnectionsForOrgs(
+	db: D1Database,
+	orgIds: string[]
+): Promise<Connection[]> {
+	if (orgIds.length === 0) return [];
+	const ph = orgIds.map((_, i) => `?${i + 1}`).join(', ');
+	const { results } = await db
+		.prepare(
+			`SELECT DISTINCT c.* FROM connections c
+			   JOIN connection_parties p ON p.connection_id = c.connection_id
+			  WHERE p.org_id IN (${ph}) AND c.state = 'ending'
+			  ORDER BY c.ended_at ASC`
+		)
+		.bind(...orgIds)
+		.all<Connection>();
+	return results ?? [];
+}
+
 // Connections left mid-end: the resume queue. There is no cron in this Worker, so
 // end_connection is its own resume entry point and this is what it looks at. That is
 // tolerable only because revocation already completed synchronously; what is deferred

@@ -283,6 +283,14 @@ function toolsFor(p: Persona): Map<string, Handler> {
 		platformContext: async () => {
 			throw new Error(`platform octokit ${STORE_MARKER}`);
 		},
+		// The mirror copy needs GitHub at both ends, so both are refused here for the
+		// same reason the store Proxy is: a scope test that reaches the network is not
+		// testing scope. end_connection treats a failure to copy as a delay rather than
+		// an error, which is what lets the gate assertions still mean something.
+		platformStore: async () => {
+			throw new Error(`platform store ${STORE_MARKER}`);
+		},
+		orgWriter: async () => null,
 		// One brain of the caller's own, because a connection has to hang off one: the
 		// anchor is what confers access, so create_connection refuses before it reaches
 		// the network if you have none.
@@ -910,15 +918,20 @@ console.log('\nEnding a connection: admin in EITHER party, and nothing less');
 		.get() as { archived_at: string | null };
 	check('...and the room is archived rather than deleted', !!archived.archived_at);
 
-	// And the revocation is real from the tool's own side: a second attempt cannot even
-	// NAME the connection, because naming one goes through the anchors that were just
-	// detached. There is no separate "is it still live" check doing this work.
+	// A second attempt FINDS it, and that is deliberate rather than a leak. Ending
+	// detaches the anchors, and the anchors are the only way to name a connection, so
+	// without a second resolution path the copies could never be resumed: nobody could
+	// refer to the connection that owes them one. Reaching it HERE is not reaching the
+	// room, which stays archived and unreachable for everyone (asserted above).
 	const again = await attempt(orgBoss, 'end_connection', args);
 	check(
-		'a second attempt cannot find it, because access is what stopped',
-		again.outcome === 'denied' && /None of your brains are connected/.test(again.detail),
+		'an admin of a party can come back to it, to carry the copies on',
+		again.outcome === 'allowed',
 		again.detail
 	);
+	// The resume path is gated too, or it would be a way around the end gate itself.
+	const notMine = await attempt(writer, 'end_connection', args);
+	check('and an org editor still cannot', notMine.outcome === 'denied', notMine.detail);
 }
 
 if (failures) {

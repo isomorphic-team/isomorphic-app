@@ -32,8 +32,14 @@ import {
 	archiveBrain,
 	beginEndConnection,
 	connectionsForAnchors,
+	createMirrorBrain,
 	detachAnchors,
+	endingConnectionsForOrgs,
+	finishEndConnection,
+	getConnection,
+	markMirror,
 	partyOrgIds,
+	setCopyCursor,
 	createConnectionRecord,
 	ensureConnectionsOrg,
 	joinConnection,
@@ -43,6 +49,8 @@ import {
 	type ConnectionParty
 } from '../lib/connections.ts';
 import { createAndScaffoldBrain } from '../lib/scaffold-core.ts';
+import { copyMirrorPass, mirrorReadme, type MirrorEnd } from '../lib/mirror.ts';
+import type { BrainStore, RepoRef } from '../lib/brain-repo.ts';
 import { createBrain } from '../lib/orgs.ts';
 
 function fail(text: string) {
@@ -71,6 +79,16 @@ export interface ConnectionDeps {
 	// and claimed later, so looking at only the current one would hide an invitation
 	// sent to another of their addresses.
 	personEmails: () => Promise<string[]>;
+	// A store scoped to the PLATFORM installation, for reading a connection's own repo.
+	platformStore: () => Promise<BrainStore>;
+	// A writer for one organization's own GitHub namespace. This is the second token a
+	// mirror needs: the copy is READ with the platform installation and WRITTEN with the
+	// receiving organization's, which for a customer org is a different installation
+	// entirely and the only one with rights to create a repository there.
+	orgWriter: (orgId: string) => Promise<{
+		store: BrainStore;
+		createRepo: (name: string, description: string) => Promise<RepoRef>;
+	} | null>;
 	now: () => string;
 }
 
@@ -89,6 +107,20 @@ function connRepoName(name: string, connectionId: string): string {
 	return `conn-${slug}-${connectionId.slice(0, 8)}`;
 }
 
+// A mirror's repo name. Unlike a connection repo this lands in ONE customer's own
+// namespace, where a numeric collision suffix would be readable and would leak nothing,
+// but the connection id is still the thing that makes it unique without a round trip to
+// find out what is already there.
+function mirrorRepoName(name: string, connectionId: string): string {
+	const slug =
+		name
+			.toLowerCase()
+			.replace(/[^a-z0-9]+/g, '-')
+			.replace(/^-+|-+$/g, '')
+			.slice(0, 40) || 'connection';
+	return `archive-${slug}-${connectionId.slice(0, 8)}`;
+}
+
 function describeParty(p: ConnectionParty): string {
 	if (p.org_id) return p.anchor_brain_id ? 'joined' : 'joined (no anchor)';
 	return p.invited_email ? `invited ${p.invited_email}` : 'invited';
@@ -105,7 +137,148 @@ function connectionLine(c: Connection, parties: ConnectionParty[]): string {
 }
 
 export function registerConnectionTools(server: McpServer, deps: ConnectionDeps) {
-	const { getContext, orgContext, platformContext, listBrains, listOrgs, personEmails, now } = deps;
+	const {
+		getContext,
+		orgContext,
+		platformContext,
+		listBrains,
+		listOrgs,
+		personEmails,
+		platformStore,
+		orgWriter,
+		now
+	} = deps;
+
+	// How many copy passes one request will drive before handing the rest to the next
+	// call. There is no cron here, so the alternative to a bound is a request that runs
+	// until the host times it out and reports nothing at all.
+	const PASSES_PER_REQUEST = 4;
+
+	// Where a party's copy has got to, as one string, because there is one column for it.
+	//
+	// `<owner>/<repo>#<path>`: which repository was made for this party, and how far the
+	// walk through the source got. Both halves are needed to resume and neither can be
+	// derived from the other, so encoding only the path (the first thing I wrote) loses
+	// the repository and makes the next pass create a second one.
+	function packCursor(repo: RepoRef, at: string | null): string {
+		return `${repo.owner}/${repo.repo}#${at ?? ''}`;
+	}
+	function unpackCursor(raw: string | null): { repo: RepoRef; at: string | null } | null {
+		if (!raw) return null;
+		const hash = raw.indexOf('#');
+		if (hash < 0) return null;
+		const [owner, name] = raw.slice(0, hash).split('/');
+		if (!owner || !name) return null;
+		const at = raw.slice(hash + 1);
+		return { repo: { owner, repo: name }, at: at || null };
+	}
+
+	// Give every joined party its read-only copy, as far as this request's budget goes.
+	//
+	// Failures are reported, never thrown. Access already stopped in the request that
+	// ended the connection, so a copy that cannot be made right now is a delay rather
+	// than a leak, and the room is archived rather than deleted so it can still be made
+	// later. That is the whole reason this is allowed to be best-effort.
+	async function advanceMirrors(
+		db: BrainContext['db'],
+		connectionId: string
+	): Promise<{ done: boolean; note: string }> {
+		const conn = await getConnection(db, connectionId);
+		if (!conn) return { done: true, note: '' };
+		const parties = await partiesOf(db, connectionId);
+		// A party that never joined is owed nothing: there is no organization to give a
+		// copy to, and waiting for one would strand the connection in the queue forever.
+		const owed = parties.filter((x) => x.org_id && !x.mirror_brain_id);
+		if (owed.length === 0) {
+			await finishEndConnection(db, connectionId);
+			return { done: true, note: '' };
+		}
+		const read = await platformStore().catch(() => null);
+		if (!read) {
+			return { done: false, note: ' The copies could not be started just now.' };
+		}
+		const [srcOwner, srcRepo] = conn.brain_id.split('/');
+		const src: MirrorEnd = { store: read, repo: { owner: srcOwner, repo: srcRepo } };
+
+		let stalled = 0;
+		for (const party of owed) {
+			const writer = await orgWriter(party.org_id!).catch(() => null);
+			if (!writer) {
+				stalled++;
+				continue;
+			}
+			try {
+				const resumed = unpackCursor(party.copy_cursor);
+				let repo: RepoRef;
+				let at: string | null = null;
+				if (resumed) {
+					repo = resumed.repo;
+					at = resumed.at;
+				} else {
+					repo = await writer.createRepo(
+						mirrorRepoName(conn.name, conn.connection_id),
+						`${conn.name}: a read-only copy of an ended Isomorphic connection`
+					);
+					// The note goes in FIRST, so even a copy that never gets any further
+					// leaves something that explains itself.
+					await writer.store.commitFiles(repo, {
+						message: 'What this is',
+						writes: [
+							{
+								path: 'README.md',
+								content: mirrorReadme({
+									connectionName: conn.name,
+									parties: parties.map((x) => x.org_id ?? 'an invited party'),
+									endedAt: (conn.ended_at ?? now()).slice(0, 10)
+								})
+							}
+						]
+					});
+					await createMirrorBrain(db, {
+						brain_id: `${repo.owner}/${repo.repo}`,
+						org_id: party.org_id!,
+						repo_owner: repo.owner,
+						repo_name: repo.repo,
+						name: `${conn.name} (archive)`,
+						connection_id: conn.connection_id
+					});
+					await setCopyCursor(db, party.party_id, packCursor(repo, null));
+				}
+
+				const dst: MirrorEnd = { store: writer.store, repo };
+				let finished = false;
+				for (let i = 0; i < PASSES_PER_REQUEST; i++) {
+					const pass = await copyMirrorPass(src, dst, {
+						branch: 'main',
+						cursor: at,
+						label: conn.name
+					});
+					at = pass.cursor;
+					if (pass.done) {
+						finished = true;
+						break;
+					}
+				}
+				// markMirror is what takes a party OUT of the queue, so it happens only
+				// once the walk actually reached the end.
+				if (finished) await markMirror(db, party.party_id, `${repo.owner}/${repo.repo}`);
+				else {
+					await setCopyCursor(db, party.party_id, packCursor(repo, at));
+					stalled++;
+				}
+			} catch {
+				stalled++;
+			}
+		}
+		if (stalled > 0) {
+			return {
+				done: false,
+				note: ' The read-only copies are still being written. Run end_connection again to carry on.'
+			};
+		}
+		await finishEndConnection(db, connectionId);
+		return { done: true, note: ' Each side now has a read-only copy.' };
+	}
 
 	// ---------- connections (read) ----------
 	server.registerTool(
@@ -396,29 +569,40 @@ export function registerConnectionTools(server: McpServer, deps: ConnectionDeps)
 		},
 		async ({ connection }) => {
 			const ctx = await getContext();
+			const mine = await listOrgs();
+			const adminOrgs = mine.filter((o) => roleAtLeast(o.role, 'admin')).map((o) => o.org.org_id);
 			const brains = await listBrains();
-			const reachable = await connectionsForAnchors(
-				ctx.db,
-				brains.map((b) => b.brain_id)
-			);
+			const reachable = (
+				await connectionsForAnchors(
+					ctx.db,
+					brains.map((b) => b.brain_id)
+				)
+			).map((r) => r.connection);
+			// Connections already ENDING are resolvable too, and they have to be: ending one
+			// detaches the anchors, and the anchors are the only way to name a connection.
+			// Without this the copies could never be resumed, because nobody could refer to
+			// the connection that owes them. Reaching it here is not reaching the ROOM, which
+			// stays archived and unreachable for everyone.
+			const resumable = await endingConnectionsForOrgs(ctx.db, adminOrgs);
+			const candidates = [...reachable, ...resumable];
 			const q = connection.trim().toLowerCase();
-			const hits = reachable.filter(
-				(r) => r.connection.name.toLowerCase() === q || r.connection.name.toLowerCase().includes(q)
+			const hits = candidates.filter(
+				(c) => c.name.toLowerCase() === q || c.name.toLowerCase().includes(q)
 			);
 			if (hits.length === 0) {
-				const names = reachable.map((r) => r.connection.name);
+				const names = candidates.map((c) => c.name);
 				return fail(
 					names.length
 						? `No connection matching "${connection}". You can end: ${names.join(', ')}.`
 						: 'None of your brains are connected to anything.'
 				);
 			}
-			if (hits.length > 1) {
+			if (new Set(hits.map((h) => h.connection_id)).size > 1) {
 				return fail(
-					`"${connection}" matches several: ${hits.map((h) => h.connection.name).join(', ')}. Be more specific.`
+					`"${connection}" matches several: ${hits.map((h) => h.name).join(', ')}. Be more specific.`
 				);
 			}
-			const target = hits[0].connection;
+			const target = hits[0];
 
 			// EITHER party may end it, so the gate is admin in ANY organization that is a
 			// party. Deliberately not the brain role: roles on a connection are derived and
@@ -426,7 +610,6 @@ export function registerConnectionTools(server: McpServer, deps: ConnectionDeps)
 			// room would let the counterparty's people end a relationship your own owner
 			// could not.
 			const parties = await partyOrgIds(ctx.db, target.connection_id);
-			const mine = await listOrgs();
 			const canEnd = mine.some(
 				(o) => parties.includes(o.org.org_id) && roleAtLeast(o.role, 'admin')
 			);
@@ -437,28 +620,30 @@ export function registerConnectionTools(server: McpServer, deps: ConnectionDeps)
 			}
 
 			// ONE conditional UPDATE is the whole concurrency guard: a second caller has to
-			// lose rather than run the sequence twice.
+			// lose rather than run the sequence twice. It also makes this call idempotent,
+			// which is what lets the same tool drive the resume.
 			const claimed = await beginEndConnection(ctx.db, target.connection_id, ctx.actorUserId ?? '');
-			if (!claimed) {
-				return ok(`"${target.name}" is already ending or has ended.`);
+			if (claimed) {
+				// Access stops HERE, before any copying, and in one statement because access
+				// was derived from the anchors rather than granted. There are no grant rows
+				// to hunt down and none to forget.
+				await detachAnchors(ctx.db, target.connection_id);
+				// Archived, never deleted. The content has to outlive the relationship, or a
+				// copy that fails to be made now could never be made at all.
+				await archiveBrain(ctx.db, target.brain_id);
 			}
-			// Access stops HERE, before any copying, and it is one statement because access
-			// was derived from the anchors rather than granted. There are no grant rows to
-			// hunt down and none to forget.
-			await detachAnchors(ctx.db, target.connection_id);
-			// Archived, never deleted. The content has to outlive the relationship, or a
-			// copy that fails to be made now could never be made at all.
-			await archiveBrain(ctx.db, target.brain_id);
 
+			const mirrors = await advanceMirrors(ctx.db, target.connection_id);
+			const headline = claimed
+				? `Ended "${target.name}". Nobody on either side can reach it any more.`
+				: `"${target.name}" has already ended.`;
 			return {
-				...ok(
-					`Ended "${target.name}". Nobody on either side can reach it any more. The pages are kept so each organization can be given a read-only copy; that copy is prepared separately and is not ready yet.`
-				),
+				...ok(`${headline}${mirrors.note}`),
 				structuredContent: {
 					connection_id: target.connection_id,
 					name: target.name,
-					state: 'ending',
-					mirrorsReady: false
+					state: mirrors.done ? 'ended' : 'ending',
+					mirrorsReady: mirrors.done
 				}
 			};
 		}
