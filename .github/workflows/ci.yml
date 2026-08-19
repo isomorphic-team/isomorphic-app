@@ -149,12 +149,43 @@ jobs:
       # the same slow mirror three times. 300s is twice the worst observed success. Raise it
       # if a run is ever killed here while apt was still making progress; the log shows the
       # transfer rate.
+      #
+      # RETRIES HAVE TO CLEAN UP AFTER THE TIMEOUT. `timeout` kills the playwright
+      # wrapper, but the apt-get it started as root outlives it and keeps holding
+      # /var/lib/apt/lists/lock. Without the release step below, attempts 2 and 3 fail
+      # in under a second with "Could not get lock ... held by process <pid> (apt-get)",
+      # so the loop looks resilient and is decorative: one stall fails the whole step.
+      # Observed on 2026-08-19, where attempt 1 hit the 300s cap and both retries died
+      # instantly on the lock.
       - name: Install Chromium system dependencies
         timeout-minutes: 16
         run: |
+          # pgrep/pkill only (procps, always present). `fuser` would read the lock
+          # directly but ships in psmisc, which is not guaranteed on a runner, and a
+          # cleanup step that itself needs an apt install would be self-defeating.
+          release_apt() {
+            sudo pkill -TERM -x apt-get 2>/dev/null || true
+            for _ in $(seq 1 20); do
+              if ! pgrep -x apt-get >/dev/null 2>&1; then break; fi
+              sleep 1
+            done
+            if pgrep -x apt-get >/dev/null 2>&1; then
+              sudo pkill -KILL -x apt-get 2>/dev/null || true
+              sleep 2
+            fi
+            # Only once the process is gone. Removing a lock a live apt still holds
+            # would let two apt-gets write the same dpkg state.
+            if pgrep -x apt-get >/dev/null 2>&1; then return 1; fi
+            sudo rm -f /var/lib/apt/lists/lock /var/cache/apt/archives/lock \
+              /var/lib/dpkg/lock /var/lib/dpkg/lock-frontend
+            # A killed apt leaves packages half-configured, which would fail the next
+            # attempt for a different reason than the one being retried.
+            sudo dpkg --configure -a || true
+          }
           for attempt in 1 2 3; do
             if timeout 300 pnpm exec playwright install-deps chromium; then exit 0; fi
             echo "::warning::playwright install-deps failed or stalled (attempt ${attempt}/3). Ubuntu mirrors are the usual cause. Retrying."
+            release_apt || echo "::warning::apt is still holding its lock; the next attempt may fail immediately."
             sleep 15
           done
           echo "::error::Could not install the Chromium system dependencies after 3 attempts."
