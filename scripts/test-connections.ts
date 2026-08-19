@@ -37,7 +37,8 @@ import {
 import {
 	getDefaultBrainForUser,
 	listAccessibleBrains,
-	listAccessibleOrgs
+	listAccessibleOrgs,
+	setBrainGrant
 } from '../src/lib/orgs.ts';
 
 let failures = 0;
@@ -285,6 +286,102 @@ console.log('\nRule 1, once it is live');
 		(await connectionsForAnchors(db, ['acme-co/internal'])).length === 0
 	);
 	check('no anchors, no query', (await connectionsForAnchors(db, [])).length === 0);
+}
+
+console.log('\nresolution: a connection brain is reached THROUGH the anchor');
+{
+	const CONN = 'iso-platform/conn-northwind-4f9c2a1b';
+	const idsFor = async (u: string) => (await listAccessibleBrains(db, [u])).map((b) => b.id);
+	const rowFor = async (u: string) =>
+		(await listAccessibleBrains(db, [u])).find((b) => b.id === CONN);
+
+	// Both sides reach the SAME brain, from different organizations, neither of which
+	// holds it. This is the whole primitive.
+	check('the initiator resolves it', (await idsFor('u-ann')).includes(CONN));
+	check('and so does the far side', (await idsFor('u-nate')).includes(CONN));
+
+	const ann = (await rowFor('u-ann'))!;
+	// Owner of Client Work, capped: brain-admin means share and configure, and both are
+	// meaningless on a surface whose access lives somewhere else.
+	check('at min(anchor role, editor)', ann.role === 'editor', ann.role);
+	// Not 'viewer' and not a default. The gates have to be able to tell "not a member"
+	// from "a member with few powers", which is what the whole nullable change is for.
+	check(
+		'with NO org role, because there is no membership',
+		ann.org_role === null,
+		String(ann.org_role)
+	);
+	check(
+		'flagged as a connection, so the switcher can leave it out',
+		ann.connection_id === 'c1',
+		String(ann.connection_id)
+	);
+	// Every connection on a deployment shares one organization row, so carrying its name
+	// would make `brain: "shared"` fuzzy-match all of them at once.
+	check(
+		'named after the connection, not the system organization',
+		ann.org_name === 'Northwind engagement',
+		ann.org_name
+	);
+
+	// It must never become the brain someone lands in by default.
+	const all = await listAccessibleBrains(db, ['u-ann']);
+	check('and never sorts first, so it cannot be a default brain', all[0].id !== CONN, all[0].id);
+
+	// Reaching the ANCHOR is what confers access. A colleague in the same organization
+	// who cannot open Client Work has no route to the room hanging off it: this is what
+	// "each side governs its own audience by governing its own brain" means in practice.
+	USER('u-amy', 'amy@acme.example');
+	MEMBER('org-acme', 'u-amy', 'editor');
+	exec(`UPDATE brains SET visibility = 'private' WHERE brain_id = ?`, 'acme-co/client-work');
+	check(
+		'a colleague who cannot reach the anchor cannot reach the connection',
+		!(await idsFor('u-amy')).includes(CONN),
+		JSON.stringify(await idsFor('u-amy'))
+	);
+	check('while the anchor’s own admin still can', (await idsFor('u-ann')).includes(CONN));
+
+	// Granting the anchor grants the room, in the same statement. There is no second
+	// access list to keep in step, which is the point of deriving rather than granting.
+	await setBrainGrant(db, {
+		brain_id: 'acme-co/client-work',
+		user_id: 'u-amy',
+		role: 'viewer',
+		granted_by: 'u-ann'
+	});
+	const amy = (await rowFor('u-amy'))!;
+	check('sharing the anchor shares the connection', !!amy);
+	check('and only at the role they hold on the anchor', amy?.role === 'viewer', String(amy?.role));
+	exec(`UPDATE brains SET visibility = 'org' WHERE brain_id = ?`, 'acme-co/client-work');
+
+	// A suspended organization must lose its rooms. The check has to be on the ANCHOR's
+	// org: a connection lives in the system organization, which is never suspended, so
+	// checking there would let a suspended customer keep reading everything.
+	exec(`UPDATE orgs SET suspended_at = datetime('now') WHERE org_id = ?`, 'org-nw');
+	check('a suspended organization loses its connections', !(await idsFor('u-nate')).includes(CONN));
+	check('and the other side is unaffected', (await idsFor('u-ann')).includes(CONN));
+	exec(`UPDATE orgs SET suspended_at = NULL WHERE org_id = ?`, 'org-nw');
+
+	// An anchor never admits you to an organization, only to a brain.
+	const orgs = await listAccessibleOrgs(db, ['u-nate']);
+	check(
+		'an anchor is not a membership',
+		!orgs.some((o) => o.org.org_id === CONNECTIONS_ORG_ID),
+		JSON.stringify(orgs.map((o) => o.org.org_id))
+	);
+}
+
+console.log('\nresolution: a read-only mirror');
+{
+	BRAIN('acme-co/ro-sample', 'org-acme', 'Sample archive');
+	exec(`UPDATE brains SET read_only = 1 WHERE brain_id = ?`, 'acme-co/ro-sample');
+	const row = (await listAccessibleBrains(db, ['u-ann'])).find((b) => b.id === 'acme-co/ro-sample');
+	// u-ann is OWNER of org-acme. Without the cap, the org-admin floor hands her owner
+	// on the mirror and every `requires: 'editor'` gate lets her write to a record that
+	// is supposed to be inert.
+	check('is readable', !!row);
+	check('but caps even the org owner at viewer', row?.role === 'viewer', String(row?.role));
+	check('and carries the flag for the UI', row?.read_only === true);
 }
 
 console.log('\nexpiry: a stale invitation is skipped, not deleted');

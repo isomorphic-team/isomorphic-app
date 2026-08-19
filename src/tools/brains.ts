@@ -35,6 +35,7 @@ import {
 	setBrainGrant,
 	getBrainByRepo
 } from '../lib/orgs.ts';
+import { connectionForBrain } from '../lib/connections.ts';
 import { createAndScaffoldBrain } from '../lib/scaffold-core.ts';
 import { githubStore } from '../lib/brain-repo.ts';
 import {
@@ -88,7 +89,7 @@ function brainRows(brains: AccessibleBrain[], activeId: string | undefined): Bra
 		// Two different powers, two different scopes: disconnecting a brain removes
 		// it from the ORG (org admin), sharing it changes who reaches its content
 		// (brain admin). Someone can hold either without the other.
-		canManage: roleAtLeast(b.org_role, 'admin'),
+		canManage: !!b.org_role && roleAtLeast(b.org_role, 'admin'),
 		canShare: roleAtLeast(b.role, 'admin'),
 		visibility: b.visibility,
 		orgId: b.org_id,
@@ -640,9 +641,19 @@ export function registerBrainTools(
 				);
 			}
 			const target = m.brain;
+			// A connection is ENDED, never disconnected. deleteBrain below would orphan the
+			// connection rows and destroy a surface both parties are working in, with no
+			// mirror written and nothing to reconstruct it from. Refuse before the role
+			// check, so the message says what to do instead of what you lack.
+			const connection = await connectionForBrain(ctx.db, target.brain_id);
+			if (connection) {
+				return fail(
+					`"${connection.name}" is a connection, so it is ended rather than disconnected: ending it leaves both sides a read-only copy, and disconnecting would delete it outright.`
+				);
+			}
 			// ORG-scope, like connect_brain: removing a brain from the org is an org
 			// admin's call, not something brain-admin-by-share confers.
-			if (!roleAtLeast(target.org_role, 'admin')) {
+			if (!target.org_role || !roleAtLeast(target.org_role, 'admin')) {
 				return fail(`You need organization admin access to disconnect ${brainLabel(target)}.`);
 			}
 			if (all.filter((b) => b.org_id === target.org_id).length <= 1) {

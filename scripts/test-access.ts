@@ -148,6 +148,75 @@ check(
 	effectiveBrainRole({ visibility: '', orgRole: 'viewer' }) === 'viewer'
 );
 
+// ---------------------------------------------------------------------------
+console.log('\nNo org role at all: the sources that need a membership are skipped');
+// ---------------------------------------------------------------------------
+// A caller reaching a brain through a CONNECTION is not a member of the organization
+// that holds it. Sources (1) org-visibility and (3) the org-admin floor have nobody to
+// apply to, so they contribute nothing. Before this was explicit the function returned
+// `undefined` for an org-visible brain with a null org role: neither a role nor null,
+// and it only failed closed because the caller happened to test `if (!role)`.
+for (const visibility of ['org', 'private', 'team-only', '']) {
+	check(
+		`${visibility || '(empty)'}: no membership, no grant, no anchor → NO ACCESS`,
+		effectiveBrainRole({ visibility, orgRole: null }) === null,
+		String(effectiveBrainRole({ visibility, orgRole: null }))
+	);
+}
+check(
+	'a grant still works with no membership',
+	effectiveBrainRole({ visibility: 'private', orgRole: null, grant: 'editor' }) === 'editor'
+);
+
+// ---------------------------------------------------------------------------
+console.log('\nAnchor-derived access, capped at editor');
+// ---------------------------------------------------------------------------
+// How a connection brain is reached: your role on a brain it is joined to, capped.
+// `admin` is deliberately unreachable, because brain-admin means share and configure
+// and both are meaningless when access is derived from somewhere else.
+for (const anchor of ORG_ROLES) {
+	const expected: Role = anchor === 'viewer' ? 'viewer' : 'editor';
+	const got = effectiveBrainRole({ visibility: 'private', orgRole: null, anchor });
+	check(`anchor ${anchor} → ${expected}`, got === expected, `got ${got}`);
+}
+check(
+	'no anchor and no membership → NO ACCESS',
+	effectiveBrainRole({ visibility: 'private', orgRole: null, anchor: null }) === null
+);
+// The cap is a CEILING, not a replacement: it must never pull down a role the caller
+// already holds by another route.
+check(
+	'an owner of the holding org is not demoted to editor by an anchor',
+	effectiveBrainRole({ visibility: 'org', orgRole: 'owner', anchor: 'owner' }) === 'owner'
+);
+
+// ---------------------------------------------------------------------------
+console.log('\nRead-only caps the whole computation');
+// ---------------------------------------------------------------------------
+// A mirror has to be inert to EVERYONE, including the admins of the organization it
+// landed in. A viewer grant cannot do that: source (3) hands an org admin their own
+// role straight back, and an org-visible mirror hands every member theirs. So the cap
+// is applied last, to whatever the sources produced.
+for (const orgRole of ORG_ROLES) {
+	check(
+		`read-only: org ${orgRole} → viewer`,
+		effectiveBrainRole({ visibility: 'org', orgRole, readOnly: true }) === 'viewer'
+	);
+}
+check(
+	'read-only: an explicit admin grant is still only viewer',
+	effectiveBrainRole({
+		visibility: 'private',
+		orgRole: 'viewer',
+		grant: 'admin',
+		readOnly: true
+	}) === 'viewer'
+);
+check(
+	'read-only does not CREATE access where there was none',
+	effectiveBrainRole({ visibility: 'private', orgRole: null, readOnly: true }) === null
+);
+
 // ===========================================================================
 // The QUERIES that apply the rule, run for real against the real schema.
 // ===========================================================================

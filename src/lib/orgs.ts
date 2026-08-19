@@ -60,6 +60,12 @@ function maxRole(a: Role, b: Role): Role {
 	return ROLE_RANK[a] >= ROLE_RANK[b] ? a : b;
 }
 
+// The only two things that LOWER a role, both ceilings rather than demotions: an
+// anchor-derived role is capped at editor, and a read-only brain is capped at viewer.
+function minRole(a: Role, b: Role): Role {
+	return ROLE_RANK[a] <= ROLE_RANK[b] ? a : b;
+}
+
 // ---------- brain-scope access (the per-brain permission rule) ----------
 //
 // Two roles, two scopes, deliberately separate:
@@ -73,35 +79,61 @@ function maxRole(a: Role, b: Role): Role {
 // below resolves rows in SQL and then runs them through here, rather than
 // spreading the policy across a WHERE clause.
 //
-// Three independent sources of access, and the effective role is the HIGHEST any
-// of them grants (never the lowest: a share must not be able to demote you):
+// FOUR independent sources of access, and the effective role is the HIGHEST any of
+// them grants (never the lowest: a share must not be able to demote you):
 //
 //   1. visibility='org'          → your org role, for every member of the org.
 //   2. an explicit grant         → that grant's role, whatever the visibility.
 //   3. org admin/owner           → your org role, floored at admin, ALWAYS.
+//   4. an anchor                 → your role on a brain this one is connected to,
+//                                  capped at editor.
 //
 // (3) is the deliberate admin override. It is honest rather than generous: an org
 // owner controls the GitHub org that physically holds the repo and can read it
 // directly, so hiding a brain from them in our UI would be theater. It also stops
 // a brain orphaning when the only person granted access leaves.
 //
-// Returns null when none of the three applies: the caller cannot see this brain
-// and it must not appear in any listing.
+// (4) is how a connection brain is reached, and it is why `orgRole` is NULLABLE.
+// A connection lives in an organization with no members at all, so sources (1) and
+// (3) have nobody to apply to: they are skipped, which is exactly what "not a member"
+// should mean, and it makes the anchor the only way in. The editor cap is not a
+// preference. Brain-admin means share and configure, and both are meaningless when
+// access is derived from somewhere else, so `admin` on a connection would be a role
+// whose powers do not exist. Ending a connection is gated separately.
+//
+// `readOnly` is the one thing that lowers the result rather than raising it. It is a
+// CEILING on the whole computation, applied last, because a mirror has to be inert to
+// everyone including the admins of the organization holding it: source (3) would
+// otherwise hand them their own role straight back, and an org-visible mirror would
+// hand every member theirs. This is why a viewer grant cannot make a brain read-only
+// and a column on the brain can.
+//
+// Returns null when none of the sources applies: the caller cannot see this brain and
+// it must not appear in any listing.
 export function effectiveBrainRole(input: {
 	visibility: string;
-	orgRole: Role;
+	orgRole: Role | null;
 	grant?: Role | null;
+	anchor?: Role | null;
+	readOnly?: boolean;
 }): Role | null {
-	const { visibility, orgRole, grant } = input;
+	const { visibility, orgRole, grant, anchor, readOnly } = input;
 	let role: Role | null = null;
-	// (1) An 'org'-visible brain is reachable by every member at their org role.
+	// (1) An 'org'-visible brain is reachable by every MEMBER at their org role.
 	// Anything other than 'private' is treated as org-visible, so an unrecognized
 	// future value fails OPEN to today's behavior rather than locking a brain out.
-	if (visibility !== 'private') role = orgRole;
+	if (orgRole && visibility !== 'private') role = orgRole;
 	// (2) An explicit per-brain grant.
 	if (grant) role = role ? maxRole(role, grant) : grant;
-	// (3) Org admin/owner floor.
-	if (roleAtLeast(orgRole, 'admin')) role = role ? maxRole(role, orgRole) : orgRole;
+	// (3) Org admin/owner floor. Also needs a membership to be a member of.
+	if (orgRole && roleAtLeast(orgRole, 'admin')) role = role ? maxRole(role, orgRole) : orgRole;
+	// (4) Reached through an anchor brain, capped at editor.
+	if (anchor) {
+		const derived = minRole(anchor, 'editor');
+		role = role ? maxRole(role, derived) : derived;
+	}
+	// A read-only brain caps whatever the sources produced.
+	if (role && readOnly) role = minRole(role, 'viewer');
 	return role;
 }
 
@@ -134,9 +166,21 @@ export interface TenantOpts {
 	sticky?: boolean;
 }
 
-// Throw a caller-facing authorization error when `actual` outranks below `required`.
-export function assertRole(actual: Role, required?: Role): void {
-	if (required && !roleAtLeast(actual, required)) {
+// Throw a caller-facing authorization error when `actual` ranks below `required`.
+//
+// `actual` is nullable because a caller reaching a brain through a connection has no
+// role in that brain's organization at all. That has to read as "you are not a member",
+// not as the literal string "undefined", which is what the previous signature produced
+// once org roles could be absent: it failed closed by accident (ROLE_RANK[undefined] is
+// undefined and every comparison against it is false) rather than by design.
+export function assertRole(actual: Role | null, required?: Role): void {
+	if (!required) return;
+	if (!actual) {
+		throw new Error(
+			`This action requires ${required} access in the organization, and you are not a member of it.`
+		);
+	}
+	if (!roleAtLeast(actual, required)) {
 		throw new Error(
 			`This action requires ${required} access or higher, but your role is ${actual}.`
 		);
@@ -921,8 +965,20 @@ export interface AccessibleBrain {
 	// the two scopes diverge: you can be an org Admin holding only viewer on a
 	// brain someone shared with you read-only, or an org Editor holding admin on
 	// a brain you created.
-	org_role: Role;
+	// NULL when this brain was reached through a CONNECTION rather than a membership:
+	// its organization has no members, so there is no org role to carry. Every consumer
+	// that gates on this has to read a null as "not a member", never as "no gate".
+	org_role: Role | null;
 	visibility: string; // 'org' | 'private'
+	// A mirror: readable, never writable, by anyone including the admins of the org it
+	// landed in. The cap lives in effectiveBrainRole; this is only the flag.
+	read_only?: boolean;
+	// Set only for a connection brain. The app filters these OUT of the switcher, because
+	// a relationship is not a workspace you own, while they stay in the accessible set so
+	// `brain:`-targeted calls still resolve: dropping them here would make "show me the
+	// Northwind kickoff doc" fail with "no brain matching", which is indistinguishable
+	// from a permission denial.
+	connection_id?: string;
 }
 
 // A human label for a brain — what the switcher shows and what fuzzy `brain` matches
@@ -1004,6 +1060,7 @@ export async function listAccessibleBrains(
 		.prepare(
 			`SELECT b.brain_id AS brain_id, b.repo_owner AS repo_owner, b.repo_name AS repo_name,
 			        b.name AS name, b.visibility AS visibility, b.org_id AS org_id,
+			        b.read_only AS read_only,
 			        o.name AS org_name, o.model AS org_model,
 			        o.installation_id AS installation_id, m.role AS org_role,
 			        bm.role AS grant_role, b.created_at AS created_at
@@ -1030,6 +1087,7 @@ export async function listAccessibleBrains(
 			installation_id: number;
 			org_role: string;
 			grant_role: string | null;
+			read_only: number | null;
 		}>();
 
 	const byId = new Map<string, AccessibleBrain>();
@@ -1039,14 +1097,16 @@ export async function listAccessibleBrains(
 		const role = effectiveBrainRole({
 			visibility: r.visibility,
 			orgRole,
-			grant: r.grant_role as Role | null
+			grant: r.grant_role as Role | null,
+			readOnly: !!r.read_only
 		});
 		if (!role) continue; // private brain, no grant, not an org admin: invisible.
 		const existing = byId.get(id);
 		if (existing) {
 			// Same brain reached via two linked identities: keep the higher of each.
 			if (roleAtLeast(role, existing.role)) existing.role = role;
-			if (roleAtLeast(orgRole, existing.org_role)) existing.org_role = orgRole;
+			if (!existing.org_role || roleAtLeast(orgRole, existing.org_role))
+				existing.org_role = orgRole;
 			continue;
 		}
 		byId.set(id, {
@@ -1061,10 +1121,131 @@ export async function listAccessibleBrains(
 			name: r.name,
 			role,
 			org_role: orgRole,
-			visibility: r.visibility
+			visibility: r.visibility,
+			read_only: !!r.read_only
 		});
 	}
+	await addConnectionBrains(db, userIds, byId);
 	return [...byId.values()];
+}
+
+// The second resolution branch: brains reached through a CONNECTION.
+//
+// The membership branch above starts FROM memberships, so it can only ever return
+// brains in an organization you belong to. A connection brain lives in an organization
+// with no members at all, which is deliberate (see src/lib/connections.ts): it means
+// this branch is the ONLY way one is ever returned, so a mistake here makes connections
+// invisible rather than over-shared.
+//
+// The walk is: your memberships → a brain in one of your orgs (the ANCHOR) → the
+// connection joined to it → that connection's own brain. Reaching the anchor is what
+// confers access, so each side governs who is in a shared room by governing its own
+// brain's access list, and nobody administers people in an organization they cannot see.
+//
+// THE POLICY IS NOT IN THIS QUERY. The SQL widens to "every connection anchored to a
+// brain in an org you belong to" and then runs the pure rule TWICE: once to ask whether
+// you can actually reach the anchor at all, and once to turn that into a role on the
+// connection. Expressing either as a WHERE clause would be the second copy of the policy
+// that docs/design/brain-level-permissions.md warns about.
+//
+// Suspension is checked on the ANCHOR's organization, not the connection's. A
+// connection lives in the system org, which is never suspended, so checking there would
+// mean a suspended customer kept reading every room they were ever in.
+async function addConnectionBrains(
+	db: D1Database,
+	userIds: string[],
+	byId: Map<string, AccessibleBrain>
+): Promise<void> {
+	const placeholders = userIds.map((_, i) => `?${i + 1}`).join(', ');
+	const { results } = await db
+		.prepare(
+			`SELECT b.brain_id AS brain_id, b.repo_owner AS repo_owner, b.repo_name AS repo_name,
+			        b.name AS name, b.visibility AS visibility, b.org_id AS org_id,
+			        b.read_only AS read_only, b.created_at AS created_at,
+			        o.name AS org_name, o.model AS org_model,
+			        o.installation_id AS installation_id,
+			        c.connection_id AS connection_id, c.name AS connection_name,
+			        ab.visibility AS anchor_visibility, m.role AS anchor_org_role,
+			        abm.role AS anchor_grant
+			   FROM memberships m
+			   JOIN orgs ao   ON ao.org_id = m.org_id AND ao.suspended_at IS NULL
+			   JOIN brains ab ON ab.org_id = m.org_id AND ab.archived_at IS NULL
+			   LEFT JOIN brain_memberships abm
+			          ON abm.brain_id = ab.brain_id AND abm.user_id = m.user_id
+			   JOIN connection_parties p ON p.anchor_brain_id = ab.brain_id
+			   JOIN connections c ON c.connection_id = p.connection_id AND c.state = 'live'
+			   JOIN brains b ON b.brain_id = c.brain_id AND b.archived_at IS NULL
+			   JOIN orgs o   ON o.org_id = b.org_id
+			  WHERE m.user_id IN (${placeholders})
+			  ORDER BY b.created_at ASC, b.brain_id ASC`
+		)
+		.bind(...userIds)
+		.all<{
+			brain_id: string;
+			repo_owner: string;
+			repo_name: string;
+			name: string | null;
+			visibility: string;
+			org_id: string;
+			org_name: string;
+			org_model: string;
+			installation_id: number;
+			read_only: number | null;
+			connection_id: string;
+			connection_name: string;
+			anchor_visibility: string;
+			anchor_org_role: string;
+			anchor_grant: string | null;
+		}>();
+
+	for (const r of results ?? []) {
+		// Can this caller actually reach the anchor? Being a member of the org that holds
+		// it is not enough: the anchor may be private and unshared, in which case the
+		// connection hanging off it is not theirs to see either.
+		const anchor = effectiveBrainRole({
+			visibility: r.anchor_visibility,
+			orgRole: r.anchor_org_role as Role,
+			grant: r.anchor_grant as Role | null
+		});
+		if (!anchor) continue;
+		const role = effectiveBrainRole({
+			visibility: r.visibility,
+			orgRole: null,
+			anchor,
+			readOnly: !!r.read_only
+		});
+		if (!role) continue;
+		const id = `${r.repo_owner}/${r.repo_name}`;
+		const existing = byId.get(id);
+		if (existing) {
+			// Reachable through two anchors, or through two linked identities. Keep the
+			// higher role, exactly as the membership branch does.
+			if (roleAtLeast(role, existing.role)) existing.role = role;
+			continue;
+		}
+		byId.set(id, {
+			id,
+			brain_id: r.brain_id,
+			org_id: r.org_id,
+			// The CONNECTION's name, not the system organization's. Every connection on a
+			// deployment shares one org row, so carrying "Shared" here would make
+			// `brain: "shared"` fuzzy-match all of them at once, and would tell a user
+			// nothing about which relationship they were looking at.
+			org_name: r.connection_name,
+			org_model: r.org_model,
+			installation_id: r.installation_id,
+			repo_owner: r.repo_owner,
+			repo_name: r.repo_name,
+			name: r.name,
+			role,
+			// No membership, so no org role. Not 'viewer' and not a default: the gates
+			// have to be able to tell "not a member" from "a member with few powers".
+			org_role: null,
+			visibility: r.visibility,
+			read_only: !!r.read_only,
+			connection_id: r.connection_id
+		});
+	}
 }
 
 // Every org a PERSON belongs to, with their role in it, INCLUDING orgs that hold no

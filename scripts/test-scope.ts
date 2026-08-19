@@ -113,7 +113,13 @@ sqlite.exec(`
 interface Persona {
 	label: string;
 	userId: string;
-	orgRole: Role;
+	// NULL for a caller who reached this brain through a CONNECTION: their organization
+	// is a different one, so they hold no role in this one at all. Distinct from
+	// 'viewer' on purpose, and that distinction is the whole reason the field is
+	// nullable: the org roster and the per-person analytics table are precisely what
+	// someone from outside must never see, and "not a member" has to be a different
+	// answer from "a member with few powers".
+	orgRole: Role | null;
 	role: Role;
 }
 const sharedAdmin: Persona = {
@@ -139,6 +145,16 @@ const lurker: Persona = {
 	userId: 'u-lurker',
 	orgRole: 'viewer',
 	role: 'viewer'
+};
+// Reached the brain through a connection anchored in their OWN organization. Editor in
+// the room, nothing in the organization that holds it. This is the shape no test had
+// ever exercised before connections existed, and the one where an accidental pass reads
+// as a permissions bug rather than as a leak.
+const connectionGuest: Persona = {
+	label: 'a connection guest: editor here, not a member of this organization',
+	userId: 'u-outside',
+	orgRole: null,
+	role: 'editor'
 };
 
 // Any octokit call means a handler reached the network on a path that should not.
@@ -218,6 +234,10 @@ function toolsFor(p: Persona): Map<string, Handler> {
 		orgContext: async (opts?: { requires?: Role; org?: string }) => {
 			orgAsks.push(opts);
 			assertRole(p.orgRole, opts?.requires);
+			// An ORG scope resolves through memberships, so it cannot exist for someone who
+			// has none. The real orgContext throws for them; mirroring that here is what
+			// keeps this stub from being more permissive than the thing it stands in for.
+			if (!p.orgRole) throw new Error('You are not a member of this organization.');
 			return {
 				octokit,
 				org: {
@@ -252,12 +272,17 @@ function toolsFor(p: Persona): Map<string, Handler> {
 			})) as AccessibleBrain[],
 		// Two orgs, one of which holds no brain at all: the case the brains payload has
 		// to carry, since the widget cannot derive it from a list of brains.
+		// Someone with no membership belongs to no organization, so the list is empty for
+		// them rather than being their brain role in disguise.
 		listOrgs: async () =>
-			[
-				{ org_id: 'org1', name: 'Northwind', brain_owner: 'northwind' },
-				{ org_id: 'org2', name: 'Contoso Group', brain_owner: 'contoso-io' }
-			].map((o) => ({
-				role: p.orgRole,
+			(p.orgRole
+				? [
+						{ org_id: 'org1', name: 'Northwind', brain_owner: 'northwind' },
+						{ org_id: 'org2', name: 'Contoso Group', brain_owner: 'contoso-io' }
+					]
+				: []
+			).map((o) => ({
+				role: p.orgRole as Role,
 				org: {
 					...o,
 					model: 'customer',
@@ -641,7 +666,54 @@ async function analyticsPayload(p: Persona) {
 	);
 }
 
+// ---------------------------------------------------------------------------// ---------------------------------------------------------------------------
+console.log('\nA CONNECTION GUEST reaches the brain and nothing around it');
 // ---------------------------------------------------------------------------
+// The risk this whole section exists for: someone from another organization can now
+// resolve a brain, and everything ORG-scope hanging off that brain must still refuse
+// them. Every one of these gates reads ctx.orgRole, which is null for them.
+{
+	const denials = [
+		['members', {}],
+		['invite_member', { email: 'x@example.com', role: 'viewer' }],
+		['set_member_role', { email: 'lurker@example.com', role: 'admin' }],
+		['remove_member', { email: 'lurker@example.com' }]
+	] as const;
+	for (const [tool, args] of denials) {
+		const r = await attempt(connectionGuest, tool, args as Record<string, unknown>);
+		check(`${tool} refuses them`, r.outcome === 'denied', `${r.outcome}: ${r.detail}`);
+		// The message has to SAY they are not a member. Before assertRole took a nullable
+		// role it interpolated the absent value straight into the sentence ("your role is
+		// undefined"), which fails closed by accident and reads to a person as a bug
+		// rather than as an answer.
+		if (tool !== 'members')
+			check(
+				`  ...and the refusal says they are not a member`,
+				/not a member/.test(r.detail) && !/your role is (undefined|null)/.test(r.detail),
+				r.detail
+			);
+	}
+
+	// Content reads stay open: they resolved the brain legitimately, and a connection is
+	// a place to work. It is the surrounding ORGANIZATION that is not theirs.
+	const read = await attempt(connectionGuest, 'search_pages', { query: 'anything' });
+	check(
+		'but a content read still passes the gate',
+		await passesGate(connectionGuest, 'search_pages', { query: 'anything' }),
+		`${read.outcome}: ${read.detail}`
+	);
+
+	// Asserted on the PAYLOAD, not on a flag: the rows have to be absent, not merely
+	// marked. Same rule the org-viewer cases below already follow.
+	const payload = await analyticsPayload(connectionGuest);
+	check(
+		'analytics withholds the per-person table entirely',
+		Array.isArray(payload.people) && payload.people.length === 0,
+		JSON.stringify(payload.people)
+	);
+	check('and says so', payload.canSeePeople === false, String(payload.canSeePeople));
+}
+
 if (failures) {
 	console.error(`\n${failures} scope check(s) FAILED.`);
 	process.exit(1);
