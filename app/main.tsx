@@ -418,7 +418,7 @@ const SELF_BOOT_MS = 1200;
 const SELF_BOOT_MAX_MS = 30_000;
 
 function connectToHost() {
-	show({ kind: 'loading', label: 'Connecting…' }, { push: false });
+	show({ kind: 'loading', label: 'Connecting…', task: 'connect' }, { push: false });
 	const timeout = setTimeout(() => {
 		if (currentView.kind === 'loading') {
 			show(

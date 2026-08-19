@@ -35,7 +35,7 @@ import type {
 	UsageBrain
 } from './types.ts';
 import { app, callTool, firstText } from './host.ts';
-import { FOLDER_NOTE_NAMES, refreshOutcome } from './util.ts';
+import { FOLDER_NOTE_NAMES, isFolderNoteName, refreshOutcome } from './util.ts';
 import {
 	show,
 	history,
@@ -241,7 +241,12 @@ async function switchBrain(id: string) {
 		openBrowse();
 		return;
 	}
-	show({ kind: 'loading', label: 'Switching brain…' });
+	show({
+		kind: 'loading',
+		label: 'Switching brain…',
+		task: 'switch',
+		subject: brainList?.find((b) => b.id === id)?.label
+	});
 	try {
 		const res = await callTool('switch_brain', { brain: id });
 		if (res.isError) throw new Error(firstText(res));
@@ -376,7 +381,10 @@ async function submitCreateBrain(name: string) {
 	// push:false — a completed flow must not enter the back stack, so the screen that
 	// opened it stays on top and Back from the new brain lands there, not on a form
 	// offering to create the brain that now exists.
-	show({ kind: 'loading', label: 'Creating brain…' }, { push: false });
+	show(
+		{ kind: 'loading', label: 'Creating brain…', task: 'create', subject: trimmed },
+		{ push: false }
+	);
 	try {
 		const res = await callTool('create_brain', { name: trimmed });
 		if (res.isError) throw new Error(firstText(res));
@@ -395,7 +403,7 @@ async function submitCreateBrain(name: string) {
 
 // Open the full brains view (the bi-modal counterpart to the header switcher).
 async function openBrains() {
-	show({ kind: 'loading', label: 'Loading brains…' });
+	show({ kind: 'loading', label: 'Loading brains…', task: 'brains' });
 	try {
 		const res = await callTool('brains', {});
 		if (res.isError) throw new Error(firstText(res));
@@ -449,7 +457,7 @@ function brainAccessViewFromSc(sc: Record<string, unknown>): View {
 // `brain` targets a specific one (the Share control in the brains list); omitted,
 // it acts on the active brain.
 async function openBrainAccess(brain?: string) {
-	show({ kind: 'loading', label: 'Loading sharing…' });
+	show({ kind: 'loading', label: 'Loading sharing…', task: 'sharing' });
 	try {
 		const result = await callTool('brain_access', brain ? { brain } : {});
 		if (result.isError) throw new Error(firstText(result));
@@ -514,10 +522,27 @@ async function fetchPageIndex(): Promise<{ path: string; title: string }[]> {
 	return data.paths.map((path) => ({ path, title: data.titleByPath[path] ?? '' }));
 }
 
+// What to CALL a path when a human is reading it: the cached tree's title if the tree
+// is warm, else the filename. Only used to name the thing in a loading line, so a cold
+// cache degrades to the filename rather than costing a fetch. The point of the line is
+// that it is free.
+function baseName(path: string): string {
+	return path.split('/').pop()?.replace(/\.md$/i, '') ?? path;
+}
+function pageLabel(path: string): string {
+	const name = baseName(path);
+	// A FOLDER NOTE is its folder (FOLDER_NOTE_NAMES), so it is called by the folder's
+	// name. `pageTitle` on the server already resolves it that way, but a title reaching
+	// us as the literal "index" is exactly what that rule exists to prevent, and it is
+	// the most-clicked path in the tree: "Turning to index…" is worse than saying nothing.
+	if (isFolderNoteName(`${name}.md`)) return path.split('/').slice(-2, -1)[0] || name;
+	return browseCache?.titleByPath[path]?.trim() || name;
+}
+
 // ---------- navigation ----------
 
 async function navigateTo(path: string) {
-	show({ kind: 'loading', label: `Loading ${path}…` });
+	show({ kind: 'loading', label: `Loading ${path}…`, task: 'page', subject: pageLabel(path) });
 	try {
 		show(pageView(path, await fetchPage(path)));
 	} catch (e) {
@@ -573,7 +598,7 @@ async function refreshPage() {
 // worse than one that was never listed, so making them visible obliged us to give
 // them somewhere to go.
 async function openAsset(path: string) {
-	show({ kind: 'loading', label: `Loading ${path}…` });
+	show({ kind: 'loading', label: `Loading ${path}…`, task: 'asset', subject: baseName(path) });
 	try {
 		// include_data: the asset view IS the bytes. See app/core/media.ts on why the
 		// default is off.
@@ -679,7 +704,7 @@ async function openBrowse(focus?: string) {
 		void revalidateBrowse();
 		return;
 	}
-	show({ kind: 'loading', label: 'Loading files…' });
+	show({ kind: 'loading', label: 'Loading files…', task: 'files' });
 	// The view this call is standing on. A cold tree fetch is the app's slowest open,
 	// and the one it makes UNATTENDED (the self-boot in connectToHost), so it is the one
 	// most likely to be overtaken: the host can deliver the opening tool result at any
@@ -725,7 +750,13 @@ async function openFolder(prefix: string) {
 	const base = prefix.replace(/\/+$/, '');
 	try {
 		// Only a cold cache costs a round-trip — say so rather than hanging silently.
-		if (!browseCache) show({ kind: 'loading', label: `Opening ${base.split('/').pop()}…` });
+		if (!browseCache)
+			show({
+				kind: 'loading',
+				label: `Opening ${base.split('/').pop()}…`,
+				task: 'folder',
+				subject: base.split('/').pop()
+			});
 		const list = await fetchPageList();
 		// index.md preferred, README.md fallback (see FOLDER_NOTE_NAMES).
 		const note = FOLDER_NOTE_NAMES.map((n) => `${base}/${n}`).find((p) => list.includes(p));
@@ -739,7 +770,12 @@ async function openFolder(prefix: string) {
 // Open the activity/audit feed — whole brain, or one page's history when `path`
 // is given. Drives the same view the view_activity tool opens.
 async function openActivity(path?: string) {
-	show({ kind: 'loading', label: 'Loading recent changes…' });
+	show({
+		kind: 'loading',
+		label: 'Loading recent changes…',
+		task: 'activity',
+		subject: path ? pageLabel(path) : undefined
+	});
 	try {
 		const result = await callTool('view_activity', { ...(path ? { path } : {}), ...brainArgs() });
 		if (result.isError) throw new Error(firstText(result));
@@ -762,7 +798,7 @@ async function openActivity(path?: string) {
 // `members` tool opens; mutations (invite / role / remove) refresh through
 // refreshMembers below.
 async function openMembers() {
-	show({ kind: 'loading', label: 'Loading members…' });
+	show({ kind: 'loading', label: 'Loading members…', task: 'members' });
 	try {
 		const result = await callTool('members', {});
 		if (result.isError) throw new Error(firstText(result));
@@ -781,7 +817,7 @@ async function openMembers() {
 // from whichever brain you happen to be in, so this deliberately does NOT pass
 // brainArgs() and lets the server resolve the org off the active brain.
 async function openAnalytics(days?: number) {
-	show({ kind: 'loading', label: 'Loading analytics…' });
+	show({ kind: 'loading', label: 'Loading analytics…', task: 'analytics' });
 	try {
 		const result = await callTool('analytics', { ...(days ? { days } : {}) });
 		if (result.isError) throw new Error(firstText(result));
@@ -844,7 +880,7 @@ function parseIdentity(sc: Record<string, unknown>): Identity {
 // Connected accounts is a per-person concern that may reject on a single-tenant
 // connection, so its failure is tolerated (the card still shows).
 async function openSettings() {
-	show({ kind: 'loading', label: 'Loading…' });
+	show({ kind: 'loading', label: 'Loading…', task: 'settings' });
 	try {
 		const [who, conn] = await Promise.all([
 			callTool('whoami', {}),
@@ -870,7 +906,12 @@ async function openSettings() {
 // Open the link graph — the whole brain as nodes + edges. `focus` centers and
 // highlights one page. Drives the same view the view_graph tool opens.
 async function openGraph(focus?: string) {
-	show({ kind: 'loading', label: 'Building the graph…' });
+	show({
+		kind: 'loading',
+		label: 'Building the graph…',
+		task: 'graph',
+		subject: focus ? pageLabel(focus) : undefined
+	});
 	try {
 		const result = await callTool('view_graph', {
 			...(focus ? { path: focus } : {}),
@@ -913,7 +954,7 @@ async function refreshBrowse() {
 
 async function runSearch(query: string) {
 	if (!query.trim()) return;
-	show({ kind: 'loading', label: `Searching for “${query}”…` });
+	show({ kind: 'loading', label: `Searching for “${query}”…`, task: 'search', subject: query });
 	try {
 		const result = await callTool('search_pages', { query, ...brainArgs() });
 		const sc = (result.structuredContent ?? {}) as { hits?: Hit[] };

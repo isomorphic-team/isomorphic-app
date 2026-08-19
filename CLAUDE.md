@@ -39,6 +39,7 @@ pnpm test:structure     # OKF conformance golden test (granularity, type:, neste
 pnpm test:links         # wikilink resolution + the broken-link report golden test
 pnpm test:access        # per-brain access rule (effectiveBrainRole) golden test
 pnpm test:scope         # org-vs-brain scope: which role each tool gates on
+pnpm test:loading       # loading-line engine: slot eligibility + per-task wiring
 pnpm test:feedback      # submit_feedback composition golden test (redaction, nothing identifying published)
 pnpm test:usage         # usage-analytics golden test (tool-classification coverage, the summary fold)
 pnpm test:wiring        # every test:* script is in BOTH package.json's `test` and ci.yml
@@ -77,6 +78,9 @@ broken-link report says about the ones that match nothing), `pnpm test:index`
 (content-index freshness guard: bounded, resumable work per read; wraps an octokit
 stub in the REAL `githubStore` so it still covers `fetchPages`'s GraphQL batching),
 `pnpm test:policy` (the path-policy wire contract between Worker and app),
+`pnpm test:loading` (the loading-line engine: that a phrase naming a fact the widget
+does not have is never eligible, and that every loading state in the app declares a
+task, which is optional in the type and so invisible to typecheck),
 `pnpm test:access` (the per-brain access rule: every input to `effectiveBrainRole`),
 `pnpm test:scope` (which role each TOOL gates on: the real handlers over a stub server
 and a fake `getContext`, asserting org-scope tools read `orgRole` and brain-scope tools
@@ -799,6 +803,51 @@ UI is `app/views/AnalyticsView.tsx`, an ORG-scope destination beside Members.
 - **Not built:** retention/pruning (rows are small, but nothing deletes them),
   a CSV export, per-brain analytics (this is deliberately org-scope), and any
   notion of a session or of time-on-page.
+
+## Loading states (the rotating status line)
+
+Every `{ kind: 'loading' }` in the app renders through one `LoadingView`, which shows
+the caller's own literal label first and then rotates through phrases from
+`src/lib/loading-lines.ts` (pure, `pnpm test:loading`). Built 2026-08-18.
+
+- **The label leads, always.** The rotation starts 2.4s in, so a load that resolves
+  quickly reads exactly as it did before: nothing whimsical is ever the only thing on
+  screen while someone waits for an answer, and the personality is spent only on waits
+  long enough to feel like waits. The lines then go specific before playful, so the
+  second thing read names the user's own brain and only a longer wait reaches the
+  library jokes.
+- **A slot is a REQUIREMENT.** A template naming `{brain}` / `{org}` / `{subject}` /
+  `{pages}` is ineligible when that value is unknown, rather than rendering blank. This
+  is structural rather than a pile of conditionals because the state with the fewest
+  facts (a cold self-boot: no brain list, no tree, no org) is both the most common and
+  the least likely to get tested by hand, and its failure mode is a customer reading
+  "Asking undefined…". `pnpm test:loading` walks every template's own slots to prove it.
+- **Personalization is LOCAL and free.** The facts come from what the widget already
+  holds: the brain it is showing, that brain's org label, the page/folder/query it was
+  asked for, and the size of the cached tree. Nothing calls a tool to decorate a wait,
+  since the alternative to a wait cannot be a second wait. Nothing reaches for a
+  person's name or email either: identity is fetched by one screen on request, and a
+  colleague's name is not chrome.
+- **`task` is optional on the view and so invisible to typecheck.** An omitted one is
+  not an error, it is a screen that quietly stops naming anything the user is looking
+  at. The golden test scans `actions.ts` / `main.tsx` / `store.ts` for every
+  `kind: 'loading'` and fails on any without a `task`, the same way `pnpm test:usage`
+  scans for unclassified tools.
+- **Motion is off under `prefers-reduced-motion`**, in CSS (both the fade and the
+  shimmer sweep in `app/styles.css`) and in JS (the timer never starts, so one phrase
+  holds: the label). Only the label is announced, from an element that never remounts;
+  the rotating span is `aria-hidden`, since a live region re-reading a new phrase every
+  three seconds is noise.
+- **The VIEW is covered too**, unusually for the app layer: `tests/ui/loading.spec.ts`
+  drives the real bundle over the `#loading` harness route, which opens the tree and
+  then holds the app's own fetches open forever so a wait stays on screen. The clock is
+  installed rather than fixed (`openApp(..., { advanceable: true })`), so the rotation
+  advances only when the test advances it. It pins the label leading, a swap happening,
+  the swapped line naming the brain and the page, the announcement staying put, and
+  reduced motion holding one phrase. Note `test.use({ reducedMotion })` at describe
+  level does NOT reach this page; the spec calls `page.emulateMedia` instead.
+- **Not built:** skeleton shells for the page/tree/graph, which are the other half of
+  this and are still on `docs/roadmap.md`.
 
 ## Brain templates
 

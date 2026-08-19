@@ -141,7 +141,7 @@ function applyPolicy(sc: Record<string, unknown>): void {
 // change before or after mount — useSyncExternalStore handles both.
 const listeners = new Set<() => void>();
 let version = 0;
-let currentView: View = { kind: 'loading', label: 'Connecting…' };
+let currentView: View = { kind: 'loading', label: 'Connecting…', task: 'connect' };
 function subscribeStore(cb: () => void) {
 	listeners.add(cb);
 	return () => listeners.delete(cb);
