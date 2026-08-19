@@ -36,6 +36,7 @@ pnpm test:import        # bulk-import planner golden test
 pnpm test:tools         # user-defined (brain-authored) tools parse-layer golden test
 pnpm test:patch         # write_page append/edits (page-patch) golden test
 pnpm test:structure     # OKF conformance golden test (granularity, type:, nested frontmatter)
+pnpm test:search        # cross-brain search: which brains, and the per-brain hit budget
 pnpm test:links         # wikilink resolution + the broken-link report golden test
 pnpm test:access        # per-brain access rule (effectiveBrainRole) golden test
 pnpm test:scope         # org-vs-brain scope: which role each tool gates on
@@ -76,7 +77,10 @@ append/edits), `pnpm test:structure` (OKF conformance), `pnpm test:links`
 broken-link report says about the ones that match nothing), `pnpm test:index`
 (content-index freshness guard: bounded, resumable work per read; wraps an octokit
 stub in the REAL `githubStore` so it still covers `fetchPages`'s GraphQL batching),
-`pnpm test:policy` (the path-policy wire contract between Worker and app),
+`pnpm test:search` (cross-brain search: `searchTargets`, which decides which brains one
+answer may contain, and `searchIndex`'s per-brain hit budget, whose failure mode is a
+fan-out where the first brain fills a global cap and every later one silently reports
+nothing), `pnpm test:policy` (the path-policy wire contract between Worker and app),
 `pnpm test:access` (the per-brain access rule: every input to `effectiveBrainRole`),
 `pnpm test:scope` (which role each TOOL gates on: the real handlers over a stub server
 and a fake `getContext`, asserting org-scope tools read `orgRole` and brain-scope tools
@@ -389,6 +393,27 @@ platform-db --remote` **before** the code ships (schema-first), so a merge to `m
   Bounded by inbound-link count rather than brain size, and uncapped: a linker beyond the
   old `MAX_SCAN_PAGES` ceiling is no longer silently missed. (The whole-brain `scanContent`
   helper is gone as of this change.)
+- **Search can span brains, and freshness is what that costs** (`scope: 'all'` on
+  `search_pages`, built 2026-08-19 as phase 1 of `docs/design/brain-seams.md`). At the
+  storage layer fan-out is nearly free: one D1 holds every brain's index and `brain_id`
+  was the only per-brain parameter, so `searchIndex` takes a SET of brains. The cost is
+  `ensureFresh`, one `branchCommitSha` per brain plus a full reindex for any whose HEAD
+  moved, which for a rarely-opened brain is the common case. So **the freshness
+  guarantee is per brain and only the ACTIVE brain keeps it**: the others are served
+  from whatever is indexed and the result says so, and a `read_page` on any hit resolves
+  the authoritative blob anyway. Two consequences that are load-bearing rather than
+  tidy. **The hit cap is per brain, not global**: one cap taken in path order is right
+  for one brain and silently starves every brain after the first, which reads as "the
+  others have no matches" rather than "we stopped looking", so each brain has its own
+  budget and the ceiling is filled round-robin. **Every result names its brain**,
+  because the leak here is conversational rather than mechanical: a conversation rooted
+  in one client's brain surfaces another engagement's material and a human pastes it
+  onward. Fan-out is opt-in per call and never ambient, and a WRITE never fans out (it
+  names exactly one brain, and `landed` now reports which, since a unique-but-wrong
+  fuzzy match otherwise puts a real page in a real client's repository silently).
+  `searchTargets` (`src/tools/librarian.ts`) is the pick and is exported so
+  `pnpm test:search` can pin it; `find_inbound_links` is deliberately NOT fanned out,
+  being two live GitHub reads plus a whole-graph load per brain.
 - **Writes are WRITE-THROUGH** (issue #31). A successful DIRECT commit upserts the index rows
   for exactly the pages its bundle touched (`writeThroughIndex` in `brain-index.ts`, called from
   the `commitBundle` chokepoint in `librarian.ts`) and advances `indexed_commit_sha`, so the
