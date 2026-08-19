@@ -83,6 +83,7 @@ jobs:
       - run: pnpm test:patch
       - run: pnpm test:structure
       - run: pnpm test:index
+      - run: pnpm test:search
       - run: pnpm test:links
       - run: pnpm test:policy
       - run: pnpm test:access

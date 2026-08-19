@@ -21,6 +21,11 @@ export interface Hit {
 	path: string;
 	line: number;
 	text: string;
+	// Set when the search spanned brains (scope: 'all'). Not decoration: opening a hit
+	// from another brain has to switch first, because navigateTo resolves its path
+	// against the ACTIVE brain and would otherwise look it up in the wrong one.
+	brain?: string;
+	brainLabel?: string;
 }
 
 // The file-tree payload (one list_pages call). Cached in the store so reopening the

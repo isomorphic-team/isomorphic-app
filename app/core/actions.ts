@@ -236,6 +236,16 @@ function ensureBrainList(): Promise<void> {
 
 // Switch the active brain, then land on its file tree. Selecting the already-active
 // brain just (re)opens its files — so the switcher doubles as the Files action.
+// Move the active brain WITHOUT deciding where to land. switchBrain lands on the file
+// tree; a search hit lands on the page it named. Both go through brainsViewFromSc,
+// because adopting a brain is what drops the previous one's file tree and path policy
+// (setActiveBrain in the store) and no path into a brain may skip that seam.
+async function adoptBrain(id: string): Promise<void> {
+	const res = await callTool('switch_brain', { brain: id });
+	if (res.isError) throw new Error(firstText(res));
+	brainsViewFromSc((res.structuredContent ?? {}) as Record<string, unknown>, true);
+}
+
 async function switchBrain(id: string) {
 	if (activeBrain?.id === id) {
 		openBrowse();
@@ -243,11 +253,7 @@ async function switchBrain(id: string) {
 	}
 	show({ kind: 'loading', label: 'Switching brain…' });
 	try {
-		const res = await callTool('switch_brain', { brain: id });
-		if (res.isError) throw new Error(firstText(res));
-		// Adopting the new brain is what drops the old one's file tree and path policy
-		// (setActiveBrain in the store) — one seam, so no path into a brain can forget.
-		brainsViewFromSc((res.structuredContent ?? {}) as Record<string, unknown>, true);
+		await adoptBrain(id);
 		openBrowse();
 	} catch (e) {
 		show({
@@ -911,21 +917,52 @@ async function refreshBrowse() {
 	}
 }
 
-async function runSearch(query: string) {
+// `scope` is opt-in and never ambient: the box searches the brain you are in, and
+// widening is a second, deliberate click (SearchView's footer). An ordinary search
+// keeps an ordinary blast radius, which matters because the leak here is
+// conversational — one client's material surfacing in another client's window.
+async function runSearch(query: string, scope?: 'all') {
 	if (!query.trim()) return;
 	show({ kind: 'loading', label: `Searching for “${query}”…` });
 	try {
-		const result = await callTool('search_pages', { query, ...brainArgs() });
+		const result = await callTool('search_pages', {
+			query,
+			...(scope ? { scope } : {}),
+			...brainArgs()
+		});
+		// A failed tool call comes back as a RESULT carrying isError, it does not throw.
+		// Without this an error rendered as "No matches", which is a different and much
+		// more misleading answer than "search failed".
+		if (result.isError) throw new Error(firstText(result));
 		const sc = (result.structuredContent ?? {}) as { hits?: Hit[] };
-		show({ kind: 'search', query, hits: sc.hits ?? [] });
+		show({ kind: 'search', query, scope, hits: sc.hits ?? [] });
 	} catch (e) {
 		show({
 			kind: 'error',
 			headline: 'Search failed.',
 			detail: String(e),
-			retry: () => runSearch(query)
+			retry: () => runSearch(query, scope)
 		});
 	}
+}
+
+// Open a search hit. A fan-out result can name a brain other than the one you are in,
+// so the switch has to land BEFORE the fetch.
+async function openHit(hit: Hit) {
+	if (!hit.brain || hit.brain === activeBrain?.id) return navigateTo(hit.path);
+	show({ kind: 'loading', label: `Loading ${hit.path}…` });
+	try {
+		await adoptBrain(hit.brain);
+	} catch (e) {
+		show({
+			kind: 'error',
+			headline: "Couldn't open that brain.",
+			detail: String(e),
+			retry: () => openHit(hit)
+		});
+		return;
+	}
+	await navigateTo(hit.path);
 }
 
 async function openEditor(path: string) {
@@ -1055,6 +1092,7 @@ export {
 	openGraph,
 	refreshBrowse,
 	runSearch,
+	openHit,
 	openEditor,
 	resolveWikilink,
 	renderMarkdown,
