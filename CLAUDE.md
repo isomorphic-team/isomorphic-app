@@ -847,16 +847,20 @@ the caller's own literal label first and then rotates through phrases from
   then holds the app's own fetches open forever so a wait stays on screen. It pins the
   label leading, a swap happening, the swapped line naming the brain and the page, the
   announcement staying put, and reduced motion holding one phrase.
-- **A rotation cannot be STEPPED, only watched**, so that spec samples the line every
-  100ms and asserts on the resulting sequence. `page.clock.install()` does not pause
+- **A rotation cannot be STEPPED, only watched**, so that spec records the line with a
+  MutationObserver INSIDE the frame and reads the result back at the end. `page.clock.install()` does not pause
   timers here: probed directly, a `setTimeout` in the main frame AND in the app's iframe
   both fire with no `runFor`, so an installed clock moves only what `Date.now()` reports
   while a `setTimeout` chain keeps running on the wall clock. (`advanceable` is still
   right for `refresh.spec.ts`, which asserts on a rendered AGE.) The first version of the
   loading spec asserted at fixed moments and so raced the machine: it checked "still the
   label" after a click plus three awaits, which passed locally and failed on CI, where
-  the runner had already spent the 2.4s the label holds for. Assert on ORDER, not on
-  what is on screen at a particular millisecond. Also note `test.use({ reducedMotion })`
+  the runner had already spent the 2.4s the label holds for. The second version polled
+  `textContent({ timeout: 100 })` from the test and was worse, because it failed
+  SILENTLY: under CI load every one of those calls timed out, so it recorded nothing and
+  reported an empty sequence rather than a wrong one. Recording in the page is what
+  finally held, because runner speed then changes when the answer arrives rather than
+  what it says. Assert on ORDER, never on what is on screen at a given millisecond. Also note `test.use({ reducedMotion })`
   at describe level does NOT reach this page; the spec calls `page.emulateMedia`.
 - **Three other kinds of wait exist and deliberately do NOT rotate.** (1) Button busy
   labels: `Creating…` (AddBrainView), `Saving…` / `Adding image…` (EditView), `Sharing…`
