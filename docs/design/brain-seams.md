@@ -1,10 +1,10 @@
 # Design: collaboration between brains
 
-- Status: Draft for discussion. Nothing built. Open questions in §14 are unresolved.
+- Status: Draft for discussion. Nothing built. Open questions in §15 are unresolved.
 - Author: Jon Hansing (via Claude)
 - Date: 2026-08-19. Supersedes the 2026-08-10 draft, which designed publishing (a one-way
   key-addressed copy between repositories) and ruled shared surfaces out of scope. Publishing is
-  not the route being taken; §15 says what happened to it.
+  not the route being taken; §16 says what happened to it.
 - Audience: the engineering session that picks this up, and Jon deciding whether it should exist
 - Related: `docs/design/brain-level-permissions.md` (the access rule this extends),
   `docs/design/records-tables-prd.md` (which owns motivating flow 1, see §2),
@@ -29,19 +29,34 @@ access can cross an organization boundary, that covers the collaboration case ou
 covers it with no copy, no reconciliation, no ledger, and no run.
 
 **The whole design is one new primitive:** a brain reachable by someone who is not a member of its
-organization. Everything else a shared brain needs already ships. Per-brain authorization, the
+organization. Everything else a connection brain needs already ships. Per-brain authorization, the
 `brain` argument on every content tool, `matchBrain` resolution, per-brain index isolation, and
 atomic writes are all in place and all brain-scoped already.
 
+Two decisions sit on top of that primitive, and both are about power rather than storage:
+
+- **The connection brain is owned by neither party** (§5). It lives in the platform organization,
+  which is already where every auto-provisioned brain lives. A collaboration between two commercial
+  peers should not sit inside one peer's namespace, where the other is a guest for the life of the
+  engagement. Where the bytes physically sit has no user-visible consequence, since nobody in this
+  audience touches a repository; it is a legal and commercial question, not a product one.
+- **Ending a connection is non-destructive** (§7). Either party may end it, neither inherits the
+  original, and each receives a **mirror**: a read-only copy landing in their own brain list. That
+  is what keeps the revoke button from being a weapon, and it is what makes the rest of this design
+  tolerable to design around.
+
 What this does not do is serve a reader who cannot be granted access at all. That case is real and
-this design leaves it unserved, deliberately and visibly. See §8.
+this design leaves it unserved, deliberately and visibly. See §9.
 
 ### Terminology
 
-- **Shared brain**: a brain both parties can reach, holding work that belongs to neither of their
-  own brains. Not a new kind of object: an ordinary brain, with grants.
-- **Connection**: the product-level object a user manages, §9. A connection names a relationship
-  and has a shared brain as its storage.
+- **Connection brain**: a brain both parties reach by grant, owned by neither, holding work that
+  belongs to neither of their own brains. Not a new kind of object: an ordinary brain in the
+  platform organization, with grants.
+- **Connection**: the product-level object a user manages, §10. A connection names a relationship
+  and has a connection brain as its storage.
+- **Mirror**: the read-only copy each party receives in their own brain list when a connection ends,
+  §7. Never written to, so it cannot drift.
 - **Grant**: a `brain_memberships` row. Today it can only raise a role within your own
   organization; §6 is about letting it cross.
 
@@ -60,12 +75,12 @@ Four flows the person wants, and what serves each:
 |     | Flow                                                                         | Served by                      |
 | --- | ---------------------------------------------------------------------------- | ------------------------------ |
 | 1   | Client-tagged to-dos and time entries visible in the client's brain          | Records, not pages. See below. |
-| 2   | A deliverable authored in the venture brain lands in the client's brain      | Publishing. Not built, §15.    |
-| 3   | A page in the client brain is findable while working in the venture brain    | Cross-brain read, §12          |
-| 4   | A working document the consultant and the client both edit, owned by neither | **A shared brain, §5**         |
+| 2   | A deliverable authored in the venture brain lands in the client's brain      | Publishing. Not built, §16.    |
+| 3   | A page in the client brain is findable while working in the venture brain    | Cross-brain read, §13          |
+| 4   | A working document the consultant and the client both edit, owned by neither | **A connection brain, §5**     |
 
 Flow 4 is the subject of this document. Flow 3 is adjacent and mostly already ships, and is here
-because a shared brain is reached by exactly that machinery.
+because a connection brain is reached by exactly that machinery.
 
 **Flow 1's real answer is records, and it is not in this document.** Time entries and dated to-dos
 against a client are activity records, not pages, which is the subject of
@@ -74,7 +89,7 @@ page cross" and becomes "can an aggregate over records cross a boundary", which 
 smaller question: a client is owed the rollup ("14 hours this month against the engagement"), not
 the underlying entries.
 
-**Flow 2 is the one this design does not serve.** §8 states that plainly rather than pretending a
+**Flow 2 is the one this design does not serve.** §9 states that plainly rather than pretending a
 grant covers it.
 
 ## 3. The test: who needs it
@@ -82,7 +97,7 @@ grant covers it.
 The discriminating question is not "which brain is it in" but **who needs it**. Three answers:
 
 - **"I need to find it."** The reader is the same person, who already has access to both brains.
-  Nothing needs to move. What is missing is a **read** that spans a person's brains, §12.
+  Nothing needs to move. What is missing is a **read** that spans a person's brains, §13.
 - **"Someone who could be granted access needs to work on it with me."** The reader is a client,
   the content is not confidential to either side, and it does not belong to either brain. Nothing
   needs to cross, because the reader can be admitted to the place the content lives. This is
@@ -90,7 +105,7 @@ The discriminating question is not "which brain is it in" but **who needs it**. 
 - **"Someone who cannot reach my brain needs to see it."** The reader cannot be admitted: the
   material sits inside a brain holding things they must never see, and the page cannot be lifted
   out of it. Content must physically cross into a repository they can read. This is **publishing**,
-  and it is the only case where copying is the right answer. Not built, §15.
+  and it is the only case where copying is the right answer. Not built, §16.
 
 The middle answer only became available when access could be widened. In the model as it stands
 today it cannot: a brain is reachable only from its own organization (§6), so "admit the reader"
@@ -99,7 +114,7 @@ one constraint is what makes this document possible and makes the previous one m
 
 The line between the second and third answers is **not** "is it confidential". It is whether the
 content can live somewhere the reader is allowed to be. A confidential deliverable that can be
-authored in a shared brain from the start is a collaboration. A page that can only exist inside a
+authored in a connection brain from the start is a collaboration. A page that can only exist inside a
 brain full of other clients' material is a publication.
 
 ## 4. Hard constraints
@@ -107,40 +122,42 @@ brain full of other clients' material is a publication.
 Inherited from the architecture and not up for renegotiation here:
 
 - **The repository is the source of truth. D1 is a cache.** Access grants are the exception and
-  always were: they are platform state by nature, and a shared brain adds no new repo-side state.
+  always were: they are platform state by nature, and a connection brain adds no new repo-side state.
 - **No unbounded work in one request.** Any whole-brain pass must be budgeted, cursored, and
   resumable, per the `rebuild_cursor` pattern.
-- **Nothing hosted-only.** A shared brain is an ordinary brain plus grants in the deployment's own
-  D1. This rules out the platform-owned relationship repository, §15.
+- **Nothing hosted-only.** A connection brain is an ordinary brain in the deployment's own platform
+  organization plus grants in its own D1. Every deployment has a `PLATFORM_ORG`, so a self-hoster
+  runs this unchanged. Both parties must be on the same deployment, which was already true of
+  everything else here.
 - **Multi-tenant isolation is the default.** Every index query is keyed by `brainId`. A shared
   brain does not weaken this: it is one brain, with one `brainId`, that more people can reach.
 - **A page has exactly one home brain.** Unchanged, and collaboration does not violate it: the
-  shared brain **is** the home. There is still no page that lives in two brains at once, and no
+  connection brain **is** the home. There is still no page that lives in two brains at once, and no
   page that is copied to stay in sync.
 - **One brain, one file tree.** The tree backs wikilink resolution, folder-note lookup, and the
   path policy, and is dropped on brain change for that reason (`setActiveBrain`,
-  `app/core/store.ts`). Nothing here merges foreign content into it, §10.
+  `app/core/store.ts`). Nothing here merges foreign content into it, §11.
 
-## 5. The model: a shared brain
+## 5. The model: a platform-owned connection brain
 
-A collaboration is **a brain both parties can write, living in one party's organization, with the
-other party granted access to it directly.** No copy, no mount, no reconciliation, no third
-mechanism.
+A collaboration is **a connection brain: an ordinary brain, owned by neither party, that both
+parties reach by grant.** No copy, no mount, no reconciliation, no third mechanism.
 
 Both sides open the same brain, and every content tool already resolves it: `brain` is an argument
 on all of them, `matchBrain` resolves the handle, `effectiveBrainRole` authorizes against the brain
-actually named, and the index isolates by `brainId`. A shared brain is not a new object with new
-semantics; it is the object that already exists, reachable by one more person.
+actually named, and the index isolates by `brainId`. A connection brain is not a new object with new
+semantics; it is the object that already exists, reachable by two parties instead of one
+organization.
 
 Consequences worth stating, because each is a thing the publishing design had to build and this one
 gets for free:
 
 - **No drift.** There is one copy. The question "are these two in sync" cannot be asked.
-- **No run, no trigger, no ledger.** There is nothing to reconcile, so §10 of the previous draft
-  (three rungs of automation, ending in a scheduled runner with a stored credential) evaporates.
-  Freshness is `ensureFresh`, the same guard every read already uses.
-- **No link horizon.** Links inside the shared brain resolve inside the shared brain. There is no
-  published set to flatten links against and no page that arrives with holes.
+- **No run, no trigger, no ledger.** There is nothing to reconcile, so the previous draft's three
+  rungs of automation, ending in a scheduled runner with a stored credential, evaporate. Freshness
+  is `ensureFresh`, the same guard every read already uses.
+- **No link horizon.** Links inside the connection brain resolve inside it. There is no published
+  set to flatten links against and no page that arrives with holes.
 - **No identity problem.** The previous draft needed keys because a page existed twice and paths
   moved on both sides. One page has one path, and `move_page` works on it normally.
 - **Ordinary editing.** Nothing is read-only, nothing is tool-maintained, `write_page` and
@@ -148,9 +165,39 @@ gets for free:
 - **Media works.** Attachments live in the same repository as the page referencing them. The
   previous draft had no answer for this at all.
 
-**Where it lives:** one party's organization, defaulting to whoever created it. Not a
-platform-owned repository, §15. The party who owns the repository keeps it when the relationship
-ends, which is a real asymmetry and is the subject of an open question in §14.
+### Where the bytes live is not a UX question
+
+The repository sits in the **platform organization**, which is where `provisionBrainForUser`
+already puts every auto-provisioned brain (`src/lib/provision.ts`: "the platform org all brains are
+created under"). This is not a new custody posture; it is the existing one.
+
+It is worth being clear that this choice has **no user-visible consequence**. Nobody in the target
+audience clones a repository. What a person experiences is three things, and all three are D1 rather
+than storage: can I open it, does it show in my brain list, and can someone take it away from me.
+So repository location should be decided on legal and commercial grounds (who is the data
+controller, what the DPA says, what happens to the content on insolvency) rather than on product
+ones, and it can be revisited without touching anything in this document except this paragraph.
+
+What platform ownership buys is **custody neutrality while the connection is live**: neither party
+can delete the other's access to a brain they do not own, rewrite its history, or control the record
+if a relationship turns adversarial. A connection between two commercial peers should not sit inside
+one peer's namespace, and the alternative (one party's organization, defaulting to whoever created
+it) makes the other party a guest for the life of the engagement.
+
+An argument that was made for customer-owned repositories and does not survive contact with the
+audience: that content in your own repository is "yours, readable without us". For a non-technical
+user that is a property they cannot exercise. It is real in a liquidation scenario and it is not
+lived. The answer to "what if Isomorphic disappears" is an **export** capability, which is separate
+work and is not what §7's mirror provides.
+
+### Platform ownership does not remove the primitive. It doubles it
+
+A recurring temptation is to treat a platform-owned repository as a way to avoid the access work in
+§6. It is not. **Both parties are non-members of the platform organization**, so `listAccessibleBrains`
+returns the connection brain for neither of them until §6 exists. Platform ownership solves
+reachability, which was never the blocker; §6 solves access, which is. Choosing a platform-owned
+connection brain means the cross-organization grant is now on the critical path for **both** sides
+rather than one.
 
 ## 6. The missing primitive: cross-organization brain grants
 
@@ -187,15 +234,59 @@ reached by organization membership.
   quietly encode policy, and it must not.
 - **Nothing changes at the GitHub layer.** A brain in organization A is served by A's installation
   token, minted from `orgs.installation_id` on the brain's row. The blocker was never reachability;
-  it was our own join. That fact is what rules out the platform-owned repository in §15, since
-  platform ownership solves reachability and leaves access exactly where it was.
+  it was our own join. This is why platform ownership (§5) is not a substitute for this section:
+  it solves reachability, which was never the blocker, and leaves access exactly where it was.
 
 Downstream consumers that resolve brains (`getDefaultBrainForUser`, `listBrainAccess`,
 `personUserIds` fan-in) all read from the same helper and inherit the widening. `chooseOrg` and
 `listAccessibleOrgs` do **not**: a grant admits you to a brain, never to an organization, and a
-shared brain must never appear as a place you can create or place brains.
+connection brain must never appear as a place you can create or place brains.
 
-## 7. Confidentiality: what a cross-organization grant opens
+## 7. Ending a connection: revocation and the mirror
+
+The question a connection brain has to answer is not who stores it but **who can end it, and what
+the other party is left with.** A shared surface that one side can make vanish is not a peer
+relationship, whatever the storage says.
+
+**Either party may end a connection.** It is a relationship, not a permission one side hands down,
+and requiring the other side's consent to leave would be worse than the asymmetry it fixes.
+
+**Neither party inherits the original.** When a connection ends, both grants drop and the connection
+brain is archived. The alternative, where the party who revoked keeps the live brain, makes revoking
+first a way to win the artifact and turns the button into a weapon. Nobody owning it while it runs
+and nobody inheriting it when it stops are the same decision stated twice.
+
+**Each party gets a mirror**: a read-only copy of the connection brain's content, landing in that
+party's own brain list as an ordinary brain they can open, search, and read. Three properties, each
+a decision:
+
+- **Per organization, not per person.** Granted to whoever held access when the connection ended.
+  Per-person would give four colleagues four copies of the same engagement, and would hand a
+  personal copy to someone who happened to have access on their last day.
+- **Created at revocation, not maintained from the start.** An earlier version of this design kept
+  a live mirror throughout, on the reasoning that exit-time cooperation is unreliable. Platform
+  ownership removes that worry: the platform holds the content and can mirror it unilaterally, with
+  no cooperation from either party and no dependency on the other organization still existing.
+  Creating it lazily saves two repositories per relationship and keeps the brain list clean while
+  the connection is live, where a mirror would only be a duplicate of something you can already
+  open. The connection brain is archived rather than deleted, so a mirror that fails to materialize
+  can still be produced late.
+- **Dead on arrival, deliberately.** Nothing ever writes to a mirror. It is a record, not a second
+  working surface, which is what separates it from the publishing design: one editable copy and one
+  inert one means drift is not managed, it is impossible. No keys, no ledger, no reconciliation.
+
+**What the mirror does and does not protect against.** It protects you from your counterparty:
+ending a relationship costs future collaboration and never costs the record. It does **not** protect
+you from us. A platform-held mirror of a platform-held brain is no insurance against the platform,
+and describing it that way would be dishonest. That concern is real and its answer is an export
+capability, §15.
+
+Revocation being non-destructive is what makes the rest of this design tolerable. If ending a
+connection could destroy six months of a client's co-authored work, the revoke path would need
+governance, confirmation flows, and probably a cooling-off period. Because it cannot, revoking is an
+ordinary act.
+
+## 8. Confidentiality: what a cross-organization grant opens
 
 A grant that crosses an organization boundary is a mechanism for one organization's admin to expose
 a brain to an outsider. It is the entire risk surface of this design, and it is smaller than
@@ -204,7 +295,7 @@ publishing's but not zero.
 - **Both ends, or an organization-level policy.** Under current sharing rules a brain admin in A
   can grant a user in B unilaterally. At minimum an organization setting ("this organization permits
   external grants"), so an org can decline the capability wholesale. A full two-sided handshake is
-  safer and is friction on the one act that makes collaboration work, §14.
+  safer and is friction on the one act that makes collaboration work, §15.
 - **Outsiders are visibly marked.** In `brain_access`, in the roster, and anywhere a brain's
   audience is shown. An outsider must never render as an ordinary colleague, because the whole
   judgement a person makes before writing something down is "who is in this room".
@@ -220,9 +311,9 @@ publishing's but not zero.
   organization's membership table, so it has no existing teardown path and needs its own.
 - **Billing and seats are unanswered.** A user in organization A working in organization B's brain:
   who counts them, and does `personUserIds` identity linking let someone widen their own reach
-  across the boundary? Commercial question before technical, §14.
+  across the boundary? Commercial question before technical, §15.
 
-## 8. What this does not solve
+## 9. What this does not solve
 
 Three things, stated plainly because each is a case someone will bring and none is covered.
 
@@ -231,18 +322,18 @@ read-modify-write against the authoritative blob and moves the branch ref. Two p
 same page in the same window will clobber. `write_page`'s `edits` (exact anchors, refused on zero or
 multiple matches) is a real mitigation and is the thing to lean on, but it is not a merge story and
 should not be described as one. Conflict pages remain rejected: a conflict page is a to-do item
-nobody clears. What a shared brain does escape is two writers in two repositories, which is the
+nobody clears. What a connection brain does escape is two writers in two repositories, which is the
 unrecoverable version of the same problem.
 
 **A reader who cannot be granted access is unserved.** This is §3's third answer and it is real: a
 page that can only exist inside a brain holding other clients' material, needed by someone who must
 never see that brain. Today the answer is a human copying text, which is where we started. The
-previous draft's publishing design is the answer to this and it is not being built; §15 says where
+previous draft's publishing design is the answer to this and it is not being built; §16 says where
 it lives. If this case turns out to be common in practice, that is the signal to go get it, and the
 design is intact rather than lost.
 
 **Single-owner documents have no round trip.** If a document genuinely belongs to one side and the
-other should only respond, a shared brain does not model that: it makes both parties editors.
+other should only respond, a connection brain does not model that: it makes both parties editors.
 Two mechanisms preserve single ownership, neither built:
 
 - **A comment layer.** The document stays owned; a responder writes a sibling page carrying
@@ -256,7 +347,7 @@ Two mechanisms preserve single ownership, neither built:
 
 Both are additive later and neither blocks the primitive.
 
-## 9. The brain list must not sprawl
+## 10. The brain list must not sprawl
 
 If every relationship is a brain, the list grows without bound: several clients, several shared
 surfaces each, plus internal team-to-team surfaces. The switcher becomes unusable and fan-out search
@@ -267,7 +358,7 @@ fight. It sprawls because a relationship is being rendered as a peer of a worksp
 one. Nobody has thirty-one brains; they have three brains and twelve relationships, and a
 relationship is always **about** something.
 
-### Rule 1: a shared brain is in scope when you are in a brain it connects to
+### Rule 1: a connection brain is in scope when you are in a brain it connects to
 
 This is the rule that bounds the list. Sprawl becomes bounded by the **degree of the current
 brain**, not by the total count of relationships. From the personal brain: your brains, plus the
@@ -275,18 +366,18 @@ surfaces attached to the personal brain. From the client brain: the surfaces att
 Nobody sees all twelve at once, it needs no configuration, and the answer to "why am I seeing this"
 is always one hop.
 
-The same rule governs fan-out search: **a shared brain is in scope for fan-out when its other end is
+The same rule governs fan-out search: **a connection brain is in scope for fan-out when its other end is
 the active brain.** Otherwise a search from the personal brain surfaces client-shared material,
-which is §12's leak-through-the-human scenario with a wider radius. One rule across navigation and
+which is §13's leak-through-the-human scenario with a wider radius. One rule across navigation and
 search is worth more than two tuned ones.
 
 ### Rule 2: the connection is the object, the brain is its storage
 
-Users manage **connections**, not shared brains. A connection has a name (the counterparty or the
+Users manage **connections**, not connection brains. A connection has a name (the counterparty or the
 shared purpose), its parties, and a brain behind it. The brain surfaces when they open it, the way a
 repository surfaces behind a brain today.
 
-This also fixes naming. Twelve shared brains need twelve names someone has to invent and keep
+This also fixes naming. Twelve connection brains need twelve names someone has to invent and keep
 distinct; twelve connections are named for who they are with, which is a name that already exists
 and that both parties agree on.
 
@@ -320,9 +411,9 @@ flag rather than a parallel model.
 The trap is modeling hierarchy as a chain of pairwise shares. It looks correct at two levels and
 produces exactly this section's sprawl at three.
 
-## 10. The file tree is never merged
+## 11. The file tree is never merged
 
-Content from a shared brain does not appear in another brain's file tree. The tree is per-brain by
+Content from a connection brain does not appear in another brain's file tree. The tree is per-brain by
 construction: `setActiveBrain` (`app/core/store.ts`) nulls `browseCache` and resets the path policy
 on every brain change.
 
@@ -336,7 +427,7 @@ Merging would reintroduce everything this design avoids:
   consult; a merged tree would force brain identity through every path in the app.
 - **Paths collide.** Both brains have `wiki/index.md`. Any prefix invented to disambiguate is a
   mount point, with nothing behind it.
-- **The freshness contract breaks.** §12 settles that the guarantee is per brain and only the brain
+- **The freshness contract breaks.** §13 settles that the guarantee is per brain and only the brain
   you are in keeps it, because `ensureFresh` costs one `branchCommitSha` per brain per read. A
   merged tree either pays that for every connected brain on every render, or renders stale foreign
   content indistinguishably from live local content.
@@ -347,11 +438,11 @@ It is also issue #26 rebuilt as architecture. That bug was the crumb naming one 
 content came from another, and the fix was that the brain a result names is authoritative. A tree
 under brain A's crumb containing brain B's pages makes that state permanent and intentional.
 
-**Adjacent, not merged.** Showing a shared brain as a second, collapsed, clearly labeled root in the
+**Adjacent, not merged.** Showing a connection brain as a second, collapsed, clearly labeled root in the
 same panel is fine: its own tree, its own brain, its own crumb when entered. The visual adjacency is
 free. The semantic merge, one tree claiming to contain two brains, is what costs.
 
-## 11. Reaching a shared brain
+## 12. Reaching a connection brain
 
 Five routes, in descending order of expected use.
 
@@ -378,7 +469,7 @@ Five routes, in descending order of expected use.
    in that file that a picker must never offer a destination whose click is refused: show it when
    the brain has at least one connection, or when the caller can create one.
 5. **Explicit cross-brain links** in page bodies, rendered as external destinations so the crossing
-   is visible, never a bare wikilink resolving elsewhere. See §12 for why the syntax is still open.
+   is visible, never a bare wikilink resolving elsewhere. See §13 for why the syntax is still open.
 
 The panel itself is the brain-scope twin of `BrainAccessView`: one row per connection with the
 counterparty, your role on the far side, and last activity. Creating one is a pushed flow off the
@@ -388,9 +479,9 @@ Routes 1 and 2 are the product. Route 4 is orientation, visited once to understa
 Connections panel becomes the main way people reach shared content, the switcher section is not
 working, and that is the thing to fix.
 
-## 12. Cross-brain read: most of it already ships
+## 13. Cross-brain read: most of it already ships
 
-§3's first answer sends "I need to find it" here. It is also how a shared brain is reached, so it is
+§3's first answer sends "I need to find it" here. It is also how a connection brain is reached, so it is
 not a separate feature so much as the substrate this one sits on.
 
 **Every content tool already takes an optional `brain`.** `read_page`, `list_pages`, `search_pages`,
@@ -434,13 +525,13 @@ exist is a single call that spans brains**, and that is the whole of the gap.
 Cross-brain read moves nothing and grants nobody access, so it reads as safe. The leak channel is
 different in kind: a conversation rooted in one client's brain surfaces another engagement's
 material, the model writes it into a reply, and a human pastes that reply somewhere. Nothing was
-shared; the leak went through the human. A shared brain widens the population this can happen to,
+shared; the leak went through the human. A connection brain widens the population this can happen to,
 which is why Rule 1 governs fan-out and not just navigation.
 
 Mitigations, in order of value:
 
 - **Every result names its brain** (gap 3 above). Cheap, and it is the one that matters.
-- **Scope fan-out by Rule 1** (§9): a shared brain is in scope when its other end is the active
+- **Scope fan-out by Rule 1** (§10): a connection brain is in scope when its other end is the active
   brain. A default that needs no configuration, though an explicit opt-out is still worth having for
   a personal brain.
 - **Fan-out is opt-in per call, never ambient.** The default stays the active brain, so an ordinary
@@ -463,20 +554,20 @@ rather than found later.
 A `[[other-brain:Kickoff]]` means nothing to github.com or to any OKF consumer, which is a larger
 divergence than `[[wikilinks]]` already are, and a broken cross-brain link is indistinguishable from
 a permission denial. Rendering one tells a reader that a page exists which they are not allowed to
-see, and `validate` would report the same page broken for one reader and fine for another. §11's
+see, and `validate` would report the same page broken for one reader and fine for another. §12's
 route 5 wants some explicit form; it should be a link syntax that announces the crossing and
-degrades to plain text, not a wikilink. The syntax is open, §14.
+degrades to plain text, not a wikilink. The syntax is open, §15.
 
-## 13. What we reuse, what is new, and what this is not
+## 14. What we reuse, what is new, and what this is not
 
 **Reused unchanged:**
 
 - `effectiveBrainRole` for every authorization check, with `orgRole` widened to nullable, and
   `pnpm test:access` as its battery.
-- `matchBrain`, `brainArg`, and per-brain index isolation, which is the whole of a shared brain's
+- `matchBrain`, `brainArg`, and per-brain index isolation, which is the whole of a connection brain's
   read and write path.
 - `commitFiles` / `commitOrPR`, unchanged. The `writeMode: 'pull-request'` path is also the
-  propose-back mechanism in §8 if that is ever built.
+  propose-back mechanism in §9 if that is ever built.
 - `groupBrainsByOrg` and the `Flow.tsx` pushed-flow convention for the UI.
 - `brain_memberships`, `share_brain`, and `BrainAccessView`, which already model per-brain grants
   and only need to stop being organization-bounded.
@@ -486,59 +577,75 @@ degrades to plain text, not a wikilink. The syntax is open, §14.
 - **Cross-organization brain grants** (§6): a second resolution branch, a nullable `orgRole`, a
   teardown path for a grant that hangs off no membership, and a `pnpm test:scope` case for the
   grant-only caller. This is the entire mechanism.
-- **The confidentiality controls around them** (§7): the organization-level policy, outsider
+- **The confidentiality controls around them** (§8): the organization-level policy, outsider
   marking, and the roster and analytics gates re-verified against a null `orgRole`.
-- **The connection object and the contextual scope rule** (§9), plus the Connections destination
-  (§11).
+- **Provisioning a connection brain into the platform organization** (§5). `provisionBrainForUser`
+  already creates repositories there; this needs a naming scheme that is not `brain-<login>`, and a
+  `brains` row whose `org_id` is the platform organization while both parties reach it by grant.
+- **Ending a connection and materializing mirrors** (§7): archive the connection brain, drop both
+  grants, and write one read-only mirror per party into their own organization. The write itself is
+  `commitFiles` over content the platform already holds, so the new part is the lifecycle, not the
+  copy.
+- **The connection object and the contextual scope rule** (§10), plus the Connections destination
+  (§12).
 
 **Explicitly not in scope:**
 
-- **Publishing / one-way keyed copies between brains** (§15). The mechanism the previous draft
-  designed. Not built, and §8 states the case it leaves unserved.
-- **A shared page that lives in two brains at once.** A page has exactly one home brain; a shared
-  brain **is** that home.
-- **Merging foreign content into a brain's file tree** (§10), in any form.
-- **Platform-owned relationship repositories** and **git submodules** (§15), in any variant.
-- **Merge resolution for concurrent edits** (§8). Last-writer-wins at the body level is the accepted
+- **Publishing / one-way keyed copies between brains** (§16). The mechanism the previous draft
+  designed. Not built, and §9 states the case it leaves unserved.
+- **A shared page that lives in two brains at once.** A page has exactly one home brain; a
+  connection brain **is** that home, and a mirror is inert rather than a second live copy.
+- **Merging foreign content into a brain's file tree** (§11), in any form.
+- **Git submodules** (§16), in any variant, including as a retention mechanism.
+- **Export** (§15). A mirror protects a party from their counterparty, never from the platform.
+- **Merge resolution for concurrent edits** (§9). Last-writer-wins at the body level is the accepted
   behavior, mitigated by anchored `edits`.
-- **Hierarchical relationships** (§9), deferred but not foreclosed.
+- **Hierarchical relationships** (§10), deferred but not foreclosed.
 
-## 14. Build order and open questions
+## 15. Build order and open questions
 
-1. **Cross-brain read** (§12, gaps 1 and 3). Smallest, highest value, needs no new model, and is the
+1. **Cross-brain read** (§13, gaps 1 and 3). Smallest, highest value, needs no new model, and is the
    substrate everything else sits on.
-2. **Cross-organization grants** (§6) with the confidentiality work in §7. This is the unlock, and
+2. **Cross-organization grants** (§6) with the confidentiality work in §8. This is the unlock, and
    the two halves ship together: the roster and analytics gates are not a follow-up.
-3. **Rule 1 scoping and the switcher section** (§9, §11 route 1). Without this, step 2 sprawls.
-4. **The connection object and Connections destination** (§9, §11 route 4), once two or three real
+3. **Connection brains and the end-of-connection mirror** (§5, §7). The mirror ships with the
+   ability to create a connection, not after it. A connection that can be created but not ended
+   safely is the failure mode this whole shape exists to avoid, and it would be live in real
+   engagements before anyone noticed.
+4. **Rule 1 scoping and the switcher section** (§10, §12 route 1). Without this, step 3 sprawls.
+5. **The connection object and Connections destination** (§10, §12 route 4), once two or three real
    relationships exist to shape it.
 
-Steps 1 to 3 are what would change how the product feels. Step 2 is where the whole risk sits.
+Steps 1, 3, and 4 are what would change how the product feels. Step 2 is where the whole
+confidentiality risk sits, and step 3 is where the commercial risk does.
 
 Open:
 
-- **Should a cross-organization grant require both ends to declare it?** §7 argues for at least an
+- **Should a cross-organization grant require both ends to declare it?** §8 argues for at least an
   organization-level policy so an organization can decline the capability. A full two-sided
   handshake is safer and is friction on the single act that makes collaboration work at all.
 - **Where does the connection object live?** Repository config keeps it with the §4 rule that state
   lives in the repos. Platform state is the only place that can describe a relationship neither
   repository fully owns, and grants are already platform state.
-- **What happens to a shared brain when the relationship ends?** It lives in one party's
-  organization (§5), so the other party loses it on revocation. That is correct for access and
-  possibly wrong for the record: a client who co-authored a document for six months has no copy.
-  An export, a fork-on-revoke, or an explicit "your copy" arrangement are all unbuilt.
-- **Billing and seats for cross-organization collaborators** (§7). Commercial question before
+- **Does the mirror need to be a full copy, or a snapshot at a point in time?** §7 says the content
+  as of the moment the connection ended. Page history is a harder question: a mirror carrying the
+  full commit log hands one party a record of the other's edits and timings, and a mirror without
+  it loses the audit trail exactly where a dispute would want one.
+- **Export, which is the thing the mirror is not.** §7 protects a party from their counterparty and
+  not from the platform. A real export (take your brains and leave, in a form readable without us)
+  is separate work that this design does not do and should not be described as doing.
+- **Billing and seats for cross-organization collaborators** (§8). Commercial question before
   technical.
-- **What is the explicit cross-brain link syntax** that §11 route 5 needs and §12 declines to make a
+- **What is the explicit cross-brain link syntax** that §12 route 5 needs and §13 declines to make a
   wikilink?
-- **Should a shared brain be visibly different from an ordinary one to its non-owning party?** `via`
-  (§9, Rule 3) marks it in the list. Whether the brain itself should say "this is shared with
+- **Should a connection brain be visibly different from an ordinary one to its non-owning party?** `via`
+  (§10, Rule 3) marks it in the list. Whether the brain itself should say "this is shared with
   Northwind, and they can read everything in it" on every page is a stronger claim and probably the
   right one.
-- **Does the unserved case in §8 show up in practice?** This is the question that decides whether
+- **Does the unserved case in §9 show up in practice?** This is the question that decides whether
   publishing comes back. It should be answered with real usage, not in advance.
 
-## 15. Rejected alternatives
+## 16. Rejected alternatives
 
 - **Publishing: a one-way, key-addressed flow of pages between repositories.** The previous draft's
   entire design (publication/subscription config declared in both repos, identity as a key rather
@@ -549,26 +656,25 @@ Open:
   a large mechanism with a permanent confidentiality surface: an automated flow out of a personal
   brain into a client's repository is an exfiltration channel that runs without a human in the loop.
   The full design is recoverable from git history (`docs/design/brain-seams.md` before this
-  revision) if §8's unserved case turns out to matter.
-- **Platform-owned relationship repositories.** A repository in the platform organization, granted
-  to both sides. It does not work: the caller is not a member of the platform organization either,
-  so the §6 join returns nothing. **Platform ownership solves reachability and does nothing about
-  access**, and once §6 exists it buys nothing the simpler topology lacks. What it would buy is
-  neutral custody, so neither party can delete the surface or rewrite its history. Against that: it
-  makes the platform installation structurally load-bearing between two parties who otherwise have
-  no relationship with it; it turns a transient broker (the Worker holds bytes for one request) into
-  a durable custodian of two customers' co-authored material, with an orphaning problem when a
-  relationship ends; and it is a silo for exactly the content least able to afford one, since
-  content in a customer's own repository is theirs when they leave.
-- **Git submodules, in every variant.** Mounting the other brain into yours fails at four layers:
-  `listTree` (`src/lib/brain-repo.ts`) filters `e.type === 'blob'`, so a gitlink is invisible to the
-  content index; granularity is whole-repository; anyone who can read the parent reads the
-  submodule's full extent, bypassing `effectiveBrainRole`; and a write spanning the boundary is two
-  commits in two repositories, breaking `commitFiles` atomicity. A dedicated publication repository
-  per relationship repairs the middle two and still leaves the index blind, the receiver unable to
-  file anything (a mount is a fixed path), and no per-page identity. Bidirectional mounts are legal
-  (pinned shas terminate) but a gitlink is a read mount, so writing into it means committing in the
-  other repository, which is correspondence rather than collaboration.
+  revision) if §9's unserved case turns out to matter.
+- **A connection brain living in one party's organization**, defaulting to whoever created it. This
+  was the recommendation in an earlier revision and is rejected in favor of platform ownership (§5).
+  It makes the other party a guest for the life of the engagement: the owning side can revoke
+  unilaterally, delete pages, rewrite history, and controls the record precisely when a dispute
+  makes it matter. Two commercial peers collaborating should not have one of them holding the room.
+  The argument that had been made for it, that content in your own repository is yours and readable
+  without us, does not survive contact with the audience: these users never touch a repository, so
+  it is a property they cannot exercise. What answers that concern is an export capability, §15.
+- **Git submodules, in every variant**, including a platform-owned repository submoduled into each
+  party's brain so that revoking access leaves them holding the content. **It leaves them holding
+  nothing.** Measured on a scratch pair of repositories: the parent's entire object database is one
+  tree, one commit, and one 93-byte blob, and that blob is `.gitmodules`. The tree carries
+  `160000 commit <sha>` for the submodule path and not a single content blob. Cloning the parent
+  with the submodule's remote unreachable produces an empty directory, and `submodule update --init`
+  fails outright. A submodule is a URL and a SHA, which is a bookmark to something you can no longer
+  read. It is also invisible to the content index, since `listTree` (`src/lib/brain-repo.ts`)
+  filters `e.type === 'blob'`. The retention property this was reaching for is real and §7's mirror
+  is how to get it: actual content, written as ordinary blobs, which the index can see.
 - **Two publishing seams pointed at each other.** Produces **correspondence**, not collaboration:
   each side owns its own artifacts and sends copies, a page never becomes co-owned, and a receiver
   who edits an arrival has forked it. Fine for deliverables out and status back; wrong for a

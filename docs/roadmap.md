@@ -335,12 +335,12 @@ A reader who **can be granted access** needs no copy either: admit them to the
 place the content lives. Only a reader who **cannot be admitted at all** needs
 content to physically cross, and that is publishing.
 
-We are building the middle answer. A collaboration is a **shared brain**: an
-ordinary brain, living in one party's organization, that the other party is granted
-access to directly. No copy, so no drift, no reconciliation, no ledger, no run, no
-link horizon, no read-only received pages, and media that resolves. The previous
-design (a one-way key-addressed publication flow) is not being built; it remains
-recoverable from git history if the third case turns out to matter.
+We are building the middle answer. A collaboration is a **connection brain**: an
+ordinary brain that both parties reach by grant and **neither party owns**. No copy,
+so no drift, no reconciliation, no ledger, no run, no link horizon, no read-only
+received pages, and media that resolves. The previous design (a one-way
+key-addressed publication flow) is not being built; it remains recoverable from git
+history if the third case turns out to matter.
 
 The whole mechanism is **one new primitive: a brain reachable by someone who is not
 a member of its organization.** `listAccessibleBrains` resolves `FROM memberships
@@ -351,9 +351,19 @@ concentrated in the same place: a grant-only caller must not reach the org roste
 the per-person analytics table, and a grant that hangs off no membership has no
 existing teardown path.
 
+Two decisions sit on top of it, both about power rather than storage. The repository
+lives in the **platform org**, where every auto-provisioned brain already lives,
+because a collaboration between commercial peers should not sit inside one peer's
+namespace with the other as a guest. That has no user-visible consequence (nobody
+here touches a repo), so it is a legal question rather than a product one. And
+**ending a connection is non-destructive**: either party may end it, neither
+inherits the original, and each gets a read-only **mirror** in their own brain list.
+That is what stops the revoke button being a weapon. The mirror protects you from
+your counterparty, never from us; that concern needs an export, which is separate.
+
 The other half is product shape. If every relationship is a brain, the list sprawls,
-so a shared brain is in scope only when you are in a brain it connects to, and the
-file tree is never merged across brains.
+so a connection brain is in scope only when you are in a brain it connects to, and
+the file tree is never merged across brains.
 
 Full design: [`docs/design/brain-seams.md`](design/brain-seams.md). Unresolved there:
 whether cross-organization grants need a two-sided handshake, and what a departing
