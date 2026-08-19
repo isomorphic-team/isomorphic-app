@@ -31,7 +31,6 @@ import {
 } from '../core/actions.ts';
 import { FOLDER_NOTE_NAMES } from '../core/util.ts';
 import { toast, askConfirm } from '../core/toast.tsx';
-import { eyebrow } from '../ui/typography.ts';
 import { Button } from '../ui/index.ts';
 import {
 	ChevronIcon,
@@ -871,39 +870,37 @@ function ConnectedRoots() {
 	// click is refused.
 	const rooms = (connectionList ?? []).filter((c) => c.state === 'live' || c.state === 'pending');
 	if (rooms.length === 0) return null;
+	// The same geometry a depth-0 file row uses, so these read as part of the tree rather
+	// than as a widget bolted under it. One line each: the icon says what they are and
+	// the counterparty is a tooltip, because a second line of metadata per row is exactly
+	// what a file tree does not do.
+	const pad = `${6 + 18}px`;
 	return (
-		<div class="mt-3 border-t border-border pt-2">
-			<div class={`px-1 pb-1 ${eyebrow}`}>Shared with others</div>
+		<div class="mt-2 border-t border-border pt-1">
 			{rooms.map((c) => {
 				const theirs = c.parties.filter((p) => !p.mine);
-				const who = theirs
-					.map((p) => p.org ?? (p.invitedEmail ? `${p.invitedEmail} (invited)` : 'invited'))
-					.join(', ');
+				const who =
+					theirs
+						.map((p) => p.org ?? (p.invitedEmail ? `${p.invitedEmail} (invited)` : 'invited'))
+						.join(', ') || 'the other side';
 				return (
-					<button
-						key={c.connection_id}
-						type="button"
-						// Entering, not peeking: this moves the crumb, the tree and the path
-						// policy together, through the one seam that drops what belonged to the
-						// brain being left. A second brain drawn under the first brain's name is
-						// issue #26.
-						onClick={() => switchBrain(c.brain)}
-						class="group flex w-full items-center gap-1.5 rounded px-1 py-1 text-left hover:bg-chip"
-						title={`Open ${c.name}, shared with ${who || 'another organization'}`}
-					>
-						{/* A link, not a folder. The icon is the only thing on the row that says
-						    this is somewhere else rather than somewhere deeper. */}
-						<span class="shrink-0 text-accent">
+					<div key={c.connection_id} class="group flex items-center rounded pr-2 hover:bg-chip">
+						<span style={{ paddingLeft: pad }} class="flex shrink-0 items-center py-1 text-accent">
 							<LinkIcon />
 						</span>
-						<span class="min-w-0 flex-1">
-							<span class="block truncate text-fg">{c.name}</span>
-							<span class="block truncate text-xs text-muted">
-								{who || 'Waiting for the other side'}
-								{c.state === 'pending' ? ' · not joined yet' : ''}
-							</span>
-						</span>
-					</button>
+						<button
+							type="button"
+							// Entering, not peeking: this moves the crumb, the tree and the path
+							// policy together, through the one seam that drops what belonged to the
+							// brain being left. A second brain drawn under the first brain's name is
+							// issue #26.
+							onClick={() => switchBrain(c.brain)}
+							class="flex min-w-0 flex-1 items-center gap-1.5 py-1 pl-1.5 text-left text-sm hover:text-accent"
+							title={`${c.name} — shared with ${who}${c.state === 'pending' ? ' (not joined yet)' : ''}`}
+						>
+							<span class="truncate">{c.name}</span>
+						</button>
+					</div>
 				);
 			})}
 		</div>

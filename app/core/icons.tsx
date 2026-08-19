@@ -77,6 +77,12 @@ const GithubIcon = () => (
 	</svg>
 );
 
+// The chain, as raw path data, because it is drawn twice: as an SVG here and onto a
+// CANVAS in the graph, where Path2D takes the same string. One source for the shape.
+// A hand-drawn approximation was tried on the canvas first and read as a lightning
+// bolt, which is what happens when two renderers own two copies of one glyph.
+const LINK_PATH_D =
+	'M6.5 9.5l3-3M7 5l.8-.8a2.3 2.3 0 0 1 3.3 3.3l-.8.8M9 11l-.8.8a2.3 2.3 0 0 1-3.3-3.3l.8-.8';
 const LinkIcon = () => (
 	<svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true">
 		<path
@@ -84,7 +90,7 @@ const LinkIcon = () => (
 			stroke="currentColor"
 			stroke-width="1.4"
 			stroke-linecap="round"
-			d="M6.5 9.5l3-3M7 5l.8-.8a2.3 2.3 0 0 1 3.3 3.3l-.8.8M9 11l-.8.8a2.3 2.3 0 0 1-3.3-3.3l.8-.8"
+			d={LINK_PATH_D}
 		/>
 	</svg>
 );
@@ -424,5 +430,6 @@ export {
 	EyeIcon,
 	LockIcon,
 	RefreshIcon,
-	InitialsAvatar
+	InitialsAvatar,
+	LINK_PATH_D
 };
