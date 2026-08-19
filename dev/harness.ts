@@ -1430,6 +1430,13 @@ let activeMode: DisplayMode = 'inline';
 // A real host caps inline height and scrolls; mimic that so a huge tree can't make
 // a runaway card. The .stage already has overflow:auto for the scroll fallback.
 const INLINE_MAX_PX = 640;
+// ...and a FLOOR, for the same reason in the other direction. Content-sizing with no
+// minimum means a short view (an empty state, a two-row panel) renders as a sliver a few
+// rows tall, which is a bad way to look at a layout you are working on: it reads as a
+// broken card rather than as a small amount of content. A real host gives an inline app
+// a card with some presence too. 320 is roughly the app's own header plus half a dozen
+// list rows, so every view has somewhere to sit.
+const INLINE_MIN_PX = 320;
 
 // The app (autoResize) reports its content height; in inline mode we size the card
 // to it (bounded), which is exactly how claude.ai grows/shrinks an inline app as
@@ -1446,7 +1453,8 @@ function applyContentHeight(height?: number) {
 	if (activeMode !== 'inline') return;
 	if (height == null || !Number.isFinite(height)) return;
 	const slot = document.getElementById('frame-slot')!;
-	slot.style.height = `${Math.min(Math.ceil(height), INLINE_MAX_PX)}px`;
+	const bounded = Math.min(Math.max(Math.ceil(height), INLINE_MIN_PX), INLINE_MAX_PX);
+	slot.style.height = `${bounded}px`;
 }
 // `?mode=pip` (etc.) forces the host to present a given mode regardless of what the
 // app requests — handy for screenshotting each mode.
@@ -1463,6 +1471,7 @@ function presentMode(mode: DisplayMode) {
 		'bottom',
 		'width',
 		'height',
+		'minHeight',
 		'maxWidth',
 		'border',
 		'borderRadius',
@@ -1478,6 +1487,10 @@ function presentMode(mode: DisplayMode) {
 		// so strip the harness frame chrome — otherwise the preview shows a double edge
 		// and misrepresents what the real host renders.
 		stage.style.alignItems = 'flex-start';
+		// The floor as CSS as well as arithmetic: presentMode clears `height` on every
+		// mode change, so between here and the app's first size report there is nothing
+		// for applyContentHeight to bound and the card would otherwise collapse.
+		slot.style.minHeight = `${INLINE_MIN_PX}px`;
 		slot.style.border = 'none';
 		slot.style.borderRadius = '0';
 		slot.style.boxShadow = 'none';
