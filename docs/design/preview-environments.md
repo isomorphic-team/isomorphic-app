@@ -329,18 +329,27 @@ The first two were done on 2026-08-18 alongside the promotion work; the last two
   Worth knowing for anything else that touches this step: the cache does **not** help the half
   that actually broke. On 2026-08-18 CI on this very pull request hung for 32 minutes inside
   `playwright install --with-deps`, and the cause was `apt-get` losing an Ubuntu mirror, not the
-  browser download. `--with-deps` couples a flaky root apt call to a reliable CDN fetch; they are
-  split now, each attempt bounded by `timeout` and retried, with `timeout-minutes` on both jobs.
+  browser download. `--with-deps` couples a flaky root apt call to a reliable CDN fetch; they were
+  split, each attempt bounded by `timeout` and retried, with `timeout-minutes` on both jobs.
   apt has no timeout of its own, and neither workflow had one, so the step would have run to
   GitHub's six-hour default.
+
+  **Superseded 2026-08-19 (issue #44).** Retrying a bad mirror made the step survivable, not fast:
+  a degraded day still turned a 3 minute run into a 7 minute one. The UI tests moved to their own
+  job running in `mcr.microsoft.com/playwright:v<version>-noble`, where the system libraries and
+  the browser are both baked in, so apt never runs and neither the download step nor the cache
+  above exists any more. `pnpm test:wiring` pins the image tag to the resolved Playwright version.
+  The other half of that split is what the fast checks buy: typecheck, prettier, the golden tests
+  and the migration check no longer wait behind a browser to report.
 
 - **`test:e2e-librarian --github` runs nowhere automatic.** Still open. It is the only coverage of
   the GitHub adapter itself, and it is maintainer-run by hand. A nightly schedule, or a
   `run-github-e2e` label, would gate `githubStore` changes without touching fork safety.
-- **No path to regenerate Linux visual baselines.** Still open. `dev/README.md` documents a Docker
-  incantation. A `workflow_dispatch` job running `pnpm ui:baselines` on the CI runner and
-  committing the result would remove the container step and guarantee the baselines match the
-  platform that checks them.
+- **No path to regenerate Linux visual baselines.** Still open, and smaller than it was. The
+  Docker incantation in `dev/README.md` now names the same image the UI job runs in, so a baseline
+  captured that way is captured against the browser and fonts that will compare it. What is still
+  missing is automation: a `workflow_dispatch` job running `pnpm ui:baselines` and committing the
+  result, so nobody has to have Docker to refresh them.
 
 ## Open questions
 

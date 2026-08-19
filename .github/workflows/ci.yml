@@ -9,6 +9,14 @@ name: CI
 # FORK-SAFE BY DESIGN: every step here is offline and needs NO secrets, so a pull
 # request from a contributor's fork gets the same green-or-red signal a maintainer's
 # branch does. Do not add a step that requires a token — put it in deploy.yml instead.
+#
+# TWO JOBS, AND THE SPLIT IS THE POINT. `check` is pure Node: it needs no browser and
+# reports in about two minutes. `ui` needs Chromium and everything that comes with it.
+# They used to be one job, so a prettier failure or a bad migration was only reported
+# after the browser install had finished, which on a bad mirror day was ten minutes
+# after the push: the cheapest signal to produce was the slowest to arrive. Splitting
+# also means a browser-infra flake fails a job that is visibly about browsers rather
+# than failing everything.
 
 on:
   pull_request:
@@ -26,13 +34,11 @@ concurrency:
 jobs:
   check:
     runs-on: ubuntu-latest
-    # A successful run takes 3 to 5 minutes. Without this, a step that hangs runs until
-    # GitHub's 6-hour default: on 2026-08-18 the apt half of the Playwright install stalled
-    # on an unresponsive Ubuntu mirror and sat there for 32 minutes before a human noticed,
-    # holding a runner and showing the pull request a check that was neither passing nor
-    # failing. Generous enough that a slow-but-working run is never killed: the dependency
-    # step alone can spend 15 minutes across its three attempts before giving up.
-    timeout-minutes: 30
+    # Every step here is local work with no network beyond the package install, and the
+    # whole job lands in about two minutes. Without a timeout a step that hangs runs
+    # until GitHub's 6-hour default, holding a runner and showing the pull request a
+    # check that is neither passing nor failing.
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
 
@@ -75,7 +81,8 @@ jobs:
       # test:index would have been caught by none of them. Listed individually
       # rather than via `pnpm test` so a failure names itself in the job log.
       # ADDING A TEST: add it here AND to the `test` script in package.json, or it
-      # runs in exactly one of the two places and nobody notices which.
+      # runs in exactly one of the two places and nobody notices which. Either job
+      # counts; `pnpm test:wiring` reads the whole file.
       - run: pnpm test:roundtrip
       - run: pnpm test:views
       - run: pnpm test:import
@@ -94,7 +101,8 @@ jobs:
       # to keep a merge in production. Offline here: driven against stub responses.
       - run: pnpm test:smoke
       # Lints the two lists above against package.json, so the instruction in the
-      # comment stops depending on anyone reading the comment.
+      # comment stops depending on anyone reading the comment. It also pins the
+      # Playwright container tag in the `ui` job to the resolved dependency version.
       - run: pnpm test:wiring
       # The write-path end-to-end batteries. They used to need real GitHub App
       # credentials and so could not gate a pull request; they now run against the
@@ -104,65 +112,64 @@ jobs:
       - run: pnpm test:e2e-librarian
       - run: pnpm test:e2e-import
 
-      # The UI tests drive the REAL generated app bundle in a real browser, over the
-      # local host harness (dev/harness.ts) with its fixtures. Offline and secret-free
-      # like everything else here: the only extra requirement is the browser binary.
-      #
-      # Chromium only, and `--with-deps` for the system libraries the runner lacks.
-      # UI_STRICT=1 turns `pnpm test:ui`'s skip-green browser guard into a failure —
-      # locally a missing browser should not fail a contributor's `pnpm test`, but in
-      # CI it means the install step above it broke and the UI tests silently did not
-      # run, which is exactly the failure a green skip would hide.
-      # Chromium was re-downloaded on every run. The cache is keyed on the RESOLVED
-      # Playwright version rather than on the lockfile hash, so an unrelated dependency
-      # bump does not evict a browser that is still the right one, and a Playwright
-      # bump does not restore one that is now wrong.
-      - name: Resolve the Playwright version
-        id: pw
-        run: echo "version=$(pnpm exec playwright --version | awk '{print $2}')" >> "$GITHUB_OUTPUT"
+      # Formatting is checked, not applied — a PR that reformats unrelated files is
+      # noise, and `--check` tells the contributor exactly what to run.
+      - name: Prettier formatting
+        run: pnpm exec prettier --check .
 
-      - name: Cache the Playwright browser
-        id: pw-cache
-        uses: actions/cache@v4
+      # Validate the D1 migrations apply cleanly against a fresh LOCAL database
+      # (offline — no Cloudflare token, never touches prod). Catches malformed
+      # migration SQL on the PR, before it can reach the deploy's --remote apply.
+      - name: D1 migrations apply cleanly (local)
+        run: pnpm exec wrangler d1 migrations apply platform-db --local
+
+  ui:
+    # The UI tests drive the REAL generated app bundle in a real browser, over the
+    # local host harness (dev/harness.ts) with its fixtures. Offline and secret-free
+    # like everything else here: the only extra requirement is the browser.
+    runs-on: ubuntu-latest
+    # PLAYWRIGHT'S OWN IMAGE, so `apt-get` never runs here. The browser binary was
+    # cacheable and the system libraries it needs were not, because the runner is fresh
+    # every time — so `playwright install-deps` shelled out to Ubuntu's mirrors on
+    # every run and was the slowest and only genuinely flaky step in this workflow:
+    # 15s against a healthy mirror, 124s and 395s against degraded ones, and one
+    # 12-minute stall that failed the run outright (issue #44). The image bakes in both
+    # halves, which trades a variable apt for a deterministic pull and removes the
+    # failure class instead of retrying through it. It also sets
+    # PLAYWRIGHT_BROWSERS_PATH=/ms-playwright, so nothing here installs or caches a
+    # browser at all — the download step and the version-keyed cache that used to guard
+    # it are both gone.
+    #
+    # BUMP THIS TAG WITH THE @playwright/test DEPENDENCY. The image ships exactly the
+    # browser build its own version expects, so a mismatch means the browser our
+    # installed Playwright looks for is not in the image. `pnpm test:wiring` compares
+    # this tag against the version pnpm resolves and fails if they drift, so the bump
+    # cannot be forgotten and the failure names itself rather than arriving as a
+    # confusing missing-browser in CI.
+    container: mcr.microsoft.com/playwright:v1.62.1-noble
+    # Roughly four minutes when healthy, most of it the image pull and the app bundle
+    # build. Same backstop reasoning as the job above.
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
         with:
-          path: ~/.cache/ms-playwright
-          key: playwright-${{ runner.os }}-${{ steps.pw.outputs.version }}
+          version: 10.33.2
 
-      # SPLIT ON PURPOSE. `playwright install --with-deps` does two unrelated things:
-      # apt-get as root against Ubuntu's mirrors, and a browser download from Playwright's
-      # CDN. Only the first is flaky, and coupling them meant a mirror outage looked like
-      # "Chromium won't install". It also defeats the cache above, which skips the download
-      # but can do nothing about apt.
-      #
-      # `timeout` bounds each ATTEMPT rather than the step, so a stalled mirror is cut loose
-      # and retried instead of eating the whole budget. apt itself has no timeout: on
-      # 2026-08-18 it sat on an unresponsive noble-security for 32 minutes without a word.
-      # The step timeout below is a second backstop in case the retry loop misbehaves.
-      #
-      # PER-ATTEMPT CAP: the point is to cut a HANG without cutting a slow success, and the
-      # gap between those is narrower than it looks. Three measurements from 2026-08-18:
-      # a healthy run took 51s; a run against a degraded mirror took 148s, fetching 21 MB at
-      # 154 kB/s; and the hang ran past 32 minutes with no output at all. The first version
-      # of this loop used 180s, which is 32 seconds of headroom over an install that WORKED,
-      # so a slightly worse mirror would have had it killing a healthy run and retrying into
-      # the same slow mirror three times. 300s is twice the worst observed success. Raise it
-      # if a run is ever killed here while apt was still making progress; the log shows the
-      # transfer rate.
-      - name: Install Chromium system dependencies
-        timeout-minutes: 16
-        run: |
-          for attempt in 1 2 3; do
-            if timeout 300 pnpm exec playwright install-deps chromium; then exit 0; fi
-            echo "::warning::playwright install-deps failed or stalled (attempt ${attempt}/3). Ubuntu mirrors are the usual cause. Retrying."
-            sleep 15
-          done
-          echo "::error::Could not install the Chromium system dependencies after 3 attempts."
-          exit 1
+      # The image ships a Node of its own; pin ours to the version in `engines` so the
+      # UI job runs the same runtime as every other job.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
 
-      # The cached half. On a cache hit this is close to a no-op.
-      - name: Install Chromium
-        timeout-minutes: 8
-        run: pnpm exec playwright install chromium
+      - run: pnpm install --frozen-lockfile
+
+      # UI_STRICT=1 turns `pnpm test:ui`'s skip-green browser guard into a failure —
+      # locally a missing browser should not fail a contributor's `pnpm test`, but here
+      # it means the container stopped carrying one and the UI tests silently did not
+      # run, which is exactly the failure a green skip would hide.
       - run: pnpm test:ui
         env:
           UI_STRICT: '1'
@@ -181,14 +188,3 @@ jobs:
             test-results/
           retention-days: 14
           if-no-files-found: ignore
-
-      # Formatting is checked, not applied — a PR that reformats unrelated files is
-      # noise, and `--check` tells the contributor exactly what to run.
-      - name: Prettier formatting
-        run: pnpm exec prettier --check .
-
-      # Validate the D1 migrations apply cleanly against a fresh LOCAL database
-      # (offline — no Cloudflare token, never touches prod). Catches malformed
-      # migration SQL on the PR, before it can reach the deploy's --remote apply.
-      - name: D1 migrations apply cleanly (local)
-        run: pnpm exec wrangler d1 migrations apply platform-db --local
