@@ -40,6 +40,7 @@ pnpm test:search        # cross-brain search: which brains, and the per-brain hi
 pnpm test:links         # wikilink resolution + the broken-link report golden test
 pnpm test:access        # per-brain access rule (effectiveBrainRole) golden test
 pnpm test:connections   # the connection lifecycle: anchors, joining, ending, mirrors
+pnpm test:e2e-mirror    # the mirror copier, over real git repos in a temp dir
 pnpm test:scope         # org-vs-brain scope: which role each tool gates on
 pnpm test:feedback      # submit_feedback composition golden test (redaction, nothing identifying published)
 pnpm test:usage         # usage-analytics golden test (tool-classification coverage, the summary fold)
@@ -836,6 +837,76 @@ UI is `app/views/AnalyticsView.tsx`, an ORG-scope destination beside Members.
 - **Not built:** retention/pruning (rows are small, but nothing deletes them),
   a CSV export, per-brain analytics (this is deliberately org-scope), and any
   notion of a session or of time-on-page.
+
+## Connections (a shared surface between two organizations)
+
+Built 2026-08-19. Design: [`docs/design/brain-seams.md`](docs/design/brain-seams.md).
+A **connection** is a place two organizations write in together: one set of pages, owned
+by neither, that each side joins to one of its OWN brains. Not a copy and not a share.
+
+- **Access is DERIVED, not granted.** Whoever can reach the anchor brain can reach the
+  connection, at their role there, capped at `editor`. So each party governs who is in
+  the room by governing its own brain's access list, and neither organization ever
+  administers people in the other. The individual cross-org grant was the earlier design
+  and is rejected: the row hangs off nothing, so it needs its own teardown
+  (`deleteUserBrainGrantsInOrg` is scoped by `brains.org_id`, so a person removed from
+  their own org would silently keep the client room) and its own outsider-marking
+  everywhere a brain's audience is shown. Deriving makes all three disappear.
+- **`admin` is unreachable on a connection**, because brain-admin means share and
+  configure and both are meaningless when access lives somewhere else. Ending one is
+  gated separately, on org admin in EITHER party.
+- **The system organization has no members, ever** (`CONNECTIONS_ORG_ID`,
+  `src/lib/connections.ts`). `brains.org_id` is NOT NULL and there is no platform `orgs`
+  row (`PLATFORM_ORG` is a GitHub org _login_; `model='platform'` means a PERSONAL org),
+  so connections need an org of their own. Having no members is what makes three rules
+  hold by construction: `listAccessibleOrgs`/`chooseOrg` start `FROM memberships` so it
+  can never be offered as a place to put a brain; `effectiveBrainRole`'s org-visibility
+  source and org-admin floor have nobody to apply to, so the anchor branch is the ONLY
+  way in and a bug there makes connections invisible rather than over-shared; and
+  `resolveProductContext` needs no change, minting the token from the brain's own org row.
+  `model` is `'system'` and not `'platform'` because `orgDisplay` renders any platform org
+  as "Personal", which would file every client room under the user's own notes.
+- **`effectiveBrainRole` gained a fourth source and its first ceiling.** `orgRole` is
+  nullable (someone reaching a brain through a connection is not a member of the org
+  holding it); `anchor` is capped at editor; `readOnly` caps the whole result at viewer
+  and is applied LAST. A viewer grant cannot make a brain read-only, because the
+  org-admin floor hands an admin of the owning org their role straight back, which is why
+  a mirror needs the column.
+- **Ending is a state machine** (`pending → live → ending → ended`), because it must
+  survive interruption. One conditional UPDATE is the entire concurrency guard.
+  Detaching the anchors IS the revocation, so access stops in the first request and
+  before any copying. The room is ARCHIVED, never deleted (`brains.archived_at`, filtered
+  in SQL by `listAccessibleBrains`/`getDefaultBrainForUser` because existence is not
+  policy), so a copy that cannot be made now can still be made later.
+- **`end_connection` also resolves connections in the `ending` state** for an admin of a
+  party org, and it has to: ending one detaches the anchors, and the anchors are the only
+  way to NAME a connection, so without that the copies would be unresumable. There is no
+  cron here, so the tool is its own resume entry point. Reaching a connection that way is
+  not reaching the ROOM, which stays archived and unreachable for everyone.
+- **The mirror copies bytes by default** (`src/lib/mirror.ts`). Text is a narrow
+  allowlist of the extensions the platform writes; everything else goes through
+  `readBinary`. Inferring binaries from what `fetchPages` omits is exact on GitHub (its
+  GraphQL yields null for non-UTF-8) and silently CORRUPTING on the fs backend, which
+  returns the same blob as mangled UTF-8 that looks like a successful read. The copy is
+  paged (`commitFiles` builds one `createTree`), and the cursor packs the target repo and
+  the position together, because the repo cannot be derived from the path.
+- **Two installation tokens.** The copy is READ with the platform installation and
+  WRITTEN with the receiving org's own. For a personal org they are the same, which is
+  why the distinction stays invisible until a customer-model party fails.
+- **A connection is NOT in the brain switcher**, but it IS in the brains payload. The app
+  resolves a result's brain against that list (`pickShownBrain`), so filtering
+  server-side would leave the crumb naming the previous brain over a connection's
+  content, which is issue #26 reintroduced. Filtering happens where the picker renders
+  (`Breadcrumb.tsx`, `BrainsView.tsx`). Its own chrome is Files and Recent changes only.
+- Coverage: `pnpm test:connections` (the lifecycle and resolution, including that a
+  colleague who cannot reach the anchor cannot reach the room, and that granting the
+  anchor grants the room in the same statement), `pnpm test:access` (the rule's whole
+  input space including a null `orgRole` and both ceilings), `pnpm test:scope` (both
+  mutations gate on the ORG role, and a connection guest is refused by the roster and the
+  per-person analytics table), `pnpm test:e2e-mirror` (attachments survive byte for byte,
+  a resumed copy converges), `pnpm test:ui`. **Not built:** creating or ending a
+  connection from the UI (conversational only), any notification when an invitation
+  arrives (nothing in this system sends mail), and export.
 
 ## Brain templates
 

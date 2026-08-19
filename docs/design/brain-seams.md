@@ -1,7 +1,10 @@
 # Design: collaboration between brains
 
-- Status: Agreed shape, nothing built. The access model (§6), where a connection is reached from
-  (§12), and how much chrome it gets are settled; the open questions in §15 are not.
+- Status: BUILT, 2026-08-19. Steps 1 to 6 of §15 are in `main`: cross-brain search, the connection
+  object, anchor-derived access, creating and joining, ending with resumable read-only mirrors, and
+  the panel. What is NOT built is listed at the end of §15 and in `CLAUDE.md`: creating or ending a
+  connection from the UI (conversational only), any notification when an invitation arrives, and
+  export. Where this document and the code disagree, the code won and §15 says so.
 - Author: Jon Hansing (via Claude)
 - Date: 2026-08-19. Supersedes the 2026-08-10 draft, which designed publishing (a one-way
   key-addressed copy between repositories) and ruled shared surfaces out of scope. Publishing is
@@ -689,6 +692,15 @@ degrades to plain text, not a wikilink. The syntax is open, §15.
    relationships exist to shape it.
 
 Step 3 is where the whole confidentiality risk sits, and step 5 is where the commercial risk does.
+
+**What building it changed.** Three things this document had wrong, kept here because each was only
+visible from the code. `PLATFORM_ORG` is a GitHub organization login and not a row, so connections
+needed a memberless system organization of their own, which turned out to be what makes §6 hold by
+construction rather than by a filter. Ending a connection detaches the anchors, and the anchors are
+the only way to NAME one, so the copies would have been unresumable without a second resolution
+path for an admin of a party. And a mirror cannot infer which files are binary from what the batched
+read omits: that is exact on GitHub and silently corrupting on the filesystem backend, which returns
+the same blob as mangled text that looks like a successful read.
 
 Open:
 
