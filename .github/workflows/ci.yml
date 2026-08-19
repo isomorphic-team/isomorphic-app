@@ -105,6 +105,7 @@ jobs:
       # against a real scratch repo, by hand, to cover the GitHub adapter itself.
       - run: pnpm test:e2e-librarian
       - run: pnpm test:e2e-import
+      - run: pnpm test:e2e-mirror
 
       # The UI tests drive the REAL generated app bundle in a real browser, over the
       # local host harness (dev/harness.ts) with its fixtures. Offline and secret-free
