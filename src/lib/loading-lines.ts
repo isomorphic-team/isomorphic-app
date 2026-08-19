@@ -96,17 +96,50 @@ const WARM: Record<LoadingTask, string[]> = {
 // The tail every task falls back to: brain-shaped, name-free, and safe anywhere.
 // Deliberately librarian rather than machine. This product's job is a wiki someone
 // else has to keep, and "compiling" would be a lie about what is happening.
+// Long on purpose. A rotation shows at most three or four of these, and a person who
+// waits several times in a session should not meet the same joke twice.
 const POOL: string[] = [
+	// The librarian, and the reading room
 	'Consulting the librarian…',
+	'Asking at the reference desk…',
+	'The librarian is looking it up…',
+	'Keeping our voice down…',
+	'Tiptoeing past the reading room…',
+	'Asking around…',
+	// The stacks
 	'Following a wikilink into the stacks…',
+	'Retrieving it from the stacks…',
+	'Second shelf from the top…',
+	'Following the spine labels…',
+	'Somewhere in the periodicals…',
+	'Behind the glass, with the rare books…',
+	'Shelving a stray thought…',
+	'Reshelving as we go…',
+	'Checking the returns cart…',
+	// The catalogue
 	'Checking the index cards…',
-	'Dusting off the archive…',
-	'Chasing a footnote…',
-	'Reading the margins…',
+	'Consulting the card catalogue…',
+	'Filed under something sensible…',
+	'Looking for the misfiled one…',
 	'Cross-referencing…',
 	'Untangling the backlinks…',
-	'Asking around…',
-	'Shelving a stray thought…',
+	// The archive proper
+	'Dusting off the archive…',
+	'Waking the archivist…',
+	'Pulling the box from storage…',
+	'Untying the folder ribbon…',
+	'Putting the cotton gloves on…',
+	'Rewinding the microfiche…',
+	'Consulting the finding aid…',
+	// The book itself
+	'Chasing a footnote…',
+	'Reading the margins…',
+	'Reading someone else’s underlining…',
+	'Checking the errata…',
+	'Turning to the appendix…',
+	'Unfolding the map at the back…',
+	'Finding where the bookmark went…',
+	'Blowing the dust off the spine…',
 	'Squinting at the handwriting…',
 	'Turning the page…'
 ];
@@ -114,9 +147,23 @@ const POOL: string[] = [
 // A couple of tasks want a tail of their own, because the generic one would be about
 // the wrong thing entirely.
 const POOL_BY_TASK: Partial<Record<LoadingTask, string[]>> = {
-	graph: ['Pulling the threads apart…', 'Letting the nodes settle…', 'Untangling the backlinks…'],
-	create: ['Deciding where it lives…', 'Choosing a good name…', 'Making room…'],
-	analytics: ['Carrying the one…', 'Squaring the columns…']
+	graph: [
+		'Pulling the threads apart…',
+		'Letting the nodes settle…',
+		'Drawing the concordance…',
+		'Untangling the backlinks…'
+	],
+	create: [
+		'Deciding where it lives…',
+		'Choosing a good name…',
+		'Clearing a shelf for it…',
+		'Making room…'
+	],
+	// A circulation desk is what this tab is: who borrowed what, how often.
+	analytics: ['Checking the circulation records…', 'Carrying the one…', 'Squaring the columns…'],
+	activity: ['Reading the accession log…', 'Checking the date stamps…'],
+	members: ['Counting the library cards…', 'Reading the sign-in book…'],
+	sharing: ['Seeing who holds a card…', 'Checking the lending rules…']
 };
 
 // Deterministic PRNG. A rotation should look picked, not sorted, and it must still be
