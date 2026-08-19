@@ -63,8 +63,13 @@ function shimStatement(sql: string, params: unknown[] = []) {
 		first: async () => sqlite.prepare(sql).get(...(params as [])) ?? null,
 		all: async () => ({ results: sqlite.prepare(sql).all(...(params as [])) }),
 		run: async () => {
-			sqlite.prepare(sql).run(...(params as []));
-			return { success: true };
+			// meta.changes is not decoration. beginEndConnection claims a connection with
+			// ONE conditional UPDATE and reads the row count to know whether it won; with
+			// the count missing it fails SAFE, reporting that someone else got there
+			// first, so a shim that omits it turns the whole end sequence into a silent
+			// no-op that still looks like success.
+			const r = sqlite.prepare(sql).run(...(params as []));
+			return { success: true, meta: { changes: Number(r.changes) } };
 		}
 	};
 }
@@ -92,6 +97,23 @@ sqlite.exec(`
   INSERT INTO brain_memberships (brain_id, user_id, role) VALUES
     ('b-main', 'u-shared', 'admin'),
     ('b-main', 'u-writer', 'editor');
+`);
+
+// A live connection anchored to b-main, so end_connection has something real to gate on.
+// The connection's own organization deliberately has NO members: that is what makes the
+// anchor the only way in, and it is why the end gate cannot be an org gate on the room.
+sqlite.exec(`
+  INSERT INTO orgs (org_id, name, model, installation_id, brain_owner, created_by) VALUES
+    ('org-connections', 'Shared', 'system',   1, 'iso-platform', ''),
+    ('org-far',         'Acme',   'customer', 2, 'acme-co',      'u-far');
+  INSERT INTO brains (brain_id, org_id, repo_owner, repo_name, name, visibility, created_at) VALUES
+    ('b-room', 'org-connections', 'iso-platform', 'conn-acme-0000', 'Acme engagement', 'private', '2026-03-01'),
+    ('b-far',  'org-far',         'acme-co',      'wiki',           'Acme wiki',       'org',     '2026-03-01');
+  INSERT INTO connections (connection_id, brain_id, name, state, created_by)
+    VALUES ('c-live', 'b-room', 'Acme engagement', 'live', 'u-boss');
+  INSERT INTO connection_parties (party_id, connection_id, org_id, anchor_brain_id, joined_at) VALUES
+    ('p-here',  'c-live', 'org1',    'b-main', '2026-03-01'),
+    ('p-there', 'c-live', 'org-far', 'b-far',  '2026-03-01');
 `);
 // u-outside deliberately has an account but NO membership in org1: the "not a member
 // of this organization" guardrail needs a real user row to reach.
@@ -275,6 +297,27 @@ function toolsFor(p: Persona): Map<string, Handler> {
 				role: p.role,
 				org_role: p.orgRole
 			})) as AccessibleBrain[],
+		// Party to org1 at whatever role this persona holds there, so the end gate has
+		// something real to intersect against.
+		listOrgs: async () =>
+			p.orgRole
+				? [
+						{
+							role: p.orgRole,
+							org: {
+								org_id: 'org1',
+								name: 'Northwind',
+								model: 'customer',
+								installation_id: 1,
+								brain_owner: 'northwind',
+								github_org_login: 'northwind',
+								created_by: 'u-boss',
+								created_at: '2026-01-01',
+								suspended_at: null
+							}
+						}
+					]
+				: [],
 		personEmails: async () => [`${p.userId}@example.com`],
 		now: () => '2026-08-19T12:00:00Z'
 	});
@@ -813,6 +856,69 @@ console.log('\nConnections are ORG-scope, and brain admin does not confer them')
 	// anything about the ORGANIZATION on the other side of it.
 	const guestRead = await attempt(connectionGuest, 'connections', {});
 	check('and by a connection guest', guestRead.outcome === 'allowed', guestRead.detail);
+}
+// ---------------------------------------------------------------------------
+console.log('\nEnding a connection: admin in EITHER party, and nothing less');
+// ---------------------------------------------------------------------------
+// Deliberately not the brain role. Roles on a connection are derived and capped at
+// editor, so there is no brain admin to gate on; and gating on the room would let the
+// counterparty's people end a relationship your own owner could not.
+//
+// These run in order, because ending really does end it: the denials have to be
+// attempted while the connection is still live.
+{
+	const args = { connection: 'Acme engagement' };
+	const shared = await attempt(sharedAdmin, 'end_connection', args);
+	check(
+		'brain ADMIN + org viewer cannot end it',
+		shared.outcome === 'denied' && /needs admin access/.test(shared.detail),
+		shared.detail
+	);
+	const edit = await attempt(writer, 'end_connection', args);
+	check(
+		'an org editor cannot either',
+		edit.outcome === 'denied' && /needs admin access/.test(edit.detail),
+		edit.detail
+	);
+	check(
+		'and it is still live',
+		(
+			sqlite.prepare(`SELECT state FROM connections WHERE connection_id = 'c-live'`).get() as {
+				state: string;
+			}
+		).state === 'live'
+	);
+
+	const boss = await attempt(orgBoss, 'end_connection', args);
+	check('an org OWNER in one of the parties can', boss.outcome === 'allowed', boss.detail);
+	// The allow direction has to have actually DONE something, or a handler that
+	// returned early would read identically.
+	const row = sqlite
+		.prepare(`SELECT state FROM connections WHERE connection_id = 'c-live'`)
+		.get() as { state: string };
+	check("...and the connection is now 'ending'", row.state === 'ending', row.state);
+	// Access stops in the same request, before anything is copied, because it was
+	// derived from the anchors rather than granted.
+	const anchors = sqlite
+		.prepare(
+			`SELECT COUNT(*) AS n FROM connection_parties WHERE connection_id = 'c-live' AND anchor_brain_id IS NOT NULL`
+		)
+		.get() as { n: number };
+	check('...and both anchors are detached, so neither side can reach it', anchors.n === 0);
+	const archived = sqlite
+		.prepare(`SELECT archived_at FROM brains WHERE brain_id = 'b-room'`)
+		.get() as { archived_at: string | null };
+	check('...and the room is archived rather than deleted', !!archived.archived_at);
+
+	// And the revocation is real from the tool's own side: a second attempt cannot even
+	// NAME the connection, because naming one goes through the anchors that were just
+	// detached. There is no separate "is it still live" check doing this work.
+	const again = await attempt(orgBoss, 'end_connection', args);
+	check(
+		'a second attempt cannot find it, because access is what stopped',
+		again.outcome === 'denied' && /None of your brains are connected/.test(again.detail),
+		again.detail
+	);
 }
 
 if (failures) {

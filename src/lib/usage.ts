@@ -81,6 +81,8 @@ export const TOOL_KINDS: Record<string, UsageKind> = {
 	// content work, because that is what it is.
 	create_connection: 'admin',
 	accept_connection: 'admin',
+	// Ending one stops access for everyone on both sides.
+	end_connection: 'admin',
 	link_identity: 'admin',
 	unlink_identity: 'admin',
 	submit_feedback: 'admin'

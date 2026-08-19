@@ -20,14 +20,20 @@ import {
 	brainLabel,
 	getAppUserByEmail,
 	matchBrain,
+	roleAtLeast,
 	type AccessibleBrain,
+	type AccessibleOrg,
 	type OrgScope,
 	type Role,
 	type TenantOpts
 } from '../lib/orgs.ts';
 import {
 	INVITE_TTL_DAYS,
+	archiveBrain,
+	beginEndConnection,
 	connectionsForAnchors,
+	detachAnchors,
+	partyOrgIds,
 	createConnectionRecord,
 	ensureConnectionsOrg,
 	joinConnection,
@@ -58,6 +64,9 @@ export interface ConnectionDeps {
 		installationId: number;
 	}>;
 	listBrains: () => Promise<AccessibleBrain[]>;
+	// The caller's organizations and their role in each. Ending a connection is gated on
+	// admin in EITHER party, which orgContext cannot express: it resolves exactly one.
+	listOrgs: () => Promise<AccessibleOrg[]>;
 	// Every address this person signs in under. An invitation is addressed to an email
 	// and claimed later, so looking at only the current one would hide an invitation
 	// sent to another of their addresses.
@@ -96,7 +105,7 @@ function connectionLine(c: Connection, parties: ConnectionParty[]): string {
 }
 
 export function registerConnectionTools(server: McpServer, deps: ConnectionDeps) {
-	const { getContext, orgContext, platformContext, listBrains, personEmails, now } = deps;
+	const { getContext, orgContext, platformContext, listBrains, listOrgs, personEmails, now } = deps;
 
 	// ---------- connections (read) ----------
 	server.registerTool(
@@ -368,6 +377,88 @@ export function registerConnectionTools(server: McpServer, deps: ConnectionDeps)
 					anchor: m.brain.id,
 					parties: parties.length,
 					switched: false
+				}
+			};
+		}
+	);
+
+	// ---------- end_connection ----------
+	server.registerTool(
+		'end_connection',
+		{
+			title: 'End a connection',
+			description:
+				'end_connection stops a shared working surface between two organizations. Either side can do it and neither needs the other to agree, because a relationship one party cannot leave is not a relationship. Access stops immediately for everyone on both sides, and neither side keeps the original: each organization is left a read-only copy of what was in it. Use this when an engagement finishes or a relationship ends. It is not disconnect_brain, which deletes a brain outright, and it is not reversible: a new connection would be a new room.',
+			inputSchema: {
+				connection: z.string().describe('Which connection to end, by name.'),
+				reason: z.string().optional().describe('Optional note for the record about why it ended.')
+			}
+		},
+		async ({ connection }) => {
+			const ctx = await getContext();
+			const brains = await listBrains();
+			const reachable = await connectionsForAnchors(
+				ctx.db,
+				brains.map((b) => b.brain_id)
+			);
+			const q = connection.trim().toLowerCase();
+			const hits = reachable.filter(
+				(r) => r.connection.name.toLowerCase() === q || r.connection.name.toLowerCase().includes(q)
+			);
+			if (hits.length === 0) {
+				const names = reachable.map((r) => r.connection.name);
+				return fail(
+					names.length
+						? `No connection matching "${connection}". You can end: ${names.join(', ')}.`
+						: 'None of your brains are connected to anything.'
+				);
+			}
+			if (hits.length > 1) {
+				return fail(
+					`"${connection}" matches several: ${hits.map((h) => h.connection.name).join(', ')}. Be more specific.`
+				);
+			}
+			const target = hits[0].connection;
+
+			// EITHER party may end it, so the gate is admin in ANY organization that is a
+			// party. Deliberately not the brain role: roles on a connection are derived and
+			// capped at editor, so there is no brain admin to gate on, and gating on the
+			// room would let the counterparty's people end a relationship your own owner
+			// could not.
+			const parties = await partyOrgIds(ctx.db, target.connection_id);
+			const mine = await listOrgs();
+			const canEnd = mine.some(
+				(o) => parties.includes(o.org.org_id) && roleAtLeast(o.role, 'admin')
+			);
+			if (!canEnd) {
+				return fail(
+					`Ending "${target.name}" needs admin access in one of the organizations that is party to it.`
+				);
+			}
+
+			// ONE conditional UPDATE is the whole concurrency guard: a second caller has to
+			// lose rather than run the sequence twice.
+			const claimed = await beginEndConnection(ctx.db, target.connection_id, ctx.actorUserId ?? '');
+			if (!claimed) {
+				return ok(`"${target.name}" is already ending or has ended.`);
+			}
+			// Access stops HERE, before any copying, and it is one statement because access
+			// was derived from the anchors rather than granted. There are no grant rows to
+			// hunt down and none to forget.
+			await detachAnchors(ctx.db, target.connection_id);
+			// Archived, never deleted. The content has to outlive the relationship, or a
+			// copy that fails to be made now could never be made at all.
+			await archiveBrain(ctx.db, target.brain_id);
+
+			return {
+				...ok(
+					`Ended "${target.name}". Nobody on either side can reach it any more. The pages are kept so each organization can be given a read-only copy; that copy is prepared separately and is not ready yet.`
+				),
+				structuredContent: {
+					connection_id: target.connection_id,
+					name: target.name,
+					state: 'ending',
+					mirrorsReady: false
 				}
 			};
 		}

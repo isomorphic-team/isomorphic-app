@@ -1011,6 +1011,10 @@ class McpSession {
 				orgContext: (opts) => this.orgContext(opts),
 				platformContext: () => this.platformContext(),
 				listBrains: () => this.listAccessibleBrainsForCaller(),
+				listOrgs: async () =>
+					this.props?.user_id
+						? listAccessibleOrgs(this.env.PLATFORM_DB, await this.personUserIds(this.props.user_id))
+						: [],
 				personEmails: () => this.personEmails(),
 				now: () => new Date().toISOString()
 			});
