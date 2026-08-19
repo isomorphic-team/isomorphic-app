@@ -5,6 +5,7 @@
 // there is no form here that could be filled in halfway. The panel answers "who are we
 // sharing a space with", which is the question people actually open it for.
 import type { ConnectionInvite, ConnectionRow } from '../core/types.ts';
+import { switchBrain } from '../core/actions.ts';
 import { defineView } from '../core/view-registry.ts';
 import { List, ListRow } from '../ui/List.tsx';
 
@@ -46,19 +47,45 @@ function ConnectionsView({
 				</div>
 			) : (
 				<div>
-					<div class="px-1 pb-1.5 text-xs text-muted">Shared with</div>
+					<div class="px-1 pb-1.5 text-xs text-muted">Shared with (open one to see its pages)</div>
 					<List>
-						{connections.map((c) => (
-							<ListRow key={c.connection_id}>
-								<span class="min-w-0 flex-1">
-									<span class="block truncate text-fg">{c.name}</span>
-									<span class="block text-xs text-muted">
-										{counterparty(c)}
-										{stateNote(c.state) ? ` · ${stateNote(c.state)}` : ''}
-									</span>
-								</span>
-							</ListRow>
-						))}
+						{connections.map((c) => {
+							// A connection that has ENDED cannot be opened: its anchors are detached
+							// and its brain is archived, so a row that looked clickable would be a
+							// control whose click is refused. A pending one CAN be, by the side that
+							// created it, which has to be able to prepare the room before anyone is
+							// invited to look at it.
+							const open = c.state === 'live' || c.state === 'pending';
+							return (
+								<ListRow key={c.connection_id} class="gap-0 py-0">
+									{open ? (
+										<button
+											type="button"
+											// switchBrain, not a peek: entering a connection moves the crumb,
+											// the file tree and the path policy with it, through the one seam
+											// that drops what belonged to the brain being left. A second brain
+											// rendered under the first brain's name is issue #26.
+											onClick={() => switchBrain(c.brain)}
+											class="min-w-0 flex-1 cursor-pointer py-1.5 text-left hover:text-accent"
+										>
+											<span class="block truncate text-fg">{c.name}</span>
+											<span class="block text-xs text-muted">
+												{counterparty(c)}
+												{stateNote(c.state) ? ` · ${stateNote(c.state)}` : ''}
+											</span>
+										</button>
+									) : (
+										<span class="min-w-0 flex-1 py-1.5">
+											<span class="block truncate text-muted">{c.name}</span>
+											<span class="block text-xs text-muted">
+												{counterparty(c)}
+												{stateNote(c.state) ? ` · ${stateNote(c.state)}` : ''}
+											</span>
+										</span>
+									)}
+								</ListRow>
+							);
+						})}
 					</List>
 				</div>
 			)}

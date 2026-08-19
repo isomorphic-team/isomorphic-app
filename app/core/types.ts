@@ -68,6 +68,10 @@ export interface GraphNode {
 	title: string;
 	group: string;
 	degree: number;
+	// Set only on the pseudo-nodes the graph adds for shared surfaces. They are not
+	// pages: they carry a brain to enter rather than a path to open, so the click has to
+	// branch on this rather than on the id shape.
+	connection?: { brain: string; who: string };
 }
 export interface GraphLink {
 	source: string;

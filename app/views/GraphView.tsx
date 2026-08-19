@@ -3,7 +3,8 @@
 import { useEffect, useRef } from 'preact/hooks';
 import type { GraphNode, GraphLink, SimNode } from '../core/types.ts';
 import { displayMode } from '../core/host.ts';
-import { navigateTo } from '../core/actions.ts';
+import { navigateTo, ensureConnections, switchBrain } from '../core/actions.ts';
+import { connectionList, features } from '../core/store.ts';
 import { defineView } from '../core/view-registry.ts';
 
 // Read the current theme tokens straight off the document so the canvas draws in
@@ -49,6 +50,26 @@ function GraphView({
 	const canvasRef = useRef<HTMLCanvasElement>(null);
 	const tall = displayMode === 'fullscreen';
 
+	// The flag arrives with the brains payload and can land after this mounts, so the
+	// retry has to be keyed on it (see Browse.tsx).
+	useEffect(() => {
+		void ensureConnections();
+	}, [features.connections]);
+
+	// Shared surfaces, drawn as pseudo-nodes on a ring OUTSIDE the page graph. They are
+	// not pages and have no links, so the spring layout would otherwise park them at the
+	// origin with everything else. Pinned (`fixed`) at a wide radius instead, which is
+	// what makes them read as somewhere ELSE rather than as an unusually lonely page.
+	//
+	// Synthesized here from the same store the tree reads, rather than sent by
+	// view_graph: a connection is not part of this brain's link graph and putting it in
+	// that payload would say it was.
+	const rooms = (connectionList ?? []).filter((c) => c.state === 'live' || c.state === 'pending');
+	// A STABLE key for the effect below. `rooms` is a fresh array every render, so
+	// depending on it directly would rebuild the whole simulation on each paint; without
+	// it the rooms would never appear at all, since they arrive after the first render.
+	const roomKey = rooms.map((c) => c.connection_id).join(',');
+
 	useEffect(() => {
 		if (!nodes.length) return;
 		const canvas = canvasRef.current!;
@@ -63,6 +84,31 @@ function GraphView({
 			const r = 40 + (i % 7) * 24;
 			return { ...n, x: Math.cos(a) * r, y: Math.sin(a) * r, vx: 0, vy: 0, fixed: false };
 		});
+		// The rooms, on their own ring beyond the page cloud and pinned there.
+		const ROOM_RING = 300;
+		for (let i = 0; i < rooms.length; i++) {
+			const c = rooms[i];
+			const theirs = c.parties.filter((p) => !p.mine);
+			const who =
+				theirs
+					.map((p) => p.org ?? (p.invitedEmail ? `${p.invitedEmail} (invited)` : 'invited'))
+					.join(', ') || 'the other side';
+			// Spread around the ring, starting at the top so one room sits above the cloud
+			// rather than off to an arbitrary side.
+			const a = -Math.PI / 2 + (i / Math.max(rooms.length, 1)) * Math.PI * 2;
+			sim.push({
+				id: `connection:${c.connection_id}`,
+				title: c.name,
+				group: 'connection',
+				degree: 0,
+				connection: { brain: c.brain, who },
+				x: Math.cos(a) * ROOM_RING,
+				y: Math.sin(a) * ROOM_RING,
+				vx: 0,
+				vy: 0,
+				fixed: true
+			});
+		}
 		const byId = new Map(sim.map((s) => [s.id, s]));
 		const edges = links
 			.map((l) => ({ a: byId.get(l.source), b: byId.get(l.target) }))
@@ -75,7 +121,9 @@ function GraphView({
 			neighbors.get(e.b.id)!.add(e.a.id);
 		}
 
-		const radiusOf = (n: SimNode) => 4 + Math.sqrt(n.degree) * 2.6;
+		// Rooms get a fixed, larger radius: degree means nothing for them (they have no
+		// links into this brain) and the size is what carries their weight on screen.
+		const radiusOf = (n: SimNode) => (n.connection ? 9 : 4 + Math.sqrt(n.degree) * 2.6);
 
 		// One physics step. Repulsion (all pairs) + link springs + gravity toward the
 		// origin so disconnected nodes don't drift away. `alpha` scales the whole step
@@ -260,8 +308,23 @@ function GraphView({
 				ctx.globalAlpha = near ? 1 : 0.3;
 				ctx.beginPath();
 				ctx.arc(sx, sy, r, 0, Math.PI * 2);
-				ctx.fillStyle = isFocus || isHover ? colors.accent : `hsl(${groupHue(n.group)} 55% 55%)`;
-				ctx.fill();
+				if (n.connection) {
+					// Hollow, ringed, accent: a room is not a page, and the difference has to
+					// be legible at a glance rather than only on hover.
+					ctx.fillStyle = colors.bg;
+					ctx.fill();
+					ctx.lineWidth = 2;
+					ctx.strokeStyle = colors.accent;
+					ctx.stroke();
+					ctx.beginPath();
+					ctx.arc(sx, sy, r + 3, 0, Math.PI * 2);
+					ctx.globalAlpha = (near ? 1 : 0.3) * 0.35;
+					ctx.stroke();
+					ctx.globalAlpha = near ? 1 : 0.3;
+				} else {
+					ctx.fillStyle = isFocus || isHover ? colors.accent : `hsl(${groupHue(n.group)} 55% 55%)`;
+					ctx.fill();
+				}
 				if (isFocus) {
 					ctx.lineWidth = 2;
 					ctx.strokeStyle = colors.accent;
@@ -271,7 +334,17 @@ function GraphView({
 					ctx.stroke();
 					ctx.globalAlpha = near ? 1 : 0.3;
 				}
-				const pri = isHover || isFocus ? 0 : hi && hi.has(n.id) ? 1 : hubIds.has(n.id) ? 2 : -1;
+				// A room is always labelled. An unlabelled ring node is a mystery rather
+				// than an affordance, and there are only ever a handful of them.
+				const pri = n.connection
+					? 0
+					: isHover || isFocus
+						? 0
+						: hi && hi.has(n.id)
+							? 1
+							: hubIds.has(n.id)
+								? 2
+								: -1;
 				if (pri >= 0) labelCands.push({ n, sx, sy, r, pri, near: !!near });
 			}
 			ctx.globalAlpha = 1;
@@ -397,7 +470,11 @@ function GraphView({
 			if (dragNode) {
 				dragNode.fixed = false;
 				// A tap (no real drag) on a node opens it.
-				if (movedSince < 5) navigateTo(dragNode.id);
+				if (movedSince < 5) {
+					// A room carries a brain to ENTER; a page carries a path to open.
+					if (dragNode.connection) switchBrain(dragNode.connection.brain);
+					else navigateTo(dragNode.id);
+				}
 				dragNode = null;
 			}
 			panning = false;
@@ -507,7 +584,7 @@ function GraphView({
 			canvas.removeEventListener('pointerup', onUp);
 			canvas.removeEventListener('wheel', onWheel);
 		};
-	}, [nodes, links, focus]);
+	}, [nodes, links, focus, roomKey]);
 
 	if (!nodes.length) {
 		return (

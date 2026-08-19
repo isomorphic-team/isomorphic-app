@@ -55,7 +55,10 @@ import {
 	setFeatures,
 	applyPolicy,
 	applyBrainContext,
-	bump
+	bump,
+	connectionList,
+	setConnectionList,
+	features
 } from './store.ts';
 import { toast } from './toast.tsx';
 
@@ -457,6 +460,32 @@ function brainAccessViewFromSc(sc: Record<string, unknown>): View {
 // Open the sharing panel for a brain: who can reach it, and at what level.
 // `brain` targets a specific one (the Share control in the brains list); omitted,
 // it acts on the active brain.
+// The connections hanging off the brain being shown, fetched the way the brain list is:
+// lazily, once, swallowing its own failure. Dropped whenever the active brain changes
+// (setActiveBrain), because they belong to ONE brain rather than to the session.
+//
+// A brain that cannot answer about its connections still shows its files, which is why
+// this never surfaces an error: it is an addition to the tree, not the tree.
+let connectionsPromise: Promise<void> | null = null;
+function ensureConnections(): Promise<void> {
+	if (!features.connections || connectionList !== null) return Promise.resolve();
+	if (connectionsPromise) return connectionsPromise;
+	connectionsPromise = (async () => {
+		try {
+			const res = await callTool('connections', { ...brainArgs() });
+			if (res.isError) throw new Error(firstText(res));
+			const sc = (res.structuredContent ?? {}) as { connections?: ConnectionRow[] };
+			setConnectionList(Array.isArray(sc.connections) ? sc.connections : []);
+			bump();
+		} catch {
+			// Stay unknown rather than claiming none.
+		} finally {
+			connectionsPromise = null;
+		}
+	})();
+	return connectionsPromise;
+}
+
 // The connections panel. A brain-scope view like sharing, and reached the same way.
 async function openConnections(brain?: string) {
 	show({ kind: 'loading', label: 'Loading connections…' });
@@ -1123,6 +1152,7 @@ export {
 	runSearch,
 	openHit,
 	openConnections,
+	ensureConnections,
 	openEditor,
 	resolveWikilink,
 	renderMarkdown,

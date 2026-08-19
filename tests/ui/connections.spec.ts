@@ -29,6 +29,30 @@ test('an invitation is listed apart from the connections themselves', async ({ p
 	await expect(app.getByText('Acme partnership')).toBeVisible();
 });
 
+test('opening a connection shows its pages, under its own name', async ({ page }) => {
+	const app = await openApp(page, 'connections');
+	await expectView(app, 'connections');
+
+	// The panel LISTS connections; this is the only route into one from the chrome, so
+	// without a working click a person can see that a shared space exists and has no way
+	// to read it.
+	await app.getByRole('button', { name: /Northwind engagement/ }).click();
+
+	// Its own pages, not the anchor brain's. The room holds a kickoff page that exists in
+	// no other fixture brain, so finding it proves the app is reading the connection.
+	await expectView(app, 'browse');
+	await app.getByRole('button', { name: 'Expand all' }).click();
+	// The tree labels a page by its TITLE where it has one, so this is "Kickoff" rather
+	// than the filename.
+	await expect(app.getByRole('button', { name: /kickoff/i })).toBeVisible();
+
+	// And the crumb follows the content. A second brain rendered under the first brain's
+	// name is issue #26; entering a connection has to move the whole context with it.
+	// getByText, not getByRole: on the Files view the brain crumb is deliberately inert,
+	// so it is a span rather than a button.
+	await expect(app.getByText('Northwind engagement').first()).toBeVisible();
+});
+
 test('a connection is not offered in the brain switcher', async ({ page }) => {
 	const app = await openApp(page, '');
 	// The crumb LABEL opens Files; the chevron beside it opens the switcher. They are

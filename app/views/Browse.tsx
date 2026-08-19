@@ -18,14 +18,24 @@ import {
 	brainArgs,
 	activeBrainCanManage,
 	isEditablePath,
+	connectionList,
+	features,
 	bump
 } from '../core/store.ts';
-import { navigateTo, openAsset, refreshBrowse } from '../core/actions.ts';
+import {
+	navigateTo,
+	openAsset,
+	refreshBrowse,
+	ensureConnections,
+	switchBrain
+} from '../core/actions.ts';
 import { FOLDER_NOTE_NAMES } from '../core/util.ts';
 import { toast, askConfirm } from '../core/toast.tsx';
+import { eyebrow } from '../ui/typography.ts';
 import { Button } from '../ui/index.ts';
 import {
 	ChevronIcon,
+	LinkIcon,
 	FolderIcon,
 	FileIcon,
 	ImageIcon,
@@ -831,6 +841,71 @@ function FileTree({
 					titleByPath={titleByPath}
 				/>
 			))}
+			<ConnectedRoots />
+		</div>
+	);
+}
+
+// Shared surfaces this brain is joined to, as roots ALONGSIDE its own tree.
+//
+// Adjacent, never merged, and the distinction is the whole design. Merging a
+// connection's pages into this tree would break four things at once: `[[wikilinks]]`
+// resolve against one brain's page set, `isEditablePath` is a path predicate with no
+// brain to consult, both brains have a `wiki/index.md`, and the freshness guarantee is
+// per brain. A second root costs none of that: its own tree, its own crumb, entered
+// rather than inlined.
+//
+// It earns its place here because the alternative was a panel two clicks away, which
+// meant a person could be looking at the brain a room hangs off with nothing on screen
+// saying the room exists.
+function ConnectedRoots() {
+	// Depends on the FLAG, not on nothing. features arrives with the brains payload, which
+	// can land after this mounts; with an empty dep list the first attempt would bail on a
+	// flag that was merely not known yet and never try again, leaving the section
+	// invisible depending on which response won the race.
+	useEffect(() => {
+		void ensureConnections();
+	}, [features.connections]);
+	// Null is "not fetched", which must not render as "none". Ended connections are
+	// omitted: their brains are archived, so a row for one would be a control whose
+	// click is refused.
+	const rooms = (connectionList ?? []).filter((c) => c.state === 'live' || c.state === 'pending');
+	if (rooms.length === 0) return null;
+	return (
+		<div class="mt-3 border-t border-border pt-2">
+			<div class={`px-1 pb-1 ${eyebrow}`}>Shared with others</div>
+			{rooms.map((c) => {
+				const theirs = c.parties.filter((p) => !p.mine);
+				const who = theirs
+					.map((p) => p.org ?? (p.invitedEmail ? `${p.invitedEmail} (invited)` : 'invited'))
+					.join(', ');
+				return (
+					<button
+						key={c.connection_id}
+						type="button"
+						// Entering, not peeking: this moves the crumb, the tree and the path
+						// policy together, through the one seam that drops what belonged to the
+						// brain being left. A second brain drawn under the first brain's name is
+						// issue #26.
+						onClick={() => switchBrain(c.brain)}
+						class="group flex w-full items-center gap-1.5 rounded px-1 py-1 text-left hover:bg-chip"
+						title={`Open ${c.name}, shared with ${who || 'another organization'}`}
+					>
+						{/* A link, not a folder. The icon is the only thing on the row that says
+						    this is somewhere else rather than somewhere deeper. */}
+						<span class="shrink-0 text-accent">
+							<LinkIcon />
+						</span>
+						<span class="min-w-0 flex-1">
+							<span class="block truncate text-fg">{c.name}</span>
+							<span class="block truncate text-xs text-muted">
+								{who || 'Waiting for the other side'}
+								{c.state === 'pending' ? ' · not joined yet' : ''}
+							</span>
+						</span>
+					</button>
+				);
+			})}
 		</div>
 	);
 }
