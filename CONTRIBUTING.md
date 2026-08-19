@@ -129,7 +129,8 @@ pnpm test:policy        # the path-policy wire contract between Worker and app
 pnpm test:access        # the per-brain access rule (every input to effectiveBrainRole)
 pnpm test:scope         # which role each tool gates on: brain scope vs org scope
 pnpm test:feedback      # what submit_feedback publishes, and what it redacts
-pnpm test:wiring        # every test:* script is in both package.json's `test` and ci.yml
+pnpm test:wiring        # every test:* script is in both package.json's `test` and ci.yml,
+                        # and ci.yml's Playwright image matches the installed Playwright
 
 pnpm typecheck          # all three tsconfigs (node, worker, app)
 pnpm format             # prettier, run before pushing
@@ -137,6 +138,7 @@ pnpm format             # prettier, run before pushing
 
 Adding a test means adding it in **both** `package.json`'s `test` script and
 `.github/workflows/ci.yml`, or it runs in exactly one place. `pnpm test:wiring` enforces that.
+Either CI job counts: it reads the whole workflow file.
 
 Golden tests compare against expected strings inline in the test file. When you change behavior
 deliberately, update the expectation in the same commit and say in the pull request why the old

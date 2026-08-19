@@ -204,7 +204,7 @@ matches CI and vice versa.
 and skips everything if Chromium is not installed, rather than failing. A missing
 browser or a missing baseline is a setup gap, not a regression, and `pnpm test` should
 stay green on a fresh clone. `UI_STRICT=1` turns those skips into failures; CI sets it
-so a broken install step cannot hide behind a green skip.
+so a container that stopped carrying a browser cannot hide behind a green skip.
 
 To generate or refresh them:
 
@@ -215,13 +215,17 @@ pnpm ui:baselines    # playwright test --project=visual --update-snapshots=all
 Use that script rather than a bare `--update-snapshots`, which only fills in MISSING
 baselines and silently leaves a changed one alone (verified on Playwright 1.62).
 
-For Linux baselines from a Mac, run it in the matching container so the fonts match
-CI:
+For Linux baselines from a Mac, run it in the image CI itself runs the UI job in, so
+the fonts and the browser build are the same ones that will compare them:
 
 ```sh
 docker run --rm -v "$PWD":/w -w /w mcr.microsoft.com/playwright:v1.62.1-noble \
   sh -c "corepack enable && pnpm install --frozen-lockfile && pnpm ui:baselines"
 ```
+
+That tag and the `container:` in `.github/workflows/ci.yml` must both match the
+resolved `@playwright/test` version; `pnpm test:wiring` fails if any of the three
+drift.
 
 ## Files
 
