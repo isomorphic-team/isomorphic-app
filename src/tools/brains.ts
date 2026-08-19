@@ -78,6 +78,17 @@ interface BrainRow {
 	orgLabel: string;
 	needsConfig?: boolean; // adopted repo with no content under its roots — offer "Set up"
 	configPrUrl?: string; // a "configure" PR is open (protected repo) — show pending
+	// A connection: a shared surface with another organization, which is a relationship
+	// rather than a workspace. The app leaves these OUT of the switcher for that reason.
+	//
+	// They stay in the PAYLOAD, and that distinction matters. The app resolves the brain
+	// a result names against this list (pickShownBrain), so dropping them here would
+	// leave the crumb naming the previous brain while the widget showed a connection's
+	// content: issue #26 exactly, reintroduced. Filtering belongs at the point of
+	// rendering the picker, not at the point of answering what exists.
+	connection?: boolean;
+	// A read-only copy of a connection that ended. Readable, never writable.
+	readOnly?: boolean;
 }
 // A friendly org name — platform (personal) orgs are email-named, so show "Personal".
 function brainRows(brains: AccessibleBrain[], activeId: string | undefined): BrainRow[] {
@@ -93,7 +104,9 @@ function brainRows(brains: AccessibleBrain[], activeId: string | undefined): Bra
 		canShare: roleAtLeast(b.role, 'admin'),
 		visibility: b.visibility,
 		orgId: b.org_id,
-		orgLabel: orgDisplay(b)
+		orgLabel: orgDisplay(b),
+		...(b.connection_id ? { connection: true } : {}),
+		...(b.read_only ? { readOnly: true } : {})
 	}));
 }
 

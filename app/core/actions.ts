@@ -24,6 +24,8 @@ import type {
 	BrainAccessSelf,
 	MemberRole,
 	BrainRow,
+	ConnectionRow,
+	ConnectionInvite,
 	OrgTarget,
 	ConnectedAccount,
 	Identity,
@@ -135,6 +137,7 @@ function handleToolResult(result: CallToolResult) {
 		);
 	else if (view === 'members') show(membersViewFromSc(sc), { push: false });
 	else if (view === 'analytics') show(analyticsViewFromSc(sc), { push: false });
+	else if (view === 'connections') show(connectionsViewFromSc(sc), { push: false });
 	else if (view === 'brain-access') show(brainAccessViewFromSc(sc), { push: false });
 	else if (view === 'brains') {
 		const bv = brainsViewFromSc(sc);
@@ -454,6 +457,32 @@ function brainAccessViewFromSc(sc: Record<string, unknown>): View {
 // Open the sharing panel for a brain: who can reach it, and at what level.
 // `brain` targets a specific one (the Share control in the brains list); omitted,
 // it acts on the active brain.
+// The connections panel. A brain-scope view like sharing, and reached the same way.
+async function openConnections(brain?: string) {
+	show({ kind: 'loading', label: 'Loading connections…' });
+	try {
+		const result = await callTool('connections', brain ? { brain } : {});
+		if (result.isError) throw new Error(firstText(result));
+		show(connectionsViewFromSc((result.structuredContent ?? {}) as Record<string, unknown>));
+	} catch (e) {
+		show({
+			kind: 'error',
+			headline: "Couldn't load connections.",
+			detail: String(e),
+			retry: () => openConnections(brain)
+		});
+	}
+}
+
+function connectionsViewFromSc(sc: Record<string, unknown>): View {
+	return {
+		kind: 'connections',
+		brainLabel: typeof sc.brainLabel === 'string' ? sc.brainLabel : 'this brain',
+		connections: Array.isArray(sc.connections) ? (sc.connections as ConnectionRow[]) : [],
+		invitations: Array.isArray(sc.invitations) ? (sc.invitations as ConnectionInvite[]) : []
+	};
+}
+
 async function openBrainAccess(brain?: string) {
 	show({ kind: 'loading', label: 'Loading sharing…' });
 	try {
@@ -1093,6 +1122,7 @@ export {
 	refreshBrowse,
 	runSearch,
 	openHit,
+	openConnections,
 	openEditor,
 	resolveWikilink,
 	renderMarkdown,

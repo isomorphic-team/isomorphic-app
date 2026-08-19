@@ -33,6 +33,7 @@ import {
 	openMembers,
 	openAnalytics,
 	openBrainAccess,
+	openConnections,
 	openBrains,
 	openSettings,
 	runSearch
@@ -45,6 +46,7 @@ import {
 	PeopleIcon,
 	ChartIcon,
 	ShareIcon,
+	LinkIcon,
 	MoreIcon,
 	GearIcon,
 	BrainGlyph
@@ -142,6 +144,18 @@ function OverflowMenu({ editing }: { editing: boolean }) {
 									</span>
 									<span class="flex-1">Sharing</span>
 								</MenuRow>
+								{/* Gated the same way the breadcrumb gates it, and for the same
+								    reason: this menu is a second route to the same places, so a row
+								    here that the picker does not offer would be a row whose click is
+								    refused. */}
+								{features.connections && (
+									<MenuRow onClick={go(() => openConnections())}>
+										<span class="w-4 text-muted">
+											<LinkIcon />
+										</span>
+										<span class="flex-1">Connections</span>
+									</MenuRow>
+								)}
 								<MenuSeparator />
 								<div class={`px-3 pb-0.5 pt-1 ${eyebrow}`}>Organization</div>
 								<MenuRow onClick={go(openMembers)}>

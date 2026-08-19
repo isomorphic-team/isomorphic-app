@@ -93,9 +93,14 @@ function applyBrainContext(sc: Record<string, unknown>): void {
 // ones fail on click. Unknown until the list lands, and a missing flag reads as OFF:
 // a destination that quietly does not appear is a far smaller failure than one that
 // appears and errors.
-let features: { analytics: boolean } = { analytics: false };
-function setFeatures(v: Partial<{ analytics: boolean }> | undefined): void {
+let features: { analytics: boolean; connections: boolean } = {
+	analytics: false,
+	connections: false
+};
+function setFeatures(v: Partial<{ analytics: boolean; connections: boolean }> | undefined): void {
 	if (v && typeof v.analytics === 'boolean') features = { ...features, analytics: v.analytics };
+	if (v && typeof v.connections === 'boolean')
+		features = { ...features, connections: v.connections };
 }
 
 // Whether the caller is admin+ in the active brain's org (can auto-configure it).

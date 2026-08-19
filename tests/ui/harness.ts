@@ -26,6 +26,9 @@ export const ROUTES = {
 	analytics: 'analytics',
 	brains: 'brains',
 	access: 'brain-access',
+	// The only route into a connection in the chrome. A shared surface is deliberately
+	// absent from the brain switcher, so this panel is how you get to one by browsing.
+	connections: 'connections',
 	graph: 'graph',
 	activity: 'activity',
 	settings: 'settings',

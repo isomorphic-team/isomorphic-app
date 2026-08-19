@@ -107,10 +107,18 @@ const NORTHWIND_PAGES: Record<string, string> = {
 	'wiki/people/director.md':
 		'---\ntitle: Operations Director\n---\n\nOwns operational processes including [[intake]].\n'
 };
+// A CONNECTION's pages. It is an ordinary brain as far as content goes, which is the
+// point: the difference is entirely in how it is reached and how it is presented.
+const ROOM_PAGES: Record<string, string> = {
+	'wiki/index.md':
+		'---\ntitle: Northwind engagement\n---\n\nShared workspace. See the [[kickoff]].\n',
+	'wiki/kickoff.md': '---\ntitle: Kickoff\n---\n\nAgreed scope and dates.\n'
+};
 const brainContent: Record<string, Record<string, string>> = {
 	'your-org/personal-wiki': PERSONAL_PAGES,
 	'acme-co/acme-wiki': ACME_PAGES,
-	'northwind/northwind-wiki': NORTHWIND_PAGES
+	'northwind/northwind-wiki': NORTHWIND_PAGES,
+	'iso-platform/conn-northwind-4f9c2a1b': ROOM_PAGES
 };
 // The content map for a brain (auto-vivify so a freshly connect_brain'd brain works).
 function pagesFor(id: string): Record<string, string> {
@@ -399,6 +407,19 @@ let brainsFixture = [
 		orgLabel: 'Northwind',
 		orgRole: 'viewer' as PreviewRole,
 		visibility: 'private'
+	},
+	// A connection: reachable, and deliberately NOT a workspace. It is in this list
+	// because the app resolves a result's brain against it, and it is kept out of the
+	// switcher at the point of rendering. Anchored to the personal brain below.
+	{
+		id: 'iso-platform/conn-northwind-4f9c2a1b',
+		label: 'Northwind engagement',
+		role: 'Editor',
+		orgId: 'org-connections',
+		orgLabel: 'Northwind engagement',
+		orgRole: 'viewer' as PreviewRole,
+		visibility: 'private',
+		connection: true
 	}
 ];
 // Explicit per-brain grants (`brain_memberships`), keyed brain id -> user id.
@@ -544,7 +565,7 @@ function brainsResult(msg: string, withView: boolean, switched = false): CallToo
 		// What the server registered. On here so the harness previews the nav with
 		// the Analytics row present; a real deployment sends false unless
 		// USAGE_ANALYTICS is set.
-		features: { analytics: true }
+		features: { analytics: true, connections: true }
 	};
 	if (withView) sc.view = 'brains';
 	if (switched) sc.switched = true;
@@ -1123,6 +1144,52 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
 			}
 			return accessResult(id, `Access for ${b?.label ?? id}.`);
 		}
+		case 'connections': {
+			const id = resolveBrainArg(args?.brain) ?? activeBrainId;
+			// Sticky, matching worker.ts and brain_access above: a view OF a brain moves the
+			// active brain with it, or the panel renders one brain's connections under
+			// another brain's crumb.
+			if (brainsFixture.some((x) => x.id === id) && id !== activeBrainId) {
+				activeBrainId = id;
+				openPath = Object.keys(pagesFor(activeBrainId))[0] ?? openPath;
+				rebuildSelector();
+			}
+			const label = brainsFixture.find((x) => x.id === id)?.label ?? id;
+			// The personal brain is the one with a connection hanging off it, so switching
+			// brains provably changes the answer, which is what makes this brain-scope.
+			const anchored = id === 'your-org/personal-wiki';
+			const connections = anchored
+				? [
+						{
+							connection_id: 'c-northwind',
+							name: 'Northwind engagement',
+							state: 'live',
+							brain: 'iso-platform/conn-northwind-4f9c2a1b',
+							parties: [
+								{ org: 'Personal', invitedEmail: null, mine: true, joined: true },
+								{ org: 'Northwind', invitedEmail: null, mine: false, joined: true }
+							]
+						}
+					]
+				: [];
+			return {
+				content: [
+					{
+						type: 'text',
+						text: anchored
+							? `"${label}" is connected to:\n- Northwind engagement`
+							: `"${label}" is not connected to anything yet.`
+					}
+				],
+				structuredContent: {
+					view: 'connections',
+					brainLabel: label,
+					connections,
+					invitations: anchored ? [{ connection_id: 'c-acme', name: 'Acme partnership' }] : [],
+					activeBrain: brainMeta(activeBrainId)
+				}
+			};
+		}
 		case 'share_brain': {
 			const id = resolveBrainArg(args?.brain) ?? activeBrainId;
 			const b = brainsFixture.find((x) => x.id === id);
@@ -1481,6 +1548,10 @@ const coldMode = hashMode === 'cold';
 // its own pointer here, because the real one lags for the same reason: it is written by
 // the request that opened the widget and read by the next one.
 const otherBrainMode = hashMode === 'other-brain';
+// `#connections` opens the panel for the brain a connection is anchored to. It is the
+// only route into a connection in the chrome: a shared surface is deliberately absent
+// from the switcher, because a relationship is not a workspace you own.
+const connectionsMode = hashMode === 'connections';
 // `#slow-result` and `#pending-input` are the opposite of #cold: a result IS coming, it
 // is just slower than the app's self-boot deadline. A host announces a tool call when it
 // STARTS and delivers the result when the tool FINISHES, and view_page on a large brain
@@ -1566,21 +1637,23 @@ bridge.oninitialized = async () => {
 	// announce the input, then deliver the result (sendToolInput once, then sendToolResult).
 	const mode = brainsMode
 		? 'brains'
-		: accessMode
-			? 'access'
-			: analyticsMode
-				? 'analytics'
-				: membersMode
-					? 'members'
-					: graphMode
-						? 'graph'
-						: activityMode
-							? 'activity'
-							: browseMode
-								? 'browse'
-								: editMode
-									? 'edit'
-									: 'page';
+		: connectionsMode
+			? 'connections'
+			: accessMode
+				? 'access'
+				: analyticsMode
+					? 'analytics'
+					: membersMode
+						? 'members'
+						: graphMode
+							? 'graph'
+							: activityMode
+								? 'activity'
+								: browseMode
+									? 'browse'
+									: editMode
+										? 'edit'
+										: 'page';
 	bridge.sendToolInput({
 		arguments:
 			browseMode ||
@@ -1590,6 +1663,7 @@ bridge.oninitialized = async () => {
 			analyticsMode ||
 			brainsMode ||
 			accessMode ||
+			connectionsMode ||
 			settingsMode ||
 			connectedMode ||
 			browseEmptyMode ||
@@ -1647,6 +1721,8 @@ bridge.oninitialized = async () => {
 		bridge.sendToolResult(await handleTool('analytics', { days: Number(hashPath) || 30 }));
 	} else if (accessMode) {
 		bridge.sendToolResult(await handleTool('brain_access', {}));
+	} else if (connectionsMode) {
+		bridge.sendToolResult(await handleTool('connections', {}));
 	} else if (graphMode) {
 		bridge.sendToolResult(await handleTool('view_graph', {}));
 	} else if (activityMode) {

@@ -155,6 +155,36 @@ export interface BrainRow {
 	orgLabel?: string;
 	needsConfig?: boolean; // adopted repo with no content under its roots — offer "Set up"
 	configPrUrl?: string; // a configure PR is pending (protected repo) — show "Review PR"
+	// A shared surface with another organization. Present in this list but NOT in the
+	// switcher: a relationship is not a workspace you own, and rendering it as a peer of
+	// one is what makes the list sprawl. It has to stay in the list all the same, because
+	// this is what a result's brain is resolved against (pickShownBrain) and dropping it
+	// would leave the crumb naming the previous brain over a connection's content.
+	connection?: boolean;
+	// A read-only copy of a connection that ended. Nothing can be written to it.
+	readOnly?: boolean;
+}
+
+// One shared surface this brain is joined to, as the panel renders it.
+export interface ConnectionRow {
+	connection_id: string;
+	name: string;
+	state: string; // pending | live | ending | ended
+	brain: string;
+	parties: {
+		org: string | null;
+		invitedEmail: string | null;
+		mine: boolean;
+		joined: boolean;
+	}[];
+}
+
+// An invitation waiting for the signed-in person. It names a connection they cannot yet
+// reach, which is the whole reason it has to be delivered separately: until they join it
+// to one of their own brains there is no brain it hangs off.
+export interface ConnectionInvite {
+	connection_id: string;
+	name: string;
 }
 
 // An org the caller can add a brain to. Identified by its own id rather than by a

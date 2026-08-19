@@ -1037,6 +1037,7 @@ class McpSession {
 		if (hasConnections)
 			registerConnectionTools(server, {
 				getContext: (opts) => this.tenantContext(opts),
+				getViewContext: (opts) => this.tenantContext({ ...opts, sticky: true }),
 				orgContext: (opts) => this.orgContext(opts),
 				platformContext: () => this.platformContext(),
 				platformStore: async () => githubStore((await this.platformContext()).octokit),

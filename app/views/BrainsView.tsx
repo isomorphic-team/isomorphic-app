@@ -60,7 +60,11 @@ function BrainsView({ brains, active }: { brains: BrainRow[]; active: string }) 
 					    label no longer carries the org, and this screen is the other place two
 					    orgs' brains sit in one list. The heading is a <li> because List is a
 					    <ul> — a bare <div> in there is invalid markup. */}
-					{groupBrainsByOrg(brains).map((g) => (
+					{/* Connections are left out here too. This screen is where a brain is set
+					    up, shared, and disconnected, and none of the three applies to a room
+					    two organizations share: it is ended rather than disconnected, and its
+					    audience follows the brain it is joined to. */}
+					{groupBrainsByOrg(brains.filter((b) => !b.connection)).map((g) => (
 						<Fragment key={g.org ?? '·'}>
 							{g.org && <li class={`px-0 pb-0.5 pt-2 first:pt-0 ${eyebrow}`}>{g.org}</li>}
 							{g.rows.map((b) => (

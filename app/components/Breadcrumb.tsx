@@ -38,6 +38,7 @@ import {
 	openSettings,
 	openAddBrain,
 	openBrainAccess,
+	openConnections,
 	navigateTo,
 	openAsset,
 	fetchPaths,
@@ -57,6 +58,7 @@ import {
 	PeopleIcon,
 	ChartIcon,
 	ShareIcon,
+	LinkIcon,
 	GearIcon
 } from '../core/icons.tsx';
 import { Menu, MenuRow, MenuSeparator, MenuNote, type MenuTriggerProps } from '../ui/Menu.tsx';
@@ -238,7 +240,11 @@ function BrainRows({ close }: { close: () => void }) {
 			{/* Grouped by org, which is what carries the org name now that the label
 			    no longer prepends it. The heading appears only when there are two orgs
 			    to tell apart; with one, every row is in it and it says nothing. */}
-			{groupBrainsByOrg(rows).map((g) => (
+			{/* Connections are filtered HERE rather than upstream. They have to stay in the
+			    payload, because that is what a result's brain is resolved against, but a
+			    relationship is not a workspace you own and listing it beside one is what
+			    makes this list sprawl. It is reached from the brain it is joined to. */}
+			{groupBrainsByOrg(rows.filter((b) => !b.connection)).map((g) => (
 				<Fragment key={g.org ?? '·'}>
 					{g.org && <div class={`px-3 pb-0.5 pt-1 ${eyebrow}`}>{g.org}</div>}
 					{g.rows.map((b) => {
@@ -436,8 +442,46 @@ function brainDestinations(): Destination[] {
 		// can reach the brain at all, so it can never be a destination whose click is
 		// refused. Only the CONTROLS inside it are admin-gated. Sharing sits last because
 		// it is the only one about the brain's audience rather than its contents.
-		{ key: 'sharing', label: 'Sharing', icon: <ShareIcon />, open: () => openBrainAccess() }
+		{ key: 'sharing', label: 'Sharing', icon: <ShareIcon />, open: () => openBrainAccess() },
+		// Sharing is who can come IN; Connections is where this brain joins OUT. Gated on
+		// whether the deployment registered the tools at all, per the rule stated twice
+		// above: a picker must never offer a destination whose click is refused.
+		...(features.connections
+			? [
+					{
+						key: 'connections',
+						label: 'Connections',
+						icon: <LinkIcon />,
+						open: () => openConnections()
+					}
+				]
+			: [])
 	];
+}
+
+// A CONNECTION's own places, which are fewer. It is a room two organizations write in,
+// not a workspace either of them owns, so most of what a brain offers has no meaning
+// here: there is no audience of its own to share (access follows the anchor brain), no
+// organization behind it to report on, and no connections hanging off it. Graph is left
+// out for now rather than ruled out; traversing a graph OF brains is a plausible later
+// direction and nothing here forecloses it.
+function connectionDestinations(): Destination[] {
+	return [
+		{ key: 'files', label: 'Files', icon: <ListIcon />, open: () => openBrowse() },
+		{
+			key: 'activity',
+			label: 'Recent changes',
+			icon: <HistoryIcon />,
+			open: () => openActivity()
+		}
+	];
+}
+
+// Is the brain we are in a shared surface rather than one of the caller's own? The
+// brains payload carries every brain a result can name, connections included, so this is
+// a lookup rather than a second round trip.
+function activeIsConnection(): boolean {
+	return !!brainList?.find((b) => b.id === activeBrain?.id)?.connection;
 }
 
 // Views of the ORGANIZATION the active brain belongs to.
@@ -483,7 +527,10 @@ function accountDestinations(): Destination[] {
 // wording live. Adding a fourth means adding it here, not at every call site.
 type Scope = 'brain' | 'org' | 'account';
 const DESTINATIONS: Record<Scope, () => Destination[]> = {
-	brain: brainDestinations,
+	// A connection substitutes its own, shorter list for the brain one. Same scope, since
+	// switching brains still changes the answer; fewer places, because most of them mean
+	// nothing in a room you do not own.
+	brain: () => (activeIsConnection() ? connectionDestinations() : brainDestinations()),
 	org: orgDestinations,
 	account: accountDestinations
 };
@@ -774,6 +821,12 @@ export function Breadcrumb({ view }: { view: View }) {
 		return (
 			<DestinationCrumb current="sharing">
 				<span class={crumbCurrent}>Sharing</span>
+			</DestinationCrumb>
+		);
+	if (view.kind === 'connections')
+		return (
+			<DestinationCrumb current="connections">
+				<span class={crumbCurrent}>Connections</span>
 			</DestinationCrumb>
 		);
 	if (view.kind === 'share-brain')

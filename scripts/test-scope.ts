@@ -254,6 +254,9 @@ function toolsFor(p: Persona): Map<string, Handler> {
 	registerLibrarianTools(server, getContext);
 	registerConnectionTools(server, {
 		getContext,
+		// The panel is sticky in production; nothing here turns on that, so it is the
+		// same context. What this file tests is which ROLE each tool gates on.
+		getViewContext: getContext,
 		orgContext: async (opts?: { requires?: Role; org?: string }) => {
 			orgAsks.push(opts);
 			assertRole(p.orgRole, opts?.requires);

@@ -14,6 +14,8 @@
 // role in it to gate on and no one for `requiresOrg` to resolve.
 
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { registerAppTool } from '@modelcontextprotocol/ext-apps/server';
+import { BRAIN_APP_URI } from './apps.ts';
 import { z } from 'zod';
 import type { BrainContext } from './librarian.ts';
 import {
@@ -51,7 +53,7 @@ import {
 import { createAndScaffoldBrain } from '../lib/scaffold-core.ts';
 import { copyMirrorPass, mirrorReadme, type MirrorEnd } from '../lib/mirror.ts';
 import type { BrainStore, RepoRef } from '../lib/brain-repo.ts';
-import { createBrain } from '../lib/orgs.ts';
+import { createBrain, orgLabel } from '../lib/orgs.ts';
 
 function fail(text: string) {
 	return { isError: true as const, content: [{ type: 'text' as const, text }] };
@@ -62,6 +64,11 @@ function ok(text: string) {
 
 export interface ConnectionDeps {
 	getContext: (opts?: TenantOpts) => Promise<BrainContext>;
+	// STICKY, and used only by the `connections` panel. Opening an in-client view for a
+	// named brain has to move the active brain with it, or the panel shows one brain's
+	// connections under another brain's crumb. end_connection deliberately does not use
+	// this: ending a relationship should not relocate the person doing it.
+	getViewContext: (opts?: TenantOpts) => Promise<BrainContext>;
 	orgContext: (opts?: { requires?: Role; org?: string }) => Promise<OrgScope>;
 	// A client for the deployment's OWN GitHub org. A connection belongs to neither
 	// party, so the client that creates its repository belongs to neither either: the
@@ -121,6 +128,18 @@ function mirrorRepoName(name: string, connectionId: string): string {
 	return `archive-${slug}-${connectionId.slice(0, 8)}`;
 }
 
+// The far side's organization name. A connection is meaningless rendered as an opaque
+// id, and this is the only detail of the counterparty a party is entitled to: who they
+// are, not who works there.
+async function orgNameOf(db: BrainContext['db'], orgId: string): Promise<string | null> {
+	const row = await db
+		.prepare(`SELECT name, model, brain_owner FROM orgs WHERE org_id = ?1`)
+		.bind(orgId)
+		.first<{ name: string; model: string; brain_owner: string }>();
+	if (!row) return null;
+	return orgLabel({ ...row, org_id: orgId } as Parameters<typeof orgLabel>[0]);
+}
+
 function describeParty(p: ConnectionParty): string {
 	if (p.org_id) return p.anchor_brain_id ? 'joined' : 'joined (no anchor)';
 	return p.invited_email ? `invited ${p.invited_email}` : 'invited';
@@ -139,6 +158,7 @@ function connectionLine(c: Connection, parties: ConnectionParty[]): string {
 export function registerConnectionTools(server: McpServer, deps: ConnectionDeps) {
 	const {
 		getContext,
+		getViewContext,
 		orgContext,
 		platformContext,
 		listBrains,
@@ -281,11 +301,16 @@ export function registerConnectionTools(server: McpServer, deps: ConnectionDeps)
 	}
 
 	// ---------- connections (read) ----------
-	server.registerTool(
+	// An in-client view, like brain_access, and sticky for the same reason: opening it
+	// for a NAMED brain has to move the active brain with it, or the panel renders one
+	// brain's connections under another brain's crumb.
+	registerAppTool(
+		server,
 		'connections',
 		{
 			title: 'Connections on this brain',
 			annotations: { readOnlyHint: true },
+			_meta: { ui: { resourceUri: BRAIN_APP_URI } },
 			description:
 				'connections lists the shared working surfaces this brain is joined to, and any invitations waiting for you. A connection is a place two organizations write in together, owned by neither: it is not one of your brains and it does not appear in your brain list, it hangs off the brain it is about. Use this to answer "who are we sharing a space with", "is there a room for this client", or "was I invited to something".',
 			inputSchema: {
@@ -296,9 +321,22 @@ export function registerConnectionTools(server: McpServer, deps: ConnectionDeps)
 			}
 		},
 		async ({ brain }) => {
-			const ctx = await getContext({ brain });
+			const ctx = await getViewContext({ brain });
 			const rows = await connectionsForAnchors(ctx.db, [ctx.brainId]);
 			const invitations = await pendingPartiesForEmails(ctx.db, await personEmails(), now());
+			// Names for the organizations on either side. Only the caller's own are known
+			// for certain; the far side is named from its own org row, which is the one
+			// piece of the counterparty this deployment can see.
+			const myOrgs = await listOrgs();
+			const myOrgIds = new Set(myOrgs.map((o) => o.org.org_id));
+			const orgNames = new Map(myOrgs.map((o) => [o.org.org_id, orgLabel(o.org)]));
+			for (const r of rows) {
+				for (const p of r.parties) {
+					if (!p.org_id || orgNames.has(p.org_id)) continue;
+					const far = await orgNameOf(ctx.db, p.org_id);
+					if (far) orgNames.set(p.org_id, far);
+				}
+			}
 
 			const lines: string[] = [];
 			if (rows.length === 0) {
@@ -317,15 +355,19 @@ export function registerConnectionTools(server: McpServer, deps: ConnectionDeps)
 			return {
 				...ok(lines.join('\n')),
 				structuredContent: {
+					view: 'connections' as const,
+					brainLabel: ctx.activeBrain?.label ?? ctx.brainId,
 					connections: rows.map((r) => ({
 						connection_id: r.connection.connection_id,
 						name: r.connection.name,
 						state: r.connection.state,
 						brain: r.connection.brain_id,
+						// The counterparty is what a person actually wants to see, so it is
+						// resolved here rather than left as an org id the widget cannot name.
 						parties: r.parties.map((p) => ({
-							org_id: p.org_id,
-							invited_email: p.invited_email,
-							anchor_brain_id: p.anchor_brain_id,
+							org: p.org_id ? (orgNames.get(p.org_id) ?? p.org_id) : null,
+							invitedEmail: p.invited_email,
+							mine: !!p.org_id && myOrgIds.has(p.org_id),
 							joined: !!p.org_id
 						}))
 					})),
