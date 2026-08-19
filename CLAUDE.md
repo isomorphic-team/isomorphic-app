@@ -42,6 +42,7 @@ pnpm test:scope         # org-vs-brain scope: which role each tool gates on
 pnpm test:feedback      # submit_feedback composition golden test (redaction, nothing identifying published)
 pnpm test:usage         # usage-analytics golden test (tool-classification coverage, the summary fold)
 pnpm test:wiring        # every test:* script is in BOTH package.json's `test` and ci.yml
+                        # (+ ci.yml's Playwright container tag matches the resolved dep)
 pnpm test:e2e-librarian # write tools end to end, offline against a git repo in a temp dir
 pnpm test:e2e-import    # the importer end to end, same
 pnpm test:ui            # the MCP App UI in a real browser, over the local host harness
@@ -88,7 +89,8 @@ has an explicit `TOOL_KINDS` entry, scanned from the tool sources so a new tool 
 unclassified, plus the summary fold, where members at zero and since-removed users both have
 to survive or the tiles stop matching the table), and `pnpm test:wiring` (every `test:*`
 script appears in both `package.json`'s `test` and `ci.yml`, in three directions, including
-itself).
+itself, plus the Playwright container tag in `ci.yml` and `dev/README.md` matching the
+version pnpm actually resolves).
 
 **`pnpm test:ui` is the only battery that needs a browser** (Playwright + Chromium). It
 drives the REAL generated app bundle over the local host harness (`dev/harness.ts`), so it
@@ -99,9 +101,9 @@ semantics — the view engine, page patches, the access rule and the analytics f
 have pure golden tests, and re-checking them through the DOM would be a slow duplicate.
 Two things keep it from being a burden on contributors: it **skips green** (loudly) when
 Chromium is absent or when this platform has no visual baselines, since both are setup gaps
-rather than regressions, and CI sets `UI_STRICT=1` so a broken install step cannot hide
-behind that skip. Determinism needs **two** frozen clocks (`?now=` for the harness's
-fixtures, `page.clock.setFixedTime` for the app's own relative-time rendering); freezing
+rather than regressions, and CI sets `UI_STRICT=1` so a container that stopped carrying a
+browser cannot hide behind that skip. Determinism needs **two** frozen clocks (`?now=` for
+the harness's fixtures, `page.clock.setFixedTime` for the app's own relative-time rendering); freezing
 one without the other lets every "5d ago" drift daily. Visual baselines are committed,
 per-platform, and regenerated with `pnpm ui:baselines` — NOT a bare `--update-snapshots`,
 which only fills in missing ones and silently leaves a changed one alone. Details:
@@ -125,7 +127,9 @@ changes.
 
 Adding a test means adding it in BOTH `package.json`'s `test` script and
 `.github/workflows/ci.yml`. `pnpm test:wiring` fails the build if you forget,
-rather than the battery silently running in exactly one place.
+rather than the battery silently running in exactly one place. `ci.yml` has two
+jobs (the pure-Node `check` and the browser-only `ui`); a new battery goes in
+`check` unless it needs a browser, and the lint reads the whole file either way.
 
 **Iterating on the app UI:** use `pnpm app:dev` (renders the real `ui://` bytes via the
 official AppBridge host over stubbed fixtures — no Worker/auth/host, live-reload). It
