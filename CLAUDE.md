@@ -844,12 +844,20 @@ the caller's own literal label first and then rotates through phrases from
   three seconds is noise.
 - **The VIEW is covered too**, unusually for the app layer: `tests/ui/loading.spec.ts`
   drives the real bundle over the `#loading` harness route, which opens the tree and
-  then holds the app's own fetches open forever so a wait stays on screen. The clock is
-  installed rather than fixed (`openApp(..., { advanceable: true })`), so the rotation
-  advances only when the test advances it. It pins the label leading, a swap happening,
-  the swapped line naming the brain and the page, the announcement staying put, and
-  reduced motion holding one phrase. Note `test.use({ reducedMotion })` at describe
-  level does NOT reach this page; the spec calls `page.emulateMedia` instead.
+  then holds the app's own fetches open forever so a wait stays on screen. It pins the
+  label leading, a swap happening, the swapped line naming the brain and the page, the
+  announcement staying put, and reduced motion holding one phrase.
+- **A rotation cannot be STEPPED, only watched**, so that spec samples the line every
+  100ms and asserts on the resulting sequence. `page.clock.install()` does not pause
+  timers here: probed directly, a `setTimeout` in the main frame AND in the app's iframe
+  both fire with no `runFor`, so an installed clock moves only what `Date.now()` reports
+  while a `setTimeout` chain keeps running on the wall clock. (`advanceable` is still
+  right for `refresh.spec.ts`, which asserts on a rendered AGE.) The first version of the
+  loading spec asserted at fixed moments and so raced the machine: it checked "still the
+  label" after a click plus three awaits, which passed locally and failed on CI, where
+  the runner had already spent the 2.4s the label holds for. Assert on ORDER, not on
+  what is on screen at a particular millisecond. Also note `test.use({ reducedMotion })`
+  at describe level does NOT reach this page; the spec calls `page.emulateMedia`.
 - **Three other kinds of wait exist and deliberately do NOT rotate.** (1) Button busy
   labels: `Creating…` (AddBrainView), `Saving…` / `Adding image…` (EditView), `Sharing…`
   (ShareBrainView). Those are a control reporting its own state, and a button whose text
