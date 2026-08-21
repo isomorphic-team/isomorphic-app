@@ -13,7 +13,7 @@ import { parseFrontmatter } from '../../src/lib/wiki.ts';
 import { ImageNodeView, mediaHandlers, uploadsInFlight } from '../core/editor-media.ts';
 import type { EditorApi } from '../core/types.ts';
 import { callTool, firstText } from '../core/host.ts';
-import { bump, show, brainArgs } from '../core/store.ts';
+import { bump, show, brainArgs, setEditDirty } from '../core/store.ts';
 import { fetchPage, pageView } from '../core/actions.ts';
 import { toast } from '../core/toast.tsx';
 import { PageProperties } from './PageView.tsx';
@@ -322,11 +322,21 @@ function MarkdownEditor({
 			// bump() re-renders the navbar toolbar so its active states track the selection.
 			dispatchTransaction(tr) {
 				view.updateState(view.state.apply(tr));
+				// The flag the app's navigation reads before leaving (confirmLeaveEdit).
+				// `docChanged` and not "the doc differs from what we opened": typing a
+				// character and deleting it again leaves the document identical and the
+				// session still worth protecting, since the user has been working in it.
+				// Selection-only transactions (every arrow key, every click) are not edits.
+				if (tr.docChanged) setEditDirty(true);
 				bump();
 			}
 		});
 		apiRef.current = { getMarkdown: () => serializeMarkdown(view.state.doc) };
 		editCtl.view = view; // the navbar toolbar binds to this
+		// A fresh session owes nothing yet. Cleared on MOUNT rather than on unmount so a
+		// session that ended by navigating away (where the guard already had its answer)
+		// cannot leave the flag set for the next one.
+		setEditDirty(false);
 		bump();
 		return () => {
 			view.destroy();

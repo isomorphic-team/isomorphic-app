@@ -30,7 +30,6 @@ export type LoadingTask =
 	| 'page'
 	| 'asset'
 	| 'files'
-	| 'folder'
 	| 'search'
 	| 'graph'
 	| 'activity'
@@ -74,7 +73,6 @@ const WARM: Record<LoadingTask, string[]> = {
 		'Reading the shelves in {brain}…',
 		'Mapping {orgs} corner of the world…'
 	],
-	folder: ['Opening {subject}…', 'Seeing what is in {subject}…'],
 	search: [
 		'Looking for {subject}…',
 		'Reading {pages} pages for {subject}…',

@@ -35,7 +35,7 @@ import type {
 	UsageBrain
 } from './types.ts';
 import { app, callTool, firstText } from './host.ts';
-import { FOLDER_NOTE_NAMES, isFolderNoteName, refreshOutcome } from './util.ts';
+import { isFolderNoteName, refreshOutcome } from './util.ts';
 import {
 	show,
 	history,
@@ -53,9 +53,47 @@ import {
 	setFeatures,
 	applyPolicy,
 	applyBrainContext,
+	editDirty,
+	setEditDirty,
 	bump
 } from './store.ts';
-import { toast } from './toast.tsx';
+import { toast, askConfirm } from './toast.tsx';
+
+// LEAVING AN OPEN EDITOR. Every destination in the app abandons an in-progress edit,
+// and the bar's answer used to be to HIDE the destinations while editing — which cost
+// the user their navigation and protected nothing, because the breadcrumb sitting
+// beside the hidden controls was still linked and still switching brains.
+//
+// So the controls stay live and this is the guard instead. It is a no-op unless there
+// is an editor open that has actually been typed in, which is why the nav surfaces can
+// route every click through it without asking anyone a question they do not need.
+//
+// It clears the flag on a YES: the caller is about to navigate, and the session it was
+// protecting is over. A NO leaves the flag set and the caller does nothing.
+async function confirmLeaveEdit(): Promise<boolean> {
+	if (currentView.kind !== 'edit' || !editDirty) return true;
+	const ok = await askConfirm({
+		title: 'Discard your changes?',
+		body: 'This page has edits that have not been saved.',
+		confirmLabel: 'Discard'
+	});
+	if (ok) setEditDirty(false);
+	return ok;
+}
+
+/**
+ * Wrap a navigation click so it asks before abandoning an unsaved edit. Returns a
+ * handler, so a call site reads `onClick={guardNav(() => openBrowse())}` — the guard
+ * belongs at the point a PERSON chose to go somewhere, not inside the openers, which
+ * are also called by the tool-result router on the model's behalf.
+ */
+function guardNav(fn: () => void): () => void {
+	return () => {
+		void confirmLeaveEdit().then((ok) => {
+			if (ok) fn();
+		});
+	};
+}
 
 // The central tool-result router: the host feeds every opening tool result here via
 // app.ontoolresult (wired in main.tsx).
@@ -742,29 +780,21 @@ async function revalidateBrowse() {
 	}
 }
 
-// A nav/breadcrumb click on a folder: open its folder note (<folder>/index.md) when it
-// has one — the same page the file tree opens for that folder — else open the tree
-// REVEALED at that folder. A note-less folder used to fall back to the bare root tree,
-// which read as "the breadcrumb sent me somewhere else entirely".
-async function openFolder(prefix: string) {
-	const base = prefix.replace(/\/+$/, '');
-	try {
-		// Only a cold cache costs a round-trip — say so rather than hanging silently.
-		if (!browseCache)
-			show({
-				kind: 'loading',
-				label: `Opening ${base.split('/').pop()}…`,
-				task: 'folder',
-				subject: base.split('/').pop()
-			});
-		const list = await fetchPageList();
-		// index.md preferred, README.md fallback (see FOLDER_NOTE_NAMES).
-		const note = FOLDER_NOTE_NAMES.map((n) => `${base}/${n}`).find((p) => list.includes(p));
-		if (note) return navigateTo(note);
-	} catch {
-		// no page list — the tree is always a safe destination
-	}
-	return openBrowse(base);
+// A breadcrumb click on a folder: ALWAYS the tree, revealed at that folder.
+//
+// It used to open the folder's note (<folder>/index.md) when it had one and the tree
+// when it did not, which made one control do two different things depending on a fact
+// about the folder that the trail never showed you. Pressing `wiki` landed on a page,
+// pressing `concepts` landed on the tree, and nothing in the bar said why. A crumb that
+// is sometimes a page link and sometimes a navigation is not a crumb you can aim.
+//
+// The tree is the answer that is always available and always the same, and it does not
+// hide the note: a folder with one shows it as that folder's own row, one press away.
+// The file TREE keeps opening folder notes on a folder click (views/Browse.tsx), which
+// is a different question — there you are already looking at the structure, so the note
+// is the thing you cannot see yet.
+function openFolder(prefix: string) {
+	return openBrowse(prefix.replace(/\/+$/, ''));
 }
 
 // Open the activity/audit feed — whole brain, or one page's history when `path`
@@ -952,7 +982,31 @@ async function refreshBrowse() {
 	}
 }
 
+// Arrive at the search PAGE, empty. The field lives on the view (SearchView), so this
+// is an ordinary destination like Files or Graph rather than a control that opens a
+// widget: press it, you are somewhere, and the rail lights.
+function openSearch() {
+	show({ kind: 'search', query: '', hits: [] });
+}
+
+// The rail's ⋯, which is a PLACE rather than a popover. It holds the destinations that
+// are not this brain (your organization, your account), and it is a page for the reason
+// every other treatment failed: the rail is top-anchored, so ⋯ sits ~145px down however
+// tall the card is, and anything hanging off it is bounded by the room left underneath.
+// A popover, a flyout rail and a labelled expanding rail all hit that wall on a 170px
+// inline card. A page owns the content area and scrolls, at every card size, forever.
+//
+// Display mode is deliberately NOT here. It is a window control, not a place, and
+// putting it on a page would mean navigating away from what you are reading in order to
+// go fullscreen, then landing on this screen instead of your content. It lives at the
+// right end of the top bar (main.tsx).
+function openMore() {
+	show({ kind: 'more' });
+}
+
 async function runSearch(query: string) {
+	// An empty submit is a no-op rather than a search for nothing, and it leaves the
+	// page as it is: you are already ON the search view, with the field in front of you.
 	if (!query.trim()) return;
 	show({ kind: 'loading', label: `Searching for “${query}”…`, task: 'search', subject: query });
 	try {
@@ -1058,6 +1112,8 @@ function onProseClick(fromPath: string) {
 
 export {
 	handleToolResult,
+	confirmLeaveEdit,
+	guardNav,
 	brainsViewFromSc,
 	ensureBrainList,
 	switchBrain,
@@ -1095,6 +1151,8 @@ export {
 	openSettings,
 	openGraph,
 	refreshBrowse,
+	openSearch,
+	openMore,
 	runSearch,
 	openEditor,
 	resolveWikilink,

@@ -37,6 +37,8 @@ import {
 	pickShownBrain
 } from '../app/core/store.ts';
 import { renderAge, refreshOutcome } from '../app/core/util.ts';
+import { DEST_META, destinationsIn, activeDestination, isMorePlace } from '../app/core/nav.ts';
+import { panelPlacement, GAP, COMFORTABLE } from '../app/core/menu-placement.ts';
 
 let failures = 0;
 function check(label: string, cond: boolean, detail = '') {
@@ -393,6 +395,140 @@ console.log('\nbrowse_brain fits in a tool result');
 		'an empty brain says so plainly',
 		browseSummary('Fresh', { paths: [], pages: [], assets: [], hidden: [] }) ===
 			'Fresh has no pages yet.'
+	);
+}
+
+// ---------- the nav's destinations ----------
+//
+// The bar's right-hand cluster and the ⋯ menu are two renderings of ONE list, which is
+// the point of app/core/nav.ts: they used to be two hand-written lists that had already
+// drifted. What is pinned here is the pair of decisions the renderings make no judgement
+// about — which destinations a given deployment actually has, and which view counts as
+// standing on one. A destination offered where its tool is not registered comes back
+// "unknown tool" on click, and one that lights up on the wrong view tells the user they
+// are somewhere they are not.
+console.log('\nnav destinations');
+{
+	const full = { analytics: true, canManageBrains: true };
+	const bare = { analytics: false, canManageBrains: false };
+
+	check(
+		'the rail is the five views OF a brain, in rail order',
+		destinationsIn('brain', full).join() === 'files,graph,search,activity,sharing'
+	);
+	check(
+		'…and none of them is gated — every one is open to anyone who can reach the brain',
+		destinationsIn('brain', bare).join() === 'files,graph,search,activity,sharing'
+	);
+	check(
+		'a deployment with USAGE_ANALYTICS off never offers Analytics',
+		destinationsIn('org', bare).join() === 'members' &&
+			destinationsIn('org', full).join() === 'members,analytics'
+	);
+	check(
+		'Manage brains appears only for an admin of some org',
+		destinationsIn('account', bare).join() === 'settings' &&
+			destinationsIn('account', full).join() === 'brains,settings'
+	);
+	// Every destination is filed under exactly one scope, so the three lists partition
+	// the set: a destination missing from all three is unreachable, and one in two of
+	// them appears twice in the same menu.
+	const partitioned = (['brain', 'org', 'account'] as const).flatMap((s) =>
+		destinationsIn(s, full)
+	);
+	check(
+		'the three scopes partition the whole destination list',
+		partitioned.length === Object.keys(DEST_META).length &&
+			new Set(partitioned).size === partitioned.length
+	);
+	check(
+		'every destination has a scope the cluster or the menu will render',
+		(Object.keys(DEST_META) as (keyof typeof DEST_META)[]).every((k) =>
+			['brain', 'org', 'account'].includes(DEST_META[k].scope)
+		)
+	);
+
+	check('a view that IS a destination marks it', activeDestination('browse') === 'files');
+	check('…including the org ones', activeDestination('members') === 'members');
+	// A pushed flow has not left the destination it was opened from, so the control that
+	// got you there stays lit rather than going dark mid-flow.
+	check(
+		'a flow step counts as its parent destination',
+		activeDestination('invite-member') === 'members'
+	);
+	check('…the sharing one too', activeDestination('share-brain') === 'sharing');
+	// Marking Files while reading a page would claim you are looking at the tree.
+	check('a page is not a destination', activeDestination('page') === null);
+	check('nor is the editor', activeDestination('edit') === null);
+	// Search is a PLACE now (its own page, its own field), so it marks itself. It was
+	// briefly a control in the chrome that swapped the trail for an input, and null here
+	// is what that version asserted.
+	check('search is a destination and marks itself', activeDestination('search') === 'search');
+	// The cluster only ever lights a destination that is IN it. An unknown kind (a view
+	// added later without a mapping) must read as "nowhere", never as the previous view.
+	check('an unmapped view marks nothing', activeDestination('brand-new-view') === null);
+
+	// THE ⋯ RAIL ITEM stays lit past its own page. More is an index of the org and
+	// account destinations, so arriving at one of them by way of it has not left it —
+	// without this the rail goes dark two steps in and stops answering "where am I".
+	check('More marks itself', isMorePlace('more'));
+	check('…and everything it leads to', isMorePlace('members') && isMorePlace('settings'));
+	check('…including a flow pushed off one of those', isMorePlace('invite-member'));
+	// The rail shows the brain's own five itself, so they light their own icon, never ⋯.
+	check(
+		'a brain destination is never the ⋯',
+		!isMorePlace('browse') && !isMorePlace('search') && !isMorePlace('graph')
+	);
+	check(
+		'nor is a page, an editor, or an unknown view',
+		!isMorePlace('page') && !isMorePlace('edit') && !isMorePlace('brand-new-view')
+	);
+
+	// A blurb is what the More page puts under each row. Required on every destination
+	// (see DEST_META) so a new one cannot land as a bare word with a gap beneath it.
+	check(
+		'every destination carries a non-empty blurb',
+		(Object.keys(DEST_META) as (keyof typeof DEST_META)[]).every(
+			(k) => typeof DEST_META[k].blurb === 'string' && DEST_META[k].blurb.trim().length > 0
+		)
+	);
+}
+
+console.log('\nmenu placement');
+{
+	// The rule two popovers share: ui/Menu's panel and the file tree's per-row ⋯. A
+	// panel taller than the room on its side does not clip, it makes the CARD scroll,
+	// which drags the chrome out of sight and reads as a clipped rail.
+	const H = 500;
+
+	const top = panelPlacement({ top: 20, bottom: 40 }, H);
+	check('a trigger in the top bar opens downward', !top.up);
+	check('…taking the room beneath it, less the gap', top.maxH === H - 40 - GAP);
+
+	const low = panelPlacement({ top: 470, bottom: 490 }, H);
+	check('a trigger at the bottom of a short card flips up', low.up);
+	check('…taking the room above it instead', low.maxH === 470 - GAP);
+
+	// The flip is not "whichever side is bigger". Down is preferred while down is
+	// usable, or a menu with plenty of room beneath it would jump above the trigger the
+	// moment the card grew a little taller than the panel.
+	const roomy = panelPlacement({ top: 300, bottom: 320 }, H);
+	check(
+		'a cramped side does not flip while it is still comfortable',
+		H - 320 - GAP >= COMFORTABLE ? !roomy.up : roomy.up
+	);
+	const both = panelPlacement({ top: 200, bottom: 220 }, 1000);
+	check('plenty of room below wins even with more above', !both.up);
+
+	// A panel is never given a negative budget: a trigger past the bottom edge (a row
+	// scrolled out of view) would otherwise produce maxHeight: -30px.
+	check(
+		'an off-screen trigger yields no negative cap',
+		panelPlacement({ top: 900, bottom: 950 }, 500).maxH >= 0
+	);
+	check(
+		'…and a trigger above the top edge does too',
+		panelPlacement({ top: -80, bottom: -60 }, 500).maxH >= 0
 	);
 }
 
