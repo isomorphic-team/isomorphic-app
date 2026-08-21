@@ -14,26 +14,30 @@
 // TWO CONTROLS BECAME ONE. The bar used to open with a brain switcher AND a ⌂ home
 // crumb, which were the same destination twice: the switcher's own "select the active
 // brain" row re-opened its file tree, and ⌂ opened the file tree. Two controls, one
-// place. The brain IS the root of the trail, so it is now the root crumb: its label
-// goes home exactly as ⌂ did, and its picker lists the other brains — because at the
-// root of a trail, "what else is at this level" means another brain.
+// place. The brain IS the root of the trail, so it is now the root crumb, and its label
+// goes home exactly as ⌂ did.
 //
-// EVERY CRUMB IS A PICKER (the VS Code breadcrumb behaviour). Label = go there,
+// A PATH CRUMB IS A PICKER (the VS Code breadcrumb behaviour). Label = go there,
 // chevron = the other things that live at this level. SIBLINGS, not children: the
 // question a crumb answers is "what else could this segment have been", so `people`
 // offers the other folders and pages under `wiki/`, and the trailing page offers the
 // rest of its own folder. That last one is the payoff — moving between sibling pages
 // used to mean a round trip through the file tree.
 //
+// THE BRAIN CRUMB IS NOT ONE. Its chevron navigates to the Brains page instead of
+// opening a panel, because that list (every brain, grouped by org, two lines each) is
+// ~300px and a panel hanging off the top bar only ever has the room beneath it. See
+// BrainCrumb for the whole argument; it is the same one that turned the rail's ⋯ into
+// a page.
+//
 // Two sources: the trail comes from the path alone, the pickers from the cached file
 // tree (`browseCache` — one list_pages call for the whole brain). A cold cache fetches
 // when a picker is OPENED rather than up front, so the bar never waits on data that a
 // given visit may not need.
-import { Fragment } from 'preact';
 import type { ComponentChildren } from 'preact';
 import { useEffect, useState } from 'preact/hooks';
-import type { View, BrowseData, BrainRow } from '../core/types.ts';
-import { isFolderNoteName, groupBrainsByOrg } from '../core/util.ts';
+import type { View, BrowseData } from '../core/types.ts';
+import { isFolderNoteName } from '../core/util.ts';
 import { browseCache, brainList, activeBrain, goBack, backKind } from '../core/store.ts';
 import type { Scope } from '../core/nav.ts';
 import {
@@ -42,14 +46,11 @@ import {
 	openBrains,
 	openMembers,
 	openSettings,
-	openAddBrain,
 	openBrainAccess,
 	navigateTo,
 	openAsset,
 	fetchPaths,
-	ensureBrainList,
-	guardNav,
-	switchBrain
+	guardNav
 } from '../core/actions.ts';
 import {
 	BrainGlyph,
@@ -59,8 +60,8 @@ import {
 	ImageIcon,
 	ArrowLeftIcon
 } from '../core/icons.tsx';
-import { Menu, MenuRow, MenuSeparator, MenuNote, type MenuTriggerProps } from '../ui/Menu.tsx';
-import { crumbCurrent, crumbLink, crumbMeta, eyebrow } from '../ui/typography.ts';
+import { Menu, MenuRow, MenuNote, type MenuTriggerProps } from '../ui/Menu.tsx';
+import { crumbCurrent, crumbLink, crumbMeta } from '../ui/typography.ts';
 
 // Wider than the 4px it was, because a crumb is no longer just a word: it is a label
 // and its picker, and those have to read as ONE unit. At the old spacing the chevron
@@ -74,18 +75,27 @@ const CrumbSep = () => <span class="mx-2 shrink-0 text-muted opacity-50">/</span
 // this keeps the trail reading as text while staying visibly clickable.
 function CrumbChevron({
 	props,
-	open,
-	title
+	open = false,
+	title,
+	onClick
 }: {
-	props: MenuTriggerProps;
-	open: boolean;
+	/** Trigger props when the chevron OPENS a picker in place (the sibling one). */
+	props?: MenuTriggerProps;
+	open?: boolean;
 	title: string;
+	/**
+	 * Used INSTEAD of `props` when the chevron navigates rather than expands — the brain
+	 * crumb, whose list outgrew any panel that can hang off the top bar (see BrainCrumb).
+	 * Spread after, so a menu trigger's own handler still wins where one is passed.
+	 */
+	onClick?: () => void;
 }) {
 	return (
 		<button
 			type="button"
 			title={title}
 			aria-label={title}
+			onClick={onClick}
 			{...props}
 			class={`ml-0.5 shrink-0 rounded p-0.5 text-muted outline-none transition-opacity hover:bg-chip hover:text-fg focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-accent ${
 				open ? 'opacity-100' : 'opacity-40 group-hover:opacity-100'
@@ -203,92 +213,6 @@ function SiblingRows({
 
 // ---------- the crumbs ----------
 
-// The rows of the brain picker. Same shape as SiblingRows, and for the same reason: a
-// cold list is FETCHED WHEN THE PICKER OPENS rather than being a precondition for the
-// picker existing at all.
-//
-// This crumb used to render as a plain label with no chevron whenever `brainList` was
-// null, on the grounds that UNKNOWN IS NOT ZERO — which is right about the label and
-// wrong about the control. The list is only ever fetched by handleToolResult, so a
-// widget that came up any other way (the self-boot in connectToHost) or a single failed
-// `brains` call left the one control that switches brains permanently absent, with no
-// error and no retry. Unknown is still not zero: the ADD row waits for real rows, so
-// "you have no brains" is never implied by a list we haven't loaded.
-function BrainRows({ close }: { close: () => void }) {
-	const [rows, setRows] = useState<BrainRow[] | null>(brainList);
-	const [failed, setFailed] = useState(false);
-	useEffect(() => {
-		if (rows) return;
-		let live = true;
-		// ensureBrainList swallows its own errors and leaves the list null, so the store
-		// is what says whether it worked.
-		void ensureBrainList().then(() => {
-			if (!live) return;
-			if (brainList) setRows(brainList);
-			else setFailed(true);
-		});
-		return () => {
-			live = false;
-		};
-	}, []);
-	if (failed) return <MenuNote>Couldn’t load your brains.</MenuNote>;
-	if (!rows) return <MenuNote>Loading…</MenuNote>;
-	return (
-		<>
-			{/* Grouped by org, which is what carries the org name now that the label
-			    no longer prepends it. The heading appears only when there are two orgs
-			    to tell apart; with one, every row is in it and it says nothing. */}
-			{groupBrainsByOrg(rows).map((g) => (
-				<Fragment key={g.org ?? '·'}>
-					{g.org && <div class={`px-3 pb-0.5 pt-1 ${eyebrow}`}>{g.org}</div>}
-					{g.rows.map((b) => {
-						// Ticked = the brain the CRUMB above this picker names, not the row's
-						// own `active` flag. That flag is the connection's pointer as the
-						// server saw it when the list was fetched, and a widget opened on an
-						// explicitly named brain sat one row away from it: the panel showed
-						// one brain and the checkmark another (issue #26).
-						const here = b.id === activeBrain?.id;
-						return (
-							<MenuRow
-								key={b.id}
-								onClick={guardNav(() => {
-									close();
-									switchBrain(b.id);
-								})}
-							>
-								<span class={here ? 'text-accent' : 'text-muted'}>
-									<BrainGlyph />
-								</span>
-								<span class="min-w-0 flex-1">
-									<span class="block truncate text-fg" title={b.label}>
-										{b.label}
-									</span>
-									<span class="block text-xs text-muted">
-										{b.role}
-										{b.configPrUrl ? ' · setup pending' : b.needsConfig ? ' · not configured' : ''}
-									</span>
-								</span>
-								{here && <span class="shrink-0 text-accent">✓</span>}
-							</MenuRow>
-						);
-					})}
-				</Fragment>
-			))}
-			<MenuSeparator />
-			<MenuRow
-				class="text-muted hover:text-fg"
-				onClick={guardNav(() => {
-					close();
-					openAddBrain();
-				})}
-			>
-				<span class="shrink-0 text-[15px] leading-none">＋</span>
-				<span class="min-w-0 flex-1 truncate">Add a brain</span>
-			</MenuRow>
-		</>
-	);
-}
-
 // The root crumb: which brain you are in. The label opens its file tree (the way home
 // from every view, exactly as ⌂ was); the picker switches brains or adds one.
 //
@@ -320,39 +244,45 @@ function BrainCrumb({ inert }: { inert?: boolean }) {
 	// place you are — it IS the place, the root the tree is rooted at. So it takes the
 	// same colour as any other terminus (see crumbCurrent) and drops the link, exactly
 	// as the last folder crumb does one level down.
-	const name = (close?: () => void) =>
-		inert ? (
-			<span class={`min-w-0 truncate ${crumbCurrent}`} title={label}>
-				{label}
-			</span>
-		) : (
-			<button
-				type="button"
-				title="Files"
-				onClick={guardNav(() => {
-					close?.();
-					openBrowse();
-				})}
-				class={`min-w-0 truncate ${crumbLink}`}
-			>
-				{label}
-			</button>
-		);
-	return (
-		<Menu
-			label="Brains"
-			class="min-w-0 max-w-[44vw] shrink"
-			panelClass="min-w-[210px]"
-			trigger={({ props, open, close }) => (
-				<span class="group flex min-w-0 items-center">
-					{glyph}
-					{name(close)}
-					<CrumbChevron props={props} open={open} title="Switch brain" />
-				</span>
-			)}
+	const name = inert ? (
+		<span class={`min-w-0 truncate ${crumbCurrent}`} title={label}>
+			{label}
+		</span>
+	) : (
+		<button
+			type="button"
+			title="Files"
+			onClick={guardNav(openBrowse)}
+			class={`min-w-0 truncate ${crumbLink}`}
 		>
-			{(close) => <BrainRows close={close} />}
-		</Menu>
+			{label}
+		</button>
+	);
+	// SWITCHING BRAINS IS A PAGE, not a popover, and the chevron NAVIGATES there.
+	//
+	// It was a picker listing every brain grouped by org, each row two lines (name, then
+	// role and setup state). That list is ~300px, and a panel hanging off the top bar can
+	// only have the room beneath it: on a 170px inline card it is clamped to ~130px, so a
+	// person with four brains scrolled a box that showed one and a half of them. The
+	// clamp is not the bug — without it the panel spills past the card and makes the card
+	// itself scroll (ui/Menu.tsx). There is no height at which a floating panel holds this
+	// list, for the same reason the rail's ⋯ could not hold its menu.
+	//
+	// BrainsView is already the page version and calls itself so in its own header: every
+	// brain you can reach, roles, the active one ticked, click to switch. It also carries
+	// what the picker never had room for — add, disconnect, per-brain sharing. So this is
+	// deleting a cramped duplicate rather than building a replacement.
+	//
+	// A chevron that navigates rather than expands is the one liberty taken. It keeps
+	// saying "there is more about this brain through here", which stayed true, and the
+	// alternative (making the whole crumb one control) costs the label its own job: the
+	// brain crumb IS the file tree's root, which is why Files alone has no tail.
+	return (
+		<span class="group flex min-w-0 max-w-[44vw] shrink items-center">
+			{glyph}
+			{name}
+			<CrumbChevron title="Switch brain" onClick={guardNav(openBrains)} />
+		</span>
 	);
 }
 
@@ -568,7 +498,7 @@ export function Breadcrumb({ view }: { view: View }) {
 	if (view.kind === 'brains')
 		return (
 			<DestinationCrumb root="account">
-				<span class={crumbCurrent}>Manage brains</span>
+				<span class={crumbCurrent}>Brains</span>
 			</DestinationCrumb>
 		);
 	if (view.kind === 'settings')
@@ -591,7 +521,7 @@ export function Breadcrumb({ view }: { view: View }) {
 				root="account"
 				parent={
 					backKind() === 'brains'
-						? { key: 'brains', label: 'Manage brains', onClick: () => goBack(openBrains) }
+						? { key: 'brains', label: 'Brains', onClick: () => goBack(openBrains) }
 						: undefined
 				}
 			>

@@ -69,7 +69,7 @@ export const DEST_META: Record<DestKey, { label: string; scope: Scope; blurb: st
 		blurb: 'How much your organization uses its brains'
 	},
 	brains: {
-		label: 'Manage brains',
+		label: 'Brains',
 		scope: 'account',
 		blurb: 'Create, connect, or disconnect a brain'
 	},
