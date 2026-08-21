@@ -1,15 +1,13 @@
-// The location trail: WHERE YOU ARE, and what else sits at each level of the path that
-// got you there.
+// The location trail: WHERE YOU ARE, and nothing else.
 //
-//   🧠 Team brain ⌄ / wiki ⌄ / people ⌄ / Ada Lovelace ⌄
+//   🧠 Team brain / wiki / people / Ada Lovelace
 //
-// It answers that question ONLY. Where else you could BE — the file tree, the graph, the
-// activity feed, the sharing panel, the org and account screens — is the RAIL down the
-// left edge (main.tsx). The trail briefly carried those too, as extra rows inside its
-// chevrons, and the two questions blurred: standing on the tree it read "Brain / Files ⌄",
-// a segment naming a view rather than a place, whose picker offered three more views
-// unrelated to the path it was drawn from. A crumb picker lists what could have stood in
-// that segment's place, and a view could never have stood in a path segment's place.
+// Where else you could BE — the file tree, the graph, the activity feed, the sharing
+// panel, the org and account screens — is the RAIL down the left edge (main.tsx). The
+// trail briefly carried those too, as extra rows inside its chevrons, and the two
+// questions blurred: standing on the tree it read "Brain / Files ⌄", a segment naming a
+// view rather than a place, whose picker offered three more views unrelated to the path
+// it was drawn from.
 //
 // TWO CONTROLS BECAME ONE. The bar used to open with a brain switcher AND a ⌂ home
 // crumb, which were the same destination twice: the switcher's own "select the active
@@ -17,28 +15,28 @@
 // place. The brain IS the root of the trail, so it is now the root crumb, and its label
 // goes home exactly as ⌂ did.
 //
-// A PATH CRUMB IS A PICKER (the VS Code breadcrumb behaviour). Label = go there,
-// chevron = the other things that live at this level. SIBLINGS, not children: the
-// question a crumb answers is "what else could this segment have been", so `people`
-// offers the other folders and pages under `wiki/`, and the trailing page offers the
-// rest of its own folder. That last one is the payoff — moving between sibling pages
-// used to mean a round trip through the file tree.
+// NO CRUMB IS A PICKER ANY MORE.
 //
-// THE BRAIN CRUMB IS NOT ONE. Its chevron navigates to the Brains page instead of
-// opening a panel, because that list (every brain, grouped by org, two lines each) is
-// ~300px and a panel hanging off the top bar only ever has the room beneath it. See
-// BrainCrumb for the whole argument; it is the same one that turned the rail's ⋯ into
-// a page.
+// Every segment used to carry one (the VS Code breadcrumb behaviour): label = go there,
+// chevron = the siblings that could have stood in this segment's place. It was a real
+// shortcut and it lost to the ceiling every popover in this bar loses to — a panel
+// hanging off the top row gets the space beneath it and no more, so on a short inline
+// card a folder of any size became a scroll box a row and a half tall. Two answers, both
+// arrived at the same way as the rail's ⋯ before them:
 //
-// Two sources: the trail comes from the path alone, the pickers from the cached file
-// tree (`browseCache` — one list_pages call for the whole brain). A cold cache fetches
-// when a picker is OPENED rather than up front, so the bar never waits on data that a
-// given visit may not need.
+//   * SIBLINGS moved to the file tree, which is the first item in the rail, shows the
+//     same list with no height limit, and shows the structure around it as well.
+//   * BRAINS moved to the Brains page, which already existed as the switcher's
+//     "bi-modal counterpart" and carries add / share / disconnect besides. The BRAIN
+//     GLYPH goes there — the icon that already meant "brain", carrying the action
+//     rather than a chevron beside it announcing one.
+//
+// What is left is an icon, text, and links. The trail states a location and hands off
+// every list to a screen with room for it.
 import type { ComponentChildren } from 'preact';
-import { useEffect, useState } from 'preact/hooks';
-import type { View, BrowseData } from '../core/types.ts';
+import type { View } from '../core/types.ts';
 import { isFolderNoteName } from '../core/util.ts';
-import { browseCache, brainList, activeBrain, goBack, backKind } from '../core/store.ts';
+import { brainList, activeBrain, goBack, backKind } from '../core/store.ts';
 import type { Scope } from '../core/nav.ts';
 import {
 	openBrowse,
@@ -47,174 +45,27 @@ import {
 	openMembers,
 	openSettings,
 	openBrainAccess,
-	navigateTo,
-	openAsset,
-	fetchPaths,
 	guardNav
 } from '../core/actions.ts';
-import {
-	BrainGlyph,
-	ChevronDownIcon,
-	FolderIcon,
-	FileIcon,
-	ImageIcon,
-	ArrowLeftIcon
-} from '../core/icons.tsx';
-import { Menu, MenuRow, MenuNote, type MenuTriggerProps } from '../ui/Menu.tsx';
+import { BrainGlyph, ArrowLeftIcon } from '../core/icons.tsx';
 import { crumbCurrent, crumbLink, crumbMeta } from '../ui/typography.ts';
 
-// Wider than the 4px it was, because a crumb is no longer just a word: it is a label
-// and its picker, and those have to read as ONE unit. At the old spacing the chevron
-// sat as far from its own label as from the next slash, so the eye grouped it with the
-// separator. The rule the trail follows now: tight INSIDE a crumb (the chevron's
-// ml-0.5), loose BETWEEN crumbs (here).
+// Wider than the 4px it was, so a crumb and the slash after it never read as one unit.
+// The rule the trail follows: tight INSIDE a crumb, loose BETWEEN crumbs (here).
 const CrumbSep = () => <span class="mx-2 shrink-0 text-muted opacity-50">/</span>;
 
-// The picker's affordance. Always rendered, but held at 40% until the crumb is hovered
-// or its menu is open: a chevron per segment is a lot of furniture for a 36px bar, and
-// this keeps the trail reading as text while staying visibly clickable.
-function CrumbChevron({
-	props,
-	open = false,
-	title,
-	onClick
-}: {
-	/** Trigger props when the chevron OPENS a picker in place (the sibling one). */
-	props?: MenuTriggerProps;
-	open?: boolean;
-	title: string;
-	/**
-	 * Used INSTEAD of `props` when the chevron navigates rather than expands — the brain
-	 * crumb, whose list outgrew any panel that can hang off the top bar (see BrainCrumb).
-	 * Spread after, so a menu trigger's own handler still wins where one is passed.
-	 */
-	onClick?: () => void;
-}) {
-	return (
-		<button
-			type="button"
-			title={title}
-			aria-label={title}
-			onClick={onClick}
-			{...props}
-			class={`ml-0.5 shrink-0 rounded p-0.5 text-muted outline-none transition-opacity hover:bg-chip hover:text-fg focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-accent ${
-				open ? 'opacity-100' : 'opacity-40 group-hover:opacity-100'
-			}`}
-		>
-			<ChevronDownIcon />
-		</button>
-	);
-}
-
-// ---------- sibling data ----------
-
-type CrumbEntry = { name: string; path: string; dir: boolean; asset?: boolean };
-
-// What lives directly under `parent` ('' = the brain root): sub-folders, then pages,
-// alphabetical — the file tree's own order, so a picker and the tree can never
-// disagree about what a folder contains.
-//
-// Folder notes are left out: <folder>/index.md IS the folder, so listing it beside its
-// own folder is the redundant sibling the tree already hides. Hidden files never
-// appear, since `paths` is the visible content set and the hidden list is kept apart.
-function entriesUnder(parent: string, data: BrowseData): CrumbEntry[] {
-	const prefix = parent ? `${parent}/` : '';
-	const folders = new Set<string>();
-	const files: CrumbEntry[] = [];
-	// Pages AND attachments. Listing only pages meant an assets/ folder never appeared
-	// as a peer of the pages beside it, so the folder you were standing in was missing
-	// from its own parent's picker — you could reach an image from the file tree but
-	// not by walking the breadcrumb it was displaying.
-	const assetSet = new Set(data.assets);
-	for (const p of [...data.paths, ...data.assets]) {
-		if (!p.startsWith(prefix)) continue;
-		const rest = p.slice(prefix.length);
-		const cut = rest.indexOf('/');
-		if (cut === -1) {
-			if (!isFolderNoteName(rest))
-				files.push({ name: rest, path: p, dir: false, asset: assetSet.has(p) });
-		} else {
-			folders.add(rest.slice(0, cut));
-		}
-	}
-	const byName = (a: CrumbEntry, b: CrumbEntry) => a.name.localeCompare(b.name);
-	return [
-		...[...folders].map((n) => ({ name: n, path: prefix + n, dir: true })).sort(byName),
-		...files.sort(byName)
-	];
-}
-
-function entryLabel(e: CrumbEntry, data: BrowseData): string {
-	return e.dir ? e.name : (data.titleByPath[e.path] ?? e.name.replace(/\.md$/, ''));
-}
-
-// The rows of one crumb's picker. Reads the memoized tree; only a cold cache costs a
-// round trip, and a failed one says so rather than rendering an empty menu that reads
-// as "this folder has nothing in it".
-function SiblingRows({
-	parent,
-	current,
-	close
-}: {
-	parent: string;
-	/** Full path of the crumb this picker hangs off — marked in the list. */
-	current: string;
-	close: () => void;
-}) {
-	const [data, setData] = useState<BrowseData | null>(browseCache);
-	const [failed, setFailed] = useState(false);
-	useEffect(() => {
-		if (data) return;
-		let live = true;
-		void fetchPaths().then(
-			(d) => {
-				if (live) setData(d);
-			},
-			() => {
-				if (live) setFailed(true);
-			}
-		);
-		return () => {
-			live = false;
-		};
-	}, []);
-	if (failed) return <MenuNote>Couldn’t load this folder.</MenuNote>;
-	if (!data) return <MenuNote>Loading…</MenuNote>;
-	const entries = entriesUnder(parent, data);
-	if (!entries.length) return <MenuNote>Nothing else here.</MenuNote>;
-	return (
-		<>
-			{entries.map((e) => {
-				const here = e.path === current;
-				const label = entryLabel(e, data);
-				return (
-					<MenuRow
-						key={e.path}
-						onClick={guardNav(() => {
-							close();
-							if (e.dir) openFolder(e.path);
-							else if (e.asset) openAsset(e.path);
-							else navigateTo(e.path);
-						})}
-					>
-						<span class={here ? 'text-accent' : 'text-muted'}>
-							{e.dir ? <FolderIcon /> : e.asset ? <ImageIcon /> : <FileIcon />}
-						</span>
-						<span class={`min-w-0 flex-1 truncate ${here ? 'text-accent' : ''}`} title={label}>
-							{label}
-						</span>
-						{here && <span class="shrink-0 text-accent">✓</span>}
-					</MenuRow>
-				);
-			})}
-		</>
-	);
-}
+// The leading slot's geometry, worn by BOTH controls that can open the trail: the brain
+// glyph on a brain screen, the back arrow everywhere else. Identical insets in both,
+// including the padding a glyph has no other use for, because unequal ones moved every
+// label in the bar by 2px when you crossed between an account screen and a brain one.
+const LEADING_SLOT =
+	'mr-1.5 shrink-0 rounded p-0.5 text-muted outline-none transition-colors hover:bg-chip hover:text-fg focus-visible:ring-2 focus-visible:ring-accent';
 
 // ---------- the crumbs ----------
 
-// The root crumb: which brain you are in. The label opens its file tree (the way home
-// from every view, exactly as ⌂ was); the picker switches brains or adds one.
+// The root crumb: which brain you are in. Two controls, and they answer the trail's two
+// halves separately — the GLYPH changes which brain, the LABEL opens that brain's file
+// tree (the way home from every view, exactly as ⌂ was).
 //
 // The label NAMES A BRAIN and nothing else. It used to fall back to "Files" — the old
 // ⌂ home button's word, kept when the brain crumb absorbed it — so a brain we could not
@@ -225,20 +76,22 @@ function SiblingRows({
 // than borrowing a destination's name.
 function BrainCrumb({ inert }: { inert?: boolean }) {
 	const label = activeBrain?.label ?? (brainList?.length === 0 ? 'No brain' : 'Brain');
-	// The glyph carries its own trailing space rather than the row carrying a `gap`:
-	// a gap would apply to the CHEVRON too, on top of the ml-0.5 every crumb's chevron
-	// already has, and the brain crumb would sit its picker 4× further from its label
-	// than the path crumbs do.
+	// THE GLYPH IS THE SWITCHER. It was decoration with a chevron beside it doing this
+	// job, which put two marks on one crumb to say one thing; the icon was already the
+	// mark that means "brain", so it carries the action instead of announcing it twice.
 	//
-	// THE LEADING SLOT IS SHARED with BackCrumb's arrow — one or the other opens the
-	// trail depending on scope. Its geometry (15px icon, p-0.5 inset, mr-1.5) is
-	// therefore identical in both, including the padding this span has no other use for:
-	// the arrow needs it as a hover target, and unequal insets moved every label in the
-	// bar by 2px when you crossed between an account screen and a brain one.
+	// It also makes the leading slot honest: every trail opens with a control now, the
+	// brain on a brain screen and the back arrow on the ones beside it (LEADING_SLOT).
 	const glyph = (
-		<span class="mr-1.5 shrink-0 p-0.5 text-muted">
+		<button
+			type="button"
+			title="Switch brain"
+			aria-label="Switch brain"
+			onClick={guardNav(openBrains)}
+			class={LEADING_SLOT}
+		>
 			<BrainGlyph />
-		</span>
+		</button>
 	);
 	// `inert` is the FILE TREE, where the brain crumb is not a step on the way to the
 	// place you are — it IS the place, the root the tree is rooted at. So it takes the
@@ -258,7 +111,7 @@ function BrainCrumb({ inert }: { inert?: boolean }) {
 			{label}
 		</button>
 	);
-	// SWITCHING BRAINS IS A PAGE, not a popover, and the chevron NAVIGATES there.
+	// SWITCHING BRAINS IS A PAGE, not a popover.
 	//
 	// It was a picker listing every brain grouped by org, each row two lines (name, then
 	// role and setup state). That list is ~300px, and a panel hanging off the top bar can
@@ -272,68 +125,44 @@ function BrainCrumb({ inert }: { inert?: boolean }) {
 	// brain you can reach, roles, the active one ticked, click to switch. It also carries
 	// what the picker never had room for — add, disconnect, per-brain sharing. So this is
 	// deleting a cramped duplicate rather than building a replacement.
-	//
-	// A chevron that navigates rather than expands is the one liberty taken. It keeps
-	// saying "there is more about this brain through here", which stayed true, and the
-	// alternative (making the whole crumb one control) costs the label its own job: the
-	// brain crumb IS the file tree's root, which is why Files alone has no tail.
 	return (
-		<span class="group flex min-w-0 max-w-[44vw] shrink items-center">
+		<span class="flex min-w-0 max-w-[44vw] shrink items-center">
 			{glyph}
 			{name}
-			<CrumbChevron title="Switch brain" onClick={guardNav(openBrains)} />
 		</span>
 	);
 }
 
-// One path segment. `last` is the current location, so its label is inert (a crumb
-// must never be a self-link that goes nowhere) — but its picker is the useful one,
-// since the siblings of where you are is exactly what you want next.
-function PathCrumb({
-	seg,
-	path,
-	parent,
-	last
-}: {
-	seg: string;
-	path: string;
-	parent: string;
-	last: boolean;
-}) {
+// One path segment. `last` is the current location, so its label is inert: a crumb must
+// never be a self-link that goes nowhere.
+//
+// NO PICKER. Each of these carried one listing the segment's siblings, which was a real
+// shortcut and lost to the same ceiling everything else in this bar lost to: a panel
+// hanging off the top row gets the space beneath it and no more, so a folder of any size
+// became a scroll box a row and a half tall. A trail is also the wrong host for it — the
+// bar tells you where you are, and browsing what is next to you is the file tree's whole
+// job. Files is the first item in the rail now, shows the same siblings with no height
+// limit, and shows the structure around them as well. This costs one press on a move
+// that used to take none.
+function PathCrumb({ seg, path, last }: { seg: string; path: string; last: boolean }) {
 	const label = seg.replace(/\.md$/, '');
 	return (
-		<Menu
-			label={parent ? `Alongside ${label} in ${parent}` : `Alongside ${label}`}
-			// Only the tail gives ground. A trail that squeezed every segment equally
-			// would render a deep path as a row of two-letter stubs; the ancestors stay
-			// at full width and the current location is what truncates.
-			class={last ? 'min-w-0 shrink' : 'shrink-0'}
-			trigger={({ props, open, close }) => (
-				<span class="group flex min-w-0 items-center">
-					{last ? (
-						<span class={`truncate ${crumbCurrent}`}>{label}</span>
-					) : (
-						<button
-							type="button"
-							onClick={guardNav(() => {
-								close();
-								openFolder(path);
-							})}
-							class={`truncate ${crumbLink}`}
-						>
-							{label}
-						</button>
-					)}
-					<CrumbChevron
-						props={props}
-						open={open}
-						title={`What else is in ${parent || 'this brain'}`}
-					/>
-				</span>
+		// Only the tail gives ground. A trail that squeezed every segment equally would
+		// render a deep path as a row of two-letter stubs; the ancestors stay at full
+		// width and the current location is what truncates.
+		<span class={`flex items-center ${last ? 'min-w-0 shrink' : 'shrink-0'}`}>
+			{last ? (
+				<span class={`truncate ${crumbCurrent}`}>{label}</span>
+			) : (
+				<button
+					type="button"
+					onClick={guardNav(() => openFolder(path))}
+					class={`truncate ${crumbLink}`}
+				>
+					{label}
+				</button>
 			)}
-		>
-			{(close) => <SiblingRows parent={parent} current={path} close={close} />}
-		</Menu>
+		</span>
 	);
 }
 
@@ -354,7 +183,7 @@ function BackCrumb() {
 			title="Back"
 			aria-label="Back"
 			onClick={guardNav(() => goBack(() => openBrowse()))}
-			class="mr-1.5 shrink-0 rounded p-0.5 text-muted outline-none transition-colors hover:bg-chip hover:text-fg focus-visible:ring-2 focus-visible:ring-accent"
+			class={LEADING_SLOT}
 		>
 			<ArrowLeftIcon />
 		</button>
@@ -601,12 +430,7 @@ export function Breadcrumb({ view }: { view: View }) {
 			{segs.map((seg, i) => (
 				<span key={segs.slice(0, i + 1).join('/')} class="flex min-w-0 items-center">
 					<CrumbSep />
-					<PathCrumb
-						seg={seg}
-						path={segs.slice(0, i + 1).join('/')}
-						parent={segs.slice(0, i).join('/')}
-						last={i === segs.length - 1}
-					/>
+					<PathCrumb seg={seg} path={segs.slice(0, i + 1).join('/')} last={i === segs.length - 1} />
 				</span>
 			))}
 		</nav>
