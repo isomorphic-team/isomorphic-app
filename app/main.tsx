@@ -254,7 +254,14 @@ function Rail({ view }: { view: View }) {
 		// while the icons inside stick to the top — a bottom-anchored group would collide
 		// with the top one in a short inline card, where the whole app may be 200px tall.
 		<aside class="w-10 shrink-0 border-r border-border" aria-label="Places">
-			<nav class="sticky top-0 flex flex-col items-center gap-0.5 py-1.5">
+			{/* z-30 IS THE CHROME LAYER, and it has to be stated rather than left to auto.
+			    `position: sticky` creates a stacking context, so the z-20 that ui/Menu.tsx
+			    puts on an open panel is scoped to THIS nav and cannot lift the panel over
+			    anything in <main>, a later sibling: the overflow menu rendered underneath
+			    the analytics chart's bars. Content-layer overlays run up to z-20 (the
+			    analytics tooltip at 10, ProseMirror's column-resize handle at 20), so chrome
+			    sits above them at 30. Header carries the same value for the same reason. */}
+			<nav class="sticky top-0 z-30 flex flex-col items-center gap-0.5 py-1.5">
 				{/* THE RAIL DOES NOT GO AWAY WHILE YOU EDIT. Every destination does abandon an
 				    in-progress edit, which is why this row used to empty itself out — but
 				    hiding the controls cost the user their navigation and protected nothing,
@@ -311,7 +318,7 @@ function Header({ view }: { view: View }) {
 	// the visible flash.
 	const toolbar = editing && editCtl.view ? editCtl.view : null;
 	return (
-		<header class="sticky top-0 z-10 bg-bg/90 backdrop-blur">
+		<header class="sticky top-0 z-30 bg-bg/90 backdrop-blur">
 			{/* Fixed row height (not padding-driven) so toggling the search icon ↔ input —
 			    which have slightly different intrinsic heights — can't nudge the header up/down. */}
 			<div class="flex h-9 items-center gap-1.5 px-2.5 text-sm">
