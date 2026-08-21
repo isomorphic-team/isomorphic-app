@@ -65,12 +65,19 @@ export const DEST_META: Record<DestKey, { label: string; scope: Scope; blurb: st
 	sharing: { label: 'Sharing', scope: 'brain', blurb: 'Who can open this brain' },
 	// Brain scope, and it passes THE SCOPE TEST the same way Sharing does: switching
 	// brains shows a different list. The two are a pair and read as opposites, which is
-	// why they sit together: Sharing is who can come IN, Connections is where this brain
-	// reaches OUT.
+	// why they sit together: Sharing is who can come IN, this is where the brain reaches
+	// OUT.
+	//
+	// LABELLED FOR WHAT A ROW IS, not for the machinery. "Connections" names the
+	// relationship and leaves the reader to work out what one of them contains; the
+	// thing you actually arrive at is a place with pages in it that two organizations
+	// share. The tools are still create_connection and accept_connection, and their
+	// descriptions call the result a shared working surface, so a person asking for a
+	// "shared space" in words still lands on them.
 	connections: {
-		label: 'Connections',
+		label: 'Shared spaces',
 		scope: 'brain',
-		blurb: 'Shared surfaces this brain is joined to'
+		blurb: 'Pages you and another organization both write in'
 	},
 	members: { label: 'Members', scope: 'org', blurb: 'Who is in your organization' },
 	analytics: {
@@ -150,6 +157,7 @@ const VIEW_DEST: Record<string, DestKey> = {
 	'brain-access': 'sharing',
 	'share-brain': 'sharing',
 	connections: 'connections',
+	'start-connection': 'connections',
 	members: 'members',
 	'invite-member': 'members',
 	analytics: 'analytics',

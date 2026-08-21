@@ -21,7 +21,6 @@ import type { BrainContext } from './librarian.ts';
 import {
 	brainLabel,
 	getAppUserByEmail,
-	matchBrain,
 	roleAtLeast,
 	type AccessibleBrain,
 	type AccessibleOrg,
@@ -47,6 +46,7 @@ import {
 	joinConnection,
 	partiesOf,
 	pendingPartiesForEmails,
+	resolveAnchor,
 	type Connection,
 	type ConnectionParty
 } from '../lib/connections.ts';
@@ -352,11 +352,39 @@ export function registerConnectionTools(server: McpServer, deps: ConnectionDeps)
 				);
 				for (const inv of invitations) lines.push(`- ${inv.connectionName}`);
 			}
+			// WHO INVITED YOU. An invitation names a connection you cannot reach yet, so
+			// the only thing about it you can act on is who it is from. Resolved here for
+			// the same reason the counterparty is: the widget cannot turn an org id into
+			// a name, and a row that cannot say who sent it is a row nobody will accept.
+			const invitationRows = [];
+			for (const inv of invitations) {
+				const parties = await partiesOf(ctx.db, inv.connection_id);
+				const from = parties.find((p) => p.org_id && p.party_id !== inv.party_id);
+				let fromName: string | null = null;
+				if (from?.org_id) {
+					fromName = orgNames.get(from.org_id) ?? (await orgNameOf(ctx.db, from.org_id));
+					if (fromName) orgNames.set(from.org_id, fromName);
+				}
+				invitationRows.push({
+					connection_id: inv.connection_id,
+					name: inv.connectionName,
+					from: fromName,
+					expiresAt: inv.expires_at ?? null
+				});
+			}
 			return {
 				...ok(lines.join('\n')),
 				structuredContent: {
 					view: 'connections' as const,
 					brainLabel: ctx.activeBrain?.label ?? ctx.brainId,
+					// STARTING one is an org-admin act, and the widget cannot ask the host
+					// which tools it may call. Without this the panel would have to offer
+					// the control to everyone and let the refusal explain itself, which
+					// reads as a broken button rather than as a permission.
+					//
+					// Null orgRole is the connection guest and the answer is a plain no:
+					// standing inside a shared room is not a place to start another one.
+					canCreate: !!ctx.orgRole && roleAtLeast(ctx.orgRole, 'admin'),
 					connections: rows.map((r) => ({
 						connection_id: r.connection.connection_id,
 						name: r.connection.name,
@@ -371,15 +399,26 @@ export function registerConnectionTools(server: McpServer, deps: ConnectionDeps)
 							joined: !!p.org_id
 						}))
 					})),
-					invitations: invitations.map((i) => ({
-						connection_id: i.connection_id,
-						name: i.connectionName
-					})),
+					invitations: invitationRows,
 					activeBrain: ctx.activeBrain
 				}
 			};
 		}
 	);
+
+	// The active brain, for the two org-scope tools that want it as a DEFAULT rather than
+	// as a requirement. Org scope resolves no brain of its own, and a person with none at
+	// all is a legitimate caller here, so a failure to resolve is an absent default and
+	// never an error.
+	async function activeBrainIdOrNull(
+		getContext: ConnectionDeps['getContext']
+	): Promise<string | null> {
+		try {
+			return (await getContext()).brainId ?? null;
+		} catch {
+			return null;
+		}
+	}
 
 	// ---------- create_connection ----------
 	server.registerTool(
@@ -403,7 +442,7 @@ export function registerConnectionTools(server: McpServer, deps: ConnectionDeps)
 					.string()
 					.optional()
 					.describe(
-						'Which of YOUR brains this connection is about. Whoever can reach that brain can reach the room. Defaults to the brain you are in.'
+						'Which of YOUR brains this connection is about. Whoever can reach that brain can reach the room. Defaults to the brain you are in, and is REQUIRED when that is ambiguous: nothing re-anchors a connection later, so it is refused rather than guessed.'
 					),
 				org: z
 					.string()
@@ -427,26 +466,9 @@ export function registerConnectionTools(server: McpServer, deps: ConnectionDeps)
 			// as: it is what confers access, so anchoring to someone else's brain would be
 			// granting reach you do not hold.
 			const mine = (await listBrains()).filter((b) => b.org_id === ctx.org.org_id);
-			if (mine.length === 0) {
-				return fail(
-					'You need a brain of your own before you can connect one to anybody: a connection hangs off one of your brains, and that is what decides who on your side can reach it.'
-				);
-			}
-			let anchor: AccessibleBrain | undefined;
-			if (about) {
-				const m = matchBrain(mine, about);
-				if (!m.brain) {
-					const names = (m.candidates ?? mine).map(brainLabel);
-					return fail(
-						m.candidates
-							? `"${about}" matches several of your brains: ${names.join(', ')}. Be more specific.`
-							: `No brain of yours matching "${about}". You could use: ${names.join(', ')}.`
-					);
-				}
-				anchor = m.brain;
-			} else {
-				anchor = mine[0];
-			}
+			const picked = resolveAnchor(about, mine, await activeBrainIdOrNull(getContext));
+			if (picked.error || !picked.brain) return fail(picked.error ?? 'No brain to anchor to.');
+			const anchor = picked.brain;
 
 			// A person invited to a room they can already reach is a no-op that reads as
 			// success, so say so instead.
@@ -531,8 +553,9 @@ export function registerConnectionTools(server: McpServer, deps: ConnectionDeps)
 				connection: z.string().describe('Which invitation to accept, by the connection’s name.'),
 				about: z
 					.string()
+					.optional()
 					.describe(
-						'Which of YOUR brains to join it to. Everyone who can reach that brain will be able to reach the room.'
+						'Which of YOUR brains to join it to. Everyone who can reach that brain will be able to reach the room. Defaults to the brain you are in, and is REQUIRED when that is ambiguous: this decides who on your side is in the room, so it is refused rather than guessed.'
 					),
 				org: z
 					.string()
@@ -566,15 +589,9 @@ export function registerConnectionTools(server: McpServer, deps: ConnectionDeps)
 			const target = hits[0];
 
 			const mine = (await listBrains()).filter((b) => b.org_id === ctx.org.org_id);
-			const m = matchBrain(mine, about);
-			if (!m.brain) {
-				const names = mine.map(brainLabel);
-				return fail(
-					m.candidates
-						? `"${about}" matches several of your brains: ${(m.candidates ?? []).map(brainLabel).join(', ')}. Be more specific.`
-						: `No brain of yours matching "${about}". You could use: ${names.join(', ')}.`
-				);
-			}
+			const picked = resolveAnchor(about, mine, await activeBrainIdOrNull(getContext));
+			if (picked.error || !picked.brain) return fail(picked.error ?? 'No brain to anchor to.');
+			const m = { brain: picked.brain };
 
 			await joinConnection(ctx.db, {
 				party_id: target.party_id,

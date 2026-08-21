@@ -21,6 +21,7 @@ import PageView from './PageView.tsx';
 import SearchView from './SearchView.tsx';
 import SettingsView from './SettingsView.tsx';
 import ShareBrainView from './ShareBrainView.tsx';
+import StartConnectionView from './StartConnectionView.tsx';
 
 const VIEW_DEFS = [
 	ActivityView,
@@ -42,7 +43,8 @@ const VIEW_DEFS = [
 	PageView,
 	SearchView,
 	SettingsView,
-	ShareBrainView
+	ShareBrainView,
+	StartConnectionView
 ] as const;
 
 // Compile-time exhaustiveness: every View kind must have exactly one renderer.

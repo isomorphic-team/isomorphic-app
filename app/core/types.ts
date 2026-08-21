@@ -184,11 +184,15 @@ export interface ConnectionRow {
 }
 
 // An invitation waiting for the signed-in person. It names a connection they cannot yet
-// reach, which is the whole reason it has to be delivered separately: until they join it
-// to one of their own brains there is no brain it hangs off.
+// reach, which is the whole reason it arrives separately from the rest: until they join
+// it to one of their own brains there is no brain for it to hang off.
 export interface ConnectionInvite {
 	connection_id: string;
 	name: string;
+	/** The organization that started it. Null while their own side is still unnamed. */
+	from: string | null;
+	/** Invitations lapse rather than vanish, so the row can say it is too late. */
+	expiresAt: string | null;
 }
 
 // An org the caller can add a brain to. Identified by its own id rather than by a

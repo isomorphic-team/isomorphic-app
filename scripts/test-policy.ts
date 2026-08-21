@@ -484,8 +484,14 @@ console.log('\nnav destinations');
 
 	check('a view that IS a destination marks it', activeDestination('browse') === 'files');
 	check(
-		'…and the connections panel marks its own',
+		'…and the shared-spaces panel marks its own',
 		activeDestination('connections') === 'connections'
+	);
+	// A pushed flow has not left the destination it was opened from, same as Invite
+	// under Members: the rail keeps answering "where am I" while the form is open.
+	check(
+		'…and starting one counts as still being there',
+		activeDestination('start-connection') === 'connections'
 	);
 	check('…including the org ones', activeDestination('members') === 'members');
 	// A pushed flow has not left the destination it was opened from, so the control that

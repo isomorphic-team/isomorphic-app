@@ -473,6 +473,36 @@ let connectableRepos = [
 	// Under the BRAINLESS org, so connecting a first repo into one is reachable here.
 	{ id: 'contoso-io/field-guide', owner: 'contoso-io', repo: 'field-guide' }
 ];
+// Shared spaces the fixture has GAINED during this session, so create and join can be
+// seen to do something. A fixture that discards the write proves only that the call was
+// made, which is the half of a flow that was never in doubt.
+type FixtureParty = {
+	org: string | null;
+	invitedEmail: string | null;
+	mine: boolean;
+	joined: boolean;
+};
+const extraConnections: {
+	connection_id: string;
+	name: string;
+	state: string;
+	brain: string;
+	parties: FixtureParty[];
+}[] = [];
+let invitationsFixture: {
+	connection_id: string;
+	name: string;
+	from: string | null;
+	expiresAt: string | null;
+}[] = [
+	{
+		connection_id: 'c-acme',
+		name: 'Acme partnership',
+		from: 'Acme',
+		expiresAt: null
+	}
+];
+
 let activeBrainId = brainsFixture[0].id;
 // The active brain's content — used by the host chrome (initial render + page selector),
 // which always shows the active brain. Inside handleTool use the per-call `pg` instead.
@@ -1164,6 +1194,54 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
 			}
 			return accessResult(id, `Access for ${b?.label ?? id}.`);
 		}
+		case 'create_connection': {
+			const name = String(args?.name ?? '').trim();
+			const withEmail = String(args?.with ?? '').trim();
+			if (!name) return errText('Please give the connection a name.');
+			if (!withEmail.includes('@')) return errText(`"${withEmail}" is not an email address.`);
+			// The real tool refuses to guess this, so the harness must not supply one:
+			// a fixture that is more forgiving than the server hides the refusal.
+			if (!args?.about) return errText('Which of your brains should this hang off?');
+			extraConnections.push({
+				connection_id: `c-${extraConnections.length + 1}`,
+				name,
+				state: 'pending',
+				brain: `iso-platform/conn-${name.toLowerCase()}`,
+				parties: [
+					{ org: 'Personal', invitedEmail: null, mine: true, joined: true },
+					{ org: null, invitedEmail: withEmail, mine: false, joined: false }
+				]
+			});
+			return {
+				content: [
+					{
+						type: 'text',
+						text: `Started "${name}" with ${withEmail}. Nothing has been sent: tell them yourself.`
+					}
+				],
+				structuredContent: { connection_id: `c-${extraConnections.length}`, name }
+			};
+		}
+		case 'accept_connection': {
+			const which = String(args?.connection ?? '').trim();
+			const inv = invitationsFixture.find((i) => i.name === which);
+			if (!inv) return errText(`No invitation matching "${which}".`);
+			invitationsFixture = invitationsFixture.filter((i) => i.connection_id !== inv.connection_id);
+			extraConnections.push({
+				connection_id: inv.connection_id,
+				name: inv.name,
+				state: 'live',
+				brain: 'iso-platform/conn-acme',
+				parties: [
+					{ org: 'Personal', invitedEmail: null, mine: true, joined: true },
+					{ org: inv.from, invitedEmail: null, mine: false, joined: true }
+				]
+			});
+			return {
+				content: [{ type: 'text', text: `Joined "${inv.name}".` }],
+				structuredContent: { connection_id: inv.connection_id, name: inv.name, switched: false }
+			};
+		}
 		case 'connections': {
 			const id = resolveBrainArg(args?.brain) ?? activeBrainId;
 			// Sticky, matching worker.ts and brain_access above: a view OF a brain moves the
@@ -1192,6 +1270,7 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
 						}
 					]
 				: [];
+			const all = anchored ? [...connections, ...extraConnections] : connections;
 			return {
 				content: [
 					{
@@ -1204,8 +1283,11 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
 				structuredContent: {
 					view: 'connections',
 					brainLabel: label,
-					connections,
-					invitations: anchored ? [{ connection_id: 'c-acme', name: 'Acme partnership' }] : [],
+					connections: all,
+					invitations: anchored ? invitationsFixture : [],
+					// Org admin on the fixture persona, so the Start control is reachable.
+					// A connection room resolves no org role and would send false.
+					canCreate: true,
 					activeBrain: brainMeta(activeBrainId)
 				}
 			};

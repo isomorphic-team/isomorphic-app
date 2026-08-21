@@ -11,7 +11,7 @@
 // Worker-safe (no node:*), because worker.ts reaches this through the tool layer.
 
 import type { D1Database } from '@cloudflare/workers-types';
-import { createOrg, type Org } from './orgs.ts';
+import { createOrg, matchBrain, brainLabel, type AccessibleBrain, type Org } from './orgs.ts';
 
 // ---- the system organization ----
 
@@ -110,6 +110,58 @@ export interface ConnectionParty {
 // SKIPPED, never deleted, so the panel can say "this invitation expired" rather than
 // showing a connection that appears to have one party for no visible reason.
 export const INVITE_TTL_DAYS = 30;
+
+// WHICH BRAIN A CONNECTION HANGS OFF, and it must never be guessed.
+//
+// The anchor is the access decision: whoever can reach it can reach the room, and
+// nothing re-anchors a live connection (setAnchor below has no caller), so a wrong
+// answer here is permanent, and it is a permanent answer about who can read another
+// organization's material.
+//
+// It used to fall back to `mine[0]`, which listAccessibleBrains orders by created_at,
+// so omitting the argument silently anchored to the caller's OLDEST brain while the
+// argument's own description promised "the brain you are in". On an org whose first
+// brain is the company-wide one, that is the widest possible reading of a field nobody
+// filled in.
+//
+// The order is: what you named, then where you are, then your only brain, then a
+// refusal that lists the candidates. Refusing to guess is the rule chooseOrg already
+// follows, for a smaller stake than this one.
+//
+// Pure and here rather than in the tool, so pnpm test:connections can drive the whole
+// decision: the tool layer only supplies the three inputs.
+export function resolveAnchor(
+	named: string | undefined,
+	mine: AccessibleBrain[],
+	activeBrainId: string | null
+): { brain?: AccessibleBrain; error?: string } {
+	if (mine.length === 0) {
+		return {
+			error:
+				'You need a brain of your own before you can connect one to anybody: a connection hangs off one of your brains, and that is what decides who on your side can reach it.'
+		};
+	}
+	const names = mine.map(brainLabel);
+	if (named) {
+		const m = matchBrain(mine, named);
+		if (m.brain) return { brain: m.brain };
+		return {
+			error: m.candidates
+				? `"${named}" matches several of your brains: ${(m.candidates ?? mine).map(brainLabel).join(', ')}. Be more specific.`
+				: `No brain of yours matching "${named}". You could use: ${names.join(', ')}.`
+		};
+	}
+	// `id` is the canonical owner/repo handle, which is what a resolved context reports
+	// as its brainId. `brain_id` is the table's key and happens to hold the same string
+	// today; matching on the documented handle keeps that a coincidence rather than a
+	// dependency.
+	const active = activeBrainId ? mine.find((b) => b.id === activeBrainId) : undefined;
+	if (active) return { brain: active };
+	if (mine.length === 1) return { brain: mine[0] };
+	return {
+		error: `Which of your brains should this hang off? Whoever can reach it can reach the room, so it is not something to guess at. You could use: ${names.join(', ')}.`
+	};
+}
 
 // ---- creating ----
 

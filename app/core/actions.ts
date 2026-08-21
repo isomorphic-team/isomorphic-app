@@ -554,8 +554,54 @@ function connectionsViewFromSc(sc: Record<string, unknown>): View {
 		kind: 'connections',
 		brainLabel: typeof sc.brainLabel === 'string' ? sc.brainLabel : 'this brain',
 		connections: Array.isArray(sc.connections) ? (sc.connections as ConnectionRow[]) : [],
-		invitations: Array.isArray(sc.invitations) ? (sc.invitations as ConnectionInvite[]) : []
+		invitations: Array.isArray(sc.invitations) ? (sc.invitations as ConnectionInvite[]) : [],
+		// Absent means NO. The control this gates starts a relationship with another
+		// organization, so a payload that forgot to say must not read as permission.
+		canCreate: sc.canCreate === true
 	};
+}
+
+// Start a connection. A pushed flow off the panel, like every other add in the app.
+//
+// The anchor is not asked for: you are standing in the brain it will hang off, and the
+// panel you came from is that brain's. Naming it in a picker would be asking someone to
+// re-state where they already are, on the one field that cannot be changed afterwards.
+function openStartConnection(anchorLabel: string) {
+	show({ kind: 'start-connection', anchorLabel });
+}
+
+// Back to the panel with the new room already in it. Same shape as finishInvite: a
+// completed flow must not sit in the back stack, and the screen it was opened from is
+// stale the moment it finishes.
+async function finishConnection() {
+	const result = await callTool('connections', {});
+	dropStale('connections');
+	if (result.isError) return void openConnections();
+	show(connectionsViewFromSc((result.structuredContent ?? {}) as Record<string, unknown>), {
+		push: false
+	});
+}
+
+// Join an invitation INTO THE BRAIN YOU ARE IN. No form, for the same reason the create
+// flow has no anchor field: the panel is one brain's, so pressing Join here says which
+// brain as plainly as a picker would, and with nothing to fill in wrongly.
+async function joinConnectionHere(
+	connectionName: string,
+	anchorLabel: string
+): Promise<string | null> {
+	// `about`, not brainArgs(). accept_connection has no `brain` argument: the brain it
+	// takes IS the anchor, under its own name. And it is passed EXPLICITLY rather than
+	// left to the server's default, because the widget's active brain and the stored
+	// active-brain pointer are two different answers to "which brain" (issue #26) and
+	// this screen is the one that knows which one the person is looking at.
+	const res = await callTool('accept_connection', {
+		connection: connectionName,
+		about: anchorLabel
+	});
+	if (res.isError) return firstText(res);
+	toast(firstText(res));
+	await finishConnection();
+	return null;
 }
 
 async function openBrainAccess(brain?: string) {
@@ -1257,6 +1303,9 @@ export {
 	openHit,
 	openConnections,
 	ensureConnections,
+	openStartConnection,
+	finishConnection,
+	joinConnectionHere,
 	openEditor,
 	resolveWikilink,
 	renderMarkdown,

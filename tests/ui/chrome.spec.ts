@@ -47,7 +47,7 @@ test.describe('the rail', () => {
 			'Search',
 			'Recent changes',
 			'Sharing',
-			'Connections',
+			'Shared spaces',
 			'More'
 		]);
 
@@ -55,7 +55,7 @@ test.describe('the rail', () => {
 		await expectView(app, 'activity');
 		await go(app, 'Sharing').click();
 		await expectView(app, 'brain-access');
-		await go(app, 'Connections').click();
+		await go(app, 'Shared spaces').click();
 		await expectView(app, 'connections');
 		await go(app, 'Search').click();
 		await expectView(app, 'search');

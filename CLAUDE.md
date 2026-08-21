@@ -933,6 +933,37 @@ by neither, that each side joins to one of its OWN brains. Not a copy and not a 
   hang off a connection. Graph is left out rather than refused. Only the BRAIN scope
   shrinks: the caller's own organization and account destinations are untouched, because
   being in someone else's room does not suspend them.
+- **THE ANCHOR IS NEVER GUESSED** (`resolveAnchor`, `src/lib/connections.ts`,
+  `pnpm test:connections`). It decides who on a side can reach the room and nothing
+  re-anchors a live connection (`setAnchor` exists and has no caller), so a wrong answer
+  is permanent and is a permanent answer about who can read another organization's
+  material. The order is: what you named, then the brain you are IN, then your only
+  brain, then a refusal listing the candidates. It used to fall back to `mine[0]`, and
+  `listAccessibleBrains` orders by `created_at`, so omitting the argument silently
+  anchored to the caller's OLDEST brain while the argument promised "the brain you are
+  in": on an org whose first brain is the company-wide one, the widest possible reading
+  of a field nobody filled in. It is PURE and in the lib rather than the tool so the
+  whole decision is drivable from a test, which is the same reason `effectiveBrainRole`
+  lives there.
+- **The panel is one list, and creating is a pushed flow.** `ConnectionsView` renders
+  invitations and joined spaces with one row shape, because what separates them is the
+  CONTROL on the row (Join, a state chip, or nothing) rather than a heading above it.
+  Rows used to append state to the counterparty after a `·`, mixing an identity with a
+  status in one grey line. `StartConnectionView` asks for ONE thing, the counterparty's
+  email: the anchor is the brain whose panel it was opened from, the org is that brain's,
+  and the name is derived from the email's domain and left editable. The anchor is stated
+  in a sentence rather than offered as a picker, because it is the argument that cannot
+  be changed afterwards. Joining needs no form at all for the same reason. The flow says
+  NO EMAIL IS SENT before you submit, since nothing in this system sends mail and the
+  next thing the person has to do is tell the other side themselves.
+- **The UI calls them SHARED SPACES; the tools still call them connections.** The label
+  names what a row is (pages two organizations both write in) rather than the machinery.
+  `create_connection` and `accept_connection` keep their names and describe their result
+  as a shared working surface, so asking for either in words reaches them.
+- **`canCreate` rides the payload.** Starting one is an org-admin act and a widget cannot
+  ask the host which tools it may call, so the panel is told rather than guessing; absent
+  reads as no. A connection guest resolves a null `orgRole` and gets `false`, which is
+  right: standing inside a shared room is not a place to start another one.
 - Coverage: `pnpm test:connections` (the lifecycle and resolution, including that a
   colleague who cannot reach the anchor cannot reach the room, and that granting the
   anchor grants the room in the same statement), `pnpm test:access` (the rule's whole
@@ -940,8 +971,10 @@ by neither, that each side joins to one of its OWN brains. Not a copy and not a 
   mutations gate on the ORG role, and a connection guest is refused by the roster and the
   per-person analytics table), `pnpm test:e2e-mirror` (attachments survive byte for byte,
   a resumed copy converges), `pnpm test:ui`. **Not built:** creating or ending a
-  connection from the UI (conversational only), any notification when an invitation
-  arrives (nothing in this system sends mail), and export.
+  connection from the UI (ending is conversational only, deliberately: it is
+  destructive and affects the other organization), any notification when an invitation
+  arrives (nothing in this system sends mail), re-anchoring a live connection, renaming
+  one, and export.
 
 ## Loading states (the rotating status line)
 

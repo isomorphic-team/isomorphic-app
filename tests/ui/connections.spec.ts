@@ -20,13 +20,30 @@ test('the panel lists what this brain is joined to, and who is on the other side
 	await expect(app.getByText('Northwind', { exact: false }).first()).toBeVisible();
 });
 
-test('an invitation is listed apart from the connections themselves', async ({ page }) => {
+test('an invitation sits in the same list, saying who sent it and offering Join', async ({
+	page
+}) => {
 	const app = await openApp(page, 'connections');
-	// Not reachable yet, and shown separately for that reason: until you join it to a
-	// brain of your own there is no brain for it to hang off, so it cannot appear as a
-	// place you can open.
-	await expect(app.getByText('Waiting for you')).toBeVisible();
+	// One list, one row shape. What separates an invitation from a joined space is the
+	// CONTROL on it, not a heading above it: an invitation cannot be opened, so its row
+	// carries the only thing you can do with it.
 	await expect(app.getByText('Acme partnership')).toBeVisible();
+	await expect(app.getByText('Acme invited you')).toBeVisible();
+	await expect(app.getByRole('button', { name: 'Join' })).toBeVisible();
+});
+
+test('joining takes no form, because the panel already says which brain', async ({ page }) => {
+	const app = await openApp(page, 'connections');
+	await app.getByRole('button', { name: 'Join' }).click();
+
+	// Straight back to the list with the invitation now a space, and no picker in
+	// between. The anchor is the brain whose panel this is, which is the whole reason
+	// there is nothing to fill in.
+	await expectView(app, 'connections');
+	await expect(app.getByRole('button', { name: 'Join' })).toHaveCount(0);
+	// The ROW, not just the text: a toast saying "Joined ..." is also on screen at this
+	// moment, and matching that instead would pass without the list ever updating.
+	await expect(app.getByRole('button', { name: /Acme partnership/ })).toBeVisible();
 });
 
 test('opening a connection shows its pages, under its own name', async ({ page }) => {
@@ -65,17 +82,43 @@ test('a connection is not offered in the brain switcher', async ({ page }) => {
 	await expect(app.getByText('Northwind engagement')).toHaveCount(0);
 });
 
-test('Connections stands in the rail beside Sharing, as a place in this brain', async ({
+test('Shared spaces stands in the rail beside Sharing, as a place in this brain', async ({
 	page
 }) => {
 	const app = await openApp(page, 'browse');
 	// Both are views OF this brain, and they are the pair that reads as opposites:
-	// Sharing is who can come IN, Connections is where this brain reaches OUT. Scoped to
-	// the rail because a file row carries controls of its own.
+	// Sharing is who can come IN, this is where the brain reaches OUT. Scoped to the
+	// rail because a file row carries controls of its own.
 	const rail = app.locator('aside[aria-label="Places"]');
 	await expect(rail.getByRole('button', { name: 'Sharing', exact: true })).toBeVisible();
-	await rail.getByRole('button', { name: 'Connections', exact: true }).click();
+	await rail.getByRole('button', { name: 'Shared spaces', exact: true }).click();
 	await expectView(app, 'connections');
+});
+
+test('starting one asks for an email and nothing else', async ({ page }) => {
+	const app = await openApp(page, 'connections');
+	await app.getByRole('button', { name: 'Start' }).click();
+	await expectView(app, 'start-connection');
+
+	// THE ANCHOR IS NOT A FIELD. It is the brain whose panel this was opened from, and
+	// the screen says so in a sentence instead of offering a picker on the one argument
+	// that cannot be changed afterwards. If a brain picker ever appears here, the
+	// simplification has been undone.
+	await expect(app.getByText(/Anyone who can open/)).toBeVisible();
+	await expect(app.getByText(/No email is sent/)).toBeVisible();
+
+	// The name is not asked for until there is something to name it after, so the
+	// screen opens as ONE field.
+	await expect(app.getByText('Call it')).toHaveCount(0);
+	await app.getByPlaceholder('name@example.com').fill('jane@northwind.com');
+	// Derived from the domain, and editable before submitting: a correction, not a
+	// decision.
+	await expect(app.locator('input[type="text"]')).toHaveValue('Northwind');
+
+	await app.getByRole('button', { name: 'Start', exact: true }).click();
+	// Back on the panel, with the new space in the list.
+	await expectView(app, 'connections');
+	await expect(app.getByText('Northwind', { exact: false }).first()).toBeVisible();
 });
 
 test('Sharing POINTS AT the connections instead of listing them', async ({ page }) => {

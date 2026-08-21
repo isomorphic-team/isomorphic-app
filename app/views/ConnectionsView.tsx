@@ -1,114 +1,179 @@
-// The connections panel: what this brain is joined to, and what is waiting for you.
+// The shared spaces this brain is joined to, and anything waiting to be joined.
 //
-// Deliberately read-only. Creating or ending a connection is an org-admin act with real
-// consequences on someone else's side, and it is done by asking rather than by clicking:
-// there is no form here that could be filled in halfway. The panel answers "who are we
-// sharing a space with", which is the question people actually open it for.
+// ONE LIST, ONE ROW SHAPE. It used to be two lists with different rules, and the rows
+// carried their state appended after a "·" to the counterparty, so a row said
+// "Northwind Ltd · Waiting for them to join" and mixed an IDENTITY with a STATUS in one
+// grey line. Which rows were clickable also varied silently. Now every row is a glyph,
+// a name, who it is with, and a control on the right that says what you can do about
+// it: nothing for the ordinary case, a chip when something is happening to it, a Join
+// button when it is waiting for you.
+//
+// Creating is a pushed flow; ENDING is deliberately not here. It is destructive, it
+// affects someone else's organization, and it is the one act that should cost a
+// sentence rather than a click.
+import { useState } from 'preact/hooks';
 import type { ConnectionInvite, ConnectionRow } from '../core/types.ts';
-import { switchBrain } from '../core/actions.ts';
+import { switchBrain, openStartConnection, joinConnectionHere } from '../core/actions.ts';
+import { toast } from '../core/toast.tsx';
+import { LinkIcon } from '../core/icons.tsx';
 import { defineView } from '../core/view-registry.ts';
-import { List, ListRow } from '../ui/List.tsx';
 
-function stateNote(state: string): string {
-	if (state === 'pending') return 'Waiting for them to join';
-	if (state === 'ending') return 'Ending; copies are being made';
+// A chip is for something HAPPENING TO the connection, so a live one gets none: the
+// normal case should be quiet, and a row reading "Live" would be a label every row
+// carries and none of them needs.
+function stateChip(state: string): string | null {
+	if (state === 'pending') return 'Not joined yet';
+	if (state === 'ending') return 'Ending';
 	if (state === 'ended') return 'Ended';
-	return '';
+	return null;
 }
 
-// Who is on the other side. A connection rendered without its counterparty is just a
+// Who is on the other side. A shared space rendered without its counterparty is just a
 // name, and the counterparty is the one thing about it a person needs at a glance.
 function counterparty(row: ConnectionRow): string {
 	const theirs = row.parties.filter((p) => !p.mine);
 	if (theirs.length === 0) return 'Just your organization';
 	return theirs
-		.map((p) => p.org ?? (p.invitedEmail ? `${p.invitedEmail} (invited)` : 'Invited'))
+		.map((p) => p.org ?? (p.invitedEmail ? `${p.invitedEmail}, invited` : 'Invited'))
 		.join(', ');
+}
+
+const CHIP = 'shrink-0 rounded-full bg-chip px-2 py-0.5 text-xs text-muted';
+
+// The shared geometry of every row here, so a joinable invitation and a live space read
+// as the same kind of thing at different stages rather than as two features.
+function Row({
+	title,
+	subtitle,
+	onOpen,
+	right
+}: {
+	title: string;
+	subtitle: string;
+	onOpen?: () => void;
+	right?: preact.ComponentChildren;
+}) {
+	const body = (
+		<>
+			<span class="shrink-0 text-accent">
+				<LinkIcon />
+			</span>
+			<span class="min-w-0 flex-1">
+				<span class={`block truncate ${onOpen ? 'text-fg' : 'text-muted'}`}>{title}</span>
+				<span class="block truncate text-xs text-muted">{subtitle}</span>
+			</span>
+		</>
+	);
+	return (
+		<div class="flex items-center gap-2 rounded px-1 py-2 hover:bg-chip">
+			{onOpen ? (
+				<button
+					type="button"
+					onClick={onOpen}
+					class="flex min-w-0 flex-1 cursor-pointer items-center gap-2 text-left hover:text-accent"
+				>
+					{body}
+				</button>
+			) : (
+				<span class="flex min-w-0 flex-1 items-center gap-2">{body}</span>
+			)}
+			{right}
+		</div>
+	);
 }
 
 function ConnectionsView({
 	brainLabel,
 	connections,
-	invitations
+	invitations,
+	canCreate
 }: {
 	brainLabel: string;
 	connections: ConnectionRow[];
 	invitations: ConnectionInvite[];
+	canCreate: boolean;
 }) {
+	const [joining, setJoining] = useState<string | null>(null);
+
+	async function join(inv: ConnectionInvite) {
+		if (joining) return;
+		setJoining(inv.connection_id);
+		const err = await joinConnectionHere(inv.name, brainLabel);
+		setJoining(null);
+		if (err) toast(err, true);
+	}
+
+	const empty = connections.length === 0 && invitations.length === 0;
+
 	return (
-		<div class="flex flex-col gap-4">
-			{connections.length === 0 ? (
-				<div class="mt-6 text-center text-muted">
-					<div>“{brainLabel}” is not connected to anything.</div>
+		<div class="flex flex-col">
+			{empty ? (
+				<div class="mt-8 text-center text-muted">
+					<div class="text-fg">No shared spaces yet.</div>
 					<p class="mx-auto mt-2 max-w-sm text-sm">
-						A connection is a space you share with another organization: one set of pages that both
-						sides write in, owned by neither. Ask to start one.
+						A shared space is one set of pages you and another organization both write in, owned by
+						neither of you. Anyone who can open “{brainLabel}” would be able to open it.
 					</p>
+					{!canCreate && (
+						<p class="mx-auto mt-2 max-w-sm text-sm">
+							An admin of your organization can start one.
+						</p>
+					)}
 				</div>
 			) : (
 				<div>
-					<div class="px-1 pb-1.5 text-xs text-muted">Shared with (open one to see its pages)</div>
-					<List>
-						{connections.map((c) => {
-							// A connection that has ENDED cannot be opened: its anchors are detached
-							// and its brain is archived, so a row that looked clickable would be a
-							// control whose click is refused. A pending one CAN be, by the side that
-							// created it, which has to be able to prepare the room before anyone is
-							// invited to look at it.
-							const open = c.state === 'live' || c.state === 'pending';
-							return (
-								<ListRow key={c.connection_id} class="gap-0 py-0">
-									{open ? (
-										<button
-											type="button"
-											// switchBrain, not a peek: entering a connection moves the crumb,
-											// the file tree and the path policy with it, through the one seam
-											// that drops what belonged to the brain being left. A second brain
-											// rendered under the first brain's name is issue #26.
-											onClick={() => switchBrain(c.brain)}
-											class="min-w-0 flex-1 cursor-pointer py-1.5 text-left hover:text-accent"
-										>
-											<span class="block truncate text-fg">{c.name}</span>
-											<span class="block text-xs text-muted">
-												{counterparty(c)}
-												{stateNote(c.state) ? ` · ${stateNote(c.state)}` : ''}
-											</span>
-										</button>
-									) : (
-										<span class="min-w-0 flex-1 py-1.5">
-											<span class="block truncate text-muted">{c.name}</span>
-											<span class="block text-xs text-muted">
-												{counterparty(c)}
-												{stateNote(c.state) ? ` · ${stateNote(c.state)}` : ''}
-											</span>
-										</span>
-									)}
-								</ListRow>
-							);
-						})}
-					</List>
+					{invitations.map((inv) => (
+						<Row
+							key={inv.connection_id}
+							title={inv.name}
+							// An invitation cannot be opened, so its subtitle answers the only
+							// question left: who is asking.
+							subtitle={inv.from ? `${inv.from} invited you` : 'You were invited'}
+							right={
+								<button
+									type="button"
+									onClick={() => void join(inv)}
+									disabled={joining === inv.connection_id}
+									class="shrink-0 cursor-pointer rounded-md border border-border px-2 py-1 text-xs text-fg hover:border-accent hover:text-accent disabled:opacity-50"
+									title={`Join it to ${brainLabel}`}
+								>
+									{joining === inv.connection_id ? 'Joining…' : 'Join'}
+								</button>
+							}
+						/>
+					))}
+					{connections.map((c) => {
+						// An ENDED space cannot be opened: its anchors are detached and its
+						// brain is archived, so a row that looked clickable would be a control
+						// whose click is refused. A pending one CAN be, by the side that
+						// started it, which has to be able to prepare the room before anyone
+						// is invited to look at it.
+						const open = c.state === 'live' || c.state === 'pending';
+						const chip = stateChip(c.state);
+						return (
+							<Row
+								key={c.connection_id}
+								title={c.name}
+								subtitle={`with ${counterparty(c)}`}
+								// switchBrain, not a peek: entering a shared space moves the crumb,
+								// the file tree and the path policy with it, through the one seam
+								// that drops what belonged to the brain being left. A second brain
+								// rendered under the first brain's name is issue #26.
+								onOpen={open ? () => switchBrain(c.brain) : undefined}
+								right={chip ? <span class={CHIP}>{chip}</span> : undefined}
+							/>
+						);
+					})}
 				</div>
 			)}
 
-			{invitations.length > 0 && (
-				<div>
-					{/* Invitations are listed apart from connections because they are not
-					    reachable yet: until you join one to a brain of your own, there is no
-					    brain for it to hang off and nobody on your side can open it. */}
-					<div class="px-1 pb-1.5 text-xs text-muted">Waiting for you</div>
-					<List>
-						{invitations.map((i) => (
-							<ListRow key={i.connection_id}>
-								<span class="min-w-0 flex-1">
-									<span class="block truncate text-fg">{i.name}</span>
-									<span class="block text-xs text-muted">
-										Ask to join it, naming one of your brains
-									</span>
-								</span>
-							</ListRow>
-						))}
-					</List>
-				</div>
+			{/* The access rule, once, under the list rather than on every row. It is the
+			    same sentence for all of them, and repeating it per row is what made the
+			    old subtitles carry status they had no room for. */}
+			{!empty && (
+				<p class="mt-3 border-t border-border pt-3 text-xs text-muted">
+					Anyone who can open “{brainLabel}” can open these. Change who that is in Sharing.
+				</p>
 			)}
 		</div>
 	);
@@ -122,14 +187,35 @@ declare module '../core/view-registry.ts' {
 			brainLabel: string;
 			connections: ConnectionRow[];
 			invitations: ConnectionInvite[];
+			canCreate: boolean;
 		};
 	}
 }
 
-export default defineView('connections', (v) => (
-	<ConnectionsView
-		brainLabel={v.brainLabel}
-		connections={v.connections}
-		invitations={v.invitations}
-	/>
-));
+export default defineView(
+	'connections',
+	(v) => (
+		<ConnectionsView
+			brainLabel={v.brainLabel}
+			connections={v.connections}
+			invitations={v.invitations}
+			canCreate={v.canCreate}
+		/>
+	),
+	{
+		// Gated on the payload's own answer, not on a guess: starting one is an org-admin
+		// act, and a widget cannot ask the host which tools it may call. A control whose
+		// click is refused is worse than no control.
+		actions: (v) =>
+			v.canCreate
+				? [
+						{
+							key: 'start-connection',
+							label: 'Start',
+							title: `Start a shared space, joined to ${v.brainLabel}`,
+							onClick: () => openStartConnection(v.brainLabel)
+						}
+					]
+				: []
+	}
+);

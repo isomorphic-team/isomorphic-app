@@ -16,6 +16,7 @@
 import { DatabaseSync } from 'node:sqlite';
 import { applyMigrations } from '../src/local/d1-sqlite.ts';
 import {
+	resolveAnchor,
 	CONNECTIONS_ORG_ID,
 	archiveBrain,
 	beginEndConnection,
@@ -581,6 +582,60 @@ console.log('\nthe schema itself');
 	// connectionForBrain is a lookup, not a judgement, and that is only true because
 	// the schema refuses a second connection over the same brain.
 	check('one brain cannot back two connections', threw2);
+}
+
+// ---------- which brain a connection hangs off ----------
+//
+// The anchor is what confers access and nothing re-anchors a live connection, so a
+// wrong answer here is a permanent one about who can read another organization's
+// material. Every input to that decision is walked here.
+console.log('\nthe anchor: which brain a connection hangs off');
+{
+	// Only the fields resolveAnchor and matchBrain actually read. A full AccessibleBrain
+	// here would be twelve fields of noise around the four under test.
+	const brain = (id: string, name: string) =>
+		({ id, brain_id: id, repo_name: id.split('/')[1], name, org_id: 'org-acme' }) as never;
+	const one = [brain('acme/first', 'Company wiki')];
+	const many = [brain('acme/first', 'Company wiki'), brain('acme/second', 'Client work')];
+
+	check(
+		'no brains at all is refused, and says why one is needed',
+		/before you can connect one to anybody/.test(resolveAnchor(undefined, [], null).error ?? '')
+	);
+	check(
+		'a named brain wins',
+		resolveAnchor('Client work', many, 'acme/first').brain?.brain_id === 'acme/second'
+	);
+	check(
+		'a name matching nothing is refused, and lists what would work',
+		/No brain of yours matching/.test(resolveAnchor('Nope', many, null).error ?? '')
+	);
+	// THE REGRESSION THIS EXISTS FOR. The old fallback took mine[0], and
+	// listAccessibleBrains orders by created_at, so omitting the argument silently
+	// anchored to the OLDEST brain while the argument promised "the brain you are in".
+	// On an org whose first brain is the company-wide one, that is the widest possible
+	// reading of a field nobody filled in.
+	check(
+		'with nothing named, the brain you are IN wins over the oldest one',
+		resolveAnchor(undefined, many, 'acme/second').brain?.brain_id === 'acme/second'
+	);
+	check(
+		'…and one brain needs no question asked',
+		resolveAnchor(undefined, one, null).brain?.brain_id === 'acme/first'
+	);
+	// Refusing to guess is the same rule chooseOrg follows. The stake here is larger.
+	const stuck = resolveAnchor(undefined, many, null);
+	check('…but several brains and nowhere to stand is REFUSED, not guessed', !stuck.brain);
+	check(
+		'…and the refusal names the candidates rather than just failing',
+		/Company wiki/.test(stuck.error ?? '') && /Client work/.test(stuck.error ?? '')
+	);
+	// An active brain in someone ELSE's org is not a candidate: the anchor has to be a
+	// brain of the org acting, or it would grant reach the caller does not hold.
+	check(
+		'an active brain outside the acting org is ignored, not adopted',
+		!resolveAnchor(undefined, many, 'other-org/theirs').brain
+	);
 }
 
 console.log(
