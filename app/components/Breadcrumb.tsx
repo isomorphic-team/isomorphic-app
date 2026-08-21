@@ -45,6 +45,7 @@ import {
 	openMembers,
 	openSettings,
 	openBrainAccess,
+	openConnections,
 	guardNav
 } from '../core/actions.ts';
 import { BrainGlyph, ArrowLeftIcon } from '../core/icons.tsx';
@@ -289,6 +290,29 @@ export function Breadcrumb({ view }: { view: View }) {
 		return (
 			<DestinationCrumb>
 				<span class={crumbCurrent}>Graph</span>
+			</DestinationCrumb>
+		);
+	// Brain root, and it passes THE SCOPE TEST for the same reason Sharing does: a
+	// shared space is a place THIS brain is joined to, so switching brains shows a
+	// different list. Sharing is who can come IN; this is where the brain reaches OUT.
+	if (view.kind === 'connections')
+		return (
+			<DestinationCrumb>
+				<span class={crumbCurrent}>Shared spaces</span>
+			</DestinationCrumb>
+		);
+	// A pushed flow, so it carries a crumb back to the panel that opened it, the same
+	// way Share hangs off Sharing and Invite off Members.
+	if (view.kind === 'start-connection')
+		return (
+			<DestinationCrumb
+				parent={{
+					key: 'connections',
+					label: 'Shared spaces',
+					onClick: () => goBack(() => openConnections())
+				}}
+			>
+				<span class={crumbCurrent}>Start</span>
 			</DestinationCrumb>
 		);
 	// ORG root, not brain: the roster belongs to the organization the active brain sits

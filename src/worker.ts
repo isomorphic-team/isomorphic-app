@@ -45,6 +45,7 @@ import {
 	linkedUserIds,
 	getAppUserByGithubUserId,
 	listAccessibleOrgs,
+	getOrgById,
 	resolveOrgForPerson,
 	matchBrain,
 	brainLabel,
@@ -59,6 +60,7 @@ import type { CommitAuthor } from './lib/brain-repo.ts';
 import { githubHandler } from './oauth/github-handler.ts';
 import { authHandler } from './oauth/auth-handler.ts';
 import { registerLibrarianTools } from './tools/librarian.ts';
+import { registerConnectionTools } from './tools/connections.ts';
 import { registerImportTools } from './tools/importer.ts';
 import { registerBrainApp } from './tools/apps.ts';
 import { SERVER_INSTRUCTIONS } from './lib/server-instructions.ts';
@@ -215,7 +217,7 @@ interface TenantContext {
 	// membership governs managing people and adding/removing brains, brain access
 	// governs the content. Tools that manage the ORG must gate on this one
 	// (TenantOpts.requiresOrg), or a brain admin could edit the org roster.
-	orgRole: Role;
+	orgRole: Role | null;
 	// The resolved org's id + the acting user's id — set only on the product-native
 	// (authjs) path, where an org table row exists. The member-management tools need
 	// them to scope the roster and enforce self-guards; undefined on the legacy
@@ -669,6 +671,77 @@ class McpSession {
 		});
 	}
 
+	// PLATFORM scope: a client for the deployment's own GitHub organization, with no
+	// user and no brain behind it.
+	//
+	// This exists because orgContext mints its octokit from the CALLER's organization
+	// installation, and for a customer-model org that installation has no rights on
+	// PLATFORM_ORG at all. Scaffolding a connection repo through it 404s. A connection
+	// belongs to neither party, so the client that creates it belongs to neither either.
+	private async platformContext(): Promise<{
+		octokit: Awaited<ReturnType<typeof installationOctokit>>;
+		org: string;
+		installationId: number;
+	}> {
+		const env = this.env;
+		if (!env.PLATFORM_ORG || !env.PLATFORM_INSTALLATION_ID) {
+			throw new Error(
+				'Connections need PLATFORM_ORG / PLATFORM_INSTALLATION_ID to be configured. ' +
+					'Run admin setup (pnpm bootstrap) to install the platform App on an org.'
+			);
+		}
+		const installationId = Number(env.PLATFORM_INSTALLATION_ID);
+		return {
+			octokit: await installationOctokit(appCreds(env), installationId),
+			org: env.PLATFORM_ORG,
+			installationId
+		};
+	}
+
+	// A writer for one organization's OWN GitHub namespace, minted from that
+	// organization's installation rather than the platform's.
+	//
+	// This is the second token a mirror needs, and the reason it is a seam at all: the
+	// copy is READ with the platform installation, which is the only one that can see a
+	// connection's repository, and WRITTEN with the receiving organization's, which is
+	// the only one that can create a repository in theirs. For a personal org the two
+	// happen to be the same installation, which is exactly why the distinction is easy
+	// to miss until a customer-model party fails.
+	private async orgWriter(orgId: string) {
+		const org = await getOrgById(this.env.PLATFORM_DB, orgId);
+		if (!org) return null;
+		const octokit = await installationOctokit(appCreds(this.env), org.installation_id);
+		return {
+			store: githubStore(octokit),
+			createRepo: async (name: string, description: string) => {
+				const { data } = await octokit.rest.repos.createInOrg({
+					org: org.brain_owner,
+					name,
+					description,
+					private: true,
+					auto_init: true
+				});
+				return { owner: data.owner.login, repo: data.name };
+			}
+		};
+	}
+
+	// Every email this person signs in under. A connection is invited BY EMAIL and
+	// claimed at sign-in, so the claim has to look at the whole identity class or an
+	// invitation sent to one of someone's addresses would be invisible from another.
+	private async personEmails(): Promise<string[]> {
+		const userId = this.props?.user_id;
+		if (!userId) return [];
+		const ids = await this.personUserIds(userId);
+		const ph = ids.map((_, i) => `?${i + 1}`).join(', ');
+		const { results } = await this.env.PLATFORM_DB.prepare(
+			`SELECT email FROM app_users WHERE user_id IN (${ph})`
+		)
+			.bind(...ids)
+			.all<{ email: string }>();
+		return (results ?? []).map((r) => r.email);
+	}
+
 	// Org-scope resolution (no brain): the caller's org + role + an installation token,
 	// for actions that must work BEFORE the user has a brain — chiefly create_brain and
 	// the "you have no brains yet" state. Authjs-only; the legacy github/static paths
@@ -895,7 +968,13 @@ class McpSession {
 		// writes are atomic bundles (page + changelog, plus any repointed links, in one
 		// commit) and all responses speak in wiki terms, never git terms. See
 		// src/tools/librarian.ts.
-		registerLibrarianTools(server, (opts) => this.tenantContext(opts));
+		// `listBrains` is what lets search_pages fan out over every brain the caller can
+		// reach (scope: "all"). It is the SAME dep the brain tools take below, deliberately:
+		// the accessible set is one question with one answer, and a second way of computing
+		// it would eventually disagree with the switcher about which brains exist.
+		registerLibrarianTools(server, (opts) => this.tenantContext(opts), {
+			listBrains: () => this.listAccessibleBrainsForCaller()
+		});
 
 		// ---------- bulk import (derived-views PRD Phase 3) ----------
 		// sync_records: non-destructive upsert-by-key from an external source.
@@ -941,6 +1020,36 @@ class McpSession {
 		// one brain's audience under another brain's name and its own bare follow-up calls
 		// hit the wrong one.
 		registerBrainAccessTools(server, (opts) => this.tenantContext({ ...opts, sticky: true }));
+
+		// ---------- connections (shared surfaces between two organizations) ----------
+		// A connection is an ordinary brain that neither party owns, living in the
+		// deployment's own GitHub org, which each side joins to one of its OWN brains.
+		// Reaching that anchor is what confers access, so neither organization ever
+		// administers the other's people. See src/tools/connections.ts.
+		//
+		// Registered only where all three preconditions hold, on the same rule as the
+		// other optional surfaces (FEEDBACK_REPO, USAGE_ANALYTICS): an org model to have
+		// two organizations at all, and a platform installation to create the repository
+		// through, since the caller's own installation has no rights there. A tool that
+		// can only apologize costs context in every conversation and reads to the model
+		// as a permissions problem to work around.
+		const hasConnections = hasOrgModel && !!env.PLATFORM_ORG && !!env.PLATFORM_INSTALLATION_ID;
+		if (hasConnections)
+			registerConnectionTools(server, {
+				getContext: (opts) => this.tenantContext(opts),
+				getViewContext: (opts) => this.tenantContext({ ...opts, sticky: true }),
+				orgContext: (opts) => this.orgContext(opts),
+				platformContext: () => this.platformContext(),
+				platformStore: async () => githubStore((await this.platformContext()).octokit),
+				orgWriter: (orgId) => this.orgWriter(orgId),
+				listBrains: () => this.listAccessibleBrainsForCaller(),
+				listOrgs: async () =>
+					this.props?.user_id
+						? listAccessibleOrgs(this.env.PLATFORM_DB, await this.personUserIds(this.props.user_id))
+						: [],
+				personEmails: () => this.personEmails(),
+				now: () => new Date().toISOString()
+			});
 
 		// ---------- connected accounts (identity linking) ----------
 		// The per-person "Your settings → Connected accounts" surface: connected_accounts
@@ -1014,7 +1123,8 @@ class McpSession {
 			activeBrainId: () => this.activeBrainId,
 			setActiveBrain: (id) => this.setActiveBrain(id),
 			invalidateConfig: (owner, repo) => this.invalidateConfig(owner, repo),
-			analyticsEnabled: this.usageEnabled()
+			analyticsEnabled: this.usageEnabled(),
+			connectionsEnabled: hasConnections
 		});
 
 		// ---------- user-defined tools (brain-tools) ----------

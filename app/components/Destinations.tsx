@@ -10,6 +10,7 @@ import {
 	GearIcon,
 	GraphIcon,
 	HistoryIcon,
+	LinkIcon,
 	ListIcon,
 	PeopleIcon,
 	SearchIcon,
@@ -21,12 +22,13 @@ import {
 	openBrainAccess,
 	openBrains,
 	openBrowse,
+	openConnections,
 	openGraph,
 	openMembers,
 	openSearch,
 	openSettings
 } from '../core/actions.ts';
-import { brainList, features } from '../core/store.ts';
+import { activeBrain, brainList, features } from '../core/store.ts';
 import { DEST_META, destinationsIn, type DestKey, type Scope } from '../core/nav.ts';
 
 const DEST_ICON: Record<DestKey, VNode> = {
@@ -35,6 +37,7 @@ const DEST_ICON: Record<DestKey, VNode> = {
 	graph: <GraphIcon />,
 	activity: <HistoryIcon />,
 	sharing: <ShareIcon />,
+	connections: <LinkIcon />,
 	members: <PeopleIcon />,
 	analytics: <ChartIcon />,
 	brains: <BrainGlyph />,
@@ -47,6 +50,7 @@ const DEST_OPEN: Record<DestKey, () => void> = {
 	graph: () => openGraph(),
 	activity: () => openActivity(),
 	sharing: () => openBrainAccess(),
+	connections: () => openConnections(),
 	members: () => openMembers(),
 	analytics: () => openAnalytics(),
 	brains: () => openBrains(),
@@ -68,7 +72,12 @@ export type Destination = {
 export function destinations(scope: Scope): Destination[] {
 	const caps = {
 		analytics: features.analytics,
-		canManageBrains: !!brainList?.some((b) => b.canManage)
+		canManageBrains: !!brainList?.some((b) => b.canManage),
+		connections: features.connections,
+		// Is the brain we are in a shared surface rather than one of the caller's own?
+		// The brains payload carries every brain a result can name, connections included,
+		// so this is a lookup rather than a second round trip.
+		inConnection: !!brainList?.find((b) => b.id === activeBrain?.id)?.connection
 	};
 	return destinationsIn(scope, caps).map((key) => ({
 		key,

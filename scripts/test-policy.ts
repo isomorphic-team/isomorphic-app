@@ -409,16 +409,50 @@ console.log('\nbrowse_brain fits in a tool result');
 // are somewhere they are not.
 console.log('\nnav destinations');
 {
-	const full = { analytics: true, canManageBrains: true };
-	const bare = { analytics: false, canManageBrains: false };
+	const full = {
+		analytics: true,
+		canManageBrains: true,
+		connections: true,
+		inConnection: false
+	};
+	const bare = {
+		analytics: false,
+		canManageBrains: false,
+		connections: false,
+		inConnection: false
+	};
+	// The same caller, standing INSIDE a shared room rather than in one of their own
+	// brains. Everything else is held equal so the only thing under test is the room.
+	const inRoom = { ...full, inConnection: true };
 
 	check(
-		'the rail is the five views OF a brain, in rail order',
-		destinationsIn('brain', full).join() === 'files,graph,search,activity,sharing'
+		'the rail is the six views OF a brain, in rail order',
+		destinationsIn('brain', full).join() === 'files,graph,search,activity,sharing,connections'
 	);
 	check(
-		'…and none of them is gated — every one is open to anyone who can reach the brain',
+		'…and only Connections is gated — the rest are open to anyone who can reach the brain',
 		destinationsIn('brain', bare).join() === 'files,graph,search,activity,sharing'
+	);
+	// A room is not one of your brains. Sharing has nothing to show (access follows the
+	// anchor brain) and nothing hangs off a connection, so the rail shrinks to the room
+	// itself. Graph is left out for now rather than refused.
+	check(
+		'inside a connection the rail is the room itself, and nothing about owning it',
+		destinationsIn('brain', inRoom).join() === 'files,search,activity'
+	);
+	// Only the BRAIN scope shrinks. Being in someone else's room does not suspend your
+	// own organization or your own account, and a rail that hid them would strand you.
+	check(
+		'…and your org and account destinations are untouched by being in one',
+		destinationsIn('org', inRoom).join() === destinationsIn('org', full).join() &&
+			destinationsIn('account', inRoom).join() === destinationsIn('account', full).join()
+	);
+	// The flag is the deployment's answer, not the caller's: connections need an org
+	// model and a platform installation, so a deployment without them must not offer a
+	// row whose click comes back "unknown tool".
+	check(
+		'a deployment with no connections never offers the destination',
+		!destinationsIn('brain', bare).includes('connections')
 	);
 	check(
 		'a deployment with USAGE_ANALYTICS off never offers Analytics',
@@ -449,6 +483,16 @@ console.log('\nnav destinations');
 	);
 
 	check('a view that IS a destination marks it', activeDestination('browse') === 'files');
+	check(
+		'…and the shared-spaces panel marks its own',
+		activeDestination('connections') === 'connections'
+	);
+	// A pushed flow has not left the destination it was opened from, same as Invite
+	// under Members: the rail keeps answering "where am I" while the form is open.
+	check(
+		'…and starting one counts as still being there',
+		activeDestination('start-connection') === 'connections'
+	);
 	check('…including the org ones', activeDestination('members') === 'members');
 	// A pushed flow has not left the destination it was opened from, so the control that
 	// got you there stays lit rather than going dark mid-flow.

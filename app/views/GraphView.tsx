@@ -3,7 +3,10 @@
 import { useEffect, useRef } from 'preact/hooks';
 import type { GraphNode, GraphLink, SimNode } from '../core/types.ts';
 import { displayMode } from '../core/host.ts';
-import { navigateTo } from '../core/actions.ts';
+import { navigateTo, ensureConnections, switchBrain } from '../core/actions.ts';
+import { connectionList, features } from '../core/store.ts';
+import { FOLDER_NOTE_NAMES } from '../core/util.ts';
+import { LINK_PATH_D } from '../core/icons.tsx';
 import { defineView } from '../core/view-registry.ts';
 
 // Read the current theme tokens straight off the document so the canvas draws in
@@ -34,6 +37,32 @@ function groupHue(group: string): number {
 // ceiling (~40 nodes). Drag to pan, scroll to zoom, drag a node to reposition,
 // click a node to open its page. The layout pre-settles synchronously so the
 // first paint is stable, then a cooling rAF loop keeps it live for interaction.
+// The tree's chain glyph, ready to stroke onto a canvas. Path2D accepts SVG path data,
+// so the graph draws the EXACT icon the tree does rather than a lookalike. Built once at
+// module scope: it is immutable and re-parsing it per frame per node would be silly.
+const LINK_GLYPH = new Path2D(LINK_PATH_D);
+// The viewBox the path was authored in, which is what the scale below divides by.
+const LINK_GLYPH_BOX = 16;
+
+// Canvas has roundRect on modern engines, but drawing the path by hand keeps this
+// working wherever the app is embedded and costs six lines.
+function drawRoundRect(
+	ctx: CanvasRenderingContext2D,
+	x: number,
+	y: number,
+	w: number,
+	h: number,
+	r: number
+): void {
+	ctx.beginPath();
+	ctx.moveTo(x + r, y);
+	ctx.arcTo(x + w, y, x + w, y + h, r);
+	ctx.arcTo(x + w, y + h, x, y + h, r);
+	ctx.arcTo(x, y + h, x, y, r);
+	ctx.arcTo(x, y, x + w, y, r);
+	ctx.closePath();
+}
+
 function GraphView({
 	nodes,
 	links,
@@ -49,6 +78,26 @@ function GraphView({
 	const canvasRef = useRef<HTMLCanvasElement>(null);
 	const tall = displayMode === 'fullscreen';
 
+	// The flag arrives with the brains payload and can land after this mounts, so the
+	// retry has to be keyed on it (see Browse.tsx).
+	useEffect(() => {
+		void ensureConnections();
+	}, [features.connections]);
+
+	// Shared surfaces, drawn as pseudo-nodes on a ring OUTSIDE the page graph. They are
+	// not pages and have no links, so the spring layout would otherwise park them at the
+	// origin with everything else. Pinned (`fixed`) at a wide radius instead, which is
+	// what makes them read as somewhere ELSE rather than as an unusually lonely page.
+	//
+	// Synthesized here from the same store the tree reads, rather than sent by
+	// view_graph: a connection is not part of this brain's link graph and putting it in
+	// that payload would say it was.
+	const rooms = (connectionList ?? []).filter((c) => c.state === 'live' || c.state === 'pending');
+	// A STABLE key for the effect below. `rooms` is a fresh array every render, so
+	// depending on it directly would rebuild the whole simulation on each paint; without
+	// it the rooms would never appear at all, since they arrive after the first render.
+	const roomKey = rooms.map((c) => c.connection_id).join(',');
+
 	useEffect(() => {
 		if (!nodes.length) return;
 		const canvas = canvasRef.current!;
@@ -63,10 +112,69 @@ function GraphView({
 			const r = 40 + (i % 7) * 24;
 			return { ...n, x: Math.cos(a) * r, y: Math.sin(a) * r, vx: 0, vy: 0, fixed: false };
 		});
+		// The rooms, on their own ring beyond the page cloud and pinned there.
+		const ROOM_RING = 300;
+		for (let i = 0; i < rooms.length; i++) {
+			const c = rooms[i];
+			const theirs = c.parties.filter((p) => !p.mine);
+			const who =
+				theirs
+					.map((p) => p.org ?? (p.invitedEmail ? `${p.invitedEmail} (invited)` : 'invited'))
+					.join(', ') || 'the other side';
+			// Spread around the ring, starting at the top so one room sits above the cloud
+			// rather than off to an arbitrary side.
+			const a = -Math.PI / 2 + (i / Math.max(rooms.length, 1)) * Math.PI * 2;
+			sim.push({
+				id: `connection:${c.connection_id}`,
+				title: c.name,
+				group: 'connection',
+				degree: 0,
+				connection: { brain: c.brain, who },
+				x: Math.cos(a) * ROOM_RING,
+				y: Math.sin(a) * ROOM_RING,
+				vx: 0,
+				vy: 0,
+				fixed: true
+			});
+		}
 		const byId = new Map(sim.map((s) => [s.id, s]));
 		const edges = links
 			.map((l) => ({ a: byId.get(l.source), b: byId.get(l.target) }))
 			.filter((e): e is { a: SimNode; b: SimNode } => !!e.a && !!e.b);
+		// THE BRAIN'S ROOT PAGE, which is what a room is tethered to below.
+		//
+		// A connection is joined to the BRAIN, not to any one page, so there is no honest
+		// page-to-page edge to draw. The root page is the closest thing the graph has to
+		// the brain itself: a folder note at the shallowest depth, which is the page every
+		// other one hangs beneath. Falling back to the biggest hub keeps the tether
+		// anchored on a brain with no folder note at all, which is better than a room
+		// floating with no visible reason to be there.
+		// FOLDER_NOTE_NAMES is in PRIORITY order (index.md, then README.md), so ranking by
+		// its position is what picks the brain's real front page. Sorting by path depth
+		// alone was wrong: content roots are stripped before the graph is built, so a
+		// repo-root README.md and a wiki/index.md both come out at depth 1 and the tie went
+		// to whichever happened to be first. That tethered rooms to the README, which is
+		// usually a file about the repository rather than the brain's front door.
+		const noteRank = (id: string) => {
+			const i = FOLDER_NOTE_NAMES.findIndex((f) => id === f || id.endsWith('/' + f));
+			return i < 0 ? Number.POSITIVE_INFINITY : i;
+		};
+		const rootNode =
+			[...sim]
+				.filter((n) => !n.connection && Number.isFinite(noteRank(n.id)))
+				.sort(
+					(a, b) =>
+						noteRank(a.id) - noteRank(b.id) ||
+						a.id.split('/').length - b.id.split('/').length ||
+						b.degree - a.degree
+				)[0] ?? [...sim].filter((n) => !n.connection).sort((a, b) => b.degree - a.degree)[0];
+		// Drawn apart from `edges` and never added to `neighbors`: a tether is not a link.
+		// Folding it into either would make a room count as a page's neighbour for hover
+		// highlighting, and would let it look like something `validate` could report on.
+		const tethers = rootNode
+			? sim.filter((n) => n.connection).map((n) => ({ a: rootNode, b: n }))
+			: [];
+
 		// Adjacency, so hover can highlight a node's immediate neighbors.
 		const neighbors = new Map<string, Set<string>>();
 		for (const s of sim) neighbors.set(s.id, new Set());
@@ -75,7 +183,12 @@ function GraphView({
 			neighbors.get(e.b.id)!.add(e.a.id);
 		}
 
-		const radiusOf = (n: SimNode) => 4 + Math.sqrt(n.degree) * 2.6;
+		// Rooms get a fixed, larger radius: degree means nothing for them (they have no
+		// links into this brain) and the size is what carries their weight on screen.
+		// Rooms get a fixed, larger radius: degree means nothing for them (they have no
+		// links into this brain), the size is what carries their weight on screen, and the
+		// glyph inside needs room to be legible rather than a smudge.
+		const radiusOf = (n: SimNode) => (n.connection ? 11 : 4 + Math.sqrt(n.degree) * 2.6);
 
 		// One physics step. Repulsion (all pairs) + link springs + gravity toward the
 		// origin so disconnected nodes don't drift away. `alpha` scales the whole step
@@ -235,6 +348,22 @@ function GraphView({
 				ctx.lineTo(view.panX + e.b.x * view.k, view.panY + e.b.y * view.k);
 				ctx.stroke();
 			}
+			// Tethers: dashed, so they read as "joined to this brain" rather than as a link
+			// between two pages. Drawn after the real edges so a room's line sits on top of
+			// the cloud it points away from.
+			ctx.save();
+			ctx.setLineDash([4, 4]);
+			ctx.lineWidth = 1.2;
+			for (const t of tethers) {
+				const lit = hover && (t.a.id === hover.id || t.b.id === hover.id);
+				ctx.strokeStyle = colors.accent;
+				ctx.globalAlpha = dim ? (lit ? 0.8 : 0.15) : 0.4;
+				ctx.beginPath();
+				ctx.moveTo(view.panX + t.a.x * view.k, view.panY + t.a.y * view.k);
+				ctx.lineTo(view.panX + t.b.x * view.k, view.panY + t.b.y * view.k);
+				ctx.stroke();
+			}
+			ctx.restore();
 			ctx.globalAlpha = 1;
 
 			// nodes + labels
@@ -258,10 +387,42 @@ function GraphView({
 				const isHover = hover?.id === n.id;
 				const near = !dim || isHover || (hi && hi.has(n.id));
 				ctx.globalAlpha = near ? 1 : 0.3;
-				ctx.beginPath();
-				ctx.arc(sx, sy, r, 0, Math.PI * 2);
-				ctx.fillStyle = isFocus || isHover ? colors.accent : `hsl(${groupHue(n.group)} 55% 55%)`;
-				ctx.fill();
+				if (n.connection) {
+					// A SQUARE, not a circle. Colour alone does not survive being glanced at
+					// among a few hundred dots, and a different silhouette does: it reads as
+					// "not one of these" before anything else registers. Hollow, so it looks
+					// like a doorway rather than a heavier page.
+					drawRoundRect(ctx, sx - r, sy - r, r * 2, r * 2, 3);
+					ctx.fillStyle = colors.bg;
+					ctx.fill();
+					ctx.lineWidth = 2;
+					ctx.strokeStyle = colors.accent;
+					ctx.stroke();
+					// A halo, so it still carries at a distance where the shape is small.
+					const keep = ctx.globalAlpha;
+					ctx.globalAlpha = keep * 0.3;
+					drawRoundRect(ctx, sx - r - 3, sy - r - 3, r * 2 + 6, r * 2 + 6, 5);
+					ctx.stroke();
+					ctx.globalAlpha = keep;
+					// The tree's own chain icon, stroked from the same path data. Scaled to sit
+					// inside the square with a little air, and the line width divided back out
+					// so it stays 1.4 on screen at any zoom rather than scaling with the glyph.
+					ctx.save();
+					const scale = (r * 1.7) / LINK_GLYPH_BOX;
+					ctx.translate(sx, sy);
+					ctx.scale(scale, scale);
+					ctx.translate(-LINK_GLYPH_BOX / 2, -LINK_GLYPH_BOX / 2);
+					ctx.lineWidth = 1.4 / scale;
+					ctx.lineCap = 'round';
+					ctx.strokeStyle = colors.accent;
+					ctx.stroke(LINK_GLYPH);
+					ctx.restore();
+				} else {
+					ctx.beginPath();
+					ctx.arc(sx, sy, r, 0, Math.PI * 2);
+					ctx.fillStyle = isFocus || isHover ? colors.accent : `hsl(${groupHue(n.group)} 55% 55%)`;
+					ctx.fill();
+				}
 				if (isFocus) {
 					ctx.lineWidth = 2;
 					ctx.strokeStyle = colors.accent;
@@ -271,7 +432,17 @@ function GraphView({
 					ctx.stroke();
 					ctx.globalAlpha = near ? 1 : 0.3;
 				}
-				const pri = isHover || isFocus ? 0 : hi && hi.has(n.id) ? 1 : hubIds.has(n.id) ? 2 : -1;
+				// A room is always labelled. An unlabelled ring node is a mystery rather
+				// than an affordance, and there are only ever a handful of them.
+				const pri = n.connection
+					? 0
+					: isHover || isFocus
+						? 0
+						: hi && hi.has(n.id)
+							? 1
+							: hubIds.has(n.id)
+								? 2
+								: -1;
 				if (pri >= 0) labelCands.push({ n, sx, sy, r, pri, near: !!near });
 			}
 			ctx.globalAlpha = 1;
@@ -397,7 +568,11 @@ function GraphView({
 			if (dragNode) {
 				dragNode.fixed = false;
 				// A tap (no real drag) on a node opens it.
-				if (movedSince < 5) navigateTo(dragNode.id);
+				if (movedSince < 5) {
+					// A room carries a brain to ENTER; a page carries a path to open.
+					if (dragNode.connection) switchBrain(dragNode.connection.brain);
+					else navigateTo(dragNode.id);
+				}
 				dragNode = null;
 			}
 			panning = false;
@@ -507,7 +682,7 @@ function GraphView({
 			canvas.removeEventListener('pointerup', onUp);
 			canvas.removeEventListener('wheel', onWheel);
 		};
-	}, [nodes, links, focus]);
+	}, [nodes, links, focus, roomKey]);
 
 	if (!nodes.length) {
 		return (

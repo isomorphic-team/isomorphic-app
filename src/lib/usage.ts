@@ -44,6 +44,7 @@ export const TOOL_KINDS: Record<string, UsageKind> = {
 	whoami: 'read',
 	connected_accounts: 'read',
 	analytics: 'read',
+	connections: 'read',
 	// Reading an attachment is a read like any other. The app also calls it once per
 	// image while rendering a page, so it is expected to be noisier than read_page.
 	read_media: 'read',
@@ -73,6 +74,15 @@ export const TOOL_KINDS: Record<string, UsageKind> = {
 	set_member_role: 'admin',
 	remove_member: 'admin',
 	connect_github_org: 'admin',
+	// Standing up or joining a shared surface with another organization. Admin rather
+	// than write: it changes who can reach what, not what any page says, and folding it
+	// into the write column would make a month of onboarding read as a month of
+	// authoring. The writing that happens INSIDE a connection is counted as ordinary
+	// content work, because that is what it is.
+	create_connection: 'admin',
+	accept_connection: 'admin',
+	// Ending one stops access for everyone on both sides.
+	end_connection: 'admin',
 	link_identity: 'admin',
 	unlink_identity: 'admin',
 	submit_feedback: 'admin'

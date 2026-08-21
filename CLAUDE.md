@@ -36,8 +36,11 @@ pnpm test:import        # bulk-import planner golden test
 pnpm test:tools         # user-defined (brain-authored) tools parse-layer golden test
 pnpm test:patch         # write_page append/edits (page-patch) golden test
 pnpm test:structure     # OKF conformance golden test (granularity, type:, nested frontmatter)
+pnpm test:search        # cross-brain search: which brains, and the per-brain hit budget
 pnpm test:links         # wikilink resolution + the broken-link report golden test
 pnpm test:access        # per-brain access rule (effectiveBrainRole) golden test
+pnpm test:connections   # the connection lifecycle: anchors, joining, ending, mirrors
+pnpm test:e2e-mirror    # the mirror copier, over real git repos in a temp dir
 pnpm test:scope         # org-vs-brain scope: which role each tool gates on
 pnpm test:loading       # loading-line engine: slot eligibility + per-task wiring
 pnpm test:feedback      # submit_feedback composition golden test (redaction, nothing identifying published)
@@ -69,6 +72,13 @@ rules that make the difference between coverage and its appearance:
   pattern to copy is: pure or db-only function in `lib/`, thin wiring in the
   Worker.
 
+**Schema in tests comes from `migrations/`, never from `src/db/*.sql`.** Those are
+reference copies of the resulting shape and they drift; when they do, the drift surfaces
+as a red test in an unrelated battery rather than as anything about the change that
+caused it. `test-index`, `test-access`, `test-scope`, and `test-connections` all call
+`applyMigrations` (`src/local/d1-sqlite.ts`), which is the same ordered set a deployment
+runs, so a migration that fails in CI would have failed a deploy too.
+
 **Tests.** All offline, all fork-safe, all wired into CI and into the `test` script
 (`pnpm test` runs everything): `pnpm test:roundtrip` (editor markdown round-trip),
 `pnpm test:views` (okf-view engine), `pnpm test:import` (import planner),
@@ -78,11 +88,19 @@ append/edits), `pnpm test:structure` (OKF conformance), `pnpm test:links`
 broken-link report says about the ones that match nothing), `pnpm test:index`
 (content-index freshness guard: bounded, resumable work per read; wraps an octokit
 stub in the REAL `githubStore` so it still covers `fetchPages`'s GraphQL batching),
-`pnpm test:policy` (the path-policy wire contract between Worker and app),
-`pnpm test:loading` (the loading-line engine: that a phrase naming a fact the widget
-does not have is never eligible, and that every loading state in the app declares a
-task, which is optional in the type and so invisible to typecheck),
+`pnpm test:search` (cross-brain search: `searchTargets`, which decides which brains one
+answer may contain, and `searchIndex`'s per-brain hit budget, whose failure mode is a
+fan-out where the first brain fills a global cap and every later one silently reports
+nothing), `pnpm test:policy` (the path-policy wire contract between Worker and app,
+plus the nav rule: which destinations a deployment offers and which one you are
+standing on), `pnpm test:loading` (the loading-line engine: that a phrase naming a fact
+the widget does not have is never eligible, and that every loading state in the app
+declares a task, which is optional in the type and so invisible to typecheck),
 `pnpm test:access` (the per-brain access rule: every input to `effectiveBrainRole`),
+`pnpm test:connections` (the connection lifecycle, where most of what is worth asserting
+is an INTERRUPTED state: that access stops before any copying, that a half-finished end
+stays in the retry queue rather than declaring itself done with a copy missing, and that
+a second caller racing the first loses cleanly),
 `pnpm test:scope` (which role each TOOL gates on: the real handlers over a stub server
 and a fake `getContext`, asserting org-scope tools read `orgRole` and brain-scope tools
 read `role`, plus the `share_brain` and lockout guardrails that live in the tool rather
@@ -397,6 +415,27 @@ platform-db --remote` **before** the code ships (schema-first), so a merge to `m
   Bounded by inbound-link count rather than brain size, and uncapped: a linker beyond the
   old `MAX_SCAN_PAGES` ceiling is no longer silently missed. (The whole-brain `scanContent`
   helper is gone as of this change.)
+- **Search can span brains, and freshness is what that costs** (`scope: 'all'` on
+  `search_pages`, built 2026-08-19 as phase 1 of `docs/design/brain-seams.md`). At the
+  storage layer fan-out is nearly free: one D1 holds every brain's index and `brain_id`
+  was the only per-brain parameter, so `searchIndex` takes a SET of brains. The cost is
+  `ensureFresh`, one `branchCommitSha` per brain plus a full reindex for any whose HEAD
+  moved, which for a rarely-opened brain is the common case. So **the freshness
+  guarantee is per brain and only the ACTIVE brain keeps it**: the others are served
+  from whatever is indexed and the result says so, and a `read_page` on any hit resolves
+  the authoritative blob anyway. Two consequences that are load-bearing rather than
+  tidy. **The hit cap is per brain, not global**: one cap taken in path order is right
+  for one brain and silently starves every brain after the first, which reads as "the
+  others have no matches" rather than "we stopped looking", so each brain has its own
+  budget and the ceiling is filled round-robin. **Every result names its brain**,
+  because the leak here is conversational rather than mechanical: a conversation rooted
+  in one client's brain surfaces another engagement's material and a human pastes it
+  onward. Fan-out is opt-in per call and never ambient, and a WRITE never fans out (it
+  names exactly one brain, and `landed` now reports which, since a unique-but-wrong
+  fuzzy match otherwise puts a real page in a real client's repository silently).
+  `searchTargets` (`src/tools/librarian.ts`) is the pick and is exported so
+  `pnpm test:search` can pin it; `find_inbound_links` is deliberately NOT fanned out,
+  being two live GitHub reads plus a whole-graph load per brain.
 - **Writes are WRITE-THROUGH** (issue #31). A successful DIRECT commit upserts the index rows
   for exactly the pages its bundle touched (`writeThroughIndex` in `brain-index.ts`, called from
   the `commitBundle` chokepoint in `librarian.ts`) and advances `indexed_commit_sha`, so the
@@ -813,6 +852,129 @@ UI is `app/views/AnalyticsView.tsx`, an ORG-scope destination beside Members.
 - **Not built:** retention/pruning (rows are small, but nothing deletes them),
   a CSV export, per-brain analytics (this is deliberately org-scope), and any
   notion of a session or of time-on-page.
+
+## Connections (a shared surface between two organizations)
+
+Built 2026-08-19. Design: [`docs/design/brain-seams.md`](docs/design/brain-seams.md).
+A **connection** is a place two organizations write in together: one set of pages, owned
+by neither, that each side joins to one of its OWN brains. Not a copy and not a share.
+
+- **Access is DERIVED, not granted.** Whoever can reach the anchor brain can reach the
+  connection, at their role there, capped at `editor`. So each party governs who is in
+  the room by governing its own brain's access list, and neither organization ever
+  administers people in the other. The individual cross-org grant was the earlier design
+  and is rejected: the row hangs off nothing, so it needs its own teardown
+  (`deleteUserBrainGrantsInOrg` is scoped by `brains.org_id`, so a person removed from
+  their own org would silently keep the client room) and its own outsider-marking
+  everywhere a brain's audience is shown. Deriving makes all three disappear.
+- **`admin` is unreachable on a connection**, because brain-admin means share and
+  configure and both are meaningless when access lives somewhere else. Ending one is
+  gated separately, on org admin in EITHER party.
+- **The system organization has no members, ever** (`CONNECTIONS_ORG_ID`,
+  `src/lib/connections.ts`). `brains.org_id` is NOT NULL and there is no platform `orgs`
+  row (`PLATFORM_ORG` is a GitHub org _login_; `model='platform'` means a PERSONAL org),
+  so connections need an org of their own. Having no members is what makes three rules
+  hold by construction: `listAccessibleOrgs`/`chooseOrg` start `FROM memberships` so it
+  can never be offered as a place to put a brain; `effectiveBrainRole`'s org-visibility
+  source and org-admin floor have nobody to apply to, so the anchor branch is the ONLY
+  way in and a bug there makes connections invisible rather than over-shared; and
+  `resolveProductContext` needs no change, minting the token from the brain's own org row.
+  `model` is `'system'` and not `'platform'` because `orgDisplay` renders any platform org
+  as "Personal", which would file every client room under the user's own notes.
+- **`effectiveBrainRole` gained a fourth source and its first ceiling.** `orgRole` is
+  nullable (someone reaching a brain through a connection is not a member of the org
+  holding it); `anchor` is capped at editor; `readOnly` caps the whole result at viewer
+  and is applied LAST. A viewer grant cannot make a brain read-only, because the
+  org-admin floor hands an admin of the owning org their role straight back, which is why
+  a mirror needs the column.
+- **Ending is a state machine** (`pending → live → ending → ended`), because it must
+  survive interruption. One conditional UPDATE is the entire concurrency guard.
+  Detaching the anchors IS the revocation, so access stops in the first request and
+  before any copying. The room is ARCHIVED, never deleted (`brains.archived_at`, filtered
+  in SQL by `listAccessibleBrains`/`getDefaultBrainForUser` because existence is not
+  policy), so a copy that cannot be made now can still be made later.
+- **`end_connection` also resolves connections in the `ending` state** for an admin of a
+  party org, and it has to: ending one detaches the anchors, and the anchors are the only
+  way to NAME a connection, so without that the copies would be unresumable. There is no
+  cron here, so the tool is its own resume entry point. Reaching a connection that way is
+  not reaching the ROOM, which stays archived and unreachable for everyone.
+- **The mirror copies bytes by default** (`src/lib/mirror.ts`). Text is a narrow
+  allowlist of the extensions the platform writes; everything else goes through
+  `readBinary`. Inferring binaries from what `fetchPages` omits is exact on GitHub (its
+  GraphQL yields null for non-UTF-8) and silently CORRUPTING on the fs backend, which
+  returns the same blob as mangled UTF-8 that looks like a successful read. The copy is
+  paged (`commitFiles` builds one `createTree`), and the cursor packs the target repo and
+  the position together, because the repo cannot be derived from the path.
+- **Two installation tokens.** The copy is READ with the platform installation and
+  WRITTEN with the receiving org's own. For a personal org they are the same, which is
+  why the distinction stays invisible until a customer-model party fails.
+- **A connection is NOT in the brain switcher**, but it IS in the brains payload. The app
+  resolves a result's brain against that list (`pickShownBrain`), so filtering
+  server-side would leave the crumb naming the previous brain over a connection's
+  content, which is issue #26 reintroduced. Filtering happens where the list renders
+  (`BrainsView.tsx`), which is the switcher now that the brain crumb's picker is gone.
+- **Sharing POINTS AT connections, and must never list them** (`AlsoJoinedTo` in
+  `app/views/BrainAccessView.tsx`). The two pages look mergeable and are not, for two
+  reasons. They are different kinds of control: sharing is an editor whose rows are
+  people and whose clicks mutate a grant, while connections is a navigation list whose
+  rows are other brains and whose clicks LEAVE the page. And access runs ONE WAY:
+  `addConnectionBrains` walks memberships to the anchor brain to the connection and
+  never the reverse, so reaching this brain gets you into the rooms it anchors while
+  being in one of those rooms gets you nothing here. A room among the people who can
+  reach this brain would state the opposite, on the one page a person opens when they
+  are worried about a leak. So the footer is a count and a link, rendered only when
+  `connectionList` holds something, and never when the panel is showing a brain other
+  than the active one. `pnpm test:ui` pins BOTH halves, and the negative one is the
+  point: it asserts the room's name is absent from the sharing page.
+- **A room has a shorter rail**, and the rule lives with every other nav decision in
+  `app/core/nav.ts` (`destinationsIn`, `pnpm test:policy`). Inside a
+  connection the brain scope shrinks to Files, Search and Recent changes: nobody
+  administers a room's access, since it follows the anchor brain, and no connections
+  hang off a connection. Graph is left out rather than refused. Only the BRAIN scope
+  shrinks: the caller's own organization and account destinations are untouched, because
+  being in someone else's room does not suspend them.
+- **THE ANCHOR IS NEVER GUESSED** (`resolveAnchor`, `src/lib/connections.ts`,
+  `pnpm test:connections`). It decides who on a side can reach the room and nothing
+  re-anchors a live connection (`setAnchor` exists and has no caller), so a wrong answer
+  is permanent and is a permanent answer about who can read another organization's
+  material. The order is: what you named, then the brain you are IN, then your only
+  brain, then a refusal listing the candidates. It used to fall back to `mine[0]`, and
+  `listAccessibleBrains` orders by `created_at`, so omitting the argument silently
+  anchored to the caller's OLDEST brain while the argument promised "the brain you are
+  in": on an org whose first brain is the company-wide one, the widest possible reading
+  of a field nobody filled in. It is PURE and in the lib rather than the tool so the
+  whole decision is drivable from a test, which is the same reason `effectiveBrainRole`
+  lives there.
+- **The panel is one list, and creating is a pushed flow.** `ConnectionsView` renders
+  invitations and joined spaces with one row shape, because what separates them is the
+  CONTROL on the row (Join, a state chip, or nothing) rather than a heading above it.
+  Rows used to append state to the counterparty after a `·`, mixing an identity with a
+  status in one grey line. `StartConnectionView` asks for ONE thing, the counterparty's
+  email: the anchor is the brain whose panel it was opened from, the org is that brain's,
+  and the name is derived from the email's domain and left editable. The anchor is stated
+  in a sentence rather than offered as a picker, because it is the argument that cannot
+  be changed afterwards. Joining needs no form at all for the same reason. The flow says
+  NO EMAIL IS SENT before you submit, since nothing in this system sends mail and the
+  next thing the person has to do is tell the other side themselves.
+- **The UI calls them SHARED SPACES; the tools still call them connections.** The label
+  names what a row is (pages two organizations both write in) rather than the machinery.
+  `create_connection` and `accept_connection` keep their names and describe their result
+  as a shared working surface, so asking for either in words reaches them.
+- **`canCreate` rides the payload.** Starting one is an org-admin act and a widget cannot
+  ask the host which tools it may call, so the panel is told rather than guessing; absent
+  reads as no. A connection guest resolves a null `orgRole` and gets `false`, which is
+  right: standing inside a shared room is not a place to start another one.
+- Coverage: `pnpm test:connections` (the lifecycle and resolution, including that a
+  colleague who cannot reach the anchor cannot reach the room, and that granting the
+  anchor grants the room in the same statement), `pnpm test:access` (the rule's whole
+  input space including a null `orgRole` and both ceilings), `pnpm test:scope` (both
+  mutations gate on the ORG role, and a connection guest is refused by the roster and the
+  per-person analytics table), `pnpm test:e2e-mirror` (attachments survive byte for byte,
+  a resumed copy converges), `pnpm test:ui`. **Not built:** creating or ending a
+  connection from the UI (ending is conversational only, deliberately: it is
+  destructive and affects the other organization), any notification when an invitation
+  arrives (nothing in this system sends mail), re-anchoring a live connection, renaming
+  one, and export.
 
 ## Loading states (the rotating status line)
 

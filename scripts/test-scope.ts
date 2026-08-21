@@ -26,8 +26,8 @@
 //
 //   pnpm test:scope
 
-import { readFileSync } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
+import { applyMigrations } from '../src/local/d1-sqlite.ts';
 import { assertRole, type Role, type TenantOpts, type AccessibleBrain } from '../src/lib/orgs.ts';
 import { registerMemberTools } from '../src/tools/members.ts';
 import { registerBrainAccessTools } from '../src/tools/brain-access.ts';
@@ -36,6 +36,7 @@ import { DEFAULT_BRAIN_CONFIG } from '../src/lib/brain-policy.ts';
 import { registerBrainTools } from '../src/tools/brains.ts';
 import { registerAnalyticsTools } from '../src/tools/analytics.ts';
 import { registerLibrarianTools, type BrainContext } from '../src/tools/librarian.ts';
+import { registerConnectionTools } from '../src/tools/connections.ts';
 
 let failures = 0;
 function check(label: string, cond: boolean, detail = '') {
@@ -51,18 +52,24 @@ function check(label: string, cond: boolean, detail = '') {
 // ---------------------------------------------------------------------------
 // Same shim shape as test-access.ts and the e2e batteries. Kept local rather than
 // shared so each golden test still runs as one self-contained file.
+// The REAL migrations, not src/db/auth-schema.sql, which is a reference copy that can
+// drift from what a deployment actually runs. Same reasoning as test-index, and it also
+// picks up usage_daily (which the analytics tool reads) without naming it here.
 const sqlite = new DatabaseSync(':memory:');
-sqlite.exec(readFileSync(new URL('../src/db/auth-schema.sql', import.meta.url), 'utf8'));
-// The analytics tool reads usage_daily, so the scope test needs its table too.
-sqlite.exec(readFileSync(new URL('../migrations/0006_usage_daily.sql', import.meta.url), 'utf8'));
+applyMigrations(sqlite);
 function shimStatement(sql: string, params: unknown[] = []) {
 	return {
 		bind: (...p: unknown[]) => shimStatement(sql, p),
 		first: async () => sqlite.prepare(sql).get(...(params as [])) ?? null,
 		all: async () => ({ results: sqlite.prepare(sql).all(...(params as [])) }),
 		run: async () => {
-			sqlite.prepare(sql).run(...(params as []));
-			return { success: true };
+			// meta.changes is not decoration. beginEndConnection claims a connection with
+			// ONE conditional UPDATE and reads the row count to know whether it won; with
+			// the count missing it fails SAFE, reporting that someone else got there
+			// first, so a shim that omits it turns the whole end sequence into a silent
+			// no-op that still looks like success.
+			const r = sqlite.prepare(sql).run(...(params as []));
+			return { success: true, meta: { changes: Number(r.changes) } };
 		}
 	};
 }
@@ -91,6 +98,23 @@ sqlite.exec(`
     ('b-main', 'u-shared', 'admin'),
     ('b-main', 'u-writer', 'editor');
 `);
+
+// A live connection anchored to b-main, so end_connection has something real to gate on.
+// The connection's own organization deliberately has NO members: that is what makes the
+// anchor the only way in, and it is why the end gate cannot be an org gate on the room.
+sqlite.exec(`
+  INSERT INTO orgs (org_id, name, model, installation_id, brain_owner, created_by) VALUES
+    ('org-connections', 'Shared', 'system',   1, 'iso-platform', ''),
+    ('org-far',         'Acme',   'customer', 2, 'acme-co',      'u-far');
+  INSERT INTO brains (brain_id, org_id, repo_owner, repo_name, name, visibility, created_at) VALUES
+    ('b-room', 'org-connections', 'iso-platform', 'conn-acme-0000', 'Acme engagement', 'private', '2026-03-01'),
+    ('b-far',  'org-far',         'acme-co',      'wiki',           'Acme wiki',       'org',     '2026-03-01');
+  INSERT INTO connections (connection_id, brain_id, name, state, created_by)
+    VALUES ('c-live', 'b-room', 'Acme engagement', 'live', 'u-boss');
+  INSERT INTO connection_parties (party_id, connection_id, org_id, anchor_brain_id, joined_at) VALUES
+    ('p-here',  'c-live', 'org1',    'b-main', '2026-03-01'),
+    ('p-there', 'c-live', 'org-far', 'b-far',  '2026-03-01');
+`);
 // u-outside deliberately has an account but NO membership in org1: the "not a member
 // of this organization" guardrail needs a real user row to reach.
 //
@@ -112,7 +136,13 @@ sqlite.exec(`
 interface Persona {
 	label: string;
 	userId: string;
-	orgRole: Role;
+	// NULL for a caller who reached this brain through a CONNECTION: their organization
+	// is a different one, so they hold no role in this one at all. Distinct from
+	// 'viewer' on purpose, and that distinction is the whole reason the field is
+	// nullable: the org roster and the per-person analytics table are precisely what
+	// someone from outside must never see, and "not a member" has to be a different
+	// answer from "a member with few powers".
+	orgRole: Role | null;
 	role: Role;
 }
 const sharedAdmin: Persona = {
@@ -138,6 +168,16 @@ const lurker: Persona = {
 	userId: 'u-lurker',
 	orgRole: 'viewer',
 	role: 'viewer'
+};
+// Reached the brain through a connection anchored in their OWN organization. Editor in
+// the room, nothing in the organization that holds it. This is the shape no test had
+// ever exercised before connections existed, and the one where an accidental pass reads
+// as a permissions bug rather than as a leak.
+const connectionGuest: Persona = {
+	label: 'a connection guest: editor here, not a member of this organization',
+	userId: 'u-outside',
+	orgRole: null,
+	role: 'editor'
 };
 
 // Any octokit call means a handler reached the network on a path that should not.
@@ -212,11 +252,95 @@ function toolsFor(p: Persona): Map<string, Handler> {
 	registerMediaTools(server, getContext);
 	registerAnalyticsTools(server, getContext);
 	registerLibrarianTools(server, getContext);
+	registerConnectionTools(server, {
+		getContext,
+		// The panel is sticky in production; nothing here turns on that, so it is the
+		// same context. What this file tests is which ROLE each tool gates on.
+		getViewContext: getContext,
+		orgContext: async (opts?: { requires?: Role; org?: string }) => {
+			orgAsks.push(opts);
+			assertRole(p.orgRole, opts?.requires);
+			if (!p.orgRole) throw new Error('You are not a member of this organization.');
+			return {
+				octokit,
+				org: {
+					org_id: 'org1',
+					name: 'Northwind',
+					model: 'customer',
+					installation_id: 1,
+					brain_owner: 'northwind',
+					github_org_login: 'northwind',
+					created_by: 'u-boss',
+					created_at: '2026-01-01',
+					suspended_at: null
+				},
+				role: p.orgRole,
+				db,
+				actorUserId: p.userId
+			};
+		},
+		// Creating the repository is the first thing past the gate, so a persona that
+		// gets this far dies here and `passesGate` reads that as admitted. Same trick
+		// as the store Proxy, for the same reason: proving the ALLOW direction without
+		// a network.
+		platformContext: async () => {
+			throw new Error(`platform octokit ${STORE_MARKER}`);
+		},
+		// The mirror copy needs GitHub at both ends, so both are refused here for the
+		// same reason the store Proxy is: a scope test that reaches the network is not
+		// testing scope. end_connection treats a failure to copy as a delay rather than
+		// an error, which is what lets the gate assertions still mean something.
+		platformStore: async () => {
+			throw new Error(`platform store ${STORE_MARKER}`);
+		},
+		orgWriter: async () => null,
+		// One brain of the caller's own, because a connection has to hang off one: the
+		// anchor is what confers access, so create_connection refuses before it reaches
+		// the network if you have none.
+		listBrains: async (): Promise<AccessibleBrain[]> =>
+			[{ id: 'northwind/main', brain_id: 'b-main', repo_name: 'main', name: 'Main' }].map((b) => ({
+				...b,
+				org_id: 'org1',
+				org_name: 'Northwind',
+				org_model: 'customer',
+				installation_id: 1,
+				repo_owner: 'northwind',
+				role: p.role,
+				org_role: p.orgRole
+			})) as AccessibleBrain[],
+		// Party to org1 at whatever role this persona holds there, so the end gate has
+		// something real to intersect against.
+		listOrgs: async () =>
+			p.orgRole
+				? [
+						{
+							role: p.orgRole,
+							org: {
+								org_id: 'org1',
+								name: 'Northwind',
+								model: 'customer',
+								installation_id: 1,
+								brain_owner: 'northwind',
+								github_org_login: 'northwind',
+								created_by: 'u-boss',
+								created_at: '2026-01-01',
+								suspended_at: null
+							}
+						}
+					]
+				: [],
+		personEmails: async () => [`${p.userId}@example.com`],
+		now: () => '2026-08-19T12:00:00Z'
+	});
 	registerBrainTools(server, {
 		getContext,
 		orgContext: async (opts?: { requires?: Role; org?: string }) => {
 			orgAsks.push(opts);
 			assertRole(p.orgRole, opts?.requires);
+			// An ORG scope resolves through memberships, so it cannot exist for someone who
+			// has none. The real orgContext throws for them; mirroring that here is what
+			// keeps this stub from being more permissive than the thing it stands in for.
+			if (!p.orgRole) throw new Error('You are not a member of this organization.');
 			return {
 				octokit,
 				org: {
@@ -251,12 +375,17 @@ function toolsFor(p: Persona): Map<string, Handler> {
 			})) as AccessibleBrain[],
 		// Two orgs, one of which holds no brain at all: the case the brains payload has
 		// to carry, since the widget cannot derive it from a list of brains.
+		// Someone with no membership belongs to no organization, so the list is empty for
+		// them rather than being their brain role in disguise.
 		listOrgs: async () =>
-			[
-				{ org_id: 'org1', name: 'Northwind', brain_owner: 'northwind' },
-				{ org_id: 'org2', name: 'Contoso Group', brain_owner: 'contoso-io' }
-			].map((o) => ({
-				role: p.orgRole,
+			(p.orgRole
+				? [
+						{ org_id: 'org1', name: 'Northwind', brain_owner: 'northwind' },
+						{ org_id: 'org2', name: 'Contoso Group', brain_owner: 'contoso-io' }
+					]
+				: []
+			).map((o) => ({
+				role: p.orgRole as Role,
 				org: {
 					...o,
 					model: 'customer',
@@ -270,7 +399,8 @@ function toolsFor(p: Persona): Map<string, Handler> {
 		activeBrainId: () => 'northwind/main',
 		setActiveBrain: async () => {},
 		invalidateConfig: () => {},
-		analyticsEnabled: true
+		analyticsEnabled: true,
+		connectionsEnabled: true
 	});
 	return handlers;
 }
@@ -640,7 +770,173 @@ async function analyticsPayload(p: Persona) {
 	);
 }
 
+// ---------------------------------------------------------------------------// ---------------------------------------------------------------------------
+console.log('\nA CONNECTION GUEST reaches the brain and nothing around it');
 // ---------------------------------------------------------------------------
+// The risk this whole section exists for: someone from another organization can now
+// resolve a brain, and everything ORG-scope hanging off that brain must still refuse
+// them. Every one of these gates reads ctx.orgRole, which is null for them.
+{
+	const denials = [
+		['members', {}],
+		['invite_member', { email: 'x@example.com', role: 'viewer' }],
+		['set_member_role', { email: 'lurker@example.com', role: 'admin' }],
+		['remove_member', { email: 'lurker@example.com' }]
+	] as const;
+	for (const [tool, args] of denials) {
+		const r = await attempt(connectionGuest, tool, args as Record<string, unknown>);
+		check(`${tool} refuses them`, r.outcome === 'denied', `${r.outcome}: ${r.detail}`);
+		// The message has to SAY they are not a member. Before assertRole took a nullable
+		// role it interpolated the absent value straight into the sentence ("your role is
+		// undefined"), which fails closed by accident and reads to a person as a bug
+		// rather than as an answer.
+		if (tool !== 'members')
+			check(
+				`  ...and the refusal says they are not a member`,
+				/not a member/.test(r.detail) && !/your role is (undefined|null)/.test(r.detail),
+				r.detail
+			);
+	}
+
+	// Content reads stay open: they resolved the brain legitimately, and a connection is
+	// a place to work. It is the surrounding ORGANIZATION that is not theirs.
+	const read = await attempt(connectionGuest, 'search_pages', { query: 'anything' });
+	check(
+		'but a content read still passes the gate',
+		await passesGate(connectionGuest, 'search_pages', { query: 'anything' }),
+		`${read.outcome}: ${read.detail}`
+	);
+
+	// Asserted on the PAYLOAD, not on a flag: the rows have to be absent, not merely
+	// marked. Same rule the org-viewer cases below already follow.
+	const payload = await analyticsPayload(connectionGuest);
+	check(
+		'analytics withholds the per-person table entirely',
+		Array.isArray(payload.people) && payload.people.length === 0,
+		JSON.stringify(payload.people)
+	);
+	check('and says so', payload.canSeePeople === false, String(payload.canSeePeople));
+}
+// ---------------------------------------------------------------------------
+console.log('\nConnections are ORG-scope, and brain admin does not confer them');
+// ---------------------------------------------------------------------------
+// Starting a connection exposes a surface carrying your organization's name to an
+// outside party, so it gates on the ORG role. sharedAdmin is the whole reason that
+// distinction exists: they hold ADMIN on this brain because it was shared with them,
+// and viewer in the organization. If either tool read ctx.role they would pass.
+{
+	for (const tool of ['create_connection', 'accept_connection']) {
+		const args =
+			tool === 'create_connection'
+				? { name: 'Northwind engagement', with: 'them@northwind.example' }
+				: { connection: 'Northwind engagement', about: 'main' };
+		// Each check asserts the refusal came from the ORG GATE, not merely that
+		// something went wrong: `attempt` counts any isError result as a denial, so a
+		// bare outcome check would pass even for a caller who sailed through
+		// authorization and died reaching for the network.
+		const shared = await attempt(sharedAdmin, tool, args);
+		check(
+			`${tool}: brain ADMIN + org viewer is refused by the org gate`,
+			shared.outcome === 'denied' && /requires admin/.test(shared.detail),
+			shared.detail
+		);
+		const edit = await attempt(writer, tool, args);
+		check(
+			`${tool}: an org editor is refused by the org gate too`,
+			edit.outcome === 'denied' && /requires admin/.test(edit.detail),
+			edit.detail
+		);
+	}
+
+	// The allow direction. An org owner gets past the gate and dies reaching for the
+	// platform client, which is the first thing a real call would do.
+	check(
+		'create_connection: an org OWNER is admitted',
+		await passesGate(orgBoss, 'create_connection', {
+			name: 'Northwind engagement',
+			with: 'them@northwind.example'
+		})
+	);
+
+	// Reading is open to anyone who can reach the brain, like brain_access: knowing who
+	// your brain is connected to is not privileged, and the connection itself is not
+	// reachable through this tool.
+	const read = await attempt(lurker, 'connections', {});
+	check('connections is readable by a plain viewer', read.outcome === 'allowed', read.detail);
+	// A connection guest can see what the room they are in is joined to. They cannot see
+	// anything about the ORGANIZATION on the other side of it.
+	const guestRead = await attempt(connectionGuest, 'connections', {});
+	check('and by a connection guest', guestRead.outcome === 'allowed', guestRead.detail);
+}
+// ---------------------------------------------------------------------------
+console.log('\nEnding a connection: admin in EITHER party, and nothing less');
+// ---------------------------------------------------------------------------
+// Deliberately not the brain role. Roles on a connection are derived and capped at
+// editor, so there is no brain admin to gate on; and gating on the room would let the
+// counterparty's people end a relationship your own owner could not.
+//
+// These run in order, because ending really does end it: the denials have to be
+// attempted while the connection is still live.
+{
+	const args = { connection: 'Acme engagement' };
+	const shared = await attempt(sharedAdmin, 'end_connection', args);
+	check(
+		'brain ADMIN + org viewer cannot end it',
+		shared.outcome === 'denied' && /needs admin access/.test(shared.detail),
+		shared.detail
+	);
+	const edit = await attempt(writer, 'end_connection', args);
+	check(
+		'an org editor cannot either',
+		edit.outcome === 'denied' && /needs admin access/.test(edit.detail),
+		edit.detail
+	);
+	check(
+		'and it is still live',
+		(
+			sqlite.prepare(`SELECT state FROM connections WHERE connection_id = 'c-live'`).get() as {
+				state: string;
+			}
+		).state === 'live'
+	);
+
+	const boss = await attempt(orgBoss, 'end_connection', args);
+	check('an org OWNER in one of the parties can', boss.outcome === 'allowed', boss.detail);
+	// The allow direction has to have actually DONE something, or a handler that
+	// returned early would read identically.
+	const row = sqlite
+		.prepare(`SELECT state FROM connections WHERE connection_id = 'c-live'`)
+		.get() as { state: string };
+	check("...and the connection is now 'ending'", row.state === 'ending', row.state);
+	// Access stops in the same request, before anything is copied, because it was
+	// derived from the anchors rather than granted.
+	const anchors = sqlite
+		.prepare(
+			`SELECT COUNT(*) AS n FROM connection_parties WHERE connection_id = 'c-live' AND anchor_brain_id IS NOT NULL`
+		)
+		.get() as { n: number };
+	check('...and both anchors are detached, so neither side can reach it', anchors.n === 0);
+	const archived = sqlite
+		.prepare(`SELECT archived_at FROM brains WHERE brain_id = 'b-room'`)
+		.get() as { archived_at: string | null };
+	check('...and the room is archived rather than deleted', !!archived.archived_at);
+
+	// A second attempt FINDS it, and that is deliberate rather than a leak. Ending
+	// detaches the anchors, and the anchors are the only way to name a connection, so
+	// without a second resolution path the copies could never be resumed: nobody could
+	// refer to the connection that owes them one. Reaching it HERE is not reaching the
+	// room, which stays archived and unreachable for everyone (asserted above).
+	const again = await attempt(orgBoss, 'end_connection', args);
+	check(
+		'an admin of a party can come back to it, to carry the copies on',
+		again.outcome === 'allowed',
+		again.detail
+	);
+	// The resume path is gated too, or it would be a way around the end gate itself.
+	const notMine = await attempt(writer, 'end_connection', args);
+	check('and an org editor still cannot', notMine.outcome === 'denied', notMine.detail);
+}
+
 if (failures) {
 	console.error(`\n${failures} scope check(s) FAILED.`);
 	process.exit(1);

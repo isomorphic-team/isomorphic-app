@@ -35,6 +35,7 @@ import {
 	setBrainGrant,
 	getBrainByRepo
 } from '../lib/orgs.ts';
+import { connectionForBrain } from '../lib/connections.ts';
 import { createAndScaffoldBrain } from '../lib/scaffold-core.ts';
 import { githubStore } from '../lib/brain-repo.ts';
 import {
@@ -77,6 +78,17 @@ interface BrainRow {
 	orgLabel: string;
 	needsConfig?: boolean; // adopted repo with no content under its roots — offer "Set up"
 	configPrUrl?: string; // a "configure" PR is open (protected repo) — show pending
+	// A connection: a shared surface with another organization, which is a relationship
+	// rather than a workspace. The app leaves these OUT of the switcher for that reason.
+	//
+	// They stay in the PAYLOAD, and that distinction matters. The app resolves the brain
+	// a result names against this list (pickShownBrain), so dropping them here would
+	// leave the crumb naming the previous brain while the widget showed a connection's
+	// content: issue #26 exactly, reintroduced. Filtering belongs at the point of
+	// rendering the picker, not at the point of answering what exists.
+	connection?: boolean;
+	// A read-only copy of a connection that ended. Readable, never writable.
+	readOnly?: boolean;
 }
 // A friendly org name — platform (personal) orgs are email-named, so show "Personal".
 function brainRows(brains: AccessibleBrain[], activeId: string | undefined): BrainRow[] {
@@ -88,11 +100,13 @@ function brainRows(brains: AccessibleBrain[], activeId: string | undefined): Bra
 		// Two different powers, two different scopes: disconnecting a brain removes
 		// it from the ORG (org admin), sharing it changes who reaches its content
 		// (brain admin). Someone can hold either without the other.
-		canManage: roleAtLeast(b.org_role, 'admin'),
+		canManage: !!b.org_role && roleAtLeast(b.org_role, 'admin'),
 		canShare: roleAtLeast(b.role, 'admin'),
 		visibility: b.visibility,
 		orgId: b.org_id,
-		orgLabel: orgDisplay(b)
+		orgLabel: orgDisplay(b),
+		...(b.connection_id ? { connection: true } : {}),
+		...(b.read_only ? { readOnly: true } : {})
 	}));
 }
 
@@ -155,6 +169,10 @@ export function registerBrainTools(
 		// deployment with usage recording off never shows a destination whose click
 		// would come back "unknown tool".
 		analyticsEnabled: boolean;
+		// Whether this deployment registered the connection tools. A widget cannot list
+		// the host's tools, so the payload is the only way the nav learns which
+		// destinations exist, and a picker must never offer one whose click is refused.
+		connectionsEnabled: boolean;
 	}
 ) {
 	const {
@@ -165,9 +183,10 @@ export function registerBrainTools(
 		activeBrainId,
 		setActiveBrain,
 		invalidateConfig,
-		analyticsEnabled
+		analyticsEnabled,
+		connectionsEnabled
 	} = deps;
-	const features = { analytics: analyticsEnabled };
+	const features = { analytics: analyticsEnabled, connections: connectionsEnabled };
 
 	// The orgs the app's "add a brain" flow may target: the ones the caller can
 	// actually adopt into (connect_brain is admin+). Sent with the brains list because
@@ -640,9 +659,19 @@ export function registerBrainTools(
 				);
 			}
 			const target = m.brain;
+			// A connection is ENDED, never disconnected. deleteBrain below would orphan the
+			// connection rows and destroy a surface both parties are working in, with no
+			// mirror written and nothing to reconstruct it from. Refuse before the role
+			// check, so the message says what to do instead of what you lack.
+			const connection = await connectionForBrain(ctx.db, target.brain_id);
+			if (connection) {
+				return fail(
+					`"${connection.name}" is a connection, so it is ended rather than disconnected: ending it leaves both sides a read-only copy, and disconnecting would delete it outright.`
+				);
+			}
 			// ORG-scope, like connect_brain: removing a brain from the org is an org
 			// admin's call, not something brain-admin-by-share confers.
-			if (!roleAtLeast(target.org_role, 'admin')) {
+			if (!target.org_role || !roleAtLeast(target.org_role, 'admin')) {
 				return fail(`You need organization admin access to disconnect ${brainLabel(target)}.`);
 			}
 			if (all.filter((b) => b.org_id === target.org_id).length <= 1) {

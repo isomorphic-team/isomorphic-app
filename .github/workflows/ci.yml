@@ -90,10 +90,12 @@ jobs:
       - run: pnpm test:patch
       - run: pnpm test:structure
       - run: pnpm test:index
+      - run: pnpm test:search
       - run: pnpm test:links
       - run: pnpm test:policy
       - run: pnpm test:loading
       - run: pnpm test:access
+      - run: pnpm test:connections
       - run: pnpm test:scope
       - run: pnpm test:feedback
       - run: pnpm test:usage
@@ -112,6 +114,7 @@ jobs:
       # against a real scratch repo, by hand, to cover the GitHub adapter itself.
       - run: pnpm test:e2e-librarian
       - run: pnpm test:e2e-import
+      - run: pnpm test:e2e-mirror
 
       # Formatting is checked, not applied — a PR that reformats unrelated files is
       # noise, and `--check` tells the contributor exactly what to run.

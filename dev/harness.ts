@@ -107,10 +107,18 @@ const NORTHWIND_PAGES: Record<string, string> = {
 	'wiki/people/director.md':
 		'---\ntitle: Operations Director\n---\n\nOwns operational processes including [[intake]].\n'
 };
+// A CONNECTION's pages. It is an ordinary brain as far as content goes, which is the
+// point: the difference is entirely in how it is reached and how it is presented.
+const ROOM_PAGES: Record<string, string> = {
+	'wiki/index.md':
+		'---\ntitle: Northwind engagement\n---\n\nShared workspace. See the [[kickoff]].\n',
+	'wiki/kickoff.md': '---\ntitle: Kickoff\n---\n\nAgreed scope and dates.\n'
+};
 const brainContent: Record<string, Record<string, string>> = {
 	'your-org/personal-wiki': PERSONAL_PAGES,
 	'acme-co/acme-wiki': ACME_PAGES,
-	'northwind/northwind-wiki': NORTHWIND_PAGES
+	'northwind/northwind-wiki': NORTHWIND_PAGES,
+	'iso-platform/conn-northwind-4f9c2a1b': ROOM_PAGES
 };
 // The content map for a brain (auto-vivify so a freshly connect_brain'd brain works).
 function pagesFor(id: string): Record<string, string> {
@@ -399,6 +407,19 @@ let brainsFixture = [
 		orgLabel: 'Northwind',
 		orgRole: 'viewer' as PreviewRole,
 		visibility: 'private'
+	},
+	// A connection: reachable, and deliberately NOT a workspace. It is in this list
+	// because the app resolves a result's brain against it, and it is kept out of the
+	// switcher at the point of rendering. Anchored to the personal brain below.
+	{
+		id: 'iso-platform/conn-northwind-4f9c2a1b',
+		label: 'Northwind engagement',
+		role: 'Editor',
+		orgId: 'org-connections',
+		orgLabel: 'Northwind engagement',
+		orgRole: 'viewer' as PreviewRole,
+		visibility: 'private',
+		connection: true
 	}
 ];
 // Explicit per-brain grants (`brain_memberships`), keyed brain id -> user id.
@@ -452,6 +473,36 @@ let connectableRepos = [
 	// Under the BRAINLESS org, so connecting a first repo into one is reachable here.
 	{ id: 'contoso-io/field-guide', owner: 'contoso-io', repo: 'field-guide' }
 ];
+// Shared spaces the fixture has GAINED during this session, so create and join can be
+// seen to do something. A fixture that discards the write proves only that the call was
+// made, which is the half of a flow that was never in doubt.
+type FixtureParty = {
+	org: string | null;
+	invitedEmail: string | null;
+	mine: boolean;
+	joined: boolean;
+};
+const extraConnections: {
+	connection_id: string;
+	name: string;
+	state: string;
+	brain: string;
+	parties: FixtureParty[];
+}[] = [];
+let invitationsFixture: {
+	connection_id: string;
+	name: string;
+	from: string | null;
+	expiresAt: string | null;
+}[] = [
+	{
+		connection_id: 'c-acme',
+		name: 'Acme partnership',
+		from: 'Acme',
+		expiresAt: null
+	}
+];
+
 let activeBrainId = brainsFixture[0].id;
 // The active brain's content — used by the host chrome (initial render + page selector),
 // which always shows the active brain. Inside handleTool use the per-call `pg` instead.
@@ -544,7 +595,7 @@ function brainsResult(msg: string, withView: boolean, switched = false): CallToo
 		// What the server registered. On here so the harness previews the nav with
 		// the Analytics row present; a real deployment sends false unless
 		// USAGE_ANALYTICS is set.
-		features: { analytics: true }
+		features: { analytics: true, connections: true }
 	};
 	if (withView) sc.view = 'brains';
 	if (switched) sc.switched = true;
@@ -831,17 +882,37 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
 		}
 		case 'search_pages': {
 			const q = String(args?.query ?? '').toLowerCase();
-			const hits: { path: string; line: number; text: string }[] = [];
-			for (const p of pth) {
-				stripFrontmatter(pg[p])
-					.split('\n')
-					.forEach((ln, i) => {
-						if (q && ln.toLowerCase().includes(q))
-							hits.push({ path: p, line: i + 1, text: ln.trim() });
-					});
+			// Mirrors the server: `scope: "all"` reaches every brain the caller can see and
+			// every hit names its brain, with the brain the call resolved leading. The
+			// default is that one brain, so an ordinary search stays where it was.
+			const wide = args?.scope === 'all';
+			const targets = wide
+				? [bid, ...brainsFixture.map((b) => b.id).filter((id) => id !== bid)]
+				: [bid];
+			const hits: {
+				path: string;
+				line: number;
+				text: string;
+				brain: string;
+				brainLabel: string;
+			}[] = [];
+			for (const id of targets) {
+				const label = brainsFixture.find((b) => b.id === id)?.label ?? id;
+				const pages = pagesFor(id);
+				for (const p of Object.keys(pages)) {
+					stripFrontmatter(pages[p])
+						.split('\n')
+						.forEach((ln, i) => {
+							if (q && ln.toLowerCase().includes(q))
+								hits.push({ path: p, line: i + 1, text: ln.trim(), brain: id, brainLabel: label });
+						});
+				}
 			}
 			const r = text(`${hits.length} match(es) for "${args?.query}".`);
-			return { ...r, structuredContent: { hits: hits.slice(0, 50) } };
+			return {
+				...r,
+				structuredContent: { hits: hits.slice(0, 50), scope: wide ? 'all' : 'brain' }
+			};
 		}
 		case 'edit_page': {
 			const md = pg[path];
@@ -1123,6 +1194,104 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
 			}
 			return accessResult(id, `Access for ${b?.label ?? id}.`);
 		}
+		case 'create_connection': {
+			const name = String(args?.name ?? '').trim();
+			const withEmail = String(args?.with ?? '').trim();
+			if (!name) return errText('Please give the connection a name.');
+			if (!withEmail.includes('@')) return errText(`"${withEmail}" is not an email address.`);
+			// The real tool refuses to guess this, so the harness must not supply one:
+			// a fixture that is more forgiving than the server hides the refusal.
+			if (!args?.about) return errText('Which of your brains should this hang off?');
+			extraConnections.push({
+				connection_id: `c-${extraConnections.length + 1}`,
+				name,
+				state: 'pending',
+				brain: `iso-platform/conn-${name.toLowerCase()}`,
+				parties: [
+					{ org: 'Personal', invitedEmail: null, mine: true, joined: true },
+					{ org: null, invitedEmail: withEmail, mine: false, joined: false }
+				]
+			});
+			return {
+				content: [
+					{
+						type: 'text',
+						text: `Started "${name}" with ${withEmail}. Nothing has been sent: tell them yourself.`
+					}
+				],
+				structuredContent: { connection_id: `c-${extraConnections.length}`, name }
+			};
+		}
+		case 'accept_connection': {
+			const which = String(args?.connection ?? '').trim();
+			const inv = invitationsFixture.find((i) => i.name === which);
+			if (!inv) return errText(`No invitation matching "${which}".`);
+			invitationsFixture = invitationsFixture.filter((i) => i.connection_id !== inv.connection_id);
+			extraConnections.push({
+				connection_id: inv.connection_id,
+				name: inv.name,
+				state: 'live',
+				brain: 'iso-platform/conn-acme',
+				parties: [
+					{ org: 'Personal', invitedEmail: null, mine: true, joined: true },
+					{ org: inv.from, invitedEmail: null, mine: false, joined: true }
+				]
+			});
+			return {
+				content: [{ type: 'text', text: `Joined "${inv.name}".` }],
+				structuredContent: { connection_id: inv.connection_id, name: inv.name, switched: false }
+			};
+		}
+		case 'connections': {
+			const id = resolveBrainArg(args?.brain) ?? activeBrainId;
+			// Sticky, matching worker.ts and brain_access above: a view OF a brain moves the
+			// active brain with it, or the panel renders one brain's connections under
+			// another brain's crumb.
+			if (brainsFixture.some((x) => x.id === id) && id !== activeBrainId) {
+				activeBrainId = id;
+				openPath = Object.keys(pagesFor(activeBrainId))[0] ?? openPath;
+				rebuildSelector();
+			}
+			const label = brainsFixture.find((x) => x.id === id)?.label ?? id;
+			// The personal brain is the one with a connection hanging off it, so switching
+			// brains provably changes the answer, which is what makes this brain-scope.
+			const anchored = id === 'your-org/personal-wiki';
+			const connections = anchored
+				? [
+						{
+							connection_id: 'c-northwind',
+							name: 'Northwind engagement',
+							state: 'live',
+							brain: 'iso-platform/conn-northwind-4f9c2a1b',
+							parties: [
+								{ org: 'Personal', invitedEmail: null, mine: true, joined: true },
+								{ org: 'Northwind', invitedEmail: null, mine: false, joined: true }
+							]
+						}
+					]
+				: [];
+			const all = anchored ? [...connections, ...extraConnections] : connections;
+			return {
+				content: [
+					{
+						type: 'text',
+						text: anchored
+							? `"${label}" is connected to:\n- Northwind engagement`
+							: `"${label}" is not connected to anything yet.`
+					}
+				],
+				structuredContent: {
+					view: 'connections',
+					brainLabel: label,
+					connections: all,
+					invitations: anchored ? invitationsFixture : [],
+					// Org admin on the fixture persona, so the Start control is reachable.
+					// A connection room resolves no org role and would send false.
+					canCreate: true,
+					activeBrain: brainMeta(activeBrainId)
+				}
+			};
+		}
 		case 'share_brain': {
 			const id = resolveBrainArg(args?.brain) ?? activeBrainId;
 			const b = brainsFixture.find((x) => x.id === id);
@@ -1363,6 +1532,13 @@ let activeMode: DisplayMode = 'inline';
 // A real host caps inline height and scrolls; mimic that so a huge tree can't make
 // a runaway card. The .stage already has overflow:auto for the scroll fallback.
 const INLINE_MAX_PX = 640;
+// ...and a FLOOR, for the same reason in the other direction. Content-sizing with no
+// minimum means a short view (an empty state, a two-row panel) renders as a sliver a few
+// rows tall, which is a bad way to look at a layout you are working on: it reads as a
+// broken card rather than as a small amount of content. A real host gives an inline app
+// a card with some presence too. 320 is roughly the app's own header plus half a dozen
+// list rows, so every view has somewhere to sit.
+const INLINE_MIN_PX = 320;
 
 // The app (autoResize) reports its content height; in inline mode we size the card
 // to it (bounded), which is exactly how claude.ai grows/shrinks an inline app as
@@ -1379,7 +1555,8 @@ function applyContentHeight(height?: number) {
 	if (activeMode !== 'inline') return;
 	if (height == null || !Number.isFinite(height)) return;
 	const slot = document.getElementById('frame-slot')!;
-	slot.style.height = `${Math.min(Math.ceil(height), INLINE_MAX_PX)}px`;
+	const bounded = Math.min(Math.max(Math.ceil(height), INLINE_MIN_PX), INLINE_MAX_PX);
+	slot.style.height = `${bounded}px`;
 }
 // `?mode=pip` (etc.) forces the host to present a given mode regardless of what the
 // app requests — handy for screenshotting each mode.
@@ -1396,6 +1573,7 @@ function presentMode(mode: DisplayMode) {
 		'bottom',
 		'width',
 		'height',
+		'minHeight',
 		'maxWidth',
 		'border',
 		'borderRadius',
@@ -1411,6 +1589,10 @@ function presentMode(mode: DisplayMode) {
 		// so strip the harness frame chrome — otherwise the preview shows a double edge
 		// and misrepresents what the real host renders.
 		stage.style.alignItems = 'flex-start';
+		// The floor as CSS as well as arithmetic: presentMode clears `height` on every
+		// mode change, so between here and the app's first size report there is nothing
+		// for applyContentHeight to bound and the card would otherwise collapse.
+		slot.style.minHeight = `${INLINE_MIN_PX}px`;
 		slot.style.border = 'none';
 		slot.style.borderRadius = '0';
 		slot.style.boxShadow = 'none';
@@ -1483,6 +1665,10 @@ const coldMode = hashMode === 'cold';
 // its own pointer here, because the real one lags for the same reason: it is written by
 // the request that opened the widget and read by the next one.
 const otherBrainMode = hashMode === 'other-brain';
+// `#connections` opens the panel for the brain a connection is anchored to. It is the
+// only route into a connection in the chrome: a shared surface is deliberately absent
+// from the switcher, because a relationship is not a workspace you own.
+const connectionsMode = hashMode === 'connections';
 // `#slow-result` and `#pending-input` are the opposite of #cold: a result IS coming, it
 // is just slower than the app's self-boot deadline. A host announces a tool call when it
 // STARTS and delivers the result when the tool FINISHES, and view_page on a large brain
@@ -1575,21 +1761,23 @@ bridge.oninitialized = async () => {
 	// announce the input, then deliver the result (sendToolInput once, then sendToolResult).
 	const mode = brainsMode
 		? 'brains'
-		: accessMode
-			? 'access'
-			: analyticsMode
-				? 'analytics'
-				: membersMode
-					? 'members'
-					: graphMode
-						? 'graph'
-						: activityMode
-							? 'activity'
-							: browseMode
-								? 'browse'
-								: editMode
-									? 'edit'
-									: 'page';
+		: connectionsMode
+			? 'connections'
+			: accessMode
+				? 'access'
+				: analyticsMode
+					? 'analytics'
+					: membersMode
+						? 'members'
+						: graphMode
+							? 'graph'
+							: activityMode
+								? 'activity'
+								: browseMode
+									? 'browse'
+									: editMode
+										? 'edit'
+										: 'page';
 	bridge.sendToolInput({
 		arguments:
 			browseMode ||
@@ -1599,6 +1787,7 @@ bridge.oninitialized = async () => {
 			analyticsMode ||
 			brainsMode ||
 			accessMode ||
+			connectionsMode ||
 			settingsMode ||
 			connectedMode ||
 			browseEmptyMode ||
@@ -1656,6 +1845,8 @@ bridge.oninitialized = async () => {
 		bridge.sendToolResult(await handleTool('analytics', { days: Number(hashPath) || 30 }));
 	} else if (accessMode) {
 		bridge.sendToolResult(await handleTool('brain_access', {}));
+	} else if (connectionsMode) {
+		bridge.sendToolResult(await handleTool('connections', {}));
 	} else if (graphMode) {
 		bridge.sendToolResult(await handleTool('view_graph', {}));
 	} else if (activityMode) {

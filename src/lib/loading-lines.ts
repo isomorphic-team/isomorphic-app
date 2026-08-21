@@ -37,6 +37,7 @@ export type LoadingTask =
 	| 'analytics'
 	| 'brains'
 	| 'sharing'
+	| 'connections'
 	| 'switch'
 	| 'create'
 	| 'settings'
@@ -84,6 +85,7 @@ const WARM: Record<LoadingTask, string[]> = {
 	analytics: ['Tallying up {org}…', 'Doing the arithmetic…', 'Adding up the week…'],
 	brains: ['Lining up your brains…', 'Seeing where you can go…'],
 	sharing: ['Checking who holds a key to {brain}…', 'Reading the guest list…'],
+	connections: ['Finding what {brain} is joined to…', 'Looking for the shared shelves…'],
 	switch: ['Walking over to {subject}…', 'Packing up {brain}…', 'Changing brains…'],
 	create: ['Naming things is the hard part…', 'Laying the foundation…', 'Clearing a shelf…'],
 	settings: ['Finding your things…', 'Checking your keys…'],
@@ -163,7 +165,10 @@ const POOL_BY_TASK: Partial<Record<LoadingTask, string[]>> = {
 	analytics: ['Checking the circulation records…', 'Carrying the one…', 'Squaring the columns…'],
 	activity: ['Reading the due-date card…', 'Checking the date stamps…', 'Who had this out…'],
 	members: ['Counting the library cards…', 'Reading the sign-in book…'],
-	sharing: ['Seeing who holds a card…', 'Checking the lending rules…']
+	sharing: ['Seeing who holds a card…', 'Checking the lending rules…'],
+	// An interlibrary loan is what a connection is: a shelf two libraries keep
+	// together, belonging to neither.
+	connections: ['Checking the interlibrary loans…', 'Reading the reciprocal agreements…']
 };
 
 // Deterministic PRNG. A rotation should look picked, not sorted, and it must still be

@@ -882,44 +882,99 @@ export async function loadPageContents(
 // Full-text search over indexed page content. LIKE coarse-filters candidate pages
 // in D1 (SQLite LIKE is ASCII case-insensitive), then we extract the exact matching
 // lines in-Worker so hit line numbers/text match the old scan exactly.
+//
+// Takes a SET of brains rather than one, because searching across a person's brains
+// costs almost nothing here: every brain's index lives in the same D1 and `brain_id`
+// was the only per-brain parameter. What fan-out DOES cost is freshness, one
+// `branchCommitSha` per brain, so the caller decides which brains to run `ensureFresh`
+// over (see search_pages) rather than this function doing it for all of them.
+//
+// TWO limits, not one. A single cap taken in path order is right for one brain and
+// silently starves every brain after the first under fan-out: the first fills the
+// budget and the rest report nothing, which reads as "the other brains have no
+// matches" rather than "we stopped looking". So each brain gets its own budget, and
+// the global ceiling is applied by taking from the brains round-robin, so a brain with
+// many hits cannot crowd out one with few.
+export interface SearchHit {
+	brainId: string;
+	path: string;
+	line: number;
+	text: string;
+}
+
 export async function searchIndex(
 	db: D1Database,
-	brainId: string,
+	brainIds: string[],
 	query: string,
 	prefix: string | undefined,
-	max: number
-): Promise<{ path: string; line: number; text: string }[]> {
+	limits: { perBrain: number; total: number }
+): Promise<SearchHit[]> {
+	if (brainIds.length === 0) return [];
 	const like = `%${escapeLike(query)}%`;
+	const ids = brainIds.map((_, i) => `?${i + 1}`).join(', ');
+	const n = brainIds.length;
 	const rows = prefix
 		? await db
 				.prepare(
-					`SELECT path, content FROM brain_pages
-					 WHERE brain_id = ?1 AND path LIKE ?2 ESCAPE '\\' AND content LIKE ?3 ESCAPE '\\'
-					 ORDER BY path`
+					`SELECT brain_id, path, content FROM brain_pages
+					 WHERE brain_id IN (${ids})
+					   AND path LIKE ?${n + 1} ESCAPE '\\' AND content LIKE ?${n + 2} ESCAPE '\\'
+					 ORDER BY brain_id, path`
 				)
-				.bind(brainId, `${escapeLike(prefix)}%`, like)
-				.all<{ path: string; content: string }>()
+				.bind(...brainIds, `${escapeLike(prefix)}%`, like)
+				.all<{ brain_id: string; path: string; content: string }>()
 		: await db
 				.prepare(
-					`SELECT path, content FROM brain_pages
-					 WHERE brain_id = ?1 AND content LIKE ?2 ESCAPE '\\'
-					 ORDER BY path`
+					`SELECT brain_id, path, content FROM brain_pages
+					 WHERE brain_id IN (${ids}) AND content LIKE ?${n + 1} ESCAPE '\\'
+					 ORDER BY brain_id, path`
 				)
-				.bind(brainId, like)
-				.all<{ path: string; content: string }>();
+				.bind(...brainIds, like)
+				.all<{ brain_id: string; path: string; content: string }>();
 
 	const needle = query.toLowerCase();
-	const hits: { path: string; line: number; text: string }[] = [];
+	// Seeded in the CALLER's order, not the query's, so the round-robin below favours
+	// the brains the caller listed first (search_pages puts the active brain there).
+	const byBrain = new Map<string, SearchHit[]>(brainIds.map((id) => [id, []]));
 	for (const r of rows.results) {
+		const bucket = byBrain.get(r.brain_id);
+		if (!bucket || bucket.length >= limits.perBrain) continue;
 		const lines = r.content.split('\n');
-		for (let i = 0; i < lines.length && hits.length < max; i++) {
+		for (let i = 0; i < lines.length && bucket.length < limits.perBrain; i++) {
 			if (lines[i].toLowerCase().includes(needle)) {
-				hits.push({ path: r.path, line: i + 1, text: lines[i].trim().slice(0, 200) });
+				bucket.push({
+					brainId: r.brain_id,
+					path: r.path,
+					line: i + 1,
+					text: lines[i].trim().slice(0, 200)
+				});
 			}
 		}
-		if (hits.length >= max) break;
 	}
-	return hits;
+
+	const buckets = [...byBrain.values()];
+	const picked: SearchHit[] = [];
+	for (let i = 0; picked.length < limits.total; i++) {
+		let more = false;
+		for (const b of buckets) {
+			if (i >= b.length) continue;
+			more = true;
+			picked.push(b[i]);
+			if (picked.length >= limits.total) break;
+		}
+		if (!more) break;
+	}
+
+	// Selection was interleaved so the global ceiling stays fair; presentation is
+	// grouped, because interleaved output is unreadable. With one brain both passes
+	// are identity and the result is byte-identical to the single-brain version.
+	const rank = new Map(brainIds.map((id, i) => [id, i]));
+	return picked.sort(
+		(a, b) =>
+			(rank.get(a.brainId) ?? 0) - (rank.get(b.brainId) ?? 0) ||
+			a.path.localeCompare(b.path) ||
+			a.line - b.line
+	);
 }
 
 // Escape LIKE wildcards so a query containing % or _ is matched literally.

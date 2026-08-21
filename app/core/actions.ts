@@ -24,6 +24,8 @@ import type {
 	BrainAccessSelf,
 	MemberRole,
 	BrainRow,
+	ConnectionRow,
+	ConnectionInvite,
 	OrgTarget,
 	ConnectedAccount,
 	Identity,
@@ -55,7 +57,10 @@ import {
 	applyBrainContext,
 	editDirty,
 	setEditDirty,
-	bump
+	bump,
+	connectionList,
+	setConnectionList,
+	features
 } from './store.ts';
 import { toast, askConfirm } from './toast.tsx';
 
@@ -173,6 +178,7 @@ function handleToolResult(result: CallToolResult) {
 		);
 	else if (view === 'members') show(membersViewFromSc(sc), { push: false });
 	else if (view === 'analytics') show(analyticsViewFromSc(sc), { push: false });
+	else if (view === 'connections') show(connectionsViewFromSc(sc), { push: false });
 	else if (view === 'brain-access') show(brainAccessViewFromSc(sc), { push: false });
 	else if (view === 'brains') {
 		const bv = brainsViewFromSc(sc);
@@ -274,6 +280,16 @@ function ensureBrainList(): Promise<void> {
 
 // Switch the active brain, then land on its file tree. Selecting the already-active
 // brain just (re)opens its files — so the switcher doubles as the Files action.
+// Move the active brain WITHOUT deciding where to land. switchBrain lands on the file
+// tree; a search hit lands on the page it named. Both go through brainsViewFromSc,
+// because adopting a brain is what drops the previous one's file tree and path policy
+// (setActiveBrain in the store) and no path into a brain may skip that seam.
+async function adoptBrain(id: string): Promise<void> {
+	const res = await callTool('switch_brain', { brain: id });
+	if (res.isError) throw new Error(firstText(res));
+	brainsViewFromSc((res.structuredContent ?? {}) as Record<string, unknown>, true);
+}
+
 async function switchBrain(id: string) {
 	if (activeBrain?.id === id) {
 		openBrowse();
@@ -286,11 +302,7 @@ async function switchBrain(id: string) {
 		subject: brainList?.find((b) => b.id === id)?.label
 	});
 	try {
-		const res = await callTool('switch_brain', { brain: id });
-		if (res.isError) throw new Error(firstText(res));
-		// Adopting the new brain is what drops the old one's file tree and path policy
-		// (setActiveBrain in the store) — one seam, so no path into a brain can forget.
-		brainsViewFromSc((res.structuredContent ?? {}) as Record<string, unknown>, true);
+		await adoptBrain(id);
 		openBrowse();
 	} catch (e) {
 		show({
@@ -494,6 +506,104 @@ function brainAccessViewFromSc(sc: Record<string, unknown>): View {
 // Open the sharing panel for a brain: who can reach it, and at what level.
 // `brain` targets a specific one (the Share control in the brains list); omitted,
 // it acts on the active brain.
+// The connections hanging off the brain being shown, fetched the way the brain list is:
+// lazily, once, swallowing its own failure. Dropped whenever the active brain changes
+// (setActiveBrain), because they belong to ONE brain rather than to the session.
+//
+// A brain that cannot answer about its connections still shows its files, which is why
+// this never surfaces an error: it is an addition to the tree, not the tree.
+let connectionsPromise: Promise<void> | null = null;
+function ensureConnections(): Promise<void> {
+	if (!features.connections || connectionList !== null) return Promise.resolve();
+	if (connectionsPromise) return connectionsPromise;
+	connectionsPromise = (async () => {
+		try {
+			const res = await callTool('connections', { ...brainArgs() });
+			if (res.isError) throw new Error(firstText(res));
+			const sc = (res.structuredContent ?? {}) as { connections?: ConnectionRow[] };
+			setConnectionList(Array.isArray(sc.connections) ? sc.connections : []);
+			bump();
+		} catch {
+			// Stay unknown rather than claiming none.
+		} finally {
+			connectionsPromise = null;
+		}
+	})();
+	return connectionsPromise;
+}
+
+// The connections panel. A brain-scope view like sharing, and reached the same way.
+async function openConnections(brain?: string) {
+	show({ kind: 'loading', label: 'Loading connections…', task: 'connections' });
+	try {
+		const result = await callTool('connections', brain ? { brain } : {});
+		if (result.isError) throw new Error(firstText(result));
+		show(connectionsViewFromSc((result.structuredContent ?? {}) as Record<string, unknown>));
+	} catch (e) {
+		show({
+			kind: 'error',
+			headline: "Couldn't load connections.",
+			detail: String(e),
+			retry: () => openConnections(brain)
+		});
+	}
+}
+
+function connectionsViewFromSc(sc: Record<string, unknown>): View {
+	return {
+		kind: 'connections',
+		brainLabel: typeof sc.brainLabel === 'string' ? sc.brainLabel : 'this brain',
+		connections: Array.isArray(sc.connections) ? (sc.connections as ConnectionRow[]) : [],
+		invitations: Array.isArray(sc.invitations) ? (sc.invitations as ConnectionInvite[]) : [],
+		// Absent means NO. The control this gates starts a relationship with another
+		// organization, so a payload that forgot to say must not read as permission.
+		canCreate: sc.canCreate === true
+	};
+}
+
+// Start a connection. A pushed flow off the panel, like every other add in the app.
+//
+// The anchor is not asked for: you are standing in the brain it will hang off, and the
+// panel you came from is that brain's. Naming it in a picker would be asking someone to
+// re-state where they already are, on the one field that cannot be changed afterwards.
+function openStartConnection(anchorLabel: string) {
+	show({ kind: 'start-connection', anchorLabel });
+}
+
+// Back to the panel with the new room already in it. Same shape as finishInvite: a
+// completed flow must not sit in the back stack, and the screen it was opened from is
+// stale the moment it finishes.
+async function finishConnection() {
+	const result = await callTool('connections', {});
+	dropStale('connections');
+	if (result.isError) return void openConnections();
+	show(connectionsViewFromSc((result.structuredContent ?? {}) as Record<string, unknown>), {
+		push: false
+	});
+}
+
+// Join an invitation INTO THE BRAIN YOU ARE IN. No form, for the same reason the create
+// flow has no anchor field: the panel is one brain's, so pressing Join here says which
+// brain as plainly as a picker would, and with nothing to fill in wrongly.
+async function joinConnectionHere(
+	connectionName: string,
+	anchorLabel: string
+): Promise<string | null> {
+	// `about`, not brainArgs(). accept_connection has no `brain` argument: the brain it
+	// takes IS the anchor, under its own name. And it is passed EXPLICITLY rather than
+	// left to the server's default, because the widget's active brain and the stored
+	// active-brain pointer are two different answers to "which brain" (issue #26) and
+	// this screen is the one that knows which one the person is looking at.
+	const res = await callTool('accept_connection', {
+		connection: connectionName,
+		about: anchorLabel
+	});
+	if (res.isError) return firstText(res);
+	toast(firstText(res));
+	await finishConnection();
+	return null;
+}
+
 async function openBrainAccess(brain?: string) {
 	show({ kind: 'loading', label: 'Loading sharing…', task: 'sharing' });
 	try {
@@ -1004,23 +1114,59 @@ function openMore() {
 	show({ kind: 'more' });
 }
 
-async function runSearch(query: string) {
+// `scope` is opt-in and never ambient: the box searches the brain you are in, and
+// widening is a second, deliberate click (SearchView's footer). An ordinary search
+// keeps an ordinary blast radius, which matters because the leak here is
+// conversational: one client's material surfacing in another client's window.
+async function runSearch(query: string, scope?: 'all') {
 	// An empty submit is a no-op rather than a search for nothing, and it leaves the
 	// page as it is: you are already ON the search view, with the field in front of you.
 	if (!query.trim()) return;
 	show({ kind: 'loading', label: `Searching for “${query}”…`, task: 'search', subject: query });
 	try {
-		const result = await callTool('search_pages', { query, ...brainArgs() });
+		const result = await callTool('search_pages', {
+			query,
+			...(scope ? { scope } : {}),
+			...brainArgs()
+		});
+		// A failed tool call comes back as a RESULT carrying isError, it does not throw.
+		// Without this an error rendered as "No matches", which is a different and much
+		// more misleading answer than "search failed".
+		if (result.isError) throw new Error(firstText(result));
 		const sc = (result.structuredContent ?? {}) as { hits?: Hit[] };
-		show({ kind: 'search', query, hits: sc.hits ?? [] });
+		show({ kind: 'search', query, scope, hits: sc.hits ?? [] });
 	} catch (e) {
 		show({
 			kind: 'error',
 			headline: 'Search failed.',
 			detail: String(e),
-			retry: () => runSearch(query)
+			retry: () => runSearch(query, scope)
 		});
 	}
+}
+
+// Open a search hit. A fan-out result can name a brain other than the one you are in,
+// so the switch has to land BEFORE the fetch.
+async function openHit(hit: Hit) {
+	if (!hit.brain || hit.brain === activeBrain?.id) return navigateTo(hit.path);
+	show({
+		kind: 'loading',
+		label: `Loading ${hit.path}…`,
+		task: 'page',
+		subject: pageLabel(hit.path)
+	});
+	try {
+		await adoptBrain(hit.brain);
+	} catch (e) {
+		show({
+			kind: 'error',
+			headline: "Couldn't open that brain.",
+			detail: String(e),
+			retry: () => openHit(hit)
+		});
+		return;
+	}
+	await navigateTo(hit.path);
 }
 
 async function openEditor(path: string) {
@@ -1154,6 +1300,12 @@ export {
 	openSearch,
 	openMore,
 	runSearch,
+	openHit,
+	openConnections,
+	ensureConnections,
+	openStartConnection,
+	finishConnection,
+	joinConnectionHere,
 	openEditor,
 	resolveWikilink,
 	renderMarkdown,

@@ -316,33 +316,61 @@ Design questions to settle before building:
   (`source_key` plus a ledger entry), a permanent side effect for a one-off update.
   The objection was the binding, not the batching.
 
-# TODO: the seam between brains (publishing across a brain boundary)
+# TODO: collaboration between brains (a shared brain, not a copy)
 
 One person reaches several brains, and work in one belongs partly in another: a
 client engagement, a personal to-do list tracking that client's work, a venture
 brain holding the methodology the client should receive. The only transport today
 is a human copying text, and nothing records that the copy happened.
 
-The design splits the want in two, and the split is the point. **"I need to find
-it"** is a reader who already has access to both brains, and copying is the wrong
-answer: what is missing is cross-brain search and cross-brain wikilinks, a READ
-feature. **"Someone who cannot reach my brain needs to see it"** is a client, and
-content genuinely has to cross into a repository they can read. That second half is
-publishing, and it is the only case where a copy is correct. Naming it publishing
-rather than sync puts the question that matters (who can now read this) in the name.
+The question is not "which brain is it in" but **who needs it**, and it has three
+answers. A reader who **already has access** needs a cross-brain READ, not a copy.
+A reader who **can be granted access** needs no copy either: admit them to the
+place the content lives. Only a reader who **cannot be admitted at all** needs
+content to physically cross, and that is publishing.
 
-Most of the machinery exists. `sync_records`' planner is already non-destructive,
-key-addressed, idempotent, ledger-backed, with proposed-not-applied deletions and a
-no-resurrection rule. What is actually new: two brains resolved in one request (the
-first code to legitimately cross the `brainId` isolation line), a `body: source-owned`
-policy the importer deliberately does not have (its bodies belong to humans; a
-publication's body IS the payload), link flattening at the published set's horizon,
-and a publication/subscription handshake declared in BOTH repos so neither end can
-open a channel alone. Identity is a key, never a path, or a routine `move_page` on
-either side becomes a delete plus a create.
+We are building the middle answer. A collaboration is a **connection brain**: an
+ordinary brain that both parties reach by grant and **neither party owns**. No copy,
+so no drift, no reconciliation, no ledger, no run, no link horizon, no read-only
+received pages, and media that resolves. The previous design (a one-way
+key-addressed publication flow) is not being built; it remains recoverable from git
+history if the third case turns out to matter.
+
+The whole mechanism is **one new primitive: a brain reachable by someone who is not
+a member of its organization.** `listAccessibleBrains` resolves `FROM memberships
+JOIN orgs JOIN brains`, so a `brain_memberships` grant can only raise a role on a
+brain already visible.
+
+**Access is derived, not granted.** Each side anchors a connection to one of its own
+brains, and anyone who can reach that anchor reaches the connection, capped at
+editor. So each party governs who is in the room by governing its own brain's access
+list, and no cross-organization user administration exists at all. Individual
+cross-org grants were the earlier design and are rejected: the row hangs off nothing,
+so it needs its own teardown (`deleteUserBrainGrantsInOrg` is scoped by
+`brains.org_id`, so a person removed from their own org would keep the client room)
+and its own outsider-marking everywhere a brain's audience is shown. The policy rule
+survives either way, with `orgRole` widened to nullable plus a cap. The risk stays
+concentrated in one place: a caller with no org role must not reach the org roster or
+the per-person analytics table.
+
+Two decisions sit on top of it, both about power rather than storage. The repository
+lives in the **platform org**, where every auto-provisioned brain already lives,
+because a collaboration between commercial peers should not sit inside one peer's
+namespace with the other as a guest. That has no user-visible consequence (nobody
+here touches a repo), so it is a legal question rather than a product one. And
+**ending a connection is non-destructive**: either party may end it, neither
+inherits the original, and each gets a read-only **mirror** in their own brain list.
+That is what stops the revoke button being a weapon. The mirror protects you from
+your counterparty, never from us; that concern needs an export, which is separate.
+
+The other half is product shape. A connection is **not a brain in the switcher**: it
+is reached from the brain it is joined to, and nowhere else, with a smaller chrome
+(files and recent changes, not graph or analytics or sharing). The file tree is never
+merged across brains.
 
 Full design: [`docs/design/brain-seams.md`](design/brain-seams.md). Unresolved there:
-whether cross-brain READ is the higher-value build and this is the smaller half.
+export, and how a party learns a connection is waiting for them, since nothing in
+this system sends mail.
 
 # TODO: brain schema migrations (fleet-wide template/schema updates)
 

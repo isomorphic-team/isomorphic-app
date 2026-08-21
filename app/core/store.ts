@@ -4,7 +4,7 @@
 // modules reassign are exposed with a setter (a `let` live-binding can be READ across
 // modules but only WRITTEN in its home).
 
-import type { View, BrainRow, BrainPolicy, BrowseData, OrgTarget } from './types.ts';
+import type { View, BrainRow, BrainPolicy, BrowseData, OrgTarget, ConnectionRow } from './types.ts';
 import {
 	DEFAULT_BRAIN_CONFIG,
 	PATH_ROLES,
@@ -17,6 +17,12 @@ const history: View[] = [];
 // lookup behind a breadcrumb click, and wikilink resolution all read the same cache,
 // so opening the tree a second time costs nothing. Cleared on brain switch/create.
 let browseCache: BrowseData | null = null;
+// The shared surfaces the ACTIVE brain is joined to. Null means not fetched yet,
+// which is different from an empty list: unknown must not render as none.
+let connectionList: ConnectionRow[] | null = null;
+function setConnectionList(v: ConnectionRow[] | null): void {
+	connectionList = v;
+}
 function setBrowseCache(v: BrowseData | null): void {
 	browseCache = v;
 }
@@ -40,6 +46,11 @@ function setActiveBrain(v: { id: string; label: string } | null): void {
 	if (v && activeBrain && activeBrain.id !== v.id) {
 		browseCache = null;
 		resetPolicy();
+		// Connections belong to ONE brain, not to the session, so they are dropped
+		// with the file tree. Carrying them across would show a brain the rooms
+		// another brain is joined to, which is the same class of mistake as showing
+		// its file tree.
+		connectionList = null;
 	}
 	activeBrain = v;
 }
@@ -93,9 +104,14 @@ function applyBrainContext(sc: Record<string, unknown>): void {
 // ones fail on click. Unknown until the list lands, and a missing flag reads as OFF:
 // a destination that quietly does not appear is a far smaller failure than one that
 // appears and errors.
-let features: { analytics: boolean } = { analytics: false };
-function setFeatures(v: Partial<{ analytics: boolean }> | undefined): void {
+let features: { analytics: boolean; connections: boolean } = {
+	analytics: false,
+	connections: false
+};
+function setFeatures(v: Partial<{ analytics: boolean; connections: boolean }> | undefined): void {
 	if (v && typeof v.analytics === 'boolean') features = { ...features, analytics: v.analytics };
+	if (v && typeof v.connections === 'boolean')
+		features = { ...features, connections: v.connections };
 }
 
 // Whether the caller is admin+ in the active brain's org (can auto-configure it).
@@ -227,6 +243,8 @@ export {
 	setEditDirty,
 	browseCache,
 	setBrowseCache,
+	connectionList,
+	setConnectionList,
 	activeBrain,
 	brainList,
 	orgList,

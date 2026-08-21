@@ -362,9 +362,14 @@ function Root() {
 	const wide = displayMode === 'fullscreen';
 	const inline = displayMode === 'inline';
 	// INLINE = a bounded card in the chat column:
-	//  - sizes to content up to a CAP (max-h), then scrolls WITHIN itself, so a long
-	//    page/tree never pushes the conversation down. autoResize reports the capped
+	//  - sizes to content between a FLOOR and a CAP, then scrolls WITHIN itself, so a
+	//    long page/tree never pushes the conversation down. autoResize reports that
 	//    height, so the host frames it tightly.
+	//  - the floor matters as much as the cap. Without one a short view (an empty state,
+	//    a two-row panel) renders as a sliver a few rows tall, which reads as a broken
+	//    card rather than as a small amount of content. It belongs HERE and not on the
+	//    host: in inline mode the app draws its own border, so the card a person sees is
+	//    this element, and a host that reserved more room would only add space around it.
 	//  - a border makes the card's edge visible in the chat, since the host doesn't
 	//    always draw one. The scroll container is this root, so the sticky Header
 	//    stays pinned while the body scrolls under it.

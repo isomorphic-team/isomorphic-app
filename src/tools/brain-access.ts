@@ -28,6 +28,7 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { registerAppTool } from '@modelcontextprotocol/ext-apps/server';
 import { z } from 'zod';
 import type { BrainContext } from './librarian.ts';
+import { connectionForBrain } from '../lib/connections.ts';
 import { BRAIN_APP_URI } from './apps.ts';
 import {
 	type TenantOpts,
@@ -182,6 +183,18 @@ export function registerBrainAccessTools(
 			if (!email && !visibility) {
 				return fail(
 					'Nothing to change: pass `email` (with `access`) to share with someone, or `visibility` to make the brain private or organization-wide.'
+				);
+			}
+			// A CONNECTION has no audience of its own, so there is nothing here to share.
+			// Access to one is derived from the brain each side joined it to, which is
+			// what lets two organizations collaborate without either administering the
+			// other's people. Without this the guardrail below would refuse every share
+			// anyway (a connection's organization has no members), but with a message
+			// about inviting someone to an organization that cannot be acted on.
+			const connection = await connectionForBrain(ctx.db, row.brain_id);
+			if (connection) {
+				return fail(
+					`"${connection.name}" is a connection, not an ordinary brain. Who can reach it follows from the brain each side joined it to, so to change who on your side can see it, change who can reach that brain.`
 				);
 			}
 

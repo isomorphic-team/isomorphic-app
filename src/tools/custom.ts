@@ -180,7 +180,12 @@ async function execOp(op: OpName, a: Record<string, string>, ctx: BrainContext):
 			const query = (a.query ?? '').trim();
 			if (query.length < 2) return 'search_pages needs a "query" arg of at least 2 characters.';
 			await ensureFresh(db, store, repoArgs, brainId, config);
-			const hits = await searchIndex(db, brainId, query, a.prefix || undefined, 50);
+			// One brain, always: a brain-authored tool is bound to the brain that
+			// defines it, so fan-out is not on offer here.
+			const hits = await searchIndex(db, [brainId], query, a.prefix || undefined, {
+				perBrain: 50,
+				total: 50
+			});
 			if (hits.length === 0) return `No matches for "${query}".`;
 			return (
 				`${hits.length} match(es) for "${query}":\n` +

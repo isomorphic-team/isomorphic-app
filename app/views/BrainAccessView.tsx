@@ -1,14 +1,60 @@
 // ---------- brain access (sharing) view ----------
 
-import { useState } from 'preact/hooks';
+import { useEffect, useState } from 'preact/hooks';
 import type { BrainAccessEntry, BrainAccessSelf } from '../core/types.ts';
 import { callTool, firstText } from '../core/host.ts';
-import { refreshBrainAccess, openShareBrain } from '../core/actions.ts';
+import {
+	refreshBrainAccess,
+	openShareBrain,
+	openConnections,
+	ensureConnections
+} from '../core/actions.ts';
+import { activeBrain, connectionList, features } from '../core/store.ts';
 import { toast } from '../core/toast.tsx';
 import { InitialsAvatar, CloseIcon } from '../core/icons.tsx';
 import { defineView } from '../core/view-registry.ts';
 import { RoleSelect, ROLE_LABEL } from '../components/RoleSelect.tsx';
 import { Button, List, ListRow } from '../ui/index.ts';
+
+// A POINTER, NOT A SECTION. Sharing is the page someone opens when they are nervous
+// about a leak, and connections are the other half of the thought that brings them here:
+// what this brain is joined to. So the question gets an answer without the two lists
+// being merged, which they must not be.
+//
+// Access runs ONE WAY, and that is the whole reason this is a link rather than rows.
+// Reaching this brain gets you into the rooms it anchors; being in one of those rooms
+// gets you nothing here (listAccessibleBrains walks memberships → anchor → connection
+// and never the reverse). A room listed among the people who can see this brain would
+// read as the opposite of that, on the one page where being wrong about it matters.
+//
+// Rendered only when there is something to point AT. `connectionList` is null until it
+// has been fetched and stays null when the fetch fails, so an unknown answer shows
+// nothing rather than claiming none.
+function AlsoJoinedTo({ brainId }: { brainId: string }) {
+	useEffect(() => {
+		void ensureConnections();
+	}, [features.connections]);
+	// The store holds the connections of the ACTIVE brain, and this panel can be opened
+	// for a named one (the Share control in the brains list). brain_access is registered
+	// sticky so the two are normally the same, and this says so out loud rather than
+	// trusting it: naming one brain's rooms under another brain's page is issue #26 in
+	// miniature.
+	if (activeBrain?.id !== brainId) return null;
+	const rooms = (connectionList ?? []).filter((c) => c.state === 'live' || c.state === 'pending');
+	if (rooms.length === 0) return null;
+	return (
+		<button
+			type="button"
+			onClick={() => openConnections(brainId)}
+			class="mt-4 flex w-full items-center gap-1 border-t border-border pt-3 text-left text-sm text-muted hover:text-fg"
+		>
+			<span>
+				Also joined to {rooms.length} shared {rooms.length === 1 ? 'space' : 'spaces'}
+			</span>
+			<span aria-hidden="true">→</span>
+		</button>
+	);
+}
 
 // Per-brain sharing: who can reach THIS brain, at what level, and whether it's
 // private or open to the whole organization. The brain-scope sibling of MembersView
@@ -135,6 +181,8 @@ function BrainAccessView({
 			{access.length === 0 && (
 				<div class="py-6 text-center text-sm text-muted">Nobody else has access yet.</div>
 			)}
+
+			<AlsoJoinedTo brainId={brainId} />
 		</div>
 	);
 }

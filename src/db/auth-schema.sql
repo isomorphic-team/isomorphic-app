@@ -69,6 +69,14 @@ CREATE TABLE IF NOT EXISTS brains (
   created_by TEXT,                       -- app_users.user_id of the creator (audit)
   visibility TEXT NOT NULL DEFAULT 'org',     -- 'org' (every org member) | 'private' (grants only)
   created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  -- Lifecycle (0007). archived_at is EXISTENCE, filtered in SQL by every consumer of
+  -- the accessible set: a brain that is gone is not a question about who you are.
+  -- read_only IS policy and caps the resolved role at viewer, which is how a mirror
+  -- stays inert; a viewer grant cannot do it, because effectiveBrainRole's org-admin
+  -- floor hands an admin of the owning org their own role straight back.
+  archived_at TEXT,
+  read_only  INTEGER NOT NULL DEFAULT 0,
+  mirror_of  TEXT,                          -- connections.connection_id, provenance only
   UNIQUE (repo_owner, repo_name)
 );
 

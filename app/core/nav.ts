@@ -20,6 +20,7 @@ export type DestKey =
 	| 'graph'
 	| 'activity'
 	| 'sharing'
+	| 'connections'
 	| 'members'
 	| 'analytics'
 	| 'brains'
@@ -27,15 +28,15 @@ export type DestKey =
 
 // THE SCOPE TEST: does switching brains change what this screen shows?
 //
-// Yes for Search, Files, Graph, Recent changes and Sharing — those are views OF a
-// brain, and they are the ones standing in the rail down the left edge.
+// Yes for Search, Files, Graph, Recent changes, Sharing and Connections — those are
+// views OF a brain, and they are the ones standing in the rail down the left edge.
 // No for Manage brains and Your settings: the same list and the same identity whichever
 // brain is active, so they are views of your ACCOUNT.
 // Members and Analytics answer a third way, which is why there is a third scope: a
 // sibling brain in the same org shows the SAME roster and the SAME numbers, and only
 // crossing into another org changes them. They are views of the ORG, reached through
 // whichever brain is active, not properties of the brain you happen to be in.
-// `blurb` is one line saying what the destination is FOR. Required on all nine even
+// `blurb` is one line saying what the destination is FOR. Required on all ten even
 // though only the More page renders it today: an optional field is one a new
 // destination quietly omits, and the row it lands in is then a bare word with a gap
 // under it where its neighbours have a sentence.
@@ -62,6 +63,22 @@ export const DEST_META: Record<DestKey, { label: string; scope: Scope; blurb: st
 		blurb: 'What changed, and who changed it'
 	},
 	sharing: { label: 'Sharing', scope: 'brain', blurb: 'Who can open this brain' },
+	// Brain scope, and it passes THE SCOPE TEST the same way Sharing does: switching
+	// brains shows a different list. The two are a pair and read as opposites, which is
+	// why they sit together: Sharing is who can come IN, this is where the brain reaches
+	// OUT.
+	//
+	// LABELLED FOR WHAT A ROW IS, not for the machinery. "Connections" names the
+	// relationship and leaves the reader to work out what one of them contains; the
+	// thing you actually arrive at is a place with pages in it that two organizations
+	// share. The tools are still create_connection and accept_connection, and their
+	// descriptions call the result a shared working surface, so a person asking for a
+	// "shared space" in words still lands on them.
+	connections: {
+		label: 'Shared spaces',
+		scope: 'brain',
+		blurb: 'Pages you and another organization both write in'
+	},
 	members: { label: 'Members', scope: 'org', blurb: 'Who is in your organization' },
 	analytics: {
 		label: 'Analytics',
@@ -86,6 +103,13 @@ export type NavCaps = {
 	analytics: boolean;
 	/** Admin+ of at least one org — brain management is theirs alone. */
 	canManageBrains: boolean;
+	/** Connections are registered only where the deployment has an org model and a platform install. */
+	connections: boolean;
+	/**
+	 * Is the ACTIVE brain a connection rather than one of the caller's own? A room has
+	 * a shorter rail (see destinationsIn).
+	 */
+	inConnection: boolean;
 };
 
 // The destinations of one scope, in order, filtered to what a click would actually
@@ -95,8 +119,25 @@ export type NavCaps = {
 export function destinationsIn(scope: Scope, caps: NavCaps): DestKey[] {
 	return (Object.keys(DEST_META) as DestKey[]).filter((k) => {
 		if (DEST_META[k].scope !== scope) return false;
+		// A CONNECTION IS NOT ONE OF YOUR BRAINS, and most of a brain's places have no
+		// answer inside one. Nobody administers a room's access (it follows the anchor
+		// brain, so there is nothing for Sharing to show or change), and no connections
+		// hang off a connection. What is left is the room itself: its files, its text,
+		// and what changed in it.
+		//
+		// Graph is LEFT OUT rather than refused. Traversing a graph of brains is a
+		// plausible later direction and nothing here forecloses it; today the graph is
+		// drawn from one brain's pages, which inside a room is the least interesting
+		// thing about it.
+		//
+		// Only the brain scope shrinks. Org and account destinations are the CALLER's
+		// own and being in a shared room does not suspend them: you can still reach your
+		// organization's roster and your own settings from inside one.
+		if (caps.inConnection && DEST_META[k].scope === 'brain')
+			return k === 'files' || k === 'search' || k === 'activity';
 		if (k === 'analytics') return caps.analytics;
 		if (k === 'brains') return caps.canManageBrains;
+		if (k === 'connections') return caps.connections;
 		return true;
 	});
 }
@@ -115,6 +156,8 @@ const VIEW_DEST: Record<string, DestKey> = {
 	activity: 'activity',
 	'brain-access': 'sharing',
 	'share-brain': 'sharing',
+	connections: 'connections',
+	'start-connection': 'connections',
 	members: 'members',
 	'invite-member': 'members',
 	analytics: 'analytics',
