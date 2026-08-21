@@ -382,9 +382,19 @@ function Root() {
 		// it. The rail is a sibling of the header rather than something inside it, because
 		// it spans the whole card — the header scrolls its content under a sticky bar, and
 		// the rail is not part of that.
+		// THE RAIL IS THE HEIGHT FLOOR: the window is never shorter than the list of
+		// places you can go. That already fell out of flex sizing, since the aside's nav
+		// has intrinsic height and nothing caps it, and it is stated here so it survives
+		// a later `overflow-hidden` on main or an absolutely positioned rail. A stale
+		// value is harmless in one direction only: too low and flex still gives the rail
+		// what it needs, too high and short views grow dead space. Inline only, because
+		// min-h-screen already clears it and two min-h utilities on one element would
+		// resolve by stylesheet order rather than by the order they are written here.
 		<div
 			class={`flex bg-bg text-fg ${
-				inline ? 'max-h-[560px] overflow-y-auto rounded-xl border border-border' : 'min-h-screen'
+				inline
+					? 'min-h-[168px] max-h-[560px] overflow-y-auto rounded-xl border border-border'
+					: 'min-h-screen'
 			}`}
 		>
 			<Rail view={view} />

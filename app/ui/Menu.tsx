@@ -8,15 +8,21 @@
 // speculative.
 //
 // Still hand-rolled, for Toolbar.tsx's reason: the menu-button pattern is small and
-// fully specified (https://www.w3.org/WAI/ARIA/apg/patterns/menu-button/). What it
-// does NOT do is portal or flip — the panel is absolutely positioned inside the
-// trigger's stacking context. That is fine here because every menu hangs off the top
-// bar of a card that scrolls internally, and it is the point at which a positioning
-// library (floating-ui) starts paying for itself.
+// fully specified (https://www.w3.org/WAI/ARIA/apg/patterns/menu-button/). It does not
+// PORTAL — the panel is absolutely positioned inside the trigger's stacking context —
+// which is the point at which a positioning library (floating-ui) starts paying for
+// itself. It does now FLIP, because the premise that used to make that unnecessary
+// ("every menu hangs off the top bar") stopped being true when the rail put one at the
+// BOTTOM of its column.
 import type { ComponentChildren } from 'preact';
 import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks';
 import { cn } from './cn.ts';
 import { Button, type ButtonProps } from './Button.tsx';
+
+/** Breathing room kept between the panel and the edge of the card. */
+const GAP = 8;
+/** Below this many pixels, a side counts as cramped and the panel looks for a roomier one. */
+const COMFORTABLE = 160;
 
 /** Spread onto whatever element opens the menu. */
 export type MenuTriggerProps = {
@@ -48,11 +54,17 @@ export function Menu({
 	children: (close: () => void) => ComponentChildren;
 }) {
 	const [open, setOpen] = useState(false);
-	// Cap the panel to the space between the trigger and the bottom of the visible
-	// viewport (the inline card IS the iframe, so window.innerHeight is the card's
-	// visible height). Without this a short card clips the lower rows, since the card's
-	// own overflow-y-auto contains the absolutely-positioned panel.
-	const [maxH, setMaxH] = useState<number | null>(null);
+	// WHICH SIDE THE PANEL OPENS ON, and how tall it may be. The inline card IS the
+	// iframe, so window.innerHeight is the card's visible height.
+	//
+	// A PANEL MAY NEVER EXCEED THE ROOM ON ITS SIDE. It is absolutely positioned inside
+	// the card, whose own overflow-y-auto contains it, so one that overflows does not
+	// simply get clipped: it makes the CARD scrollable, and opening the menu focuses its
+	// first row, which scrolls the card to reach it and drags the rail up out of sight.
+	// The rail then reads as clipped by a too-short window, which is not what happened.
+	// That is what a `Math.max(96, …)` floor here used to guarantee on a short card: on a
+	// 170px browse card the ⋯ has 32px beneath it, and the panel was told to take 96.
+	const [place, setPlace] = useState<{ up: boolean; maxH: number } | null>(null);
 	// Wraps the trigger. The panel is absolute, so it does not affect this rect — one
 	// ref serves both the outside-click test and the measurement.
 	const ref = useRef<HTMLDivElement>(null);
@@ -82,12 +94,20 @@ export function Menu({
 
 	useLayoutEffect(() => {
 		if (!open) {
-			setMaxH(null);
+			setPlace(null);
 			return;
 		}
 		const measure = () => {
-			const b = ref.current?.getBoundingClientRect().bottom ?? 0;
-			setMaxH(Math.max(96, window.innerHeight - b - 8));
+			const r = ref.current?.getBoundingClientRect();
+			if (!r) return;
+			const below = window.innerHeight - r.bottom - GAP;
+			const above = r.top - GAP;
+			// Prefer opening downward, and flip only when down is cramped AND up is
+			// roomier — the same rule a positioning library applies. Menus in the top bar
+			// have almost nothing above them and so never flip; the rail's ⋯ sits at the
+			// bottom of its column and, on a short card, always does.
+			const up = below < COMFORTABLE && above > below;
+			setPlace({ up, maxH: Math.max(0, up ? above : below) });
 		};
 		measure();
 		window.addEventListener('resize', measure);
@@ -138,9 +158,10 @@ export function Menu({
 					role="menu"
 					aria-label={label}
 					onKeyDown={onPanelKeyDown}
-					style={maxH ? { maxHeight: `${maxH}px` } : undefined}
+					style={place ? { maxHeight: `${place.maxH}px` } : undefined}
 					class={cn(
-						'absolute top-full z-20 mt-1 min-w-[168px] max-w-[80vw] overflow-y-auto overscroll-contain rounded-md border border-border bg-bg py-1 shadow-lg',
+						'absolute z-20 min-w-[168px] max-w-[80vw] overflow-y-auto overscroll-contain rounded-md border border-border bg-bg py-1 shadow-lg',
+						place?.up ? 'bottom-full mb-1' : 'top-full mt-1',
 						align === 'end' ? 'right-0' : 'left-0',
 						panelClass
 					)}
