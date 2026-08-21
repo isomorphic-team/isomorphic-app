@@ -913,6 +913,19 @@ by neither, that each side joins to one of its OWN brains. Not a copy and not a 
   server-side would leave the crumb naming the previous brain over a connection's
   content, which is issue #26 reintroduced. Filtering happens where the list renders
   (`BrainsView.tsx`), which is the switcher now that the brain crumb's picker is gone.
+- **Sharing POINTS AT connections, and must never list them** (`AlsoJoinedTo` in
+  `app/views/BrainAccessView.tsx`). The two pages look mergeable and are not, for two
+  reasons. They are different kinds of control: sharing is an editor whose rows are
+  people and whose clicks mutate a grant, while connections is a navigation list whose
+  rows are other brains and whose clicks LEAVE the page. And access runs ONE WAY:
+  `addConnectionBrains` walks memberships to the anchor brain to the connection and
+  never the reverse, so reaching this brain gets you into the rooms it anchors while
+  being in one of those rooms gets you nothing here. A room among the people who can
+  reach this brain would state the opposite, on the one page a person opens when they
+  are worried about a leak. So the footer is a count and a link, rendered only when
+  `connectionList` holds something, and never when the panel is showing a brain other
+  than the active one. `pnpm test:ui` pins BOTH halves, and the negative one is the
+  point: it asserts the room's name is absent from the sharing page.
 - **A room has a shorter rail**, and the rule lives with every other nav decision in
   `app/core/nav.ts` (`destinationsIn`, `pnpm test:policy`). Inside a
   connection the brain scope shrinks to Files, Search and Recent changes: nobody

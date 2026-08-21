@@ -77,3 +77,24 @@ test('Connections stands in the rail beside Sharing, as a place in this brain', 
 	await rail.getByRole('button', { name: 'Connections', exact: true }).click();
 	await expectView(app, 'connections');
 });
+
+test('Sharing POINTS AT the connections instead of listing them', async ({ page }) => {
+	const app = await openApp(page, 'access');
+	await expectView(app, 'brain-access');
+
+	// The two lists must not merge, and this is the assertion that says why. Access runs
+	// one way: reaching this brain gets you into the rooms it anchors, and being in one
+	// of those rooms gets you nothing here. A room among the people who can reach this
+	// brain would state the reverse, on the one page opened by someone worried about a
+	// leak. So the room's name must NOT be on the sharing page.
+	await expect(app.getByText('Northwind engagement')).toHaveCount(0);
+
+	// What is there is a pointer, which answers the other half of the thought that
+	// brings someone to this page without putting a brain in a list of people.
+	const link = app.getByRole('button', { name: /Also joined to \d+ shared space/ });
+	await expect(link).toBeVisible();
+
+	await link.click();
+	await expectView(app, 'connections');
+	await expect(app.getByText('Northwind engagement')).toBeVisible();
+});
