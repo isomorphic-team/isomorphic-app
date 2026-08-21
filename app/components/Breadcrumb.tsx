@@ -536,6 +536,16 @@ export function Breadcrumb({ view }: { view: View }) {
 	// in, and every brain in that org shows the same one. Under a brain crumb it read as
 	// "these people belong to this brain", which is the containment main already removed
 	// from Manage brains and Your settings for exactly the same reason.
+	// More is the one screen that belongs to no single scope: it is the index of both the
+	// org and the account destinations. Any non-brain root gives it the back arrow, which
+	// is what it needs — it sits BESIDE the brain like everything it lists, and a brain
+	// crumb would claim the organization is inside the brain.
+	if (view.kind === 'more')
+		return (
+			<DestinationCrumb root="account">
+				<span class={crumbCurrent}>More</span>
+			</DestinationCrumb>
+		);
 	if (view.kind === 'members')
 		return (
 			<DestinationCrumb root="org">

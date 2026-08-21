@@ -37,7 +37,7 @@ import {
 	pickShownBrain
 } from '../app/core/store.ts';
 import { renderAge, refreshOutcome } from '../app/core/util.ts';
-import { DEST_META, destinationsIn, activeDestination } from '../app/core/nav.ts';
+import { DEST_META, destinationsIn, activeDestination, isMorePlace } from '../app/core/nav.ts';
 
 let failures = 0;
 function check(label: string, cond: boolean, detail = '') {
@@ -412,12 +412,12 @@ console.log('\nnav destinations');
 	const bare = { analytics: false, canManageBrains: false };
 
 	check(
-		'the brain cluster is the four views OF a brain, in bar order',
-		destinationsIn('brain', full).join() === 'files,graph,activity,sharing'
+		'the rail is the five views OF a brain, in rail order',
+		destinationsIn('brain', full).join() === 'search,files,graph,activity,sharing'
 	);
 	check(
 		'…and none of them is gated — every one is open to anyone who can reach the brain',
-		destinationsIn('brain', bare).join() === 'files,graph,activity,sharing'
+		destinationsIn('brain', bare).join() === 'search,files,graph,activity,sharing'
 	);
 	check(
 		'a deployment with USAGE_ANALYTICS off never offers Analytics',
@@ -459,10 +459,38 @@ console.log('\nnav destinations');
 	// Marking Files while reading a page would claim you are looking at the tree.
 	check('a page is not a destination', activeDestination('page') === null);
 	check('nor is the editor', activeDestination('edit') === null);
-	check('nor a search result', activeDestination('search') === null);
+	// Search is a PLACE now (its own page, its own field), so it marks itself. It was
+	// briefly a control in the chrome that swapped the trail for an input, and null here
+	// is what that version asserted.
+	check('search is a destination and marks itself', activeDestination('search') === 'search');
 	// The cluster only ever lights a destination that is IN it. An unknown kind (a view
 	// added later without a mapping) must read as "nowhere", never as the previous view.
 	check('an unmapped view marks nothing', activeDestination('brand-new-view') === null);
+
+	// THE ⋯ RAIL ITEM stays lit past its own page. More is an index of the org and
+	// account destinations, so arriving at one of them by way of it has not left it —
+	// without this the rail goes dark two steps in and stops answering "where am I".
+	check('More marks itself', isMorePlace('more'));
+	check('…and everything it leads to', isMorePlace('members') && isMorePlace('settings'));
+	check('…including a flow pushed off one of those', isMorePlace('invite-member'));
+	// The rail shows the brain's own five itself, so they light their own icon, never ⋯.
+	check(
+		'a brain destination is never the ⋯',
+		!isMorePlace('browse') && !isMorePlace('search') && !isMorePlace('graph')
+	);
+	check(
+		'nor is a page, an editor, or an unknown view',
+		!isMorePlace('page') && !isMorePlace('edit') && !isMorePlace('brand-new-view')
+	);
+
+	// A blurb is what the More page puts under each row. Required on every destination
+	// (see DEST_META) so a new one cannot land as a bare word with a gap beneath it.
+	check(
+		'every destination carries a non-empty blurb',
+		(Object.keys(DEST_META) as (keyof typeof DEST_META)[]).every(
+			(k) => typeof DEST_META[k].blurb === 'string' && DEST_META[k].blurb.trim().length > 0
+		)
+	);
 }
 
 console.log(

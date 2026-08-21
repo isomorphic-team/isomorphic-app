@@ -53,7 +53,14 @@ const DEST_OPEN: Record<DestKey, () => void> = {
 	settings: () => openSettings()
 };
 
-export type Destination = { key: DestKey; label: string; icon: VNode; open: () => void };
+export type Destination = {
+	key: DestKey;
+	label: string;
+	/** One line on what the destination is for. Rendered by the More page; the rail uses the title. */
+	blurb: string;
+	icon: VNode;
+	open: () => void;
+};
 
 // One scope's destinations, resolved against the live store. Read on every header
 // render rather than memoized: `features` lands with the brain list, and `canManage`
@@ -66,6 +73,7 @@ export function destinations(scope: Scope): Destination[] {
 	return destinationsIn(scope, caps).map((key) => ({
 		key,
 		label: DEST_META[key].label,
+		blurb: DEST_META[key].blurb,
 		icon: DEST_ICON[key],
 		open: DEST_OPEN[key]
 	}));

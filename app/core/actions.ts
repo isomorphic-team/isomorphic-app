@@ -997,6 +997,21 @@ function openSearch() {
 	show({ kind: 'search', query: '', hits: [] });
 }
 
+// The rail's ⋯, which is a PLACE rather than a popover. It holds the destinations that
+// are not this brain (your organization, your account), and it is a page for the reason
+// every other treatment failed: the rail is top-anchored, so ⋯ sits ~145px down however
+// tall the card is, and anything hanging off it is bounded by the room left underneath.
+// A popover, a flyout rail and a labelled expanding rail all hit that wall on a 170px
+// inline card. A page owns the content area and scrolls, at every card size, forever.
+//
+// Display mode is deliberately NOT here. It is a window control, not a place, and
+// putting it on a page would mean navigating away from what you are reading in order to
+// go fullscreen, then landing on this screen instead of your content. It lives at the
+// right end of the top bar (main.tsx).
+function openMore() {
+	show({ kind: 'more' });
+}
+
 async function runSearch(query: string) {
 	// An empty submit is a no-op rather than a search for nothing, and it leaves the
 	// page as it is: you are already ON the search view, with the field in front of you.
@@ -1145,6 +1160,7 @@ export {
 	openGraph,
 	refreshBrowse,
 	openSearch,
+	openMore,
 	runSearch,
 	openEditor,
 	resolveWikilink,

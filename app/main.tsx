@@ -9,13 +9,13 @@
 // modules: app/core/* (types < store < toast < host < actions < icons/util) and one
 // file per view under app/views/*. Adding a view = one file there + one Body case here.
 
-import { Fragment, render } from 'preact';
+import { render } from 'preact';
 import type { ComponentChildren } from 'preact';
 import { useSyncExternalStore } from 'preact/compat';
 import type { View } from './core/types.ts';
 import type { ViewAction } from './core/view-registry.ts';
 import { subscribeStore, version, currentView, show } from './core/store.ts';
-import { activeDestination } from './core/nav.ts';
+import { activeDestination, isMorePlace } from './core/nav.ts';
 import { destinations } from './components/Destinations.tsx';
 import {
 	app,
@@ -31,17 +31,17 @@ import {
 	ensureBrainList,
 	openBrowse,
 	openGraph,
+	openMore,
 	guardNav
 } from './core/actions.ts';
 import { toast, Toast, ConfirmDialog } from './core/toast.tsx';
 import { MoreIcon } from './core/icons.tsx';
-import { Button, Menu, MenuRow, MenuSeparator } from './ui/index.ts';
+import { Button, Menu, MenuRow } from './ui/index.ts';
 import { Breadcrumb } from './components/Breadcrumb.tsx';
 // The Body dispatch table is codegenned from app/views/*.tsx (see scripts/gen-app.ts).
 import { renderView, viewActions } from './views/registry.generated.ts';
 // Chrome still binds the editor's save/cancel + toolbar directly.
 import { EditorToolbar, editCtl } from './views/EditView.tsx';
-import { eyebrow } from './ui/typography.ts';
 
 // ---------- host wiring ----------
 
@@ -72,88 +72,57 @@ app.ontoolcancelled = () => {
 
 // ---------- chrome ----------
 
-// The wording of the two groups the ⋯ menu still carries. Kept here rather than in
-// nav.ts because it is a heading in ONE surface: the rail needs no heading (its items
-// are all one scope) and the trail no longer offers destinations at all.
-const SCOPE_HEADING: Record<'org' | 'account', string> = {
-	org: 'Organization',
-	account: 'Your account'
-};
-
-// The last item in the rail (⋯), holding everything that is not this brain: the
-// organization it sits in, your account, and the display mode. Its rows survive an open
-// editor for the same reason the rail above it does — they ask (`guardNav`) rather than
-// disappear.
-function OverflowMenu() {
+// WHICH WINDOW THIS IS, at the right end of the top bar.
+//
+// It used to be the third group inside the rail's ⋯ menu, filed beside Members and Your
+// settings, which put a WINDOW CONTROL among PLACES and is most of why that menu read as
+// a junk drawer. It is not a destination: it changes how the app is presented, not what
+// you are looking at, and it is the one thing here that must stay reachable without
+// navigating — going fullscreen to read something has to leave you on the thing you were
+// reading.
+//
+// Right end of the bar rather than in the rail. The rail is destinations only, and the
+// bottom of the rail (the other candidate) collides with the destination group on a
+// short card, which is why that column is top-anchored. The honest wrinkle: this end of
+// the bar is otherwise the current VIEW's actions, and display mode belongs to the app.
+// The gap before it is what separates the two.
+function DisplayMenu() {
 	const modes = availableModeList();
-	const hasDisplay = modes.length >= 2;
+	// One mode is not a choice. A host that offers no alternative gets no control.
+	if (modes.length < 2) return null;
 	return (
 		<Menu
-			label="More"
-			// Opens to the RIGHT now that its trigger sits in the left rail. `end` would
-			// hang the panel off the card's left edge, where it is clipped.
-			align="start"
+			label="Display"
+			align="end"
+			class="ml-1 border-l border-border pl-1.5"
 			trigger={({ props }) => (
-				<Button variant="ghost" size="icon" title="More" aria-label="More" {...props}>
-					<MoreIcon />
+				<Button
+					variant="ghost"
+					size="icon"
+					title={`Display: ${MODE_LABEL[displayMode]}`}
+					aria-label={`Display: ${MODE_LABEL[displayMode]}`}
+					{...props}
+				>
+					{MODE_ICON[displayMode]}
 				</Button>
 			)}
 		>
-			{(close) => {
-				const go = (fn: () => void) => () => {
-					close();
-					fn();
-				};
-				// Empty groups are dropped before the separators are drawn, so a scope that
-				// has nothing to offer (every row gated away) cannot leave a rule floating
-				// at the top of the menu.
-				const groups = (['org', 'account'] as const)
-					.map((scope) => ({ scope, rows: destinations(scope) }))
-					.filter((g) => g.rows.length > 0);
-				return (
-					<>
-						{/* THE BRAIN'S OWN VIEWS ARE NOT IN HERE. Files, Graph, Recent changes and
-						    Sharing are the four items standing above this one in the rail, and a row
-						    each would be a second way to say the same thing — which is what the ⋯
-						    menu and the crumb pickers had already become to each other.
-						    What is left is the two scopes that are NOT this brain: the organization
-						    it sits in, and your account. Both are rare enough to live behind one
-						    press, and both would read as properties of the current brain if they sat
-						    open in the rail beside its own views. The groups come from DEST_META's
-						    scopes (app/core/nav.ts), so a destination is filed by the same rule that
-						    decides which surface shows it. */}
-						{groups.map((g, i) => (
-							<Fragment key={g.scope}>
-								{i > 0 && <MenuSeparator />}
-								<div class={`px-3 pb-0.5 pt-1 ${eyebrow}`}>{SCOPE_HEADING[g.scope]}</div>
-								{g.rows.map((d) => (
-									<MenuRow key={d.key} onClick={go(guardNav(d.open))}>
-										<span class="w-4 text-muted">{d.icon}</span>
-										<span class="flex-1">{d.label}</span>
-									</MenuRow>
-								))}
-							</Fragment>
-						))}
-						{hasDisplay && (
-							<>
-								{groups.length > 0 && <MenuSeparator />}
-								<div class={`px-3 pb-0.5 pt-1 ${eyebrow}`}>Display</div>
-								{modes.map((m) => (
-									<MenuRow
-										key={m}
-										onClick={go(() => setDisplayMode(m))}
-										class={m === displayMode ? 'text-accent' : 'text-fg'}
-									>
-										<span class="w-4 text-center">{MODE_ICON[m]}</span>
-										<span class="flex-1">{MODE_LABEL[m]}</span>
-										{m === displayMode && <span>✓</span>}
-									</MenuRow>
-								))}
-							</>
-						)}
-					</>
-				);
-			}}
+			{(close) =>
+				modes.map((m) => (
+					<MenuRow
+						key={m}
+						onClick={() => {
+							close();
+							setDisplayMode(m);
+						}}
+						class={m === displayMode ? 'text-accent' : 'text-fg'}
+					>
+						<span class="w-4 text-center">{MODE_ICON[m]}</span>
+						<span class="flex-1">{MODE_LABEL[m]}</span>
+						{m === displayMode && <span>✓</span>}
+					</MenuRow>
+				))
+			}
 		</Menu>
 	);
 }
@@ -293,11 +262,31 @@ function Rail({ view }: { view: View }) {
 					);
 				})}
 				<span class="my-0.5 h-px w-4 bg-border" />
-				{/* The org and account scopes. They are one press further in than the brain's
-				    own views because they are rarer AND because sitting in the rail beside
-				    them would read as "these belong to this brain" — the containment claim
-				    the scope split exists to prevent. */}
-				<OverflowMenu />
+				{/* ⋯ IS A DESTINATION LIKE THE REST OF THE RAIL, not a menu. It opens the More
+				    page, which carries the org and account scopes: one press further in than
+				    the brain's own views because they are rarer, and separate because sitting
+				    open in the rail beside them would read as "these belong to this brain",
+				    the containment claim the scope split exists to prevent.
+				    It lights while you are on More AND while you are on anything More led you
+				    to, so the rail keeps answering "where am I" two steps in (isMorePlace). */}
+				{(() => {
+					const current = isMorePlace(view.kind);
+					return (
+						<RailItem current={current}>
+							<Button
+								variant="ghost"
+								size="icon"
+								title="More"
+								aria-label="More"
+								aria-current={current ? 'page' : undefined}
+								onClick={guardNav(openMore)}
+								class={current ? 'text-accent' : undefined}
+							>
+								<MoreIcon />
+							</Button>
+						</RailItem>
+					);
+				})()}
 			</nav>
 		</aside>
 	);
@@ -337,6 +326,9 @@ function Header({ view }: { view: View }) {
 					{viewActions(view).map((a) => (
 						<HeaderAction key={a.key} action={a} />
 					))}
+					{/* Then the window itself, after a rule. Not one of the view's actions, and
+					    the separator is what says so. */}
+					<DisplayMenu />
 				</span>
 			</div>
 			{/* The formatting toolbar slides in / out as you enter / leave edit — grid-rows

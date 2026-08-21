@@ -35,7 +35,11 @@ export type DestKey =
 // sibling brain in the same org shows the SAME roster and the SAME numbers, and only
 // crossing into another org changes them. They are views of the ORG, reached through
 // whichever brain is active, not properties of the brain you happen to be in.
-export const DEST_META: Record<DestKey, { label: string; scope: Scope }> = {
+// `blurb` is one line saying what the destination is FOR. Required on all nine even
+// though only the More page renders it today: an optional field is one a new
+// destination quietly omits, and the row it lands in is then a bare word with a gap
+// under it where its neighbours have a sentence.
+export const DEST_META: Record<DestKey, { label: string; scope: Scope; blurb: string }> = {
 	// Search leads: it is the way to a page you cannot point at yet, which is the
 	// question you arrive with most often. Then Files and Graph, the same brain drawn
 	// two ways, and the feed and the audience after them.
@@ -45,15 +49,31 @@ export const DEST_META: Record<DestKey, { label: string; scope: Scope }> = {
 	// opened a widget instead of going somewhere, which is exactly the inconsistency a
 	// rail of peers makes obvious. It has a view of its own that holds its own field
 	// now, so it behaves like every other destination: press it, arrive, the rail lights.
-	search: { label: 'Search', scope: 'brain' },
-	files: { label: 'Files', scope: 'brain' },
-	graph: { label: 'Graph', scope: 'brain' },
-	activity: { label: 'Recent changes', scope: 'brain' },
-	sharing: { label: 'Sharing', scope: 'brain' },
-	members: { label: 'Members', scope: 'org' },
-	analytics: { label: 'Analytics', scope: 'org' },
-	brains: { label: 'Manage brains', scope: 'account' },
-	settings: { label: 'Your settings', scope: 'account' }
+	search: { label: 'Search', scope: 'brain', blurb: 'Find a page by its text' },
+	files: { label: 'Files', scope: 'brain', blurb: 'The whole brain as a tree' },
+	graph: { label: 'Graph', scope: 'brain', blurb: 'How the pages link to each other' },
+	activity: {
+		label: 'Recent changes',
+		scope: 'brain',
+		blurb: 'What changed, and who changed it'
+	},
+	sharing: { label: 'Sharing', scope: 'brain', blurb: 'Who can open this brain' },
+	members: { label: 'Members', scope: 'org', blurb: 'Who is in your organization' },
+	analytics: {
+		label: 'Analytics',
+		scope: 'org',
+		blurb: 'How much your organization uses its brains'
+	},
+	brains: {
+		label: 'Manage brains',
+		scope: 'account',
+		blurb: 'Create, connect, or disconnect a brain'
+	},
+	settings: {
+		label: 'Your settings',
+		scope: 'account',
+		blurb: 'Your identity and connected accounts'
+	}
 };
 
 /** What the deployment and the caller's roles actually make reachable. */
@@ -102,4 +122,17 @@ const VIEW_DEST: Record<string, DestKey> = {
 
 export function activeDestination(viewKind: string): DestKey | null {
 	return VIEW_DEST[viewKind] ?? null;
+}
+
+// IS THE RAIL'S ⋯ THE PLACE YOU ARE? True on the More page itself and on everything
+// More leads to, so the rail keeps answering "where am I" once you are two steps in.
+// Without the second half, opening Members from More lights nothing and the rail reads
+// as though you had left it.
+//
+// Defined by SCOPE rather than by a list, so a destination added to org or account is
+// covered the day it exists — those are exactly the ones the rail does not show itself.
+export function isMorePlace(viewKind: string): boolean {
+	if (viewKind === 'more') return true;
+	const d = activeDestination(viewKind);
+	return !!d && DEST_META[d].scope !== 'brain';
 }
