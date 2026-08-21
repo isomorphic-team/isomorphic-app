@@ -37,7 +37,7 @@ import type {
 	UsageBrain
 } from './types.ts';
 import { app, callTool, firstText } from './host.ts';
-import { FOLDER_NOTE_NAMES, refreshOutcome } from './util.ts';
+import { isFolderNoteName, refreshOutcome } from './util.ts';
 import {
 	show,
 	history,
@@ -55,12 +55,50 @@ import {
 	setFeatures,
 	applyPolicy,
 	applyBrainContext,
+	editDirty,
+	setEditDirty,
 	bump,
 	connectionList,
 	setConnectionList,
 	features
 } from './store.ts';
-import { toast } from './toast.tsx';
+import { toast, askConfirm } from './toast.tsx';
+
+// LEAVING AN OPEN EDITOR. Every destination in the app abandons an in-progress edit,
+// and the bar's answer used to be to HIDE the destinations while editing — which cost
+// the user their navigation and protected nothing, because the breadcrumb sitting
+// beside the hidden controls was still linked and still switching brains.
+//
+// So the controls stay live and this is the guard instead. It is a no-op unless there
+// is an editor open that has actually been typed in, which is why the nav surfaces can
+// route every click through it without asking anyone a question they do not need.
+//
+// It clears the flag on a YES: the caller is about to navigate, and the session it was
+// protecting is over. A NO leaves the flag set and the caller does nothing.
+async function confirmLeaveEdit(): Promise<boolean> {
+	if (currentView.kind !== 'edit' || !editDirty) return true;
+	const ok = await askConfirm({
+		title: 'Discard your changes?',
+		body: 'This page has edits that have not been saved.',
+		confirmLabel: 'Discard'
+	});
+	if (ok) setEditDirty(false);
+	return ok;
+}
+
+/**
+ * Wrap a navigation click so it asks before abandoning an unsaved edit. Returns a
+ * handler, so a call site reads `onClick={guardNav(() => openBrowse())}` — the guard
+ * belongs at the point a PERSON chose to go somewhere, not inside the openers, which
+ * are also called by the tool-result router on the model's behalf.
+ */
+function guardNav(fn: () => void): () => void {
+	return () => {
+		void confirmLeaveEdit().then((ok) => {
+			if (ok) fn();
+		});
+	};
+}
 
 // The central tool-result router: the host feeds every opening tool result here via
 // app.ontoolresult (wired in main.tsx).
@@ -257,7 +295,12 @@ async function switchBrain(id: string) {
 		openBrowse();
 		return;
 	}
-	show({ kind: 'loading', label: 'Switching brain…' });
+	show({
+		kind: 'loading',
+		label: 'Switching brain…',
+		task: 'switch',
+		subject: brainList?.find((b) => b.id === id)?.label
+	});
 	try {
 		await adoptBrain(id);
 		openBrowse();
@@ -388,7 +431,10 @@ async function submitCreateBrain(name: string) {
 	// push:false — a completed flow must not enter the back stack, so the screen that
 	// opened it stays on top and Back from the new brain lands there, not on a form
 	// offering to create the brain that now exists.
-	show({ kind: 'loading', label: 'Creating brain…' }, { push: false });
+	show(
+		{ kind: 'loading', label: 'Creating brain…', task: 'create', subject: trimmed },
+		{ push: false }
+	);
 	try {
 		const res = await callTool('create_brain', { name: trimmed });
 		if (res.isError) throw new Error(firstText(res));
@@ -407,7 +453,7 @@ async function submitCreateBrain(name: string) {
 
 // Open the full brains view (the bi-modal counterpart to the header switcher).
 async function openBrains() {
-	show({ kind: 'loading', label: 'Loading brains…' });
+	show({ kind: 'loading', label: 'Loading brains…', task: 'brains' });
 	try {
 		const res = await callTool('brains', {});
 		if (res.isError) throw new Error(firstText(res));
@@ -488,7 +534,7 @@ function ensureConnections(): Promise<void> {
 
 // The connections panel. A brain-scope view like sharing, and reached the same way.
 async function openConnections(brain?: string) {
-	show({ kind: 'loading', label: 'Loading connections…' });
+	show({ kind: 'loading', label: 'Loading connections…', task: 'connections' });
 	try {
 		const result = await callTool('connections', brain ? { brain } : {});
 		if (result.isError) throw new Error(firstText(result));
@@ -513,7 +559,7 @@ function connectionsViewFromSc(sc: Record<string, unknown>): View {
 }
 
 async function openBrainAccess(brain?: string) {
-	show({ kind: 'loading', label: 'Loading sharing…' });
+	show({ kind: 'loading', label: 'Loading sharing…', task: 'sharing' });
 	try {
 		const result = await callTool('brain_access', brain ? { brain } : {});
 		if (result.isError) throw new Error(firstText(result));
@@ -578,10 +624,27 @@ async function fetchPageIndex(): Promise<{ path: string; title: string }[]> {
 	return data.paths.map((path) => ({ path, title: data.titleByPath[path] ?? '' }));
 }
 
+// What to CALL a path when a human is reading it: the cached tree's title if the tree
+// is warm, else the filename. Only used to name the thing in a loading line, so a cold
+// cache degrades to the filename rather than costing a fetch. The point of the line is
+// that it is free.
+function baseName(path: string): string {
+	return path.split('/').pop()?.replace(/\.md$/i, '') ?? path;
+}
+function pageLabel(path: string): string {
+	const name = baseName(path);
+	// A FOLDER NOTE is its folder (FOLDER_NOTE_NAMES), so it is called by the folder's
+	// name. `pageTitle` on the server already resolves it that way, but a title reaching
+	// us as the literal "index" is exactly what that rule exists to prevent, and it is
+	// the most-clicked path in the tree: "Turning to index…" is worse than saying nothing.
+	if (isFolderNoteName(`${name}.md`)) return path.split('/').slice(-2, -1)[0] || name;
+	return browseCache?.titleByPath[path]?.trim() || name;
+}
+
 // ---------- navigation ----------
 
 async function navigateTo(path: string) {
-	show({ kind: 'loading', label: `Loading ${path}…` });
+	show({ kind: 'loading', label: `Loading ${path}…`, task: 'page', subject: pageLabel(path) });
 	try {
 		show(pageView(path, await fetchPage(path)));
 	} catch (e) {
@@ -637,7 +700,7 @@ async function refreshPage() {
 // worse than one that was never listed, so making them visible obliged us to give
 // them somewhere to go.
 async function openAsset(path: string) {
-	show({ kind: 'loading', label: `Loading ${path}…` });
+	show({ kind: 'loading', label: `Loading ${path}…`, task: 'asset', subject: baseName(path) });
 	try {
 		// include_data: the asset view IS the bytes. See app/core/media.ts on why the
 		// default is off.
@@ -743,7 +806,7 @@ async function openBrowse(focus?: string) {
 		void revalidateBrowse();
 		return;
 	}
-	show({ kind: 'loading', label: 'Loading files…' });
+	show({ kind: 'loading', label: 'Loading files…', task: 'files' });
 	// The view this call is standing on. A cold tree fetch is the app's slowest open,
 	// and the one it makes UNATTENDED (the self-boot in connectToHost), so it is the one
 	// most likely to be overtaken: the host can deliver the opening tool result at any
@@ -781,29 +844,32 @@ async function revalidateBrowse() {
 	}
 }
 
-// A nav/breadcrumb click on a folder: open its folder note (<folder>/index.md) when it
-// has one — the same page the file tree opens for that folder — else open the tree
-// REVEALED at that folder. A note-less folder used to fall back to the bare root tree,
-// which read as "the breadcrumb sent me somewhere else entirely".
-async function openFolder(prefix: string) {
-	const base = prefix.replace(/\/+$/, '');
-	try {
-		// Only a cold cache costs a round-trip — say so rather than hanging silently.
-		if (!browseCache) show({ kind: 'loading', label: `Opening ${base.split('/').pop()}…` });
-		const list = await fetchPageList();
-		// index.md preferred, README.md fallback (see FOLDER_NOTE_NAMES).
-		const note = FOLDER_NOTE_NAMES.map((n) => `${base}/${n}`).find((p) => list.includes(p));
-		if (note) return navigateTo(note);
-	} catch {
-		// no page list — the tree is always a safe destination
-	}
-	return openBrowse(base);
+// A breadcrumb click on a folder: ALWAYS the tree, revealed at that folder.
+//
+// It used to open the folder's note (<folder>/index.md) when it had one and the tree
+// when it did not, which made one control do two different things depending on a fact
+// about the folder that the trail never showed you. Pressing `wiki` landed on a page,
+// pressing `concepts` landed on the tree, and nothing in the bar said why. A crumb that
+// is sometimes a page link and sometimes a navigation is not a crumb you can aim.
+//
+// The tree is the answer that is always available and always the same, and it does not
+// hide the note: a folder with one shows it as that folder's own row, one press away.
+// The file TREE keeps opening folder notes on a folder click (views/Browse.tsx), which
+// is a different question — there you are already looking at the structure, so the note
+// is the thing you cannot see yet.
+function openFolder(prefix: string) {
+	return openBrowse(prefix.replace(/\/+$/, ''));
 }
 
 // Open the activity/audit feed — whole brain, or one page's history when `path`
 // is given. Drives the same view the view_activity tool opens.
 async function openActivity(path?: string) {
-	show({ kind: 'loading', label: 'Loading recent changes…' });
+	show({
+		kind: 'loading',
+		label: 'Loading recent changes…',
+		task: 'activity',
+		subject: path ? pageLabel(path) : undefined
+	});
 	try {
 		const result = await callTool('view_activity', { ...(path ? { path } : {}), ...brainArgs() });
 		if (result.isError) throw new Error(firstText(result));
@@ -826,7 +892,7 @@ async function openActivity(path?: string) {
 // `members` tool opens; mutations (invite / role / remove) refresh through
 // refreshMembers below.
 async function openMembers() {
-	show({ kind: 'loading', label: 'Loading members…' });
+	show({ kind: 'loading', label: 'Loading members…', task: 'members' });
 	try {
 		const result = await callTool('members', {});
 		if (result.isError) throw new Error(firstText(result));
@@ -845,7 +911,7 @@ async function openMembers() {
 // from whichever brain you happen to be in, so this deliberately does NOT pass
 // brainArgs() and lets the server resolve the org off the active brain.
 async function openAnalytics(days?: number) {
-	show({ kind: 'loading', label: 'Loading analytics…' });
+	show({ kind: 'loading', label: 'Loading analytics…', task: 'analytics' });
 	try {
 		const result = await callTool('analytics', { ...(days ? { days } : {}) });
 		if (result.isError) throw new Error(firstText(result));
@@ -908,7 +974,7 @@ function parseIdentity(sc: Record<string, unknown>): Identity {
 // Connected accounts is a per-person concern that may reject on a single-tenant
 // connection, so its failure is tolerated (the card still shows).
 async function openSettings() {
-	show({ kind: 'loading', label: 'Loading…' });
+	show({ kind: 'loading', label: 'Loading…', task: 'settings' });
 	try {
 		const [who, conn] = await Promise.all([
 			callTool('whoami', {}),
@@ -934,7 +1000,12 @@ async function openSettings() {
 // Open the link graph — the whole brain as nodes + edges. `focus` centers and
 // highlights one page. Drives the same view the view_graph tool opens.
 async function openGraph(focus?: string) {
-	show({ kind: 'loading', label: 'Building the graph…' });
+	show({
+		kind: 'loading',
+		label: 'Building the graph…',
+		task: 'graph',
+		subject: focus ? pageLabel(focus) : undefined
+	});
 	try {
 		const result = await callTool('view_graph', {
 			...(focus ? { path: focus } : {}),
@@ -975,13 +1046,37 @@ async function refreshBrowse() {
 	}
 }
 
+// Arrive at the search PAGE, empty. The field lives on the view (SearchView), so this
+// is an ordinary destination like Files or Graph rather than a control that opens a
+// widget: press it, you are somewhere, and the rail lights.
+function openSearch() {
+	show({ kind: 'search', query: '', hits: [] });
+}
+
+// The rail's ⋯, which is a PLACE rather than a popover. It holds the destinations that
+// are not this brain (your organization, your account), and it is a page for the reason
+// every other treatment failed: the rail is top-anchored, so ⋯ sits ~145px down however
+// tall the card is, and anything hanging off it is bounded by the room left underneath.
+// A popover, a flyout rail and a labelled expanding rail all hit that wall on a 170px
+// inline card. A page owns the content area and scrolls, at every card size, forever.
+//
+// Display mode is deliberately NOT here. It is a window control, not a place, and
+// putting it on a page would mean navigating away from what you are reading in order to
+// go fullscreen, then landing on this screen instead of your content. It lives at the
+// right end of the top bar (main.tsx).
+function openMore() {
+	show({ kind: 'more' });
+}
+
 // `scope` is opt-in and never ambient: the box searches the brain you are in, and
 // widening is a second, deliberate click (SearchView's footer). An ordinary search
 // keeps an ordinary blast radius, which matters because the leak here is
-// conversational — one client's material surfacing in another client's window.
+// conversational: one client's material surfacing in another client's window.
 async function runSearch(query: string, scope?: 'all') {
+	// An empty submit is a no-op rather than a search for nothing, and it leaves the
+	// page as it is: you are already ON the search view, with the field in front of you.
 	if (!query.trim()) return;
-	show({ kind: 'loading', label: `Searching for “${query}”…` });
+	show({ kind: 'loading', label: `Searching for “${query}”…`, task: 'search', subject: query });
 	try {
 		const result = await callTool('search_pages', {
 			query,
@@ -1008,7 +1103,12 @@ async function runSearch(query: string, scope?: 'all') {
 // so the switch has to land BEFORE the fetch.
 async function openHit(hit: Hit) {
 	if (!hit.brain || hit.brain === activeBrain?.id) return navigateTo(hit.path);
-	show({ kind: 'loading', label: `Loading ${hit.path}…` });
+	show({
+		kind: 'loading',
+		label: `Loading ${hit.path}…`,
+		task: 'page',
+		subject: pageLabel(hit.path)
+	});
 	try {
 		await adoptBrain(hit.brain);
 	} catch (e) {
@@ -1112,6 +1212,8 @@ function onProseClick(fromPath: string) {
 
 export {
 	handleToolResult,
+	confirmLeaveEdit,
+	guardNav,
 	brainsViewFromSc,
 	ensureBrainList,
 	switchBrain,
@@ -1149,6 +1251,8 @@ export {
 	openSettings,
 	openGraph,
 	refreshBrowse,
+	openSearch,
+	openMore,
 	runSearch,
 	openHit,
 	openConnections,

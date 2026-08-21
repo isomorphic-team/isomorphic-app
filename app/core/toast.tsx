@@ -47,7 +47,14 @@ function ConfirmDialog() {
 			class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4"
 			onClick={() => done(false)}
 		>
+			{/* A real dialog role, so assistive tech announces this as a modal rather than
+			    as loose text over the page, and so its own Cancel is addressable apart
+			    from the editor's Cancel sitting behind it. `aria-label` is the question
+			    being asked, which is the same string the box leads with. */}
 			<div
+				role="dialog"
+				aria-modal="true"
+				aria-label={req.title}
 				class="w-full max-w-xs rounded-lg border border-border bg-bg p-4 shadow-xl"
 				onClick={(e) => e.stopPropagation()}
 			>

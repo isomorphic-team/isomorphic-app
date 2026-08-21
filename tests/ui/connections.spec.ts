@@ -65,13 +65,15 @@ test('a connection is not offered in the brain switcher', async ({ page }) => {
 	await expect(app.getByText('Northwind engagement')).toHaveCount(0);
 });
 
-test('Connections is offered beside Sharing, as a place in this brain', async ({ page }) => {
+test('Connections stands in the rail beside Sharing, as a place in this brain', async ({
+	page
+}) => {
 	const app = await openApp(page, 'browse');
-	// The overflow menu is the second route to the same places, and it groups them by
-	// scope. Sharing is who can come IN; Connections is where this brain joins OUT.
-	// getByLabel rather than getByRole: a file row carries its own "More" action, and the
-	// one this test means is the header's.
-	await app.getByLabel('More').click();
-	await expect(app.getByText('Sharing')).toBeVisible();
-	await expect(app.getByText('Connections')).toBeVisible();
+	// Both are views OF this brain, and they are the pair that reads as opposites:
+	// Sharing is who can come IN, Connections is where this brain reaches OUT. Scoped to
+	// the rail because a file row carries controls of its own.
+	const rail = app.locator('aside[aria-label="Places"]');
+	await expect(rail.getByRole('button', { name: 'Sharing', exact: true })).toBeVisible();
+	await rail.getByRole('button', { name: 'Connections', exact: true }).click();
+	await expectView(app, 'connections');
 });

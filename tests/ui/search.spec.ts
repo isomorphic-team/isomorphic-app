@@ -13,9 +13,15 @@ import { openApp, expectView } from './harness.ts';
 // search left the brain the app opened in (Personal).
 const ONLY_IN_NORTHWIND = 'Primary site';
 
+// Search is a DESTINATION now, not a control that swaps the trail for a box: the rail
+// takes you to a page that owns its own field. Scoped to the rail so this cannot match
+// some other control that happens to be named Search.
 async function search(app: ReturnType<typeof openApp> extends Promise<infer T> ? T : never) {
-	await app.getByRole('button', { name: 'Search' }).click();
-	const box = app.getByPlaceholder('Search…');
+	await app
+		.locator('aside[aria-label="Places"]')
+		.getByRole('button', { name: 'Search', exact: true })
+		.click();
+	const box = app.getByPlaceholder('Search this brain…');
 	await box.fill(ONLY_IN_NORTHWIND);
 	await box.press('Enter');
 	return box;

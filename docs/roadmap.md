@@ -21,24 +21,18 @@ built. This file describes what is not.
 
 ---
 
-# TODO: better loading states (Claude-like rotating status)
+# TODO: skeleton shells for the page, tree, and graph
 
-The app's loading states are plain static text ("Loading…", "Building the graph…",
-etc. via `{ kind: 'loading', label }` in app/main.tsx). Replace with something
-alive: a **Claude-style rotating/cycling status line**, a sequence of short phrases
-that swap on an interval (with a subtle fade/shimmer), so waits feel intentional
-rather than stalled. Notes:
+The rotating status line landed (`src/lib/loading-lines.ts` + `app/views/LoadingView.tsx`,
+`pnpm test:loading`), which covers the wait itself. What it does not do is show the
+SHAPE of what is coming. Where the layout is known before the content is (a page, the
+file tree, the graph) a skeleton would let the frame appear instantly and only the
+content stream in, which is a different and better answer than a centered line of text.
 
-- Centralize it: one `LoadingView` that cycles a small set of context-appropriate
-  phrases (per action: opening a page, building the graph, searching, scanning for
-  links). Respect `prefers-reduced-motion` (hold one phrase, no motion).
-- Consider skeleton shimmers for the page/tree/graph shells where the layout is
-  known, so the frame appears instantly and only the content streams in.
-- Pairs with the flash-free transitions we just landed (we removed several loading
-  states entirely on edit enter/cancel/save; this is for the loads that remain:
-  first connect, navigate, browse, search, graph build, activity).
-- Keep phrases short and evocative rather than instructional. See the "show, don't
-  tell" note in CLAUDE.md.
+Worth doing per view rather than centrally: the point is that each shell matches its own
+view's real layout, and a generic skeleton that matches nothing is worse than the line.
+Reuse the `.loading-shimmer` sweep and the `prefers-reduced-motion` rule already in
+`app/styles.css`.
 
 # TODO: file/folder management UX (create / rename / move / delete)
 

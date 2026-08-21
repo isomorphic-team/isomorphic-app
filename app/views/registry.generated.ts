@@ -16,6 +16,7 @@ import GraphView from './GraphView.tsx';
 import InviteMemberView from './InviteMemberView.tsx';
 import LoadingView from './LoadingView.tsx';
 import MembersView from './MembersView.tsx';
+import MoreView from './MoreView.tsx';
 import PageView from './PageView.tsx';
 import SearchView from './SearchView.tsx';
 import SettingsView from './SettingsView.tsx';
@@ -37,6 +38,7 @@ const VIEW_DEFS = [
 	InviteMemberView,
 	LoadingView,
 	MembersView,
+	MoreView,
 	PageView,
 	SearchView,
 	SettingsView,

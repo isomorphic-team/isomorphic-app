@@ -130,6 +130,21 @@ function brainArgs(): { brain?: string } {
 	return activeBrain?.id ? { brain: activeBrain.id } : {};
 }
 
+// Whether the open editor has unsaved changes. It lives HERE rather than on the
+// editor's own control handle because the thing that needs to read it is the app's
+// navigation (`confirmLeaveEdit` in actions.ts), which sits below the view layer and
+// cannot import from it.
+//
+// This is what lets the chrome stay live while you edit. The bar used to hide its
+// controls instead, on the reasoning that leaving mid-edit abandons the edit — which
+// was true, and which hiding them never prevented: the breadcrumb sat right beside the
+// hidden controls, still linked, still switching brains. So it cost the user their
+// navigation and protected nothing.
+let editDirty = false;
+function setEditDirty(v: boolean): void {
+	editDirty = v;
+}
+
 let brainPolicy: BrainPolicy = { paths: { ...DEFAULT_BRAIN_CONFIG.paths } };
 
 // A policy belongs to ONE brain, so switching brains must drop it — otherwise the
@@ -157,7 +172,7 @@ function applyPolicy(sc: Record<string, unknown>): void {
 // change before or after mount — useSyncExternalStore handles both.
 const listeners = new Set<() => void>();
 let version = 0;
-let currentView: View = { kind: 'loading', label: 'Connecting…' };
+let currentView: View = { kind: 'loading', label: 'Connecting…', task: 'connect' };
 function subscribeStore(cb: () => void) {
 	listeners.add(cb);
 	return () => listeners.delete(cb);
@@ -224,6 +239,8 @@ function isEditablePath(path: string): boolean {
 
 export {
 	history,
+	editDirty,
+	setEditDirty,
 	browseCache,
 	setBrowseCache,
 	connectionList,

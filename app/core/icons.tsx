@@ -22,6 +22,25 @@ const FolderIcon = () => (
 		/>
 	</svg>
 );
+// A folder that IS a page: one holding a folder note (index.md / README.md), which by
+// the convention in view-directives.ts means the folder and the page are the same thing.
+// The tree could not say so — a folder with a note and one without drew the same glyph,
+// while clicking them did different things (the note, or just expand).
+//
+// Same silhouette as FolderIcon with two lines of "text" in it, so the pair reads as one
+// family and the difference is the content rather than the shape. The lines are HOLES
+// (fill-rule evenodd), not painted strokes, because a tree row sits on three different
+// backgrounds — plain, hover:bg-chip, and the focused row's bg-chip — and a hole shows
+// whichever is behind it while a painted line would have to guess.
+const FolderNoteIcon = () => (
+	<svg viewBox="0 0 16 16" width="15" height="15" class="shrink-0 text-muted" aria-hidden="true">
+		<path
+			fill="currentColor"
+			fill-rule="evenodd"
+			d="M1.5 3.5A1.5 1.5 0 013 2h3l1.5 1.5H13A1.5 1.5 0 0114.5 5v6A1.5 1.5 0 0113 12.5H3A1.5 1.5 0 011.5 11zM4.4 7.2h7.2v1.15H4.4zm0 2.3h4.8v1.15H4.4z"
+		/>
+	</svg>
+);
 const FileIcon = () => (
 	<svg viewBox="0 0 16 16" width="15" height="15" class="shrink-0 text-muted" aria-hidden="true">
 		<path
@@ -403,6 +422,7 @@ function InitialsAvatar({ name }: { name: string }) {
 export {
 	ChevronIcon,
 	FolderIcon,
+	FolderNoteIcon,
 	FileIcon,
 	ImageIcon,
 	PencilIcon,

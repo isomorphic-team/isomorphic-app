@@ -680,8 +680,28 @@ async function displayPage(pg: Record<string, string>, path: string): Promise<st
 	return (await renderViews(md, path, viewCtxFor(pg))).display;
 }
 
+// The app-initiated fetches `#loading` holds open. Each one is a screen that has a
+// loading state of its own, which is the point: click a page, run a search, open the
+// graph, and read the rotation each one draws.
+const STALLED_IN_LOADING_MODE = new Set([
+	'read_page',
+	'read_media',
+	'search_pages',
+	'view_graph',
+	'view_activity',
+	'members',
+	'analytics',
+	'brain_access'
+]);
+
 // ---- the host's answer to every callback the app makes ----
 async function handleTool(name: string, args: Record<string, unknown>): Promise<CallToolResult> {
+	// `#loading`: the fetches the app starts on its own never answer, so the wait they
+	// draw stays on screen. Only those, and only in this mode: list_pages and brains
+	// still answer, because a loading line that names the brain, the page and the page
+	// count is the thing worth looking at, and the app learns all three from them.
+	if (loadingMode && STALLED_IN_LOADING_MODE.has(name))
+		return new Promise<CallToolResult>(() => {});
 	const path = String(args?.path ?? '');
 	// Resolve WHICH brain's content this call touches (explicit `brain` arg, else the
 	// active brain). pg is that brain's page map; pth its current paths. Mutations to
@@ -1533,7 +1553,9 @@ bridge.onrequestdisplaymode = async ({ mode }) => {
 // `#browse` the file tree; `#activity` the change feed.
 const [hashMode, hashPath] = location.hash.replace(/^#/, '').split('=');
 const editMode = hashMode === 'edit';
-const browseMode = hashMode === 'browse';
+// `#loading` opens the tree too (see loadingMode): the wait it exists to show is only
+// worth looking at once the app knows where it is.
+const browseMode = hashMode === 'browse' || hashMode === 'loading';
 const activityMode = hashMode === 'activity';
 const graphMode = hashMode === 'graph';
 const membersMode = hashMode === 'members';
@@ -1578,6 +1600,13 @@ const connectionsMode = hashMode === 'connections';
 //                   app's signal that a result is coming and it should keep waiting.
 const slowResultMode = hashMode === 'slow-result';
 const pendingInputMode = hashMode === 'pending-input';
+// `#loading` announces a call and never answers it, so the loading view stays up and can
+// actually be read. It is the one view with no other way in: every other mode's stub
+// answers in milliseconds, and the rotating status line it draws does not begin until
+// 2.4s, so nothing else here shows more than its first frame. (`#pending-input` above is
+// the closest and still resolves at 1.8s.) The app gives up on a promised result after
+// 30s and opens the tree, which is the behavior under test at the far end of the wait.
+const loadingMode = hashMode === 'loading';
 // Past the app's 1200ms deadline, with the tree fetch that deadline kicks off answering
 // after the page — so the page is on screen when the stale tree lands.
 const SLOW_RESULT_MS = 1800;

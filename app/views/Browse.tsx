@@ -7,7 +7,7 @@
 // handlers + toggle state here, and the Header (main.tsx) renders them. Per-item
 // actions (rename, delete, new note/folder in a folder) live in one hover `⋯` menu.
 
-import { useEffect, useLayoutEffect, useMemo, useState } from 'preact/hooks';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { slugify } from '../../src/lib/wiki.ts';
 import { isHiddenName, rootsOf } from '../../src/lib/brain-policy.ts';
 import { defineView } from '../core/view-registry.ts';
@@ -30,12 +30,14 @@ import {
 	switchBrain
 } from '../core/actions.ts';
 import { FOLDER_NOTE_NAMES } from '../core/util.ts';
+import { panelPlacement, type Placement } from '../core/menu-placement.ts';
 import { toast, askConfirm } from '../core/toast.tsx';
 import { Button } from '../ui/index.ts';
 import {
 	ChevronIcon,
 	LinkIcon,
 	FolderIcon,
+	FolderNoteIcon,
 	FileIcon,
 	ImageIcon,
 	PencilIcon,
@@ -208,6 +210,13 @@ function AddInput({
 
 // The per-row hover menu (⋯). Wrapped in a [data-row-menu] span so the tree's single
 // outside-click listener can tell an in-menu click from an outside one.
+//
+// Hand-rolled rather than ui/Menu because the TREE owns the open state (one row's menu
+// at a time, closed by the tree's own listener), but it takes the same placement rule
+// from app/core/menu-placement.ts. It had no cap at all before that: the last row of an
+// expanded tree in an inline card put its panel ~50px past the bottom of the card, which
+// is the same defect the rail's ⋯ and the brain switcher were both moved off popovers
+// for. Overflow does not clip here, it makes the CARD scroll.
 function RowMenu({
 	open,
 	toggle,
@@ -222,9 +231,19 @@ function RowMenu({
 		onClick: () => void;
 	}[];
 }) {
+	const trigger = useRef<HTMLButtonElement>(null);
+	const [place, setPlace] = useState<Placement | null>(null);
+	// Measured on OPEN, not on render: a tree row moves as folders above it expand, so
+	// the rect that matters is the one at the moment the panel appears.
+	useLayoutEffect(() => {
+		if (!open) return setPlace(null);
+		const r = trigger.current?.getBoundingClientRect();
+		if (r) setPlace(panelPlacement(r, window.innerHeight));
+	}, [open]);
 	return (
 		<span data-row-menu class="relative shrink-0">
 			<button
+				ref={trigger}
 				type="button"
 				title="More"
 				onClick={(e) => {
@@ -238,7 +257,12 @@ function RowMenu({
 				<MoreIcon />
 			</button>
 			{open && (
-				<div class="absolute top-full right-0 z-30 mt-0.5 min-w-[168px] overflow-hidden rounded-md border border-border bg-bg py-1 shadow-lg">
+				<div
+					style={place ? { maxHeight: `${place.maxH}px` } : undefined}
+					class={`absolute right-0 z-30 min-w-[168px] overflow-y-auto overscroll-contain rounded-md border border-border bg-bg py-1 shadow-lg ${
+						place?.up ? 'bottom-full mb-0.5' : 'top-full mt-0.5'
+					}`}
+				>
 					{items.map((it) => (
 						<Button
 							variant="row"
@@ -354,7 +378,10 @@ function TreeItem({
 						class={`flex shrink-0 items-center gap-1.5 py-1 ${editable ? 'cursor-grab' : ''}`}
 					>
 						<ChevronIcon open={open} />
-						<FolderIcon />
+						{/* The glyph says whether this folder is also a PAGE. Clicking the name
+						    opens that note, and without the distinction the two kinds of folder
+						    looked identical while behaving differently. */}
+						{folderPage ? <FolderNoteIcon /> : <FolderIcon />}
 					</span>
 					<button
 						type="button"

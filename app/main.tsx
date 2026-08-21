@@ -10,11 +10,13 @@
 // file per view under app/views/*. Adding a view = one file there + one Body case here.
 
 import { render } from 'preact';
-import { useEffect, useRef, useState } from 'preact/hooks';
+import type { ComponentChildren } from 'preact';
 import { useSyncExternalStore } from 'preact/compat';
 import type { View } from './core/types.ts';
 import type { ViewAction } from './core/view-registry.ts';
-import { subscribeStore, version, currentView, show, brainList, features } from './core/store.ts';
+import { subscribeStore, version, currentView, show } from './core/store.ts';
+import { activeDestination, isMorePlace } from './core/nav.ts';
+import { destinations } from './components/Destinations.tsx';
 import {
 	app,
 	applyHostContext,
@@ -29,35 +31,17 @@ import {
 	ensureBrainList,
 	openBrowse,
 	openGraph,
-	openActivity,
-	openMembers,
-	openAnalytics,
-	openBrainAccess,
-	openConnections,
-	openBrains,
-	openSettings,
-	runSearch
+	openMore,
+	guardNav
 } from './core/actions.ts';
 import { toast, Toast, ConfirmDialog } from './core/toast.tsx';
-import {
-	SearchIcon,
-	HistoryIcon,
-	GraphIcon,
-	PeopleIcon,
-	ChartIcon,
-	ShareIcon,
-	LinkIcon,
-	MoreIcon,
-	GearIcon,
-	BrainGlyph
-} from './core/icons.tsx';
-import { Button, Menu, MenuRow, MenuSeparator } from './ui/index.ts';
+import { MoreIcon } from './core/icons.tsx';
+import { Button, Menu, MenuRow } from './ui/index.ts';
 import { Breadcrumb } from './components/Breadcrumb.tsx';
 // The Body dispatch table is codegenned from app/views/*.tsx (see scripts/gen-app.ts).
 import { renderView, viewActions } from './views/registry.generated.ts';
 // Chrome still binds the editor's save/cancel + toolbar directly.
 import { EditorToolbar, editCtl } from './views/EditView.tsx';
-import { eyebrow } from './ui/typography.ts';
 
 // ---------- host wiring ----------
 
@@ -88,167 +72,58 @@ app.ontoolcancelled = () => {
 
 // ---------- chrome ----------
 
-// The single overflow menu (⋯) that holds everything secondary, so the top bar stays
-// down to the trail + Search/Graph + Edit. New destinations (Org settings, etc.)
-// become rows here — the bar never grows. Contents are contextual: while editing,
-// only Display (switching views mid-edit would abandon it); otherwise the full nav +
-// settings. Hidden entirely if it would be empty.
-function OverflowMenu({ editing }: { editing: boolean }) {
+// WHICH WINDOW THIS IS, at the right end of the top bar.
+//
+// It used to be the third group inside the rail's ⋯ menu, filed beside Members and Your
+// settings, which put a WINDOW CONTROL among PLACES and is most of why that menu read as
+// a junk drawer. It is not a destination: it changes how the app is presented, not what
+// you are looking at, and it is the one thing here that must stay reachable without
+// navigating — going fullscreen to read something has to leave you on the thing you were
+// reading.
+//
+// Right end of the bar rather than in the rail. The rail is destinations only, and the
+// bottom of the rail (the other candidate) collides with the destination group on a
+// short card, which is why that column is top-anchored. The honest wrinkle: this end of
+// the bar is otherwise the current VIEW's actions, and display mode belongs to the app.
+// The gap before it is what separates the two.
+function DisplayMenu() {
 	const modes = availableModeList();
-	const hasDisplay = modes.length >= 2;
-	// While editing there's nothing but Display — if the host offers one mode, drop the
-	// whole menu rather than show an empty ⋯.
-	if (editing && !hasDisplay) return null;
+	// One mode is not a choice. A host that offers no alternative gets no control.
+	if (modes.length < 2) return null;
 	return (
 		<Menu
-			label="More"
+			label="Display"
 			align="end"
+			class="ml-1 border-l border-border pl-1.5"
 			trigger={({ props }) => (
-				<Button variant="ghost" size="icon" title="More" aria-label="More" {...props}>
-					<MoreIcon />
+				<Button
+					variant="ghost"
+					size="icon"
+					title={`Display: ${MODE_LABEL[displayMode]}`}
+					aria-label={`Display: ${MODE_LABEL[displayMode]}`}
+					{...props}
+				>
+					{MODE_ICON[displayMode]}
 				</Button>
 			)}
 		>
-			{(close) => {
-				const go = (fn: () => void) => () => {
-					close();
-					fn();
-				};
-				return (
-					<>
-						{/* GROUPED BY SCOPE, the same three groups the breadcrumb uses. Recent
-						    changes and Sharing are views of THIS BRAIN and change when you switch
-						    brains. Members is a view of the ORGANIZATION: every brain in one org
-						    shows the same roster, so it moved out of "This brain", where it was the
-						    one row that failed the test the group is named for. Manage brains and
-						    Your settings are views of YOUR ACCOUNT and change with neither.
-						    Ungrouped, this read as one flat list of unrelated places, which is what
-						    made Members look like a property of whichever brain you were in.
-						    Graph is not here: it has its own lit control in the bar, and a row would
-						    be a second way to say the same thing. */}
-						{!editing && (
-							<>
-								<div class={`px-3 pb-0.5 pt-1 ${eyebrow}`}>This brain</div>
-								<MenuRow onClick={go(() => openActivity())}>
-									<span class="w-4 text-muted">
-										<HistoryIcon />
-									</span>
-									<span class="flex-1">Recent changes</span>
-								</MenuRow>
-								{/* Ungated: brain_access is read-only and open to anyone who can reach
-								    the brain, so unlike Manage brains below there is no role to check.
-								    Members is the org's people, this is who reaches THIS brain. */}
-								<MenuRow onClick={go(() => openBrainAccess())}>
-									<span class="w-4 text-muted">
-										<ShareIcon />
-									</span>
-									<span class="flex-1">Sharing</span>
-								</MenuRow>
-								{/* Gated the same way the breadcrumb gates it, and for the same
-								    reason: this menu is a second route to the same places, so a row
-								    here that the picker does not offer would be a row whose click is
-								    refused. */}
-								{features.connections && (
-									<MenuRow onClick={go(() => openConnections())}>
-										<span class="w-4 text-muted">
-											<LinkIcon />
-										</span>
-										<span class="flex-1">Connections</span>
-									</MenuRow>
-								)}
-								<MenuSeparator />
-								<div class={`px-3 pb-0.5 pt-1 ${eyebrow}`}>Organization</div>
-								<MenuRow onClick={go(openMembers)}>
-									<span class="w-4 text-muted">
-										<PeopleIcon />
-									</span>
-									<span class="flex-1">Members</span>
-								</MenuRow>
-								{/* Shown only where the server registered it: usage recording is
-								    opt-in per deployment (USAGE_ANALYTICS), and this menu must not
-								    offer a row whose click comes back "unknown tool". */}
-								{features.analytics && (
-									<MenuRow onClick={go(() => openAnalytics())}>
-										<span class="w-4 text-muted">
-											<ChartIcon />
-										</span>
-										<span class="flex-1">Analytics</span>
-									</MenuRow>
-								)}
-								<MenuSeparator />
-								<div class={`px-3 pb-0.5 pt-1 ${eyebrow}`}>Your account</div>
-								{/* Brain management (add/remove) — the brain crumb's picker is
-								    switch-only. Shown when the user is admin of at least one org. */}
-								{brainList?.some((b) => b.canManage) && (
-									<MenuRow onClick={go(openBrains)}>
-										<span class="w-4 text-muted">
-											<BrainGlyph />
-										</span>
-										<span class="flex-1">Manage brains</span>
-									</MenuRow>
-								)}
-								<MenuRow onClick={go(openSettings)}>
-									<span class="w-4 text-muted">
-										<GearIcon />
-									</span>
-									<span class="flex-1">Your settings</span>
-								</MenuRow>
-							</>
-						)}
-						{hasDisplay && (
-							<>
-								{!editing && <MenuSeparator />}
-								<div class={`px-3 pb-0.5 pt-1 ${eyebrow}`}>Display</div>
-								{modes.map((m) => (
-									<MenuRow
-										key={m}
-										onClick={go(() => setDisplayMode(m))}
-										class={m === displayMode ? 'text-accent' : 'text-fg'}
-									>
-										<span class="w-4 text-center">{MODE_ICON[m]}</span>
-										<span class="flex-1">{MODE_LABEL[m]}</span>
-										{m === displayMode && <span>✓</span>}
-									</MenuRow>
-								))}
-							</>
-						)}
-					</>
-				);
-			}}
+			{(close) =>
+				modes.map((m) => (
+					<MenuRow
+						key={m}
+						onClick={() => {
+							close();
+							setDisplayMode(m);
+						}}
+						class={m === displayMode ? 'text-accent' : 'text-fg'}
+					>
+						<span class="w-4 text-center">{MODE_ICON[m]}</span>
+						<span class="flex-1">{MODE_LABEL[m]}</span>
+						{m === displayMode && <span>✓</span>}
+					</MenuRow>
+				))
+			}
 		</Menu>
-	);
-}
-
-function SearchBox() {
-	const [open, setOpen] = useState(false);
-	const ref = useRef<HTMLInputElement>(null);
-	useEffect(() => {
-		if (open) ref.current?.focus();
-	}, [open]);
-	if (!open)
-		return (
-			<Button
-				variant="ghost"
-				size="icon"
-				title="Search"
-				aria-label="Search"
-				onClick={() => setOpen(true)}
-			>
-				<SearchIcon />
-			</Button>
-		);
-	return (
-		<input
-			ref={ref}
-			type="search"
-			placeholder="Search…"
-			onKeyDown={(e) => {
-				if (e.key === 'Enter') runSearch((e.target as HTMLInputElement).value);
-				if (e.key === 'Escape') setOpen(false);
-			}}
-			onBlur={(e) => !(e.target as HTMLInputElement).value && setOpen(false)}
-			class="w-44 rounded-md bg-chip px-2 py-1 text-sm text-fg outline-none"
-		/>
 	);
 }
 
@@ -303,73 +178,172 @@ function HeaderAction({ action }: { action: ViewAction }) {
 	);
 }
 
-function Header({ view }: { view: View }) {
-	const editing = view.kind === 'edit';
-	// In edit mode the navbar hosts the formatting toolbar (a second flush row) and a
-	// subtle Save/Cancel — so editing feels integrated with the top chrome, not boxed.
+// THE RAIL — where else you can go. The app's three questions, one zone each:
+//
+//   ▤   🧠 Team brain / wiki / people / Ada Lovelace       🔍   ⟳ 4m   Edit
+//   ⁙   ───────────────────────────────────────────────────────────────────
+//   ⏱   # Ada Lovelace
+//   ⇗
+//   ⋯
+//
+// Left rail = WHERE ELSE YOU COULD BE. Top left = WHERE YOU ARE. Top right = WHAT YOU
+// CAN DO HERE. Nothing answers two of those, which is the failure every previous
+// arrangement of this bar had in some form: destinations pushed into the breadcrumb's
+// chevrons (a trail claiming to know about views), then destinations and page actions
+// sharing one run of buttons at the right end (Edit beside Graph, indistinguishable).
+//
+// A rail is also where "you are here" reads best. Lit-among-four in a horizontal run of
+// nine controls is a weak signal; a vertical stack of four with one in accent is not.
+//
+// It costs ~40px of width, which is free in fullscreen and real in an inline chat card.
+// The trade is deliberate: the trail truncates and the content column is centred with
+// margin to spare, so the rail eats margin rather than text almost everywhere.
+//
+// `aria-current` rather than `aria-pressed`: these are navigation, and a nav control is
+// current or it is not — it is never a toggle that happens to be down.
+// One slot in the rail. The active marker is an EDGE, not a fill: a filled square in a
+// 40px column is a heavy mark to carry permanently, and the edge is what every
+// rail-shaped nav uses, so it reads as "current" without being read as "selected item
+// in a list".
+function RailItem({ current, children }: { current: boolean; children: ComponentChildren }) {
 	return (
-		<header class="sticky top-0 z-10 bg-bg/90 backdrop-blur">
-			{/* Fixed row height (not padding-driven) so toggling the search icon ↔ input —
-			    which have slightly different intrinsic heights — can't nudge the header up/down. */}
-			<div class="flex h-9 items-center gap-1.5 px-2.5 text-sm">
-				{/* The trail owns the left edge, whole. It starts at the BRAIN — which is
-				    what killed the separate top-left switcher: that control and the ⌂ crumb
-				    beside it were the same destination twice (see components/Breadcrumb).
-				    Nothing may sit between the brain and the rest of the path, or the trail
-				    stops reading as one. */}
-				<Breadcrumb view={view} />
-				<span class="ml-auto flex shrink-0 items-center gap-0.5">
-					{/* Search and Graph moved here when the brain became the head of the trail:
-					    the left edge is now the trail and nothing else. The rule the bar follows
-					    is LEFT = where you are, RIGHT = what you can do about it — and both of
-					    these act on the brain you are already in (search it, re-draw it as a
-					    graph) rather than naming a place. Graph stays lit while you're in it.
-					    Both are hidden while editing — leaving mid-edit would abandon it, the
-					    same reason the ⋯ menu drops its nav rows.
+		<div class="relative flex w-full justify-center">
+			{current && (
+				<span class="absolute left-0 top-1/2 h-4 w-0.5 -translate-y-1/2 rounded-r bg-accent" />
+			)}
+			{children}
+		</div>
+	);
+}
 
-					    This button SURVIVED the crumb picker gaining a Graph row, because on a
-					    page it is not the same action: it passes the page's path, and view_graph
-					    with a path returns the subgraph around it. "This page's neighbours" is
-					    not something a list of destinations can express — and a page's trail ends
-					    in a path crumb, so it has no destination picker to express it in. The
-					    title says which of the two you are getting; a control whose meaning
-					    changes with context has to say so. */}
-					{!editing && (
-						<>
-							<SearchBox />
+function Rail({ view }: { view: View }) {
+	const here = activeDestination(view.kind);
+	return (
+		// Stretches to the full height of the content so its edge runs the whole card,
+		// while the icons inside stick to the top — a bottom-anchored group would collide
+		// with the top one in a short inline card, where the whole app may be 200px tall.
+		<aside class="w-10 shrink-0 border-r border-border" aria-label="Places">
+			{/* z-30 IS THE CHROME LAYER, and it has to be stated rather than left to auto.
+			    `position: sticky` creates a stacking context, so the z-20 that ui/Menu.tsx
+			    puts on an open panel is scoped to THIS nav and cannot lift the panel over
+			    anything in <main>, a later sibling: the overflow menu rendered underneath
+			    the analytics chart's bars. Content-layer overlays run up to z-20 (the
+			    analytics tooltip at 10, ProseMirror's column-resize handle at 20), so chrome
+			    sits above them at 30. Header carries the same value for the same reason. */}
+			<nav class="sticky top-0 z-30 flex flex-col items-center gap-0.5 py-1.5">
+				{/* THE RAIL DOES NOT GO AWAY WHILE YOU EDIT. Every destination does abandon an
+				    in-progress edit, which is why this row used to empty itself out — but
+				    hiding the controls cost the user their navigation and protected nothing,
+				    since the trail beside them stayed linked and kept its brain switcher. So
+				    the rail stays whole and `guardNav` asks before discarding (actions.ts). */}
+				{destinations('brain').map((d) => {
+					// GRAPH IS THE ONE CONTEXTUAL CONTROL. From a page it passes that page's
+					// path, and view_graph with a path returns the subgraph around it, so the
+					// button means "this page's neighbours" there and "the whole brain"
+					// everywhere else. A control whose meaning changes with context has to
+					// say so, which is what the title does.
+					const onPage = d.key === 'graph' && view.kind === 'page';
+					const title = onPage ? 'Show this page in the graph' : d.label;
+					const current = d.key === here;
+					return (
+						<RailItem key={d.key} current={current}>
 							<Button
 								variant="ghost"
 								size="icon"
-								title={view.kind === 'page' ? 'Show this page in the graph' : 'Graph view'}
-								aria-label={view.kind === 'page' ? 'Show this page in the graph' : 'Graph view'}
-								onClick={() => openGraph(view.kind === 'page' ? view.path : undefined)}
-								class={view.kind === 'graph' ? 'text-accent' : undefined}
+								title={title}
+								aria-label={title}
+								aria-current={current ? 'page' : undefined}
+								onClick={guardNav(onPage ? () => openGraph(view.path) : d.open)}
+								class={current ? 'text-accent' : undefined}
 							>
-								<GraphIcon />
+								{d.icon}
 							</Button>
-						</>
-					)}
+						</RailItem>
+					);
+				})}
+				<span class="my-0.5 h-px w-4 bg-border" />
+				{/* ⋯ IS A DESTINATION LIKE THE REST OF THE RAIL, not a menu. It opens the More
+				    page, which carries the org and account scopes: one press further in than
+				    the brain's own views because they are rarer, and separate because sitting
+				    open in the rail beside them would read as "these belong to this brain",
+				    the containment claim the scope split exists to prevent.
+				    It lights while you are on More AND while you are on anything More led you
+				    to, so the rail keeps answering "where am I" two steps in (isMorePlace). */}
+				{(() => {
+					const current = isMorePlace(view.kind);
+					return (
+						<RailItem current={current}>
+							<Button
+								variant="ghost"
+								size="icon"
+								title="More"
+								aria-label="More"
+								aria-current={current ? 'page' : undefined}
+								onClick={guardNav(openMore)}
+								class={current ? 'text-accent' : undefined}
+							>
+								<MoreIcon />
+							</Button>
+						</RailItem>
+					);
+				})()}
+			</nav>
+		</aside>
+	);
+}
+
+// ONE ROW: where you are, and what you can do to it. Where else you could be is the
+// rail (above), which is what lets this row stay one row.
+//
+// A SECOND ROW IS A MODE, NOT A FIXTURE. It appears when you enter the editor, carrying
+// the formatting toolbar, and that is the whole of its job — the appearing is the
+// signal. A permanent second row holding two icons was the version before this, and it
+// read as leftover space rather than a zone, because a row that is always there cannot
+// tell you anything by being there.
+function Header({ view }: { view: View }) {
+	const editing = view.kind === 'edit';
+	// The toolbar waits for the editor to actually be bound, so the row drops in WITH
+	// the buttons already in it — no blank-toolbar frame, and no opacity fade, which was
+	// the visible flash.
+	const toolbar = editing && editCtl.view ? editCtl.view : null;
+	return (
+		<header class="sticky top-0 z-30 bg-bg/90 backdrop-blur">
+			{/* Fixed row height (not padding-driven) so toggling the search icon ↔ input —
+			    which have slightly different intrinsic heights — can't nudge the header up/down. */}
+			<div class="flex h-9 items-center gap-1.5 px-2.5 text-sm">
+				{/* The trail owns the left edge, whole. It starts at the BRAIN — which is what
+				    killed the separate top-left switcher: that control and the ⌂ crumb beside
+				    it were the same destination twice (see components/Breadcrumb). Nothing may
+				    sit between the brain and the rest of the path, or the trail stops reading
+				    as one. */}
+				<Breadcrumb view={view} />
+				<span class="ml-auto flex shrink-0 items-center gap-0.5">
 					{/* "What you can do HERE" — supplied by the current view, not switched on
 					    here. Five views used to have an empty slot and had to put their primary
-					    action in the body instead; declaring actions per view is what closed that. */}
+					    action in the body instead; declaring actions per view is what closed
+					    that. They have this end of the bar to themselves now that the
+					    destinations have a rail. */}
 					{viewActions(view).map((a) => (
 						<HeaderAction key={a.key} action={a} />
 					))}
-					<OverflowMenu editing={editing} />
+					{/* Then the window itself, after a rule. Not one of the view's actions, and
+					    the separator is what says so. */}
+					<DisplayMenu />
 				</span>
 			</div>
-			{/* The formatting toolbar slides in / out as you enter / leave edit (grid-rows
-			    0fr↔1fr animates to the exact content height). Gated on the editor actually
-			    being bound (editCtl.view) so it drops in WITH the buttons already there —
-			    no blank-toolbar frame — and no opacity fade, which was the visible flash. */}
+			{/* The formatting toolbar slides in / out as you enter / leave edit — grid-rows
+			    0fr↔1fr animates to the exact content height. `data-row` rides on the
+			    collapsing element rather than the content inside it, so a collapsed row
+			    measures zero and a test can assert its absence the way a user sees it. */}
 			<div
+				data-row="actions"
 				class={`grid overflow-hidden transition-[grid-template-rows] duration-200 ease-out motion-reduce:transition-none ${
-					editing && editCtl.view ? 'grid-rows-[1fr]' : 'grid-rows-[0fr]'
+					toolbar ? 'grid-rows-[1fr]' : 'grid-rows-[0fr]'
 				}`}
 			>
 				<div class="min-h-0 overflow-hidden">
 					<div class="flex items-center border-b border-border px-2 pb-1.5 pt-0.5">
-						<EditorToolbar view={editCtl.view} />
+						<EditorToolbar view={toolbar} />
 					</div>
 				</div>
 			</div>
@@ -401,28 +375,46 @@ function Root() {
 	//    stays pinned while the body scrolls under it.
 	// Fullscreen/pip own their own window → fill it (min-h-screen), no cap, no border.
 	return (
+		// A ROW at the top level now: the rail, then everything else in a column beside
+		// it. The rail is a sibling of the header rather than something inside it, because
+		// it spans the whole card — the header scrolls its content under a sticky bar, and
+		// the rail is not part of that.
+		// THE RAIL IS THE HEIGHT FLOOR: the window is never shorter than the list of
+		// places you can go. That already fell out of flex sizing, since the aside's nav
+		// has intrinsic height and nothing caps it, and it is stated here so it survives
+		// a later `overflow-hidden` on main or an absolutely positioned rail. A stale
+		// value is harmless in one direction only: too low and flex still gives the rail
+		// what it needs, too high and short views grow dead space. Inline only, because
+		// min-h-screen already clears it and two min-h utilities on one element would
+		// resolve by stylesheet order rather than by the order they are written here.
 		<div
-			class={`flex flex-col bg-bg text-fg ${
+			class={`flex bg-bg text-fg ${
 				inline
-					? 'max-h-[560px] min-h-[320px] overflow-y-auto rounded-xl border border-border'
+					? 'min-h-[168px] max-h-[560px] overflow-y-auto rounded-xl border border-border'
 					: 'min-h-screen'
 			}`}
 		>
-			<Header view={view} />
-			{/* One padding source for every view (page / browse / search / edit / activity
-			    / graph / members) so they read identically. Kept tight — the app usually
-			    renders inline in the chat column, where big margins waste width. */}
-			{/* `data-view` names the view currently rendered. It rides on the <main> that
-			    was already here rather than a wrapper, so it adds no element and cannot
-			    change layout, and it sits at the ONE render site rather than in each view
-			    file, so a view added later carries it for free. `pnpm test:ui` selects on
-			    it: [data-view="page"], [data-view="browse"], and so on. */}
-			<main
-				data-view={view.kind}
-				class={`mx-auto w-full flex-1 px-3.5 pt-3 pb-5 ${wide ? 'max-w-[1100px]' : 'max-w-[860px]'}`}
-			>
-				<Body view={view} />
-			</main>
+			<Rail view={view} />
+			{/* min-w-0 so the trail's truncation still works: without it the flex child
+			    takes its content's intrinsic width and a long path pushes the card wider
+			    than the chat column instead of ellipsing. */}
+			<div class="flex min-w-0 flex-1 flex-col">
+				<Header view={view} />
+				{/* One padding source for every view (page / browse / search / edit / activity
+				    / graph / members) so they read identically. Kept tight — the app usually
+				    renders inline in the chat column, where big margins waste width. */}
+				{/* `data-view` names the view currently rendered. It rides on the <main> that
+				    was already here rather than a wrapper, so it adds no element and cannot
+				    change layout, and it sits at the ONE render site rather than in each view
+				    file, so a view added later carries it for free. `pnpm test:ui` selects on
+				    it: [data-view="page"], [data-view="browse"], and so on. */}
+				<main
+					data-view={view.kind}
+					class={`mx-auto w-full flex-1 px-3.5 pt-3 pb-5 ${wide ? 'max-w-[1100px]' : 'max-w-[860px]'}`}
+				>
+					<Body view={view} />
+				</main>
+			</div>
 			<Toast />
 			<ConfirmDialog />
 		</div>
@@ -439,7 +431,7 @@ const SELF_BOOT_MS = 1200;
 const SELF_BOOT_MAX_MS = 30_000;
 
 function connectToHost() {
-	show({ kind: 'loading', label: 'Connecting…' }, { push: false });
+	show({ kind: 'loading', label: 'Connecting…', task: 'connect' }, { push: false });
 	const timeout = setTimeout(() => {
 		if (currentView.kind === 'loading') {
 			show(

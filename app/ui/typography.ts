@@ -37,18 +37,23 @@ export const viewTitle = 'text-base font-semibold text-fg';
 // its glyph, not by being heavier. A new nav state picks one of these four; if none
 // fits, the role is missing and belongs here rather than inline.
 
-/** Where you are. The end of the trail, or a destination's own name. Never a link. */
+/**
+ * Where you are. The end of the trail, and never a link — the last path segment, a
+ * destination's own name, or the brain crumb on the file tree, whose place IS the root
+ * the tree is showing.
+ *
+ * CURRENT AND INERT ARE THE SAME ROLE, not two. There was a second `crumbInert` at
+ * `text-muted` for "names a place but must not link", and the brain crumb on the file
+ * tree used it — so that one trail ended in a muted segment and, by the rule above,
+ * said you were nowhere. Meanwhile the identical case one level down (the last folder
+ * crumb, equally unclickable) was already `text-fg`. Colour answers where you are;
+ * whether a segment is a <button> answers whether you can leave. Do not re-split them.
+ */
 export const crumbCurrent = 'text-fg';
 
 /** A crumb above you, clickable. */
 export const crumbLink =
 	'rounded text-muted outline-none transition-colors hover:text-fg hover:underline focus-visible:ring-2 focus-visible:ring-accent';
-
-/**
- * A crumb that names a place but must not link — the brain crumb on the file tree,
- * whose label would open the view you are already reading.
- */
-export const crumbInert = 'text-muted';
 
 /**
  * The identity suffix after a destination's name: which search, which page's history.

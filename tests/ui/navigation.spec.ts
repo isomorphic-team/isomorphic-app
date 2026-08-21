@@ -30,6 +30,24 @@ test('a note-less folder expands instead of navigating', async ({ page }) => {
 	await expectView(app, 'browse');
 });
 
+test('the tree SAYS which folders are also pages', async ({ page }) => {
+	// The two folders above behave differently on a click, and until this icon the tree
+	// drew them identically — the distinction lived entirely in what happened after you
+	// pressed. FolderNoteIcon is FolderIcon's silhouette with two lines of text knocked
+	// out of it, and the knockout (fill-rule evenodd) is what identifies it here.
+	const app = await openApp(page, 'browse');
+	await app.getByRole('button', { name: 'Expand all' }).click();
+	const iconFor = (name: string) =>
+		app
+			.getByRole('button', { name, exact: true })
+			.locator('xpath=preceding-sibling::span[1]')
+			// The chevron is the other svg in that span; the file/folder glyph is the 15px one.
+			.locator('svg[width="15"] path');
+	// `wiki/` has an index.md, `concepts/` does not.
+	await expect(iconFor('wiki')).toHaveAttribute('fill-rule', 'evenodd');
+	await expect(iconFor('concepts')).not.toHaveAttribute('fill-rule', 'evenodd');
+});
+
 test('expand all reveals nested pages', async ({ page }) => {
 	const app = await openApp(page, 'browse');
 	const main = app.locator('main[data-view="browse"]');
@@ -78,17 +96,33 @@ test('a brain opened BY NAME is not retargeted by the brain list', async ({ page
 	await expect(app.getByRole('button', { name: 'facilities', exact: true })).toBeVisible();
 });
 
-test('search runs from the header and lands on the search view', async ({ page }) => {
+test('search is a PAGE that owns its own field', async ({ page }) => {
+	// It was a control in the chrome that swapped the trail for an input: the one item
+	// in the rail that opened a widget rather than going somewhere. Now it arrives like
+	// every other destination, and the field is ON the page — which is what gives it
+	// room for a long query, keeps the query visible while you read the results, and
+	// leaves somewhere to put the empty state.
 	const app = await openApp(page, 'browse');
-	// The header button swaps itself for the input; the search only runs on Enter.
-	await app.getByRole('button', { name: 'Search' }).click();
-	const box = app.getByPlaceholder('Search…');
-	await expect(box).toBeVisible();
-	// A term that appears in the fixture pages, so this exercises a hit rather than
-	// the empty state.
+	await app.locator('aside[aria-label="Places"]').getByRole('button', { name: 'Search' }).click();
+	await expectView(app, 'search');
+	const body = app.locator('main[data-view="search"]');
+	// Nothing has been asked yet, so this is an invitation and not "no results". Saying
+	// "no matches for ''" would report a failure that never happened.
+	await expect(body.getByText('Search the pages of this brain by their text.')).toBeVisible();
+
+	const box = body.getByPlaceholder('Search this brain…');
+	await expect(box).toBeFocused();
+	// A term in the fixture pages, so this exercises a hit rather than the empty state.
 	await box.fill('vision');
 	await box.press('Enter');
 	await expectView(app, 'search');
+	const hit = body.getByRole('button').filter({ hasText: 'wiki/concepts/vision.md' });
+	await expect(hit.first()).toBeVisible();
+	// The query survives the search, in the thing you typed it into.
+	await expect(body.getByPlaceholder('Search this brain…')).toHaveValue('vision');
+	// And a hit navigates.
+	await hit.first().click();
+	await expectView(app, 'page');
 });
 
 test('the graph view renders the force-directed canvas', async ({ page }) => {

@@ -33,6 +33,7 @@ Edit anything in `app/` (or `src/lib/wiki.ts`) and the browser live-reloads:
 | `/#cold`                                              | no opening tool result (below)   |
 | `/#other-brain`                                       | a brain opened BY NAME (below)   |
 | `/#stale`                                             | a page edited behind you (below) |
+| `/#loading`                                           | a wait that never ends (below)   |
 
 `/#other-brain` delivers a browse result for a brain that is NOT the one the
 connection's active-brain pointer names — what happens when the model calls
@@ -48,6 +49,16 @@ case the page viewer's refresh control exists for and the one no amount of care 
 own write path prevents: another person, another agent, or an edit made on github.com.
 Pressing Refresh has to both replace the content and SAY the page moved, since a
 refresh that repaints in silence cannot be told apart from one that failed.
+
+`/#loading` announces a tool call and never answers it, so the loading view stays up
+long enough to read. Every other route's stub answers in milliseconds, and the
+rotating status line (`app/views/LoadingView.tsx`) holds the caller's literal label
+for 2.4s before its first swap, so this is the only way to see the rest of a
+rotation. Worth checking here: the label leads, the lines that follow name the brain
+and the page rather than reading as generic filler, the shimmer sweeps, and with
+`prefers-reduced-motion` set (DevTools rendering pane) nothing moves and the label
+simply holds. The app opens the tree by itself after 30s, which is the far end of
+the same behavior.
 
 `/#cold` connects and then sends nothing, so the app self-boots: `connectToHost`
 opens the file tree itself 1200ms after the handshake. A real host does this
@@ -193,7 +204,7 @@ matches CI and vice versa.
 and skips everything if Chromium is not installed, rather than failing. A missing
 browser or a missing baseline is a setup gap, not a regression, and `pnpm test` should
 stay green on a fresh clone. `UI_STRICT=1` turns those skips into failures; CI sets it
-so a broken install step cannot hide behind a green skip.
+so a container that stopped carrying a browser cannot hide behind a green skip.
 
 To generate or refresh them:
 
@@ -204,13 +215,17 @@ pnpm ui:baselines    # playwright test --project=visual --update-snapshots=all
 Use that script rather than a bare `--update-snapshots`, which only fills in MISSING
 baselines and silently leaves a changed one alone (verified on Playwright 1.62).
 
-For Linux baselines from a Mac, run it in the matching container so the fonts match
-CI:
+For Linux baselines from a Mac, run it in the image CI itself runs the UI job in, so
+the fonts and the browser build are the same ones that will compare them:
 
 ```sh
 docker run --rm -v "$PWD":/w -w /w mcr.microsoft.com/playwright:v1.62.1-noble \
   sh -c "corepack enable && pnpm install --frozen-lockfile && pnpm ui:baselines"
 ```
+
+That tag and the `container:` in `.github/workflows/ci.yml` must both match the
+resolved `@playwright/test` version; `pnpm test:wiring` fails if any of the three
+drift.
 
 ## Files
 

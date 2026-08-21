@@ -42,9 +42,11 @@ pnpm test:access        # per-brain access rule (effectiveBrainRole) golden test
 pnpm test:connections   # the connection lifecycle: anchors, joining, ending, mirrors
 pnpm test:e2e-mirror    # the mirror copier, over real git repos in a temp dir
 pnpm test:scope         # org-vs-brain scope: which role each tool gates on
+pnpm test:loading       # loading-line engine: slot eligibility + per-task wiring
 pnpm test:feedback      # submit_feedback composition golden test (redaction, nothing identifying published)
 pnpm test:usage         # usage-analytics golden test (tool-classification coverage, the summary fold)
 pnpm test:wiring        # every test:* script is in BOTH package.json's `test` and ci.yml
+                        # (+ ci.yml's Playwright container tag matches the resolved dep)
 pnpm test:e2e-librarian # write tools end to end, offline against a git repo in a temp dir
 pnpm test:e2e-import    # the importer end to end, same
 pnpm test:ui            # the MCP App UI in a real browser, over the local host harness
@@ -89,7 +91,11 @@ stub in the REAL `githubStore` so it still covers `fetchPages`'s GraphQL batchin
 `pnpm test:search` (cross-brain search: `searchTargets`, which decides which brains one
 answer may contain, and `searchIndex`'s per-brain hit budget, whose failure mode is a
 fan-out where the first brain fills a global cap and every later one silently reports
-nothing), `pnpm test:policy` (the path-policy wire contract between Worker and app),
+nothing), `pnpm test:policy` (the path-policy wire contract between Worker and app,
+plus the nav rule: which destinations a deployment offers and which one you are
+standing on), `pnpm test:loading` (the loading-line engine: that a phrase naming a fact
+the widget does not have is never eligible, and that every loading state in the app
+declares a task, which is optional in the type and so invisible to typecheck),
 `pnpm test:access` (the per-brain access rule: every input to `effectiveBrainRole`),
 `pnpm test:connections` (the connection lifecycle, where most of what is worth asserting
 is an INTERRUPTED state: that access stops before any copying, that a half-finished end
@@ -105,7 +111,8 @@ has an explicit `TOOL_KINDS` entry, scanned from the tool sources so a new tool 
 unclassified, plus the summary fold, where members at zero and since-removed users both have
 to survive or the tiles stop matching the table), and `pnpm test:wiring` (every `test:*`
 script appears in both `package.json`'s `test` and `ci.yml`, in three directions, including
-itself).
+itself, plus the Playwright container tag in `ci.yml` and `dev/README.md` matching the
+version pnpm actually resolves).
 
 **`pnpm test:ui` is the only battery that needs a browser** (Playwright + Chromium). It
 drives the REAL generated app bundle over the local host harness (`dev/harness.ts`), so it
@@ -116,9 +123,9 @@ semantics — the view engine, page patches, the access rule and the analytics f
 have pure golden tests, and re-checking them through the DOM would be a slow duplicate.
 Two things keep it from being a burden on contributors: it **skips green** (loudly) when
 Chromium is absent or when this platform has no visual baselines, since both are setup gaps
-rather than regressions, and CI sets `UI_STRICT=1` so a broken install step cannot hide
-behind that skip. Determinism needs **two** frozen clocks (`?now=` for the harness's
-fixtures, `page.clock.setFixedTime` for the app's own relative-time rendering); freezing
+rather than regressions, and CI sets `UI_STRICT=1` so a container that stopped carrying a
+browser cannot hide behind that skip. Determinism needs **two** frozen clocks (`?now=` for
+the harness's fixtures, `page.clock.setFixedTime` for the app's own relative-time rendering); freezing
 one without the other lets every "5d ago" drift daily. Visual baselines are committed,
 per-platform, and regenerated with `pnpm ui:baselines` — NOT a bare `--update-snapshots`,
 which only fills in missing ones and silently leaves a changed one alone. Details:
@@ -142,7 +149,9 @@ changes.
 
 Adding a test means adding it in BOTH `package.json`'s `test` script and
 `.github/workflows/ci.yml`. `pnpm test:wiring` fails the build if you forget,
-rather than the battery silently running in exactly one place.
+rather than the battery silently running in exactly one place. `ci.yml` has two
+jobs (the pure-Node `check` and the browser-only `ui`); a new battery goes in
+`check` unless it needs a browser, and the lint reads the whole file either way.
 
 **Iterating on the app UI:** use `pnpm app:dev` (renders the real `ui://` bytes via the
 official AppBridge host over stubbed fixtures — no Worker/auth/host, live-reload). It
@@ -496,10 +505,16 @@ convention. The names, in priority order, live in **`FOLDER_NOTE_NAMES` =
 single source of truth; `app/core/util.ts` re-exports it (`isFolderNoteName`) so the browser
 tree, breadcrumb, and the view engine can never disagree on what a folder note is. Behavior:
 
-- **App navigation** (`app/`): clicking a folder in the file tree or breadcrumb opens its
-  folder note instead of just expanding it, and the note's own row is hidden as a redundant
-  sibling. A note-less folder just expands. Hovering a note-less folder in the tree shows an
-  "Add folder note" action that creates `index.md`, pre-seeded with a directory view.
+- **App navigation** (`app/`): clicking a folder **in the file tree** opens its folder note
+  instead of just expanding it, and the note's own row is hidden as a redundant sibling. A
+  note-less folder just expands. Hovering a note-less folder in the tree shows an "Add folder
+  note" action that creates `index.md`, pre-seeded with a directory view. **The BREADCRUMB
+  does not do this** (changed 2026-08-21): a folder crumb always opens the tree revealed at
+  that folder. Opening the note when one existed and the tree when one did not made a single
+  control do two different things based on a fact the trail never showed, so pressing `wiki`
+  landed on a page and pressing `concepts` landed on the tree with nothing to explain why.
+  The tree is the answer that is always available and always the same, and it does not hide
+  the note: a folder with one shows it as that folder's own row.
 - **Engine** (`kind: folders` okf-view): each direct sub-folder under `under` is represented
   by its folder note (linked via `index.md` > `README.md`); a sub-folder with no note renders
   as an unlinked, deslugged name. This is the directory-of-directories source — see the
@@ -896,8 +911,15 @@ by neither, that each side joins to one of its OWN brains. Not a copy and not a 
 - **A connection is NOT in the brain switcher**, but it IS in the brains payload. The app
   resolves a result's brain against that list (`pickShownBrain`), so filtering
   server-side would leave the crumb naming the previous brain over a connection's
-  content, which is issue #26 reintroduced. Filtering happens where the picker renders
-  (`Breadcrumb.tsx`, `BrainsView.tsx`). Its own chrome is Files and Recent changes only.
+  content, which is issue #26 reintroduced. Filtering happens where the list renders
+  (`BrainsView.tsx`), which is the switcher now that the brain crumb's picker is gone.
+- **A room has a shorter rail**, and the rule lives with every other nav decision in
+  `app/core/nav.ts` (`destinationsIn`, `pnpm test:policy`). Inside a
+  connection the brain scope shrinks to Files, Search and Recent changes: nobody
+  administers a room's access, since it follows the anchor brain, and no connections
+  hang off a connection. Graph is left out rather than refused. Only the BRAIN scope
+  shrinks: the caller's own organization and account destinations are untouched, because
+  being in someone else's room does not suspend them.
 - Coverage: `pnpm test:connections` (the lifecycle and resolution, including that a
   colleague who cannot reach the anchor cannot reach the room, and that granting the
   anchor grants the room in the same statement), `pnpm test:access` (the rule's whole
@@ -907,6 +929,78 @@ by neither, that each side joins to one of its OWN brains. Not a copy and not a 
   a resumed copy converges), `pnpm test:ui`. **Not built:** creating or ending a
   connection from the UI (conversational only), any notification when an invitation
   arrives (nothing in this system sends mail), and export.
+
+## Loading states (the rotating status line)
+
+Every `{ kind: 'loading' }` in the app renders through one `LoadingView`, which shows
+the caller's own literal label first and then rotates through phrases from
+`src/lib/loading-lines.ts` (pure, `pnpm test:loading`). Built 2026-08-18.
+
+- **The label leads, always.** The rotation starts 2.4s in, so a load that resolves
+  quickly reads exactly as it did before: nothing whimsical is ever the only thing on
+  screen while someone waits for an answer, and the personality is spent only on waits
+  long enough to feel like waits.
+- **The two kinds of line ALTERNATE**, one naming this brain and the next naming the
+  library, opening on a specific one. The name-free lines were a fallback queued behind
+  the specific ones at first, which spent a normal-length wait entirely on facts and put
+  the humor past where almost anybody got to. Interleaved, a rotation reads as one voice
+  that happens to know the brain's name. `pnpm test:loading` pins the SLSLSL shape, so a
+  change back to appending fails rather than quietly draining the humor out.
+- **A slot is a REQUIREMENT.** A template naming `{brain}` / `{org}` / `{subject}` /
+  `{pages}` is ineligible when that value is unknown, rather than rendering blank. This
+  is structural rather than a pile of conditionals because the state with the fewest
+  facts (a cold self-boot: no brain list, no tree, no org) is both the most common and
+  the least likely to get tested by hand, and its failure mode is a customer reading
+  "Asking undefined…". `pnpm test:loading` walks every template's own slots to prove it.
+- **Personalization is LOCAL and free.** The facts come from what the widget already
+  holds: the brain it is showing, that brain's org label, the page/folder/query it was
+  asked for, and the size of the cached tree. Nothing calls a tool to decorate a wait,
+  since the alternative to a wait cannot be a second wait. Nothing reaches for a
+  person's name or email either: identity is fetched by one screen on request, and a
+  colleague's name is not chrome.
+- **`task` is optional on the view and so invisible to typecheck.** An omitted one is
+  not an error, it is a screen that quietly stops naming anything the user is looking
+  at. The golden test scans `actions.ts` / `main.tsx` / `store.ts` for every
+  `kind: 'loading'` and fails on any without a `task`, the same way `pnpm test:usage`
+  scans for unclassified tools.
+- **Motion is off under `prefers-reduced-motion`**, in CSS (both the fade and the
+  shimmer sweep in `app/styles.css`) and in JS (the timer never starts, so one phrase
+  holds: the label). Only the label is announced, from an element that never remounts;
+  the rotating span is `aria-hidden`, since a live region re-reading a new phrase every
+  three seconds is noise.
+- **The VIEW is covered too**, unusually for the app layer: `tests/ui/loading.spec.ts`
+  drives the real bundle over the `#loading` harness route, which opens the tree and
+  then holds the app's own fetches open forever so a wait stays on screen. It pins the
+  label leading, a swap happening, the swapped line naming the brain and the page, the
+  announcement staying put, and reduced motion holding one phrase.
+- **A rotation cannot be STEPPED, only watched**, so that spec records the line with a
+  MutationObserver INSIDE the frame and reads the result back at the end. `page.clock.install()` does not pause
+  timers here: probed directly, a `setTimeout` in the main frame AND in the app's iframe
+  both fire with no `runFor`, so an installed clock moves only what `Date.now()` reports
+  while a `setTimeout` chain keeps running on the wall clock. (`advanceable` is still
+  right for `refresh.spec.ts`, which asserts on a rendered AGE.) The first version of the
+  loading spec asserted at fixed moments and so raced the machine: it checked "still the
+  label" after a click plus three awaits, which passed locally and failed on CI, where
+  the runner had already spent the 2.4s the label holds for. The second version polled
+  `textContent({ timeout: 100 })` from the test and was worse, because it failed
+  SILENTLY: under CI load every one of those calls timed out, so it recorded nothing and
+  reported an empty sequence rather than a wrong one. Recording in the page is what
+  finally held, because runner speed then changes when the answer arrives rather than
+  what it says. Assert on ORDER, never on what is on screen at a given millisecond. Also note `test.use({ reducedMotion })`
+  at describe level does NOT reach this page; the spec calls `page.emulateMedia`.
+- **Three other kinds of wait exist and deliberately do NOT rotate.** (1) Button busy
+  labels: `Creating…` (AddBrainView), `Saving…` / `Adding image…` (EditView), `Sharing…`
+  (ShareBrainView). Those are a control reporting its own state, and a button whose text
+  cycles jokes while a save is in flight is a broken control, not a charming one. (2) The
+  two `<MenuNote>Loading…</MenuNote>` in `Breadcrumb.tsx` (folder entries, the brain
+  list): a popover the reader is currently aiming at, where text moving under the cursor
+  is hostile. (3) `.asset-loading` in `app/styles.css`, the placeholder an `<img>` sits in
+  while its bytes arrive, which is a skeleton rather than a status line and is the one
+  place the shimmer could extend to. Several paths are also deliberately SILENT and
+  should stay that way: `refreshPage`, `revalidateBrowse`, `refreshBrowse`, and entering
+  or leaving the editor, all of which keep real content on screen instead of flashing.
+- **Not built:** skeleton shells for the page/tree/graph, which are the other half of
+  this and are still on `docs/roadmap.md`.
 
 ## Brain templates
 

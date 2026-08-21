@@ -44,7 +44,12 @@ export const ROUTES = {
 	// A result SLOWER than that deadline, with and without the host announcing the call
 	// it is waiting on. Both must land on the page the tool opened.
 	'slow-result': 'page',
-	'pending-input': 'page'
+	'pending-input': 'page',
+	// Opens the tree like `#browse` and then never answers the fetches the app starts
+	// for itself, so a wait stays on screen long enough to assert on. The loading view
+	// it draws is `loading.spec.ts`; what belongs here is that the route still boots
+	// into the tree, since everything that test does starts from there.
+	loading: 'browse'
 } as const;
 
 /**
@@ -106,6 +111,17 @@ export async function openApp(
 	const params = new URLSearchParams();
 	params.set('now', now);
 	if (opts.mode) params.set('mode', opts.mode);
+
+	// BLANK FIRST, so every open is a real load.
+	//
+	// The harness reads its route from the URL HASH at boot and does not listen for
+	// hashchange. A `goto` whose URL differs from the current one only by its hash is a
+	// SAME-DOCUMENT navigation: it resolves immediately, the app never re-boots, and the
+	// caller goes on to assert against whatever the previous step left on screen. That
+	// fails silently and in the direction that passes — a sweep over sixteen routes read
+	// the same view sixteen times and reported green while a deliberately broken build
+	// was in front of it.
+	if (!page.url().startsWith('about:')) await page.goto('about:blank');
 	await page.goto(`/?${params}${route ? `#${route}` : ''}`);
 
 	const app = appFrame(page);

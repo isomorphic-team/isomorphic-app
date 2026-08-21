@@ -13,14 +13,7 @@ export { cn } from './cn.ts';
 export { Button, type ButtonProps } from './Button.tsx';
 export { List, ListRow, listRowTitle, type ListRowProps } from './List.tsx';
 export { Flow, FlowNote, submitOnEnter, type FlowProps } from './Flow.tsx';
-export {
-	eyebrow,
-	viewTitle,
-	crumbCurrent,
-	crumbLink,
-	crumbInert,
-	crumbMeta
-} from './typography.ts';
+export { eyebrow, viewTitle, crumbCurrent, crumbLink, crumbMeta } from './typography.ts';
 export { Input, Select, type InputProps, type SelectProps } from './Input.tsx';
 export { Toolbar, ToolbarButton, ToolbarSeparator, type ToolbarButtonProps } from './Toolbar.tsx';
 export { Menu, MenuRow, MenuSeparator, MenuNote, type MenuTriggerProps } from './Menu.tsx';

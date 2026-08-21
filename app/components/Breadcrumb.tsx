@@ -1,302 +1,71 @@
-// The location trail — and, since the brain is the root of it, the app's only
-// "where am I / where else could I be" control.
+// The location trail: WHERE YOU ARE, and nothing else.
 //
-//   🧠 Team brain ⌄ / wiki ⌄ / people ⌄ / Ada Lovelace ⌄
+//   🧠 Team brain / wiki / people / Ada Lovelace
+//
+// Where else you could BE — the file tree, the graph, the activity feed, the sharing
+// panel, the org and account screens — is the RAIL down the left edge (main.tsx). The
+// trail briefly carried those too, as extra rows inside its chevrons, and the two
+// questions blurred: standing on the tree it read "Brain / Files ⌄", a segment naming a
+// view rather than a place, whose picker offered three more views unrelated to the path
+// it was drawn from.
 //
 // TWO CONTROLS BECAME ONE. The bar used to open with a brain switcher AND a ⌂ home
 // crumb, which were the same destination twice: the switcher's own "select the active
 // brain" row re-opened its file tree, and ⌂ opened the file tree. Two controls, one
-// place. The brain IS the root of the trail, so it is now the root crumb: its label
-// goes home exactly as ⌂ did, and its picker lists the other brains — because at the
-// root of a trail, "what else is at this level" means another brain.
+// place. The brain IS the root of the trail, so it is now the root crumb, and its label
+// goes home exactly as ⌂ did.
 //
-// EVERY CRUMB IS A PICKER (the VS Code breadcrumb behaviour). Label = go there,
-// chevron = the other things that live at this level. SIBLINGS, not children: the
-// question a crumb answers is "what else could this segment have been", so `people`
-// offers the other folders and pages under `wiki/`, and the trailing page offers the
-// rest of its own folder. That last one is the payoff — moving between sibling pages
-// used to mean a round trip through the file tree.
+// NO CRUMB IS A PICKER ANY MORE.
 //
-// Two sources: the trail comes from the path alone, the pickers from the cached file
-// tree (`browseCache` — one list_pages call for the whole brain). A cold cache fetches
-// when a picker is OPENED rather than up front, so the bar never waits on data that a
-// given visit may not need.
-import { Fragment } from 'preact';
+// Every segment used to carry one (the VS Code breadcrumb behaviour): label = go there,
+// chevron = the siblings that could have stood in this segment's place. It was a real
+// shortcut and it lost to the ceiling every popover in this bar loses to — a panel
+// hanging off the top row gets the space beneath it and no more, so on a short inline
+// card a folder of any size became a scroll box a row and a half tall. Two answers, both
+// arrived at the same way as the rail's ⋯ before them:
+//
+//   * SIBLINGS moved to the file tree, which is the first item in the rail, shows the
+//     same list with no height limit, and shows the structure around it as well.
+//   * BRAINS moved to the Brains page, which already existed as the switcher's
+//     "bi-modal counterpart" and carries add / share / disconnect besides. The BRAIN
+//     GLYPH goes there — the icon that already meant "brain", carrying the action
+//     rather than a chevron beside it announcing one.
+//
+// What is left is an icon, text, and links. The trail states a location and hands off
+// every list to a screen with room for it.
 import type { ComponentChildren } from 'preact';
-import { useEffect, useState } from 'preact/hooks';
-import type { View, BrowseData, BrainRow } from '../core/types.ts';
-import { isFolderNoteName, groupBrainsByOrg } from '../core/util.ts';
-import { browseCache, brainList, activeBrain, features, goBack, backKind } from '../core/store.ts';
+import type { View } from '../core/types.ts';
+import { isFolderNoteName } from '../core/util.ts';
+import { brainList, activeBrain, goBack, backKind } from '../core/store.ts';
+import type { Scope } from '../core/nav.ts';
 import {
 	openBrowse,
 	openFolder,
-	openActivity,
-	openGraph,
 	openBrains,
 	openMembers,
-	openAnalytics,
 	openSettings,
-	openAddBrain,
 	openBrainAccess,
-	openConnections,
-	navigateTo,
-	openAsset,
-	fetchPaths,
-	ensureBrainList,
-	switchBrain
+	guardNav
 } from '../core/actions.ts';
-import {
-	BrainGlyph,
-	ChevronDownIcon,
-	FolderIcon,
-	FileIcon,
-	ImageIcon,
-	ArrowLeftIcon,
-	ListIcon,
-	HistoryIcon,
-	GraphIcon,
-	PeopleIcon,
-	ChartIcon,
-	ShareIcon,
-	LinkIcon,
-	GearIcon
-} from '../core/icons.tsx';
-import { Menu, MenuRow, MenuSeparator, MenuNote, type MenuTriggerProps } from '../ui/Menu.tsx';
-import { crumbCurrent, crumbLink, crumbInert, crumbMeta, eyebrow } from '../ui/typography.ts';
+import { BrainGlyph, ArrowLeftIcon } from '../core/icons.tsx';
+import { crumbCurrent, crumbLink, crumbMeta } from '../ui/typography.ts';
 
-// Wider than the 4px it was, because a crumb is no longer just a word: it is a label
-// and its picker, and those have to read as ONE unit. At the old spacing the chevron
-// sat as far from its own label as from the next slash, so the eye grouped it with the
-// separator. The rule the trail follows now: tight INSIDE a crumb (the chevron's
-// ml-0.5), loose BETWEEN crumbs (here).
+// Wider than the 4px it was, so a crumb and the slash after it never read as one unit.
+// The rule the trail follows: tight INSIDE a crumb, loose BETWEEN crumbs (here).
 const CrumbSep = () => <span class="mx-2 shrink-0 text-muted opacity-50">/</span>;
 
-// The picker's affordance. Always rendered, but held at 40% until the crumb is hovered
-// or its menu is open: a chevron per segment is a lot of furniture for a 36px bar, and
-// this keeps the trail reading as text while staying visibly clickable.
-function CrumbChevron({
-	props,
-	open,
-	title
-}: {
-	props: MenuTriggerProps;
-	open: boolean;
-	title: string;
-}) {
-	return (
-		<button
-			type="button"
-			title={title}
-			aria-label={title}
-			{...props}
-			class={`ml-0.5 shrink-0 rounded p-0.5 text-muted outline-none transition-opacity hover:bg-chip hover:text-fg focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-accent ${
-				open ? 'opacity-100' : 'opacity-40 group-hover:opacity-100'
-			}`}
-		>
-			<ChevronDownIcon />
-		</button>
-	);
-}
-
-// ---------- sibling data ----------
-
-type CrumbEntry = { name: string; path: string; dir: boolean; asset?: boolean };
-
-// What lives directly under `parent` ('' = the brain root): sub-folders, then pages,
-// alphabetical — the file tree's own order, so a picker and the tree can never
-// disagree about what a folder contains.
-//
-// Folder notes are left out: <folder>/index.md IS the folder, so listing it beside its
-// own folder is the redundant sibling the tree already hides. Hidden files never
-// appear, since `paths` is the visible content set and the hidden list is kept apart.
-function entriesUnder(parent: string, data: BrowseData): CrumbEntry[] {
-	const prefix = parent ? `${parent}/` : '';
-	const folders = new Set<string>();
-	const files: CrumbEntry[] = [];
-	// Pages AND attachments. Listing only pages meant an assets/ folder never appeared
-	// as a peer of the pages beside it, so the folder you were standing in was missing
-	// from its own parent's picker — you could reach an image from the file tree but
-	// not by walking the breadcrumb it was displaying.
-	const assetSet = new Set(data.assets);
-	for (const p of [...data.paths, ...data.assets]) {
-		if (!p.startsWith(prefix)) continue;
-		const rest = p.slice(prefix.length);
-		const cut = rest.indexOf('/');
-		if (cut === -1) {
-			if (!isFolderNoteName(rest))
-				files.push({ name: rest, path: p, dir: false, asset: assetSet.has(p) });
-		} else {
-			folders.add(rest.slice(0, cut));
-		}
-	}
-	const byName = (a: CrumbEntry, b: CrumbEntry) => a.name.localeCompare(b.name);
-	return [
-		...[...folders].map((n) => ({ name: n, path: prefix + n, dir: true })).sort(byName),
-		...files.sort(byName)
-	];
-}
-
-function entryLabel(e: CrumbEntry, data: BrowseData): string {
-	return e.dir ? e.name : (data.titleByPath[e.path] ?? e.name.replace(/\.md$/, ''));
-}
-
-// The rows of one crumb's picker. Reads the memoized tree; only a cold cache costs a
-// round trip, and a failed one says so rather than rendering an empty menu that reads
-// as "this folder has nothing in it".
-function SiblingRows({
-	parent,
-	current,
-	close
-}: {
-	parent: string;
-	/** Full path of the crumb this picker hangs off — marked in the list. */
-	current: string;
-	close: () => void;
-}) {
-	const [data, setData] = useState<BrowseData | null>(browseCache);
-	const [failed, setFailed] = useState(false);
-	useEffect(() => {
-		if (data) return;
-		let live = true;
-		void fetchPaths().then(
-			(d) => {
-				if (live) setData(d);
-			},
-			() => {
-				if (live) setFailed(true);
-			}
-		);
-		return () => {
-			live = false;
-		};
-	}, []);
-	if (failed) return <MenuNote>Couldn’t load this folder.</MenuNote>;
-	if (!data) return <MenuNote>Loading…</MenuNote>;
-	const entries = entriesUnder(parent, data);
-	if (!entries.length) return <MenuNote>Nothing else here.</MenuNote>;
-	return (
-		<>
-			{entries.map((e) => {
-				const here = e.path === current;
-				const label = entryLabel(e, data);
-				return (
-					<MenuRow
-						key={e.path}
-						onClick={() => {
-							close();
-							if (e.dir) openFolder(e.path);
-							else if (e.asset) openAsset(e.path);
-							else navigateTo(e.path);
-						}}
-					>
-						<span class={here ? 'text-accent' : 'text-muted'}>
-							{e.dir ? <FolderIcon /> : e.asset ? <ImageIcon /> : <FileIcon />}
-						</span>
-						<span class={`min-w-0 flex-1 truncate ${here ? 'text-accent' : ''}`} title={label}>
-							{label}
-						</span>
-						{here && <span class="shrink-0 text-accent">✓</span>}
-					</MenuRow>
-				);
-			})}
-		</>
-	);
-}
+// The leading slot's geometry, worn by BOTH controls that can open the trail: the brain
+// glyph on a brain screen, the back arrow everywhere else. Identical insets in both,
+// including the padding a glyph has no other use for, because unequal ones moved every
+// label in the bar by 2px when you crossed between an account screen and a brain one.
+const LEADING_SLOT =
+	'mr-1.5 shrink-0 rounded p-0.5 text-muted outline-none transition-colors hover:bg-chip hover:text-fg focus-visible:ring-2 focus-visible:ring-accent';
 
 // ---------- the crumbs ----------
 
-// The rows of the brain picker. Same shape as SiblingRows, and for the same reason: a
-// cold list is FETCHED WHEN THE PICKER OPENS rather than being a precondition for the
-// picker existing at all.
-//
-// This crumb used to render as a plain label with no chevron whenever `brainList` was
-// null, on the grounds that UNKNOWN IS NOT ZERO — which is right about the label and
-// wrong about the control. The list is only ever fetched by handleToolResult, so a
-// widget that came up any other way (the self-boot in connectToHost) or a single failed
-// `brains` call left the one control that switches brains permanently absent, with no
-// error and no retry. Unknown is still not zero: the ADD row waits for real rows, so
-// "you have no brains" is never implied by a list we haven't loaded.
-function BrainRows({ close }: { close: () => void }) {
-	const [rows, setRows] = useState<BrainRow[] | null>(brainList);
-	const [failed, setFailed] = useState(false);
-	useEffect(() => {
-		if (rows) return;
-		let live = true;
-		// ensureBrainList swallows its own errors and leaves the list null, so the store
-		// is what says whether it worked.
-		void ensureBrainList().then(() => {
-			if (!live) return;
-			if (brainList) setRows(brainList);
-			else setFailed(true);
-		});
-		return () => {
-			live = false;
-		};
-	}, []);
-	if (failed) return <MenuNote>Couldn’t load your brains.</MenuNote>;
-	if (!rows) return <MenuNote>Loading…</MenuNote>;
-	return (
-		<>
-			{/* Grouped by org, which is what carries the org name now that the label
-			    no longer prepends it. The heading appears only when there are two orgs
-			    to tell apart; with one, every row is in it and it says nothing. */}
-			{/* Connections are filtered HERE rather than upstream. They have to stay in the
-			    payload, because that is what a result's brain is resolved against, but a
-			    relationship is not a workspace you own and listing it beside one is what
-			    makes this list sprawl. It is reached from the brain it is joined to. */}
-			{groupBrainsByOrg(rows.filter((b) => !b.connection)).map((g) => (
-				<Fragment key={g.org ?? '·'}>
-					{g.org && <div class={`px-3 pb-0.5 pt-1 ${eyebrow}`}>{g.org}</div>}
-					{g.rows.map((b) => {
-						// Ticked = the brain the CRUMB above this picker names, not the row's
-						// own `active` flag. That flag is the connection's pointer as the
-						// server saw it when the list was fetched, and a widget opened on an
-						// explicitly named brain sat one row away from it: the panel showed
-						// one brain and the checkmark another (issue #26).
-						const here = b.id === activeBrain?.id;
-						return (
-							<MenuRow
-								key={b.id}
-								onClick={() => {
-									close();
-									switchBrain(b.id);
-								}}
-							>
-								<span class={here ? 'text-accent' : 'text-muted'}>
-									<BrainGlyph />
-								</span>
-								<span class="min-w-0 flex-1">
-									<span class="block truncate text-fg" title={b.label}>
-										{b.label}
-									</span>
-									<span class="block text-xs text-muted">
-										{b.role}
-										{b.configPrUrl ? ' · setup pending' : b.needsConfig ? ' · not configured' : ''}
-									</span>
-								</span>
-								{here && <span class="shrink-0 text-accent">✓</span>}
-							</MenuRow>
-						);
-					})}
-				</Fragment>
-			))}
-			<MenuSeparator />
-			<MenuRow
-				class="text-muted hover:text-fg"
-				onClick={() => {
-					close();
-					openAddBrain();
-				}}
-			>
-				<span class="shrink-0 text-[15px] leading-none">＋</span>
-				<span class="min-w-0 flex-1 truncate">Add a brain</span>
-			</MenuRow>
-		</>
-	);
-}
-
-// The root crumb: which brain you are in. The label opens its file tree (the way home
-// from every view, exactly as ⌂ was); the picker switches brains or adds one.
+// The root crumb: which brain you are in. Two controls, and they answer the trail's two
+// halves separately — the GLYPH changes which brain, the LABEL opens that brain's file
+// tree (the way home from every view, exactly as ⌂ was).
 //
 // The label NAMES A BRAIN and nothing else. It used to fall back to "Files" — the old
 // ⌂ home button's word, kept when the brain crumb absorbed it — so a brain we could not
@@ -307,320 +76,102 @@ function BrainRows({ close }: { close: () => void }) {
 // than borrowing a destination's name.
 function BrainCrumb({ inert }: { inert?: boolean }) {
 	const label = activeBrain?.label ?? (brainList?.length === 0 ? 'No brain' : 'Brain');
-	// The glyph carries its own trailing space rather than the row carrying a `gap`:
-	// a gap would apply to the CHEVRON too, on top of the ml-0.5 every crumb's chevron
-	// already has, and the brain crumb would sit its picker 4× further from its label
-	// than the path crumbs do.
+	// THE GLYPH IS THE SWITCHER. It was decoration with a chevron beside it doing this
+	// job, which put two marks on one crumb to say one thing; the icon was already the
+	// mark that means "brain", so it carries the action instead of announcing it twice.
 	//
-	// THE LEADING SLOT IS SHARED with BackCrumb's arrow — one or the other opens the
-	// trail depending on scope. Its geometry (15px icon, p-0.5 inset, mr-1.5) is
-	// therefore identical in both, including the padding this span has no other use for:
-	// the arrow needs it as a hover target, and unequal insets moved every label in the
-	// bar by 2px when you crossed between an account screen and a brain one.
+	// It also makes the leading slot honest: every trail opens with a control now, the
+	// brain on a brain screen and the back arrow on the ones beside it (LEADING_SLOT).
 	const glyph = (
-		<span class="mr-1.5 shrink-0 p-0.5 text-muted">
+		<button
+			type="button"
+			title="Switch brain"
+			aria-label="Switch brain"
+			onClick={guardNav(openBrains)}
+			class={LEADING_SLOT}
+		>
 			<BrainGlyph />
+		</button>
+	);
+	// `inert` is the FILE TREE, where the brain crumb is not a step on the way to the
+	// place you are — it IS the place, the root the tree is rooted at. So it takes the
+	// same colour as any other terminus (see crumbCurrent) and drops the link, exactly
+	// as the last folder crumb does one level down.
+	const name = inert ? (
+		<span class={`min-w-0 truncate ${crumbCurrent}`} title={label}>
+			{label}
+		</span>
+	) : (
+		<button
+			type="button"
+			title="Files"
+			onClick={guardNav(openBrowse)}
+			class={`min-w-0 truncate ${crumbLink}`}
+		>
+			{label}
+		</button>
+	);
+	// SWITCHING BRAINS IS A PAGE, not a popover.
+	//
+	// It was a picker listing every brain grouped by org, each row two lines (name, then
+	// role and setup state). That list is ~300px, and a panel hanging off the top bar can
+	// only have the room beneath it: on a 170px inline card it is clamped to ~130px, so a
+	// person with four brains scrolled a box that showed one and a half of them. The
+	// clamp is not the bug — without it the panel spills past the card and makes the card
+	// itself scroll (ui/Menu.tsx). There is no height at which a floating panel holds this
+	// list, for the same reason the rail's ⋯ could not hold its menu.
+	//
+	// BrainsView is already the page version and calls itself so in its own header: every
+	// brain you can reach, roles, the active one ticked, click to switch. It also carries
+	// what the picker never had room for — add, disconnect, per-brain sharing. So this is
+	// deleting a cramped duplicate rather than building a replacement.
+	return (
+		<span class="flex min-w-0 max-w-[44vw] shrink items-center">
+			{glyph}
+			{name}
 		</span>
 	);
-	const name = (close?: () => void) =>
-		inert ? (
-			<span class={`min-w-0 truncate ${crumbInert}`} title={label}>
-				{label}
-			</span>
-		) : (
-			<button
-				type="button"
-				title="Files"
-				onClick={() => {
-					close?.();
-					openBrowse();
-				}}
-				class={`min-w-0 truncate ${crumbLink}`}
-			>
-				{label}
-			</button>
-		);
-	return (
-		<Menu
-			label="Brains"
-			class="min-w-0 max-w-[44vw] shrink"
-			panelClass="min-w-[210px]"
-			trigger={({ props, open, close }) => (
-				<span class="group flex min-w-0 items-center">
-					{glyph}
-					{name(close)}
-					<CrumbChevron props={props} open={open} title="Switch brain" />
-				</span>
-			)}
-		>
-			{(close) => <BrainRows close={close} />}
-		</Menu>
-	);
 }
 
-// One path segment. `last` is the current location, so its label is inert (a crumb
-// must never be a self-link that goes nowhere) — but its picker is the useful one,
-// since the siblings of where you are is exactly what you want next.
-function PathCrumb({
-	seg,
-	path,
-	parent,
-	last
-}: {
-	seg: string;
-	path: string;
-	parent: string;
-	last: boolean;
-}) {
+// One path segment. `last` is the current location, so its label is inert: a crumb must
+// never be a self-link that goes nowhere.
+//
+// NO PICKER. Each of these carried one listing the segment's siblings, which was a real
+// shortcut and lost to the same ceiling everything else in this bar lost to: a panel
+// hanging off the top row gets the space beneath it and no more, so a folder of any size
+// became a scroll box a row and a half tall. A trail is also the wrong host for it — the
+// bar tells you where you are, and browsing what is next to you is the file tree's whole
+// job. Files is the first item in the rail now, shows the same siblings with no height
+// limit, and shows the structure around them as well. This costs one press on a move
+// that used to take none.
+function PathCrumb({ seg, path, last }: { seg: string; path: string; last: boolean }) {
 	const label = seg.replace(/\.md$/, '');
 	return (
-		<Menu
-			label={parent ? `Alongside ${label} in ${parent}` : `Alongside ${label}`}
-			// Only the tail gives ground. A trail that squeezed every segment equally
-			// would render a deep path as a row of two-letter stubs; the ancestors stay
-			// at full width and the current location is what truncates.
-			class={last ? 'min-w-0 shrink' : 'shrink-0'}
-			trigger={({ props, open, close }) => (
-				<span class="group flex min-w-0 items-center">
-					{last ? (
-						<span class={`truncate ${crumbCurrent}`}>{label}</span>
-					) : (
-						<button
-							type="button"
-							onClick={() => {
-								close();
-								openFolder(path);
-							}}
-							class={`truncate ${crumbLink}`}
-						>
-							{label}
-						</button>
-					)}
-					<CrumbChevron
-						props={props}
-						open={open}
-						title={`What else is in ${parent || 'this brain'}`}
-					/>
-				</span>
+		// Only the tail gives ground. A trail that squeezed every segment equally would
+		// render a deep path as a row of two-letter stubs; the ancestors stay at full
+		// width and the current location is what truncates.
+		<span class={`flex items-center ${last ? 'min-w-0 shrink' : 'shrink-0'}`}>
+			{last ? (
+				<span class={`truncate ${crumbCurrent}`}>{label}</span>
+			) : (
+				<button
+					type="button"
+					onClick={guardNav(() => openFolder(path))}
+					class={`truncate ${crumbLink}`}
+				>
+					{label}
+				</button>
 			)}
-		>
-			{(close) => <SiblingRows parent={parent} current={path} close={close} />}
-		</Menu>
+		</span>
 	);
 }
 
-// The destinations, in TWO SCOPES, because they are not one level. Recent changes,
-// Graph and Members are views of a brain; Manage brains and Your settings are views of
-// your account. A single flat list let a crumb offer Graph as a sibling of Your
-// settings, which is not what "what else is at this level" means — those are two
-// distinct operations and the trail should not pretend one leads to the other.
-//
-// Which list a crumb offers follows from its own root (see THE SCOPE TEST): a crumb
-// under the brain offers brain destinations, an account crumb offers account ones. So
-// from Manage brains you reach Your settings and no further, which is exactly as far
-// as that level goes.
-//
-// This deliberately overlaps the ⋯ menu, which carries the same two groups. They answer
-// different questions (⋯ is what you can DO, the trail is where you can BE) and the
-// overlap is the point: from a page the trail's tail is a page, so ⋯ stays the only
-// way in.
-type Destination = { key: string; label: string; icon: ComponentChildren; open: () => void };
-
-function brainDestinations(): Destination[] {
-	return [
-		// Files leads, and belongs here even though the brain crumb's own label already
-		// opens it. The brain crumb is doing two jobs — it is the ROOT of the trail and it
-		// is the file-tree VIEW — and only the first of those is visible from a picker. A
-		// list that offers Graph while silently omitting the tree is claiming to be the
-		// views of this brain and isn't one of them.
-		// Order is deliberate: Files and Graph are the SAME brain drawn two ways, so they
-		// sit together at the top, and the feed and the audience follow.
-		{ key: 'files', label: 'Files', icon: <ListIcon />, open: () => openBrowse() },
-		{ key: 'graph', label: 'Graph', icon: <GraphIcon />, open: () => openGraph() },
-		{ key: 'activity', label: 'Recent changes', icon: <HistoryIcon />, open: () => openActivity() },
-		// Ungated, unlike Manage brains: brain_access is readOnly and open to anyone who
-		// can reach the brain at all, so it can never be a destination whose click is
-		// refused. Only the CONTROLS inside it are admin-gated. Sharing sits last because
-		// it is the only one about the brain's audience rather than its contents.
-		{ key: 'sharing', label: 'Sharing', icon: <ShareIcon />, open: () => openBrainAccess() },
-		// Sharing is who can come IN; Connections is where this brain joins OUT. Gated on
-		// whether the deployment registered the tools at all, per the rule stated twice
-		// above: a picker must never offer a destination whose click is refused.
-		...(features.connections
-			? [
-					{
-						key: 'connections',
-						label: 'Connections',
-						icon: <LinkIcon />,
-						open: () => openConnections()
-					}
-				]
-			: [])
-	];
-}
-
-// A CONNECTION's own places, which are fewer. It is a room two organizations write in,
-// not a workspace either of them owns, so most of what a brain offers has no meaning
-// here: there is no audience of its own to share (access follows the anchor brain), no
-// organization behind it to report on, and no connections hanging off it. Graph is left
-// out for now rather than ruled out; traversing a graph OF brains is a plausible later
-// direction and nothing here forecloses it.
-function connectionDestinations(): Destination[] {
-	return [
-		{ key: 'files', label: 'Files', icon: <ListIcon />, open: () => openBrowse() },
-		{
-			key: 'activity',
-			label: 'Recent changes',
-			icon: <HistoryIcon />,
-			open: () => openActivity()
-		}
-	];
-}
-
-// Is the brain we are in a shared surface rather than one of the caller's own? The
-// brains payload carries every brain a result can name, connections included, so this is
-// a lookup rather than a second round trip.
-function activeIsConnection(): boolean {
-	return !!brainList?.find((b) => b.id === activeBrain?.id)?.connection;
-}
-
-// Views of the ORGANIZATION the active brain belongs to.
-//
-// Members used to sit in brainDestinations, and it was the one row there that failed
-// the scope test it was grouped by. `members` resolves the org FROM the brain and
-// returns that org's roster, so switching to a sibling brain in the same org shows an
-// identical list; only crossing into another org changes it. It is a view of the org,
-// reached through a brain, which is not the same as a view of the brain.
-//
-// That distinction is load-bearing now rather than cosmetic. Org role and brain role
-// are separate axes (docs/design/brain-level-permissions.md), and the roster is the ORG
-// one: showing it as a property of the brain you happen to be in is the same conflation
-// the tool gating exists to prevent, drawn in the UI.
-//
-// Analytics is the second row, and it passes the same scope test Members does: the
-// usage numbers are the org's, identical from whichever brain you opened them in.
-// Conditional because it is the one destination whose TOOL may not exist: usage
-// recording is opt-in per deployment (USAGE_ANALYTICS), and `features` carries what
-// the server actually registered. A picker must never offer a destination whose
-// click is refused, which is the same rule Manage brains follows below.
-function orgDestinations(): Destination[] {
-	return [
-		{ key: 'members', label: 'Members', icon: <PeopleIcon />, open: openMembers },
-		...(features.analytics
-			? [{ key: 'analytics', label: 'Analytics', icon: <ChartIcon />, open: () => openAnalytics() }]
-			: [])
-	];
-}
-
-function accountDestinations(): Destination[] {
-	return [
-		// Same gate as the ⋯ menu's row: brain management is for admins of at least one
-		// org. A picker must never offer a destination its click would be refused.
-		...(brainList?.some((b) => b.canManage)
-			? [{ key: 'brains', label: 'Manage brains', icon: <BrainGlyph />, open: openBrains }]
-			: []),
-		{ key: 'settings', label: 'Your settings', icon: <GearIcon />, open: openSettings }
-	];
-}
-
-// The three scopes a destination can belong to, and the one place each one's list and
-// wording live. Adding a fourth means adding it here, not at every call site.
-type Scope = 'brain' | 'org' | 'account';
-const DESTINATIONS: Record<Scope, () => Destination[]> = {
-	// A connection substitutes its own, shorter list for the brain one. Same scope, since
-	// switching brains still changes the answer; fewer places, because most of them mean
-	// nothing in a room you do not own.
-	brain: () => (activeIsConnection() ? connectionDestinations() : brainDestinations()),
-	org: orgDestinations,
-	account: accountDestinations
-};
-const SCOPE_LABEL: Record<Scope, string> = {
-	brain: 'Places in this brain',
-	org: 'Organization',
-	account: 'Your account'
-};
-const SCOPE_TITLE: Record<Scope, string> = {
-	brain: 'What else is in this brain',
-	org: 'Organization',
-	account: 'Your account'
-};
-
-// A destination crumb: its label, plus the picker of its siblings. `current` marks the
-// row you are on — and an unrecognised key (Search, which is a query rather than a
-// standing place) simply marks nothing, which is honest: the list still answers where
-// else you could go.
-function DestinationPicker({
-	scope,
-	current,
-	last,
-	children
-}: {
-	scope: Scope;
-	current: string;
-	last?: boolean;
-	children: ComponentChildren;
-}) {
-	const rows = DESTINATIONS[scope]();
-	// NO PICKER WITHOUT A CHOICE. A chevron that opens onto the screen you are already
-	// looking at is furniture that promises somewhere to go and delivers nowhere — which
-	// is what an account crumb offers a user who administers no org, since Manage brains
-	// is then gated away and Your settings is all that is left. The org list is one row
-	// today, so this is also what keeps the Members crumb from growing a dead chevron.
-	if (!rows.some((d) => d.key !== current))
-		return <span class={last ? 'min-w-0 truncate' : 'shrink-0'}>{children}</span>;
-	return (
-		<Menu
-			label={SCOPE_LABEL[scope]}
-			class={last ? 'min-w-0 shrink' : 'shrink-0'}
-			trigger={({ props, open }) => (
-				<span class="group flex min-w-0 items-center">
-					{children}
-					<CrumbChevron props={props} open={open} title={SCOPE_TITLE[scope]} />
-				</span>
-			)}
-		>
-			{(close) =>
-				rows.map((d) => {
-					const here = d.key === current;
-					return (
-						<MenuRow
-							key={d.key}
-							onClick={() => {
-								close();
-								d.open();
-							}}
-						>
-							<span class={`w-4 ${here ? 'text-accent' : 'text-muted'}`}>{d.icon}</span>
-							<span class={`min-w-0 flex-1 truncate ${here ? 'text-accent' : ''}`}>{d.label}</span>
-							{here && <span class="shrink-0 text-accent">✓</span>}
-						</MenuRow>
-					);
-				})
-			}
-		</Menu>
-	);
-}
-
-// THE SCOPE TEST: does switching brains change what this screen shows?
-//
-// Yes for Recent changes, Graph, Sharing and Search: those are views OF a brain and
-// belong under the brain crumb. No for Manage brains and Your settings: the same list,
-// the same identity, whichever brain happens to be active. Hanging those off a brain
-// crumb claimed a containment that is not there, and read as "these things belong to
-// this brain".
-//
-// Members answers the test a third way, which is why there is a third scope. Switching
-// to a sibling brain in the same org shows the SAME roster; only crossing into another
-// org changes it. So it is neither a view of the brain nor a view of your account: it
-// is a view of the ORG, reached through whichever brain is active. It takes the back
-// arrow like an account screen, because it is not inside the brain either, but its
-// picker and its ⋯ group say Organization.
-//
-// So they get no parent crumb, because they have no parent to name — they sit beside
-// the brain, not inside it. What they get instead is a way back, and that is history
-// rather than location, so it is an ARROW and not a crumb. Anything that looks like a
-// crumb has to behave like one (name a place, offer its siblings); a back arrow
-// promises neither, and so can honestly go wherever you came from.
+// A screen outside the brain gets a way back rather than a parent crumb, because it has
+// no parent to name: Members, Analytics, Manage brains and Your settings sit BESIDE the
+// brain, not inside it (THE SCOPE TEST, app/core/nav.ts). A way back is history rather
+// than location, so it is an ARROW and not a crumb. Anything that looks like a crumb has
+// to behave like one — name a place, offer what else is at that level — and a back arrow
+// promises neither, so it can honestly go wherever you came from.
 function BackCrumb() {
 	// Nothing behind you and no brain to fall back into — the very first run, sitting on
 	// "Create your first brain". A back arrow there would land on the tree, fail for want
@@ -631,8 +182,8 @@ function BackCrumb() {
 			type="button"
 			title="Back"
 			aria-label="Back"
-			onClick={() => goBack(() => openBrowse())}
-			class="mr-1.5 shrink-0 rounded p-0.5 text-muted outline-none transition-colors hover:bg-chip hover:text-fg focus-visible:ring-2 focus-visible:ring-accent"
+			onClick={guardNav(() => goBack(() => openBrowse()))}
+			class={LEADING_SLOT}
 		>
 			<ArrowLeftIcon />
 		</button>
@@ -645,39 +196,36 @@ function BackCrumb() {
 // showing you. What stays after the · is only ever IDENTITY — which search, which
 // page's history — because that distinguishes one instance of a view from another.
 //
-// A destination that has no path (Search, Members, Recent changes, …) still hangs off
-// the brain crumb:
+// A destination that has no path (Search, Recent changes, Graph, …) still hangs off the
+// brain crumb:
 //
-//   🧠 Team brain / Members ⌄
+//   🧠 Team brain / Recent changes
 //
 // so leaving it is the same one click as anywhere else. `parent` adds one clickable
 // crumb between the brain and the destination, for a view that was PUSHED from another
-// (🧠 / Manage brains / Add a brain): a pushed flow needs a way back to the thing that
+// (← Manage brains / Add a brain): a pushed flow needs a way back to the thing that
 // opened it, not just a way home, and the crumb is where a user looks for it.
 //
-// `current` is omitted for a step INSIDE a flow (Invite, Connect an account). That is
-// not an exception to "every crumb is a picker" but the rule applying: a flow step has
-// no siblings to offer, and its parent crumb — which does — carries the picker.
+// NO PICKER ON A DESTINATION CRUMB. These segments used to carry one — the chevron on
+// "Files" offered Graph, Recent changes and Sharing — and it was the wrong control in
+// the wrong place. A crumb's chevron answers "what else could this segment have been",
+// which for a path segment is its siblings on disk and for a view is nothing at all: a
+// view has no siblings, it has peers, and peers belong in the bar's own cluster where
+// one press reaches them from anywhere. The trail is location; the cluster is
+// destinations. Path crumbs keep their pickers, which is the question they can actually
+// answer.
 function DestinationCrumb({
 	parent,
-	current,
 	root = 'brain',
-	rootInert,
 	children
 }: {
 	parent?: { key: string; label: string; onClick: () => void };
-	current?: string;
 	/**
-	 * See THE SCOPE TEST above. Only `brain` screens sit INSIDE the brain and get the
-	 * brain crumb; `org` and `account` ones sit beside it and get a back arrow instead.
+	 * See THE SCOPE TEST in app/core/nav.ts. Only `brain` screens sit INSIDE the brain
+	 * and get the brain crumb; `org` and `account` ones sit beside it and get a back
+	 * arrow instead.
 	 */
 	root?: Scope;
-	/**
-	 * Kill the brain crumb's link. Only Files needs it: the brain crumb's label opens
-	 * the file tree, so on the file tree it would be a crumb that navigates to the view
-	 * you are already reading.
-	 */
-	rootInert?: boolean;
 	children: ComponentChildren;
 }) {
 	return (
@@ -686,27 +234,23 @@ function DestinationCrumb({
 				<BackCrumb />
 			) : (
 				<>
-					<BrainCrumb inert={rootInert} />
+					<BrainCrumb />
 					<CrumbSep />
 				</>
 			)}
 			{parent && (
 				<>
-					<DestinationPicker scope={root} current={parent.key}>
-						<button type="button" onClick={parent.onClick} class={`truncate ${crumbLink}`}>
-							{parent.label}
-						</button>
-					</DestinationPicker>
+					<button
+						type="button"
+						onClick={guardNav(parent.onClick)}
+						class={`shrink-0 truncate ${crumbLink}`}
+					>
+						{parent.label}
+					</button>
 					<CrumbSep />
 				</>
 			)}
-			{current === undefined ? (
-				<span class="min-w-0 truncate">{children}</span>
-			) : (
-				<DestinationPicker scope={root} current={current} last>
-					<span class="min-w-0 truncate">{children}</span>
-				</DestinationPicker>
-			)}
+			<span class="min-w-0 truncate">{children}</span>
 		</nav>
 	);
 }
@@ -720,14 +264,17 @@ function DestinationCrumb({
 export function Breadcrumb({ view }: { view: View }) {
 	if (view.kind === 'search')
 		return (
-			<DestinationCrumb current="search">
+			<DestinationCrumb>
+				{/* No query after the ·. The search PAGE carries its own field, showing the
+				    query in the thing you typed it into, so a copy up here would be the trail
+				    reporting a value the screen below is already displaying — the same rule
+				    that keeps tallies out of it. */}
 				<span class={crumbCurrent}>Search</span>
-				<span class={crumbMeta}> · “{view.query}”</span>
 			</DestinationCrumb>
 		);
 	if (view.kind === 'activity')
 		return (
-			<DestinationCrumb current="activity">
+			<DestinationCrumb>
 				<span class={crumbCurrent}>Recent changes</span>
 				{view.scopePath && <span class={crumbMeta}> · {view.scopePath}</span>}
 			</DestinationCrumb>
@@ -740,17 +287,36 @@ export function Breadcrumb({ view }: { view: View }) {
 	// the canvas's own corner.
 	if (view.kind === 'graph')
 		return (
-			<DestinationCrumb current="graph">
+			<DestinationCrumb>
 				<span class={crumbCurrent}>Graph</span>
+			</DestinationCrumb>
+		);
+	// Brain root, and it passes THE SCOPE TEST for the same reason Sharing does: a
+	// connection is a place THIS brain is joined to, so switching brains shows a
+	// different list. Sharing is who can come IN; this is where the brain reaches OUT.
+	if (view.kind === 'connections')
+		return (
+			<DestinationCrumb>
+				<span class={crumbCurrent}>Connections</span>
 			</DestinationCrumb>
 		);
 	// ORG root, not brain: the roster belongs to the organization the active brain sits
 	// in, and every brain in that org shows the same one. Under a brain crumb it read as
 	// "these people belong to this brain", which is the containment main already removed
 	// from Manage brains and Your settings for exactly the same reason.
+	// More is the one screen that belongs to no single scope: it is the index of both the
+	// org and the account destinations. Any non-brain root gives it the back arrow, which
+	// is what it needs — it sits BESIDE the brain like everything it lists, and a brain
+	// crumb would claim the organization is inside the brain.
+	if (view.kind === 'more')
+		return (
+			<DestinationCrumb root="account">
+				<span class={crumbCurrent}>More</span>
+			</DestinationCrumb>
+		);
 	if (view.kind === 'members')
 		return (
-			<DestinationCrumb root="org" current="members">
+			<DestinationCrumb root="org">
 				<span class={crumbCurrent}>Members</span>
 			</DestinationCrumb>
 		);
@@ -763,19 +329,19 @@ export function Breadcrumb({ view }: { view: View }) {
 	// bar and a second, non-clickable copy of a control that was already there.
 	if (view.kind === 'analytics')
 		return (
-			<DestinationCrumb root="org" current="analytics">
+			<DestinationCrumb root="org">
 				<span class={crumbCurrent}>Analytics</span>
 			</DestinationCrumb>
 		);
 	if (view.kind === 'brains')
 		return (
-			<DestinationCrumb current="brains" root="account">
-				<span class={crumbCurrent}>Manage brains</span>
+			<DestinationCrumb root="account">
+				<span class={crumbCurrent}>Brains</span>
 			</DestinationCrumb>
 		);
 	if (view.kind === 'settings')
 		return (
-			<DestinationCrumb current="settings" root="account">
+			<DestinationCrumb root="account">
 				<span class={crumbCurrent}>Your settings</span>
 			</DestinationCrumb>
 		);
@@ -793,7 +359,7 @@ export function Breadcrumb({ view }: { view: View }) {
 				root="account"
 				parent={
 					backKind() === 'brains'
-						? { key: 'brains', label: 'Manage brains', onClick: () => goBack(openBrains) }
+						? { key: 'brains', label: 'Brains', onClick: () => goBack(openBrains) }
 						: undefined
 				}
 			>
@@ -819,14 +385,8 @@ export function Breadcrumb({ view }: { view: View }) {
 	// a crumb naming another.
 	if (view.kind === 'brain-access')
 		return (
-			<DestinationCrumb current="sharing">
+			<DestinationCrumb>
 				<span class={crumbCurrent}>Sharing</span>
-			</DestinationCrumb>
-		);
-	if (view.kind === 'connections')
-		return (
-			<DestinationCrumb current="connections">
-				<span class={crumbCurrent}>Connections</span>
 			</DestinationCrumb>
 		);
 	if (view.kind === 'share-brain')
@@ -851,18 +411,24 @@ export function Breadcrumb({ view }: { view: View }) {
 			</DestinationCrumb>
 		);
 	const path = 'path' in view ? (view as { path: string }).path : null;
-	// The file tree is a VIEW of the brain, so it says so — and being named is what lets
-	// it be selected. It used to render as the bare brain crumb on the reasoning that the
-	// tree IS home, which left the one screen you are on most often as the only one whose
-	// trail never said where you were, and the only brain-scope screen with no way to
-	// reach its siblings. The brain crumb goes inert here rather than the tail: it is the
-	// brain crumb's label that opens the tree, so it is the one that would be the
-	// self-link.
+	// THE TREE IS THE BRAIN'S ROOT, so the trail is complete at the brain crumb: no tail,
+	// no separator, just the brain, styled as the terminus it is.
+	//
+	// WHY FILES ALONE HAS NO TAIL, next to 🧠 Personal / Graph. The tail names the place,
+	// and the tree's place is the root — which the brain crumb already names, the way
+	// "My Drive" names Drive's. A "Files" tail would name that root a second time, and
+	// would then have to survive one folder click: either it vanishes (🧠 Personal / wiki,
+	// a segment that disappears as you go deeper) or it stays (🧠 Personal / Files / wiki,
+	// a view's name wedged into a path). Graph, Search, Recent changes and Sharing have no
+	// root to inherit, so they say their own name.
+	//
+	// Which SECTION is open is the rail's answer, not the trail's — the same split as an
+	// editor's activity bar naming EXPLORER while its breadcrumb names only the path.
 	if (!path)
 		return (
-			<DestinationCrumb current="files" rootInert>
-				<span class={crumbCurrent}>Files</span>
-			</DestinationCrumb>
+			<nav class="flex min-w-0 items-center">
+				<BrainCrumb inert />
+			</nav>
 		);
 	let segs = path.split('/').filter(Boolean);
 	// A folder note collapses into its folder crumb (never a self-link tail).
@@ -873,12 +439,7 @@ export function Breadcrumb({ view }: { view: View }) {
 			{segs.map((seg, i) => (
 				<span key={segs.slice(0, i + 1).join('/')} class="flex min-w-0 items-center">
 					<CrumbSep />
-					<PathCrumb
-						seg={seg}
-						path={segs.slice(0, i + 1).join('/')}
-						parent={segs.slice(0, i).join('/')}
-						last={i === segs.length - 1}
-					/>
+					<PathCrumb seg={seg} path={segs.slice(0, i + 1).join('/')} last={i === segs.length - 1} />
 				</span>
 			))}
 		</nav>
