@@ -108,6 +108,17 @@ export async function openApp(
 	const params = new URLSearchParams();
 	params.set('now', now);
 	if (opts.mode) params.set('mode', opts.mode);
+
+	// BLANK FIRST, so every open is a real load.
+	//
+	// The harness reads its route from the URL HASH at boot and does not listen for
+	// hashchange. A `goto` whose URL differs from the current one only by its hash is a
+	// SAME-DOCUMENT navigation: it resolves immediately, the app never re-boots, and the
+	// caller goes on to assert against whatever the previous step left on screen. That
+	// fails silently and in the direction that passes — a sweep over sixteen routes read
+	// the same view sixteen times and reported green while a deliberately broken build
+	// was in front of it.
+	if (!page.url().startsWith('about:')) await page.goto('about:blank');
 	await page.goto(`/?${params}${route ? `#${route}` : ''}`);
 
 	const app = appFrame(page);

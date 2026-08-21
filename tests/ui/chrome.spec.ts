@@ -15,10 +15,11 @@
 // assertions that a thing is ABSENT are the ones that catch a slide back, so they are
 // here deliberately and are not redundant with the positive ones.
 //
-// ONE openApp PER TEST. A second call whose URL differs from the first only by its hash
-// is a same-document navigation, so the app never re-boots and the test silently runs
-// against whatever the previous step left on screen. Where two starting states are
-// needed, that is two tests.
+// ONE openApp PER TEST, still. The harness now blanks the page before every open, so a
+// second call in one test is no longer the silent trap it was — a hash-only goto is a
+// same-document navigation, and specs were asserting against whatever the previous step
+// had left on screen (see openApp in harness.ts). Splitting is kept anyway: two starting
+// states in one test is two tests' worth of failure to read from one red line.
 import { test, expect } from '@playwright/test';
 import { openApp, expectView, settle } from './harness.ts';
 

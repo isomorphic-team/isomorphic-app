@@ -189,13 +189,27 @@ test.describe('every route', () => {
 	// A sweep rather than one case, because the failure was never about a particular
 	// screen: it was about a card short enough for the rail to be the tallest thing in
 	// it, and which screens those are changes with the fixtures.
-	test('keeps the rail whole in every display mode', async ({ page }) => {
-		const bad: string[] = [];
-		for (const mode of ['inline', 'fullscreen', 'pip'] as DisplayMode[]) {
+	//
+	// ONE TEST PER MODE, AND A BUDGET STATED OUT LOUD. This was a single test walking
+	// all three modes, which is ~48 full app boots. It passed locally and timed out on
+	// CI at the default 30s, which is the classic shape of a test that measures the
+	// machine rather than the app. Split, the three run on separate workers and each
+	// retries alone; the raised budget is because a sweep is MEANT to be long, and
+	// trimming one until it fits the default is how it quietly stops sweeping.
+	test.describe.configure({ timeout: 120_000 });
+
+	for (const mode of ['inline', 'fullscreen', 'pip'] as DisplayMode[]) {
+		test(`keeps the rail whole in ${mode}`, async ({ page }) => {
+			const bad: string[] = [];
 			for (const route of Object.keys(ROUTES)) {
 				if (UNSETTLED.has(route)) continue;
 				const app = await openApp(page, route as never, { mode });
-				await settle(page);
+				// Only INLINE needs settling: its card is sized by a host message
+				// (onsizechange), so a measurement taken mid-resize reads a height the
+				// app never actually showed. Fullscreen and pip own a fixed window that
+				// presentMode has already set, so the wait there was pure sleeping —
+				// two thirds of this sweep's wall clock, spent on nothing.
+				if (mode === 'inline') await settle(page);
 				const m = await rail(app).evaluate((el) => {
 					const nav = el.querySelector('nav') as HTMLElement;
 					const root = el.parentElement as HTMLElement;
@@ -203,9 +217,9 @@ test.describe('every route', () => {
 					const rr = root.getBoundingClientRect();
 					return { out: Math.max(0, nr.bottom - rr.bottom, rr.top - nr.top) };
 				});
-				if (m.out > 0.5) bad.push(`${mode}/${route} by ${m.out.toFixed(1)}px`);
+				if (m.out > 0.5) bad.push(`${route} by ${m.out.toFixed(1)}px`);
 			}
-		}
-		expect(bad).toEqual([]);
-	});
+			expect(bad).toEqual([]);
+		});
+	}
 });
