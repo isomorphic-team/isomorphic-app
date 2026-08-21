@@ -60,7 +60,7 @@ import {
 	ArrowLeftIcon
 } from '../core/icons.tsx';
 import { Menu, MenuRow, MenuSeparator, MenuNote, type MenuTriggerProps } from '../ui/Menu.tsx';
-import { crumbCurrent, crumbLink, crumbInert, crumbMeta, eyebrow } from '../ui/typography.ts';
+import { crumbCurrent, crumbLink, crumbMeta, eyebrow } from '../ui/typography.ts';
 
 // Wider than the 4px it was, because a crumb is no longer just a word: it is a label
 // and its picker, and those have to read as ONE unit. At the old spacing the chevron
@@ -316,9 +316,13 @@ function BrainCrumb({ inert }: { inert?: boolean }) {
 			<BrainGlyph />
 		</span>
 	);
+	// `inert` is the FILE TREE, where the brain crumb is not a step on the way to the
+	// place you are — it IS the place, the root the tree is rooted at. So it takes the
+	// same colour as any other terminus (see crumbCurrent) and drops the link, exactly
+	// as the last folder crumb does one level down.
 	const name = (close?: () => void) =>
 		inert ? (
-			<span class={`min-w-0 truncate ${crumbInert}`} title={label}>
+			<span class={`min-w-0 truncate ${crumbCurrent}`} title={label}>
 				{label}
 			</span>
 		) : (
@@ -630,15 +634,18 @@ export function Breadcrumb({ view }: { view: View }) {
 		);
 	const path = 'path' in view ? (view as { path: string }).path : null;
 	// THE TREE IS THE BRAIN'S ROOT, so the trail is complete at the brain crumb: no tail,
-	// no separator, just the brain (inert, since its own label is what opens the tree).
-	// It briefly carried a "Files" tail so the tree could be picked from a crumb's
-	// destination menu — a menu that no longer exists, now that the rail names the tree
-	// and lights it. What was left was the brain crumb linking to itself with a label
-	// after it saying so, and the rail saying it a second time.
+	// no separator, just the brain, styled as the terminus it is.
 	//
-	// The other destinations keep their tail (🧠 Personal / Graph). They are not what the
-	// brain crumb opens, so naming them is the trail doing its job rather than repeating
-	// the segment before.
+	// WHY FILES ALONE HAS NO TAIL, next to 🧠 Personal / Graph. The tail names the place,
+	// and the tree's place is the root — which the brain crumb already names, the way
+	// "My Drive" names Drive's. A "Files" tail would name that root a second time, and
+	// would then have to survive one folder click: either it vanishes (🧠 Personal / wiki,
+	// a segment that disappears as you go deeper) or it stays (🧠 Personal / Files / wiki,
+	// a view's name wedged into a path). Graph, Search, Recent changes and Sharing have no
+	// root to inherit, so they say their own name.
+	//
+	// Which SECTION is open is the rail's answer, not the trail's — the same split as an
+	// editor's activity bar naming EXPLORER while its breadcrumb names only the path.
 	if (!path)
 		return (
 			<nav class="flex min-w-0 items-center">

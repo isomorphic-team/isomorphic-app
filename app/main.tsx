@@ -261,30 +261,30 @@ function Rail({ view }: { view: View }) {
 				    since the trail beside them stayed linked and kept its brain switcher. So
 				    the rail stays whole and `guardNav` asks before discarding (actions.ts). */}
 				{destinations('brain').map((d) => {
-						// GRAPH IS THE ONE CONTEXTUAL CONTROL. From a page it passes that page's
-						// path, and view_graph with a path returns the subgraph around it, so the
-						// button means "this page's neighbours" there and "the whole brain"
-						// everywhere else. A control whose meaning changes with context has to
-						// say so, which is what the title does.
-						const onPage = d.key === 'graph' && view.kind === 'page';
-						const title = onPage ? 'Show this page in the graph' : d.label;
-						const current = d.key === here;
-						return (
-							<RailItem key={d.key} current={current}>
-								<Button
-									variant="ghost"
-									size="icon"
-									title={title}
-									aria-label={title}
-									aria-current={current ? 'page' : undefined}
-									onClick={guardNav(onPage ? () => openGraph(view.path) : d.open)}
-									class={current ? 'text-accent' : undefined}
-								>
-									{d.icon}
-								</Button>
-							</RailItem>
-						);
-					})}
+					// GRAPH IS THE ONE CONTEXTUAL CONTROL. From a page it passes that page's
+					// path, and view_graph with a path returns the subgraph around it, so the
+					// button means "this page's neighbours" there and "the whole brain"
+					// everywhere else. A control whose meaning changes with context has to
+					// say so, which is what the title does.
+					const onPage = d.key === 'graph' && view.kind === 'page';
+					const title = onPage ? 'Show this page in the graph' : d.label;
+					const current = d.key === here;
+					return (
+						<RailItem key={d.key} current={current}>
+							<Button
+								variant="ghost"
+								size="icon"
+								title={title}
+								aria-label={title}
+								aria-current={current ? 'page' : undefined}
+								onClick={guardNav(onPage ? () => openGraph(view.path) : d.open)}
+								class={current ? 'text-accent' : undefined}
+							>
+								{d.icon}
+							</Button>
+						</RailItem>
+					);
+				})}
 				<span class="my-0.5 h-px w-4 bg-border" />
 				{/* The org and account scopes. They are one press further in than the brain's
 				    own views because they are rarer AND because sitting in the rail beside

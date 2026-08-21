@@ -451,7 +451,10 @@ console.log('\nnav destinations');
 	check('…including the org ones', activeDestination('members') === 'members');
 	// A pushed flow has not left the destination it was opened from, so the control that
 	// got you there stays lit rather than going dark mid-flow.
-	check('a flow step counts as its parent destination', activeDestination('invite-member') === 'members');
+	check(
+		'a flow step counts as its parent destination',
+		activeDestination('invite-member') === 'members'
+	);
 	check('…the sharing one too', activeDestination('share-brain') === 'sharing');
 	// Marking Files while reading a page would claim you are looking at the tree.
 	check('a page is not a destination', activeDestination('page') === null);

@@ -49,10 +49,9 @@ test('the destination you are looking at is marked, and only that one', async ({
 	// Files on a page would claim you are looking at the tree while reading a page.
 	const onPage = await openApp(page, '');
 	await expectView(onPage, 'page');
-	await expect(banner(onPage).getByRole('button', { name: 'Files', exact: true })).not.toHaveAttribute(
-		'aria-current',
-		'page'
-	);
+	await expect(
+		banner(onPage).getByRole('button', { name: 'Files', exact: true })
+	).not.toHaveAttribute('aria-current', 'page');
 });
 
 test('a crumb picker offers the folder’s contents, never the app’s destinations', async ({
