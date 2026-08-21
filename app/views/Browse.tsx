@@ -27,6 +27,7 @@ import { Button } from '../ui/index.ts';
 import {
 	ChevronIcon,
 	FolderIcon,
+	FolderNoteIcon,
 	FileIcon,
 	ImageIcon,
 	PencilIcon,
@@ -345,7 +346,10 @@ function TreeItem({
 						class={`flex shrink-0 items-center gap-1.5 py-1 ${editable ? 'cursor-grab' : ''}`}
 					>
 						<ChevronIcon open={open} />
-						<FolderIcon />
+						{/* The glyph says whether this folder is also a PAGE. Clicking the name
+						    opens that note, and without the distinction the two kinds of folder
+						    looked identical while behaving differently. */}
+						{folderPage ? <FolderNoteIcon /> : <FolderIcon />}
 					</span>
 					<button
 						type="button"
