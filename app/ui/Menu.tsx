@@ -17,12 +17,8 @@
 import type { ComponentChildren } from 'preact';
 import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks';
 import { cn } from './cn.ts';
+import { panelPlacement, type Placement } from '../core/menu-placement.ts';
 import { Button, type ButtonProps } from './Button.tsx';
-
-/** Breathing room kept between the panel and the edge of the card. */
-const GAP = 8;
-/** Below this many pixels, a side counts as cramped and the panel looks for a roomier one. */
-const COMFORTABLE = 160;
 
 /** Spread onto whatever element opens the menu. */
 export type MenuTriggerProps = {
@@ -64,7 +60,7 @@ export function Menu({
 	// The rail then reads as clipped by a too-short window, which is not what happened.
 	// That is what a `Math.max(96, …)` floor here used to guarantee on a short card: on a
 	// 170px browse card the ⋯ has 32px beneath it, and the panel was told to take 96.
-	const [place, setPlace] = useState<{ up: boolean; maxH: number } | null>(null);
+	const [place, setPlace] = useState<Placement | null>(null);
 	// Wraps the trigger. The panel is absolute, so it does not affect this rect — one
 	// ref serves both the outside-click test and the measurement.
 	const ref = useRef<HTMLDivElement>(null);
@@ -99,15 +95,7 @@ export function Menu({
 		}
 		const measure = () => {
 			const r = ref.current?.getBoundingClientRect();
-			if (!r) return;
-			const below = window.innerHeight - r.bottom - GAP;
-			const above = r.top - GAP;
-			// Prefer opening downward, and flip only when down is cramped AND up is
-			// roomier — the same rule a positioning library applies. Menus in the top bar
-			// have almost nothing above them and so never flip; the rail's ⋯ sits at the
-			// bottom of its column and, on a short card, always does.
-			const up = below < COMFORTABLE && above > below;
-			setPlace({ up, maxH: Math.max(0, up ? above : below) });
+			if (r) setPlace(panelPlacement(r, window.innerHeight));
 		};
 		measure();
 		window.addEventListener('resize', measure);

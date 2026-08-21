@@ -38,6 +38,7 @@ import {
 } from '../app/core/store.ts';
 import { renderAge, refreshOutcome } from '../app/core/util.ts';
 import { DEST_META, destinationsIn, activeDestination, isMorePlace } from '../app/core/nav.ts';
+import { panelPlacement, GAP, COMFORTABLE } from '../app/core/menu-placement.ts';
 
 let failures = 0;
 function check(label: string, cond: boolean, detail = '') {
@@ -490,6 +491,44 @@ console.log('\nnav destinations');
 		(Object.keys(DEST_META) as (keyof typeof DEST_META)[]).every(
 			(k) => typeof DEST_META[k].blurb === 'string' && DEST_META[k].blurb.trim().length > 0
 		)
+	);
+}
+
+console.log('\nmenu placement');
+{
+	// The rule two popovers share: ui/Menu's panel and the file tree's per-row ⋯. A
+	// panel taller than the room on its side does not clip, it makes the CARD scroll,
+	// which drags the chrome out of sight and reads as a clipped rail.
+	const H = 500;
+
+	const top = panelPlacement({ top: 20, bottom: 40 }, H);
+	check('a trigger in the top bar opens downward', !top.up);
+	check('…taking the room beneath it, less the gap', top.maxH === H - 40 - GAP);
+
+	const low = panelPlacement({ top: 470, bottom: 490 }, H);
+	check('a trigger at the bottom of a short card flips up', low.up);
+	check('…taking the room above it instead', low.maxH === 470 - GAP);
+
+	// The flip is not "whichever side is bigger". Down is preferred while down is
+	// usable, or a menu with plenty of room beneath it would jump above the trigger the
+	// moment the card grew a little taller than the panel.
+	const roomy = panelPlacement({ top: 300, bottom: 320 }, H);
+	check(
+		'a cramped side does not flip while it is still comfortable',
+		H - 320 - GAP >= COMFORTABLE ? !roomy.up : roomy.up
+	);
+	const both = panelPlacement({ top: 200, bottom: 220 }, 1000);
+	check('plenty of room below wins even with more above', !both.up);
+
+	// A panel is never given a negative budget: a trigger past the bottom edge (a row
+	// scrolled out of view) would otherwise produce maxHeight: -30px.
+	check(
+		'an off-screen trigger yields no negative cap',
+		panelPlacement({ top: 900, bottom: 950 }, 500).maxH >= 0
+	);
+	check(
+		'…and a trigger above the top edge does too',
+		panelPlacement({ top: -80, bottom: -60 }, 500).maxH >= 0
 	);
 }
 
