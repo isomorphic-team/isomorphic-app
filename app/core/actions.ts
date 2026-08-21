@@ -35,7 +35,7 @@ import type {
 	UsageBrain
 } from './types.ts';
 import { app, callTool, firstText } from './host.ts';
-import { FOLDER_NOTE_NAMES, isFolderNoteName, refreshOutcome } from './util.ts';
+import { isFolderNoteName, refreshOutcome } from './util.ts';
 import {
 	show,
 	history,
@@ -780,29 +780,21 @@ async function revalidateBrowse() {
 	}
 }
 
-// A nav/breadcrumb click on a folder: open its folder note (<folder>/index.md) when it
-// has one — the same page the file tree opens for that folder — else open the tree
-// REVEALED at that folder. A note-less folder used to fall back to the bare root tree,
-// which read as "the breadcrumb sent me somewhere else entirely".
-async function openFolder(prefix: string) {
-	const base = prefix.replace(/\/+$/, '');
-	try {
-		// Only a cold cache costs a round-trip — say so rather than hanging silently.
-		if (!browseCache)
-			show({
-				kind: 'loading',
-				label: `Opening ${base.split('/').pop()}…`,
-				task: 'folder',
-				subject: base.split('/').pop()
-			});
-		const list = await fetchPageList();
-		// index.md preferred, README.md fallback (see FOLDER_NOTE_NAMES).
-		const note = FOLDER_NOTE_NAMES.map((n) => `${base}/${n}`).find((p) => list.includes(p));
-		if (note) return navigateTo(note);
-	} catch {
-		// no page list — the tree is always a safe destination
-	}
-	return openBrowse(base);
+// A breadcrumb click on a folder: ALWAYS the tree, revealed at that folder.
+//
+// It used to open the folder's note (<folder>/index.md) when it had one and the tree
+// when it did not, which made one control do two different things depending on a fact
+// about the folder that the trail never showed you. Pressing `wiki` landed on a page,
+// pressing `concepts` landed on the tree, and nothing in the bar said why. A crumb that
+// is sometimes a page link and sometimes a navigation is not a crumb you can aim.
+//
+// The tree is the answer that is always available and always the same, and it does not
+// hide the note: a folder with one shows it as that folder's own row, one press away.
+// The file TREE keeps opening folder notes on a folder click (views/Browse.tsx), which
+// is a different question — there you are already looking at the structure, so the note
+// is the thing you cannot see yet.
+function openFolder(prefix: string) {
+	return openBrowse(prefix.replace(/\/+$/, ''));
 }
 
 // Open the activity/audit feed — whole brain, or one page's history when `path`

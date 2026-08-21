@@ -466,10 +466,16 @@ convention. The names, in priority order, live in **`FOLDER_NOTE_NAMES` =
 single source of truth; `app/core/util.ts` re-exports it (`isFolderNoteName`) so the browser
 tree, breadcrumb, and the view engine can never disagree on what a folder note is. Behavior:
 
-- **App navigation** (`app/`): clicking a folder in the file tree or breadcrumb opens its
-  folder note instead of just expanding it, and the note's own row is hidden as a redundant
-  sibling. A note-less folder just expands. Hovering a note-less folder in the tree shows an
-  "Add folder note" action that creates `index.md`, pre-seeded with a directory view.
+- **App navigation** (`app/`): clicking a folder **in the file tree** opens its folder note
+  instead of just expanding it, and the note's own row is hidden as a redundant sibling. A
+  note-less folder just expands. Hovering a note-less folder in the tree shows an "Add folder
+  note" action that creates `index.md`, pre-seeded with a directory view. **The BREADCRUMB
+  does not do this** (changed 2026-08-21): a folder crumb always opens the tree revealed at
+  that folder. Opening the note when one existed and the tree when one did not made a single
+  control do two different things based on a fact the trail never showed, so pressing `wiki`
+  landed on a page and pressing `concepts` landed on the tree with nothing to explain why.
+  The tree is the answer that is always available and always the same, and it does not hide
+  the note: a folder with one shows it as that folder's own row.
 - **Engine** (`kind: folders` okf-view): each direct sub-folder under `under` is represented
   by its folder note (linked via `index.md` > `README.md`); a sub-folder with no note renders
   as an unlinked, deslugged name. This is the directory-of-directories source — see the
