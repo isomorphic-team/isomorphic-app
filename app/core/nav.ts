@@ -40,18 +40,22 @@ export type DestKey =
 // destination quietly omits, and the row it lands in is then a bare word with a gap
 // under it where its neighbours have a sentence.
 export const DEST_META: Record<DestKey, { label: string; scope: Scope; blurb: string }> = {
-	// Search leads: it is the way to a page you cannot point at yet, which is the
-	// question you arrive with most often. Then Files and Graph, the same brain drawn
-	// two ways, and the feed and the audience after them.
+	// DECLARATION ORDER IS RAIL ORDER — destinationsIn filters these keys in place, so
+	// moving an entry here moves the icon.
 	//
-	// It is a PLACE like the rest, and it took a detour to get here. Search was briefly
-	// a control that swapped the trail for a field — the one item in the rail that
-	// opened a widget instead of going somewhere, which is exactly the inconsistency a
-	// rail of peers makes obvious. It has a view of its own that holds its own field
-	// now, so it behaves like every other destination: press it, arrive, the rail lights.
-	search: { label: 'Search', scope: 'brain', blurb: 'Find a page by its text' },
+	// Files leads: the tree is the brain itself and the thing the app opens into, so the
+	// rail's first mark is where you already are. Graph next, the same brain drawn the
+	// other way. Then Search, which is the way to a page you cannot point at. Then the
+	// feed and the audience.
+	//
+	// Search is a PLACE like the rest, and it took a detour to get here. It was briefly a
+	// control that swapped the trail for a field — the one item in the rail that opened a
+	// widget instead of going somewhere, which is exactly the inconsistency a rail of
+	// peers makes obvious. It has a view of its own holding its own field now, so it
+	// behaves like every other destination: press it, arrive, the rail lights.
 	files: { label: 'Files', scope: 'brain', blurb: 'The whole brain as a tree' },
 	graph: { label: 'Graph', scope: 'brain', blurb: 'How the pages link to each other' },
+	search: { label: 'Search', scope: 'brain', blurb: 'Find a page by its text' },
 	activity: {
 		label: 'Recent changes',
 		scope: 'brain',

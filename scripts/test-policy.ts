@@ -413,11 +413,11 @@ console.log('\nnav destinations');
 
 	check(
 		'the rail is the five views OF a brain, in rail order',
-		destinationsIn('brain', full).join() === 'search,files,graph,activity,sharing'
+		destinationsIn('brain', full).join() === 'files,graph,search,activity,sharing'
 	);
 	check(
 		'…and none of them is gated — every one is open to anyone who can reach the brain',
-		destinationsIn('brain', bare).join() === 'search,files,graph,activity,sharing'
+		destinationsIn('brain', bare).join() === 'files,graph,search,activity,sharing'
 	);
 	check(
 		'a deployment with USAGE_ANALYTICS off never offers Analytics',
