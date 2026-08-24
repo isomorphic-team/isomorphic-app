@@ -21,6 +21,26 @@ built. This file describes what is not.
 
 ---
 
+# TODO: honor hostContext.safeAreaInsets in the app
+
+The `ui://` resource now declares `_meta.ui.prefersBorder: false`, because the app draws
+its own bordered card inline and the host's unspecified default is bordered on mobile,
+which nested one border inside another. The trade that comes with borderless is that the
+host contributes no padding, and host padding is what otherwise absorbs
+`hostContext.safeAreaInsets`. The app reads none of them today, in any display mode, so
+on a phone the composer and the navigation bar can overlay content flush to the edge.
+
+Apply the insets as padding on the root container (`Root` in `app/main.tsx`), and as
+`scroll-padding` on any scroll-snap container. They arrive in `ui/initialize`'s host
+context and again on `ui/notifications/host-context-changed`, which `applyHostContext`
+in `app/core/host.ts` already receives and currently ignores.
+
+The alternative is to hand the chrome back to the host: `prefersBorder: true` AND drop
+the app's own inline border, since the two must never both draw one. That gets the
+padding for free and is closer to the design guidelines' "inherit the containing
+environment", at the cost of the app no longer controlling its own card. Either way the
+two halves move together, which is what `pnpm test:appmeta` pins.
+
 # TODO: skeleton shells for the page, tree, and graph
 
 The rotating status line landed (`src/lib/loading-lines.ts` + `app/views/LoadingView.tsx`,
