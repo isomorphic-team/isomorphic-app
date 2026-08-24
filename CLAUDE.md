@@ -40,6 +40,7 @@ pnpm test:links         # wikilink resolution + the broken-link report golden te
 pnpm test:access        # per-brain access rule (effectiveBrainRole) golden test
 pnpm test:scope         # org-vs-brain scope: which role each tool gates on
 pnpm test:loading       # loading-line engine: slot eligibility + per-task wiring
+pnpm test:appmeta       # the ui:// app resource's host contract (prefersBorder, tool→app link)
 pnpm test:feedback      # submit_feedback composition golden test (redaction, nothing identifying published)
 pnpm test:usage         # usage-analytics golden test (tool-classification coverage, the summary fold)
 pnpm test:wiring        # every test:* script is in BOTH package.json's `test` and ci.yml
@@ -79,6 +80,11 @@ broken-link report says about the ones that match nothing), `pnpm test:index`
 (content-index freshness guard: bounded, resumable work per read; wraps an octokit
 stub in the REAL `githubStore` so it still covers `fetchPages`'s GraphQL batching),
 `pnpm test:policy` (the path-policy wire contract between Worker and app),
+`pnpm test:appmeta` (the ui:// resource's HOST contract, over a real client/server
+pair: that it declares `prefersBorder` rather than inheriting a default that differs
+per platform, that the post-deploy versioned-template read carries the same metadata,
+and that every widget tool's `resourceUri` names a resource this server actually
+serves),
 `pnpm test:loading` (the loading-line engine: that a phrase naming a fact the widget
 does not have is never eligible, and that every loading state in the app declares a
 task, which is optional in the type and so invisible to typecheck),

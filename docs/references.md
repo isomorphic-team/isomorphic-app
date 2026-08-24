@@ -108,6 +108,22 @@ Non-obvious things confirmed against the sources above (with the "why it bit us"
 - **Resource MIME type is `text/html;profile=mcp-app`**; tool→app link is
   `_meta.ui.resourceUri` (nested form; legacy flat `_meta["ui/resourceUri"]` is
   deprecated).
+- **The host's border default is PER-PLATFORM, not per-host.** An app that does not
+  declare `_meta.ui.prefersBorder` renders borderless on web and **bordered on mobile**
+  (Claude's design guidelines, "Borderless inline"). This app draws its own bordered
+  card in inline mode, so the unspecified default nested a border inside a border on
+  phones and nowhere else. It is declared `false` on the `ui://` resource, at both the
+  `resources/list` entry and the `resources/read` content item (the content item wins
+  when both carry `_meta.ui`). Borderless also means no host padding, which is what
+  otherwise absorbs `hostContext.safeAreaInsets`, so the app owes those insets on
+  mobile. Pinned by `pnpm test:appmeta`.
+- **Inline cards size to the app's own content height, with no minimum.** The SDK's
+  `autoResize` measures `documentElement` and reports it via
+  `ui/notifications/size-changed`, so a one-line render gets a one-line card. The
+  design guidelines cap what belongs in one: no nested scrolling, at most 2 actions
+  and 4-5 data points, "No drill-ins, breadcrumbs, or multiple views". On mobile a
+  vertical pan starting inside an inline app is handed to the CONVERSATION scroll,
+  so an inline app's own vertical scroll container does not work there at all.
 - **claude.ai may not mount the iframe even with a byte-correct protocol exchange**
   (ext-apps#671) — client-side, not fixable from the server. Verify payloads with a
   known-good host (MCPJam Inspector, VS Code Copilot) to isolate host vs. server.

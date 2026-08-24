@@ -97,6 +97,21 @@ export const BRAIN_APP_URI = `ui://isomorphic-mind/brain-app.${bundleFingerprint
 // (exact match wins over templates — see McpServer read dispatch).
 const BRAIN_APP_URI_TEMPLATE = 'ui://isomorphic-mind/brain-app.{v}.html';
 
+// Whether the HOST draws a card (border + background + padding) around the app.
+// Declared explicitly because the default is per-platform, not per-host: Claude
+// renders an unspecified app borderless on web and BORDERED on mobile. The app
+// draws its own bordered card in inline mode (see Root in app/main.tsx), so on
+// mobile that default produced a border inside a border. `false` makes our card
+// the only one on every platform.
+//
+// The cost of borderless is that the host contributes no padding, which is what
+// otherwise absorbs hostContext.safeAreaInsets. The app does not read those yet,
+// so on mobile the composer can overlay content flush to the bottom edge. That is
+// a real gap, and it is the reason to revisit this: honoring the insets in the app
+// keeps `false`, while handing the chrome to the host means `true` here AND
+// dropping the app's own border, since the two must never both draw one.
+const APP_UI_META = { ui: { prefersBorder: false } } as const;
+
 function fail(text: string) {
 	return { isError: true as const, content: [{ type: 'text' as const, text }] };
 }
@@ -171,7 +186,9 @@ export function registerBrainApp(
 		// (a hash != BRAIN_APP_URI means a live session survived a deploy).
 		console.log(`[brain-app] ui resource read (${BRAIN_APP_HTML.length} chars) uri=${reqUri}`);
 		return {
-			contents: [{ uri: reqUri, mimeType: RESOURCE_MIME_TYPE, text: BRAIN_APP_HTML }]
+			contents: [
+				{ uri: reqUri, mimeType: RESOURCE_MIME_TYPE, text: BRAIN_APP_HTML, _meta: APP_UI_META }
+			]
 		};
 	};
 
@@ -179,7 +196,7 @@ export function registerBrainApp(
 		server,
 		'brain-app',
 		BRAIN_APP_URI,
-		{ mimeType: RESOURCE_MIME_TYPE },
+		{ mimeType: RESOURCE_MIME_TYPE, _meta: APP_UI_META },
 		async () => readAppBundle(BRAIN_APP_URI)
 	);
 
@@ -189,7 +206,7 @@ export function registerBrainApp(
 	server.registerResource(
 		'brain-app-versioned',
 		new ResourceTemplate(BRAIN_APP_URI_TEMPLATE, { list: undefined }),
-		{ mimeType: RESOURCE_MIME_TYPE },
+		{ mimeType: RESOURCE_MIME_TYPE, _meta: APP_UI_META },
 		async (uri) => readAppBundle(uri.toString())
 	);
 
