@@ -949,15 +949,19 @@ and unbounded, so these are optimizations or new surfaces):
 - **sha-check TTL cache.** Cache the HEAD-sha check per brain (~30-60s) to drop
   the per-read `getRef` in steady state; on our own writes call `invalidateIndex()` (already
   exported) so the just-edited state reflects immediately.
-- **Idempotency keys for writes** (issue #31, suggestion 1 — deliberately deferred). A
-  client-supplied request id making a repeated write a no-op returning the original result.
-  Deferred because every piece of it is harder than it looks: the id only helps if the MODEL
-  repeats it on retry (tool-description guidance, unenforceable); the client gives up at 60s
-  while the Worker may still be running, so a dedupe record must exist BEFORE the commit or the
-  retry races the in-flight original; and that means a durable TTL store keyed by id. Today's
-  backstop is cheaper and covers the reported cases: writes are read-before-retry (the write
-  tools' descriptions say so), a retried create fails with "already exists" if the first attempt
-  landed, and move/delete are atomic (land whole or not at all).
+- ~~**Idempotency keys for writes**~~ **DONE 2026-08-27** (issue #31 suggestion 1, built when
+  issue #50 reported the same ambiguity arriving as a 502 rather than a timeout). The shape that
+  shipped is NOT the client-supplied request id this entry deferred, and the difference is what
+  dissolved two of the three objections. The id is DERIVED SERVER-SIDE — a hash of (actor, tool,
+  canonicalized arguments) — so it needs nothing from the model and no unenforceable
+  tool-description guidance. The row is reserved BEFORE the commit, which is what makes a retry
+  arriving while the original is still running a recognised retry rather than a second write.
+  Only the third objection was real, and a durable TTL store is exactly what `write_attempts`
+  (migration 0007) is: two windows, pruned by the next claim on the same brain, so no separate
+  job. The one thing to know before changing it: the hash is over ARGUMENTS, never over the
+  commit, because an append's bundle stops matching the moment the first attempt lands — see
+  `src/lib/write-dedupe.ts`. Still not covered: `sync_records` (it has its own ledger-backed
+  idempotency by design) and the app's own editor saves, which are sha-guarded instead.
 - **Installation-token cache.** Every request builds a fresh `App`/octokit and mints an
   installation token on first use (and tenant resolution runs twice per request: preamble +
   handler). Caching the token in KV against its 1h TTL would drop one GitHub round trip and the
