@@ -76,6 +76,7 @@ import { dayKey, countedCall } from './lib/usage.ts';
 import { loadCustomToolDefs, registerCustomTools, type CustomToolLoad } from './tools/custom.ts';
 import { resolveInstallationOrg, connectCustomerOrg } from './lib/org-connect.ts';
 import { loadBrainConfig, type BrainConfig } from './lib/brain-config.ts';
+import { peekJsonRpc, needsBrainPreamble, jsonRpcError } from './lib/mcp-preamble.ts';
 
 interface Env {
 	// Auth mode selector
@@ -280,9 +281,18 @@ class McpSession {
 		);
 	}
 
+	// Fail-open, like loadCustomTools: a KV read that throws leaves the pointer
+	// unresolved, so the request falls back to the caller's default brain. It used
+	// to reject, and this runs in the preamble OUTSIDE any handler, so the throw
+	// left the Worker with no reply at all — a storage blip on a pointer that is a
+	// preference became an unexplained gateway error (issue #50).
 	async loadActiveBrain(): Promise<void> {
-		this._activeBrainId =
-			(await this.env.OAUTH_KV.get('active_brain:' + this.userKey())) ?? undefined;
+		try {
+			this._activeBrainId =
+				(await this.env.OAUTH_KV.get('active_brain:' + this.userKey())) ?? undefined;
+		} catch {
+			this._activeBrainId = undefined;
+		}
 	}
 
 	// User-defined tools discovered from the active brain's `tools/` folder,
@@ -1066,17 +1076,55 @@ const mcpApiHandler = {
 		if (request.method !== 'POST') {
 			return new Response('Method Not Allowed', { status: 405, headers: { Allow: 'POST' } });
 		}
+		// Read the body ONCE and hand the same bytes to the transport in a fresh
+		// Request. Two things need it before the SDK does: deciding whether this
+		// request needs a brain resolved at all, and knowing the request id so a
+		// failure can still be answered.
+		const raw = await request.text();
+		const peek = peekJsonRpc(raw);
+		const forwarded = new Request(request, { body: raw });
+
 		const props = (ctx as ExecutionContext & { props?: McpProps }).props;
 		const session = new McpSession(env, props, ctx);
-		await session.loadActiveBrain();
-		await session.loadCustomTools();
-		const server = session.buildServer();
-		const transport = new WebStandardStreamableHTTPServerTransport({
-			sessionIdGenerator: undefined,
-			enableJsonResponse: true
-		});
-		await server.connect(transport);
-		return transport.handleRequest(request);
+		try {
+			// `initialize`, `ping` and notifications are answered from the static tool
+			// surface, so they skip the KV read, the tenant resolution, the
+			// installation-token mint and the index freshness check that discovering a
+			// brain's own `tools/` pages costs. The handshake is the request a user
+			// cannot retry past, and it was paying for all four (issue #50).
+			if (needsBrainPreamble(peek)) {
+				await session.loadActiveBrain();
+				await session.loadCustomTools();
+			}
+			const server = session.buildServer();
+			const transport = new WebStandardStreamableHTTPServerTransport({
+				sessionIdGenerator: undefined,
+				enableJsonResponse: true
+			});
+			await server.connect(transport);
+			return await transport.handleRequest(forwarded);
+		} catch (err) {
+			// Nothing above this point was inside a tool handler, so the SDK's own
+			// error mapping never saw it and `workers-oauth-provider` does not catch
+			// either: the throw used to leave the Worker with no response, which
+			// upstream reads as an invalid one and reports as a bare gateway error
+			// with nothing to diagnose. Answer with the reason and the ray id instead.
+			const ray = request.headers.get('cf-ray');
+			const message = err instanceof Error ? err.message : String(err);
+			const body = jsonRpcError(
+				peek.id,
+				`Isomorphic could not serve this request: ${message}`,
+				ray
+			);
+			// A JSON-RPC error object IS a successful transport exchange, so 200 is the
+			// honest status when we know which request to attribute it to — and it is
+			// the one that reaches the user as our message rather than as the host's
+			// generic transport failure. With no id there is no valid reply to make.
+			return new Response(body, {
+				status: peek.id === null ? 500 : 200,
+				headers: { 'content-type': 'application/json' }
+			});
+		}
 	}
 };
 
