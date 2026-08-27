@@ -40,6 +40,9 @@ pnpm test:links         # wikilink resolution + the broken-link report golden te
 pnpm test:access        # per-brain access rule (effectiveBrainRole) golden test
 pnpm test:scope         # org-vs-brain scope: which role each tool gates on
 pnpm test:loading       # loading-line engine: slot eligibility + per-task wiring
+pnpm test:preamble      # the /mcp preamble: which requests need a brain, and what a
+                        # failure in front of the SDK answers with
+pnpm test:dedupe        # write-attempt ledger: an identical retry is answered, not applied twice
 pnpm test:appmeta       # the ui:// app resource's host contract (prefersBorder, tool→app link)
 pnpm test:feedback      # submit_feedback composition golden test (redaction, nothing identifying published)
 pnpm test:usage         # usage-analytics golden test (tool-classification coverage, the summary fold)
@@ -80,6 +83,11 @@ broken-link report says about the ones that match nothing), `pnpm test:index`
 (content-index freshness guard: bounded, resumable work per read; wraps an octokit
 stub in the REAL `githubStore` so it still covers `fetchPages`'s GraphQL batching),
 `pnpm test:policy` (the path-policy wire contract between Worker and app),
+`pnpm test:preamble` (the /mcp request preamble: which methods need a brain resolved,
+in both directions, and the JSON-RPC error a failure in front of the SDK answers with),
+`pnpm test:dedupe` (the write-attempt ledger: the argument fingerprint, the two windows,
+the claim being given back on a refusal or a throw, plus the real statements over the
+real migration on `node:sqlite`),
 `pnpm test:appmeta` (the ui:// resource's HOST contract, over a real client/server
 pair: that it declares `prefersBorder` rather than inheriting a default that differs
 per platform, that the post-deploy versioned-template read carries the same metadata,
@@ -629,6 +637,88 @@ not be marked `done:` without rewriting all 44 pages.
   commit, every refusal proving nothing was written), and `pnpm test:scope`, which now
   registers the librarian tools and asserts all three content writes gate on the BRAIN
   role at `editor` in both directions. **Uncovered:** the app layer, as everywhere else.
+
+## Retried writes, and what a lost answer costs (issue #50)
+
+A caller reported ~40% of MCP calls failing with Cloudflare `502
+origin_bad_gateway` inside a ten-minute window, the connect included, every one
+of them succeeding on retry. The functional half was recoverable. The
+correctness half was not: a 502 on `write_page` says nothing about whether the
+commit landed, so every retry had to be preceded by a `read_page`, and both ways
+of guessing wrong are silent — a retried `append` duplicates the text, a retried
+`mode: "create"` fails claiming the page exists.
+
+Read the error body before assuming the origin was ours. Its `zone` was
+`api.anthropic.com`, not this Worker's, so the 502 was generated in front of
+Anthropic's API by ITS origin; a slow Worker is one way to cause that and not the
+only one. The evidence in that report says our commits never landed at all (every
+retried create SUCCEEDED, which `mode: "create"` would have refused had the first
+attempt committed), and there was no deploy that day. Confirming it needs the
+Worker's own logs for the window, which is what the ray ids in the report are for.
+
+**The write-attempt ledger** (`src/lib/write-dedupe.ts` pure + the D1 half
+`src/lib/write-dedupe-store.ts`, migration 0007, `pnpm test:dedupe`) makes an
+identical retry safe rather than merely documented. `guardedWrite` in
+`librarian.ts` wraps `write_page` / `move_page` / `delete_page`.
+
+- **It is keyed on the CALL, never on the commit**, and that is the whole design.
+  An append's bundle is not stable across a retry: attempt 1 reads body B and
+  commits B+T; if that lands, attempt 2 reads B+T and commits B+T+T. Anything
+  fingerprinting content would miss exactly the case this exists for. The
+  fingerprint is SHA-256 over (actor, tool, canonicalized arguments), with the
+  `brain` routing argument excluded because the resolved `brainId` already keys
+  the row.
+- **The claim is taken BEFORE the handler and given back on any non-landing
+  exit.** Before, because the client gives up long before the Worker does and a
+  row written only on success would let the retry commit a second time. Given
+  back, because a refusal is deterministic (re-running it says the same thing) and
+  a fingerprint left reserved by a failed call blocks that write for minutes.
+- **It wraps the whole handler, not `commitBundle`.** The create case never
+  reaches a commit: `write_page`'s own "that path already exists" check fires
+  first, and what that check told a retry was the confusing half of the bug.
+- **Two windows, answering different questions.** `IN_FLIGHT_GRACE_MS` (2 min) is
+  how long an unfinished attempt speaks for itself; past it a claim is TAKEN OVER,
+  because a Worker killed mid-request leaves a row nobody will finish and a
+  permanently blocked fingerprint is worse than the duplicate it prevents.
+  `DONE_TTL_MS` (10 min) is how long a completed attempt is replayed. Rows are
+  pruned by the next claim on the same brain, so there is no prune job and the
+  table is bounded by write concurrency rather than write volume.
+- **Fail-open, twice over.** A ledger that cannot be reached runs the handler
+  exactly as it ran before this existed, and bookkeeping AFTER the write never
+  changes the answer: the commit is the fact and this table is a cache of it, the
+  same rule `writeThroughIndex` follows.
+- **The accepted trade-off:** a DELIBERATE identical write inside the done window
+  is reported as already applied rather than applied again. It is not silent (the
+  caller is told what it is repeating and when it landed), varying anything makes
+  it a different write, and the alternative is being unable to tell it apart from
+  the retry — which is the bug. **Not covered:** `sync_records`, which has its own
+  ledger-backed idempotency, and the editor's saves, which are sha-guarded.
+
+**The `/mcp` preamble** (`src/lib/mcp-preamble.ts`, `pnpm test:preamble`) is the
+other half, and it is about the request path rather than the write.
+
+- **A throw in the preamble used to leave no reply at all.** `loadActiveBrain`,
+  `buildServer` and `server.connect` run before the transport, outside any tool
+  handler, so the SDK's error mapping never sees them — and
+  `workers-oauth-provider` does not catch around its api handler either. An
+  uncaught exception reads upstream as an invalid response and reaches the user as
+  a bare gateway error. The handler answers with a JSON-RPC error carrying the
+  reason and the **CF ray id**: the report that opened this listed four ray ids
+  and there was nothing to join them against. 200 when the request id is known (a
+  JSON-RPC error object IS a completed exchange, and it is the form that reaches
+  the user as OUR message), 500 only when no valid reply can be addressed.
+- **`initialize` no longer resolves a brain.** Every POST used to pay for a KV
+  read, a tenant lookup, an installation-token mint and an index freshness check
+  before anyone read the method — all to discover the brain's own `tools/` pages.
+  `needsBrainPreamble` skips that for `initialize`, `ping` and notifications, and
+  is conservative in both unknown directions. **`tools/list` still resolves**, on
+  purpose: a brain's own tools belong in the list it returns.
+- `loadActiveBrain` is fail-open like `loadCustomTools`. That pointer is a
+  preference; a KV blip should fall back to the default brain, not fail the call.
+
+**Still open from that report:** whether the Worker itself was slow during the
+window (needs the logs), and the installation-token cache on `docs/roadmap.md`,
+which would take one more GitHub round trip off every call.
 
 ## User-defined tools (brain-tools)
 
