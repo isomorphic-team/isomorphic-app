@@ -20,6 +20,9 @@
 //     to render underneath the analytics chart's bars.
 //   * The rail's height is the window's floor. It falls out of flex sizing today and is
 //     stated explicitly so it survives an `overflow-hidden` landing on main.
+//   * Flex stretch sizes the rail to the CONTAINER, and inline the container is the
+//     scrollport rather than the page. So the rail is sticky, and the check has to
+//     SCROLL: at rest it looked right in every mode while being wrong in one.
 import { test, expect } from '@playwright/test';
 import { openApp, settle, ROUTES, type DisplayMode } from './harness.ts';
 
@@ -43,6 +46,55 @@ test.describe('the window', () => {
 			});
 			expect(m.rail).toBeGreaterThan(0);
 			expect(m.root + 0.5).toBeGreaterThanOrEqual(m.rail);
+		});
+	}
+
+	// SCROLLED, not merely tall. Every other assertion in this file measures the card at
+	// rest, where the rail was correct in all three modes, which is why this went unseen.
+	// The rail is a flex item, so stretching sizes it to the CONTAINER, and in inline the
+	// container is the scrollport rather than the page: 560px of border and icons
+	// anchored at scroll-top, both gone by the bottom of a long page. What was reported
+	// was the visible half, the edge between nav and content stopping partway down (#47);
+	// the navigation going with it is the same fault.
+	//
+	// A page taller than the card is the whole precondition, so it is named here rather
+	// than left to whichever fixture the default route happens to open.
+	for (const mode of ['inline', 'fullscreen', 'pip'] as DisplayMode[]) {
+		test(`holds the column at the bottom of a long page, in ${mode}`, async ({ page }) => {
+			if (mode !== 'inline') await page.setViewportSize({ width: 700, height: 420 });
+			const app = await openApp(page, 'page=wiki/playbooks/brand-voice.md', { mode });
+			await settle(page);
+			const m = await rail(app).evaluate((el) => {
+				const root = el.parentElement as HTMLElement;
+				const doc = document.scrollingElement as HTMLElement;
+				// WHICH element scrolls is the difference between the modes, and it is what
+				// the bug turned on: inline scrolls the flex root, fullscreen and pip scroll
+				// the document under a root that has grown to the whole page.
+				const inner = root.scrollHeight > root.clientHeight + 1;
+				const scroller = inner ? root : doc;
+				scroller.scrollTop = scroller.scrollHeight;
+				// The scrollport in viewport coordinates. The inline root carries a 1px
+				// border, so its client box is the honest comparison: its border box would
+				// report the rail a pixel short at each end.
+				const rr = root.getBoundingClientRect();
+				const port = inner
+					? { top: rr.top + root.clientTop, bottom: rr.top + root.clientTop + root.clientHeight }
+					: { top: 0, bottom: window.innerHeight };
+				const r = el.getBoundingClientRect();
+				const nav = (el.querySelector('nav') as HTMLElement).getBoundingClientRect();
+				return {
+					scrolled: scroller.scrollTop,
+					edge: getComputedStyle(el).borderRightWidth,
+					uncovered: Math.max(0, r.top - port.top) + Math.max(0, port.bottom - r.bottom),
+					navOut: Math.max(0, port.top - nav.top, nav.bottom - port.bottom)
+				};
+			});
+			// Without this the rest is vacuous: a card that never scrolled cannot lose a
+			// rail that scrolls away.
+			expect(m.scrolled).toBeGreaterThan(100);
+			expect(m.edge).not.toBe('0px');
+			expect(m.uncovered).toBeLessThanOrEqual(0.5);
+			expect(m.navOut).toBeLessThanOrEqual(0.5);
 		});
 	}
 
