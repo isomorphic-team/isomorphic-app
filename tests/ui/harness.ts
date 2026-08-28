@@ -52,12 +52,17 @@ export const ROUTES = {
 /**
  * A route the harness understands.
  *
- * The named ones above, plus `edit=<any path>`: the edit route takes a page path, so
- * enumerating it would mean listing every fixture page. Spelling it as a template
- * literal keeps a typo in a NAMED route an error while letting the editor tests open
- * whichever page they need.
+ * The named ones above, plus `edit=<any path>` and `page=<any path>`: both take a page
+ * path, so enumerating them would mean listing every fixture page. Spelling them as
+ * template literals keeps a typo in a NAMED route an error while letting a test open
+ * whichever page it needs.
+ *
+ * `page=` is the plain viewer on a NAMED page, where `''` is the viewer on whichever
+ * page the harness opens by default. It exists because the default one is short: a
+ * test about what happens when the card SCROLLS needs a page taller than the card, and
+ * which fixture that is should be stated in the test rather than depended on silently.
  */
-export type Route = keyof typeof ROUTES | `edit=${string}`;
+export type Route = keyof typeof ROUTES | `edit=${string}` | `page=${string}`;
 export type DisplayMode = 'inline' | 'fullscreen' | 'pip';
 
 /**
