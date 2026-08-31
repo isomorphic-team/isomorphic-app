@@ -1,16 +1,27 @@
 // Golden test for the retrieval probe scorer (src/lib/probe.ts). Pure — no D1, no
 // GitHub. Run: pnpm test:probe
 //
-// The verdict split is the whole instrument. A probe the expected page loses means
-// two completely different things: nothing in the brain answered (a content gap), or
-// something else answered (competition). The first cut of this collapsed both into
-// "missing" and reported "nothing matched" for a query that had in fact matched
-// another page, which is worse than no measurement: it hides the finding that
-// motivated building probes at all.
+// The verdicts are the instrument, and both times they have been wrong it was because
+// they measured something that stopped being the question:
+//
+//   - The first cut collapsed "nothing answered" and "the wrong page answered" into
+//     one "missing" verdict, and printed "nothing matched" for queries that had in
+//     fact matched another page. That hid the competition finding probes exist to
+//     produce.
+//   - The second keyed on how many pages co-matched, which was the right signal while
+//     search took the whole query as one substring and had no order to read. Once
+//     search tokenized, co-matching became ordinary: on a real brain those thresholds
+//     called 30 of 34 probes "contested" on a run that put the right page first 21
+//     times.
+//
+// So the cases below assert on RANK, and the silent ones matter as much as the loud:
+// a crowded result set where the owner still wins is a success, not a warning.
 import {
 	scoreProbe,
 	summarizeProbes,
+	diffProbeRuns,
 	stripDeclaredProbes,
+	TOP_BAND,
 	type ProbeHit
 } from '../src/lib/probe.ts';
 
@@ -26,7 +37,7 @@ function check(name: string, cond: boolean, detail?: string) {
 const hit = (path: string, line = 1): ProbeHit => ({ path, line, text: 'x' });
 const BUDGET = 50;
 
-// ---------- the four verdicts ----------
+// ---------- the verdicts ----------
 {
 	const owned = scoreProbe('q', 'wiki/a.md', [hit('wiki/a.md'), hit('wiki/b.md')], BUDGET);
 	check('owned: the expected page matched', owned.verdict === 'owned');
@@ -55,14 +66,43 @@ const BUDGET = 50;
 	);
 	check('inconclusive: truncation is flagged', truncated.truncated);
 
-	const contested = scoreProbe(
+	// Ranking first is the whole point, so a crowded result set where the expected page
+	// still wins is a SUCCESS. The previous version called this "contested" purely
+	// because four other pages also matched, which under tokenized search is ordinary.
+	const crowdedButFirst = scoreProbe(
 		'q',
 		'wiki/a.md',
 		[hit('wiki/a.md'), hit('wiki/b.md'), hit('wiki/c.md'), hit('wiki/d.md'), hit('wiki/e.md')],
 		BUDGET
 	);
-	check('contested: many pages answering the same query', contested.verdict === 'contested');
-	check('contested: still records that the expected page matched', contested.position === 1);
+	check(
+		'owned: many co-matching pages do not demote a first-place result',
+		crowdedButFirst.verdict === 'owned'
+	);
+	check('owned: nothing outranked it', crowdedButFirst.outrankedBy.length === 0);
+
+	const outranked = scoreProbe('q', 'wiki/b.md', [hit('wiki/a.md'), hit('wiki/b.md')], BUDGET);
+	check('outranked: present, but beaten', outranked.verdict === 'outranked');
+	check('outranked: names exactly who beat it', outranked.outrankedBy.join() === 'wiki/a.md');
+
+	// The boundary of the top band, asserted on both sides so widening TOP_BAND is a
+	// deliberate edit rather than a silent one.
+	const atBand = scoreProbe(
+		'q',
+		'wiki/z.md',
+		[...Array.from({ length: TOP_BAND - 1 }, (_, i) => hit(`wiki/${i}.md`)), hit('wiki/z.md')],
+		BUDGET
+	);
+	check(`outranked: position ${TOP_BAND} is still in the band`, atBand.verdict === 'outranked');
+
+	const buried = scoreProbe(
+		'q',
+		'wiki/z.md',
+		[...Array.from({ length: TOP_BAND }, (_, i) => hit(`wiki/${i}.md`)), hit('wiki/z.md')],
+		BUDGET
+	);
+	check(`buried: position ${TOP_BAND + 1} falls out of the band`, buried.verdict === 'buried');
+	check('buried: still records the position', buried.position === TOP_BAND + 1);
 }
 
 // Lines, not pages: several hits on one page are one matched page.
@@ -91,14 +131,83 @@ const BUDGET = 50;
 		s.total === 4 && s.owned === 2 && s.elsewhere === 1 && s.absent === 1
 	);
 	check(
-		'summary: the page answering other pages questions leads the intruder list',
-		s.intruders[0]?.path === 'wiki/note.md' && s.intruders[0]?.count === 3,
-		JSON.stringify(s.intruders)
+		'summary: the rank histogram is the headline number',
+		s.positions.find((p) => p.position === 1)?.count === 2 &&
+			s.positions.find((p) => p.position === null)?.count === 2,
+		JSON.stringify(s.positions)
+	);
+	// Co-occurrence while the owner still wins is NOT intrusion. Counting it is what
+	// made this list useless once search tokenized: the busiest page on a real brain
+	// co-occurred with 30 of 34 probes, which says only that it is long.
+	const ownerWins = summarizeProbes([
+		scoreProbe('q1', 'wiki/a.md', [hit('wiki/a.md'), hit('wiki/note.md')], BUDGET),
+		scoreProbe('q2', 'wiki/b.md', [hit('wiki/b.md'), hit('wiki/note.md')], BUDGET)
+	]);
+	check(
+		'summary: co-occurrence behind a winning owner is not intrusion',
+		ownerWins.intruders.length === 0,
+		JSON.stringify(ownerWins.intruders)
+	);
+
+	// Answering a question whose owner did not answer at all is the strongest form of
+	// intrusion, not an exempt case, so it counts.
+	const stoleIt = summarizeProbes([scoreProbe('q3', 'wiki/c.md', [hit('wiki/note.md')], BUDGET)]);
+	check(
+		'summary: answering instead of the owner counts as intrusion',
+		stoleIt.intruders[0]?.path === 'wiki/note.md' && stoleIt.intruders[0]?.count === 1,
+		JSON.stringify(stoleIt.intruders)
+	);
+
+	const beaten = summarizeProbes([
+		scoreProbe('q1', 'wiki/a.md', [hit('wiki/note.md'), hit('wiki/a.md')], BUDGET),
+		scoreProbe('q2', 'wiki/b.md', [hit('wiki/note.md'), hit('wiki/b.md')], BUDGET)
+	]);
+	check(
+		'summary: a page that outranks its neighbours leads the intruder list',
+		beaten.intruders[0]?.path === 'wiki/note.md' && beaten.intruders[0]?.count === 2,
+		JSON.stringify(beaten.intruders)
 	);
 	check(
 		'summary: a page is never an intruder on its own probe',
-		!s.intruders.some((i) => i.path === 'wiki/a.md')
+		!beaten.intruders.some((i) => i.path === 'wiki/a.md')
 	);
+}
+
+// ---------- comparing two runs ----------
+{
+	const before = [
+		scoreProbe('q1', 'wiki/a.md', [hit('wiki/x.md'), hit('wiki/a.md')], BUDGET), // #2
+		scoreProbe('q2', 'wiki/b.md', [hit('wiki/b.md')], BUDGET), // #1
+		scoreProbe('q3', 'wiki/c.md', [], BUDGET), // absent
+		scoreProbe('q4', 'wiki/d.md', [hit('wiki/d.md')], BUDGET) // only in before
+	];
+	const after = [
+		scoreProbe('q1', 'wiki/a.md', [hit('wiki/a.md')], BUDGET), // #2 → #1
+		scoreProbe('q2', 'wiki/b.md', [hit('wiki/x.md'), hit('wiki/b.md')], BUDGET), // #1 → #2
+		scoreProbe('q3', 'wiki/c.md', [hit('wiki/c.md')], BUDGET), // absent → #1
+		scoreProbe('q5', 'wiki/e.md', [hit('wiki/e.md')], BUDGET) // only in after
+	];
+	const d = diffProbeRuns(before, after);
+	check('diff: a better rank is an improvement', d.improved === 2, JSON.stringify(d));
+	check('diff: a worse rank is a regression', d.regressed === 1);
+	check(
+		'diff: probes on one side only are reported, not averaged in',
+		d.added === 1 && d.dropped === 1
+	);
+	check(
+		'diff: finding a previously absent page counts as improved',
+		d.deltas.find((x) => x.query === 'q3')?.change === 'improved'
+	);
+	check(
+		'diff: worst results sort first so a regression cannot hide',
+		d.deltas[0].change === 'dropped' || rankLast(d),
+		JSON.stringify(d.deltas.map((x) => [x.query, x.after]))
+	);
+}
+
+function rankLast(d: ReturnType<typeof diffProbeRuns>): boolean {
+	const positions = d.deltas.map((x) => x.after ?? Number.POSITIVE_INFINITY);
+	return positions.every((p, i) => i === 0 || positions[i - 1] >= p);
 }
 
 // ---------- the self-fulfilling probe ----------
