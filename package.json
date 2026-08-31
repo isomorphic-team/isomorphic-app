@@ -80,7 +80,7 @@
 		"zod": "^3.24.1"
 	},
 	"devDependencies": {
-		"@cloudflare/workers-types": "^4.20260101.0",
+		"@cloudflare/workers-types": "^5.20260828.1",
 		"@playwright/test": "^1.62.1",
 		"@tailwindcss/cli": "^4.3.3",
 		"@types/markdown-it": "^14.1.2",
