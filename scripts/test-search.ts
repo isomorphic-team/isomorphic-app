@@ -25,14 +25,9 @@ import {
 import { escapeLike, searchIndex } from '../src/lib/brain-index.ts';
 import { applyMigrations } from '../src/local/d1-sqlite.ts';
 
-let failures = 0;
-function check(name: string, cond: boolean, detail?: string) {
-	if (cond) console.log(`  ok  ${name}`);
-	else {
-		failures++;
-		console.error(`FAIL  ${name}${detail ? `\n      ${detail}` : ''}`);
-	}
-}
+import { checker } from './check.ts';
+
+const { check, done } = checker('search checks');
 
 // ---------------------------------------------------------------- the corpus ----
 //
@@ -661,5 +656,4 @@ function seed(pages: { path: string; title: string | null; content: string }[]) 
 	);
 }
 
-console.log(failures === 0 ? '\nAll search checks passed.' : `\n${failures} check(s) failed.`);
-process.exit(failures === 0 ? 0 : 1);
+done();

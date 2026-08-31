@@ -25,14 +25,9 @@ import {
 	type Role
 } from '../src/lib/orgs.ts';
 
-let failures = 0;
-function check(label: string, cond: boolean, detail = '') {
-	if (cond) console.log(`  ✓ ${label}`);
-	else {
-		failures++;
-		console.log(`  ✗ ${label}${detail ? `: ${detail}` : ''}`);
-	}
-}
+import { checker } from './check.ts';
+
+const { check, done } = checker('access-rule checks');
 
 const ORG_ROLES: Role[] = ['viewer', 'editor', 'admin', 'owner'];
 const GRANTS: (Role | null)[] = [null, 'viewer', 'editor', 'admin'];
@@ -527,7 +522,4 @@ check(
 		thunkCalls === 0
 );
 
-console.log(
-	failures === 0 ? '\nAll access-rule checks passed.\n' : `\n${failures} check(s) FAILED.\n`
-);
-process.exit(failures === 0 ? 0 : 1);
+done();

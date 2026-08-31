@@ -26,14 +26,9 @@ import { smokeOrigin, waitForOrigin, allPassed, type Check } from './smoke.ts';
 
 const ORIGIN = 'https://example.workers.dev';
 
-let failures = 0;
-function check(label: string, cond: boolean, detail = '') {
-	if (cond) console.log(`  ✓ ${label}`);
-	else {
-		failures++;
-		console.log(`  ✗ ${label}${detail ? `: ${detail}` : ''}`);
-	}
-}
+import { checker } from './check.ts';
+
+const { check, done } = checker('smoke checks');
 
 /** A response shaped like the one the named route really returns (verified against prod). */
 type Routes = Record<string, () => Response>;
@@ -464,5 +459,4 @@ check('the workflow parsed into steps', steps.length > 5, `got ${steps.length}`)
 	check('and re-runs the checks against production', /scripts\/smoke\.ts/.test(verify?.body ?? ''));
 }
 
-console.log(failures === 0 ? '\nAll smoke checks passed.\n' : `\n${failures} check(s) FAILED.\n`);
-process.exit(failures === 0 ? 0 : 1);
+done();

@@ -22,14 +22,9 @@ import {
 import { backlinksTo } from '../src/lib/brain-index.ts';
 import type { PageFields } from '../src/lib/brain-index.ts';
 
-let failures = 0;
-function check(name: string, cond: boolean, detail?: string) {
-	if (cond) console.log(`  ok  ${name}`);
-	else {
-		failures++;
-		console.error(`FAIL  ${name}${detail ? `\n      ${detail}` : ''}`);
-	}
-}
+import { checker } from './check.ts';
+
+const { check, done } = checker('structure checks');
 
 const fields = (rows: Record<string, string[]>): PageFields => new Map(Object.entries(rows));
 
@@ -511,5 +506,4 @@ Body text.
 	);
 }
 
-console.log(failures === 0 ? '\nAll structure checks passed.' : `\n${failures} check(s) failed.`);
-process.exit(failures === 0 ? 0 : 1);
+done();

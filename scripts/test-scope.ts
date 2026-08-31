@@ -37,14 +37,9 @@ import { registerBrainTools } from '../src/tools/brains.ts';
 import { registerAnalyticsTools } from '../src/tools/analytics.ts';
 import { registerLibrarianTools, type BrainContext } from '../src/tools/librarian.ts';
 
-let failures = 0;
-function check(label: string, cond: boolean, detail = '') {
-	if (cond) console.log(`  ✓ ${label}`);
-	else {
-		failures++;
-		console.log(`  ✗ ${label}${detail ? `: ${detail}` : ''}`);
-	}
-}
+import { checker } from './check.ts';
+
+const { check, done } = checker('scope checks');
 
 // ---------------------------------------------------------------------------
 // The schema, real, over node:sqlite shimmed to the D1 surface.
@@ -650,8 +645,4 @@ async function analyticsPayload(p: Persona) {
 }
 
 // ---------------------------------------------------------------------------
-if (failures) {
-	console.error(`\n${failures} scope check(s) FAILED.`);
-	process.exit(1);
-}
-console.log('\nAll scope checks passed.');
+done();
