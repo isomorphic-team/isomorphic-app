@@ -34,8 +34,12 @@ try {
 	const results: ProbeResult[] = [];
 	for (const { expect, questions } of spec) {
 		for (const q of questions) {
-			const hits = await searchIndex(brain.db, brain.brainId, q, undefined, HIT_BUDGET);
-			results.push(scoreProbe(q, expect, hits, HIT_BUDGET));
+			// searchIndex returns the hits plus what it left out (see
+			// docs/design/search-relevance.md). scoreProbe wants the hits; the rest of
+			// that result is a better truncation signal than inferring one from the hit
+			// count, which is the thread PR #68 is already pulling on.
+			const r = await searchIndex(brain.db, brain.brainId, q, undefined, HIT_BUDGET);
+			results.push(scoreProbe(q, expect, r.hits, HIT_BUDGET));
 		}
 	}
 	const summary = summarizeProbes(results);
