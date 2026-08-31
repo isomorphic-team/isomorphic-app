@@ -31,6 +31,14 @@ import {
 	wikilinkKey,
 	wikilinkTargetName
 } from './wiki.ts';
+import {
+	DEFAULT_SEARCH_OPTIONS,
+	rankPages,
+	searchCorpus,
+	tokenizeQuery,
+	type PageSignal,
+	type SearchResult
+} from './search.ts';
 
 // Version of the index's ROW SHAPE (not the D1 schema — migrations handle that).
 // Bumped when (re)indexing starts producing rows older builds lack, so brains
@@ -879,50 +887,103 @@ export async function loadPageContents(
 	return byPath;
 }
 
-// Full-text search over indexed page content. LIKE coarse-filters candidate pages
-// in D1 (SQLite LIKE is ASCII case-insensitive), then we extract the exact matching
-// lines in-Worker so hit line numbers/text match the old scan exactly.
+// Pages whose content is fetched so their matching lines can be extracted. This is a
+// memory bound, not a relevance one: the previous engine selected `content` for every
+// matching row, so a common term on a large brain pulled the whole brain into the
+// isolate and then discarded all but the first 50 lines of it. Ranking happens on the
+// cheap signal rows first, so what survives this cut is the best of the brain rather
+// than the alphabetically earliest of it.
+const MAX_SEARCH_CANDIDATES = 25;
+
+// Full-text search over indexed page content, in two phases.
+//
+// Phase 1 asks SQL only what is cheap to ask: for each page, does it contain each
+// query term, and does it contain the whole query verbatim. Those rows are path,
+// title and a handful of booleans, so the answer stays small however large the brain.
+// Phase 2 fetches content for the top-ranked candidates and extracts their lines.
+//
+// SQL narrows; it never orders. Every decision about what ranks above what, and what
+// gets dropped, lives in the pure src/lib/search.ts so it can be tested without a
+// database — see docs/design/search-relevance.md.
 export async function searchIndex(
 	db: D1Database,
 	brainId: string,
 	query: string,
 	prefix: string | undefined,
-	max: number
-): Promise<{ path: string; line: number; text: string }[]> {
-	const like = `%${escapeLike(query)}%`;
-	const rows = prefix
-		? await db
-				.prepare(
-					`SELECT path, content FROM brain_pages
-					 WHERE brain_id = ?1 AND path LIKE ?2 ESCAPE '\\' AND content LIKE ?3 ESCAPE '\\'
-					 ORDER BY path`
-				)
-				.bind(brainId, `${escapeLike(prefix)}%`, like)
-				.all<{ path: string; content: string }>()
-		: await db
-				.prepare(
-					`SELECT path, content FROM brain_pages
-					 WHERE brain_id = ?1 AND content LIKE ?2 ESCAPE '\\'
-					 ORDER BY path`
-				)
-				.bind(brainId, like)
-				.all<{ path: string; content: string }>();
+	max: number,
+	perPage: number = DEFAULT_SEARCH_OPTIONS.perPage
+): Promise<SearchResult> {
+	const q = tokenizeQuery(query);
+	const empty: SearchResult = {
+		hits: [],
+		terms: q.terms,
+		pagesMatched: 0,
+		pagesShown: 0,
+		linesElided: 0,
+		budgetHit: false
+	};
+	if (q.terms.length === 0) return empty;
 
-	const needle = query.toLowerCase();
-	const hits: { path: string; line: number; text: string }[] = [];
-	for (const r of rows.results) {
-		const lines = r.content.split('\n');
-		for (let i = 0; i < lines.length && hits.length < max; i++) {
-			if (lines[i].toLowerCase().includes(needle)) {
-				hits.push({ path: r.path, line: i + 1, text: lines[i].trim().slice(0, 200) });
-			}
-		}
-		if (hits.length >= max) break;
+	// One bound parameter per term, reused between the SELECT list and the WHERE, so a
+	// term is escaped exactly once. escapeLike keeps a query's own % or _ literal.
+	const binds: unknown[] = [brainId];
+	const selects: string[] = [];
+	const conds: string[] = [];
+	for (const term of q.terms) {
+		binds.push(`%${escapeLike(term)}%`);
+		const p = `?${binds.length}`;
+		selects.push(`(content LIKE ${p} ESCAPE '\\') AS t${selects.length}`);
+		conds.push(`content LIKE ${p} ESCAPE '\\'`);
 	}
-	return hits;
+	binds.push(`%${escapeLike(q.phrase)}%`);
+	selects.push(`(content LIKE ?${binds.length} ESCAPE '\\') AS ph`);
+
+	// OR, not AND: a page holding some of the terms is a worse match, not a non-match,
+	// and the scorer is what decides how much worse. ANDing here would reintroduce the
+	// defect this replaces — an empty result for a query the brain can nearly answer.
+	let where = `brain_id = ?1 AND (${conds.join(' OR ')})`;
+	if (prefix) {
+		binds.push(`${escapeLike(prefix)}%`);
+		where += ` AND path LIKE ?${binds.length} ESCAPE '\\'`;
+	}
+
+	const rows = await db
+		.prepare(`SELECT path, title, ${selects.join(', ')} FROM brain_pages WHERE ${where}`)
+		.bind(...binds)
+		.all<Record<string, string | number | null>>();
+
+	const signals: PageSignal[] = rows.results.map((r) => ({
+		path: String(r.path),
+		title: r.title == null ? null : String(r.title),
+		has: q.terms.map((_, i) => Number(r[`t${i}`]) === 1),
+		phrase: Number(r.ph) === 1
+	}));
+	if (signals.length === 0) return empty;
+
+	const chosen = rankPages(signals, q.terms).slice(0, MAX_SEARCH_CANDIDATES);
+	const contents = await loadPageContents(
+		db,
+		brainId,
+		chosen.map((s) => s.path)
+	);
+	const pages = chosen.map((s) => ({
+		path: s.path,
+		title: s.title,
+		content: contents.get(s.path) ?? ''
+	}));
+	// Ranking runs again over the fetched pages, where term FREQUENCY is finally
+	// known. It only refines the phase-1 order (frequency is one saturating term of a
+	// score coverage dominates), so a page cannot leapfrog a strictly better match.
+	return searchCorpus(pages, query, { max, perPage }, signals.length - chosen.length);
 }
 
 // Escape LIKE wildcards so a query containing % or _ is matched literally.
-function escapeLike(s: string): string {
+// Exported so pnpm test:search can pin it. It has to be tested directly, because it is
+// invisible from the outside: searchCorpus re-verifies every candidate against the page
+// content it fetched, so an unescaped `%` that made phase 1 match the whole brain would
+// still produce the right hits — just after scanning and fetching far more than it had
+// any reason to. The escaping bounds the WORK; the re-verification is what guarantees
+// the answer.
+export function escapeLike(s: string): string {
 	return s.replace(/[\\%_]/g, (c) => `\\${c}`);
 }

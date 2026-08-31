@@ -91,6 +91,7 @@ import {
 	type OkfPageStatus,
 	type FieldPatch
 } from '../lib/page-patch.ts';
+import { elisionNote } from '../lib/search.ts';
 import { parseLedger } from '../lib/brain-import.ts';
 import { dedupeWrite, writeFingerprint, secondsSince } from '../lib/write-dedupe.ts';
 import { d1WriteLedger } from '../lib/write-dedupe-store.ts';
@@ -107,7 +108,12 @@ const brainArg = z
 // `type:` values, so this takes whatever the brain calls things rather than a
 // fixed list.
 const fieldsArg = z
+	// zod 4 wants the KEY schema passed explicitly. The one-argument form still parses
+	// at runtime, but its inferred type widens to Record<string | number | symbol,
+	// unknown>, which no longer matches FieldPatch. Naming z.string() keeps the record
+	// typed as Record<string, ...>.
 	.record(
+		z.string(),
 		z.union([
 			z.string(),
 			z.number(),
@@ -2209,8 +2215,12 @@ export function registerLibrarianTools(
 		{
 			title: 'Search brain pages',
 			annotations: { readOnlyHint: true },
+			// search_pages names itself, and says enough that an agent hunting for it
+			// mid-task finds it — see the read_page/view_page note in CLAUDE.md. It also
+			// states that a question works, because the previous engine's inability to
+			// answer one is the habit a model arrives with.
 			description:
-				'Full-text search across wiki pages (case-insensitive). Returns matching lines with their page and line number.',
+				'search_pages: full-text search across this brain\'s wiki pages, case-insensitive. Takes a phrase, a question, or a single term — the query is split into words and pages are ranked by how many of them they carry, so "who owns the referral program" works as well as "referral". Returns the best matching lines, best page first, each with its page path and line number. Use read_page or view_page to open a page it names.',
 			inputSchema: {
 				brain: brainArg,
 				query: z.string().min(2).describe('Text to search for.'),
@@ -2232,32 +2242,44 @@ export function registerLibrarianTools(
 			const { store, repoArgs, config, db, brainId } = await getContext({ brain });
 			const { truncated } = await ensureFresh(db, store, repoArgs, brainId, config);
 
-			const MAX_HITS = 50;
+			// The per-page cap is what keeps breadth: without it one page with a common
+			// term takes the whole budget and every other page is invisible, which on a
+			// large brain is the difference between a search and a lucky sort order.
+			const opts = { max: 50, perPage: 3 };
 			// Structured hits ride along for UI consumers (the brain MCP App);
 			// the text block stays the source of truth for chat/agent consumers.
-			// searchIndex matches lines exactly as the old live scan did, but against
-			// the D1 index (no GitHub fetch, unbounded by page count).
-			const hits = await searchIndex(db, brainId, query, prefix, MAX_HITS);
+			const result = await searchIndex(db, brainId, query, prefix, opts.max, opts.perPage);
+			const { hits, terms } = result;
+
+			// Naming the terms is the difference between "the brain does not say" and
+			// "I asked the wrong question". A model that gets a bare no-match rephrases
+			// blindly; one that can see the query was reduced to two words can tell
+			// which two missed.
+			const searched = terms.join(', ');
+			const note =
+				searched && searched !== query.trim().toLowerCase() ? ` Searched: ${searched}.` : '';
 
 			// `expect` measures the retrieval path rather than changing it: the results
 			// are identical with and without it. It answers the one question a rewrite
 			// otherwise cannot check — did the page that owns this question come back,
 			// and did it come back first.
-			const probe = expect ? scoreProbe(query, expect, hits, MAX_HITS) : null;
+			const probe = expect ? scoreProbe(query, expect, hits, opts.max) : null;
 			const probeNote = probe ? `\n\n${describeProbe(probe)}` : '';
 
 			if (hits.length === 0) {
 				return {
-					...ok(`No matches for "${query}".${probeNote}${truncationNote(truncated)}`),
-					structuredContent: { hits: [], probe }
+					...ok(`No matches for "${query}".${note}${probeNote}${truncationNote(truncated)}`),
+					structuredContent: { hits: [], terms, pagesMatched: 0, probe }
 				};
 			}
-			const capped = hits.length >= MAX_HITS ? ` (showing first ${MAX_HITS})` : '';
+			const capped = result.budgetHit ? ` (the top ${opts.max})` : '';
+			const lines = hits.map((h) => `${h.path}:${h.line}: ${h.text}`).join('\n');
 			return {
 				...ok(
-					`${hits.length} match(es) for "${query}"${capped}:\n${hits.map((h) => `${h.path}:${h.line}: ${h.text}`).join('\n')}${probeNote}${truncationNote(truncated)}`
+					`${hits.length} match(es)${capped} for "${query}" across ${result.pagesShown} page(s), best first.${note}\n${lines}` +
+						`${elisionNote(result, opts)}${probeNote}${truncationNote(truncated)}`
 				),
-				structuredContent: { hits, probe }
+				structuredContent: { hits, terms, pagesMatched: result.pagesMatched, probe }
 			};
 		}
 	);

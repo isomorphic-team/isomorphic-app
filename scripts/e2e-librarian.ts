@@ -455,6 +455,22 @@ try {
 	r = await call('search_pages', { query: 'xylophonic' });
 	check('the verifying search finds the new page', /write-through-probe\.md/.test(r.text), r.text);
 
+	// Search relevance, through the real tool rather than the engine's own golden test
+	// (docs/design/search-relevance.md). A sentence-shaped query matched nothing at all
+	// before tokenization, whatever the brain held — the literal string is on no page.
+	r = await call('search_pages', { query: 'what is the uniquely probe-xylophonic content' });
+	check(
+		'a sentence-shaped query reaches the page that answers it',
+		/write-through-probe\.md/.test(r.text),
+		r.text
+	);
+	check('and the response names the terms it searched', /Searched:/.test(r.text), r.text);
+	check(
+		'the hit lines still carry a path and line number',
+		/write-through-probe\.md:\d+: /.test(r.text),
+		r.text
+	);
+
 	// A move upserts the new path AND deletes the old one — both must be written
 	// through, or the index would keep listing a page that no longer exists.
 	r = await call('move_page', {

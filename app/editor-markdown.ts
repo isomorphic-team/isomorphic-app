@@ -14,7 +14,10 @@
 // pages is not achievable via parse->serialize. The golden test asserts semantic
 // stability (re-parse and compare) for those.
 
-import MarkdownIt from 'markdown-it';
+// markdown-it 15 ships its own types and splits the two meanings of the name: the
+// default export is the callable class (a VALUE), and MarkdownIt is exported
+// separately as the instance TYPE. v14's @types package conflated them.
+import MarkdownIt, { type MarkdownIt as MarkdownItInstance } from 'markdown-it';
 import { Schema, type Node } from 'prosemirror-model';
 import {
 	schema as baseSchema,
@@ -82,7 +85,7 @@ export const editorSchema = new Schema({
 // off a list item's first paragraph (mutating the raw `.content`, before it's
 // tokenized into `.children`) and stash the checked state on the `list_item_open`
 // token for the ProseMirror parser to read as an attr.
-function taskListPlugin(md: MarkdownIt) {
+function taskListPlugin(md: MarkdownItInstance) {
 	md.core.ruler.before('inline', 'task-lists', (state) => {
 		const toks = state.tokens;
 		for (let i = 0; i < toks.length; i++) {
