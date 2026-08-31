@@ -63,14 +63,34 @@ jobs:
       - run: pnpm gen:templates
       - run: pnpm gen:app
 
-      # The committed generated files must match a fresh regen — catches a PR that
-      # edited app/ or brain-template/ but forgot to run `pnpm gen:app` / `gen:templates`.
+      # The committed generated files must match a fresh regen. TWO different mistakes
+      # land on this step, and the message has to tell them apart, because the second
+      # one is nobody's mistake at all and otherwise reads as a broken check:
+      #
+      #   1. A pull request edited app/ or brain-template/ and did not re-run codegen.
+      #   2. A pull request bumped a dependency that is BUNDLED into the app UI (zod
+      #      and markdown-it are both in there). `pnpm gen:app` inlines those packages,
+      #      so their bytes change, and the committed bundle no longer matches. A
+      #      Dependabot pull request ALWAYS lands here: it writes package.json and the
+      #      lockfile and nothing else, because it cannot run codegen. `pnpm regen:pr`
+      #      is the fix, and it is the maintainer's job rather than the bot's.
+      #
+      # Diff with --quiet and report with --stat. The app bundle is ~900 KiB of minified
+      # JavaScript on ONE line, so a bare `git diff` buried the error under megabytes of
+      # it and the reason for the failure scrolled off the top of the log.
       - name: Generated artifacts in sync with source
         run: |
-          git diff --exit-code -- \
+          if ! git diff --quiet -- \
             src/lib/app-bundle.generated.ts \
-            src/lib/brain-template.generated.ts \
-          || { echo "::error::Generated files are stale — run 'pnpm gen:app' and 'pnpm gen:templates' and commit the result."; exit 1; }
+            src/lib/brain-template.generated.ts
+          then
+            echo "Generated files that differ from a fresh regen:"
+            git diff --stat -- \
+              src/lib/app-bundle.generated.ts \
+              src/lib/brain-template.generated.ts
+            echo "::error::Generated files are stale. If you edited app/ or brain-template/, run 'pnpm gen:app' and 'pnpm gen:templates' and commit the result. If this is a dependency bump (Dependabot cannot run codegen), a maintainer regenerates it with 'pnpm regen:pr <number>'."
+            exit 1
+          fi
 
       # Gate on a clean typecheck across all three tsconfigs (node/worker/app).
       - run: pnpm typecheck
