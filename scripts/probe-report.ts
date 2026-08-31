@@ -10,7 +10,7 @@
 // path an agent actually gets, lexical limits included.
 import { readFile } from 'node:fs/promises';
 import { searchIndex } from '../src/lib/brain-index.ts';
-import { scoreProbe, summarizeProbes, type ProbeResult } from '../src/lib/probe.ts';
+import { scoreProbe, summarizeProbes, diffProbeRuns, type ProbeResult } from '../src/lib/probe.ts';
 import { openFolderAsBrain } from './local-brain.ts';
 
 // The cap search_pages itself uses, so a probe sees exactly what an agent sees.
@@ -18,11 +18,24 @@ const HIT_BUDGET = 50;
 
 const args = process.argv.slice(2);
 const asJson = args.includes('--json');
-const [source, probeFile] = args.filter((a) => !a.startsWith('--'));
+const baseFlag = args.indexOf('--baseline');
+const baseFile = baseFlag === -1 ? null : args[baseFlag + 1];
+const positional = args.filter(
+	(a, i) => !a.startsWith('--') && !(baseFlag !== -1 && i === baseFlag + 1)
+);
+const [source, probeFile] = positional;
 if (!source || !probeFile) {
-	console.error('usage: tsx scripts/probe-report.ts <folder> <probes.json> [--json]');
+	console.error(
+		'usage: tsx scripts/probe-report.ts <folder> <probes.json> [--baseline <run.json>] [--json]'
+	);
 	process.exit(2);
 }
+
+// A baseline is a previous run's --json output. Compared by RANK, which means the
+// same thing across runs even when the verdict labels have been redefined.
+const baseline: ProbeResult[] | null = baseFile
+	? (JSON.parse(await readFile(baseFile, 'utf8')).results as ProbeResult[])
+	: null;
 
 const spec = JSON.parse(await readFile(probeFile, 'utf8')) as {
 	expect: string;
@@ -45,7 +58,8 @@ try {
 	} else {
 		const mark = {
 			owned: 'OWNED    ',
-			contested: 'CONTESTED',
+			outranked: 'OUTRANKED',
+			buried: 'BURIED   ',
 			elsewhere: 'ELSEWHERE',
 			absent: 'ABSENT   ',
 			inconclusive: 'TRUNCATED'
@@ -57,10 +71,9 @@ try {
 				console.log(`\n${current}`);
 			}
 			let extra: string;
-			if (r.verdict === 'owned' || r.verdict === 'contested') {
-				extra =
-					`${r.linesOnExpected} line(s) on the expected page, ${r.matched.length} page(s) matched` +
-					(r.competitors.length ? `; also: ${r.competitors.slice(0, 3).join(', ')}` : '');
+			if (r.position !== null) {
+				extra = `rank ${r.position} of ${r.matched.length}, ${r.linesOnExpected} line(s)`;
+				if (r.outrankedBy.length) extra += `; behind ${r.outrankedBy.slice(0, 3).join(', ')}`;
 			} else if (r.verdict === 'inconclusive') {
 				extra = `${r.matched.length} pages matched and the hit budget ran out — cannot tell`;
 			} else if (r.verdict === 'elsewhere') {
@@ -72,13 +85,34 @@ try {
 			console.log(`              ${extra}`);
 		}
 		console.log(
-			`\n${summary.total} probes: ${summary.owned} owned, ${summary.contested} contested, ` +
-				`${summary.elsewhere} answered elsewhere, ${summary.absent} absent, ` +
-				`${summary.inconclusive} inconclusive.`
+			`\n${summary.total} probes: ${summary.owned} first, ${summary.outranked} outranked, ` +
+				`${summary.buried} buried, ${summary.elsewhere} answered elsewhere, ` +
+				`${summary.absent} absent, ${summary.inconclusive} inconclusive.`
 		);
+		const ranked = summary.positions.filter((p) => p.position !== null);
+		if (ranked.length) {
+			console.log(
+				`\nRank of the expected page: ${ranked.map((p) => `#${p.position} x${p.count}`).join(', ')}`
+			);
+		}
 		if (summary.intruders.length) {
-			console.log(`\nPages answering to other pages' questions:`);
+			console.log(`\nPages outranking the page a question belongs to:`);
 			for (const i of summary.intruders.slice(0, 8)) console.log(`  ${i.count}x  ${i.path}`);
+		}
+		if (baseline) {
+			const diff = diffProbeRuns(baseline, results);
+			console.log(
+				`\nvs baseline: ${diff.improved} improved, ${diff.regressed} regressed, ${diff.same} unchanged` +
+					(diff.added || diff.dropped
+						? `, ${diff.added} added, ${diff.dropped} dropped (the two runs asked different questions)`
+						: '')
+			);
+			const moved = diff.deltas.filter((d) => d.change === 'improved' || d.change === 'regressed');
+			for (const d of moved) {
+				const at = (p: number | null) => (p === null ? 'not found' : `#${p}`);
+				const arrow = d.change === 'improved' ? '↑' : '↓';
+				console.log(`  ${arrow} "${d.query}": ${at(d.before)} → ${at(d.after)}`);
+			}
 		}
 	}
 } finally {

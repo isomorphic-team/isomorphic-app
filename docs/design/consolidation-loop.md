@@ -74,10 +74,10 @@ pure, all offline, all covered by golden tests wired into `package.json` and `ci
 | File                            | Exports                                                                                                                              | Test                                |
 | ------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------- |
 | `src/lib/consolidate.ts`        | `computeTensions`, `parseReviewLedger`, `serializeReviewLedger`, `filterDismissed`, `dismiss`, `REVIEW_LEDGER_PATH`, `MAX_DUP_PAGES` | `pnpm test:consolidate` (34 checks) |
-| `src/lib/probe.ts`              | `scoreProbe`, `summarizeProbes`, `stripDeclaredProbes`                                                                               | `pnpm test:probe` (22 checks)       |
+| `src/lib/probe.ts`              | `scoreProbe`, `summarizeProbes`, `diffProbeRuns`, `stripDeclaredProbes`                                                              | `pnpm test:probe`                   |
 | `scripts/local-brain.ts`        | `openFolderAsBrain`                                                                                                                  | exercised by both runners           |
 | `scripts/consolidate-report.ts` | `pnpm consolidate:report <folder>`                                                                                                   |                                     |
-| `scripts/probe-report.ts`       | `pnpm probe:report <folder> <probes.json>`                                                                                           |                                     |
+| `scripts/probe-report.ts`       | `pnpm probe:report <folder> <probes.json> [--baseline <run.json>] [--json]`                                                          |                                     |
 
 Both runners copy a folder of markdown into a temp git repo, index it through the
 **real** content index on `node:sqlite`, and run the real engines. No network, no
@@ -90,8 +90,20 @@ the paths involved, evidence, and the suggested move:
 `island` · `orphan` · `note-less-folder` · `hollow-folder-note` ·
 `folder-note-convention` · `folder-echo-page` · `near-duplicate`
 
-`scoreProbe` returns four verdicts plus a truncation guard: `owned` · `contested` ·
-`elsewhere` · `absent` · `inconclusive`.
+`scoreProbe` returns five verdicts plus a truncation guard, keyed on the expected
+page's RANK: `owned` (first) · `outranked` (top band, beaten) · `buried` (present,
+below the band) · `elsewhere` (absent, others answered) · `absent` · `inconclusive`.
+`diffProbeRuns` compares two runs by rank, which is the only number that means the
+same thing on both sides.
+
+An earlier version keyed the verdicts on how many other pages matched. That was right
+while search took the whole query as one substring, because matching many pages meant
+a vague query and there was no order to read. Once search tokenized, matching many
+pages became ordinary and ranking became the thing that resolves it: on a real brain
+the old thresholds called 30 of 34 probes "contested" on a run that put the right page
+first 21 times. The same correction applies to the intruder list, which now counts
+pages that OUTRANK the page a question belongs to rather than pages that merely
+co-occur with it.
 
 ## Work items, in order
 
