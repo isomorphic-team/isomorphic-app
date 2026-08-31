@@ -96,13 +96,10 @@ import { parseLedger } from '../lib/brain-import.ts';
 import { dedupeWrite, writeFingerprint, secondsSince } from '../lib/write-dedupe.ts';
 import { d1WriteLedger } from '../lib/write-dedupe-store.ts';
 import type { TenantOpts, Role } from '../lib/orgs.ts';
+import { brainArg, fail, ok } from './shared.ts';
 
 // Shared optional `brain` arg — every tool takes it so the model can one-shot a
 // different brain than the connection's active one (see tenantContext in worker.ts).
-const brainArg = z
-	.string()
-	.optional()
-	.describe('Which brain to target (name/handle). Defaults to the active brain.');
 
 // Frontmatter keys are free-form and brain-owned, exactly like folders and
 // `type:` values, so this takes whatever the brain calls things rather than a
@@ -182,14 +179,6 @@ function slugOf(path: string): string {
 // prefix checks (`${folder}/`) are unambiguous. "" means "unspecified".
 function normFolderPath(p: string): string {
 	return p.trim().replace(/^\/+/, '').replace(/\/+$/, '');
-}
-
-export function ok(text: string) {
-	return { content: [{ type: 'text' as const, text }] };
-}
-
-export function fail(text: string) {
-	return { isError: true as const, content: [{ type: 'text' as const, text }] };
 }
 
 // Shape a write response to match how the change actually landed:

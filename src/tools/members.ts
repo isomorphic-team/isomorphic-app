@@ -47,17 +47,13 @@ import {
 	roleLabel,
 	parseRole
 } from '../lib/orgs.ts';
-
-function fail(text: string) {
-	return { isError: true as const, content: [{ type: 'text' as const, text }] };
-}
+import { brainArgFor, fail } from './shared.ts';
 
 // Member tools are org-scoped; the org follows the selected brain, so `brain` picks
 // which brain's org roster to act on (defaults to the active brain).
-const brainArg = z
-	.string()
-	.optional()
-	.describe("Which brain's organization to target (name/handle). Defaults to the active brain.");
+const brainArg = brainArgFor(
+	"Which brain's organization to target (name/handle). Defaults to the active brain."
+);
 
 // Resolve the org scope, or throw the caller-facing "org accounts only" error. The
 // product-native (authjs) path always sets both; the legacy single-tenant paths

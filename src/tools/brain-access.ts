@@ -44,15 +44,11 @@ import {
 	roleLabel,
 	parseRole
 } from '../lib/orgs.ts';
+import { brainArgFor, fail } from './shared.ts';
 
-function fail(text: string) {
-	return { isError: true as const, content: [{ type: 'text' as const, text }] };
-}
-
-const brainArg = z
-	.string()
-	.optional()
-	.describe("Which brain's sharing to act on (name/handle). Defaults to the active brain.");
+const brainArg = brainArgFor(
+	"Which brain's sharing to act on (name/handle). Defaults to the active brain."
+);
 
 // The brain a tool call resolved to, as the access tools need it: the PK to write
 // grants against plus its current visibility. tenantContext resolves a brain by

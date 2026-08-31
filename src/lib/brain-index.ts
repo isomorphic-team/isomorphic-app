@@ -643,16 +643,6 @@ export async function writeThroughIndex(
 	return (final?.meta?.changes ?? 0) > 0;
 }
 
-// Mark a brain's index stale so the next read forces a reconcile against HEAD.
-// (No-op in the always-check design — HEAD is compared every read — but exposed so
-// a future sha-check TTL cache / write-through path can invalidate explicitly.)
-export async function invalidateIndex(db: D1Database, brainId: string): Promise<void> {
-	await db
-		.prepare(`UPDATE brain_index_meta SET indexed_commit_sha = NULL WHERE brain_id = ?1`)
-		.bind(brainId)
-		.run();
-}
-
 // Drop a brain's index entirely so the next ensureFresh does a FULL rebuild. Needed
 // when the CONTENT SHAPE changes (e.g. .isomorphic.json contentRoots edited): the
 // content blobs are unchanged, so an incremental (sha-diff) reindex wouldn't pick up

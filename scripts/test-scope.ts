@@ -26,8 +26,8 @@
 //
 //   pnpm test:scope
 
-import { readFileSync } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
+import { applyMigrations } from '../src/local/d1-sqlite.ts';
 import { assertRole, type Role, type TenantOpts, type AccessibleBrain } from '../src/lib/orgs.ts';
 import { registerMemberTools } from '../src/tools/members.ts';
 import { registerBrainAccessTools } from '../src/tools/brain-access.ts';
@@ -51,18 +51,27 @@ function check(label: string, cond: boolean, detail = '') {
 // ---------------------------------------------------------------------------
 // Same shim shape as test-access.ts and the e2e batteries. Kept local rather than
 // shared so each golden test still runs as one self-contained file.
+//
+// The SCHEMA is not local, though: it comes from the real migrations, not from
+// src/db/auth-schema.sql, which is reference only. This battery pins the
+// authorization model, so it is the last place that should assert against a
+// schema production does not run. Applying the whole directory also picks up a
+// new migration automatically; naming files by hand (this used to cherry-pick
+// 0006 for usage_daily) silently skips whatever lands next.
 const sqlite = new DatabaseSync(':memory:');
-sqlite.exec(readFileSync(new URL('../src/db/auth-schema.sql', import.meta.url), 'utf8'));
-// The analytics tool reads usage_daily, so the scope test needs its table too.
-sqlite.exec(readFileSync(new URL('../migrations/0006_usage_daily.sql', import.meta.url), 'utf8'));
+applyMigrations(sqlite);
 function shimStatement(sql: string, params: unknown[] = []) {
 	return {
 		bind: (...p: unknown[]) => shimStatement(sql, p),
 		first: async () => sqlite.prepare(sql).get(...(params as [])) ?? null,
 		all: async () => ({ results: sqlite.prepare(sql).all(...(params as [])) }),
 		run: async () => {
-			sqlite.prepare(sql).run(...(params as []));
-			return { success: true };
+			// `meta.changes` is not decoration: the write-attempt ledger decides whether
+			// it won a claim with `(res.meta?.changes ?? 0) > 0` (d1WriteLedger.claim).
+			// A shim that omits it reports every claim as lost, so the ledger reads back
+			// the row this very call just inserted and answers "already in flight".
+			const r = sqlite.prepare(sql).run(...(params as []));
+			return { success: true, meta: { changes: Number(r.changes ?? 0) } };
 		}
 	};
 }

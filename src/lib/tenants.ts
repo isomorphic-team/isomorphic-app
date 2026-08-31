@@ -64,16 +64,6 @@ export async function upsertTenant(
 		.run();
 }
 
-export async function markSuspended(db: D1Database, installationId: number): Promise<void> {
-	await db
-		.prepare(
-			`UPDATE tenants SET suspended_at = datetime('now'), updated_at = datetime('now')
-       WHERE installation_id = ?1`
-		)
-		.bind(installationId)
-		.run();
-}
-
 // Thrown by `tenantContext()` when the OAuth-bound user has no brain row yet.
 // Callers (tool handlers) should catch and surface as a structured MCP error
 // pointing at the onboarding URL.

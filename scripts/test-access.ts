@@ -159,8 +159,8 @@ check(
 // (same shim the e2e batteries use), and the real exported functions are called.
 // No network: node:sqlite is a Node builtin.
 
-import { readFileSync } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
+import { applyMigrations } from '../src/local/d1-sqlite.ts';
 import {
 	listAccessibleBrains,
 	listAccessibleOrgs,
@@ -178,8 +178,11 @@ import {
 	deleteUserBrainGrantsInOrg
 } from '../src/lib/orgs.ts';
 
+// Schema comes from the REAL migrations, not src/db/auth-schema.sql, which is
+// reference only. This battery pins the access rule, so it is the last place that
+// should be asserting against a schema production does not run.
 const sqlite = new DatabaseSync(':memory:');
-sqlite.exec(readFileSync(new URL('../src/db/auth-schema.sql', import.meta.url), 'utf8'));
+applyMigrations(sqlite);
 function shimStatement(sql: string, params: unknown[] = []) {
 	return {
 		bind: (...p: unknown[]) => shimStatement(sql, p),
