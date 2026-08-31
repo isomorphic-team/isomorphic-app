@@ -336,6 +336,36 @@ Design questions to settle before building:
   (`source_key` plus a ledger entry), a permanent side effect for a one-off update.
   The objection was the binding, not the batching.
 
+# TODO: sharing a page by link (and the web app behind it)
+
+A page in a brain has no URL. It is readable inside Claude through `view_page`, and it
+exists on github.com at a path no member of the org can open, because the product
+deliberately keeps members away from GitHub. So "send me that doc" has no answer.
+
+The design splits it by RECIPIENT, and the split is the point. Someone **outside the
+org** (a client, a candidate, a vendor) gets a **reader**: a revocable, expiring,
+server-rendered read-only page at a secret link, with no app bundle, no tools, no
+identity, and links out of the shared set flattened to plain text at the horizon. A
+**colleague who already has access** needs no grant at all, only a URL and a place to
+open it, which is the **web app**: the same MCP App bundle in a browser tab, talking to
+the same tool handlers over the Auth.js session that already exists.
+
+The second half is smaller than it sounds. The app couples to its host through five
+calls in one file (`app/core/host.ts`), and identity reaches `McpSession` as `props`,
+which a browser session already produces. The web app is another MCP client holding a
+cookie instead of a Bearer token, so it cannot do anything the connector cannot.
+
+Two things the design insists on: `effectiveBrainRole` gains NO new input (a share is
+scoped to a path, capped at read, and belongs to nobody, so the reader resolves its own
+narrow context and cannot construct a `TenantContext`), and markdown rendering moves to
+`src/lib/` **with sanitization**, since `PageView.tsx` currently puts unsanitized
+`marked` output through `dangerouslySetInnerHTML` and serving that from our own origin
+turns a page body into stored XSS.
+
+Full design: [`design/link-sharing-and-the-web-app.md`](design/link-sharing-and-the-web-app.md).
+Unresolved there: whether the reader or the web app comes first, and whether the reader
+needs its own hostname.
+
 # TODO: the seam between brains (publishing across a brain boundary)
 
 One person reaches several brains, and work in one belongs partly in another: a
