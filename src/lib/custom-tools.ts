@@ -66,8 +66,7 @@ export interface ToolParseError {
 }
 
 export type ToolParseResult =
-	| { def: CustomToolDef; error?: undefined }
-	| { def?: undefined; error: string };
+	{ def: CustomToolDef; error?: undefined } | { def?: undefined; error: string };
 
 // ---------- discovery predicate ----------
 

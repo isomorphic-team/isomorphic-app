@@ -27,8 +27,7 @@ export interface PageEdit {
 }
 
 export type PatchResult =
-	| { ok: true; body: string; summary: string }
-	| { ok: false; error: string };
+	{ ok: true; body: string; summary: string } | { ok: false; error: string };
 
 // Character ranges covered by okf-view snapshot regions (markers included).
 // Line-based, mirroring segmentContent's own marker scan in view-directives.ts.
