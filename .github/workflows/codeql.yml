@@ -1,0 +1,51 @@
+name: CodeQL
+
+# Static analysis of our own source, which the dependency scanners do not do: they
+# read the lockfile, this reads the code. Free on public repositories.
+#
+# Findings land in the Security tab, and on a pull request as inline review comments.
+#
+# NOTE: if CodeQL "default setup" is ever enabled in the repository UI, it takes over
+# and this workflow stops being the thing that runs. Pick one.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  # Advisories arrive after a merge, not only with one. The weekly run re-analyzes
+  # unchanged code against updated queries.
+  schedule:
+    - cron: '27 4 * * 1'
+  workflow_dispatch: {}
+
+concurrency:
+  group: codeql-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  analyze:
+    name: Analyze JavaScript/TypeScript
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      # Writing results to the Security tab is the whole point of the job.
+      security-events: write
+      contents: read
+      actions: read
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: javascript-typescript
+          config-file: ./.github/codeql/codeql-config.yml
+
+      # No build step. CodeQL analyzes TypeScript from source, and this repo has no
+      # compile output to point it at: `pnpm typecheck` is --noEmit and the Worker is
+      # bundled by wrangler at deploy time.
+      - name: Analyze
+        uses: github/codeql-action/analyze@v3
+        with:
+          category: /language:javascript-typescript

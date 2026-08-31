@@ -62,6 +62,28 @@ for (const name of inCi) {
 	check(`${name} is a real package.json script`, name in pkg.scripts, 'renamed or removed?');
 }
 
+// ---------- every other pnpm script ci.yml invokes ----------
+
+// The test:* lists above are not everything ci.yml runs. A step like
+// `- run: pnpm security:audit` names a script exactly the same way and rots exactly
+// the same way, and that step is `continue-on-error`, so a rename would fail SILENTLY
+// instead of reddening the job: the check would report success having run nothing.
+const PNPM_BUILTINS = new Set(['install', 'exec', 'run', 'dlx', 'audit', 'why', 'add', 'test']);
+// Anchored to `run:` rather than scanning the whole file the way the test:* matcher
+// above does. Unprefixed script names are ordinary English, so prose in a comment
+// ("the version pnpm actually resolves") otherwise reads as a step.
+const otherScripts = new Set(
+	Array.from(ci.matchAll(/run:\s*pnpm\s+([a-z0-9:_-]+)/g), (m) => m[1]).filter(
+		(n) => !n.startsWith('test:') && !PNPM_BUILTINS.has(n)
+	)
+);
+
+console.log('\nevery other pnpm script ci.yml invokes still exists');
+check('ci.yml invokes at least one', otherScripts.size > 0);
+for (const name of otherScripts) {
+	check(`${name} is a real package.json script`, name in pkg.scripts, 'renamed or removed?');
+}
+
 // ---------- the Playwright container tag ----------
 
 // The INSTALLED version, not the `^1.62.1` range in package.json: a range says nothing

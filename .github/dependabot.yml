@@ -1,0 +1,51 @@
+# Dependency version updates. `package-ecosystem: npm` is the right key for a pnpm
+# repo: Dependabot reads pnpm-lock.yaml under that ecosystem.
+#
+# THIS FILE ONLY CONTROLS VERSION UPDATES. Dependabot security ALERTS and the
+# automatic security PRs that follow a new advisory are a repository setting
+# (Settings > Advanced Security), not config, and are worth enabling separately.
+#
+# Grouped so a quiet week is one pull request rather than fifteen. The split is by
+# blast radius: a dev-only bump touches tooling, a production bump touches what the
+# Worker actually serves and deserves to be read on its own.
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 10
+    groups:
+      production-minor-patch:
+        applies-to: version-updates
+        dependency-type: production
+        update-types:
+          - minor
+          - patch
+      development:
+        applies-to: version-updates
+        dependency-type: development
+        update-types:
+          - minor
+          - patch
+      security-fixes:
+        applies-to: security-updates
+        patterns:
+          - '*'
+    # Majors are left ungrouped and unbatched: each one is a changelog to read.
+    labels:
+      - dependencies
+
+  # The workflows pin actions by major tag (actions/checkout@v4). Nothing else
+  # updates those, so a deprecated runner action is otherwise found by it breaking.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    groups:
+      actions:
+        patterns:
+          - '*'
+    labels:
+      - dependencies
