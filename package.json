@@ -83,13 +83,12 @@
 		"@cloudflare/workers-types": "^5.20260828.1",
 		"@playwright/test": "^1.62.1",
 		"@tailwindcss/cli": "^4.3.3",
-		"@types/markdown-it": "^14.1.2",
 		"@types/node": "^26.4.0",
 		"class-variance-authority": "^0.7.1",
 		"clsx": "^2.1.1",
 		"esbuild": "^0.28.2",
 		"lucide-preact": "^1.35.0",
-		"markdown-it": "^14.3.0",
+		"markdown-it": "^15.0.1",
 		"marked": "^18.0.11",
 		"preact": "^10.29.8",
 		"prettier": "^3.9.6",
@@ -110,6 +109,9 @@
 		"wrangler": "^4.127.1"
 	},
 	"pnpm": {
+		"overrides": {
+			"markdown-it": "^15.0.1"
+		},
 		"onlyBuiltDependencies": [
 			"esbuild",
 			"workerd"
