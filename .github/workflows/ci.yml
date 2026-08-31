@@ -121,6 +121,7 @@ jobs:
       - run: pnpm test:appmeta
       - run: pnpm test:loading
       - run: pnpm test:access
+      - run: pnpm test:invites
       - run: pnpm test:scope
       - run: pnpm test:feedback
       - run: pnpm test:usage

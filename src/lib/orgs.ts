@@ -380,8 +380,15 @@ export async function unlinkGithubLink(
 	await db.prepare(`DELETE FROM github_links WHERE github_user_id = ?1`).bind(githubUserId).run();
 }
 
-// Resolve a user's single membership plus its org. One org per user today
-// (multi-org membership is a later concern), so LIMIT 1.
+// One membership of this user id, oldest first, plus its org.
+//
+// A person CAN belong to several orgs: `memberships` is keyed (org_id, user_id),
+// invitations put someone in a second one, and every resolution path that picks
+// where to act unions across them (listAccessibleBrains, listAccessibleOrgs,
+// resolveOrgForPerson, chooseOrg). This is not one of those paths. It answers
+// "does this user id belong anywhere yet", for first-touch provisioning, so the
+// LIMIT 1 is deliberate; it is ordered so the answer is the same on every call
+// rather than whichever row the query plan reached first.
 export async function getMembershipWithOrg(
 	db: D1Database,
 	userId: string
@@ -392,6 +399,7 @@ export async function getMembershipWithOrg(
          FROM memberships m
          JOIN orgs o ON o.org_id = m.org_id
         WHERE m.user_id = ?1
+        ORDER BY m.added_at ASC, m.org_id ASC
         LIMIT 1`
 		)
 		.bind(userId)
@@ -559,42 +567,18 @@ export async function deleteBrain(db: D1Database, brainId: string): Promise<void
 	await db.prepare(`DELETE FROM brains WHERE brain_id = ?1`).bind(brainId).run();
 }
 
-// ---------- email invitations (pre-membership) ----------
+// ---------- email invitations ----------
 //
-// An `invitations` row is how an admin puts a user into an org BEFORE that user
-// has ever signed in — the only way a member with no GitHub account joins a
-// specific org (otherwise first sign-in would auto-provision them a personal
-// Model-A brain). Matching is by email: magic-link/SSO already proves the user
-// owns the address, so no separate invite token is required for this path (the
-// token_hash column stays for a future link-based flow).
-
-export interface PendingInvite {
-	invite_id: string;
-	org_id: string;
-	role: Role;
-}
-
-// The most recent unexpired, unaccepted invite for an email (case-insensitive),
-// or null. Callers consume it at first sign-in to place the user in that org.
-export async function getPendingInviteByEmail(
-	db: D1Database,
-	email: string
-): Promise<PendingInvite | null> {
-	const row = await db
-		.prepare(
-			`SELECT invite_id, org_id, role
-         FROM invitations
-        WHERE lower(email) = lower(?1)
-          AND accepted_at IS NULL
-          AND expires_at > datetime('now')
-        ORDER BY rowid DESC
-        LIMIT 1`
-		)
-		.bind(email)
-		.first<{ invite_id: string; org_id: string; role: string }>();
-	if (!row) return null;
-	return { invite_id: row.invite_id, org_id: row.org_id, role: row.role as Role };
-}
+// An `invitations` row is how an admin puts someone in an org without touching
+// GitHub: it is the only way a member with no GitHub account joins a SPECIFIC
+// org (a first sign-in otherwise mints them a personal Model-A one). Matching is
+// by email, because magic-link/SSO already proves the person owns the address,
+// so no separate invite token is required for this path (the token_hash column
+// stays for a future link-based flow).
+//
+// Claiming lives in lib/invites.ts, and is not restricted to a first sign-in:
+// an existing account can be invited to a second org, and an address linked to
+// an existing account carries its invitation with it (issue #69).
 
 export async function acceptInvite(db: D1Database, inviteId: string): Promise<void> {
 	await db
@@ -710,7 +694,7 @@ export async function removeMembership(
 }
 
 // Record an email invitation. Matched by email and consumed at the invitee's first
-// sign-in (provisionOrgForUser → getPendingInviteByEmail → acceptInvite). token_hash
+// sign-in or on the invitee's next request (claimPendingInvites). token_hash
 // stays empty: email possession is proven by magic-link/SSO, so no link token is
 // needed for this path (the column is reserved for a future link-based flow).
 export async function createInvitation(
