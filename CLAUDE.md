@@ -33,6 +33,7 @@ pnpm gen:app            # codegen the ui:// app bundle (after editing app/ OR an
 pnpm regen:pr <n>       # regenerate that bundle on a PR branch that could not (Dependabot); --push to send it
 pnpm test:roundtrip     # editor markdown round-trip golden test
 pnpm test:render        # the shared markdown renderer: parity + sanitization
+pnpm test:web           # web-app routes + the cookie-auth CSRF gate
 pnpm test:views         # derived-views (okf-view) engine golden test
 pnpm test:import        # bulk-import planner golden test
 pnpm test:tools         # user-defined (brain-authored) tools parse-layer golden test
@@ -590,6 +591,54 @@ source of truth (app tree re-exports). Engine: `src/lib/views.ts` (index-coupled
 - **Fail-open everywhere:** any view-computation failure falls back to raw content — a view
   never makes a page unreadable or blocks a save. Malformed directives render a visible note.
 - `pnpm test:views` is the engine's golden test (pure, stubbed index).
+
+## The web app (the same bundle, in a browser tab)
+
+Phase 3 of [`docs/design/link-sharing-and-the-web-app.md`](docs/design/link-sharing-and-the-web-app.md).
+`/b/<owner>/<repo>/<path>` serves the SAME generated bundle the `ui://` MCP App
+resource serves, authenticated by the Auth.js session cookie that already existed.
+Rules live in `src/lib/web-app.ts` (pure, `pnpm test:web`); routes live in the
+Worker's `fetch`, ahead of the OAuth provider like `/health`.
+
+- **It is another MCP CLIENT, holding a cookie instead of a Bearer token.**
+  `McpSession` reads identity from `props`, so the whole port is one branch that
+  builds `props` from a validated session. Tenant resolution, `effectiveBrainRole`,
+  the two-scope gating and usage analytics are the code that already runs, which
+  makes the web app **structurally incapable of doing something the connector
+  cannot**. Keep it that way: anything that widens what a caller can do belongs
+  in a tool, not in this route.
+- **The cookie `/mcp` branch is a credential-bearing WRITE endpoint reached with an
+  ambient cookie**, which is the exact shape CSRF exploits. `checkWebMcpRequest` is
+  the gate and is pure so it can be tested in both directions: a Bearer token is
+  refused outright (the two auth paths must never be confusable, or a cookie could
+  stand in for a token that failed validation), the `Origin` must match, a
+  `cross-site` `Sec-Fetch-Site` is refused, and the content type must be JSON
+  (an HTML form can only POST three types, none of them JSON, so a form cannot
+  reach the endpoint even carrying the cookie).
+- **The host seam is `app/core/host.ts`, and nothing outside it touches `App`.**
+  It used to export the raw AppBridge object and five call sites in four files
+  reached through it, so "swap this file and the bundle runs anywhere" was not
+  true. `callTool`, `openLink`, `connectHost` and `registerHostEvents` are the
+  seam now.
+- **Which host is serving is a FLAG stamped at serve time** (`window.__ISO_WEB__`),
+  not an AppBridge handshake the app waits on and gives up. Inferring it from a
+  timeout makes every web boot pay the timeout and makes a slow MCP host look like
+  a browser. `pnpm test:web` asserts the bundle never sets the flag itself, since
+  the same bytes are served to Claude.
+- **A tab has no conversation**, so no opening tool result is coming and the
+  self-boot deadlines do not apply: the URL says what to show. `parseWebPath` and
+  `webPathFor` are inverses in ONE module, imported by both the Worker and the app,
+  because two parsers is how a link opens a different page than it names.
+- **`script-src` still carries `'unsafe-inline'`.** The bundle is one self-contained
+  HTML file with JS and CSS inlined (the MCP App iframe CSP forbids external hosts,
+  which is why it is built that way), so there is no external script for `'self'` to
+  point at. Hashes belong in `pnpm gen:app`, the only thing that knows where the
+  script tags are; a blind replace over minified JS risks rewriting the literal
+  text `<script` inside it. The threat that made this urgent was markdown-borne
+  XSS, and that is closed at the source by `src/lib/render.ts`.
+- **Not verified end to end in a browser yet.** `pnpm test:web` covers the rules and
+  `pnpm test:ui` covers the MCP host path; nothing yet drives the real bundle in web
+  mode against a stubbed `/mcp`. That harness route is the next thing worth adding.
 
 ## One markdown renderer (`src/lib/render.ts`)
 

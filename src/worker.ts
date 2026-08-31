@@ -59,6 +59,15 @@ import {
 import type { CommitAuthor } from './lib/brain-repo.ts';
 import { githubHandler } from './oauth/github-handler.ts';
 import { authHandler } from './oauth/auth-handler.ts';
+import { getAuthSession } from './auth/config.ts';
+import { BRAIN_APP_HTML } from './lib/app-bundle.generated.ts';
+import {
+	WEB_ROUTE_PREFIX,
+	WEB_APP_HEADERS,
+	checkWebMcpRequest,
+	signInRedirect,
+	webShell
+} from './lib/web-app.ts';
 import { registerLibrarianTools } from './tools/librarian.ts';
 import { registerImportTools } from './tools/importer.ts';
 import { registerBrainApp } from './tools/apps.ts';
@@ -1377,6 +1386,64 @@ export default {
 				return handleOrgConnectCallback(url, state, installationId, env);
 			}
 			return installedPage(url);
+		}
+
+		// ---------- the web app ----------
+		//
+		// Both routes sit AHEAD of the OAuth provider, like /health and the
+		// install callback, because the provider owns `/mcp` and would reject a
+		// cookie-authenticated call before it ever reached the handler.
+		//
+		// authjs only: the cookie session is what Auth.js issues, and the github
+		// and static identity paths have no browser session to read.
+		if (env.AUTH_MODE === 'oauth' && env.IDENTITY_MODE === 'authjs') {
+			// The shell. Serving the same bundle the MCP App resource serves, with
+			// a flag telling it which host it is running in.
+			if (
+				url.pathname === WEB_ROUTE_PREFIX.slice(0, -1) ||
+				url.pathname.startsWith(WEB_ROUTE_PREFIX)
+			) {
+				const session = await getAuthSession(request, env);
+				if (!session?.user?.id) {
+					return Response.redirect(
+						new URL(signInRedirect(url.pathname, url.search), url.origin).toString(),
+						302
+					);
+				}
+				return new Response(webShell(BRAIN_APP_HTML), { headers: { ...WEB_APP_HEADERS } });
+			}
+
+			// The web app's tool calls. Same handler, same session, same
+			// authorization: only the credential differs, so `props` is built from
+			// the Auth.js session exactly as the OAuth path builds it from a token.
+			if (url.pathname === '/mcp' && !request.headers.get('authorization')) {
+				const verdict = checkWebMcpRequest({
+					method: request.method,
+					selfOrigin: url.origin,
+					origin: request.headers.get('origin'),
+					fetchSite: request.headers.get('sec-fetch-site'),
+					contentType: request.headers.get('content-type'),
+					hasAuthorization: false
+				});
+				if (!verdict.ok) {
+					return new Response(verdict.message, { status: verdict.status });
+				}
+				const session = await getAuthSession(request, env);
+				if (!session?.user?.id) {
+					// The app turns this into a sign-in redirect. A body is not much
+					// use to it, but the status is.
+					return new Response('Not signed in', { status: 401 });
+				}
+				const props: McpProps = { user_id: session.user.id, email: session.user.email };
+				// `mcpApiHandler` reads identity off `ctx.props`. Bind rather than
+				// spread: an ExecutionContext's methods need their own `this`.
+				const webCtx = {
+					waitUntil: ctx.waitUntil.bind(ctx),
+					passThroughOnException: ctx.passThroughOnException.bind(ctx),
+					props
+				} as unknown as ExecutionContext;
+				return mcpApiHandler.fetch(request, env, webCtx);
+			}
 		}
 
 		if (env.AUTH_MODE === 'oauth') {

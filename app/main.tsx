@@ -18,17 +18,20 @@ import { subscribeStore, version, currentView, show } from './core/store.ts';
 import { activeDestination, isMorePlace } from './core/nav.ts';
 import { destinations } from './components/Destinations.tsx';
 import {
-	app,
-	applyHostContext,
+	connectHost,
+	registerHostEvents,
+	isWeb,
 	displayMode,
 	setDisplayMode,
 	MODE_ICON,
 	MODE_LABEL,
 	availableModeList
 } from './core/host.ts';
+import { parseWebPath } from './core/host-web.ts';
 import {
 	handleToolResult,
 	ensureBrainList,
+	navigateTo,
 	openBrowse,
 	openGraph,
 	openMore,
@@ -45,9 +48,9 @@ import { EditorToolbar, editCtl } from './views/EditView.tsx';
 
 // ---------- host wiring ----------
 
-app.onhostcontextchanged = applyHostContext;
-app.onerror = (e) => toast(String(e), true);
-app.ontoolresult = handleToolResult;
+// The host pushes results and errors at us. On the web none of this fires: a tab
+// has no conversation attached, so the app opens the page its URL names instead
+// (see connectToHost below).
 
 // A RESULT IS COMING. The host announces the tool call that opened this widget when the
 // call STARTS and delivers its result when the tool FINISHES, so silence at the
@@ -60,15 +63,18 @@ app.ontoolresult = handleToolResult;
 // These are one-shot events, so the handlers are registered here at module scope, before
 // connect() — the host may send them the moment the handshake completes.
 let resultPending = false;
-function noteResultComing() {
-	resultPending = true;
-}
-app.ontoolinput = noteResultComing;
-app.ontoolinputpartial = noteResultComing;
-// Cancelled means the result is NOT coming after all, so stop holding the screen for it.
-app.ontoolcancelled = () => {
-	resultPending = false;
-};
+registerHostEvents({
+	onToolResult: (r) => handleToolResult(r as Parameters<typeof handleToolResult>[0]),
+	onError: (message) => toast(message, true),
+	onResultComing: () => {
+		resultPending = true;
+	},
+	// Cancelled means the result is NOT coming after all, so stop holding the
+	// screen for it.
+	onResultCancelled: () => {
+		resultPending = false;
+	}
+});
 
 // ---------- chrome ----------
 
@@ -464,12 +470,20 @@ function connectToHost() {
 			);
 		}
 	}, 5000);
-	app
-		.connect()
+	connectHost()
 		.then(() => {
 			clearTimeout(timeout);
-			const ctx = app.getHostContext();
-			if (ctx) applyHostContext(ctx); // may auto-request fullscreen (see applyHostContext)
+			// THE WEB HAS NO OPENING TOOL RESULT. There is no conversation behind a
+			// tab, so none of the self-boot timing below applies: the URL already
+			// says what to show, and waiting on a result that cannot arrive would
+			// spend the whole deadline before drawing anything.
+			if (isWeb()) {
+				void ensureBrainList();
+				const target = parseWebPath(location.pathname);
+				if (target?.path) void navigateTo(target.path);
+				else openBrowse();
+				return;
+			}
 			// SELF-BOOT: no tool result arrived, so open the tree ourselves — and fetch the
 			// nav's own data too, which handleToolResult would otherwise have been the only
 			// thing to ask for. Without this the app came up with no brain list: no brain

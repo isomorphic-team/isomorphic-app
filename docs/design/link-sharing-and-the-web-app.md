@@ -325,9 +325,40 @@ This is the ask, end to end, and it is shippable on its own.
 shared subtree's folder notes. Mostly a rendering change, since the model already carries a
 prefix.
 
-**Phase 3: the web app.** Cookie-authenticated `/mcp`, the web host adapter, `/b/<brain>/<path>`
-deep links, sign-in and return. This is the larger piece and it is second on purpose: Phase 1
-delivers the request, and Phase 3 inherits Phase 1's chrome, renderer, and CSP work.
+**Phase 3: the web app. BUILT (not yet browser-verified).** Cookie-authenticated `/mcp`, the web
+host adapter, `/b/<brain>/<path>` deep links, sign-in and return. Taken FIRST rather than second,
+on the owner's call: the motivating want is opening pages in a browser alongside the chat, and the
+renderer (Phase 0) was the only thing Phase 1 was going to hand it anyway.
+
+What building it changed about this document:
+
+- **The host seam was leakier than §1 claims.** `app/core/host.ts` exported the raw `App` object
+  and five call sites in four files reached through it for `openLink` and `getHostContext`, so
+  "swap that file and the same bundle runs anywhere" was not true until those were routed through
+  named functions.
+- **The adapter is chosen by a FLAG stamped at serve time, not by a handshake that times out.**
+  Runtime selection as §5 suggests would make every web boot pay the AppBridge timeout, and would
+  make a slow MCP host indistinguishable from a browser.
+- **No `initialize` is needed, and the `accept` header is.** A bare `tools/call` POST is answered
+  `200` because the transport is stateless; the same request is refused `406` unless it accepts
+  BOTH `application/json` and `text/event-stream`, even though no stream is ever opened. Verified
+  against the real handlers, recorded in `docs/references.md`.
+- **§5's CSRF note needed a third layer.** `Origin` plus `SameSite=Lax` leaves the case where a
+  browser sends no `Origin` at all, so the content type must also be JSON: an HTML form can only
+  POST three types, none of them JSON, which is what puts this endpoint out of a form's reach even
+  with the cookie attached.
+- **Still open:** no browser-level coverage of the app in web mode (a harness route driving the
+  real bundle against a stubbed `/mcp`), and `script-src` still carries `'unsafe-inline'` because
+  the bundle inlines its own JS. Hashes belong in `pnpm gen:app`.
+
+The **session bootstrap link** considered alongside this (a short-lived URL minted by an MCP tool
+that plants a session in whatever browser opens it) was **deliberately not built**. It only buys
+the two environments a cookie cannot reach, `web_fetch` and a fresh sandboxed browser profile;
+Claude in Chrome already carries the user's cookies, and Claude Code's desktop browser persists a
+session when that is enabled. Weighed against putting a credential for a whole account into a
+conversation transcript, that was not worth it without evidence the cookie path actually falls
+short. Revisit only with that evidence, and then with a two-minute lifetime and a session scoped
+to brain read/write rather than the full account.
 
 **Phase 4, maybe never: a public site.** Custom domain per brain, sitemap, indexable pages. It is
 the same machinery as an `audience: 'public'` share with a hostname in front, and it should not

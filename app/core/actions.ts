@@ -34,7 +34,7 @@ import type {
 	UsagePerson,
 	UsageBrain
 } from './types.ts';
-import { app, callTool, firstText } from './host.ts';
+import { openLink, callTool, firstText } from './host.ts';
 import { isFolderNoteName, refreshOutcome } from './util.ts';
 import {
 	show,
@@ -1089,7 +1089,7 @@ function onProseClick(fromPath: string) {
 			else toast(`No page found for [[${target}]]`, true);
 		} else if (/^https?:/i.test(href)) {
 			e.preventDefault();
-			app.openLink({ url: href });
+			openLink(href);
 		} else if (href.endsWith('.md') || href.includes('.md#')) {
 			e.preventDefault();
 			navigateTo(resolveRelative(fromPath, href));

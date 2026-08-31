@@ -1,5 +1,5 @@
 import { useState } from 'preact/hooks';
-import { app, callTool, firstText } from '../core/host.ts';
+import { openLink, callTool, firstText } from '../core/host.ts';
 import { goBack } from '../core/store.ts';
 import { openSettings } from '../core/actions.ts';
 import { toast } from '../core/toast.tsx';
@@ -53,7 +53,7 @@ function ConnectAccountView() {
 				<FlowNote>
 					<Button
 						variant="link"
-						onClick={() => app.openLink({ url: linkUrl })}
+						onClick={() => openLink(linkUrl)}
 						class="block break-all text-left"
 					>
 						{linkUrl}
