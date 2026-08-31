@@ -21,6 +21,7 @@
 //   pnpm test:e2e                              (local, offline, in CI)
 //   pnpm exec tsx scripts/e2e-librarian.ts --github   (real GitHub, by hand)
 //
+import { registerImportTools } from '../src/tools/importer.ts';
 // The --github mode requires `.dev.vars` (repo root, or DEV_VARS_PATH) with the
 // platform App creds + PLATFORM_ORG / PLATFORM_INSTALLATION_ID, creates a scratch
 // brain repo `brain-librarian-e2e-*`, and deletes it afterwards (success or failure).
@@ -191,6 +192,7 @@ const getContext = async () => ({
 	activeBrain: { id: brainId, label: name }
 });
 registerLibrarianTools(server, getContext);
+registerImportTools(server, getContext);
 registerMediaTools(server, getContext);
 // The two READ tools the app renders a page from. Registered here for the version
 // contract below: only a real store hands out real blob shas, so a stub could not
@@ -1065,6 +1067,71 @@ try {
 	check(
 		'validate reports no malformed tool pages',
 		!/won't register/.test((await call('validate', {})).text)
+	);
+
+	// ══ findings: validate surfaces, resolve records, validate stops re-raising ═══
+	// The whole point of keying findings. Driven end to end because the ledger is a
+	// real file in the repo and the round trip is what a user actually performs: the
+	// pure test can prove filterDismissed filters, only this can prove the key
+	// validate PRINTS is the key resolve ACCEPTS.
+	await call('write_page', {
+		path: 'wiki/stranded/lonely-note.md',
+		title: 'Lonely Note',
+		content: 'A page nothing links to, that links to nothing.'
+	});
+	await settledHead();
+
+	// Take whichever finding validate actually printed rather than assuming one: the
+	// report is capped, so a specific page may legitimately fall outside it, and a
+	// test that depends on which page surfaced would be testing the ordering.
+	r = await call('validate', {});
+	const ISLAND = /\[(island:[^\]]+)\]/.exec(r.text)?.[1] ?? '';
+	check('validate raises findings with resolvable keys', ISLAND.length > 0, r.text.slice(0, 400));
+	const ISLAND_PAGE = ISLAND.slice('island:'.length);
+	const pageBeforeDismiss = await fileText(ISLAND_PAGE);
+
+	r = await call('resolve', {
+		decisions: [{ finding: ISLAND, action: 'dismiss', why: 'deliberately standalone' }]
+	});
+	check('resolve records the dismissal', !r.isError, r.text);
+	await settledHead();
+
+	r = await call('validate', {});
+	check('validate no longer raises a dismissed finding', !r.text.includes(ISLAND), r.text);
+	check('validate says how many it withheld', /previously dismissed/.test(r.text), r.text);
+
+	// Dismissing must not touch the page: it records a decision, it is not a fix.
+	check(
+		'dismissing edits no content',
+		(await fileText(ISLAND_PAGE)) === pageBeforeDismiss && pageBeforeDismiss !== null
+	);
+
+	r = await call('resolve', {
+		decisions: [{ finding: ISLAND, action: 'undismiss' }]
+	});
+	check('resolve reverses a dismissal', !r.isError, r.text);
+	await settledHead();
+	r = await call('validate', {});
+	check('validate raises it again after undismiss', r.text.includes(`[${ISLAND}]`), r.text);
+
+	// A broken link is a DEFECT, not a finding: it carries no key and cannot be
+	// silenced. This is the line that makes a dismissal mechanism safe to have.
+	r = await call('resolve', {
+		decisions: [{ finding: 'link:wiki/a.md', action: 'suppress' }]
+	});
+	check('a non-import key cannot take an import action', r.isError, r.text);
+
+	// ══ search_pages `expect`: the retrieval measurement, folded into the read ════
+	r = await call('search_pages', {
+		query: 'Lonely Note',
+		expect: 'wiki/stranded/lonely-note.md'
+	});
+	check('expect reports where the page ranked', /ranked/i.test(r.text), r.text);
+	const withoutExpect = await call('search_pages', { query: 'Lonely Note' });
+	check(
+		'expect measures without changing the results',
+		withoutExpect.text.split('\n')[0] === r.text.split('\n')[0],
+		`${withoutExpect.text.split('\n')[0]} vs ${r.text.split('\n')[0]}`
 	);
 
 	// Register on a fresh server+client (a "reconnect") and drive the tool.
