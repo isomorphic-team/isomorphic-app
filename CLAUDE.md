@@ -32,6 +32,7 @@ pnpm app:dev            # local dev server for the MCP App UI — http://localho
 pnpm gen:app            # codegen the ui:// app bundle (after editing app/ OR any src/lib/ file it imports)
 pnpm regen:pr <n>       # regenerate that bundle on a PR branch that could not (Dependabot); --push to send it
 pnpm test:roundtrip     # editor markdown round-trip golden test
+pnpm test:render        # the shared markdown renderer: parity + sanitization
 pnpm test:views         # derived-views (okf-view) engine golden test
 pnpm test:import        # bulk-import planner golden test
 pnpm test:tools         # user-defined (brain-authored) tools parse-layer golden test
@@ -77,6 +78,9 @@ rules that make the difference between coverage and its appearance:
 
 **Tests.** All offline, all fork-safe, all wired into CI and into the `test` script
 (`pnpm test` runs everything): `pnpm test:roundtrip` (editor markdown round-trip),
+`pnpm test:render` (the ONE markdown renderer: that the viewer's output is unchanged,
+and that every raw-HTML and URL-scheme payload comes back inert — see [One markdown
+renderer](#one-markdown-renderer-srclibrenderts) below),
 `pnpm test:views` (okf-view engine), `pnpm test:import` (import planner),
 `pnpm test:tools` (brain-authored tool parsing), `pnpm test:patch` (write_page
 append/edits), `pnpm test:structure` (OKF conformance), `pnpm test:links`
@@ -586,6 +590,50 @@ source of truth (app tree re-exports). Engine: `src/lib/views.ts` (index-coupled
 - **Fail-open everywhere:** any view-computation failure falls back to raw content — a view
   never makes a page unreadable or blocks a save. Malformed directives render a visible note.
 - `pnpm test:views` is the engine's golden test (pure, stubbed index).
+
+## One markdown renderer (`src/lib/render.ts`)
+
+Markdown-to-HTML is in `src/lib/` rather than the app bundle, pure and Worker-safe, so
+every surface that shows a page produces the same HTML. It used to live in
+`app/core/actions.ts`, which meant a second surface rendering pages needed a second
+implementation, and those drift exactly the way `wikilinkKey` and `FOLDER_NOTE_NAMES`
+drifted before they were extracted. `pnpm test:render` is the golden test.
+
+- **It sanitizes, and that is new.** `marked` sanitizes nothing at all (see
+  `docs/references.md`), and the app rendered its output straight into
+  `dangerouslySetInnerHTML`. Inside the MCP App that was bounded by the host iframe's
+  CSP and by the author already having write access. Served from our own origin next to
+  a session cookie, the same page body is stored XSS. **Treat every change to the policy
+  constants as a security change**, and break the sanitizer deliberately to confirm the
+  battery goes red before believing it.
+- **Raw HTML is a TAG ALLOWLIST with ZERO ATTRIBUTES.** That single rule is what makes
+  the list safe to read: with no attributes there is no `on*` handler, no `style`, and no
+  `href`/`src`, so a listed tag cannot carry a payload however it is written. `a` and
+  `img` are deliberately NOT on it, because markdown's own link and image syntax goes
+  through the renderer where the scheme is checked, and a raw `<a href="javascript:…">`
+  would walk straight past that. Anything not on the list is **escaped, never dropped**,
+  so an unsupported tag becomes visible to its author instead of quietly disappearing.
+- **Scheme checks decode entities first.** `&#106;avascript:` and `javascript&colon;`
+  reach the browser as `javascript:` while a scheme test on the raw string sees no scheme
+  at all. Both were live bypasses; `isSafeUrl` is the one place that closes them.
+- **Three hooks, and returning `null` from each means "refuse".** `wikilink` (where a
+  `[[link]]` points), `href` (where a markdown link points, and the reader's horizon
+  rule: **flatten** to plain text rather than 404, because a dead link still advertises
+  the title and existence of a page the reader was not given), `image` (falls back to alt
+  text). The app relies on the defaults: the `#wikilink=` sentinel that `onProseClick`
+  parses, and an untouched repo-relative `src` that `media.ts` swaps for a data URI
+  after render. **Changing a default breaks app navigation**, which is why the exact
+  sentinel string is asserted.
+- **Overrides are a plain object, not a `Renderer` subclass.** `Marked.use` walks the
+  renderer with `for...in` and throws on any property that is not a renderer method (so
+  an instance field is a hard error), then invokes each override with ITS OWN renderer as
+  `this`. Setting `token.href` and returning `false` is marked's documented "fall back to
+  the default", which re-renders the mutated token, so this module never reproduces
+  marked's attribute formatting or escaping.
+- **Wikilinks are rewritten outside code only**, through the same `maskCode` that
+  `extractLinks` uses (now exported from `wiki.ts`). `[[Name]]` in a fence on a
+  conventions page is a syntax example; the old string pre-pass rewrote it and the code
+  block displayed `[Name](#wikilink=Name)`.
 
 ## Folder notes
 

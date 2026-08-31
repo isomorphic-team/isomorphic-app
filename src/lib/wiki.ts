@@ -262,7 +262,11 @@ const INLINE_CODE_RE = /(`+)(?:(?!\1)[\s\S])*?\1/g;
 // Fences are scanned line by line rather than matched by one regex: an unterminated
 // fence has to swallow the rest of the document, and expressing that as a regex
 // alternation on `$` silently ends the block at the first line break under /m.
-function maskCode(md: string): string {
+// Blank out fenced and inline code, preserving every character offset, so a
+// caller can scan for links in the result and splice back into the original.
+// Exported because the renderer needs the same answer: a `[[Name]]` inside a
+// fence is a syntax example on a conventions page, not a link.
+export function maskCode(md: string): string {
 	const blank = (s: string) => s.replace(/[^\n]/g, ' ');
 	let fence: string | null = null;
 	const lines = md.split('\n').map((line) => {
