@@ -3,15 +3,17 @@
 // tell you. Pure over index-derived material — no D1, no GitHub — so the rule can be
 // pinned by `pnpm test:consolidate`.
 //
-// This is deliberately NOT part of `validate`. Validate's authority rests on every
-// hard finding being provably true (a broken link is a fact); these are judgment
-// calls with no single right answer, and mixing the two teaches a reader to skim
-// both. Validate reports the COUNT and names the verb; the work happens here.
+// These are reported by `validate` alongside its other advisories, and dismissed
+// through `resolve` like any other finding. They are judgment calls, which is exactly
+// why they need a dismissal: an advisory nobody can silence decays into noise. What
+// stays outside that system is the one class with a single right answer — a broken
+// link is a defect, carries no key, and cannot be dismissed.
 //
 // Everything below is computed, never generated. Deciding whether a tension is real,
 // and what the right shape is, costs model tokens in the caller's session.
 import { isFolderNoteName, FOLDER_NOTE_NAMES } from './view-directives.ts';
 import { parseFrontmatter } from './wiki.ts';
+import { findingKey, type Finding } from './findings.ts';
 
 export type TensionKind =
 	| 'island'
@@ -34,18 +36,10 @@ export interface Tension {
 	weight: number;
 }
 
-export interface ReviewLedger {
-	version: number;
-	dismissed: { key: string; why: string; at: string }[];
-}
-
-export const REVIEW_LEDGER_PATH = '.isomorphic/review.json';
-const LEDGER_VERSION = 1;
-
 // A folder earns a folder note once it holds this many pages: below it, "no note" is
-// a shape, not a gap. `validate` stays silent on note-less folders at any size
-// (folderNoteSuggestions speaks only when an overview-shaped page already exists);
-// this is the consolidation-side counterpart, which is allowed to be a judgment call.
+// a shape, not a gap. `folderNoteSuggestions` stays silent on note-less folders at any
+// size (it speaks only when an overview-shaped page already exists); this is the
+// counterpart that is allowed to be a judgment call, because it can be dismissed.
 const MIN_FOLDER_PAGES_FOR_NOTE = 3;
 
 // Jaccard over word bigrams. Two pages telling the same story land well above this;
@@ -124,40 +118,18 @@ function slug(text: string): string {
 		.replace(/^-|-$/g, '');
 }
 
-function tensionKey(kind: TensionKind, paths: string[]): string {
-	return `${kind}:${[...paths].sort().join('|')}`;
-}
+const tensionKey = (kind: TensionKind, paths: string[]) => findingKey(kind, paths);
 
-// ---------- the ledger ----------
-
-export function parseReviewLedger(raw: string | null): ReviewLedger {
-	if (!raw || !raw.trim()) return { version: LEDGER_VERSION, dismissed: [] };
-	const parsed = JSON.parse(raw) as unknown;
-	if (!parsed || typeof parsed !== 'object') throw new Error('review ledger is not an object');
-	const obj = parsed as Partial<ReviewLedger>;
-	const dismissed = Array.isArray(obj.dismissed) ? obj.dismissed : [];
-	return {
-		version: typeof obj.version === 'number' ? obj.version : LEDGER_VERSION,
-		dismissed: dismissed
-			.filter((d): d is ReviewLedger['dismissed'][number] => !!d && typeof d.key === 'string')
-			.map((d) => ({ key: d.key, why: String(d.why ?? ''), at: String(d.at ?? '') }))
-	};
-}
-
-export function serializeReviewLedger(ledger: ReviewLedger): string {
-	return `${JSON.stringify({ version: LEDGER_VERSION, dismissed: ledger.dismissed }, null, 2)}\n`;
-}
-
-// A dismissal is what keeps the queue from re-raising the same judgment call every
-// run, the way an advisory nobody can silence decays into noise.
-export function filterDismissed(tensions: Tension[], ledger: ReviewLedger): Tension[] {
-	const dropped = new Set(ledger.dismissed.map((d) => d.key));
-	return tensions.filter((t) => !dropped.has(t.key));
-}
-
-export function dismiss(ledger: ReviewLedger, key: string, why: string, at: string): ReviewLedger {
-	if (ledger.dismissed.some((d) => d.key === key)) return ledger;
-	return { ...ledger, dismissed: [...ledger.dismissed, { key, why, at }] };
+/**
+ * Tensions as `validate` reports them: the headline, its evidence and the suggested
+ * move folded into one block, carrying the key `resolve` dismisses it by.
+ */
+export function tensionFindings(tensions: Tension[]): Finding[] {
+	return tensions.map((t) => ({
+		key: t.key,
+		weight: t.weight,
+		headline: [`- ${t.headline}`, ...t.evidence.map((e) => `    ${e}`), `  → ${t.move}`].join('\n')
+	}));
 }
 
 // ---------- near-duplicate ----------

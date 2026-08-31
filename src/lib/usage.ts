@@ -53,7 +53,7 @@ export const TOOL_KINDS: Record<string, UsageKind> = {
 	move_page: 'write',
 	delete_page: 'write',
 	sync_records: 'write',
-	resolve_import: 'write',
+	resolve: 'write',
 	configure_brain: 'write',
 	// The editor opens here and saves through write_page. Counted as a write
 	// because it records the INTENT to edit, which is the thing the tab is asked

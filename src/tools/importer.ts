@@ -29,6 +29,15 @@ import { ensureFresh, loadAllFields } from '../lib/brain-index.ts';
 import { hasViews, renderViews, buildViewContext } from '../lib/views.ts';
 import { insertLogEntry, todayIso } from '../lib/wiki.ts';
 import { isContentPath, logPathOf } from '../lib/brain-config.ts';
+import {
+	isImportKey,
+	parseImportKey,
+	parseReviewLedger,
+	serializeReviewLedger,
+	dismissFinding,
+	undismissFinding,
+	REVIEW_LEDGER_PATH
+} from '../lib/findings.ts';
 import type { BrainContext } from './librarian.ts';
 import type { TenantOpts } from '../lib/orgs.ts';
 
@@ -304,22 +313,26 @@ export function registerImportTools(
 	);
 
 	server.registerTool(
-		'resolve_import',
+		'resolve',
 		{
-			title: 'Apply import reconciliation decisions',
+			title: 'Record a decision about a finding',
 			description:
-				'Apply human decisions to the questions a sync_records run raised, durably, so the next import does not re-ask. Per key: "delete" (remove the page a proposed deletion pointed at), "alias" (bind the key onto a surviving page — how a consolidation claims a duplicate\'s identity), "suppress" (never import this key again), or "recreate" (forget the key so the next sync creates its page fresh).',
+				'`resolve` answers the findings `validate` reports, durably, so they stop being re-raised. Every finding validate prints carries a `[key]`; pass that key here with what you decided. For a CONSOLIDATION or STRUCTURE finding (a page nothing links to, a mixed folder-note convention, wikilink portability, a missing `type:`): "dismiss" records that the shape is deliberate and validate stops reporting it, and "undismiss" reverses that. For an IMPORT finding (a key a sync_records run could not decide alone): "delete" removes the page a proposed deletion pointed at, "alias" binds the key onto a surviving page (how a consolidation claims a duplicate\'s identity), "suppress" never imports the key again, and "recreate" forgets it so the next sync makes its page fresh. Dismissing is not a fix and never edits a page — it records that a human looked and chose this. Broken links have no key and cannot be resolved; fix them instead.',
 			inputSchema: {
 				brain: brainArg,
-				source: z
-					.string()
-					.regex(/^[a-z0-9][a-z0-9_-]*$/)
-					.describe('The source feed these decisions apply to.'),
 				decisions: z
 					.array(
 						z.object({
-							key: z.string(),
-							action: z.enum(['delete', 'alias', 'suppress', 'recreate']),
+							finding: z
+								.string()
+								.describe('The `[key]` validate printed for this finding, copied exactly.'),
+							action: z.enum(['dismiss', 'undismiss', 'delete', 'alias', 'suppress', 'recreate']),
+							why: z
+								.string()
+								.optional()
+								.describe(
+									'For "dismiss": why this shape is deliberate. Recorded in the brain so the next reader knows it was a decision rather than an oversight.'
+								),
 							alias_to: z
 								.string()
 								.optional()
@@ -330,9 +343,93 @@ export function registerImportTools(
 					.max(100)
 			}
 		},
-		async ({ source, decisions, brain }) => {
+		async ({ decisions: allDecisions, brain }) => {
 			const ctx = await getContext({ requires: 'editor', brain });
 			const { store, repoArgs, config, author, db, brainId } = ctx;
+
+			const importDecisions = allDecisions.filter((d) => isImportKey(d.finding));
+			const reviewDecisions = allDecisions.filter((d) => !isImportKey(d.finding));
+
+			const misrouted = reviewDecisions.find(
+				(d) => d.action !== 'dismiss' && d.action !== 'undismiss'
+			);
+			if (misrouted)
+				return fail(
+					`"${misrouted.action}" only applies to an import finding. "${misrouted.finding}" is a structure or consolidation finding, which takes "dismiss" or "undismiss".`
+				);
+			const importMisrouted = importDecisions.find(
+				(d) => d.action === 'dismiss' || d.action === 'undismiss'
+			);
+			if (importMisrouted)
+				return fail(
+					`"${importMisrouted.finding}" is an import finding: answer it with delete / alias / suppress / recreate rather than dismissing it, so the next sync knows what to do.`
+				);
+
+			// One ledger per call. Import decisions land in the importer's per-source
+			// ledger and dismissals in the review ledger, which are different files and
+			// therefore different commits; rather than write two, ask for two calls.
+			if (importDecisions.length && reviewDecisions.length)
+				return fail(
+					'Import findings and structure findings are recorded in different ledgers. Send them as two calls.'
+				);
+
+			if (reviewDecisions.length) {
+				const raw = await store.readFile(repoArgs, REVIEW_LEDGER_PATH);
+				let ledger;
+				try {
+					ledger = parseReviewLedger(raw?.content ?? null);
+				} catch {
+					return fail(
+						`The review ledger (${REVIEW_LEDGER_PATH}) is corrupt. Fix or delete it before recording decisions.`
+					);
+				}
+				const at = todayIso();
+				for (const d of reviewDecisions) {
+					ledger =
+						d.action === 'dismiss'
+							? dismissFinding(ledger, d.finding, d.why?.trim() ?? '', at)
+							: undismissFinding(ledger, d.finding);
+				}
+				const head = await store.getHead(repoArgs, config.defaultBranch);
+				const dismissed = reviewDecisions.filter((d) => d.action === 'dismiss').length;
+				const restored = reviewDecisions.length - dismissed;
+				const summary = [
+					dismissed ? `${dismissed} dismissed` : '',
+					restored ? `${restored} restored` : ''
+				]
+					.filter(Boolean)
+					.join(', ');
+				await store.commitOrPR(repoArgs, {
+					writeMode: config.writeMode,
+					defaultBranch: config.defaultBranch,
+					author,
+					autoMerge: config.autoMerge,
+					mergeMethod: config.mergeMethod,
+					message: `Record validate decisions: ${summary}`,
+					writes: [{ path: REVIEW_LEDGER_PATH, content: serializeReviewLedger(ledger) }],
+					head,
+					branchPrefix: 'isomorphic/resolve',
+					prTitle: 'Record validate decisions',
+					prBody: `${summary}. No page content changed — this records that a human decided, so validate stops re-reporting it.`
+				});
+				return ok(
+					`Recorded: ${summary}. validate will not raise ${dismissed === 1 ? 'it' : 'them'} again unless undismissed.`
+				);
+			}
+
+			// Every import decision in one call must name the same source, because the
+			// ledger it writes is per-source and one commit writes one ledger.
+			const sources = [...new Set(importDecisions.map((d) => parseImportKey(d.finding)!.source))];
+			if (sources.length > 1)
+				return fail(
+					`These findings span ${sources.length} import sources (${sources.join(', ')}). Send one call per source.`
+				);
+			const source = sources[0];
+			const decisions = importDecisions.map((d) => ({
+				key: parseImportKey(d.finding)!.recordKey,
+				action: d.action as 'delete' | 'alias' | 'suppress' | 'recreate',
+				alias_to: d.alias_to
+			}));
 
 			const badAlias = decisions.find((d) => d.action === 'alias' && !d.alias_to?.trim());
 			if (badAlias) return fail(`Decision for "${badAlias.key}": alias needs "alias_to".`);

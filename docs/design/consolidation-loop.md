@@ -1,5 +1,26 @@
 # Design: the consolidation loop
 
+> **Update (2026-08-31): this shipped as ZERO new tools, not two.**
+>
+> The plan below proposed a `consolidate` tool and a `probe` tool. Both were cut on
+> review, and the capabilities landed inside the surface that already existed:
+>
+> - **Findings go in `validate`.** The distinction this document draws, that validate
+>   is for provable defects and consolidation is for judgment, does not match the code:
+>   validate already emitted five advisory sections that are pure judgment. Consolidation
+>   tensions are the same species and belong beside them. Broken links remain the one
+>   class that carries no key and cannot be silenced, which is the real line.
+> - **Dismissal generalised `resolve_import` into `resolve`.** One rename, not one
+>   addition. Every finding carries a namespaced `[key]`; `resolve` records a decision
+>   about any of them, keeping the import actions and adding `dismiss`/`undismiss`.
+>   This also fixed a standing wart: advisories nobody could silence.
+> - **Probe became an `expect` argument on `search_pages`.** Measurement belongs to the
+>   read that already runs the search. An advertised tool costs context in every
+>   conversation; this costs an optional argument.
+>
+> The work items below still describe the reasoning; read W2 and W5 as history rather
+> than as a plan.
+
 Status: **partly built**. The two pure engines and their offline runners exist on
 branch `worktree-consolidate-loop` with golden tests wired into CI. Nothing is
 registered as an MCP tool, `validate` does not point at any of it, and the dismissal

@@ -61,8 +61,16 @@ const EVENTS = [
 		[{ path: 'wiki/events/index.md', title: 'Events' }]
 	);
 	check('events: 12 inlined franchises are flagged', out.length === 1, JSON.stringify(out));
-	check('events: names the count', out[0]?.includes('12 sections') === true, out[0]);
-	check('events: names an example', out[0]?.includes('Annual Meeting') === true, out[0]);
+	check(
+		'events: names the count',
+		out[0]?.headline.includes('12 sections') === true,
+		out[0]?.headline
+	);
+	check(
+		'events: names an example',
+		out[0]?.headline.includes('Annual Meeting') === true,
+		out[0]?.headline
+	);
 }
 
 {
@@ -194,7 +202,11 @@ const EVENTS = [
 	const pages = [{ path: 'a.md' }, { path: 'b.md' }, { path: 'c.md' }];
 	const out = typeFieldSuggestions(pages, new Map());
 	check('type: wholly untyped brain gets one soft note', out.length === 1, JSON.stringify(out));
-	check('type: soft note does not list pages', out[0]?.includes('a.md') === false, out[0]);
+	check(
+		'type: soft note does not list pages',
+		out[0]?.headline.includes('a.md') === false,
+		out[0]?.headline
+	);
 }
 
 {
@@ -205,8 +217,8 @@ const EVENTS = [
 	]);
 	const out = typeFieldSuggestions(pages, byPath);
 	check('type: half-typed brain is flagged', out.length === 1, JSON.stringify(out));
-	check('type: names the straggler', out[0]?.includes('c.md') === true, out[0]);
-	check('type: counts correctly', out[0]?.includes('1 of 3') === true, out[0]);
+	check('type: names the straggler', out[0]?.headline.includes('c.md') === true, out[0]?.headline);
+	check('type: counts correctly', out[0]?.headline.includes('1 of 3') === true, out[0]?.headline);
 }
 
 {
@@ -227,7 +239,7 @@ const EVENTS = [
 	const out = typeFieldSuggestions(pages, byPath);
 	check(
 		'type: blank type counts as missing',
-		out[0]?.includes('b.md') === true,
+		out[0]?.headline.includes('b.md') === true,
 		JSON.stringify(out)
 	);
 }
@@ -389,8 +401,16 @@ Body text.
 		{ path: 'wiki/other.md', title: 'Other' }
 	]);
 	check('titles: duplicate title flagged', out.length === 1, JSON.stringify(out));
-	check('titles: match is case-insensitive', out[0]?.includes('2 pages') === true, out[0]);
-	check('titles: names both paths', out[0]?.includes('wiki/b/acme.md') === true, out[0]);
+	check(
+		'titles: match is case-insensitive',
+		out[0]?.headline.includes('2 pages') === true,
+		out[0]?.headline
+	);
+	check(
+		'titles: names both paths',
+		out[0]?.headline.includes('wiki/b/acme.md') === true,
+		out[0]?.headline
+	);
 }
 
 {
@@ -410,7 +430,7 @@ Body text.
 		{ kind: 'wiki', cnt: 1 }
 	]);
 	check('links: wikilinks reported', out.length === 1, JSON.stringify(out));
-	check('links: counts are right', out[0]?.includes('3 of 6') === true, out[0]);
+	check('links: counts are right', out[0]?.headline.includes('3 of 6') === true, out[0]?.headline);
 }
 
 {

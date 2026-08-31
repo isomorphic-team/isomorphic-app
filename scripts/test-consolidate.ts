@@ -8,14 +8,19 @@
 // worth reading: a brain consistently on README.md is consistent, a two-page folder
 // with no note is a shape rather than a gap, and two pages sharing a vocabulary are
 // not two pages sharing a story.
+import { computeTensions, tensionFindings, type Tension } from '../src/lib/consolidate.ts';
 import {
-	computeTensions,
 	parseReviewLedger,
 	serializeReviewLedger,
 	filterDismissed,
-	dismiss,
-	type Tension
-} from '../src/lib/consolidate.ts';
+	dismissFinding,
+	undismissFinding,
+	renderFindings,
+	findingKey,
+	importKey,
+	parseImportKey,
+	isImportKey
+} from '../src/lib/findings.ts';
 
 let failures = 0;
 function check(name: string, cond: boolean, detail?: string) {
@@ -275,21 +280,73 @@ const of = (ts: Tension[], kind: string) => ts.filter((t) => t.kind === kind);
 	);
 
 	const base = parseReviewLedger(null);
-	const once = dismiss(base, 'island:wiki/a.md', 'kept on purpose', '2026-08-31');
-	const twice = dismiss(once, 'island:wiki/a.md', 'again', '2026-09-01');
+	const once = dismissFinding(base, 'island:wiki/a.md', 'kept on purpose', '2026-08-31');
+	const twice = dismissFinding(once, 'island:wiki/a.md', 'again', '2026-09-01');
 	check('ledger: dismiss is idempotent on the key', twice.dismissed.length === 1);
 	check(
 		'ledger: round-trips through serialize',
 		parseReviewLedger(serializeReviewLedger(once)).dismissed[0].key === 'island:wiki/a.md'
 	);
+	check(
+		'ledger: undismiss forgets the decision so the finding returns',
+		undismissFinding(once, 'island:wiki/a.md').dismissed.length === 0
+	);
 
 	const ts = computeTensions({ pages: [page('wiki/a.md'), page('wiki/b.md')], edges: [] });
-	const kept = filterDismissed(ts, once);
-	check('ledger: the dismissed tension is gone', !kept.some((t) => t.paths[0] === 'wiki/a.md'));
+	const kept = filterDismissed(tensionFindings(ts), once);
+	check('ledger: the dismissed finding is gone', !kept.some((f) => f.key === 'island:wiki/a.md'));
 	check(
 		'ledger: everything else survives',
-		kept.some((t) => t.paths[0] === 'wiki/b.md')
+		kept.some((f) => f.key === 'island:wiki/b.md')
 	);
+}
+
+// ---------- keys are an interface ----------
+// A dismissal is stored against a key, so the key has to keep meaning the same thing.
+// Order-independence matters for the pair findings: `dup:a|b` and `dup:b|a` are the
+// same finding, and a run that emitted them in the other order must not resurrect a
+// dismissal.
+{
+	check(
+		'key: identity order does not change the key',
+		findingKey('near-duplicate', ['wiki/b.md', 'wiki/a.md']) ===
+			findingKey('near-duplicate', ['wiki/a.md', 'wiki/b.md'])
+	);
+	check(
+		'key: a single identity needs no array',
+		findingKey('island', 'wiki/a.md') === 'island:wiki/a.md'
+	);
+
+	// Import findings route to the importer's own per-source ledger, so `resolve` has
+	// to be able to tell them apart and recover both halves.
+	const k = importKey('vendors', 'acme:corp:1');
+	check('key: an import key is recognised', isImportKey(k));
+	check('key: a consolidation key is not', !isImportKey('island:wiki/a.md'));
+	check(
+		'key: the source and record key round-trip, record keys may contain colons',
+		parseImportKey(k)?.source === 'vendors' && parseImportKey(k)?.recordKey === 'acme:corp:1',
+		JSON.stringify(parseImportKey(k))
+	);
+	check('key: a malformed import key parses to nothing', parseImportKey('import:novalue') === null);
+}
+
+// ---------- the report is capped, and says so ----------
+// A silently truncated list reads as "that is all of them", which is the failure that
+// makes a long report worse than a short one.
+{
+	const many = Array.from({ length: 12 }, (_, i) => ({
+		key: `island:wiki/${String(i).padStart(2, '0')}.md`,
+		headline: `- page ${i}`,
+		weight: i
+	}));
+	const r = renderFindings(many, 5);
+	check('render: caps at the limit', r.shown === 5 && r.hidden === 7);
+	check('render: says how many it withheld', r.text.includes('and 7 more'));
+	check('render: highest weight first', r.text.indexOf('page 11') < r.text.indexOf('page 7'));
+	check('render: every finding carries its key', r.text.includes('[island:wiki/11.md]'));
+
+	const few = renderFindings(many.slice(0, 3), 5);
+	check('render: no truncation note when nothing was withheld', !few.text.includes('more'));
 }
 
 // The dismissal design rests entirely on this: a key derived from the wording of a

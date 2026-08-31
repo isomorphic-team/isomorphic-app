@@ -73,6 +73,17 @@ import { tryRenderViews, type ViewDeps } from '../lib/views.ts';
 import { isToolPagePath, parseToolDef } from '../lib/custom-tools.ts';
 import { isFolderNoteName } from '../lib/view-directives.ts';
 import {
+	findingKey,
+	filterDismissed,
+	parseReviewLedger,
+	renderFindings,
+	REVIEW_LEDGER_PATH,
+	importKey,
+	type Finding
+} from '../lib/findings.ts';
+import { computeTensions, tensionFindings, MAX_DUP_PAGES } from '../lib/consolidate.ts';
+import { scoreProbe, type ProbeResult } from '../lib/probe.ts';
+import {
 	applyPageEdits,
 	applyFieldPatch,
 	validateFieldPatch,
@@ -375,7 +386,7 @@ async function fetchInboundLinkers(
 // title matching the folder name), so "folder has no note at all" stays unreported noise.
 const OVERVIEW_BASENAMES = new Set(['overview', 'about', 'home', 'summary', 'start-here']);
 
-export function folderNoteSuggestions(pages: { path: string; title: string }[]): string[] {
+export function folderNoteSuggestions(pages: { path: string; title: string }[]): Finding[] {
 	const byFolder = new Map<string, { path: string; title: string }[]>();
 	for (const p of pages) {
 		const cut = p.path.lastIndexOf('/');
@@ -385,7 +396,7 @@ export function folderNoteSuggestions(pages: { path: string; title: string }[]):
 		if (siblings) siblings.push(p);
 		else byFolder.set(folder, [p]);
 	}
-	const out: string[] = [];
+	const out: Finding[] = [];
 	for (const [folder, siblings] of byFolder) {
 		if (siblings.length < 2) continue; // a lone page isn't a folder wanting a note
 		const nameOf = (p: { path: string }) => p.path.slice(folder.length + 1);
@@ -400,12 +411,41 @@ export function folderNoteSuggestions(pages: { path: string; title: string }[]):
 			);
 		});
 		if (!candidate) continue;
-		out.push(
-			`- ${candidate.path} looks like the overview for "${folder}/". Move_page it to ${folder}/index.md so it becomes the folder note.`
-		);
+		// Keyed on the FOLDER, not the candidate page: the finding is "this folder's
+		// overview is not its note", and it stays that finding if the page is renamed.
+		out.push({
+			key: findingKey('folder-note', folder),
+			weight: 2.5,
+			headline: `- ${candidate.path} looks like the overview for "${folder}/". Move_page it to ${folder}/index.md so it becomes the folder note.`
+		});
 	}
-	return out.sort();
+	return out.sort((a, b) => a.key.localeCompare(b.key));
 }
+
+// One line describing where the expected page landed. Kept beside the tool rather
+// than in the pure scorer because it is presentation: the scorer decides the verdict,
+// this decides how to say it.
+function describeProbe(p: ProbeResult): string {
+	switch (p.verdict) {
+		case 'owned':
+			return `"${p.expect}" ranked FIRST of ${p.matched.length} matching page(s).`;
+		case 'outranked':
+		case 'buried':
+			return `"${p.expect}" ranked ${p.position} of ${p.matched.length}, behind ${p.outrankedBy.slice(0, 3).join(', ')}. If it should own this question, sharpen its title and description, then search again.`;
+		case 'elsewhere':
+			return `"${p.expect}" did NOT match. ${p.matched.length} other page(s) answered, starting with ${p.matched.slice(0, 3).join(', ')} — either they own this question or the expected page is missing the words people search with.`;
+		case 'inconclusive':
+			return `"${p.expect}" did not appear, but the hit budget ran out, so it may simply not have been reached.`;
+		default:
+			return `Nothing in this brain matched, so "${p.expect}" is not findable by this question.`;
+	}
+}
+
+// How many findings `validate` prints before it stops and says how many are left.
+// Bounded because validate is read inside a conversation where every line costs
+// context: a hundred advisories is not more useful than ten plus a count, and the
+// count is what stops a truncated list reading as the whole list.
+const MAX_FINDINGS_SHOWN = 12;
 
 // ---------- OKF structure advisories (validate) ----------
 //
@@ -501,7 +541,7 @@ function inlinedSections(content: string, known: Set<string>): string[] {
 export function inlinedConceptSuggestions(
 	notes: { path: string; content: string }[],
 	pages: { path: string; title: string }[]
-): string[] {
+): Finding[] {
 	// Every name the brain already has a page for, so a section that merely restates
 	// an existing page isn't mistaken for a homeless concept. Both sides go through
 	// wikilinkKey for the reason resolution does: a filename kept raw here never
@@ -511,17 +551,19 @@ export function inlinedConceptSuggestions(
 		known.add(wikilinkKey(slugOf(p.path)));
 		if (p.title) known.add(wikilinkKey(p.title));
 	}
-	const out: string[] = [];
+	const out: Finding[] = [];
 	for (const note of notes) {
 		const suspects = inlinedSections(note.content, known);
 		if (suspects.length < MIN_INLINED_SECTIONS) continue;
 		const shown = suspects.slice(0, 3).join('", "');
 		const more = suspects.length > 3 ? ', …' : '';
-		out.push(
-			`- ${note.path} holds ${suspects.length} sections that read like pages of their own ("${shown}"${more}). A folder note is a LISTING, not a container: if other pages should be able to link to these, give each its own file and leave a link (or an okf-view) here.`
-		);
+		out.push({
+			key: findingKey('inlined', note.path),
+			weight: 3,
+			headline: `- ${note.path} holds ${suspects.length} sections that read like pages of their own ("${shown}"${more}). A folder note is a LISTING, not a container: if other pages should be able to link to these, give each its own file and leave a link (or an okf-view) here.`
+		});
 	}
-	return out.sort();
+	return out.sort((a, b) => a.key.localeCompare(b.key));
 }
 
 // Pages with no `type:`. Reported only as an INCONSISTENCY (some pages typed, others
@@ -530,22 +572,35 @@ export function inlinedConceptSuggestions(
 export function typeFieldSuggestions(
 	conceptPages: { path: string }[],
 	fieldsByPath: Map<string, PageFields>
-): string[] {
+): Finding[] {
 	if (conceptPages.length === 0) return [];
 	const missing = conceptPages.filter((p) => {
 		const v = fieldsByPath.get(p.path)?.get('type');
 		return !v || !v.some((s) => s.trim() !== '');
 	});
 	if (missing.length === 0) return [];
+	// Two keys, not one: "nothing is typed" and "half of it is typed" are different
+	// situations, and a brain that adopts `type:` partway has changed its mind since
+	// dismissing the first. Silencing the adoption note should not also silence the
+	// inconsistency note it turns into.
 	if (missing.length === conceptPages.length) {
 		return [
-			'- No page declares a `type:`. That is OKF\'s one required field — a free-form string ("Vendor", "Event Series", "Meeting Note"), NOT a fixed taxonomy. It makes the brain readable by any OKF consumer, and asking "what type is this?" is the question that catches a concept being written as a section inside another page instead of getting its own file.'
+			{
+				key: findingKey('untyped', 'none'),
+				weight: 1.5,
+				headline:
+					'- No page declares a `type:`. That is OKF\'s one required field — a free-form string ("Vendor", "Event Series", "Meeting Note"), NOT a fixed taxonomy. It makes the brain readable by any OKF consumer, and asking "what type is this?" is the question that catches a concept being written as a section inside another page instead of getting its own file.'
+			}
 		];
 	}
 	const shown = missing.slice(0, 8).map((p) => `  - ${p.path}`);
 	const more = missing.length > 8 ? `\n  …and ${missing.length - 8} more.` : '';
 	return [
-		`- ${missing.length} of ${conceptPages.length} pages have no \`type:\` while the rest do, so the brain is half-typed:\n${shown.join('\n')}${more}`
+		{
+			key: findingKey('untyped', 'partial'),
+			weight: 1.5,
+			headline: `- ${missing.length} of ${conceptPages.length} pages have no \`type:\` while the rest do, so the brain is half-typed:\n${shown.join('\n')}${more}`
+		}
 	];
 }
 
@@ -554,7 +609,7 @@ export function typeFieldSuggestions(
 // so two pages sharing a title — or sharing a filename in different folders — mean
 // every `[[That Name]]` lands on one of them and the rest are unreachable by name.
 // Pure over the index's page list.
-export function ambiguousTitleSuggestions(pages: { path: string; title: string }[]): string[] {
+export function ambiguousTitleSuggestions(pages: { path: string; title: string }[]): Finding[] {
 	const group = (of: (p: { path: string; title: string }) => string) => {
 		const by = new Map<string, { label: string; paths: string[] }>();
 		for (const p of pages) {
@@ -582,12 +637,13 @@ export function ambiguousTitleSuggestions(pages: { path: string; title: string }
 		seen.add(key);
 		clashes.push(entry);
 	}
-	return clashes
-		.slice(0, 5)
-		.map(
-			({ label, paths }) =>
-				`- ${paths.length} pages answer to the name "${label}", so a [[${label}]] wikilink can only reach one of them: ${paths.sort().join(', ')}. Give them distinct titles, or link these by path.`
-		);
+	return clashes.slice(0, 5).map(({ label, paths }) => ({
+		// The clashing PAGES are the identity. The label is what they happen to share
+		// today, and renaming one of them resolves the finding rather than renaming it.
+		key: findingKey('ambiguous', paths),
+		weight: 2,
+		headline: `- ${paths.length} pages answer to the name "${label}", so a [[${label}]] wikilink can only reach one of them: ${paths.sort().join(', ')}. Give them distinct titles, or link these by path.`
+	}));
 }
 
 // ---------- the broken-link report ----------
@@ -679,12 +735,19 @@ export function brokenLinkReport(
 // an outside reader of the bundle follows plain markdown links and sees a
 // wikilink as literal text. Informational, not a defect: a brain may deliberately
 // be Obsidian-first. One line, never a list.
-export function wikilinkPortabilityNote(edges: { kind: 'md' | 'wiki'; cnt: number }[]): string[] {
+export function wikilinkPortabilityNote(edges: { kind: 'md' | 'wiki'; cnt: number }[]): Finding[] {
 	const wiki = edges.filter((e) => e.kind === 'wiki').reduce((n, e) => n + e.cnt, 0);
 	if (wiki === 0) return [];
 	const total = edges.reduce((n, e) => n + e.cnt, 0);
+	// One brain-wide note, so the identity is the brain. This is the advisory that most
+	// wanted a dismissal: a deliberately Obsidian-first brain has already decided, and
+	// before findings had keys it was told again on every single run.
 	return [
-		`- ${wiki} of ${total} resolved links are [[wikilinks]]. They resolve here, but they are not Open Knowledge Format links — an outside reader of this brain follows plain markdown links and sees these as literal text.`
+		{
+			key: findingKey('wikilink-portability', 'brain'),
+			weight: 0.5,
+			headline: `- ${wiki} of ${total} resolved links are [[wikilinks]]. They resolve here, but they are not Open Knowledge Format links — an outside reader of this brain follows plain markdown links and sees these as literal text.`
+		}
 	];
 }
 
@@ -1969,7 +2032,7 @@ export function registerLibrarianTools(
 			title: 'Check the brain for problems',
 			annotations: { readOnlyHint: true },
 			description:
-				'Scan the wiki for broken links — markdown links to missing pages and [[wikilinks]] that match no page — and surface any pending import decisions awaiting a human answer. Also returns advisory Open Knowledge Format structure notes: concepts written as sections inside a folder note instead of getting their own page, pages missing a `type:`, and nested frontmatter the editor would flatten. Taxonomy-agnostic (folders stay free-form) and nothing it reports blocks a save. Run after big changes or restructures.',
+				'`validate` checks a brain and reports what needs attention. Two kinds of result, deliberately separate. DEFECTS: broken links — markdown links to missing pages and [[wikilinks]] that match no page. Those have one right answer and cannot be silenced. FINDINGS: everything advisory, each carrying a `[key]` — pending import decisions, Open Knowledge Format structure notes (concepts written as sections inside a folder note instead of getting their own page, pages missing a `type:`, names two pages both answer to), and consolidation tensions (a page nothing links to, a folder note that lists none of its pages, two pages telling the same story). Nothing advisory blocks a save, and any finding can be answered or permanently silenced with `resolve` using its key, so a deliberate choice stops being re-reported. Run after big changes or restructures, or when asked to tidy a brain up.',
 			inputSchema: { brain: brainArg }
 		},
 		async ({ brain }) => {
@@ -1988,6 +2051,7 @@ export function registerLibrarianTools(
 			// the "anything need attention?" surface — deciding happens via
 			// resolve_import; a decision stays listed here until someone answers it.
 			const pendingSections: string[] = [];
+			const importFindings: Finding[] = [];
 			try {
 				const head = await store.getHead(repoArgs, config.defaultBranch);
 				// listTree defaults to .md — ledgers are .json.
@@ -2009,13 +2073,20 @@ export function registerLibrarianTools(
 						continue;
 					}
 					if (!ledger.pending.length) continue;
-					const lines = ledger.pending.map((q) =>
-						q.kind === 'proposed-deletion'
-							? `- "${q.key}" (${q.path}): ${q.reason} — delete it, or keep it and suppress the key.`
-							: `- "${q.key}": ${q.reason}`
-					);
+					// Import questions are findings like any other, so they carry the same
+					// namespaced key and are answered by the same verb.
+					for (const q of ledger.pending) {
+						importFindings.push({
+							key: importKey(source, q.key),
+							weight: 4,
+							headline:
+								q.kind === 'proposed-deletion'
+									? `- "${q.key}" (${q.path}): ${q.reason} — delete it, or keep it and suppress the key.`
+									: `- "${q.key}": ${q.reason}`
+						});
+					}
 					pendingSections.push(
-						`${ledger.pending.length} import decision(s) pending for "${source}" — answer with resolve_import:\n${lines.join('\n')}`
+						`${ledger.pending.length} import decision(s) pending for "${source}".`
 					);
 				}
 			} catch {
@@ -2055,14 +2126,11 @@ export function registerLibrarianTools(
 			// them from the folder. Advisory, not a problem, and pure over the index's
 			// page list (no extra fetch).
 			const folderNotes = folderNoteSuggestions(resolved.pages);
-			const folderNoteText = folderNotes.length
-				? `\n\n${folderNotes.length} folder(s) have an overview page that isn't a folder note, so clicking the folder in the app won't open it:\n${folderNotes.join('\n')}`
-				: '';
 
 			// OKF structure advisories: concepts inlined into a folder note instead of
 			// getting their own file, and pages missing the `type:` the format requires.
 			// Soft and best-effort — a failure here must never take link validation with it.
-			let structureText = '';
+			let findingsText = '';
 			try {
 				const notePaths = resolved.pages
 					.filter((p) => isFolderNoteName(p.path.slice(p.path.lastIndexOf('/') + 1)))
@@ -2074,23 +2142,64 @@ export function registerLibrarianTools(
 						!isFolderNoteName(p.path.slice(p.path.lastIndexOf('/') + 1)) &&
 						!isToolMaintained(p.path, config)
 				);
-				const structure = [
+
+				// Consolidation tensions need page BODIES only for near-duplicate
+				// detection, and loading a whole brain's content is the one expensive
+				// thing here — so above the cap that check is skipped rather than run.
+				const contents =
+					resolved.pages.length <= MAX_DUP_PAGES
+						? await loadPageContents(
+								db,
+								brainId,
+								resolved.pages.map((p) => p.path)
+							)
+						: undefined;
+
+				const all: Finding[] = [
+					...importFindings,
 					...inlinedConceptSuggestions(
 						[...noteContents].map(([path, content]) => ({ path, content })),
 						resolved.pages
 					),
 					...typeFieldSuggestions(conceptPages, fieldsByPath),
 					...ambiguousTitleSuggestions(resolved.pages),
-					...wikilinkPortabilityNote(resolved.edges)
+					...wikilinkPortabilityNote(resolved.edges),
+					...folderNotes,
+					...tensionFindings(
+						computeTensions({
+							pages: resolved.pages,
+							edges: resolved.edges,
+							contents,
+							toolMaintained: (p) => isToolMaintained(p, config)
+						})
+					)
 				];
-				if (structure.length) {
-					structureText = `\n\nStructure notes (Open Knowledge Format — advisory, nothing is broken):\n${structure.join('\n')}`;
+
+				// Everything already decided about is dropped here. A best-effort read:
+				// a corrupt or unreadable ledger must not cost the caller their report,
+				// it just means nothing is filtered this run.
+				let kept = all;
+				try {
+					const raw = await store.readFile(repoArgs, REVIEW_LEDGER_PATH);
+					kept = filterDismissed(all, parseReviewLedger(raw?.content ?? null));
+				} catch {
+					// An unparseable ledger filters nothing rather than failing the read.
+				}
+
+				if (kept.length) {
+					const { text, hidden } = renderFindings(kept, MAX_FINDINGS_SHOWN);
+					const silenced = all.length - kept.length;
+					const note = silenced ? ` ${silenced} previously dismissed and not shown.` : '';
+					findingsText =
+						`\n\n${kept.length} finding(s) need a decision — advisory, nothing here is broken,` +
+						` and each can be answered or silenced with resolve.${note}\n${text}` +
+						(hidden ? '' : '');
 				}
 			} catch {
 				// Advisory only; link validation stands alone.
 			}
 
-			const extras = `${truncationNote(truncated)}${pendingText}${toolText}${folderNoteText}${structureText}`;
+			const extras = `${truncationNote(truncated)}${pendingText}${toolText}${findingsText}`;
 			if (problemCount === 0) {
 				return ok(`Checked ${pageCount} page(s) — no broken links.${extras}`);
 			}
@@ -2120,10 +2229,16 @@ export function registerLibrarianTools(
 					.optional()
 					.describe(
 						'Restrict to a path prefix, e.g. "internal/frameworks/". Defaults to all content.'
+					),
+				expect: z
+					.string()
+					.optional()
+					.describe(
+						'Path of the page that SHOULD answer this query. Adds a line saying where it ranked and what beat it, without changing the results. Use it to check that a page is findable by the questions it owns, and to see whether a retitle helped.'
 					)
 			}
 		},
-		async ({ query, prefix, brain }) => {
+		async ({ query, prefix, brain, expect }) => {
 			const { store, repoArgs, config, db, brainId } = await getContext({ brain });
 			const { truncated } = await ensureFresh(db, store, repoArgs, brainId, config);
 
@@ -2144,10 +2259,17 @@ export function registerLibrarianTools(
 			const note =
 				searched && searched !== query.trim().toLowerCase() ? ` Searched: ${searched}.` : '';
 
+			// `expect` measures the retrieval path rather than changing it: the results
+			// are identical with and without it. It answers the one question a rewrite
+			// otherwise cannot check — did the page that owns this question come back,
+			// and did it come back first.
+			const probe = expect ? scoreProbe(query, expect, hits, opts.max) : null;
+			const probeNote = probe ? `\n\n${describeProbe(probe)}` : '';
+
 			if (hits.length === 0) {
 				return {
-					...ok(`No matches for "${query}".${note}${truncationNote(truncated)}`),
-					structuredContent: { hits: [], terms, pagesMatched: 0 }
+					...ok(`No matches for "${query}".${note}${probeNote}${truncationNote(truncated)}`),
+					structuredContent: { hits: [], terms, pagesMatched: 0, probe }
 				};
 			}
 			const capped = result.budgetHit ? ` (the top ${opts.max})` : '';
@@ -2155,9 +2277,9 @@ export function registerLibrarianTools(
 			return {
 				...ok(
 					`${hits.length} match(es)${capped} for "${query}" across ${result.pagesShown} page(s), best first.${note}\n${lines}` +
-						`${elisionNote(result, opts)}${truncationNote(truncated)}`
+						`${elisionNote(result, opts)}${probeNote}${truncationNote(truncated)}`
 				),
-				structuredContent: { hits, terms, pagesMatched: result.pagesMatched }
+				structuredContent: { hits, terms, pagesMatched: result.pagesMatched, probe }
 			};
 		}
 	);

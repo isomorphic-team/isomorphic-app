@@ -1,4 +1,4 @@
-// Manual end-to-end battery for the bulk importer (sync_records / resolve_import).
+// Manual end-to-end battery for the bulk importer (sync_records / resolve).
 //
 // Runs offline by default (fs + git BrainStore in a temp dir), so it is in CI. `--github`
 // runs the identical assertions against a real scratch repo, by hand.
@@ -21,6 +21,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { registerImportTools } from '../src/tools/importer.ts';
+import { importKey } from '../src/lib/findings.ts';
 import { registerLibrarianTools } from '../src/tools/librarian.ts';
 import { installationOctokit } from '../src/lib/github.ts';
 import { createAndScaffoldBrain, buildScaffoldFiles } from '../src/lib/scaffold-core.ts';
@@ -284,9 +285,8 @@ try {
 
 	// 5. Suppress the dupe key → re-sync goes quiet.
 	console.log('suppress:');
-	r = await call('resolve_import', {
-		source: SOURCE,
-		decisions: [{ key: dupe.key, action: 'suppress' }]
+	r = await call('resolve', {
+		decisions: [{ finding: importKey(SOURCE, dupe.key), action: 'suppress' }]
 	});
 	check('suppress applied', !r.isError, r.text);
 	await sleep(1500);
@@ -309,10 +309,13 @@ try {
 		'Human-created page'
 	);
 	await sleep(1500);
-	r = await call('resolve_import', {
-		source: SOURCE,
+	r = await call('resolve', {
 		decisions: [
-			{ key: 'helen@e2e.example', action: 'alias', alias_to: 'wiki/people/helen-keller.md' }
+			{
+				finding: importKey(SOURCE, 'helen@e2e.example'),
+				action: 'alias',
+				alias_to: 'wiki/people/helen-keller.md'
+			}
 		]
 	});
 	check('alias applied', !r.isError, r.text);
@@ -359,9 +362,8 @@ try {
 		r.text
 	);
 	check('grace page still exists', (await ghRead(grace.path)) !== null);
-	r = await call('resolve_import', {
-		source: SOURCE,
-		decisions: [{ key: grace.key, action: 'delete' }]
+	r = await call('resolve', {
+		decisions: [{ finding: importKey(SOURCE, grace.key), action: 'delete' }]
 	});
 	check('delete decision applied', !r.isError, r.text);
 	await sleep(1500);
