@@ -29,6 +29,9 @@ import { readFileSync, readdirSync } from 'node:fs';
 const root = new URL('../', import.meta.url);
 const pkg = JSON.parse(readFileSync(new URL('package.json', root), 'utf8')) as {
 	scripts: Record<string, string>;
+	dependencies?: Record<string, string>;
+	devDependencies?: Record<string, string>;
+	pnpm?: { overrides?: Record<string, string> };
 };
 const ci = readFileSync(new URL('.github/workflows/ci.yml', root), 'utf8');
 
@@ -97,6 +100,34 @@ check('the workflows invoke at least one', invoked.size > 0);
 for (const [name, file] of invoked) {
 	check(`${name} (${file})`, name in pkg.scripts, 'renamed or removed from package.json?');
 }
+
+// ---------- the markdown-it override ----------
+
+// prosemirror-markdown depends on markdown-it "^14.0.0" and imports it at RUNTIME, so
+// without an override pnpm installs a SECOND copy alongside ours and esbuild bundles
+// both: two complete markdown parsers in the app bundle, about 104 KiB of pure
+// duplication. Nothing fails when that happens. The build is green, the tests pass, and
+// the only symptom is a bundle that quietly grew, which is exactly the kind of regression
+// nobody notices for months.
+//
+// The override pins the whole tree to one version. It has to keep MATCHING our own
+// dependency, because an override that drifts below it reintroduces the duplicate it was
+// added to prevent.
+const mdRange = pkg.devDependencies?.['markdown-it'] ?? pkg.dependencies?.['markdown-it'];
+const mdOverride = pkg.pnpm?.overrides?.['markdown-it'];
+
+console.log('\nmarkdown-it resolves to exactly one copy');
+check('markdown-it is a dependency', Boolean(mdRange), 'expected it in devDependencies');
+check(
+	'pnpm.overrides pins markdown-it',
+	Boolean(mdOverride),
+	'without it prosemirror-markdown pulls a second copy into the bundle'
+);
+check(
+	`the override (${mdOverride ?? 'none'}) matches the dependency (${mdRange ?? 'none'})`,
+	Boolean(mdOverride) && mdOverride === mdRange,
+	'a drifting override silently restores the duplicate'
+);
 
 // ---------- the Playwright container tag ----------
 
