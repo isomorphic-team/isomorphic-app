@@ -76,6 +76,27 @@ D1 is the defect an agent actually hits. It is invisible in normal use because a
 that gets no results silently rephrases or gives up, and the transcript shows a model
 that "could not find" something rather than a search that could not match it.
 
+### After (same 34 probes, same brain)
+
+Re-run against the implementation with `pnpm probe:report`:
+
+|                              | before  | after       |
+| ---------------------------- | ------- | ----------- |
+| expected page ranks #1       | 4 / 34  | **21 / 34** |
+| expected page present at all | 19 / 34 | **31 / 34** |
+| absent (nothing matched)     | 7       | **0**       |
+
+All six sentence-shaped queries now return their page, five of them at #1. The three
+probes that still miss are vocabulary gaps in the brain rather than search failures: the
+expected page genuinely does not contain the term, and other pages do.
+
+**That re-run is also what found the proximity defect below.** Two probes sat at #4 and
+#7 whose sub-phrases (`day rate`, `get paid`) were verbatim on the page they wanted,
+which is what exposed a phrase signal keyed to the whole sentence. The lesson is the one
+the Evidence section was written for: this engine's failures are legible from probes
+against a real brain and invisible from a constructed corpus, because a corpus is written
+by whoever already knows what the code does.
+
 ## Who is affected
 
 - **`search_pages`**, for agents and for the MCP App, which parses the text block for
@@ -110,8 +131,9 @@ selected full `content` for every matching row, then discarded all but 50 lines 
 ### S1. Cap hits per page
 
 Three lines per page (`perPage`), best lines rather than first three: a line matching
-more of the query outranks one matching less, the phrase breaks the tie, earliest wins
-after that, and the kept lines are then restored to reading order. `elisionNote` reports
+more of the query outranks one matching less, proximity breaks the tie (see below —
+keying that tie-break on the whole query was a defect, not a simplification), earliest
+wins after that, and the kept lines are then restored to reading order. `elisionNote` reports
 what the cap and the budget left out, so a caller can finally tell "these are all the
 matches" from "these are the first 50".
 
@@ -151,10 +173,34 @@ identifier (`write_page`, `50%`) one precise term instead of two loose ones. `-`
 held, so a brain writing "fine grained" still answers `fine-grained`.
 
 **Scoring** is a weighted sum over signals every caller can recompute: term coverage
-(dominant), terms present in the title, terms present in the path, whether the whole
-query appears verbatim, and a saturating frequency term. Ties break on path, so the same
-query never disagrees with itself between reads. The weights and their two failure modes
-are commented at the constants and pinned by `pnpm test:search`.
+(dominant), terms present in the title, terms present in the path, proximity, and a
+saturating frequency term. Ties break on path, so the same query never disagrees with
+itself between reads. The weights and their failure modes are commented at the constants
+and pinned by `pnpm test:search`.
+
+**Proximity has two lanes**, and the second exists because the first was dead on
+arrival. `phrase` is the whole query, so on "what is the day rate" it asks whether a page
+contains that entire sentence — which no page does. `W_PHRASE` is the third-largest
+weight and it could only ever fire for term-shaped queries, which were the ones already
+working. So the signal was worth nothing on precisely the input tokenization was added
+to serve, while "day rate" sat verbatim on the page the query wanted. The fix is
+**bigrams**: adjacent pairs from the query as written, where neither word is a function
+word (determiner, question word, auxiliary, pronoun) and at least one is a retained term.
+Proximity is `1` when the whole query is present, otherwise the fraction of bigrams
+present — one signal, two lanes, never stacking, so the weight budget is unchanged and a
+term-shaped query scores exactly as it did before.
+
+Two details that are easy to get wrong. Pairs come from the **raw** token sequence, not
+the retained terms: stopword removal destroys adjacency, and "how do partners get paid"
+retains `[partners, paid]`, whose pairing is a string the target page does not contain,
+while "get paid" is one it does. And the function-word filter is what keeps "the day"
+from scoring alongside "day rate" while letting "get paid" through — prepositions and
+light verbs collocate, determiners and auxiliaries do not.
+
+The same defect lived in **line selection**, whose tie-break used the same unusable
+whole-query phrase, so the line that actually answered the question was picked no more
+often than any other line holding the words apart. `scoreLines` uses the same two-lane
+proximity now.
 
 **No derived structure was added**, so none of the rules governing derived state applied:
 no `INDEX_SCHEMA_VERSION` bump, no migration, no backfill, nothing for a rollback to be
@@ -214,6 +260,12 @@ it had any reason to. The escaping bounds the WORK; the re-verification guarante
 ANSWER. No result-shaped assertion can see the difference, so the function is now
 exported and asserted on its own, and the defense-in-depth property (an over-matching
 candidate never becomes a wrong hit) is asserted separately.
+
+The proximity section is the one written from evidence rather than intuition, and it
+shows: it pins the bigram extraction (including the two pairs that must NOT be
+extracted), the ranking outcome, the line-selection outcome, and — the check that matters
+— that the two pages it separates are identical on every other signal, so without the
+bigram lane they tie exactly and the tie hands the query to whichever sorts first.
 
 The first run found a real defect rather than confirming an intention: a lone `_` was
 being dropped by the tokenizer's minimum term length, silently losing the literal-match

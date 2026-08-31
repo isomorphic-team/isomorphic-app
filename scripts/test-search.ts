@@ -233,6 +233,131 @@ const CORPUS = [REFERRALS, STANDUP, PARKING];
 	);
 }
 
+// ------------------------------- proximity: the phrase signal on a question ----
+//
+// Found by running retrieval probes against a real brain after the first version
+// merged, not by writing this file. `phrase` is the WHOLE query, so on a sentence it
+// asks whether a page contains "what is the day rate" — which no page does. W_PHRASE,
+// the third-largest weight, was dead on exactly the input tokenization exists to serve,
+// while the two words that matter sat verbatim on the page the query wanted.
+
+{
+	const q = tokenizeQuery('what is the day rate');
+	check(
+		'the whole-query phrase is unusable on a sentence',
+		!'Our standard day rate is 1200.'.toLowerCase().includes(q.phrase),
+		'the corpus line contains the whole query — this section would be vacuous'
+	);
+	check(
+		'the meaningful pair is extracted instead',
+		JSON.stringify(q.bigrams) === JSON.stringify(['day rate']),
+		JSON.stringify(q.bigrams)
+	);
+	// A determiner carries no collocation, so "the day" must not become a bigram — it
+	// would dilute the signal and score a page that merely says "the day".
+	check('a determiner pair is not a bigram', !q.bigrams.includes('the day'));
+
+	// Stopword removal destroys adjacency, which is why pairs come from the RAW
+	// sequence: the retained terms here are [partners, paid], and "partners paid" is a
+	// string the target page does not contain.
+	const q2 = tokenizeQuery('how do partners get paid');
+	check(
+		'a light verb between two terms is kept, not paired around',
+		q2.bigrams.includes('get paid') && !q2.bigrams.includes('partners paid'),
+		JSON.stringify(q2.bigrams)
+	);
+	check('and an auxiliary pair is dropped', !q2.bigrams.includes('do partners'));
+}
+
+{
+	// The case the probe run asked for: a sentence-shaped query whose meaningful
+	// sub-phrase is verbatim on one page and scattered on another.
+	// Paths and titles are deliberately free of both query terms, and both pages hold
+	// each term exactly once, so coverage, title, path and frequency are all identical
+	// and proximity is the ONLY thing that can separate them. The scattered page also
+	// sorts first alphabetically, so a tie hands the query to the wrong page.
+	const together = {
+		path: 'wiki/omega.md',
+		title: 'Commercials',
+		content: 'Our standard day rate is 1200.'
+	};
+	const scattered = {
+		path: 'wiki/alpha.md',
+		title: 'Commercials',
+		content: 'The rate was agreed. It took a day.'
+	};
+	const order = [
+		...new Set(searchCorpus([scattered, together], 'what is the day rate').hits.map((h) => h.path))
+	];
+	check(
+		'a verbatim sub-phrase outranks the same terms scattered',
+		order[0] === together.path,
+		JSON.stringify(order)
+	);
+
+	// The failing direction, and the reason this needed fixing rather than tuning: with
+	// no bigram lane the two tie exactly, and the tie breaks on path — handing the query
+	// to the page that only happens to sort first.
+	const q = tokenizeQuery('what is the day rate');
+	const sigs = [together, scattered].map((p) => signalsFromContent(p, q));
+	check(
+		'without the bigram lane the two are indistinguishable',
+		scorePage(sigs[0], q.terms, []) === scorePage(sigs[1], q.terms, []),
+		`${scorePage(sigs[0], q.terms, [])} vs ${scorePage(sigs[1], q.terms, [])}`
+	);
+	check(
+		'so the old tie-break would have answered with the wrong page',
+		rankPages(sigs, q.terms, [])[0].path === scattered.path
+	);
+	check(
+		'and with it the verbatim page scores higher',
+		scorePage(sigs[0], q.terms, q.bigrams) > scorePage(sigs[1], q.terms, q.bigrams)
+	);
+}
+
+{
+	// The two lanes are ONE signal and must not stack, or a term-shaped query would be
+	// worth twice a sentence-shaped one on the same evidence.
+	const q = tokenizeQuery('referral fee');
+	check(
+		'a two-word query has the phrase and the bigram as the same string',
+		q.bigrams.length === 1 && q.bigrams[0] === q.phrase
+	);
+	const sig = signalsFromContent(
+		{ path: 'wiki/a.md', title: null, content: 'The referral fee is 10 percent.' },
+		q
+	);
+	const withBoth = scorePage(sig, q.terms, q.bigrams);
+	const phraseOnly = scorePage({ ...sig, bigramHits: 0 }, q.terms, []);
+	check(
+		'so they contribute once, not twice',
+		withBoth === phraseOnly,
+		`${withBoth} vs ${phraseOnly}`
+	);
+}
+
+{
+	// The same defect lived in line selection, whose tie-break was keyed on the same
+	// unusable whole-query phrase: the line that actually answers the question was
+	// picked no more often than any other line holding both words apart.
+	const page = {
+		path: 'wiki/p.md',
+		title: 'Commercials',
+		content: [
+			'The rate was agreed in March.', // 1: one term
+			'It took a day to close.', // 2: one term
+			'Every day we review the rate.', // 3: both terms, no phrase
+			'Our standard day rate is 1200.' // 4: both terms AND the bigram
+		].join('\n')
+	};
+	const r = searchCorpus([page], 'what is the day rate', { max: 50, perPage: 1 });
+	check(
+		'the one line kept is the one carrying the sub-phrase',
+		r.hits.length === 1 && r.hits[0].line === 4,
+		JSON.stringify(r.hits)
+	);
+}
+
 // --------------------------------------------------- D3: the per-page hit cap ----
 
 {

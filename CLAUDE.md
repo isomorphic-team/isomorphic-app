@@ -470,6 +470,26 @@ result is in the pure `src/lib/search.ts` (`pnpm test:search`). Full record:
   SATURATES, or a long rambling page buries a short authoritative one. Both failure
   modes are test cases over a constructed corpus, so changing the trade turns a check
   red. Ties break on path, so a query never disagrees with itself between reads.
+- **PROXIMITY HAS TWO LANES, and the whole-query one is useless alone.** `phrase` is the
+  entire query, so on "what is the day rate" it asks whether a page holds that whole
+  sentence — which no page does. That made `W_PHRASE`, the third-largest weight, dead on
+  exactly the query shape tokenization was added for, while "day rate" sat verbatim on
+  the page the query wanted. Proximity is now `1` for the whole query, else the fraction
+  of the query's BIGRAMS present: adjacent pairs from the query AS WRITTEN, where neither
+  word is a function word and at least one is a retained term. Two traps — pairs come
+  from the RAW sequence, because stopword removal destroys adjacency ("how do partners
+  get paid" retains `[partners, paid]`, and "partners paid" is on no page while "get
+  paid" is); and the function-word filter is what keeps "the day" from scoring beside
+  "day rate", which is why prepositions and light verbs are deliberately NOT in
+  `NON_COLLOCATING`. The lanes never stack, so a term-shaped query scores exactly as it
+  did before bigrams existed. `scoreLines` carries the same signal, because its tie-break
+  had the identical bug: the line that answered the question was picked no more often
+  than any other line holding the words apart.
+- **Probe against a real brain before believing a ranking change.** `pnpm probe:report`
+  is the retrieval harness, and it is what found the proximity defect after the first
+  version had a green golden suite. A constructed corpus is written by whoever already
+  knows what the code does, so it confirms intentions; probes over a brain nobody wrote
+  for the test expose them.
 - **`%` and `_` stay INSIDE the token** rather than splitting it. The escaping contract
   requires it (they must never act as LIKE wildcards, at either layer), and it makes
   `write_page` or `50%` one precise term. `-` does not, so a brain writing "fine
