@@ -1160,6 +1160,37 @@ export function chooseOrg(
 	return orgs.find((o) => o.org.org_id === opts.activeOrgId) ?? orgs[0];
 }
 
+// Which brain a brain-scope call acts on. The exact twin of chooseOrg above, and it
+// was the half that never got extracted: the same ladder (named handle, then the
+// brain the caller is working in, then the oldest) sat inline in a private method on
+// McpSession, where no test could reach it. That is the decision routing every read
+// and every write, so the two halves of one rule should not have different standards
+// of proof.
+//
+// Throws rather than guessing for the same reason chooseOrg does: a handle matching
+// several brains that silently picked one would act on a brain the caller did not
+// name. A BLANK handle throws too — a caller who passed `brain` asked for a specific
+// one, and quietly falling back to a different brain is the same failure wearing a
+// friendlier face. Callers resolve the empty-list case before reaching here (it means
+// provision, not fail), but throwing is still the right answer if one does not.
+export function chooseBrain(
+	brains: AccessibleBrain[],
+	opts: { brain?: string; activeBrainId?: string } = {}
+): AccessibleBrain {
+	if (brains.length === 0) throw new Error('You do not have access to any brain yet.');
+	if (opts.brain) {
+		const m = matchBrain(brains, opts.brain);
+		if (m.brain) return m.brain;
+		const names = (m.candidates ?? brains).map(brainLabelQualified);
+		throw new Error(
+			m.candidates
+				? `"${opts.brain}" matches multiple brains: ${names.join(', ')}. Be more specific.`
+				: `No brain matching "${opts.brain}". You have access to: ${names.join(', ')}.`
+		);
+	}
+	return brains.find((b) => b.id === opts.activeBrainId) ?? brains[0];
+}
+
 // The whole org-selection decision for a person, in one function a test can drive
 // against a real database. The Worker's orgContext wraps this with token minting and
 // first-touch provisioning; keeping the decision here is what makes the empty case
