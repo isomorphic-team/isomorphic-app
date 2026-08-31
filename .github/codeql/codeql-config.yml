@@ -1,0 +1,16 @@
+name: isomorphic-app CodeQL
+
+# security-and-quality is a superset of the default security queries. The extra
+# maintainability rules are noisier; drop to security-extended if that becomes a
+# problem rather than turning scanning off.
+queries:
+  - uses: security-and-quality
+
+paths-ignore:
+  # Codegen'd from app/ and brain-template/ by `pnpm gen:app` / `pnpm gen:templates`.
+  # app-bundle.generated.ts is ~1MB of bundled output: analyzing it reports findings
+  # against a build artifact nobody edits, at the source's expense.
+  - src/lib/app-bundle.generated.ts
+  - src/lib/brain-template.generated.ts
+  - dev/bundle.js
+  - '**/node_modules'

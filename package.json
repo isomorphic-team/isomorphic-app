@@ -32,6 +32,7 @@
 		"db:migrate:new": "wrangler d1 migrations create platform-db",
 		"typecheck": "tsc -p tsconfig.node.json --noEmit && tsc -p tsconfig.worker.json --noEmit && tsc -p tsconfig.app.json --noEmit && tsc -p tsconfig.tests.json --noEmit",
 		"format": "prettier --write .",
+		"security:audit": "pnpm audit --prod --audit-level high",
 		"gen:app": "tsx scripts/gen-app.ts",
 		"app:dev": "tsx scripts/app-dev.ts",
 		"test": "pnpm test:roundtrip && pnpm test:views && pnpm test:import && pnpm test:tools && pnpm test:patch && pnpm test:structure && pnpm test:consolidate && pnpm test:probe && pnpm test:index && pnpm test:links && pnpm test:policy && pnpm test:preamble && pnpm test:dedupe && pnpm test:appmeta && pnpm test:loading && pnpm test:access && pnpm test:scope && pnpm test:feedback && pnpm test:usage && pnpm test:media && pnpm test:smoke && pnpm test:wiring && pnpm test:e2e-librarian && pnpm test:e2e-import && pnpm test:ui",

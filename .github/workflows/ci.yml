@@ -129,6 +129,22 @@ jobs:
       - name: D1 migrations apply cleanly (local)
         run: pnpm exec wrangler d1 migrations apply platform-db --local
 
+      # Known advisories against the dependencies the Worker actually serves.
+      # `--prod` is doing real work: it drops the wrangler/miniflare subtree, which
+      # is most of the raw count and none of the production exposure.
+      #
+      # REPORTS, DOES NOT GATE. The tree currently has advisories this repo has not
+      # cleared, so a blocking step would red every pull request until they are, which
+      # trains people to ignore it. Dependabot is the mechanism that actually chases
+      # these; this step exists so a PR that ADDS a vulnerable dependency says so in
+      # the log. Drop `continue-on-error` once `pnpm security:audit` is clean.
+      #
+      # Not named `test:*` on purpose: the batteries above are offline, and this one
+      # calls the registry. It needs no secret, so it stays fork-safe.
+      - name: Dependency advisories (production tree)
+        run: pnpm security:audit
+        continue-on-error: true
+
   ui:
     # The UI tests drive the REAL generated app bundle in a real browser, over the
     # local host harness (dev/harness.ts) with its fixtures. Offline and secret-free
