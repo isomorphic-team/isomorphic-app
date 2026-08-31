@@ -15,8 +15,7 @@
 //
 //   pnpm test:invites
 
-import { DatabaseSync } from 'node:sqlite';
-import { applyMigrations } from '../src/local/d1-sqlite.ts';
+import { localD1 } from '../src/local/d1-sqlite.ts';
 import { checker } from './check.ts';
 import { planInviteClaims, claimPendingInvites, type MatchedInvite } from '../src/lib/invites.ts';
 import { noBrainOutcome, provisionOrgForUser } from '../src/lib/provision.ts';
@@ -133,29 +132,7 @@ check(
 // reference only. Invitations decide org membership, so this battery is
 // authorization-adjacent and should not assert against a schema production does
 // not run.
-const sqlite = new DatabaseSync(':memory:');
-applyMigrations(sqlite);
-function shimStatement(sql: string, params: unknown[] = []) {
-	return {
-		bind: (...p: unknown[]) => shimStatement(sql, p),
-		first: async () => sqlite.prepare(sql).get(...(params as [])) ?? null,
-		all: async () => ({ results: sqlite.prepare(sql).all(...(params as [])) }),
-		run: async () => {
-			// `meta.changes` is load-bearing: d1WriteLedger.claim decides it won a claim
-			// with `(res.meta?.changes ?? 0) > 0`, and writeThroughIndex reads it the
-			// same way. A shim without it reports every write as a no-op.
-			const r = sqlite.prepare(sql).run(...(params as []));
-			return { success: true, meta: { changes: Number(r.changes ?? 0) } };
-		}
-	};
-}
-const db = {
-	prepare: (sql: string) => shimStatement(sql),
-	batch: async (stmts: { run: () => Promise<unknown> }[]) => {
-		for (const s of stmts) await s.run();
-		return [];
-	}
-} as never;
+const { db, sqlite } = localD1();
 
 // Two orgs. Ada belongs to Org A and works there; Org B is a customer org with
 // one org-visible brain, and its admin is about to invite her second address.

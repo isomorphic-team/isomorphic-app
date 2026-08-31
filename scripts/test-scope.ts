@@ -26,8 +26,7 @@
 //
 //   pnpm test:scope
 
-import { DatabaseSync } from 'node:sqlite';
-import { applyMigrations } from '../src/local/d1-sqlite.ts';
+import { localD1 } from '../src/local/d1-sqlite.ts';
 import { assertRole, type Role, type TenantOpts, type AccessibleBrain } from '../src/lib/orgs.ts';
 import { registerMemberTools } from '../src/tools/members.ts';
 import { registerBrainAccessTools } from '../src/tools/brain-access.ts';
@@ -44,33 +43,19 @@ const { check, done } = checker('scope checks');
 // ---------------------------------------------------------------------------
 // The schema, real, over node:sqlite shimmed to the D1 surface.
 // ---------------------------------------------------------------------------
-// Same shim shape as test-access.ts and the e2e batteries. Kept local rather than
-// shared so each golden test still runs as one self-contained file.
+// localD1() rather than a copy of the shim. This file used to carry its own, on
+// the grounds that a golden test should run as one self-contained file, and the
+// cost of that showed up: the copies drifted, and the one that omitted
+// `meta.changes` made the write-dedupe ledger report a fresh write as already in
+// flight. A battery is still self-contained in what it ASSERTS; the D1 surface it
+// asserts against is not the part worth re-deriving per file. test-index.ts keeps
+// its own because it instruments the shim to count statements and batches, which
+// is that battery's whole subject.
 //
-// The SCHEMA is not local, though: it comes from the real migrations, not from
-// src/db/auth-schema.sql, which is reference only. This battery pins the
-// authorization model, so it is the last place that should assert against a
-// schema production does not run. Applying the whole directory also picks up a
-// new migration automatically; naming files by hand (this used to cherry-pick
-// 0006 for usage_daily) silently skips whatever lands next.
-const sqlite = new DatabaseSync(':memory:');
-applyMigrations(sqlite);
-function shimStatement(sql: string, params: unknown[] = []) {
-	return {
-		bind: (...p: unknown[]) => shimStatement(sql, p),
-		first: async () => sqlite.prepare(sql).get(...(params as [])) ?? null,
-		all: async () => ({ results: sqlite.prepare(sql).all(...(params as [])) }),
-		run: async () => {
-			// `meta.changes` is not decoration: the write-attempt ledger decides whether
-			// it won a claim with `(res.meta?.changes ?? 0) > 0` (d1WriteLedger.claim).
-			// A shim that omits it reports every claim as lost, so the ledger reads back
-			// the row this very call just inserted and answers "already in flight".
-			const r = sqlite.prepare(sql).run(...(params as []));
-			return { success: true, meta: { changes: Number(r.changes ?? 0) } };
-		}
-	};
-}
-const db = { prepare: (sql: string) => shimStatement(sql) } as never;
+// The schema comes from the real migrations, not from src/db/auth-schema.sql,
+// which is reference only. This battery pins the authorization model, so it is
+// the last place that should assert against a schema production does not run.
+const { db, sqlite } = localD1();
 
 sqlite.exec(`
   INSERT INTO orgs (org_id, name, model, installation_id, brain_owner, created_by)

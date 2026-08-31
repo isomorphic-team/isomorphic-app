@@ -11,7 +11,6 @@
 // reported broken whose targets `list_pages` and `read_page` returned happily.
 // Every case below is a form a human writes by hand and expects to work.
 
-import { DatabaseSync } from 'node:sqlite';
 import {
 	ensureFresh,
 	loadResolvedGraph,
@@ -19,7 +18,7 @@ import {
 	type ResolvedGraph
 } from '../src/lib/brain-index.ts';
 import { githubStore } from '../src/lib/brain-repo.ts';
-import { applyMigrations } from '../src/local/d1-sqlite.ts';
+import { localD1 } from '../src/local/d1-sqlite.ts';
 import { DEFAULT_BRAIN_CONFIG, type BrainConfig } from '../src/lib/brain-policy.ts';
 import { extractLinks, rewriteWikiLinks, wikilinkKey } from '../src/lib/wiki.ts';
 import { classifyMdLink } from '../src/lib/links.ts';
@@ -31,30 +30,7 @@ const { check, done } = checker('link checks');
 
 // ---- D1 over node:sqlite (real migrations) + a GitHub stub behind githubStore ----
 
-let sqlite = new DatabaseSync(':memory:');
-applyMigrations(sqlite);
-
-function shimStatement(sql: string, params: unknown[] = []): any {
-	return {
-		bind: (...p: unknown[]) => shimStatement(sql, p),
-		first: async () => sqlite.prepare(sql).get(...(params as [])) ?? null,
-		all: async () => ({ results: sqlite.prepare(sql).all(...(params as [])) }),
-		run: async () => {
-			// `meta.changes` is load-bearing: d1WriteLedger.claim decides it won a claim
-			// with `(res.meta?.changes ?? 0) > 0`, and writeThroughIndex reads it the
-			// same way. A shim without it reports every write as a no-op.
-			const r = sqlite.prepare(sql).run(...(params as []));
-			return { success: true, meta: { changes: Number(r.changes ?? 0) } };
-		}
-	};
-}
-const db = {
-	prepare: (sql: string) => shimStatement(sql),
-	batch: async (stmts: { run: () => Promise<unknown> }[]) => {
-		for (const s of stmts) await s.run();
-		return [];
-	}
-} as never;
+let { db } = localD1();
 
 interface FakePage {
 	path: string;
@@ -104,8 +80,7 @@ const brainId = 'example-org/brain';
 const config: BrainConfig = { ...DEFAULT_BRAIN_CONFIG };
 
 async function indexAndResolve(pages: FakePage[]): Promise<ResolvedGraph> {
-	sqlite = new DatabaseSync(':memory:');
-	applyMigrations(sqlite);
+	({ db } = localD1());
 	currentPages = pages;
 	currentHead = `commit-${pages.length}`;
 	await ensureFresh(db, store, repo, brainId, config);
