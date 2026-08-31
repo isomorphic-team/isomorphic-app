@@ -24,6 +24,7 @@ import {
 	loadResolvedGraph,
 	backlinksTo
 } from '../lib/brain-index.ts';
+import { elisionNote, DEFAULT_SEARCH_OPTIONS } from '../lib/search.ts';
 import { tryRenderViews } from '../lib/views.ts';
 import { BRAIN_APP_URI } from './apps.ts';
 import {
@@ -180,11 +181,13 @@ async function execOp(op: OpName, a: Record<string, string>, ctx: BrainContext):
 			const query = (a.query ?? '').trim();
 			if (query.length < 2) return 'search_pages needs a "query" arg of at least 2 characters.';
 			await ensureFresh(db, store, repoArgs, brainId, config);
-			const hits = await searchIndex(db, brainId, query, a.prefix || undefined, 50);
+			const result = await searchIndex(db, brainId, query, a.prefix || undefined, 50);
+			const { hits } = result;
 			if (hits.length === 0) return `No matches for "${query}".`;
 			return (
-				`${hits.length} match(es) for "${query}":\n` +
-				hits.map((h) => `${h.path}:${h.line}: ${h.text}`).join('\n')
+				`${hits.length} match(es) for "${query}" across ${result.pagesShown} page(s), best first:\n` +
+				hits.map((h) => `${h.path}:${h.line}: ${h.text}`).join('\n') +
+				elisionNote(result, { max: 50, perPage: DEFAULT_SEARCH_OPTIONS.perPage })
 			);
 		}
 		case 'read_page': {

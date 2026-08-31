@@ -57,12 +57,29 @@ We use `@modelcontextprotocol/ext-apps`: `/server` (registerAppTool / registerAp
 - Wrangler: https://developers.cloudflare.com/workers/wrangler/
 - **Gradual deployments / versions / rollback:** https://developers.cloudflare.com/workers/configuration/versions-and-deployments/
 - **Preview URLs:** https://developers.cloudflare.com/workers/configuration/previews/
+- **D1 supported SQLite extensions:** https://developers.cloudflare.com/d1/sql-api/sql-statements/
+- **D1 import/export limits:** https://developers.cloudflare.com/d1/best-practices/import-export-data/
 
 ---
 
 ## Verified facts worth remembering
 
 Non-obvious things confirmed against the sources above (with the "why it bit us"):
+
+- **D1 DOES support FTS5 virtual tables — and creating one costs the whole database its
+  export.** Verified against Cloudflare's docs on 2026-08-31, because
+  `docs/design/search-relevance.md` made the search-ranking design hinge on the answer and
+  said to check rather than recall it. The SQL-statements page lists "FTS5 module (including
+  `fts5vocab`)" under supported extensions, so availability was never the constraint. The
+  import/export page is: _"Export is not supported for virtual tables, **including databases
+  with virtual tables**. As a workaround, delete any virtual tables, export, and then recreate
+  virtual tables."_ The blast radius is the DATABASE, not the table, and `platform-db` holds
+  `orgs`, `memberships`, `app_users`, `invitations` and `feedback_reports` — so an FTS index
+  over a derived cache would put a manual destructive step into the backup path for the
+  platform's system of record. That, plus BM25 being unreproducible outside SQLite (the design
+  requires a ranking a caller can recompute, and a pure golden test can pin), is why search
+  ranks in `src/lib/search.ts` instead. **If FTS5 is revisited**, the seam is deliberate:
+  SQL narrows candidates, the pure module orders them, so only the narrowing phase changes.
 
 - **`wrangler versions upload` inherits the Worker's secrets; `wrangler deploy` is what you
   give up to get a rollback.** Verified against wrangler 4.85 on 2026-08-18. Secrets set with

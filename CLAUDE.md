@@ -441,6 +441,54 @@ platform-db --remote` **before** the code ships (schema-first), so a merge to `m
   couldn't finish. Successive reads converge. **Any new whole-brain pass belongs in this
   shape** — budget, cursor, advance-the-marker-only-when-done.
 
+## Search ranking (`search_pages`)
+
+`searchIndex` runs in TWO PHASES and the split is the point: **SQL narrows, it never
+orders.** Phase 1 asks D1 only what is cheap — per page, does it hold each query term,
+and does it hold the whole query verbatim — so the rows are path, title and a few
+booleans however large the brain. Phase 2 fetches content for the top-ranked
+`MAX_SEARCH_CANDIDATES` (25) and extracts their lines. Everything that ORDERS or DROPS a
+result is in the pure `src/lib/search.ts` (`pnpm test:search`). Full record:
+[`docs/design/search-relevance.md`](docs/design/search-relevance.md). Built 2026-08-31.
+
+- **What it replaced.** One opaque `LIKE '%<whole query>%'`, `ORDER BY path`, and a
+  global 50-hit cap with no per-page limit. Three defects at once: a question-shaped
+  query matched nothing whatever the brain contained (measured — all 6 sentence-shaped
+  probes on a real 28-page brain returned nothing, while 27 of 28 term-shaped ones
+  matched, so absence tracked query SHAPE, not content); alphabetical position stood in
+  for relevance; and one page could consume the whole budget with every other page
+  invisible and nothing in the response saying so. The first defect is invisible in
+  normal use, because a model that gets no results rephrases or gives up, and the
+  transcript then shows a model that could not find something rather than a search that
+  could not match it.
+- **Terms are ORed, not ANDed.** A page holding some of the query is a worse match, not
+  a non-match; the scorer decides how much worse. ANDing in SQL would reintroduce the
+  empty result this replaces.
+- **Coverage dominates the score** (weights and their rationale are commented at the
+  constants). Title and path matches only break ties inside a coverage band, or a
+  keyword-stuffed title outranks the page that discusses the subject; frequency
+  SATURATES, or a long rambling page buries a short authoritative one. Both failure
+  modes are test cases over a constructed corpus, so changing the trade turns a check
+  red. Ties break on path, so a query never disagrees with itself between reads.
+- **`%` and `_` stay INSIDE the token** rather than splitting it. The escaping contract
+  requires it (they must never act as LIKE wildcards, at either layer), and it makes
+  `write_page` or `50%` one precise term. `-` does not, so a brain writing "fine
+  grained" still answers `fine-grained`. A lone `%` or `_` survives the minimum term
+  length for the same reason — the first version dropped it as noise and silently lost
+  the literal-match guarantee, which is what `isUsableTerm` exists to prevent.
+- **FTS5 was verified AVAILABLE in D1 and deliberately not used.** Adding a virtual
+  table disables `wrangler d1 export` for the ENTIRE database, and `platform-db` holds
+  the org/membership/user rows; BM25 also cannot satisfy the design's requirement that
+  ranking be reproducible from row data and pinnable by a pure test. Reasoning in
+  `docs/references.md`. Don't re-litigate it from memory — and note the seam is built
+  for it: swapping phase 1 for an FTS5 `MATCH` would touch neither the ranking nor its
+  tests.
+- **No schema change, so no `INDEX_SCHEMA_VERSION` bump and nothing a rollback cannot
+  undo.** This is the read path; that property is what bounds the blast radius.
+- **The response now says what it left out** (`elisionNote`) and which terms it actually
+  searched. A bare no-match tells a model nothing; "Searched: referral, fee" tells it
+  which half of its question missed.
+
 ## Derived views (okf-view)
 
 Phases 1+2 of `docs/design/derived-views-and-sync-prd.md` (FR-1a/1b/1c/1d + FR-2) are built.
