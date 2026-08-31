@@ -446,8 +446,11 @@ console.log('\nusage_daily: the real migration and the real statements');
 				first: async () => sqlite.prepare(sql).get(...(params as [])) ?? null,
 				all: async () => ({ results: sqlite.prepare(sql).all(...(params as [])) }),
 				run: async () => {
-					sqlite.prepare(sql).run(...(params as []));
-					return { success: true };
+					// `meta.changes` is load-bearing: d1WriteLedger.claim decides it won a
+					// claim with `(res.meta?.changes ?? 0) > 0`, and writeThroughIndex reads
+					// it the same way. A shim without it reports every write as a no-op.
+					const r = sqlite.prepare(sql).run(...(params as []));
+					return { success: true, meta: { changes: Number(r.changes ?? 0) } };
 				}
 			});
 			return mk([]);

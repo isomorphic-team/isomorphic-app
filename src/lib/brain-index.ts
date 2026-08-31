@@ -29,7 +29,8 @@ import {
 	buildWikilinkIndex,
 	resolveWikilink,
 	wikilinkKey,
-	wikilinkTargetName
+	wikilinkTargetName,
+	slugOf
 } from './wiki.ts';
 import {
 	DEFAULT_SEARCH_OPTIONS,
@@ -55,7 +56,6 @@ export const INDEX_SCHEMA_VERSION = 4;
 
 // ---------- shared helpers ----------
 
-const slugOf = (path: string) => path.split('/').pop()!.replace(/\.md$/, '');
 const deslug = (path: string) => slugOf(path).replace(/-/g, ' ');
 
 // Title resolution lives in wiki.ts (pageTitle) as the single source of truth —

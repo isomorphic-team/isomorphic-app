@@ -33,7 +33,8 @@ import {
 	rebaseMdLinks,
 	insertLogEntry,
 	wikilinkKey,
-	wikilinkTargetName
+	wikilinkTargetName,
+	slugOf
 } from '../lib/wiki.ts';
 import {
 	type RepoRef,
@@ -168,11 +169,6 @@ export interface BrainContext {
 	// Which brain this call resolved to (id + display label), so app tools can echo the
 	// active brain to the nav switcher.
 	activeBrain: { id: string; label: string };
-}
-
-// Filename stem, which is one of the names a [[Wiki Link]] can call a page by.
-function slugOf(path: string): string {
-	return path.split('/').pop()!.replace(/\.md$/, '');
 }
 
 // Normalize a folder path for the folder tools: strip surrounding slashes so

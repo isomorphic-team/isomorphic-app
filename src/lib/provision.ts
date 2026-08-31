@@ -158,18 +158,6 @@ export interface ProvisionOrgInput {
 	installationId: number;
 }
 
-// Brain repo name for a product-identity user. GitHub logins aren't available
-// (these users may have no GitHub account), so derive a slug from the email
-// local-part; fall back to the user id if that empties out.
-export function brainRepoNameForEmail(email: string, userId: string): string {
-	const local = email.split('@')[0] ?? '';
-	const slug = local
-		.toLowerCase()
-		.replace(/[^a-z0-9-]+/g, '-')
-		.replace(/^-+|-+$/g, '');
-	return slug ? `brain-${slug}` : `brain-${userId.slice(0, 8)}`;
-}
-
 // First-touch provisioning for a product-identity user: create a Model-A org
 // (platform-owned) with an owner membership and one scaffolded brain under the
 // platform org. The authjs analog of provisionBrainForUser. Idempotent: an
