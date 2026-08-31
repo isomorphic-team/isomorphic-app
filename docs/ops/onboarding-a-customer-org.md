@@ -88,9 +88,10 @@ What it does that raw SQL can't:
   accidentally set them to the customer (the seed template's trap). The script
   refuses if `--operator-email` equals `--owner-email`.
 - Writes three `INSERT OR IGNORE` rows: the `customer` org, the adopted brain
-  (if `--repo` given), and a pending **invitation** for the owner. On first
-  magic-link sign-in, `provisionOrgForUser` consumes the invite and drops them
-  into this org instead of minting a personal brain.
+  (if `--repo` given), and a pending **invitation** for the owner. Their next
+  authenticated request claims it (`claimPendingInvites`) and drops them into
+  this org instead of minting a personal brain. That holds whether or not they
+  already have an account, and whether or not `AUTO_PROVISION` is on.
 
 By default it's a **dry run**: it resolves + verifies against GitHub, prints the
 SQL, and writes it to `ops/seeds-real/seed-<org>-org.sql` (gitignored). Nothing
