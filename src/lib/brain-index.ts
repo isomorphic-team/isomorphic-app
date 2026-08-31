@@ -29,7 +29,8 @@ import {
 	buildWikilinkIndex,
 	resolveWikilink,
 	wikilinkKey,
-	wikilinkTargetName
+	wikilinkTargetName,
+	slugOf
 } from './wiki.ts';
 import {
 	DEFAULT_SEARCH_OPTIONS,
@@ -55,7 +56,6 @@ export const INDEX_SCHEMA_VERSION = 4;
 
 // ---------- shared helpers ----------
 
-const slugOf = (path: string) => path.split('/').pop()!.replace(/\.md$/, '');
 const deslug = (path: string) => slugOf(path).replace(/-/g, ' ');
 
 // Title resolution lives in wiki.ts (pageTitle) as the single source of truth —
@@ -641,16 +641,6 @@ export async function writeThroughIndex(
 	const results = await db.batch(stmts);
 	const final = results[results.length - 1] as { meta?: { changes?: number } } | undefined;
 	return (final?.meta?.changes ?? 0) > 0;
-}
-
-// Mark a brain's index stale so the next read forces a reconcile against HEAD.
-// (No-op in the always-check design — HEAD is compared every read — but exposed so
-// a future sha-check TTL cache / write-through path can invalidate explicitly.)
-export async function invalidateIndex(db: D1Database, brainId: string): Promise<void> {
-	await db
-		.prepare(`UPDATE brain_index_meta SET indexed_commit_sha = NULL WHERE brain_id = ?1`)
-		.bind(brainId)
-		.run();
 }
 
 // Drop a brain's index entirely so the next ensureFresh does a FULL rebuild. Needed

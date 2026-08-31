@@ -24,14 +24,9 @@ import { applyMigrations } from '../src/local/d1-sqlite.ts';
 import { DEFAULT_BRAIN_CONFIG, type BrainConfig } from '../src/lib/brain-policy.ts';
 import { pageTitle } from '../src/lib/wiki.ts';
 
-let failures = 0;
-function check(label: string, cond: boolean, detail = '') {
-	if (cond) console.log(`  ✓ ${label}`);
-	else {
-		failures++;
-		console.log(`  ✗ ${label}${detail ? ` — ${detail}` : ''}`);
-	}
-}
+import { checker } from './check.ts';
+
+const { check, done } = checker('content-index checks');
 
 // ---- D1 shim over node:sqlite, instrumented to count the work each read does ----
 //
@@ -934,7 +929,4 @@ console.log('\nContent index — bounded, resumable ensureFresh\n');
 	);
 }
 
-console.log(
-	failures === 0 ? '\nAll content-index checks passed.\n' : `\n${failures} check(s) FAILED.\n`
-);
-process.exit(failures === 0 ? 0 : 1);
+done();

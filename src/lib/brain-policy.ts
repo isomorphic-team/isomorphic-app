@@ -95,17 +95,6 @@ export function normRoot(root: string): string {
 	return `${t}/`;
 }
 
-// Is `path` at or under a single root? A "" root matches everything.
-function underRoot(path: string, root: string): boolean {
-	const p = normRoot(root);
-	if (p === '') return true;
-	return path === p.slice(0, -1) || path.startsWith(p);
-}
-
-export function underAnyRoot(path: string, roots: string[]): boolean {
-	return roots.some((r) => underRoot(path, r));
-}
-
 // Resolve a path's role: the longest map key that matches wins ("" / "." keys
 // match everything at the lowest priority); unmatched paths are `system`. A key
 // matches as an exact path or as a directory prefix, so file keys ("wiki/log.md")

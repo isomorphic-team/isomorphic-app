@@ -25,14 +25,9 @@ import { extractLinks, rewriteWikiLinks, wikilinkKey } from '../src/lib/wiki.ts'
 import { classifyMdLink } from '../src/lib/links.ts';
 import { brokenLinkReport } from '../src/tools/librarian.ts';
 
-let failures = 0;
-function check(name: string, cond: boolean, detail?: string) {
-	if (cond) console.log(`  ok  ${name}`);
-	else {
-		failures++;
-		console.error(`FAIL  ${name}${detail ? `\n      ${detail}` : ''}`);
-	}
-}
+import { checker } from './check.ts';
+
+const { check, done } = checker('link checks');
 
 // ---- D1 over node:sqlite (real migrations) + a GitHub stub behind githubStore ----
 
@@ -45,8 +40,11 @@ function shimStatement(sql: string, params: unknown[] = []): any {
 		first: async () => sqlite.prepare(sql).get(...(params as [])) ?? null,
 		all: async () => ({ results: sqlite.prepare(sql).all(...(params as [])) }),
 		run: async () => {
-			sqlite.prepare(sql).run(...(params as []));
-			return { success: true };
+			// `meta.changes` is load-bearing: d1WriteLedger.claim decides it won a claim
+			// with `(res.meta?.changes ?? 0) > 0`, and writeThroughIndex reads it the
+			// same way. A shim without it reports every write as a no-op.
+			const r = sqlite.prepare(sql).run(...(params as []));
+			return { success: true, meta: { changes: Number(r.changes ?? 0) } };
 		}
 	};
 }
@@ -398,5 +396,4 @@ console.log('\nLink resolution — how a [[wikilink]] finds its page\n');
 	check('a dotfile is not a file reference', kindOf('./.gitkeep') === 'ignore');
 }
 
-console.log(failures === 0 ? '\nAll link checks passed.' : `\n${failures} check(s) failed.`);
-process.exit(failures === 0 ? 0 : 1);
+done();
