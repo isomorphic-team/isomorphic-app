@@ -23,6 +23,7 @@
 		"setup:config": "tsx scripts/setup-config.ts",
 		"bootstrap": "tsx src/bootstrap.ts",
 		"onboard-org": "tsx scripts/onboard-org.ts",
+		"regen:pr": "tsx scripts/regen-pr.ts",
 		"gen:templates": "tsx scripts/gen-brain-template.ts",
 		"worker:dev": "wrangler dev",
 		"worker:deploy": "wrangler deploy",

@@ -30,6 +30,7 @@ pnpm worker:deploy      # publish the Worker to Cloudflare
 pnpm worker:types       # regenerate Worker types from wrangler.jsonc
 pnpm app:dev            # local dev server for the MCP App UI — http://localhost:5175 (see dev/README.md)
 pnpm gen:app            # codegen the ui:// app bundle (after editing app/ OR any src/lib/ file it imports)
+pnpm regen:pr <n>       # regenerate that bundle on a PR branch that could not (Dependabot); --push to send it
 pnpm test:roundtrip     # editor markdown round-trip golden test
 pnpm test:views         # derived-views (okf-view) engine golden test
 pnpm test:import        # bulk-import planner golden test
@@ -249,6 +250,50 @@ drill to run before trusting it: [`docs/ops/deploy-and-rollback.md`](docs/ops/de
   builds its metadata from the request origin, not from the configured value, so every
   assertion passes on any hostname. The value is read where there is no request to derive
   an origin from (`src/manifest.ts`, the connected-accounts `/link/start` URL).
+
+## Dependency and code scanning
+
+Three mechanisms, all GitHub-native and free on a public repo, added 2026-08-31. Snyk was
+evaluated and not adopted: it needs an account and a token, which a fork cannot have, so it
+would have been a check that only ever ran for us.
+
+- **Dependabot** (`.github/dependabot.yml`) opens weekly npm and monthly actions updates.
+  `package-ecosystem: npm` is correct for pnpm. Updates are GROUPED (production minor/patch,
+  development, security fixes, actions) because ungrouped they arrive as roughly two dozen
+  separate pull requests a week, which is how a team learns to ignore them. Majors stay
+  individual on purpose: those need reading.
+- **CodeQL** (`.github/workflows/codeql.yml` + `.github/codeql/codeql-config.yml`) runs the
+  `security-and-quality` suite, which is 201 rules, 97 of them quality rather than security.
+  **Do not enable CodeQL default setup in the repository settings**: it takes over from this
+  workflow and runs the narrower `default` suite, so clicking it in the UI silently drops
+  those 97 rules. The config also excludes `src/lib/app-bundle.generated.ts`, which is a
+  ~1 MB build artifact and would otherwise be scanned as if a human wrote it.
+- **`pnpm security:audit`** (`pnpm audit --prod --audit-level high`) runs in ci.yml as a
+  REPORTING step, `continue-on-error`. `--prod` is doing real work: it drops the
+  wrangler/miniflare subtree, which is most of the raw advisory count and none of the
+  production exposure. It does not gate because the tree has advisories that are not cleared
+  yet, and a step that reds every pull request is a step people route around. Drop
+  `continue-on-error` once it is clean.
+
+**A Dependabot pull request that bumps a BUNDLED dependency always fails CI, and this is
+not a bug in either.** `pnpm gen:app` inlines the packages the app UI imports (zod and
+markdown-it are both in the bundle), so their bytes are part of the committed
+`app-bundle.generated.ts`. Dependabot writes `package.json` and the lockfile and nothing
+else, because it does not run repository code, so the bundle is stale the moment the bump
+lands and ci.yml's "Generated artifacts in sync with source" step fires. A maintainer
+regenerates with **`pnpm regen:pr <number>`** (`scripts/regen-pr.ts`), which does the work
+in a throwaway `git worktree` and pushes only with `--push`.
+
+This is deliberately a local script rather than a workflow. Regenerating means installing
+and bundling a dependency version nobody has reviewed, and automating that would need a
+token with write access to a public repo at a bot's say-so, which is the exact supply-chain
+shape the scanning above exists to catch. It would also not work: a `GITHUB_TOKEN` push does
+not re-trigger checks, so the pull request would keep showing the failure it just fixed.
+
+`pnpm test:wiring` lints the pnpm scripts named in EVERY workflow, not just ci.yml, against
+`package.json`. deploy.yml names `gen:app`, `gen:templates`, `typecheck` and `setup:config`,
+and it is the worse file to lose a step in: a rename that reds ci.yml blocks a pull request,
+while the same rename in deploy.yml just skips the regen and ships a stale bundle.
 
 ## Non-obvious wrangler bits
 
