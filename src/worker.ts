@@ -38,6 +38,7 @@ import { installationOctokit, tokenOctokit, type AppCreds } from './lib/github.t
 import { githubStore, type BrainStore } from './lib/brain-repo.ts';
 import { getTenantByUserId, NoTenantError } from './lib/tenants.ts';
 import { provisionBrainForUser, provisionOrgForUser } from './lib/provision.ts';
+import { claimPendingInvites } from './lib/invites.ts';
 import {
 	getAppUser,
 	assertRole,
@@ -274,6 +275,9 @@ class McpSession {
 	// semantic change of the stateless move.
 	private _activeBrainId?: string;
 
+	// One invite claim per request, however many times a person is resolved.
+	private invitesClaimed = false;
+
 	private userKey(): string {
 		return (
 			this.props?.user_id ??
@@ -390,7 +394,32 @@ class McpSession {
 	// their brains from any linked email — this is the single seam the linking work
 	// plugs into (see linkedUserIds in lib/orgs.ts).
 	private async personUserIds(userId: string): Promise<string[]> {
-		return linkedUserIds(this.env.PLATFORM_DB, userId);
+		const ids = await linkedUserIds(this.env.PLATFORM_DB, userId);
+		await this.claimInvites(ids);
+		return ids;
+	}
+
+	// Join any org this person has been invited to, once per request, before
+	// anything reads their memberships. It lives here rather than in provisioning
+	// because provisioning is only reached by a person with no brain anywhere: an
+	// invitation to a SECOND org would otherwise stay pending until it expired,
+	// with nothing surfaced to either side (issue #69). Claiming is a no-op SELECT
+	// when there is nothing pending, which is almost always.
+	//
+	// Fail-open: an invite that cannot be claimed must not break a session that
+	// was working without it. The invitation stays pending and the next request
+	// tries again.
+	private async claimInvites(userIds: string[]): Promise<void> {
+		if (this.invitesClaimed) return;
+		this.invitesClaimed = true;
+		try {
+			const claimed = await claimPendingInvites(this.env.PLATFORM_DB, userIds);
+			for (const c of claimed) {
+				if (c.joins) console.log(`[invites] ${c.user_id} joined org ${c.org_id} as ${c.role}`);
+			}
+		} catch (err) {
+			console.warn(`[invites] claim failed: ${err instanceof Error ? err.message : String(err)}`);
+		}
 	}
 
 	// The org holding the connection's active brain. Lets an org-scope action default
@@ -653,29 +682,28 @@ class McpSession {
 		};
 	}
 
-	// Product-identity analog of autoProvision(): first-touch org+brain for an
-	// Auth.js user with no membership. Gated by AUTO_PROVISION.
+	// Product-identity analog of autoProvision(): first-touch org for an Auth.js
+	// user with no membership. AUTO_PROVISION governs MINTING a personal org, and
+	// is passed down rather than checked here, because the same call also claims a
+	// pending invitation and an invite-only deployment must still honour those.
+	// Touches no GitHub: no brain is created on this path.
 	private async autoProvisionOrg(userId: string, email: string) {
 		const env = this.env;
-		if (env.AUTO_PROVISION !== 'true') {
-			throw new Error(
-				`No org configured for ${email} and AUTO_PROVISION is off. An admin must invite you.`
-			);
-		}
-		if (!env.PLATFORM_ORG || !env.PLATFORM_INSTALLATION_ID) {
+		const autoProvision = env.AUTO_PROVISION === 'true';
+		if (autoProvision && (!env.PLATFORM_ORG || !env.PLATFORM_INSTALLATION_ID)) {
 			throw new Error(
 				'AUTO_PROVISION is on but PLATFORM_ORG / PLATFORM_INSTALLATION_ID are not configured. ' +
 					'Run admin setup (pnpm bootstrap) to install the platform App on an org.'
 			);
 		}
-		const installationId = Number(env.PLATFORM_INSTALLATION_ID);
-		const octokit = await installationOctokit(appCreds(env), installationId);
 		return provisionOrgForUser({
-			octokit,
 			db: env.PLATFORM_DB,
 			user: { user_id: userId, email, name: null },
 			org: env.PLATFORM_ORG,
-			installationId
+			installationId: env.PLATFORM_INSTALLATION_ID
+				? Number(env.PLATFORM_INSTALLATION_ID)
+				: undefined,
+			autoProvision
 		});
 	}
 
