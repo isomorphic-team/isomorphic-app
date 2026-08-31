@@ -154,8 +154,7 @@ check(
 // (same shim the e2e batteries use), and the real exported functions are called.
 // No network: node:sqlite is a Node builtin.
 
-import { DatabaseSync } from 'node:sqlite';
-import { applyMigrations } from '../src/local/d1-sqlite.ts';
+import { localD1 } from '../src/local/d1-sqlite.ts';
 import {
 	listAccessibleBrains,
 	listAccessibleOrgs,
@@ -176,23 +175,7 @@ import {
 // Schema comes from the REAL migrations, not src/db/auth-schema.sql, which is
 // reference only. This battery pins the access rule, so it is the last place that
 // should be asserting against a schema production does not run.
-const sqlite = new DatabaseSync(':memory:');
-applyMigrations(sqlite);
-function shimStatement(sql: string, params: unknown[] = []) {
-	return {
-		bind: (...p: unknown[]) => shimStatement(sql, p),
-		first: async () => sqlite.prepare(sql).get(...(params as [])) ?? null,
-		all: async () => ({ results: sqlite.prepare(sql).all(...(params as [])) }),
-		run: async () => {
-			// `meta.changes` is load-bearing: d1WriteLedger.claim decides it won a claim
-			// with `(res.meta?.changes ?? 0) > 0`, and writeThroughIndex reads it the
-			// same way. A shim without it reports every write as a no-op.
-			const r = sqlite.prepare(sql).run(...(params as []));
-			return { success: true, meta: { changes: Number(r.changes ?? 0) } };
-		}
-	};
-}
-const db = { prepare: (sql: string) => shimStatement(sql) } as never;
+const { db, sqlite } = localD1();
 
 // One customer org, three people at three org roles, three brains covering each
 // access source: grandfathered org-visible, and two private ones owned by

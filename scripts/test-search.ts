@@ -12,7 +12,6 @@
 // direction as well — a check that passes against the old engine too is testing
 // neither engine.
 
-import { DatabaseSync } from 'node:sqlite';
 import {
 	elisionNote,
 	rankPages,
@@ -23,7 +22,7 @@ import {
 	type PageSignal
 } from '../src/lib/search.ts';
 import { escapeLike, searchIndex } from '../src/lib/brain-index.ts';
-import { applyMigrations } from '../src/local/d1-sqlite.ts';
+import { localD1 } from '../src/local/d1-sqlite.ts';
 
 import { checker } from './check.ts';
 
@@ -480,30 +479,7 @@ const CORPUS = [REFERRALS, STANDUP, PARKING];
 // that SQL narrowing agrees with it, and that a query's own % or _ never becomes a
 // wildcard.
 
-const sqlite = new DatabaseSync(':memory:');
-applyMigrations(sqlite);
-
-function shimStatement(sql: string, params: unknown[] = []): any {
-	return {
-		bind: (...p: unknown[]) => shimStatement(sql, p),
-		first: async () => sqlite.prepare(sql).get(...(params as [])) ?? null,
-		all: async () => ({ results: sqlite.prepare(sql).all(...(params as [])) }),
-		run: async () => {
-			// `meta.changes` is load-bearing: d1WriteLedger.claim decides it won a claim
-			// with `(res.meta?.changes ?? 0) > 0`, and writeThroughIndex reads it the
-			// same way. A shim without it reports every write as a no-op.
-			const r = sqlite.prepare(sql).run(...(params as []));
-			return { success: true, meta: { changes: Number(r.changes ?? 0) } };
-		}
-	};
-}
-const db = {
-	prepare: (sql: string) => shimStatement(sql),
-	batch: async (stmts: { run: () => Promise<unknown> }[]) => {
-		for (const s of stmts) await s.run();
-		return [];
-	}
-} as never;
+const { db, sqlite } = localD1();
 
 const BRAIN = 'example-org/brain';
 function seed(pages: { path: string; title: string | null; content: string }[]) {
