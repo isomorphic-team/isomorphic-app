@@ -45,6 +45,7 @@ import {
 	pathPolicyOf
 } from '../lib/brain-config.ts';
 import type { TenantOpts } from '../lib/orgs.ts';
+import { brainArgFor, fail } from './shared.ts';
 
 // The editability policy the in-client app needs to gate its own UI. Lives in
 // brain-policy.ts (pathPolicyOf) so the tools OUTSIDE this file that also feed
@@ -56,12 +57,9 @@ const editPolicy = pathPolicyOf;
 // tools' one-shot `brain`, opening a brain in the app MAKES IT ACTIVE (sticky — see
 // registerBrainApp in worker.ts), because the user is now looking at it and the
 // viewer follows the active brain; subsequent bare calls stay on it.
-const brainArg = z
-	.string()
-	.optional()
-	.describe(
-		'Which brain to open (name/handle). Defaults to the active brain; opening another makes it the active brain.'
-	);
+const brainArg = brainArgFor(
+	'Which brain to open (name/handle). Defaults to the active brain; opening another makes it the active brain.'
+);
 
 // A stable content fingerprint of the app bundle (FNV-1a 32-bit → base36). Not
 // cryptographic — just enough to change when the bytes change and stay identical
@@ -111,10 +109,6 @@ const BRAIN_APP_URI_TEMPLATE = 'ui://isomorphic-mind/brain-app.{v}.html';
 // keeps `false`, while handing the chrome to the host means `true` here AND
 // dropping the app's own border, since the two must never both draw one.
 const APP_UI_META = { ui: { prefersBorder: false } } as const;
-
-function fail(text: string) {
-	return { isError: true as const, content: [{ type: 'text' as const, text }] };
-}
 
 // One node per content page; one edge per link between two pages. Sized to the
 // in-client graph view (view_graph). Both shapes mirror what app/main.tsx expects.

@@ -44,6 +44,7 @@ import {
 	listIndexedPages
 } from '../lib/brain-index.ts';
 import { CONFIG_PATH, DEFAULT_BRAIN_CONFIG } from '../lib/brain-config.ts';
+import { fail } from './shared.ts';
 
 // The GitHub client, for the three operations in this file that are GitHub as a
 // platform rather than a brain as storage: create a repository, list the repos an
@@ -57,10 +58,6 @@ function githubClient(ctx: { octokit?: Octokit }): Octokit {
 		throw new Error('This action needs a GitHub-backed deployment (no GitHub client configured).');
 	}
 	return ctx.octokit;
-}
-
-function fail(text: string) {
-	return { isError: true as const, content: [{ type: 'text' as const, text }] };
 }
 
 // One row per brain for the UI / text: stable id, human label (disambiguated when an

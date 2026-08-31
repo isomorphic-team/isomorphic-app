@@ -24,14 +24,9 @@ import {
 	MAX_TITLE
 } from '../src/lib/feedback.ts';
 
-let failures = 0;
-function check(label: string, cond: boolean, detail = '') {
-	if (cond) console.log(`  ✓ ${label}`);
-	else {
-		failures++;
-		console.log(`  ✗ ${label}${detail ? `: ${detail}` : ''}`);
-	}
-}
+import { checker } from './check.ts';
+
+const { check, done } = checker('feedback checks');
 
 console.log('\nredaction: credential shapes are removed');
 {
@@ -182,7 +177,4 @@ console.log('\npreview: the confirm gate tells the user what it will do');
 	);
 }
 
-console.log(
-	failures === 0 ? '\nAll feedback checks passed.\n' : `\n${failures} feedback check(s) FAILED.\n`
-);
-process.exit(failures === 0 ? 0 : 1);
+done();

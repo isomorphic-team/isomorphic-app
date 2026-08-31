@@ -43,14 +43,9 @@ import {
 	validateAttachment
 } from '../src/lib/media.ts';
 
-let failures = 0;
-function check(label: string, cond: boolean, detail = '') {
-	if (cond) console.log(`  ✓ ${label}`);
-	else {
-		failures++;
-		console.log(`  ✗ ${label}${detail ? ` — ${detail}` : ''}`);
-	}
-}
+import { checker } from './check.ts';
+
+const { check, done } = checker('media checks');
 
 // A 1x1 transparent PNG. Real bytes, so the size math is exercised against
 // something that actually decodes rather than a string of 'A's.
@@ -573,5 +568,4 @@ console.log('\nfetchRemoteAttachment');
 	}
 }
 
-console.log(failures === 0 ? '\nAll media checks passed.\n' : `\n${failures} check(s) FAILED.\n`);
-process.exit(failures === 0 ? 0 : 1);
+done();

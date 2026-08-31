@@ -29,6 +29,7 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { registerAppTool } from '@modelcontextprotocol/ext-apps/server';
 import { z } from 'zod';
 import type { BrainContext } from './librarian.ts';
+import { brainArgFor } from './shared.ts';
 import { BRAIN_APP_URI } from './apps.ts';
 import {
 	type TenantOpts,
@@ -47,10 +48,9 @@ const DEFAULT_DAYS = 30;
 // is the question a new org actually asks.
 const MAX_DAYS = 90;
 
-const brainArg = z
-	.string()
-	.optional()
-	.describe("Which brain's organization to report on (name/handle). Defaults to the active brain.");
+const brainArg = brainArgFor(
+	"Which brain's organization to report on (name/handle). Defaults to the active brain."
+);
 
 export function registerAnalyticsTools(
 	server: McpServer,

@@ -25,14 +25,9 @@ import {
 	type Role
 } from '../src/lib/orgs.ts';
 
-let failures = 0;
-function check(label: string, cond: boolean, detail = '') {
-	if (cond) console.log(`  ✓ ${label}`);
-	else {
-		failures++;
-		console.log(`  ✗ ${label}${detail ? `: ${detail}` : ''}`);
-	}
-}
+import { checker } from './check.ts';
+
+const { check, done } = checker('access-rule checks');
 
 const ORG_ROLES: Role[] = ['viewer', 'editor', 'admin', 'owner'];
 const GRANTS: (Role | null)[] = [null, 'viewer', 'editor', 'admin'];
@@ -159,8 +154,8 @@ check(
 // (same shim the e2e batteries use), and the real exported functions are called.
 // No network: node:sqlite is a Node builtin.
 
-import { readFileSync } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
+import { applyMigrations } from '../src/local/d1-sqlite.ts';
 import {
 	listAccessibleBrains,
 	listAccessibleOrgs,
@@ -178,16 +173,22 @@ import {
 	deleteUserBrainGrantsInOrg
 } from '../src/lib/orgs.ts';
 
+// Schema comes from the REAL migrations, not src/db/auth-schema.sql, which is
+// reference only. This battery pins the access rule, so it is the last place that
+// should be asserting against a schema production does not run.
 const sqlite = new DatabaseSync(':memory:');
-sqlite.exec(readFileSync(new URL('../src/db/auth-schema.sql', import.meta.url), 'utf8'));
+applyMigrations(sqlite);
 function shimStatement(sql: string, params: unknown[] = []) {
 	return {
 		bind: (...p: unknown[]) => shimStatement(sql, p),
 		first: async () => sqlite.prepare(sql).get(...(params as [])) ?? null,
 		all: async () => ({ results: sqlite.prepare(sql).all(...(params as [])) }),
 		run: async () => {
-			sqlite.prepare(sql).run(...(params as []));
-			return { success: true };
+			// `meta.changes` is load-bearing: d1WriteLedger.claim decides it won a claim
+			// with `(res.meta?.changes ?? 0) > 0`, and writeThroughIndex reads it the
+			// same way. A shim without it reports every write as a no-op.
+			const r = sqlite.prepare(sql).run(...(params as []));
+			return { success: true, meta: { changes: Number(r.changes ?? 0) } };
 		}
 	};
 }
@@ -524,7 +525,4 @@ check(
 		thunkCalls === 0
 );
 
-console.log(
-	failures === 0 ? '\nAll access-rule checks passed.\n' : `\n${failures} check(s) FAILED.\n`
-);
-process.exit(failures === 0 ? 0 : 1);
+done();

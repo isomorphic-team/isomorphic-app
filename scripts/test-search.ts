@@ -25,14 +25,9 @@ import {
 import { escapeLike, searchIndex } from '../src/lib/brain-index.ts';
 import { applyMigrations } from '../src/local/d1-sqlite.ts';
 
-let failures = 0;
-function check(name: string, cond: boolean, detail?: string) {
-	if (cond) console.log(`  ok  ${name}`);
-	else {
-		failures++;
-		console.error(`FAIL  ${name}${detail ? `\n      ${detail}` : ''}`);
-	}
-}
+import { checker } from './check.ts';
+
+const { check, done } = checker('search checks');
 
 // ---------------------------------------------------------------- the corpus ----
 //
@@ -494,8 +489,11 @@ function shimStatement(sql: string, params: unknown[] = []): any {
 		first: async () => sqlite.prepare(sql).get(...(params as [])) ?? null,
 		all: async () => ({ results: sqlite.prepare(sql).all(...(params as [])) }),
 		run: async () => {
-			sqlite.prepare(sql).run(...(params as []));
-			return { success: true };
+			// `meta.changes` is load-bearing: d1WriteLedger.claim decides it won a claim
+			// with `(res.meta?.changes ?? 0) > 0`, and writeThroughIndex reads it the
+			// same way. A shim without it reports every write as a no-op.
+			const r = sqlite.prepare(sql).run(...(params as []));
+			return { success: true, meta: { changes: Number(r.changes ?? 0) } };
 		}
 	};
 }
@@ -661,5 +659,4 @@ function seed(pages: { path: string; title: string | null; content: string }[]) 
 	);
 }
 
-console.log(failures === 0 ? '\nAll search checks passed.' : `\n${failures} check(s) failed.`);
-process.exit(failures === 0 ? 0 : 1);
+done();

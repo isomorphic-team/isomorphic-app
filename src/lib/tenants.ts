@@ -30,17 +30,6 @@ export async function getTenantByUserId(db: D1Database, ghUserId: number): Promi
 	return row ?? null;
 }
 
-export async function findTenantByInstallationId(
-	db: D1Database,
-	installationId: number
-): Promise<Tenant | null> {
-	const row = await db
-		.prepare('SELECT * FROM tenants WHERE installation_id = ?1')
-		.bind(installationId)
-		.first<Tenant>();
-	return row ?? null;
-}
-
 // Insert-or-update on `gh_user_id`. Used by the install-callback handler
 // (future work) and by manual seed scripts.
 export async function upsertTenant(
@@ -61,16 +50,6 @@ export async function upsertTenant(
          updated_at = datetime('now')`
 		)
 		.bind(t.gh_user_id, t.installation_id, t.brain_owner, t.brain_repo, t.gh_login ?? null)
-		.run();
-}
-
-export async function markSuspended(db: D1Database, installationId: number): Promise<void> {
-	await db
-		.prepare(
-			`UPDATE tenants SET suspended_at = datetime('now'), updated_at = datetime('now')
-       WHERE installation_id = ?1`
-		)
-		.bind(installationId)
 		.run();
 }
 

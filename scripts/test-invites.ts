@@ -15,8 +15,9 @@
 //
 //   pnpm test:invites
 
-import { readFileSync } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
+import { applyMigrations } from '../src/local/d1-sqlite.ts';
+import { checker } from './check.ts';
 import { planInviteClaims, claimPendingInvites, type MatchedInvite } from '../src/lib/invites.ts';
 import { noBrainOutcome, provisionOrgForUser } from '../src/lib/provision.ts';
 import {
@@ -30,14 +31,7 @@ import {
 	type Role
 } from '../src/lib/orgs.ts';
 
-let failures = 0;
-function check(label: string, cond: boolean, detail = '') {
-	if (cond) console.log(`  ✓ ${label}`);
-	else {
-		failures++;
-		console.log(`  ✗ ${label}${detail ? `: ${detail}` : ''}`);
-	}
-}
+const { check, done } = checker('invite checks');
 
 const inv = (id: string, org: string, role: Role, user = 'u1'): MatchedInvite => ({
 	invite_id: id,
@@ -135,16 +129,23 @@ check(
 // 2. The queries, run for real against the real schema.
 // ===========================================================================
 
+// Schema comes from the real migrations, not src/db/auth-schema.sql, which is
+// reference only. Invitations decide org membership, so this battery is
+// authorization-adjacent and should not assert against a schema production does
+// not run.
 const sqlite = new DatabaseSync(':memory:');
-sqlite.exec(readFileSync(new URL('../src/db/auth-schema.sql', import.meta.url), 'utf8'));
+applyMigrations(sqlite);
 function shimStatement(sql: string, params: unknown[] = []) {
 	return {
 		bind: (...p: unknown[]) => shimStatement(sql, p),
 		first: async () => sqlite.prepare(sql).get(...(params as [])) ?? null,
 		all: async () => ({ results: sqlite.prepare(sql).all(...(params as [])) }),
 		run: async () => {
-			sqlite.prepare(sql).run(...(params as []));
-			return { success: true };
+			// `meta.changes` is load-bearing: d1WriteLedger.claim decides it won a claim
+			// with `(res.meta?.changes ?? 0) > 0`, and writeThroughIndex reads it the
+			// same way. A shim without it reports every write as a no-op.
+			const r = sqlite.prepare(sql).run(...(params as []));
+			return { success: true, meta: { changes: Number(r.changes ?? 0) } };
 		}
 	};
 }
@@ -395,5 +396,4 @@ sqlite.exec(
 	check('an empty org and a viewer → ask your admin', msg.includes('no brain configured'));
 }
 
-console.log(failures === 0 ? '\nAll invite checks passed.' : `\n${failures} check(s) FAILED.`);
-process.exit(failures === 0 ? 0 : 1);
+done();

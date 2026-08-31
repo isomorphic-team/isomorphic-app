@@ -43,14 +43,9 @@ import {
 } from '../src/lib/usage.ts';
 import { recordUsage, readUsage } from '../src/lib/usage-store.ts';
 
-let failures = 0;
-function check(label: string, cond: boolean, detail = '') {
-	if (cond) console.log(`  ✓ ${label}`);
-	else {
-		failures++;
-		console.log(`  ✗ ${label}${detail ? `: ${detail}` : ''}`);
-	}
-}
+import { checker } from './check.ts';
+
+const { check, done } = checker('usage checks');
 
 console.log('\nclassification: every registered tool is classified');
 {
@@ -451,8 +446,11 @@ console.log('\nusage_daily: the real migration and the real statements');
 				first: async () => sqlite.prepare(sql).get(...(params as [])) ?? null,
 				all: async () => ({ results: sqlite.prepare(sql).all(...(params as [])) }),
 				run: async () => {
-					sqlite.prepare(sql).run(...(params as []));
-					return { success: true };
+					// `meta.changes` is load-bearing: d1WriteLedger.claim decides it won a
+					// claim with `(res.meta?.changes ?? 0) > 0`, and writeThroughIndex reads
+					// it the same way. A shim without it reports every write as a no-op.
+					const r = sqlite.prepare(sql).run(...(params as []));
+					return { success: true, meta: { changes: Number(r.changes ?? 0) } };
 				}
 			});
 			return mk([]);
@@ -512,7 +510,4 @@ console.log('\nusage_daily: the real migration and the real statements');
 	check('the brain row joins its label', folded.brains[0]?.label === 'Team brain');
 }
 
-console.log(
-	failures === 0 ? '\nAll usage checks passed.\n' : `\n${failures} usage check(s) FAILED.\n`
-);
-process.exit(failures === 0 ? 0 : 1);
+done();

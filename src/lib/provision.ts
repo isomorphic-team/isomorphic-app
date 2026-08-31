@@ -164,18 +164,6 @@ export interface ProvisionOrgInput {
 	autoProvision?: boolean;
 }
 
-// Brain repo name for a product-identity user. GitHub logins aren't available
-// (these users may have no GitHub account), so derive a slug from the email
-// local-part; fall back to the user id if that empties out.
-export function brainRepoNameForEmail(email: string, userId: string): string {
-	const local = email.split('@')[0] ?? '';
-	const slug = local
-		.toLowerCase()
-		.replace(/[^a-z0-9-]+/g, '-')
-		.replace(/^-+|-+$/g, '');
-	return slug ? `brain-${slug}` : `brain-${userId.slice(0, 8)}`;
-}
-
 // What a member with no reachable brain gets. 'create' is the app's "create your
 // first brain" state, which is the right answer for anyone who can actually
 // create one: the owner of the personal org a first sign-in mints, and equally an

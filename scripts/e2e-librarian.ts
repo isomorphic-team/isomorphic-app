@@ -223,14 +223,9 @@ async function eventually<T>(
 	return last;
 }
 
-let failures = 0;
-function check(label: string, cond: boolean, detail?: string) {
-	if (cond) console.log(`  ok  ${label}`);
-	else {
-		failures++;
-		console.error(`FAIL  ${label}${detail ? `\n      ${detail}` : ''}`);
-	}
-}
+import { checker } from './check.ts';
+
+const { check, done } = checker('librarian E2E checks');
 async function call(tool: string, args: Record<string, unknown>) {
 	const res = (await client.callTool({ name: tool, arguments: args })) as {
 		isError?: boolean;
@@ -1820,5 +1815,4 @@ try {
 	await server.close();
 }
 
-console.log(failures === 0 ? '\nALL PASS' : `\n${failures} FAILURES`);
-process.exit(failures === 0 ? 0 : 1);
+done();
