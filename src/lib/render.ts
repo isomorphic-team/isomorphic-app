@@ -196,10 +196,18 @@ export function isSafeUrl(url: string): boolean {
 
 // ---------- raw HTML ----------
 
-// One tag, well formed: `<name attrs>` or `</name>`. Attribute values may hold
-// `>` inside quotes, which is why the body alternation is quote-aware.
-const TAG_RE = /<(\/?)([A-Za-z][A-Za-z0-9-]*)((?:[^>"']|"[^"]*"|'[^']*')*)>/g;
-const COMMENT_RE = /<!--[\s\S]*?-->/g;
+// One comment, or one well-formed tag (`<name attrs>` / `</name>`). Attribute
+// values may hold `>` inside quotes, which is why the tag body alternation is
+// quote-aware.
+//
+// Comments are an alternative in the SAME pass rather than a `replace` before
+// it. Stripping them first is the "incomplete multi-character sanitization"
+// shape: `<!--` is two characters that can survive their own removal, so a
+// pre-pass hands the next stage a string it has already declared clean. Nothing
+// was exploitable here (a surviving `<!--` matches no tag, so it takes the text
+// path and comes back `&lt;!--`), but the safety then rests on a downstream
+// detail rather than on this function, and one edit away it would not.
+const CHUNK_RE = /<!--[\s\S]*?-->|<(\/?)([A-Za-z][A-Za-z0-9-]*)((?:[^>"']|"[^"]*"|'[^']*')*)>/g;
 
 // Apply the tag allowlist to a chunk of raw HTML.
 //
@@ -214,15 +222,18 @@ const COMMENT_RE = /<!--[\s\S]*?-->/g;
 // visible to its author instead of quietly disappearing, and a stray `<`
 // becomes `&lt;` rather than opening something.
 export function sanitizeRawHtml(html: string): string {
-	// Comments are dropped rather than escaped: they are invisible today, and
-	// escaping one would print it onto the page.
-	const source = html.replace(COMMENT_RE, '');
 	let out = '';
 	let last = 0;
-	for (const m of source.matchAll(TAG_RE)) {
+	for (const m of html.matchAll(CHUNK_RE)) {
 		const [whole, closing, name, attrs] = m;
-		out += escapeHtml(source.slice(last, m.index));
+		out += escapeHtml(html.slice(last, m.index));
 		last = m.index + whole.length;
+		// A complete comment is dropped rather than escaped: it is invisible
+		// today, and escaping one would print it onto the page. An INCOMPLETE one
+		// never matches here, so it falls through to the text path above and is
+		// escaped, which is what keeps a half-open comment from swallowing the
+		// rest of the page.
+		if (name === undefined) continue;
 		// A self-closing marker is not an attribute.
 		const bare = attrs.replace(/\/\s*$/, '').trim() === '';
 		if (SAFE_TAGS.has(name.toLowerCase()) && bare) {
@@ -232,7 +243,7 @@ export function sanitizeRawHtml(html: string): string {
 			out += escapeHtml(whole);
 		}
 	}
-	return out + escapeHtml(source.slice(last));
+	return out + escapeHtml(html.slice(last));
 }
 
 // ---------- rendering ----------

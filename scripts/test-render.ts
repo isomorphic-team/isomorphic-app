@@ -196,6 +196,19 @@ function inert(html: string): boolean {
 		renderMarkdown('<script>alert(1)</script>').includes('&lt;script&gt;')
 	);
 	check('an HTML comment is dropped', !/comment/.test(renderMarkdown('<!-- comment -->')));
+	// Comments are matched in the same pass as tags rather than stripped before
+	// it, so a `<!--` that survives its own removal cannot be handed onward as
+	// already-clean. Both of these leave one behind.
+	check(
+		'a nested comment opener does not survive as markup',
+		!sanitizeRawHtml('<!--<!-- --><b>x</b>').includes('<!--'),
+		sanitizeRawHtml('<!--<!-- --><b>x</b>')
+	);
+	check(
+		'an unterminated comment is escaped, not left to swallow the page',
+		sanitizeRawHtml('<!-- never closed <b>x</b>') === '&lt;!-- never closed <b>x</b>',
+		sanitizeRawHtml('<!-- never closed <b>x</b>')
+	);
 	check(
 		'a self-closing allowed tag survives',
 		/<br \/>/.test(sanitizeRawHtml('<br/>')),
