@@ -30,6 +30,7 @@ pnpm worker:deploy      # publish the Worker to Cloudflare
 pnpm worker:types       # regenerate Worker types from wrangler.jsonc
 pnpm app:dev            # local dev server for the MCP App UI — http://localhost:5175 (see dev/README.md)
 pnpm gen:app            # codegen the ui:// app bundle (after editing app/ OR any src/lib/ file it imports)
+pnpm regen:pr <n>       # regenerate that bundle on a PR branch that could not (Dependabot); --push to send it
 pnpm test:roundtrip     # editor markdown round-trip golden test
 pnpm test:views         # derived-views (okf-view) engine golden test
 pnpm test:import        # bulk-import planner golden test
@@ -40,6 +41,10 @@ pnpm test:links         # wikilink resolution + the broken-link report golden te
 pnpm test:access        # per-brain access rule (effectiveBrainRole) golden test
 pnpm test:scope         # org-vs-brain scope: which role each tool gates on
 pnpm test:loading       # loading-line engine: slot eligibility + per-task wiring
+pnpm test:preamble      # the /mcp preamble: which requests need a brain, and what a
+                        # failure in front of the SDK answers with
+pnpm test:dedupe        # write-attempt ledger: an identical retry is answered, not applied twice
+pnpm test:appmeta       # the ui:// app resource's host contract (prefersBorder, tool→app link)
 pnpm test:feedback      # submit_feedback composition golden test (redaction, nothing identifying published)
 pnpm test:usage         # usage-analytics golden test (tool-classification coverage, the summary fold)
 pnpm test:wiring        # every test:* script is in BOTH package.json's `test` and ci.yml
@@ -79,6 +84,16 @@ broken-link report says about the ones that match nothing), `pnpm test:index`
 (content-index freshness guard: bounded, resumable work per read; wraps an octokit
 stub in the REAL `githubStore` so it still covers `fetchPages`'s GraphQL batching),
 `pnpm test:policy` (the path-policy wire contract between Worker and app),
+`pnpm test:preamble` (the /mcp request preamble: which methods need a brain resolved,
+in both directions, and the JSON-RPC error a failure in front of the SDK answers with),
+`pnpm test:dedupe` (the write-attempt ledger: the argument fingerprint, the two windows,
+the claim being given back on a refusal or a throw, plus the real statements over the
+real migration on `node:sqlite`),
+`pnpm test:appmeta` (the ui:// resource's HOST contract, over a real client/server
+pair: that it declares `prefersBorder` rather than inheriting a default that differs
+per platform, that the post-deploy versioned-template read carries the same metadata,
+and that every widget tool's `resourceUri` names a resource this server actually
+serves),
 `pnpm test:loading` (the loading-line engine: that a phrase naming a fact the widget
 does not have is never eligible, and that every loading state in the app declares a
 task, which is optional in the type and so invisible to typecheck),
@@ -235,6 +250,50 @@ drill to run before trusting it: [`docs/ops/deploy-and-rollback.md`](docs/ops/de
   builds its metadata from the request origin, not from the configured value, so every
   assertion passes on any hostname. The value is read where there is no request to derive
   an origin from (`src/manifest.ts`, the connected-accounts `/link/start` URL).
+
+## Dependency and code scanning
+
+Three mechanisms, all GitHub-native and free on a public repo, added 2026-08-31. Snyk was
+evaluated and not adopted: it needs an account and a token, which a fork cannot have, so it
+would have been a check that only ever ran for us.
+
+- **Dependabot** (`.github/dependabot.yml`) opens weekly npm and monthly actions updates.
+  `package-ecosystem: npm` is correct for pnpm. Updates are GROUPED (production minor/patch,
+  development, security fixes, actions) because ungrouped they arrive as roughly two dozen
+  separate pull requests a week, which is how a team learns to ignore them. Majors stay
+  individual on purpose: those need reading.
+- **CodeQL** (`.github/workflows/codeql.yml` + `.github/codeql/codeql-config.yml`) runs the
+  `security-and-quality` suite, which is 201 rules, 97 of them quality rather than security.
+  **Do not enable CodeQL default setup in the repository settings**: it takes over from this
+  workflow and runs the narrower `default` suite, so clicking it in the UI silently drops
+  those 97 rules. The config also excludes `src/lib/app-bundle.generated.ts`, which is a
+  ~1 MB build artifact and would otherwise be scanned as if a human wrote it.
+- **`pnpm security:audit`** (`pnpm audit --prod --audit-level high`) runs in ci.yml as a
+  REPORTING step, `continue-on-error`. `--prod` is doing real work: it drops the
+  wrangler/miniflare subtree, which is most of the raw advisory count and none of the
+  production exposure. It does not gate because the tree has advisories that are not cleared
+  yet, and a step that reds every pull request is a step people route around. Drop
+  `continue-on-error` once it is clean.
+
+**A Dependabot pull request that bumps a BUNDLED dependency always fails CI, and this is
+not a bug in either.** `pnpm gen:app` inlines the packages the app UI imports (zod and
+markdown-it are both in the bundle), so their bytes are part of the committed
+`app-bundle.generated.ts`. Dependabot writes `package.json` and the lockfile and nothing
+else, because it does not run repository code, so the bundle is stale the moment the bump
+lands and ci.yml's "Generated artifacts in sync with source" step fires. A maintainer
+regenerates with **`pnpm regen:pr <number>`** (`scripts/regen-pr.ts`), which does the work
+in a throwaway `git worktree` and pushes only with `--push`.
+
+This is deliberately a local script rather than a workflow. Regenerating means installing
+and bundling a dependency version nobody has reviewed, and automating that would need a
+token with write access to a public repo at a bot's say-so, which is the exact supply-chain
+shape the scanning above exists to catch. It would also not work: a `GITHUB_TOKEN` push does
+not re-trigger checks, so the pull request would keep showing the failure it just fixed.
+
+`pnpm test:wiring` lints the pnpm scripts named in EVERY workflow, not just ci.yml, against
+`package.json`. deploy.yml names `gen:app`, `gen:templates`, `typecheck` and `setup:config`,
+and it is the worse file to lose a step in: a rename that reds ci.yml blocks a pull request,
+while the same rename in deploy.yml just skips the regen and ships a stale bundle.
 
 ## Non-obvious wrangler bits
 
@@ -623,6 +682,88 @@ not be marked `done:` without rewriting all 44 pages.
   commit, every refusal proving nothing was written), and `pnpm test:scope`, which now
   registers the librarian tools and asserts all three content writes gate on the BRAIN
   role at `editor` in both directions. **Uncovered:** the app layer, as everywhere else.
+
+## Retried writes, and what a lost answer costs (issue #50)
+
+A caller reported ~40% of MCP calls failing with Cloudflare `502
+origin_bad_gateway` inside a ten-minute window, the connect included, every one
+of them succeeding on retry. The functional half was recoverable. The
+correctness half was not: a 502 on `write_page` says nothing about whether the
+commit landed, so every retry had to be preceded by a `read_page`, and both ways
+of guessing wrong are silent — a retried `append` duplicates the text, a retried
+`mode: "create"` fails claiming the page exists.
+
+Read the error body before assuming the origin was ours. Its `zone` was
+`api.anthropic.com`, not this Worker's, so the 502 was generated in front of
+Anthropic's API by ITS origin; a slow Worker is one way to cause that and not the
+only one. The evidence in that report says our commits never landed at all (every
+retried create SUCCEEDED, which `mode: "create"` would have refused had the first
+attempt committed), and there was no deploy that day. Confirming it needs the
+Worker's own logs for the window, which is what the ray ids in the report are for.
+
+**The write-attempt ledger** (`src/lib/write-dedupe.ts` pure + the D1 half
+`src/lib/write-dedupe-store.ts`, migration 0007, `pnpm test:dedupe`) makes an
+identical retry safe rather than merely documented. `guardedWrite` in
+`librarian.ts` wraps `write_page` / `move_page` / `delete_page`.
+
+- **It is keyed on the CALL, never on the commit**, and that is the whole design.
+  An append's bundle is not stable across a retry: attempt 1 reads body B and
+  commits B+T; if that lands, attempt 2 reads B+T and commits B+T+T. Anything
+  fingerprinting content would miss exactly the case this exists for. The
+  fingerprint is SHA-256 over (actor, tool, canonicalized arguments), with the
+  `brain` routing argument excluded because the resolved `brainId` already keys
+  the row.
+- **The claim is taken BEFORE the handler and given back on any non-landing
+  exit.** Before, because the client gives up long before the Worker does and a
+  row written only on success would let the retry commit a second time. Given
+  back, because a refusal is deterministic (re-running it says the same thing) and
+  a fingerprint left reserved by a failed call blocks that write for minutes.
+- **It wraps the whole handler, not `commitBundle`.** The create case never
+  reaches a commit: `write_page`'s own "that path already exists" check fires
+  first, and what that check told a retry was the confusing half of the bug.
+- **Two windows, answering different questions.** `IN_FLIGHT_GRACE_MS` (2 min) is
+  how long an unfinished attempt speaks for itself; past it a claim is TAKEN OVER,
+  because a Worker killed mid-request leaves a row nobody will finish and a
+  permanently blocked fingerprint is worse than the duplicate it prevents.
+  `DONE_TTL_MS` (10 min) is how long a completed attempt is replayed. Rows are
+  pruned by the next claim on the same brain, so there is no prune job and the
+  table is bounded by write concurrency rather than write volume.
+- **Fail-open, twice over.** A ledger that cannot be reached runs the handler
+  exactly as it ran before this existed, and bookkeeping AFTER the write never
+  changes the answer: the commit is the fact and this table is a cache of it, the
+  same rule `writeThroughIndex` follows.
+- **The accepted trade-off:** a DELIBERATE identical write inside the done window
+  is reported as already applied rather than applied again. It is not silent (the
+  caller is told what it is repeating and when it landed), varying anything makes
+  it a different write, and the alternative is being unable to tell it apart from
+  the retry — which is the bug. **Not covered:** `sync_records`, which has its own
+  ledger-backed idempotency, and the editor's saves, which are sha-guarded.
+
+**The `/mcp` preamble** (`src/lib/mcp-preamble.ts`, `pnpm test:preamble`) is the
+other half, and it is about the request path rather than the write.
+
+- **A throw in the preamble used to leave no reply at all.** `loadActiveBrain`,
+  `buildServer` and `server.connect` run before the transport, outside any tool
+  handler, so the SDK's error mapping never sees them — and
+  `workers-oauth-provider` does not catch around its api handler either. An
+  uncaught exception reads upstream as an invalid response and reaches the user as
+  a bare gateway error. The handler answers with a JSON-RPC error carrying the
+  reason and the **CF ray id**: the report that opened this listed four ray ids
+  and there was nothing to join them against. 200 when the request id is known (a
+  JSON-RPC error object IS a completed exchange, and it is the form that reaches
+  the user as OUR message), 500 only when no valid reply can be addressed.
+- **`initialize` no longer resolves a brain.** Every POST used to pay for a KV
+  read, a tenant lookup, an installation-token mint and an index freshness check
+  before anyone read the method — all to discover the brain's own `tools/` pages.
+  `needsBrainPreamble` skips that for `initialize`, `ping` and notifications, and
+  is conservative in both unknown directions. **`tools/list` still resolves**, on
+  purpose: a brain's own tools belong in the list it returns.
+- `loadActiveBrain` is fail-open like `loadCustomTools`. That pointer is a
+  preference; a KV blip should fall back to the default brain, not fail the call.
+
+**Still open from that report:** whether the Worker itself was slow during the
+window (needs the logs), and the installation-token cache on `docs/roadmap.md`,
+which would take one more GitHub round trip off every call.
 
 ## User-defined tools (brain-tools)
 

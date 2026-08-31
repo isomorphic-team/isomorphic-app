@@ -1640,6 +1640,95 @@ try {
 		br.text
 	);
 
+	// ---- the retry a lost answer forces (issue #50) ----------------------------
+	// The reported failure: a write returns 502, so the caller cannot tell whether
+	// the commit landed, and retries. Both ways of guessing wrong are silent, so
+	// both are driven here against the real write path and asserted on the FILE and
+	// the COMMIT COUNT, not on the message.
+	{
+		const dedupePath = 'wiki/retry/lost-answer.md';
+		let before = await commitCount();
+		let r = await call('write_page', {
+			path: dedupePath,
+			type: 'note',
+			mode: 'create',
+			content: 'Body written once.'
+		});
+		check('dedupe: the first create succeeds', !r.isError, r.text);
+		await assertOneCommit('dedupe: the first create', before);
+		const firstText = r.text;
+
+		// The retry an agent makes when the 502 gave it nothing to go on.
+		before = await commitCount();
+		r = await call('write_page', {
+			path: dedupePath,
+			type: 'note',
+			mode: 'create',
+			content: 'Body written once.'
+		});
+		check('dedupe: an identical retry does NOT error', !r.isError, r.text);
+		check(
+			'dedupe: ...and no longer refuses with "already exists"',
+			!/already exists/i.test(r.text),
+			r.text
+		);
+		check('dedupe: it says the write already landed', /Already applied/.test(r.text), r.text);
+		check(
+			'dedupe: it replays the original answer',
+			r.text.includes(firstText.split('\n')[0]),
+			r.text
+		);
+		// Before this existed, mode:"create" reported "already exists" here — a
+		// refusal about a page the caller believed it had never created.
+		check(
+			'dedupe: no second commit',
+			(await commitCount()) === before,
+			`commits added = ${(await commitCount()) - before}`
+		);
+
+		// The silent one. A retried append used to write the text twice.
+		before = await commitCount();
+		r = await call('write_page', { path: dedupePath, append: 'APPENDED-ONCE' });
+		check('dedupe: the first append succeeds', !r.isError, r.text);
+		await assertOneCommit('dedupe: the first append', before);
+
+		before = await commitCount();
+		r = await call('write_page', { path: dedupePath, append: 'APPENDED-ONCE' });
+		check('dedupe: an identical append retry does NOT error', !r.isError, r.text);
+		check(
+			'dedupe: no second commit for the append',
+			(await commitCount()) === before,
+			`commits added = ${(await commitCount()) - before}`
+		);
+		const body = (await fileText(dedupePath)) ?? '';
+		check(
+			'dedupe: the appended text appears EXACTLY once',
+			body.split('APPENDED-ONCE').length - 1 === 1,
+			body
+		);
+
+		// The other direction: the guard must not swallow a genuinely different write.
+		before = await commitCount();
+		r = await call('write_page', { path: dedupePath, append: 'APPENDED-TWICE' });
+		check('dedupe: a DIFFERENT append still writes', !r.isError, r.text);
+		await assertOneCommit('dedupe: the different append', before);
+		const body2 = (await fileText(dedupePath)) ?? '';
+		check('dedupe: ...and lands in the page', body2.includes('APPENDED-TWICE'), body2);
+
+		// A refusal is deterministic and must stay immediately retryable, not sit
+		// behind a reserved fingerprint for the length of the grace window.
+		before = await commitCount();
+		const refused1 = await call('write_page', { path: 'wiki/retry/nope.txt', content: 'x' });
+		const refused2 = await call('write_page', { path: 'wiki/retry/nope.txt', content: 'x' });
+		check('dedupe: an invalid write is refused', refused1.isError, refused1.text);
+		check(
+			'dedupe: ...and the identical retry gets the SAME refusal, not a replay',
+			refused2.isError && !/Already applied/.test(refused2.text),
+			refused2.text
+		);
+		check('dedupe: ...and neither wrote anything', (await commitCount()) === before);
+	}
+
 	await brainClient.close();
 	await brainServer.close();
 } finally {

@@ -219,18 +219,41 @@ function RailItem({ current, children }: { current: boolean; children: Component
 function Rail({ view }: { view: View }) {
 	const here = activeDestination(view.kind);
 	return (
-		// Stretches to the full height of the content so its edge runs the whole card,
-		// while the icons inside stick to the top — a bottom-anchored group would collide
-		// with the top one in a short inline card, where the whole app may be 200px tall.
-		<aside class="w-10 shrink-0 border-r border-border" aria-label="Places">
-			{/* z-30 IS THE CHROME LAYER, and it has to be stated rather than left to auto.
-			    `position: sticky` creates a stacking context, so the z-20 that ui/Menu.tsx
-			    puts on an open panel is scoped to THIS nav and cannot lift the panel over
-			    anything in <main>, a later sibling: the overflow menu rendered underneath
-			    the analytics chart's bars. Content-layer overlays run up to z-20 (the
-			    analytics tooltip at 10, ProseMirror's column-resize handle at 20), so chrome
-			    sits above them at 30. Header carries the same value for the same reason. */}
-			<nav class="sticky top-0 z-30 flex flex-col items-center gap-0.5 py-1.5">
+		// STICKY, BECAUSE STRETCHING IS THE WHOLE COLUMN IN ONLY TWO OF THE THREE MODES.
+		// The aside is a flex item, so `align-items: stretch` sizes it to the flex LINE,
+		// which is the container's own height rather than the height of what scrolls
+		// inside it. In fullscreen and pip the root does not scroll (the document does),
+		// so it grows to the content and stretching gives the rail the whole column.
+		// Inline the root IS the scrollport: it stays 560px however long the page is, so
+		// the rail was 560px of border and icons anchored at scroll-top, and by the bottom
+		// of a long page both had scrolled away entirely. The edge between nav and content
+		// stopping partway down is the visible half of that (#47).
+		//
+		// Sticky needs no second layout to fix it. A direct child of a scroll container is
+		// constrained to that container's padding box, which IS the scrollport, so the rail
+		// holds the visible column for the whole scroll. In fullscreen and pip the aside
+		// already fills its containing block and sticky has no room to move, so the one
+		// class covers all three modes rather than branching on the mode.
+		//
+		// NO EXPLICIT HEIGHT. `align-items: stretch` is what sizes this, and an `h-full`
+		// would replace it with a percentage resolved against a container whose own height
+		// is content-derived, so the rail would collapse to its icons.
+		//
+		// z-30 IS THE CHROME LAYER, and it has to be stated rather than left to auto. It
+		// sits HERE rather than on the nav below because sticky creates a stacking context:
+		// a z-index inside this aside is scoped to it and cannot lift anything over <main>,
+		// a later sibling, which is how the overflow menu came to render underneath the
+		// analytics chart's bars. It now applies to the aside itself, which is positioned
+		// and would otherwise paint under any `relative` wrapper in main. Content-layer
+		// overlays run up to z-20 (the analytics tooltip at 10, ProseMirror's column-resize
+		// handle at 20), so chrome sits above them at 30. Header carries the same value.
+		<aside class="sticky top-0 z-30 w-10 shrink-0 border-r border-border" aria-label="Places">
+			{/* The icons stick to the top of the RAIL, which is a separate job from the rail
+			    sticking to the scrollport: in fullscreen and pip the aside is as tall as the
+			    whole document, so without this the controls would sit at the top of the page
+			    rather than the top of the window. A bottom-anchored group would collide with
+			    this one in a short inline card, where the whole app may be 200px tall. */}
+			<nav class="sticky top-0 flex flex-col items-center gap-0.5 py-1.5">
 				{/* THE RAIL DOES NOT GO AWAY WHILE YOU EDIT. Every destination does abandon an
 				    in-progress edit, which is why this row used to empty itself out — but
 				    hiding the controls cost the user their navigation and protected nothing,

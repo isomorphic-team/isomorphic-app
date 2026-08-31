@@ -78,7 +78,9 @@ export function registerImportTools(
 								.optional()
 								.describe('Where to create the page on FIRST import (ignored for updates).'),
 							fields: z
-								.record(z.union([z.string(), z.array(z.string())]))
+								// zod 4 wants the key schema named; without it the value widens to
+								// unknown and stops matching ImportRecord's fields.
+								.record(z.string(), z.union([z.string(), z.array(z.string())]))
 								.describe('Frontmatter facts. Only source-owned keys are ever written.'),
 							body: z.string().optional().describe('Initial body markdown (create only).')
 						})

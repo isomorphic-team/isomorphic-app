@@ -21,6 +21,26 @@ built. This file describes what is not.
 
 ---
 
+# TODO: honor hostContext.safeAreaInsets in the app
+
+The `ui://` resource now declares `_meta.ui.prefersBorder: false`, because the app draws
+its own bordered card inline and the host's unspecified default is bordered on mobile,
+which nested one border inside another. The trade that comes with borderless is that the
+host contributes no padding, and host padding is what otherwise absorbs
+`hostContext.safeAreaInsets`. The app reads none of them today, in any display mode, so
+on a phone the composer and the navigation bar can overlay content flush to the edge.
+
+Apply the insets as padding on the root container (`Root` in `app/main.tsx`), and as
+`scroll-padding` on any scroll-snap container. They arrive in `ui/initialize`'s host
+context and again on `ui/notifications/host-context-changed`, which `applyHostContext`
+in `app/core/host.ts` already receives and currently ignores.
+
+The alternative is to hand the chrome back to the host: `prefersBorder: true` AND drop
+the app's own inline border, since the two must never both draw one. That gets the
+padding for free and is closer to the design guidelines' "inherit the containing
+environment", at the cost of the app no longer controlling its own card. Either way the
+two halves move together, which is what `pnpm test:appmeta` pins.
+
 # TODO: skeleton shells for the page, tree, and graph
 
 The rotating status line landed (`src/lib/loading-lines.ts` + `app/views/LoadingView.tsx`,
@@ -959,15 +979,19 @@ and unbounded, so these are optimizations or new surfaces):
 - **sha-check TTL cache.** Cache the HEAD-sha check per brain (~30-60s) to drop
   the per-read `getRef` in steady state; on our own writes call `invalidateIndex()` (already
   exported) so the just-edited state reflects immediately.
-- **Idempotency keys for writes** (issue #31, suggestion 1 — deliberately deferred). A
-  client-supplied request id making a repeated write a no-op returning the original result.
-  Deferred because every piece of it is harder than it looks: the id only helps if the MODEL
-  repeats it on retry (tool-description guidance, unenforceable); the client gives up at 60s
-  while the Worker may still be running, so a dedupe record must exist BEFORE the commit or the
-  retry races the in-flight original; and that means a durable TTL store keyed by id. Today's
-  backstop is cheaper and covers the reported cases: writes are read-before-retry (the write
-  tools' descriptions say so), a retried create fails with "already exists" if the first attempt
-  landed, and move/delete are atomic (land whole or not at all).
+- ~~**Idempotency keys for writes**~~ **DONE 2026-08-27** (issue #31 suggestion 1, built when
+  issue #50 reported the same ambiguity arriving as a 502 rather than a timeout). The shape that
+  shipped is NOT the client-supplied request id this entry deferred, and the difference is what
+  dissolved two of the three objections. The id is DERIVED SERVER-SIDE — a hash of (actor, tool,
+  canonicalized arguments) — so it needs nothing from the model and no unenforceable
+  tool-description guidance. The row is reserved BEFORE the commit, which is what makes a retry
+  arriving while the original is still running a recognised retry rather than a second write.
+  Only the third objection was real, and a durable TTL store is exactly what `write_attempts`
+  (migration 0007) is: two windows, pruned by the next claim on the same brain, so no separate
+  job. The one thing to know before changing it: the hash is over ARGUMENTS, never over the
+  commit, because an append's bundle stops matching the moment the first attempt lands — see
+  `src/lib/write-dedupe.ts`. Still not covered: `sync_records` (it has its own ledger-backed
+  idempotency by design) and the app's own editor saves, which are sha-guarded instead.
 - **Installation-token cache.** Every request builds a fresh `App`/octokit and mints an
   installation token on first use (and tenant resolution runs twice per request: preamble +
   handler). Caching the token in KV against its 1h TTL would drop one GitHub round trip and the

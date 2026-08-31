@@ -81,6 +81,8 @@ import {
 	type FieldPatch
 } from '../lib/page-patch.ts';
 import { parseLedger } from '../lib/brain-import.ts';
+import { dedupeWrite, writeFingerprint, secondsSince } from '../lib/write-dedupe.ts';
+import { d1WriteLedger } from '../lib/write-dedupe-store.ts';
 import type { TenantOpts, Role } from '../lib/orgs.ts';
 
 // Shared optional `brain` arg — every tool takes it so the model can one-shot a
@@ -94,7 +96,12 @@ const brainArg = z
 // `type:` values, so this takes whatever the brain calls things rather than a
 // fixed list.
 const fieldsArg = z
+	// zod 4 wants the KEY schema passed explicitly. The one-argument form still parses
+	// at runtime, but its inferred type widens to Record<string | number | symbol,
+	// unknown>, which no longer matches FieldPatch. Naming z.string() keeps the record
+	// typed as Record<string, ...>.
 	.record(
+		z.string(),
 		z.union([
 			z.string(),
 			z.number(),
@@ -215,6 +222,85 @@ async function commitBundle(ctx: BrainContext, opts: CommitOrPROpts): Promise<Wr
 		).catch(() => {});
 	}
 	return outcome;
+}
+
+// The dedupe wrapper the three content writes run inside.
+//
+// Issue #50: a write whose ANSWER was lost — a 502, a timeout, a dropped
+// connection — leaves the caller unable to tell whether it landed, and both ways
+// of guessing wrong are silent. A retried `append` duplicates the text; a
+// retried `mode: "create"` fails claiming the page exists, on a page the caller
+// believes it never created. Reading the page before every retry was the only
+// recourse, which is guidance rather than a mechanism. The ledger recognises the
+// retry and replays the original answer instead of applying the write twice.
+// Engine, windows, and the deliberate-repeat trade-off: src/lib/write-dedupe.ts.
+//
+// IT WRAPS THE WHOLE HANDLER, NOT THE COMMIT. The create case never reaches a
+// commit: write_page's own "that path already exists" check fires first, and
+// what that check tells a retry is the confusing half of the bug. Wrapping the
+// handler is also what makes the claim cover every exit path, so a refusal
+// cannot leave a fingerprint reserved behind it.
+//
+// FAIL-OPEN. The brain is the source of truth and this table is only a cache of
+// "did this just happen", so a ledger that cannot be reached must never stop a
+// write: any failure before the handler runs falls through to running it exactly
+// as it ran before this existed.
+async function guardedWrite<R>(
+	ctx: BrainContext,
+	tool: string,
+	args: Record<string, unknown>,
+	perform: () => Promise<R>
+): Promise<R> {
+	const now = Date.now();
+	// Whether the handler itself has been entered. It separates a ledger failure
+	// (fall through and write) from the handler's own failure (propagate), and
+	// guarantees the handler is never run twice by the fallback.
+	let entered = false;
+	const enter = async () => {
+		entered = true;
+		return perform();
+	};
+	try {
+		const fingerprint = await writeFingerprint(ctx.actorUserId ?? 'anon', tool, args);
+		return await dedupeWrite<R>(
+			d1WriteLedger(ctx.db),
+			{ brainId: ctx.brainId, fingerprint, now },
+			{
+				perform: enter,
+				record: (result) => {
+					const r = result as { isError?: boolean; content?: { text?: string }[] };
+					// A refusal is deterministic: re-running it produces the same answer, so
+					// it is released rather than remembered and stays retryable at once.
+					if (r.isError) return null;
+					const text = (r.content ?? [])
+						.map((c) => c.text ?? '')
+						.filter(Boolean)
+						.join('\n');
+					return text || null;
+				},
+				// ok() and fail() build valid tool results, but nothing proves to the
+				// compiler that they are the same result type this handler returns, so
+				// the two caller-facing branches are cast at the boundary.
+				onReplay: (attempt) =>
+					ok(
+						`${attempt.summary ?? 'That write already landed.'}\n\n(Already applied. This repeats the answer to an identical ${tool} call from you that finished ${secondsSince(
+							attempt.completedAt ?? attempt.startedAt,
+							now
+						)}s ago — nothing was written a second time, so nothing is duplicated. To make the same change twice over, vary it or wait a few minutes.)`
+					) as R,
+				onInFlight: (attempt) =>
+					fail(
+						`An identical ${tool} call from you started ${secondsSince(
+							attempt.startedAt,
+							now
+						)}s ago and has not finished. THIS call wrote nothing. Do not retry blindly: wait a few seconds, then read the page to see whether the first one landed.`
+					) as R
+			}
+		);
+	} catch (err) {
+		if (entered) throw err;
+		return perform();
+	}
 }
 
 // Does this path touch the tools/ area (a file or a folder under tools/)? Files use
@@ -1347,7 +1433,7 @@ export function registerLibrarianTools(
 		{
 			title: 'Write a brain page',
 			description:
-				'Create a new page, or change an existing one, at a content path you choose (folders are free-form). ONE PAGE = ONE CONCEPT: anything another page should be able to link to — a person, vendor, system, event series, project — gets its own file, never a section inside a bigger page. If you are about to write a heading per item, write a page per item instead. To change PART of a page use `edits` (exact find/replace; each anchor must match exactly once) or `append` (add to the end): both leave the rest of the page untouched, so you do not have to read it first and cannot destroy text you have not seen. To change METADATA rather than page text, use `fields` (set or remove any frontmatter key the brain tracks, e.g. done/owner/due) or the title/type/description/status arguments: those leave the body untouched. `content` REPLACES the entire body, so pass it only for a new page or a deliberate full rewrite, and read the page first (read_page) if you did not just write it. OKF lifecycle status is optional: absent means stable; set draft, stable, or deprecated only when the distinction should be explicit. On an existing page frontmatter is preserved and merged, the "updated" date is bumped, a retitle repoints inbound links, and passing none of content/edits/append changes only metadata. Every change is logged. Pass mode: "create" to require a new path (fails if it exists) or "update" to require an existing one. If this call TIMES OUT, its outcome is ambiguous — read the page before retrying: a retried create fails if the first attempt landed, and a retried append would duplicate the text.',
+				'Create a new page, or change an existing one, at a content path you choose (folders are free-form). ONE PAGE = ONE CONCEPT: anything another page should be able to link to — a person, vendor, system, event series, project — gets its own file, never a section inside a bigger page. If you are about to write a heading per item, write a page per item instead. To change PART of a page use `edits` (exact find/replace; each anchor must match exactly once) or `append` (add to the end): both leave the rest of the page untouched, so you do not have to read it first and cannot destroy text you have not seen. To change METADATA rather than page text, use `fields` (set or remove any frontmatter key the brain tracks, e.g. done/owner/due) or the title/type/description/status arguments: those leave the body untouched. `content` REPLACES the entire body, so pass it only for a new page or a deliberate full rewrite, and read the page first (read_page) if you did not just write it. OKF lifecycle status is optional: absent means stable; set draft, stable, or deprecated only when the distinction should be explicit. On an existing page frontmatter is preserved and merged, the "updated" date is bumped, a retitle repoints inbound links, and passing none of content/edits/append changes only metadata. Every change is logged. Pass mode: "create" to require a new path (fails if it exists) or "update" to require an existing one. If this call FAILS WITHOUT A RESULT — a timeout, a 502 or any other gateway error, a dropped connection — its outcome is ambiguous and the write may still have landed. Retrying the IDENTICAL call is the safe move: a repeat with the same arguments within a few minutes is recognised as a retry and answered from the first attempt rather than applied twice. Change anything about the call and that no longer holds, so read the page before retrying a changed one: a repeated create fails if the first attempt landed, and a repeated append would duplicate the text.',
 			inputSchema: {
 				brain: brainArg,
 				path: z
@@ -1422,125 +1508,132 @@ export function registerLibrarianTools(
 					)
 			}
 		},
-		async ({
-			path,
-			content,
-			append,
-			edits,
-			title,
-			type,
-			description,
-			status,
-			fields,
-			sources,
-			mode,
-			sha,
-			brain
-		}) => {
-			const ctx = await getContext({ requires: 'editor', brain });
-			const { store, repoArgs, config } = ctx;
-			const target = path.trim().replace(/^\/+/, '');
-			if (!target.endsWith('.md')) {
-				return fail('Pages must end in .md, e.g. "wiki/research/notes.md".');
-			}
-			// Partial edit vs whole-body replace are different intents; taking both
-			// would mean silently dropping one of them.
-			const patching = append !== undefined || (edits !== undefined && edits.length > 0);
-			if (patching && content !== undefined) {
-				return fail(
-					'Pass either content (which replaces the whole body) or append/edits (which change part of it), not both.'
-				);
-			}
-			if (isSourcePath(target, config)) return fail(`"${target}" is immutable source material.`);
-			if (isToolMaintained(target, config)) return fail(`"${target}" is maintained automatically.`);
-			// Key names and managed keys are context-free, so reject a bad patch before
-			// touching the repo rather than after reading the blob.
-			if (fields) {
-				const invalid = validateFieldPatch(fields);
-				if (invalid) return fail(invalid);
-			}
-
-			// Capture the commit base before reading authoritative content. If the
-			// branch moves afterwards, updateRef rejects this write instead of letting
-			// content read from an older revision overwrite the newer commit.
-			const head = await store.getHead(repoArgs, config.defaultBranch);
-			const existing = await store.readFile(repoArgs, target, head.commitSha);
-			const wantMode = mode ?? 'upsert';
-
-			// New path → create. Guard against an "update"-only intent and confirm editability.
-			if (!existing) {
-				if (patching) {
-					return fail(
-						`"${target}" does not exist yet, so there is nothing to ${append !== undefined ? 'append to' : 'edit'}. Create it first by passing content.`
-					);
-				}
-				if (wantMode === 'update') {
-					return fail(
-						`"${target}" does not exist. Use mode "create" or "upsert" (the default) to create it.`
-					);
-				}
-				if (!isContentPath(target, config)) {
-					return fail(`"${target}" is outside this brain's editable content area.`);
-				}
-				return createPageWrite(ctx, head, {
-					target,
-					content,
-					title,
-					type,
-					description,
-					status,
-					fields,
-					sources
-				});
-			}
-
-			// Existing path → update. Guard against a "create"-only intent (clobber guard).
-			if (wantMode === 'create') {
-				return fail(
-					`A page already exists at ${target}. Use mode "update" or "upsert" to change it, or pick a different path.`
-				);
-			}
-			// Concurrency guard for the in-client editor (conversational callers pass no sha).
-			if (sha !== undefined && existing.sha !== sha) {
-				return fail(
-					'This page changed since you opened it (someone else saved first). Reopen the editor to get the latest version (your unsaved text stays in the editor until you leave).'
-				);
-			}
-			if (
-				content === undefined &&
-				!patching &&
-				title === undefined &&
-				type === undefined &&
-				description === undefined &&
-				status === undefined &&
-				fields === undefined
-			) {
-				return fail(
-					'Nothing to update: pass append / edits (to change part of the page) or content (to replace the body), or a fields / title / type / description / status change.'
-				);
-			}
-
-			// append/edits run against the AUTHORITATIVE blob we just read, never the
-			// index, and against the body alone so an anchor can't match frontmatter.
-			let rawBody: string | undefined;
-			let changeSummary: string | undefined;
-			if (patching) {
-				const patched = applyPageEdits(parseFrontmatter(existing.content).body, { append, edits });
-				if (!patched.ok) return fail(patched.error);
-				rawBody = patched.body;
-				changeSummary = patched.summary;
-			}
-			return updatePageWrite(ctx, head, existing, {
-				path: target,
+		async (args) => {
+			const {
+				path,
 				content,
-				rawBody,
-				changeSummary,
+				append,
+				edits,
 				title,
 				type,
 				description,
 				status,
 				fields,
-				sha
+				sources,
+				mode,
+				sha,
+				brain
+			} = args;
+			const ctx = await getContext({ requires: 'editor', brain });
+			return guardedWrite(ctx, 'write_page', args, async () => {
+				const { store, repoArgs, config } = ctx;
+				const target = path.trim().replace(/^\/+/, '');
+				if (!target.endsWith('.md')) {
+					return fail('Pages must end in .md, e.g. "wiki/research/notes.md".');
+				}
+				// Partial edit vs whole-body replace are different intents; taking both
+				// would mean silently dropping one of them.
+				const patching = append !== undefined || (edits !== undefined && edits.length > 0);
+				if (patching && content !== undefined) {
+					return fail(
+						'Pass either content (which replaces the whole body) or append/edits (which change part of it), not both.'
+					);
+				}
+				if (isSourcePath(target, config)) return fail(`"${target}" is immutable source material.`);
+				if (isToolMaintained(target, config))
+					return fail(`"${target}" is maintained automatically.`);
+				// Key names and managed keys are context-free, so reject a bad patch before
+				// touching the repo rather than after reading the blob.
+				if (fields) {
+					const invalid = validateFieldPatch(fields);
+					if (invalid) return fail(invalid);
+				}
+
+				// Capture the commit base before reading authoritative content. If the
+				// branch moves afterwards, updateRef rejects this write instead of letting
+				// content read from an older revision overwrite the newer commit.
+				const head = await store.getHead(repoArgs, config.defaultBranch);
+				const existing = await store.readFile(repoArgs, target, head.commitSha);
+				const wantMode = mode ?? 'upsert';
+
+				// New path → create. Guard against an "update"-only intent and confirm editability.
+				if (!existing) {
+					if (patching) {
+						return fail(
+							`"${target}" does not exist yet, so there is nothing to ${append !== undefined ? 'append to' : 'edit'}. Create it first by passing content.`
+						);
+					}
+					if (wantMode === 'update') {
+						return fail(
+							`"${target}" does not exist. Use mode "create" or "upsert" (the default) to create it.`
+						);
+					}
+					if (!isContentPath(target, config)) {
+						return fail(`"${target}" is outside this brain's editable content area.`);
+					}
+					return createPageWrite(ctx, head, {
+						target,
+						content,
+						title,
+						type,
+						description,
+						status,
+						fields,
+						sources
+					});
+				}
+
+				// Existing path → update. Guard against a "create"-only intent (clobber guard).
+				if (wantMode === 'create') {
+					return fail(
+						`A page already exists at ${target}. Use mode "update" or "upsert" to change it, or pick a different path.`
+					);
+				}
+				// Concurrency guard for the in-client editor (conversational callers pass no sha).
+				if (sha !== undefined && existing.sha !== sha) {
+					return fail(
+						'This page changed since you opened it (someone else saved first). Reopen the editor to get the latest version (your unsaved text stays in the editor until you leave).'
+					);
+				}
+				if (
+					content === undefined &&
+					!patching &&
+					title === undefined &&
+					type === undefined &&
+					description === undefined &&
+					status === undefined &&
+					fields === undefined
+				) {
+					return fail(
+						'Nothing to update: pass append / edits (to change part of the page) or content (to replace the body), or a fields / title / type / description / status change.'
+					);
+				}
+
+				// append/edits run against the AUTHORITATIVE blob we just read, never the
+				// index, and against the body alone so an anchor can't match frontmatter.
+				let rawBody: string | undefined;
+				let changeSummary: string | undefined;
+				if (patching) {
+					const patched = applyPageEdits(parseFrontmatter(existing.content).body, {
+						append,
+						edits
+					});
+					if (!patched.ok) return fail(patched.error);
+					rawBody = patched.body;
+					changeSummary = patched.summary;
+				}
+				return updatePageWrite(ctx, head, existing, {
+					path: target,
+					content,
+					rawBody,
+					changeSummary,
+					title,
+					type,
+					description,
+					status,
+					fields,
+					sha
+				});
 			});
 		}
 	);
@@ -1551,7 +1644,7 @@ export function registerLibrarianTools(
 		{
 			title: 'Move or rename a page or folder',
 			description:
-				"Move a page (or a whole folder and everything under it) to a different location and/or rename it. Every link pointing at the moved page(s) — from other pages and the index — is repointed in the same save, and the moved content's own links keep working. Nothing dangles. Pass a folder path (no .md extension) to move or rename an entire subtree; moving a folder ONTO an existing one merges them, and is refused only if a page would be overwritten. If this call TIMES OUT, check whether the page is already at the destination before retrying — a move lands whole or not at all.",
+				"Move a page (or a whole folder and everything under it) to a different location and/or rename it. Every link pointing at the moved page(s) — from other pages and the index — is repointed in the same save, and the moved content's own links keep working. Nothing dangles. Pass a folder path (no .md extension) to move or rename an entire subtree; moving a folder ONTO an existing one merges them, and is refused only if a page would be overwritten. If this call FAILS WITHOUT A RESULT (a timeout, a 502 or any other gateway error, a dropped connection), retrying the identical call is safe: a repeat with the same arguments within a few minutes is recognised as a retry rather than applied twice. A move lands whole or not at all, so if you change the call, check whether the page is already at the destination before retrying.",
 			inputSchema: {
 				brain: brainArg,
 				path: z
@@ -1573,133 +1666,136 @@ export function registerLibrarianTools(
 					)
 			}
 		},
-		async ({ path, new_path, new_title, brain }) => {
+		async (args) => {
+			const { path, new_path, new_title, brain } = args;
 			const ctx = await getContext({ requires: 'editor', brain });
-			// A path without a .md extension is a folder OR a non-page file, and the
-			// name cannot tell them apart (".gitkeep" is a file, ".obsidian" a folder).
-			// Ask the tree instead of guessing, then hand the answer to the mover that
-			// fits. Guessing "folder" is what made a dotfile unaddressable: it reported
-			// "no folder found (it has no files)" about a file that was right there.
-			//
-			// This supersedes an attachment-specific branch that routed on isAssetPath:
-			// the tree answers the same question for EVERY non-page file, so an
-			// attachment needs no case of its own.
-			if (!path.trim().replace(/^\/+/, '').endsWith('.md')) {
-				const cleaned = path.trim().replace(/^\/+/, '').replace(/\/+$/, '');
-				const head = await ctx.store.getHead(ctx.repoArgs, ctx.config.defaultBranch);
-				const tree = await ctx.store.listTree(ctx.repoArgs, head, { extension: '*' });
-				if (tree.some((e) => e.path === cleaned))
-					return moveFileWrite(ctx, head, tree, { path: cleaned, new_path, new_name: new_title });
-				if (tree.some((e) => e.path.startsWith(`${cleaned}/`)))
-					return moveFolderWrite(ctx, { path, new_path, new_name: new_title }, { head, tree });
-				return fail(`No file or folder "${cleaned}" found.`);
-			}
-			const { store, repoArgs, config, author } = ctx;
-			if (!new_path && !new_title)
-				return fail('Give a new_path (move/rename) or a new_title (rename in place).');
-			if (isSourcePath(path, config))
-				return fail(`"${path}" is source material — it can't be moved.`);
-			if (isToolMaintained(path, config)) return fail(`"${path}" is maintained automatically.`);
-
-			const head = await store.getHead(repoArgs, config.defaultBranch);
-			const existing = await store.readFile(repoArgs, path, head.commitSha);
-			if (!existing) return fail(`"${path}" does not exist.`);
-
-			const { frontmatter, body } = parseFrontmatter(existing.content);
-			// pageTitle is the single title resolver (frontmatter > H1 > filename); a
-			// second copy here would repoint links to a name the rest of the system
-			// doesn't call this page.
-			const oldTitle = pageTitle(path, existing.content);
-			const newPath = new_path
-				? new_path.trim().replace(/^\/+/, '')
-				: `${path.slice(0, path.lastIndexOf('/'))}/${slugify(new_title!)}.md`;
-			if (!newPath.endsWith('.md')) return fail('Target must end in .md.');
-			if (!isContentPath(newPath, config))
-				return fail(`Can't move to ${newPath} — it's outside this brain's editable content.`);
-			const newTitle = new_title ?? oldTitle;
-			if (newPath === path) return ok(`"${oldTitle}" is already at ${path} — nothing to move.`);
-
-			const tree = await store.listTree(repoArgs, head);
-			if (tree.some((e) => e.path === newPath)) {
-				return fail(`Can't move to ${newPath} — a page already exists there.`);
-			}
-
-			// Only the pages that link to the moving page are fetched (discovered via the
-			// content index), not the whole brain — bounded by inbound-link count. The
-			// linker fetch reuses the tree above, and runs alongside the changelog read.
-			const [linkersRes, log] = await Promise.all([
-				fetchInboundLinkers(ctx, head, path, tree),
-				store.readFile(repoArgs, logPathOf(config))
-			]);
-			const { pages, truncated } = linkersRes;
-			const today = todayIso();
-			const writes: { path: string; content: string }[] = [];
-			let repointedPages = 0;
-
-			// Repoint inbound links across the wiki.
-			for (const page of pages) {
-				if (page.path === path || isToolMaintained(page.path, config)) continue;
-				let content = page.content;
-				let changed = 0;
-				const md = rewriteMdLinks(content, page.path, path, newPath);
-				content = md.body;
-				changed += md.changed;
-				if (newTitle !== oldTitle) {
-					const wl = rewriteWikiLinks(content, oldTitle, newTitle);
-					content = wl.body;
-					changed += wl.changed;
+			return guardedWrite(ctx, 'move_page', args, async () => {
+				// A path without a .md extension is a folder OR a non-page file, and the
+				// name cannot tell them apart (".gitkeep" is a file, ".obsidian" a folder).
+				// Ask the tree instead of guessing, then hand the answer to the mover that
+				// fits. Guessing "folder" is what made a dotfile unaddressable: it reported
+				// "no folder found (it has no files)" about a file that was right there.
+				//
+				// This supersedes an attachment-specific branch that routed on isAssetPath:
+				// the tree answers the same question for EVERY non-page file, so an
+				// attachment needs no case of its own.
+				if (!path.trim().replace(/^\/+/, '').endsWith('.md')) {
+					const cleaned = path.trim().replace(/^\/+/, '').replace(/\/+$/, '');
+					const head = await ctx.store.getHead(ctx.repoArgs, ctx.config.defaultBranch);
+					const tree = await ctx.store.listTree(ctx.repoArgs, head, { extension: '*' });
+					if (tree.some((e) => e.path === cleaned))
+						return moveFileWrite(ctx, head, tree, { path: cleaned, new_path, new_name: new_title });
+					if (tree.some((e) => e.path.startsWith(`${cleaned}/`)))
+						return moveFolderWrite(ctx, { path, new_path, new_name: new_title }, { head, tree });
+					return fail(`No file or folder "${cleaned}" found.`);
 				}
-				// A wikilink can also name a page by its FILENAME, so a rename orphans
-				// those unless they move with it (the title lane above only catches the
-				// ones written as the title).
-				if (wikilinkKey(slugOf(newPath)) !== wikilinkKey(slugOf(path))) {
-					const wl = rewriteWikiLinks(content, slugOf(path), slugOf(newPath));
-					content = wl.body;
-					changed += wl.changed;
-				}
-				if (changed > 0) {
-					writes.push({ path: page.path, content });
-					repointedPages++;
-				}
-			}
+				const { store, repoArgs, config, author } = ctx;
+				if (!new_path && !new_title)
+					return fail('Give a new_path (move/rename) or a new_title (rename in place).');
+				if (isSourcePath(path, config))
+					return fail(`"${path}" is source material — it can't be moved.`);
+				if (isToolMaintained(path, config)) return fail(`"${path}" is maintained automatically.`);
 
-			// The moved page itself: rebase outbound links, refresh frontmatter.
-			const fm: Frontmatter = { ...(frontmatter ?? {}), title: newTitle, updated: today };
-			writes.push({
-				path: newPath,
-				content: withFrontmatter(fm, rebaseMdLinks(body, path, newPath))
-			});
+				const head = await store.getHead(repoArgs, config.defaultBranch);
+				const existing = await store.readFile(repoArgs, path, head.commitSha);
+				if (!existing) return fail(`"${path}" does not exist.`);
 
-			if (log) {
-				const bullet =
-					newTitle !== oldTitle
-						? `Moved "${oldTitle}" to \`${newPath}\` (now "${newTitle}").`
-						: `Moved "${oldTitle}" to \`${newPath}\`.`;
+				const { frontmatter, body } = parseFrontmatter(existing.content);
+				// pageTitle is the single title resolver (frontmatter > H1 > filename); a
+				// second copy here would repoint links to a name the rest of the system
+				// doesn't call this page.
+				const oldTitle = pageTitle(path, existing.content);
+				const newPath = new_path
+					? new_path.trim().replace(/^\/+/, '')
+					: `${path.slice(0, path.lastIndexOf('/'))}/${slugify(new_title!)}.md`;
+				if (!newPath.endsWith('.md')) return fail('Target must end in .md.');
+				if (!isContentPath(newPath, config))
+					return fail(`Can't move to ${newPath} — it's outside this brain's editable content.`);
+				const newTitle = new_title ?? oldTitle;
+				if (newPath === path) return ok(`"${oldTitle}" is already at ${path} — nothing to move.`);
+
+				const tree = await store.listTree(repoArgs, head);
+				if (tree.some((e) => e.path === newPath)) {
+					return fail(`Can't move to ${newPath} — a page already exists there.`);
+				}
+
+				// Only the pages that link to the moving page are fetched (discovered via the
+				// content index), not the whole brain — bounded by inbound-link count. The
+				// linker fetch reuses the tree above, and runs alongside the changelog read.
+				const [linkersRes, log] = await Promise.all([
+					fetchInboundLinkers(ctx, head, path, tree),
+					store.readFile(repoArgs, logPathOf(config))
+				]);
+				const { pages, truncated } = linkersRes;
+				const today = todayIso();
+				const writes: { path: string; content: string }[] = [];
+				let repointedPages = 0;
+
+				// Repoint inbound links across the wiki.
+				for (const page of pages) {
+					if (page.path === path || isToolMaintained(page.path, config)) continue;
+					let content = page.content;
+					let changed = 0;
+					const md = rewriteMdLinks(content, page.path, path, newPath);
+					content = md.body;
+					changed += md.changed;
+					if (newTitle !== oldTitle) {
+						const wl = rewriteWikiLinks(content, oldTitle, newTitle);
+						content = wl.body;
+						changed += wl.changed;
+					}
+					// A wikilink can also name a page by its FILENAME, so a rename orphans
+					// those unless they move with it (the title lane above only catches the
+					// ones written as the title).
+					if (wikilinkKey(slugOf(newPath)) !== wikilinkKey(slugOf(path))) {
+						const wl = rewriteWikiLinks(content, slugOf(path), slugOf(newPath));
+						content = wl.body;
+						changed += wl.changed;
+					}
+					if (changed > 0) {
+						writes.push({ path: page.path, content });
+						repointedPages++;
+					}
+				}
+
+				// The moved page itself: rebase outbound links, refresh frontmatter.
+				const fm: Frontmatter = { ...(frontmatter ?? {}), title: newTitle, updated: today };
 				writes.push({
-					path: logPathOf(config),
-					content: insertLogEntry(log.content, today, bullet)
+					path: newPath,
+					content: withFrontmatter(fm, rebaseMdLinks(body, path, newPath))
 				});
-			}
 
-			const outcome = await commitBundle(ctx, {
-				writeMode: config.writeMode,
-				defaultBranch: config.defaultBranch,
-				author,
-				autoMerge: config.autoMerge,
-				mergeMethod: config.mergeMethod,
-				message: `Move ${path} -> ${newPath}\n\nInbound links repointed across ${repointedPages} page(s); logged.`,
-				writes,
-				deletes: [path],
-				head,
-				branchPrefix: 'isomorphic/move',
-				prTitle: `Move ${path} → ${newPath}`,
-				prBody: `Move \`${path}\` to \`${newPath}\`; inbound links repointed. Proposed via the Isomorphic brain tools.`
+				if (log) {
+					const bullet =
+						newTitle !== oldTitle
+							? `Moved "${oldTitle}" to \`${newPath}\` (now "${newTitle}").`
+							: `Moved "${oldTitle}" to \`${newPath}\`.`;
+					writes.push({
+						path: logPathOf(config),
+						content: insertLogEntry(log.content, today, bullet)
+					});
+				}
+
+				const outcome = await commitBundle(ctx, {
+					writeMode: config.writeMode,
+					defaultBranch: config.defaultBranch,
+					author,
+					autoMerge: config.autoMerge,
+					mergeMethod: config.mergeMethod,
+					message: `Move ${path} -> ${newPath}\n\nInbound links repointed across ${repointedPages} page(s); logged.`,
+					writes,
+					deletes: [path],
+					head,
+					branchPrefix: 'isomorphic/move',
+					prTitle: `Move ${path} → ${newPath}`,
+					prBody: `Move \`${path}\` to \`${newPath}\`; inbound links repointed. Proposed via the Isomorphic brain tools.`
+				});
+				return landed(
+					outcome,
+					`Moved "${oldTitle}" to ${newPath}${newTitle !== oldTitle ? ` and renamed it "${newTitle}"` : ''}. Links in ${repointedPages} page(s) were repointed; the change was logged.${truncationNote(truncated)}${toolRosterNote(path, newPath)}`,
+					`Proposed moving "${oldTitle}" to ${newPath}${newTitle !== oldTitle ? ` (renamed "${newTitle}")` : ''}; links in ${repointedPages} page(s) repointed.${truncationNote(truncated)}${toolRosterNote(path, newPath)}`
+				);
 			});
-			return landed(
-				outcome,
-				`Moved "${oldTitle}" to ${newPath}${newTitle !== oldTitle ? ` and renamed it "${newTitle}"` : ''}. Links in ${repointedPages} page(s) were repointed; the change was logged.${truncationNote(truncated)}${toolRosterNote(path, newPath)}`,
-				`Proposed moving "${oldTitle}" to ${newPath}${newTitle !== oldTitle ? ` (renamed "${newTitle}")` : ''}; links in ${repointedPages} page(s) repointed.${truncationNote(truncated)}${toolRosterNote(path, newPath)}`
-			);
 		}
 	);
 
@@ -1709,7 +1805,7 @@ export function registerLibrarianTools(
 		{
 			title: 'Delete a page or folder',
 			description:
-				'Remove a page (or a whole folder and everything under it) from the wiki. The deletion is logged. If other pages still link into what you deleted, they are listed so the references can be cleaned up. Pass a folder path (no .md extension) to delete an entire subtree, or the path of a non-page file (an image, a folder marker) to delete just that file. If this call TIMES OUT, check whether the path still exists before retrying — a delete lands whole or not at all.',
+				'Remove a page (or a whole folder and everything under it) from the wiki. The deletion is logged. If other pages still link into what you deleted, they are listed so the references can be cleaned up. Pass a folder path (no .md extension) to delete an entire subtree, or the path of a non-page file (an image, a folder marker) to delete just that file. If this call FAILS WITHOUT A RESULT (a timeout, a 502 or any other gateway error, a dropped connection), retrying the identical call is safe: a repeat with the same arguments within a few minutes is recognised as a retry rather than applied twice. A delete lands whole or not at all, so if you change the call, check whether the path still exists before retrying.',
 			inputSchema: {
 				brain: brainArg,
 				path: z
@@ -1719,75 +1815,78 @@ export function registerLibrarianTools(
 					)
 			}
 		},
-		async ({ path, brain }) => {
+		async (args) => {
+			const { path, brain } = args;
 			const ctx = await getContext({ requires: 'editor', brain });
-			// A path without a .md extension is a folder OR a non-page file; the tree
-			// says which, for the same reason it does in move_page. Guessing "folder"
-			// answered "No folder found" about files that were plainly there. This
-			// supersedes an attachment-specific branch, exactly as in move_page.
-			if (!path.trim().replace(/^\/+/, '').endsWith('.md')) {
-				const cleaned = path.trim().replace(/^\/+/, '').replace(/\/+$/, '');
-				const head = await ctx.store.getHead(ctx.repoArgs, ctx.config.defaultBranch);
-				const tree = await ctx.store.listTree(ctx.repoArgs, head, { extension: '*' });
-				if (tree.some((e) => e.path === cleaned))
-					return deleteFileWrite(ctx, head, { path: cleaned });
-				if (tree.some((e) => e.path.startsWith(`${cleaned}/`)))
-					return deleteFolderWrite(ctx, { path }, { head, tree });
-				return fail(`No file or folder "${cleaned}" found.`);
-			}
-			const { store, repoArgs, config, author } = ctx;
-			if (isSourcePath(path, config))
-				return fail(`"${path}" is source material — it can't be deleted.`);
-			if (isToolMaintained(path, config)) return fail(`"${path}" is maintained automatically.`);
-			if (!isContentPath(path, config))
-				return fail(`"${path}" is outside this brain's editable content.`);
+			return guardedWrite(ctx, 'delete_page', args, async () => {
+				// A path without a .md extension is a folder OR a non-page file; the tree
+				// says which, for the same reason it does in move_page. Guessing "folder"
+				// answered "No folder found" about files that were plainly there. This
+				// supersedes an attachment-specific branch, exactly as in move_page.
+				if (!path.trim().replace(/^\/+/, '').endsWith('.md')) {
+					const cleaned = path.trim().replace(/^\/+/, '').replace(/\/+$/, '');
+					const head = await ctx.store.getHead(ctx.repoArgs, ctx.config.defaultBranch);
+					const tree = await ctx.store.listTree(ctx.repoArgs, head, { extension: '*' });
+					if (tree.some((e) => e.path === cleaned))
+						return deleteFileWrite(ctx, head, { path: cleaned });
+					if (tree.some((e) => e.path.startsWith(`${cleaned}/`)))
+						return deleteFolderWrite(ctx, { path }, { head, tree });
+					return fail(`No file or folder "${cleaned}" found.`);
+				}
+				const { store, repoArgs, config, author } = ctx;
+				if (isSourcePath(path, config))
+					return fail(`"${path}" is source material — it can't be deleted.`);
+				if (isToolMaintained(path, config)) return fail(`"${path}" is maintained automatically.`);
+				if (!isContentPath(path, config))
+					return fail(`"${path}" is outside this brain's editable content.`);
 
-			const head = await store.getHead(repoArgs, config.defaultBranch);
-			const existing = await store.readFile(repoArgs, path, head.commitSha);
-			if (!existing) return fail(`"${path}" does not exist.`);
+				const head = await store.getHead(repoArgs, config.defaultBranch);
+				const existing = await store.readFile(repoArgs, path, head.commitSha);
+				if (!existing) return fail(`"${path}" does not exist.`);
 
-			const title = pageTitle(path, existing.content);
-			// The reference count and the changelog are independent — run them together.
-			const [refsRes, log] = await Promise.all([
-				inboundRefs(ctx, [path]),
-				store.readFile(repoArgs, logPathOf(config))
-			]);
-			const { refs, truncated } = refsRes;
+				const title = pageTitle(path, existing.content);
+				// The reference count and the changelog are independent — run them together.
+				const [refsRes, log] = await Promise.all([
+					inboundRefs(ctx, [path]),
+					store.readFile(repoArgs, logPathOf(config))
+				]);
+				const { refs, truncated } = refsRes;
 
-			const today = todayIso();
-			const writes: { path: string; content: string }[] = [];
-			if (log) {
-				writes.push({
-					path: logPathOf(config),
-					content: insertLogEntry(log.content, today, `Deleted "${title}" (\`${path}\`).`)
+				const today = todayIso();
+				const writes: { path: string; content: string }[] = [];
+				if (log) {
+					writes.push({
+						path: logPathOf(config),
+						content: insertLogEntry(log.content, today, `Deleted "${title}" (\`${path}\`).`)
+					});
+				}
+
+				const outcome = await commitBundle(ctx, {
+					writeMode: config.writeMode,
+					defaultBranch: config.defaultBranch,
+					author,
+					autoMerge: config.autoMerge,
+					mergeMethod: config.mergeMethod,
+					message: `Delete ${title} (${path})\n\nDeletion logged.`,
+					writes,
+					deletes: [path],
+					head,
+					branchPrefix: 'isomorphic/delete',
+					prTitle: `Delete ${title}`,
+					prBody: `Delete \`${path}\`. Proposed via the Isomorphic brain tools.`
 				});
-			}
 
-			const outcome = await commitBundle(ctx, {
-				writeMode: config.writeMode,
-				defaultBranch: config.defaultBranch,
-				author,
-				autoMerge: config.autoMerge,
-				mergeMethod: config.mergeMethod,
-				message: `Delete ${title} (${path})\n\nDeletion logged.`,
-				writes,
-				deletes: [path],
-				head,
-				branchPrefix: 'isomorphic/delete',
-				prTitle: `Delete ${title}`,
-				prBody: `Delete \`${path}\`. Proposed via the Isomorphic brain tools.`
+				const refNote = refs.length
+					? `\n\nHeads up — ${refs.length} page(s) still reference it:\n${refs
+							.map((r) => `- ${r.path} (${r.count} link(s))`)
+							.join('\n')}\nUpdate those pages to remove or repoint the references.`
+					: '';
+				return landed(
+					outcome,
+					`Deleted "${title}" (${path}). The change was logged.${refNote}${truncationNote(truncated)}${toolRosterNote(path)}`,
+					`Proposed deleting "${title}" (${path}).${refNote}${truncationNote(truncated)}${toolRosterNote(path)}`
+				);
 			});
-
-			const refNote = refs.length
-				? `\n\nHeads up — ${refs.length} page(s) still reference it:\n${refs
-						.map((r) => `- ${r.path} (${r.count} link(s))`)
-						.join('\n')}\nUpdate those pages to remove or repoint the references.`
-				: '';
-			return landed(
-				outcome,
-				`Deleted "${title}" (${path}). The change was logged.${refNote}${truncationNote(truncated)}${toolRosterNote(path)}`,
-				`Proposed deleting "${title}" (${path}).${refNote}${truncationNote(truncated)}${toolRosterNote(path)}`
-			);
 		}
 	);
 
