@@ -6,13 +6,13 @@
 // The first case is the regression this whole check exists for: a folder note that
 // held twelve event franchises as prose sections instead of giving each its own
 // page, in a brain whose other folders were already one-file-per-entity.
+import { folderMoveCollisions } from '../src/tools/librarian.ts';
 import {
-	folderMoveCollisions,
 	inlinedConceptSuggestions,
 	typeFieldSuggestions,
 	ambiguousTitleSuggestions,
 	wikilinkPortabilityNote
-} from '../src/tools/librarian.ts';
+} from '../src/lib/advisories.ts';
 import {
 	parseFrontmatter,
 	withFrontmatter,
