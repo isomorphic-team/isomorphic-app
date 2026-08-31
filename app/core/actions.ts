@@ -4,7 +4,7 @@
 // import freely without a cycle.
 
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
-import { marked } from 'marked';
+import { renderMarkdown } from '../../src/lib/render.ts';
 import {
 	resolveRelative,
 	buildWikilinkIndex,
@@ -1057,19 +1057,10 @@ async function resolveWikilink(target: string): Promise<string | null> {
 
 // ---------- markdown rendering (viewer) ----------
 
-function renderMarkdown(body: string): string {
-	const withWikilinks = body.replace(
-		/\[\[([^\]|]+)(?:\|([^\]]*))?\]\]/g,
-		(_m, target: string, label?: string) =>
-			`[${(label || target).trim()}](#wikilink=${encodeURIComponent(target.trim())})`
-	);
-	const html = marked.parse(withWikilinks, { async: false }) as string;
-	// marked emits a literal space between a task-list checkbox and its label
-	// (`<input type="checkbox"> Text`). Drop it so the gap is governed purely by CSS
-	// (`margin-right`), matching the editor's flex `gap` exactly — otherwise the viewer
-	// reads 0.4em + a space and the box-to-text spacing visibly shifts between modes.
-	return html.replace(/(<input\b[^>]*\btype="checkbox"[^>]*>) /g, '$1');
-}
+// Rendering lives in `src/lib/render.ts` so the Worker produces the same HTML.
+// The app's defaults are the ones baked in there: a `[[wikilink]]` becomes the
+// `#wikilink=` sentinel `onProseClick` resolves below, and an image keeps its
+// repo-relative `src` for `media.ts` to swap for a data URI after render.
 
 // Delegated link handling for rendered markdown.
 function onProseClick(fromPath: string) {
