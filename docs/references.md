@@ -117,6 +117,17 @@ Non-obvious things confirmed against the sources above (with the "why it bit us"
   the original function, replacing the property would be a silent no-op and every
   counter would read zero forever). Re-run that test after any SDK bump.
 
+- **`marked` sanitizes NOTHING** (verified against v18.0.11 by rendering the payloads
+  directly). `<script>`, `<iframe>`, `<style>`, and `<img onerror=…>` pass through
+  verbatim, and so do `javascript:`, `vbscript:`, and `data:` hrefs on both links and
+  images. The `sanitize` option was removed in v5 and nothing replaced it. Two further
+  details that decide how you defend: marked DOES escape quotes inside attributes
+  (`&quot;`), so there is no attribute-injection vector through link titles or image alt
+  text; and it emits the href otherwise untouched, so `&#106;avascript:` and
+  `javascript&colon;` reach the browser as `javascript:` while a scheme test on the raw
+  string sees no scheme at all. Anything rendering a page body has to decode entities
+  before checking the scheme. `src/lib/render.ts` is the one place that does it, and
+  `pnpm test:render` pins every payload above.
 - **MCP Apps display modes are `inline | fullscreen | pip`** — there is **no "sidebar"
   host mode.** A sidebar is a layout you build _inside_ a fullscreen app (Claude's design
   guidelines recommend exactly that for editors). PiP is a floating window, not a dock.

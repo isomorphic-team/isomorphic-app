@@ -104,6 +104,7 @@ jobs:
       # runs in exactly one of the two places and nobody notices which. Either job
       # counts; `pnpm test:wiring` reads the whole file.
       - run: pnpm test:roundtrip
+      - run: pnpm test:render
       - run: pnpm test:views
       - run: pnpm test:import
       - run: pnpm test:tools

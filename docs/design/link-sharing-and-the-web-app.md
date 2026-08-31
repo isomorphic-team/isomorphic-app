@@ -1,6 +1,7 @@
 # Design: sharing a page by link (and the web app behind it)
 
-- Status: Draft for discussion. Nothing built. Open questions in §16 are unresolved.
+- Status: Phase 0 is BUILT (`src/lib/render.ts`, `pnpm test:render`). Phases 1-4 are a
+  draft for discussion. Open questions in §16 are unresolved.
 - Author: Jon Hansing (via Claude)
 - Date: 2026-08-24
 - Audience: the engineering session that picks this up, and Jon deciding whether it should exist
@@ -297,9 +298,24 @@ OKF: sharing exists, it is per page, and it is a grant.
 
 ## 10. Implementation plan
 
-**Phase 0: extract the renderer.** `src/lib/render.ts` plus sanitization, the app switched onto
-it, `pnpm test:render`. No user-visible change, and it fixes an unsanitized `innerHTML` that is a
-latent bug today regardless of whether the rest of this gets built.
+**Phase 0: extract the renderer. BUILT.** `src/lib/render.ts` plus sanitization, the app switched
+onto it, `pnpm test:render`. No user-visible change, and it fixes an unsanitized `innerHTML` that
+was a latent bug regardless of whether the rest of this gets built.
+
+Three things came out of building it that this document had wrong or did not know:
+
+- **`marked` sanitizes nothing whatsoever**, which is worse than §4.6 assumed. Not just raw
+  HTML: `javascript:` and `data:` hrefs pass through on links _and_ images, and
+  `&#106;avascript:` / `javascript&colon;` reach the browser decoded while a scheme test on the
+  raw string sees no scheme at all. The scheme check has to decode entities first.
+- **The allowlist is over TAGS WITH ZERO ATTRIBUTES, not over tags and attributes.** With no
+  attributes there is no `on*`, no `style`, no `href`, so a listed tag cannot carry a payload.
+  `a` and `img` are off the list: markdown's own syntax routes through the renderer where the
+  scheme is checked, and a raw anchor would bypass exactly that. Disallowed markup is escaped
+  rather than dropped, so it becomes visible to its author instead of silently vanishing.
+- **The horizon rule (§4.4) is already in place** as the `href` hook: returning `null` flattens
+  a link to plain text. Phase 1 supplies the scope predicate; the renderer needs no further
+  change for it, and `pnpm test:render` already pins flatten-keeps-text.
 
 **Phase 1: single-page share links.** Migration `0007`, `share_page`, the reader route and the
 asset route in `fetch` ahead of `oauthProvider.fetch`, the link horizon, the app's share sheet.
