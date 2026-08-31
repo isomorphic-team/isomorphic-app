@@ -30,14 +30,9 @@ import { peekJsonRpc, needsBrainPreamble, jsonRpcError } from '../src/lib/mcp-pr
 import { registerLibrarianTools, type BrainContext } from '../src/tools/librarian.ts';
 import type { TenantOpts } from '../src/lib/orgs.ts';
 
-let failures = 0;
-function check(label: string, cond: boolean, detail = '') {
-	if (cond) console.log(`  ✓ ${label}`);
-	else {
-		failures++;
-		console.log(`  ✗ ${label}${detail ? ` — ${detail}` : ''}`);
-	}
-}
+import { checker } from './check.ts';
+
+const { check, done } = checker('preamble checks');
 
 const req = (method: string, id: number | string = 1) =>
 	JSON.stringify({ jsonrpc: '2.0', id, method, params: {} });
@@ -169,7 +164,4 @@ console.log('\nwrite-tool retry guidance');
 	}
 }
 
-console.log(
-	failures === 0 ? '\nAll preamble checks passed.\n' : `\n${failures} check(s) FAILED.\n`
-);
-process.exit(failures === 0 ? 0 : 1);
+done();

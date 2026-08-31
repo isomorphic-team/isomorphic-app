@@ -36,6 +36,7 @@ import {
 	previewText,
 	type FeedbackKind
 } from '../lib/feedback.ts';
+import { fail, ok } from './shared.ts';
 
 // Best-effort identity. Every field is optional on purpose: feedback must work on
 // the static single-bearer path (no user at all) and for someone who has an org but
@@ -60,17 +61,6 @@ interface FeedbackEnv {
 // A rolling-window cap, so one connection cannot turn a public tracker into a
 // firehose. High enough that nobody reporting real problems will notice it.
 const MAX_REPORTS_PER_DAY = 10;
-
-function fail(text: string) {
-	return { isError: true as const, content: [{ type: 'text' as const, text }] };
-}
-
-function ok(text: string, structuredContent?: Record<string, unknown>) {
-	return {
-		content: [{ type: 'text' as const, text }],
-		...(structuredContent ? { structuredContent } : {})
-	};
-}
 
 // Labels are best-effort. VERIFIED 2026-07-30 against real GitHub: a fine-grained
 // PAT with Issues: write DOES auto-create a label that does not exist yet (a report

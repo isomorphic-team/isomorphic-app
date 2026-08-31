@@ -13,14 +13,9 @@ import {
 } from '../src/lib/brain-import.ts';
 import { parseFrontmatter } from '../src/lib/wiki.ts';
 
-let failures = 0;
-function check(name: string, cond: boolean, detail?: string) {
-	if (cond) console.log(`  ok  ${name}`);
-	else {
-		failures++;
-		console.error(`FAIL  ${name}${detail ? `\n      ${detail}` : ''}`);
-	}
-}
+import { checker } from './check.ts';
+
+const { check, done } = checker('import checks');
 
 const TODAY = '2026-07-23';
 const SOURCE_OWNED = ['title', 'type', 'email', 'roles', 'organization'];
@@ -393,11 +388,7 @@ function run() {
 	}
 	check('corrupt ledger throws (never guess — guessing resurrects deletions)', threw);
 
-	if (failures) {
-		console.error(`\n${failures} check(s) FAILED`);
-		process.exit(1);
-	}
-	console.log('\nAll import checks passed.');
+	done();
 }
 
 run();

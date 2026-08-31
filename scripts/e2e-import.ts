@@ -117,14 +117,9 @@ await client.connect(clientTransport);
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-let failures = 0;
-function check(name: string, cond: boolean, detail?: string) {
-	if (cond) console.log(`  ok  ${name}`);
-	else {
-		failures++;
-		console.error(`FAIL  ${name}${detail ? `\n      ${detail}` : ''}`);
-	}
-}
+import { checker } from './check.ts';
+
+const { check, done } = checker('import E2E checks');
 
 interface CallResult {
 	isError: boolean;
@@ -438,12 +433,9 @@ try {
 	check('dry run plans a create', !r.isError && (r.sc.created as unknown[])?.length === 1, r.text);
 	check('dry run writes nothing', (await headSha()) === shaDry);
 
-	if (failures) {
-		console.error(`\n${failures} check(s) FAILED`);
-		process.exitCode = 1;
-	} else {
-		console.log('\nAll import E2E checks passed.');
-	}
+	// Inside the try on purpose: `done()` sets process.exitCode rather than exiting,
+	// so the finally below still deletes the scratch brain.
+	done();
 } finally {
 	await cleanup();
 }

@@ -15,14 +15,9 @@ import {
 } from '../src/lib/views.ts';
 import type { PageFields } from '../src/lib/brain-index.ts';
 
-let failures = 0;
-function check(name: string, cond: boolean, detail?: string) {
-	if (cond) console.log(`  ok  ${name}`);
-	else {
-		failures++;
-		console.error(`FAIL  ${name}${detail ? `\n      ${detail}` : ''}`);
-	}
-}
+import { checker } from './check.ts';
+
+const { check, done } = checker('view checks');
 
 // ---------- fixture brain ----------
 // org page + three people; two link to the org (one via wikilink), one links elsewhere.
@@ -431,11 +426,7 @@ async function main() {
 		spaced.display.includes('[Plain](plain.md)')
 	);
 
-	if (failures) {
-		console.error(`\n${failures} check(s) FAILED`);
-		process.exit(1);
-	}
-	console.log('\nAll view checks passed.');
+	done();
 }
 
 main();

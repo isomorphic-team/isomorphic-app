@@ -15,14 +15,9 @@ import {
 import { parseFrontmatter, withFrontmatter, type Frontmatter } from '../src/lib/wiki.ts';
 import { SNAPSHOT_BEGIN, SNAPSHOT_END } from '../src/lib/view-directives.ts';
 
-let failures = 0;
-function check(name: string, cond: boolean, detail?: string) {
-	if (cond) console.log(`  ok  ${name}`);
-	else {
-		failures++;
-		console.error(`FAIL  ${name}${detail ? `\n      ${detail}` : ''}`);
-	}
-}
+import { checker } from './check.ts';
+
+const { check, done } = checker('page-patch checks');
 
 const BODY = `# Key documents
 
@@ -350,5 +345,4 @@ check('fields: an empty patch is an error', !applyFieldPatch(fmOf(PAGE), {}).ok)
 check('fields: validate agrees before any page is fetched', validateFieldPatch({}) !== null);
 check('fields: validate passes a good patch', validateFieldPatch({ done: 'yes' }) === null);
 
-console.log(failures === 0 ? '\nAll page-patch checks passed.' : `\n${failures} check(s) failed.`);
-process.exit(failures === 0 ? 0 : 1);
+done();
