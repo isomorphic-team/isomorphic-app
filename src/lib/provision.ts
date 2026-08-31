@@ -25,10 +25,11 @@ import {
 	getDefaultBrainForUser,
 	createOrg,
 	addMembership,
-	getPendingInviteByEmail,
-	acceptInvite,
+	roleAtLeast,
+	type Role,
 	type OrgContext
 } from './orgs.ts';
+import { claimPendingInvites } from './invites.ts';
 
 export interface ProvisionInput {
 	octokit: Octokit;
@@ -149,24 +150,66 @@ export async function provisionBrainForUser(input: ProvisionInput): Promise<Tena
 // ---------- Product-identity (Auth.js) provisioning ----------
 
 export interface ProvisionOrgInput {
-	octokit: Octokit;
 	db: D1Database;
 	// The Auth.js user this org is being provisioned for.
 	user: { user_id: string; email: string; name?: string | null };
-	// The platform org all Model-A brains are created under, and its installation.
-	org: string;
-	installationId: number;
+	// The platform org Model-A orgs are minted against, and its installation.
+	// Only needed to MINT one: joining an org by invitation touches neither, which
+	// is what lets an invite-only deployment accept invitations at all.
+	org?: string;
+	installationId?: number;
+	// Whether this deployment mints a personal org for a person nobody invited
+	// (AUTO_PROVISION). Off means an un-invited person is turned away; it has
+	// never meant an invited one is.
+	autoProvision?: boolean;
 }
 
-// First-touch provisioning for a product-identity user: create a Model-A org
-// (platform-owned) with an owner membership and one scaffolded brain under the
-// platform org. The authjs analog of provisionBrainForUser. Idempotent: an
-// existing membership short-circuits, and a repo-name collision adopts the
-// existing repo (mirrors the GitHub-path race handling above).
-export async function provisionOrgForUser(input: ProvisionOrgInput): Promise<OrgContext> {
-	const { db, user, org, installationId } = input;
+// What a member with no reachable brain gets. 'create' is the app's "create your
+// first brain" state, which is the right answer for anyone who can actually
+// create one: the owner of the personal org a first sign-in mints, and equally an
+// editor whose org holds only brains nobody has shared with them.
+//
+// A VIEWER can create nothing, so that state strands them, and which of two very
+// different problems they are looking at is invisible from their side because
+// brains are private by default. An org holding no brain at all needs one
+// created; an org whose brains are simply not shared with this person needs an
+// admin to share one. Telling an admin to "finish setup" on an org that is
+// already set up sends them looking in the wrong place.
+export function noBrainOutcome(input: {
+	role: Role;
+	orgHasAnyBrain: boolean;
+}): { kind: 'create' } | { kind: 'error'; message: string } {
+	if (roleAtLeast(input.role, 'editor')) return { kind: 'create' };
+	return {
+		kind: 'error',
+		message: input.orgHasAnyBrain
+			? 'You are a member of an organization, but none of its brains have been shared with you yet. Ask your admin to share one (they can run share_brain, or use the Share panel on the brain).'
+			: 'You are a member of an organization, but it has no brain configured yet. Ask your admin to finish setup.'
+	};
+}
 
-	// Idempotent short-circuit: user already has an org with a brain.
+// First-touch resolution for a product-identity user: claim any invitation
+// addressed to them, and otherwise mint a personal Model-A org (platform-owned)
+// with an owner membership. The authjs analog of provisionBrainForUser. No brain
+// is created here: as of Phase 8 (brain-creation-and-init) brains are stood up
+// EXPLICITLY (create_brain / the Add-a-brain flow). Idempotent, so it is safe on
+// every request that finds no accessible brain.
+export async function provisionOrgForUser(input: ProvisionOrgInput): Promise<OrgContext> {
+	const { db, user, org, installationId, autoProvision = true } = input;
+
+	await upsertAppUser(db, {
+		user_id: user.user_id,
+		email: user.email,
+		name: user.name ?? null
+	});
+
+	// An admin may have pre-invited this address to a specific org (e.g. a customer
+	// Model-B org with its own adopted brain). Joining it is how a member with no
+	// GitHub account lands in the right org. This runs BEFORE the membership
+	// lookup and BEFORE the autoProvision gate: an invitation is not provisioning,
+	// and it applies whatever else this person already belongs to (issue #69).
+	await claimPendingInvites(db, [user.user_id]);
+
 	const existing = await getMembershipWithOrg(db, user.user_id);
 	if (existing) {
 		const brain = await getDefaultBrainForUser(
@@ -176,73 +219,41 @@ export async function provisionOrgForUser(input: ProvisionOrgInput): Promise<Org
 			existing.role
 		);
 		if (brain) return { org: existing.org, brain, role: existing.role };
-	}
-
-	await upsertAppUser(db, {
-		user_id: user.user_id,
-		email: user.email,
-		name: user.name ?? null
-	});
-
-	// An admin may have pre-invited this email to a specific org (e.g. a customer
-	// Model-B org with its own adopted brain). If so, join THAT org at the invited
-	// role rather than minting a personal Model-A brain — this is how members with
-	// no GitHub account land in the right org on their very first sign-in.
-	if (!existing) {
-		const invite = await getPendingInviteByEmail(db, user.email);
-		if (invite) {
-			await addMembership(db, {
-				org_id: invite.org_id,
-				user_id: user.user_id,
-				role: invite.role
-			});
-			await acceptInvite(db, invite.invite_id);
-			const membership = await getMembershipWithOrg(db, user.user_id);
-			const brain = membership
-				? await getDefaultBrainForUser(db, membership.org.org_id, user.user_id, membership.role)
-				: null;
-			if (membership && brain) return { org: membership.org, brain, role: membership.role };
-			// No brain to land in. Minting a platform brain under a customer org would
-			// be wrong, so surface a clear error, but say WHICH problem it is. Since
-			// brains are private by default, "the org has no brain at all" and "the org
-			// has brains and none are shared with you" need different fixes from the
-			// admin, and telling an admin to "finish setup" on an org that is already
-			// set up sends them looking in the wrong place.
-			const orgHasAnyBrain = membership ? await getAnyBrainInOrg(db, membership.org.org_id) : null;
-			throw new Error(
-				orgHasAnyBrain
-					? 'You were invited to an organization, but none of its brains have been shared with you yet. Ask your admin to share one (they can run share_brain, or use the Share panel on the brain).'
-					: 'You were invited to an organization, but it has no brain configured yet. Ask your admin to finish setup.'
-			);
-		}
-	}
-
-	// Reuse the existing org if the user already had a membership (brain missing);
-	// otherwise mint a fresh platform-model org with the user as owner. NO brain is
-	// created here — as of Phase 8 (brain-creation-and-init) brains are stood up
-	// EXPLICITLY (create_brain / the Add-a-brain flow), never auto-provisioned. First
-	// touch lands the user in their empty personal org; getDefaultBrainForUser returns null
-	// until they create one, and callers render the "create your first brain" state.
-	const orgId = existing?.org.org_id ?? crypto.randomUUID();
-	if (!existing) {
-		await createOrg(db, {
-			org_id: orgId,
-			name: user.email,
-			model: 'platform',
-			installation_id: installationId,
-			brain_owner: org,
-			github_org_login: null,
-			created_by: user.user_id
+		// Minting a platform brain inside someone else's org would be wrong, so say
+		// what is actually missing instead.
+		const outcome = noBrainOutcome({
+			role: existing.role,
+			orgHasAnyBrain: !!(await getAnyBrainInOrg(db, existing.org.org_id))
 		});
-		await addMembership(db, { org_id: orgId, user_id: user.user_id, role: 'owner' });
+		if (outcome.kind === 'error') throw new Error(outcome.message);
+		return { org: existing.org, brain: null, role: existing.role };
 	}
+
+	// Nobody invited them and they belong nowhere. Minting a personal org is the
+	// only thing left, and it is what AUTO_PROVISION governs.
+	if (!autoProvision || !org || installationId === undefined) {
+		throw new Error(
+			`No org configured for ${user.email} and AUTO_PROVISION is off. An admin must invite you.`
+		);
+	}
+
+	const orgId = crypto.randomUUID();
+	await createOrg(db, {
+		org_id: orgId,
+		name: user.email,
+		model: 'platform',
+		installation_id: installationId,
+		brain_owner: org,
+		github_org_login: null,
+		created_by: user.user_id
+	});
+	await addMembership(db, { org_id: orgId, user_id: user.user_id, role: 'owner' });
 
 	const membership = await getMembershipWithOrg(db, user.user_id);
 	if (!membership) {
 		throw new Error(`Provisioned org ${orgId} for ${user.email} but membership did not persist.`);
 	}
-	// null until a brain is created: and, for a pre-existing org, null also when
-	// every brain in it is private and none has been shared with this user.
+	// null until a brain is created; callers render the "create your first brain" state.
 	const brain = await getDefaultBrainForUser(db, orgId, user.user_id, membership.role);
 	return { org: membership.org, brain, role: membership.role };
 }

@@ -17,6 +17,7 @@ import { Auth } from '@auth/core';
 import { buildAuthConfig, getAuthSession, AUTH_BASE_PATH, type AuthEnv } from '../auth/config.ts';
 import { resolveProductIdentity } from '../lib/identity.ts';
 import { getAppUser, upsertAppUser, mergePersons } from '../lib/orgs.ts';
+import { claimPendingInvites } from '../lib/invites.ts';
 
 interface AuthHandlerEnv extends AuthEnv {
 	OAUTH_KV: KVNamespace;
@@ -185,11 +186,36 @@ export const authHandler = {
 				name: session.user.name ?? null
 			});
 			await mergePersons(env.PLATFORM_DB, actor_user_id, session.user.id);
+
+			// This sign-in just PROVED the address, which is the whole basis on which
+			// an invitation is honoured, so a pending invite for it is claimed here
+			// exactly as a first sign-in claims one. Without this the invited address
+			// gets an app_users row and no membership, and the invite sits pending
+			// until it expires with nothing surfaced to either side (issue #69).
+			// Fail-open: the accounts ARE linked at this point, and reporting the
+			// linking as failed would be worse than a late invite.
+			let joined = 0;
+			try {
+				const claimed = await claimPendingInvites(env.PLATFORM_DB, [session.user.id]);
+				joined = claimed.filter((c) => c.joins).length;
+			} catch (err) {
+				console.warn(
+					`[link/complete] invite claim failed: ${err instanceof Error ? err.message : String(err)}`
+				);
+			}
+
 			await env.OAUTH_KV.delete(`pending_link:${state}`); // consume only on success
-			console.log(`[link/complete] linked ${session.user.email} → person of ${actor_user_id}`);
+			console.log(
+				`[link/complete] linked ${session.user.email} → person of ${actor_user_id}` +
+					(joined ? ` (claimed ${joined} invitation${joined === 1 ? '' : 's'})` : '')
+			);
 			return linkPage(
 				'Account linked',
-				`Linked ${session.user.email} to your account. Return to Claude — all your brains are now reachable from either sign-in.`
+				`Linked ${session.user.email} to your account.${
+					joined
+						? ` That address had a pending invitation, so you have joined ${joined === 1 ? 'that organization' : 'those organizations'} too.`
+						: ''
+				} Return to Claude: all your brains are now reachable from either sign-in.`
 			);
 		}
 
