@@ -89,7 +89,7 @@
 		"clsx": "^2.1.1",
 		"esbuild": "^0.28.1",
 		"lucide-preact": "^1.23.0",
-		"markdown-it": "^14.3.0",
+		"markdown-it": "^15.0.1",
 		"marked": "^18.0.5",
 		"preact": "^10.29.5",
 		"prettier": "^3.8.1",
