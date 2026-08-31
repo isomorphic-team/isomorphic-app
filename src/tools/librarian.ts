@@ -96,7 +96,12 @@ const brainArg = z
 // `type:` values, so this takes whatever the brain calls things rather than a
 // fixed list.
 const fieldsArg = z
+	// zod 4 wants the KEY schema passed explicitly. The one-argument form still parses
+	// at runtime, but its inferred type widens to Record<string | number | symbol,
+	// unknown>, which no longer matches FieldPatch. Naming z.string() keeps the record
+	// typed as Record<string, ...>.
 	.record(
+		z.string(),
 		z.union([
 			z.string(),
 			z.number(),
