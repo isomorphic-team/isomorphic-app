@@ -24,13 +24,18 @@
 //   pnpm test:wiring
 
 import { createRequire } from 'node:module';
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 
 const root = new URL('../', import.meta.url);
 const pkg = JSON.parse(readFileSync(new URL('package.json', root), 'utf8')) as {
 	scripts: Record<string, string>;
 };
 const ci = readFileSync(new URL('.github/workflows/ci.yml', root), 'utf8');
+
+// Every workflow, not just ci.yml. A pnpm script named in ANY of them can rot.
+const workflowFiles = readdirSync(new URL('.github/workflows/', root)).filter(
+	(f) => f.endsWith('.yml') || f.endsWith('.yaml')
+);
 
 let failures = 0;
 function check(label: string, cond: boolean, detail = '') {
@@ -60,6 +65,37 @@ for (const name of batteries) {
 console.log('\nci.yml does not run anything that stopped existing');
 for (const name of inCi) {
 	check(`${name} is a real package.json script`, name in pkg.scripts, 'renamed or removed?');
+}
+
+// ---------- every other pnpm script the workflows invoke ----------
+
+// The test:* lists above are not everything the workflows run. A step like
+// `- run: pnpm security:audit` names a script exactly the same way and rots exactly
+// the same way, and that step is `continue-on-error`, so a rename would fail SILENTLY
+// instead of reddening the job: the check would report success having run nothing.
+//
+// EVERY workflow, not only ci.yml. deploy.yml names gen:app, gen:templates, typecheck
+// and setup:config, and it is the worse file to lose a step in: a rename that reddens
+// ci.yml is a blocked pull request, while the same rename in deploy.yml skips a regen
+// and ships a stale bundle to production.
+const PNPM_BUILTINS = new Set(['install', 'exec', 'run', 'dlx', 'audit', 'why', 'add', 'test']);
+// Anchored to `run:` rather than scanning the whole file the way the test:* matcher
+// above does. Unprefixed script names are ordinary English, so prose in a comment
+// ("the version pnpm actually resolves") otherwise reads as a step.
+const invoked = new Map<string, string>();
+for (const file of workflowFiles) {
+	const text = readFileSync(new URL(`.github/workflows/${file}`, root), 'utf8');
+	for (const m of text.matchAll(/run:\s*pnpm\s+([a-z0-9:_-]+)/g)) {
+		const name = m[1];
+		if (name.startsWith('test:') || PNPM_BUILTINS.has(name)) continue;
+		if (!invoked.has(name)) invoked.set(name, file);
+	}
+}
+
+console.log('\nevery other pnpm script the workflows invoke still exists');
+check('the workflows invoke at least one', invoked.size > 0);
+for (const [name, file] of invoked) {
+	check(`${name} (${file})`, name in pkg.scripts, 'renamed or removed from package.json?');
 }
 
 // ---------- the Playwright container tag ----------
