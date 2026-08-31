@@ -117,6 +117,17 @@ Non-obvious things confirmed against the sources above (with the "why it bit us"
   the original function, replacing the property would be a silent no-op and every
   counter would read zero forever). Re-run that test after any SDK bump.
 
+- **A stateless `/mcp` POST needs NO `initialize`, and DOES need both accept types.**
+  Verified 2026-08-31 against `pnpm try` (the same handlers the Worker serves). A bare
+  `{"method":"tools/call"}` POST returns `200` with the real result: because the transport
+  is stateless (`sessionIdGenerator: undefined`) every request builds a fresh
+  `McpServer`, so there is no initialization state to enforce and nothing to carry
+  between calls. A non-host MCP client (the web app) is therefore one `fetch` per call,
+  with no handshake to maintain. The catch is the header: the request MUST send
+  `accept: application/json, text/event-stream`. Either one alone, or a missing header,
+  is refused with `406 Not Acceptable` and `-32000 "Client must accept both
+application/json and text/event-stream"`, even though `enableJsonResponse: true` means
+  the answer is always JSON and no stream is ever opened.
 - **`marked` sanitizes NOTHING** (verified against v18.0.11 by rendering the payloads
   directly). `<script>`, `<iframe>`, `<style>`, and `<img onerror=…>` pass through
   verbatim, and so do `javascript:`, `vbscript:`, and `data:` hrefs on both links and
