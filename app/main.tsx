@@ -27,7 +27,7 @@ import {
 	MODE_LABEL,
 	availableModeList
 } from './core/host.ts';
-import { parseWebPath } from './core/host-web.ts';
+import { parseWebPath, registerWebNavigation } from './core/host-web.ts';
 import {
 	handleToolResult,
 	ensureBrainList,
@@ -479,6 +479,13 @@ function connectToHost() {
 			// spend the whole deadline before drawing anything.
 			if (isWeb()) {
 				void ensureBrainList();
+				// Back and forward. `push: false` because the browser has already
+				// moved; store.ts's syncAddressBar is the half that put the entry
+				// there.
+				registerWebNavigation((t) => {
+					if (t.path) void navigateTo(t.path, { push: false });
+					else openBrowse();
+				});
 				const target = parseWebPath(location.pathname);
 				if (target?.path) void navigateTo(target.path);
 				else openBrowse();

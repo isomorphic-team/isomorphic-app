@@ -579,10 +579,14 @@ function pageLabel(path: string): string {
 
 // ---------- navigation ----------
 
-async function navigateTo(path: string) {
+// `push` is forwarded to the final `show`, which is what decides whether the web
+// host adds a browser history entry. It is false when the browser has already
+// moved and we are catching up to it (the popstate handler), where pushing would
+// re-add the entry the user just left.
+async function navigateTo(path: string, { push = true } = {}) {
 	show({ kind: 'loading', label: `Loading ${path}…`, task: 'page', subject: pageLabel(path) });
 	try {
-		show(pageView(path, await fetchPage(path)));
+		show(pageView(path, await fetchPage(path)), { push });
 	} catch (e) {
 		if (isNoBrain(String(e))) return openAddBrain();
 		show({

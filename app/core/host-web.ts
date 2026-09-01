@@ -86,7 +86,24 @@ async function readEnvelope(res: Response): Promise<JsonRpcEnvelope> {
 	throw new Error('Empty response from the server.');
 }
 
+// Back and forward.
+//
+// The app is one document that never navigates, so a browser history move arrives
+// only as this event: without a handler, Back leaves the app rather than returning
+// to the previous page. The counterpart is `syncAddressBar` in store.ts, which is
+// what puts the entries there in the first place.
+//
+// The handler navigates with `push: false`, since the browser has ALREADY moved —
+// pushing here would re-add the entry it just left and make Back a no-op.
+export function registerWebNavigation(onNavigate: (target: WebTarget) => void): void {
+	addEventListener('popstate', () => {
+		const target = parseWebPath(location.pathname);
+		if (target) onNavigate(target);
+	});
+}
+
 // What a `/b/...` URL means is decided in ONE place, which the Worker uses to
 // serve the shell and the app uses to open the right page. Two parsers is how a
 // link ends up opening a different page than the one it names.
+import { parseWebPath, type WebTarget } from '../../src/lib/web-app.ts';
 export { parseWebPath, webPathFor, type WebTarget } from '../../src/lib/web-app.ts';

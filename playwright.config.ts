@@ -24,6 +24,13 @@ import { defineConfig, devices } from '@playwright/test';
 // clash) just because they also ran the tests.
 export const UI_TEST_PORT = Number(process.env.UI_TEST_PORT) || 5176;
 
+// The WEB host's own server (`scripts/web-dev.ts`), which is a different program
+// from the harness: it serves the bundle as a top-level document and answers its
+// tool calls over HTTP from the local runtime. Same reasoning as above for the
+// port — not 5177 either, which is `pnpm web:dev`'s.
+export const WEB_TEST_PORT = Number(process.env.WEB_TEST_PORT) || 5178;
+const WEB_TEST_UPSTREAM = Number(process.env.WEB_TEST_UPSTREAM) || 8789;
+
 export default defineConfig({
 	testDir: './tests/ui',
 	// Snapshots are platform-specific: font rasterization and scrollbar metrics differ
@@ -58,27 +65,53 @@ export default defineConfig({
 		{
 			name: 'functional',
 			use: { ...devices['Desktop Chrome'] },
-			testIgnore: /visual\.spec\.ts/
+			testIgnore: [/visual\.spec\.ts/, /web-nav\.spec\.ts/]
 		},
 		{
 			name: 'visual',
 			use: { ...devices['Desktop Chrome'] },
 			testMatch: /visual\.spec\.ts/
+		},
+		{
+			// The web host. A separate project because it has its own baseURL: these
+			// specs load a top-level document from the web server, not the harness.
+			name: 'web',
+			use: { ...devices['Desktop Chrome'], baseURL: `http://localhost:${WEB_TEST_PORT}` },
+			testMatch: /web-nav\.spec\.ts/
 		}
 	],
-	webServer: {
-		// --once: one build, then a static server. No watchers, no live-reload channel,
-		// so nothing can reload the page mid-assertion. See scripts/app-dev.ts.
-		command: 'pnpm exec tsx scripts/app-dev.ts --once',
-		env: { PORT: String(UI_TEST_PORT) },
-		url: `http://localhost:${UI_TEST_PORT}/`,
-		// Reuse a server a maintainer already has up locally; never in CI, where a
-		// leftover process would mean testing a stale bundle.
-		reuseExistingServer: !process.env.CI,
-		// The server runs `pnpm gen:app` before it can serve, which is tens of seconds on
-		// a cold CI runner.
-		timeout: 180_000,
-		stdout: 'pipe',
-		stderr: 'pipe'
-	}
+	webServer: [
+		{
+			// --once: one build, then a static server. No watchers, no live-reload channel,
+			// so nothing can reload the page mid-assertion. See scripts/app-dev.ts.
+			command: 'pnpm exec tsx scripts/app-dev.ts --once',
+			env: { PORT: String(UI_TEST_PORT) },
+			url: `http://localhost:${UI_TEST_PORT}/`,
+			// Reuse a server a maintainer already has up locally; never in CI, where a
+			// leftover process would mean testing a stale bundle.
+			reuseExistingServer: !process.env.CI,
+			// The server runs `pnpm gen:app` before it can serve, which is tens of seconds on
+			// a cold CI runner.
+			timeout: 180_000,
+			stdout: 'pipe',
+			stderr: 'pipe'
+		},
+		{
+			// The web app, over its own brain. `--reset` and a dedicated BRAIN_DIR
+			// because this one is a real git repo the app WRITES to: sharing the
+			// preview's brain would make a run depend on whatever a maintainer last
+			// edited, and would edit it back.
+			command: 'pnpm exec tsx scripts/web-dev.ts --reset',
+			env: {
+				PORT: String(WEB_TEST_PORT),
+				UPSTREAM_PORT: String(WEB_TEST_UPSTREAM),
+				BRAIN_DIR: 'dev/web-test-brain'
+			},
+			url: `http://localhost:${WEB_TEST_PORT}/b/local/web-test-brain`,
+			reuseExistingServer: !process.env.CI,
+			timeout: 180_000,
+			stdout: 'pipe',
+			stderr: 'pipe'
+		}
+	]
 });

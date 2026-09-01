@@ -11,7 +11,10 @@ import {
 	isContentPath,
 	normRoot
 } from '../../src/lib/brain-policy.ts';
+import { isWebHost, webPathFor, parseWebPath } from './host-web.ts';
 
+// NOTE: this shadows the global `history`. Anything wanting the browser's own
+// history stack (see syncAddressBar) must say `globalThis.history`.
 const history: View[] = [];
 // The whole last file-tree payload, not just its paths: the tree, the folder-note
 // lookup behind a breadcrumb click, and wikilink resolution all read the same cache,
@@ -178,7 +181,45 @@ function show(v: View, { push = true } = {}) {
 		if (history.length > HISTORY_LIMIT) history.shift();
 	}
 	currentView = v;
+	syncAddressBar(v, push);
 	bump();
+}
+
+// Keep the browser's address bar naming what is on screen (web host only).
+//
+// In a tab the URL is not decoration: it is what you copy to send someone the page
+// you are reading, and what Back returns you to. Nothing wrote it before, so the app
+// parsed `/b/...` once at boot and then navigated underneath it — every page you
+// reached by clicking still advertised the one you first opened, and Back left the
+// app entirely. `webPathFor` existed for this and had no caller outside its own
+// round-trip test, which is why a green `pnpm test:web` never noticed.
+//
+// Only the two views the URL grammar can NAME are synced. `parseWebPath` understands
+// a brain and a path and nothing else, so Members, the editor and the graph leave the
+// bar on the last page it named rather than inventing a URL that cannot be read back
+// — the inverse property the whole module exists to hold.
+//
+// In the MCP App this is dead: `isWebHost()` is false, there is no address bar, and
+// the host owns navigation.
+function syncAddressBar(v: View, push: boolean): void {
+	if (!isWebHost()) return;
+	const path = v.kind === 'page' ? v.path : v.kind === 'browse' ? '' : null;
+	if (path === null) return;
+	// The brain on screen, else the one the URL already names. The fallback is not
+	// belt-and-braces: `activeBrain` is set from the brains list, which fails open
+	// when a deployment does not register that tool (the local runtime does not),
+	// and a null there would silently disable the address bar rather than degrade.
+	// The URL's own brain is the right answer whenever we have nothing better.
+	const brain = activeBrain?.id ?? parseWebPath(location.pathname)?.brain;
+	if (!brain) return;
+	const url = webPathFor(brain, path);
+	if (url === location.pathname) return;
+	// `push: false` means the view is being RESTORED — goBack, a refresh in place, or
+	// the popstate handler reacting to a move the browser already made. Pushing there
+	// would leave an entry pointing at where the user just was, so Back would have to
+	// be pressed twice to go anywhere.
+	if (push) globalThis.history.pushState(null, '', url);
+	else globalThis.history.replaceState(null, '', url);
 }
 
 // Return to whatever pushed the current view.

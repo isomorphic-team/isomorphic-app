@@ -29,6 +29,7 @@ pnpm worker:dev         # `wrangler dev` for the MCP Worker — http://localhost
 pnpm worker:deploy      # publish the Worker to Cloudflare
 pnpm worker:types       # regenerate Worker types from wrangler.jsonc
 pnpm app:dev            # local dev server for the MCP App UI — http://localhost:5175 (see dev/README.md)
+pnpm web:dev            # the same bundle as a WEB page — http://localhost:5177 (no auth; --reset re-seeds)
 pnpm gen:app            # codegen the ui:// app bundle (after editing app/ OR any src/lib/ file it imports)
 pnpm regen:pr <n>       # regenerate that bundle on a PR branch that could not (Dependabot); --push to send it
 pnpm test:roundtrip     # editor markdown round-trip golden test
@@ -629,6 +630,31 @@ Worker's `fetch`, ahead of the OAuth provider like `/health`.
   self-boot deadlines do not apply: the URL says what to show. `parseWebPath` and
   `webPathFor` are inverses in ONE module, imported by both the Worker and the app,
   because two parsers is how a link opens a different page than it names.
+- **The URL is WRITTEN as well as read** (`syncAddressBar` in `app/core/store.ts`,
+  `registerWebNavigation` in `host-web.ts`). It was only read at first: the app
+  parsed `/b/...` once at boot and then navigated underneath it, so Back left the
+  app, Forward could not return, and the URL you copied to send someone was never
+  the page you were reading — which is the entire point of the web app. `show()` is
+  the one chokepoint, so the sync rides it; `push: false` (a restore, or catching up
+  to a move the browser already made) replaces the entry instead of adding one.
+  **Only the two views the URL grammar can NAME are synced** — a page and a brain
+  root. Members, the editor and the graph leave the bar alone rather than inventing
+  a URL `parseWebPath` cannot read back, which is the inverse property the module
+  exists to hold. In the MCP App the whole thing is dead code: `isWebHost()` is
+  false and the host owns navigation.
+- **`pnpm web:dev` is the web host's dev server, and `--project=web` its tests.**
+  `pnpm app:dev` cannot stand in for either: it mounts the bundle in a sandboxed
+  iframe over AppBridge, so `host-web.ts`, `parseWebPath` and the shell are
+  unreachable from it however complete its fixtures are. `web:dev` serves the real
+  `webShell` + `WEB_APP_HEADERS` behind the real `checkWebMcpRequest`, proxied to
+  the local runtime (`pnpm try`) for real tool handlers over a git repo. **Both
+  hosts seed from `dev/seed.ts`** so a difference between them is a difference in
+  the APP rather than in what it was handed. What it does NOT reproduce is AUTH:
+  there is no session, no cookie, and the local runtime reports `owner` for
+  everything, so it is the right tool for behaviour and the wrong one for access.
+  The address-bar bug above is what the first run of it found, which is the case
+  for keeping it: `pnpm test:web` was green throughout, because `webPathFor` had no
+  caller outside its own round-trip test.
 - **`script-src` still carries `'unsafe-inline'`.** The bundle is one self-contained
   HTML file with JS and CSS inlined (the MCP App iframe CSP forbids external hosts,
   which is why it is built that way), so there is no external script for `'self'` to
@@ -636,9 +662,12 @@ Worker's `fetch`, ahead of the OAuth provider like `/health`.
   script tags are; a blind replace over minified JS risks rewriting the literal
   text `<script` inside it. The threat that made this urgent was markdown-borne
   XSS, and that is closed at the source by `src/lib/render.ts`.
-- **Not verified end to end in a browser yet.** `pnpm test:web` covers the rules and
-  `pnpm test:ui` covers the MCP host path; nothing yet drives the real bundle in web
-  mode against a stubbed `/mcp`. That harness route is the next thing worth adding.
+- **Verified in a browser now** (`tests/ui/web-nav.spec.ts`, the `web` project), which
+  is what caught the address-bar defect above. **Still unverified: AUTHENTICATION.**
+  `web:dev` has no session, no cookie and no org model, so the `/b/` redirect for a
+  signed-out visitor, `props` built from a real Auth.js session, and every
+  authorization path behind it have run nowhere but production. That is the half to
+  be careful about, and no amount of green here speaks to it.
 
 ## One markdown renderer (`src/lib/render.ts`)
 
