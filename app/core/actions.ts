@@ -247,7 +247,7 @@ function ensureBrainList(): Promise<void> {
 			const sc = (res.structuredContent ?? {}) as {
 				brains?: BrainRow[];
 				active?: string;
-				features?: { analytics?: boolean };
+				features?: { analytics?: boolean; webBase?: string };
 			};
 			if (!Array.isArray(sc.brains)) throw new Error('brains: no list in the result');
 			setBrainList(sc.brains);

@@ -108,9 +108,11 @@ function applyBrainContext(sc: Record<string, unknown>): void {
 // ones fail on click. Unknown until the list lands, and a missing flag reads as OFF:
 // a destination that quietly does not appear is a far smaller failure than one that
 // appears and errors.
-let features: { analytics: boolean } = { analytics: false };
-function setFeatures(v: Partial<{ analytics: boolean }> | undefined): void {
-	if (v && typeof v.analytics === 'boolean') features = { ...features, analytics: v.analytics };
+let features: { analytics: boolean; webBase?: string } = { analytics: false };
+function setFeatures(v: Partial<{ analytics: boolean; webBase: string }> | undefined): void {
+	if (!v) return;
+	if (typeof v.analytics === 'boolean') features = { ...features, analytics: v.analytics };
+	if (typeof v.webBase === 'string' && v.webBase) features = { ...features, webBase: v.webBase };
 }
 
 // Whether the caller is admin+ in the active brain's org (can auto-configure it).
@@ -278,6 +280,18 @@ function webTitleFor(v: View): string | null {
 	}
 }
 
+// The web app's URL for what the widget is showing, for the "Open in browser"
+// control in the MCP App: the same page, same brain, in a full window. Null when
+// there is nothing to offer: on the web host itself (already there), on a
+// deployment with no web app (`features.webBase` never arrived), before a brain is
+// known, or on a view the URL grammar cannot name (the editor, deliberately).
+function webLinkFor(v: View): string | null {
+	if (isWebHost() || !features.webBase || !activeBrain) return null;
+	const target = webTargetFor(v);
+	if (!target) return null;
+	return `${features.webBase}${webPathFor(activeBrain.id, target.path, target.extras)}`;
+}
+
 function syncAddressBar(v: View, push: boolean): void {
 	if (!isWebHost()) return;
 	const target = webTargetFor(v);
@@ -356,6 +370,7 @@ export {
 	setOrgList,
 	applyBrainContext,
 	features,
+	webLinkFor,
 	setFeatures,
 	activeBrainCanManage,
 	brainArgs,

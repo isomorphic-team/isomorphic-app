@@ -14,7 +14,14 @@ import type { ComponentChildren } from 'preact';
 import { useSyncExternalStore } from 'preact/compat';
 import type { View } from './core/types.ts';
 import type { ViewAction } from './core/view-registry.ts';
-import { subscribeStore, version, currentView, show, setActiveBrain } from './core/store.ts';
+import {
+	subscribeStore,
+	version,
+	currentView,
+	show,
+	setActiveBrain,
+	webLinkFor
+} from './core/store.ts';
 import { activeDestination, isMorePlace } from './core/nav.ts';
 import { destinations } from './components/Destinations.tsx';
 import {
@@ -23,6 +30,7 @@ import {
 	isWeb,
 	displayMode,
 	setDisplayMode,
+	openLink,
 	MODE_ICON,
 	MODE_LABEL,
 	availableModeList
@@ -92,15 +100,48 @@ registerHostEvents({
 // short card, which is why that column is top-anchored. The honest wrinkle: this end of
 // the bar is otherwise the current VIEW's actions, and display mode belongs to the app.
 // The gap before it is what separates the two.
+// THE WINDOW GROUP: the controls about where the app is showing, as opposed to what
+// it is showing (the view's own actions, to the left). Two of them, behind one rule:
+//
+//   Open in browser  the same page, same brain, in a full browser tab. The door from
+//                    the card in the chat to the web app, and the one control that
+//                    is in front of you every time you are reading. The URL is built
+//                    by the widget from the base the server sent on `features`
+//                    (webLinkFor), so it exists only where the deployment serves the
+//                    web app, never on the web host itself, and never for the editor.
+//                    Where the tab opens (Claude's own browser or the system one) is
+//                    the host's decision, made in `openLink`.
+//   Display          inline / fullscreen / pip, where the host offers a choice.
+//
+// Nothing here on the web host: a tab is already the window.
+function WindowControls({ view }: { view: View }) {
+	const link = webLinkFor(view);
+	const modes = availableModeList();
+	if (!link && modes.length < 2) return null;
+	return (
+		<span class="ml-1 flex items-center gap-0.5 border-l border-border pl-1.5">
+			{link && (
+				<Button
+					variant="ghost"
+					size="icon"
+					title="Open in browser"
+					aria-label="Open in browser"
+					onClick={() => openLink(link)}
+				>
+					↗
+				</Button>
+			)}
+			{modes.length >= 2 && <DisplayMenu />}
+		</span>
+	);
+}
+
 function DisplayMenu() {
 	const modes = availableModeList();
-	// One mode is not a choice. A host that offers no alternative gets no control.
-	if (modes.length < 2) return null;
 	return (
 		<Menu
 			label="Display"
 			align="end"
-			class="ml-1 border-l border-border pl-1.5"
 			trigger={({ props }) => (
 				<Button
 					variant="ghost"
@@ -357,7 +398,7 @@ function Header({ view }: { view: View }) {
 					))}
 					{/* Then the window itself, after a rule. Not one of the view's actions, and
 					    the separator is what says so. */}
-					<DisplayMenu />
+					<WindowControls view={view} />
 				</span>
 			</div>
 			{/* The formatting toolbar slides in / out as you enter / leave edit — grid-rows

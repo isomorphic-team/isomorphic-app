@@ -61,7 +61,7 @@ import { githubHandler } from './oauth/github-handler.ts';
 import { authHandler } from './oauth/auth-handler.ts';
 import { getAuthSession } from './auth/config.ts';
 import { BRAIN_APP_HTML } from './lib/app-bundle.generated.ts';
-import { WEB_ROUTE_PREFIX, checkWebMcpRequest, claimsWebMcp } from './lib/web-app.ts';
+import { WEB_ROUTE_PREFIX, checkWebMcpRequest, claimsWebMcp, webBaseUrl } from './lib/web-app.ts';
 import { WEB_APP_HEADERS, signInRedirect, webShell } from './lib/web-shell.ts';
 import { registerLibrarianTools } from './tools/librarian.ts';
 import { registerImportTools } from './tools/importer.ts';
@@ -1056,7 +1056,12 @@ class McpSession {
 			activeBrainId: () => this.activeBrainId,
 			setActiveBrain: (id) => this.setActiveBrain(id),
 			invalidateConfig: (owner, repo) => this.invalidateConfig(owner, repo),
-			analyticsEnabled: this.usageEnabled()
+			analyticsEnabled: this.usageEnabled(),
+			webBaseUrl: webBaseUrl({
+				authMode: this.env.AUTH_MODE,
+				identityMode: this.env.IDENTITY_MODE,
+				publicBaseUrl: this.env.PUBLIC_BASE_URL
+			})
 		});
 
 		// ---------- user-defined tools (brain-tools) ----------

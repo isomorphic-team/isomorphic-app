@@ -709,6 +709,17 @@ Worker's `fetch`, ahead of the OAuth provider like `/health`.
   the view through `pageTitle`, the one title resolver, so the tab says what the
   header says. Nothing about the MCP App changed: it still starts inline and the
   visual baselines pin it.
+- **The door from the card to the tab is "Open in browser" in the header's window
+  group** (`WindowControls` in `app/main.tsx`, beside the display-mode menu). The
+  widget builds the URL itself from the view (`webLinkFor` in `store.ts`, the same
+  `webTargetFor` + `webPathFor` the address bar uses) and a base the server sends on
+  the `brains` payload as `features.webBase` (`webBaseUrl` in `src/lib/web-app.ts`:
+  authjs + `PUBLIC_BASE_URL`, else absent). Same vehicle and reason as
+  `features.analytics`: a widget cannot ask what the server serves, and a control
+  whose click lands on a 404 is worse than none. Never on the web host, never for
+  the editor. Where the tab opens is the host's call, through `openLink`. Nothing
+  puts the URL in a tool result's TEXT yet, so Claude cannot link to a page in chat;
+  that is the deferred half, and `features.webBase` is the server side of it.
 - **`script-src` still carries `'unsafe-inline'`.** The bundle is one self-contained
   HTML file with JS and CSS inlined (the MCP App iframe CSP forbids external hosts,
   which is why it is built that way), so there is no external script for `'self'` to

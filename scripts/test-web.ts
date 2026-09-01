@@ -19,6 +19,7 @@ import {
 	webPathFor,
 	checkWebMcpRequest,
 	claimsWebMcp,
+	webBaseUrl,
 	WEB_TOOL_ROUTING,
 	type WebMcpRequest
 } from '../src/lib/web-app.ts';
@@ -194,6 +195,26 @@ function check(name: string, cond: boolean, detail?: string) {
 		.filter((r) => r.kind === 'view')
 		.map((r) => (r as { token: string }).token);
 	check('tokens are unique', new Set(tokens).size === tokens.length, tokens.join(', '));
+}
+
+// ---------- does this deployment have a web app to link to ----------
+//
+// What the widget's "Open in browser" control is gated on. A base URL handed to a
+// deployment that does not mount `/b/` is a control whose click lands on a 404, so
+// the rule says no unless all three facts hold.
+{
+	console.log('\nthe web base URL');
+
+	const on = { authMode: 'oauth', identityMode: 'authjs', publicBaseUrl: 'https://brain.example/' };
+	check('an authjs deployment with a base URL has one', webBaseUrl(on) === 'https://brain.example');
+	check('trailing slashes are dropped', !webBaseUrl(on)?.endsWith('/'));
+	check('static mode has none', webBaseUrl({ ...on, authMode: 'static' }) === undefined);
+	check('github identity has none', webBaseUrl({ ...on, identityMode: 'github' }) === undefined);
+	check('no base URL, no link', webBaseUrl({ ...on, publicBaseUrl: '' }) === undefined);
+	check(
+		'unset is not a link either',
+		webBaseUrl({ ...on, publicBaseUrl: undefined }) === undefined
+	);
 }
 
 // ---------- which /mcp requests are the web app's ----------

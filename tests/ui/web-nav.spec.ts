@@ -90,6 +90,9 @@ test.describe('the app in a browser tab', () => {
 		});
 		expect(bg.html).not.toBe('rgba(0, 0, 0, 0)');
 
+		// A tab is already the window, so the door INTO a tab is not offered here.
+		await expect(page.getByRole('button', { name: 'Open in browser' })).toHaveCount(0);
+
 		// The tab is named after what it shows, and which brain: a tab strip and a
 		// history menu are read by their titles, and "Brain" twelve times is no help.
 		await expect(page).toHaveTitle(/^Index · /);

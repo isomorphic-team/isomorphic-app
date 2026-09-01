@@ -510,7 +510,9 @@ function brainsResult(msg: string, withView: boolean, switched = false): CallToo
 		// What the server registered. On here so the harness previews the nav with
 		// the Analytics row present; a real deployment sends false unless
 		// USAGE_ANALYTICS is set.
-		features: { analytics: true }
+		// `webBase` is what a deployment serving the web app sends (webBaseUrl in
+		// src/lib/web-app.ts); it puts the "Open in browser" control in the header.
+		features: { analytics: true, webBase: 'https://brain.example' }
 	};
 	if (withView) sc.view = 'brains';
 	if (switched) sc.switched = true;
@@ -1311,7 +1313,14 @@ bridge.oncalltool = async (params) => {
 		await new Promise((r) => setTimeout(r, SLOW_LIST_MS));
 	return handleTool(params.name, (params.arguments ?? {}) as Record<string, unknown>);
 };
-bridge.onopenlink = async () => ({}); // no-op; links would open a tab in a real host
+// No tab opens here; the request is recorded where a test can read it, since which
+// URL the app asked the host to open is the whole assertion for "Open in browser".
+const openedLinks: string[] = [];
+(window as unknown as { __openedLinks: string[] }).__openedLinks = openedLinks;
+bridge.onopenlink = async (req) => {
+	openedLinks.push(req.url);
+	return {};
+};
 bridge.onloggingmessage = async () => ({});
 // The app's autoResize reports content-height changes here; in inline mode we
 // resize the card to fit (bounded), mirroring how claude.ai grows/shrinks an

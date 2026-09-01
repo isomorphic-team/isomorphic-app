@@ -221,6 +221,26 @@ export function webPathFor(
 	return `${WEB_ROUTE_PREFIX}${brain}${encoded}${qs ? `?${qs}` : ''}`;
 }
 
+// ---------- does this deployment have a web app, and where? ----------
+
+// The origin the web app is served from, or undefined when this deployment has no
+// web app to link to. The route itself is mounted on the same three facts in the
+// Worker; this is the one place they are asked together so a widget is never handed
+// a base URL for a route that does not exist. Trailing slashes dropped so a path can
+// be appended without producing `//b/`.
+//
+// authjs only: the cookie session is what Auth.js issues, and the github and static
+// identity paths have no browser session to read, so `/b/` is not served there.
+export function webBaseUrl(env: {
+	authMode?: string;
+	identityMode?: string;
+	publicBaseUrl?: string;
+}): string | undefined {
+	if (env.authMode !== 'oauth' || env.identityMode !== 'authjs') return undefined;
+	const base = (env.publicBaseUrl ?? '').trim().replace(/\/+$/, '');
+	return base || undefined;
+}
+
 // ---------- is this /mcp request the web app's at all? ----------
 
 // Which of the two auth paths a `/mcp` POST belongs to, decided on what the request

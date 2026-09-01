@@ -205,7 +205,10 @@ type Handler = (args: Record<string, unknown>) => Promise<{ isError?: boolean; c
 // writes into the wrong organization, which no role assertion would catch.
 const orgAsks: ({ requires?: Role; org?: string } | undefined)[] = [];
 
-function toolsFor(p: Persona): Map<string, Handler> {
+function toolsFor(
+	p: Persona,
+	deployment: { webBaseUrl?: string } = { webBaseUrl: 'https://brain.example' }
+): Map<string, Handler> {
 	const handlers = new Map<string, Handler>();
 	const server = {
 		registerTool: (name: string, _cfg: unknown, handler: Handler) => handlers.set(name, handler)
@@ -274,7 +277,8 @@ function toolsFor(p: Persona): Map<string, Handler> {
 		activeBrainId: () => 'northwind/main',
 		setActiveBrain: async () => {},
 		invalidateConfig: () => {},
-		analyticsEnabled: true
+		analyticsEnabled: true,
+		webBaseUrl: deployment.webBaseUrl
 	});
 	return handlers;
 }
@@ -405,6 +409,28 @@ check(
 	viewerPayload.structuredContent?.orgs?.length === 0,
 	'a picker that offers an org the click would refuse'
 );
+// The web base rides on the same payload, for the same reason as `analytics`: the
+// widget cannot ask what the server serves. Present exactly when the deployment
+// supplied one; a deployment without a web app must not hand out a base for a
+// route it does not mount.
+{
+	const features = (brainsPayload.structuredContent as { features?: { webBase?: string } })
+		?.features;
+	check(
+		'the brains payload carries the web base when the deployment has one',
+		features?.webBase === 'https://brain.example',
+		`got ${JSON.stringify(features)}`
+	);
+	const without = (await toolsFor(orgBoss, { webBaseUrl: undefined }).get('brains')!({})) as {
+		structuredContent?: { features?: { webBase?: string } };
+	};
+	check(
+		'...and none when it has none',
+		without.structuredContent?.features !== undefined &&
+			!('webBase' in without.structuredContent.features),
+		`got ${JSON.stringify(without.structuredContent?.features)}`
+	);
+}
 
 // ===========================================================================
 console.log('\nBRAIN-scope tools gate on the BRAIN role, never the org role');
