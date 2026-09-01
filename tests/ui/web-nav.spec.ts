@@ -118,6 +118,74 @@ test.describe('the app in a browser tab', () => {
 		await other.close();
 	});
 
+	// The destinations that are not a page. They ride the query string because the
+	// path after the brain is a repo path, so `/b/o/r/graph` is a page called
+	// `graph` — a collision that would appear the day someone wrote one.
+	test('a search is a URL, and reopens cold', async ({ page, context }) => {
+		await page.goto(`${BASE}${INDEX}`);
+		await settled(page);
+
+		// Through the app's own control, not by typing a URL: the point is that
+		// searching WRITES the address bar, not merely that the app can read one.
+		await page.getByTitle('Search', { exact: false }).first().click();
+		const field = page.locator('input[type="search"], input[type="text"]').first();
+		await field.fill('vision');
+		await field.press('Enter');
+		await expect(page.locator('.prose, [data-testid="search-results"], body')).toBeVisible();
+		await expect
+			.poll(() => new URL(page.url()).searchParams.get('q'), { timeout: 15_000 })
+			.toBe('vision');
+
+		// Cold, in a fresh tab: the query has to survive as the thing that rebuilds
+		// the view, since the hits themselves are derived and were never in the URL.
+		const other = await context.newPage();
+		await other.goto(page.url());
+		await expect
+			.poll(() => other.locator('input').first().inputValue(), { timeout: 15_000 })
+			.toBe('vision');
+		await other.close();
+	});
+
+	test('the graph is a URL, and Back leaves it for the page you came from', async ({ page }) => {
+		await page.goto(`${BASE}${INDEX}`);
+		await settled(page);
+
+		await page.goto(`${BASE}/b/${BRAIN}?view=graph`);
+		// The graph builds from a tool call, so wait for the view rather than a tick.
+		await expect(page.locator('svg, canvas').first()).toBeVisible({ timeout: 20_000 });
+		expect(new URL(page.url()).searchParams.get('view')).toBe('graph');
+
+		await page.goBack();
+		await settled(page, 'Index');
+		expect(await at(page)).toEqual({ url: INDEX, heading: 'Index' });
+	});
+
+	// The two that had no URL at all until the routing table was derived from the
+	// tool surface rather than from the view list.
+	// `?view=activity`, one of the two destinations that had no URL at all until the
+	// routing table was derived from the tool surface instead of the view list.
+	//
+	// `?view=access` is NOT covered here and cannot be: `brain_access` is org-model
+	// machinery that the local runtime deliberately does not register (no orgs, no
+	// memberships), so this host serves no such tool. Its round trip is pinned in
+	// `pnpm test:web`; the app actually opening it is uncovered, like every other
+	// org-scope screen.
+	test('activity is reachable by URL', async ({ page }) => {
+		// Asserted on the RAIL's `aria-current`, not on body text. The first version
+		// matched /change|edit|commit|history/ against the whole body, and "Edit" is a
+		// button in the chrome of every page — so it passed while `?view=access` was
+		// silently doing nothing, which is how that gap was found.
+		await page.goto(`${BASE}/b/${BRAIN}?view=activity`);
+		await expect(page.getByRole('button', { name: 'Recent changes' })).toHaveAttribute(
+			'aria-current',
+			'page',
+			{ timeout: 20_000 }
+		);
+		// The URL has to SURVIVE the load: a view that opens and then rewrites the bar
+		// back to the tree would look right on screen and break every link.
+		expect(new URL(page.url()).searchParams.get('view')).toBe('activity');
+	});
+
 	test('a cookie-less tool call is refused by the real gate', async ({ page }) => {
 		await page.goto(`${BASE}${INDEX}`);
 		await settled(page);

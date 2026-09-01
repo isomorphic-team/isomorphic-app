@@ -106,4 +106,10 @@ export function registerWebNavigation(onNavigate: (target: WebTarget) => void): 
 // serve the shell and the app uses to open the right page. Two parsers is how a
 // link ends up opening a different page than the one it names.
 import { parseWebPath, type WebTarget } from '../../src/lib/web-app.ts';
-export { parseWebPath, webPathFor, type WebTarget } from '../../src/lib/web-app.ts';
+export {
+	parseWebPath,
+	webPathFor,
+	WEB_TOOL_ROUTING,
+	type WebTarget,
+	type WebRouting
+} from '../../src/lib/web-app.ts';

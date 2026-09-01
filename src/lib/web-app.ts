@@ -13,23 +13,132 @@ export const WEB_ROUTE_PREFIX = '/b/';
 
 // ---------- what a web URL means ----------
 
+// WHICH URL EACH WIDGET TOOL CORRESPONDS TO.
+//
+// A web URL and a widget tool call answer the same question — "show me this" — so
+// this is ONE table rather than a second vocabulary invented beside the tool
+// surface. The first version of this grammar was invented that way and immediately
+// drifted: it grew `?q=` and `?view=graph` while `view_activity` and `brain_access`
+// had no URL at all, for no reason other than that nobody was looking at the tool
+// list when writing it.
+//
+// Every widget tool must appear here, INCLUDING the ones that get no URL, and
+// `pnpm test:web` scans `registerAppTool` call sites and fails on any that is
+// missing. That is the same guard `TOOL_KINDS` uses in the usage analytics: a new
+// destination silently having no link should be a red test, not something noticed a
+// year later.
+//
+// THE TOKEN IS AN ALIAS, NOT THE TOOL NAME, and that is deliberate. A URL is a
+// permanent contract (these functions are inverses so links do not rot), while the
+// tool surface is actively consolidated — 42 tools became 30, and `list_members` +
+// `view_members` became `members`. Coupling the two literally would make every
+// future merge a link-breaking change; with an alias, a rename is one line here.
+//
+// Three questions decide whether a tool earns a URL, and all three must pass. Would
+// you send it to someone (a destination, not a step)? Can the URL alone rebuild it
+// (no hidden state)? Is arriving cold harmless (no unsaved work, no half-finished
+// mutation)?
+export type WebRouting =
+	// The page path IS the URL: `/b/<owner>/<repo>/<path>`.
+	| { kind: 'path' }
+	// The bare brain URL, `/b/<owner>/<repo>`, optionally with `?focus=`.
+	| { kind: 'root' }
+	// `?view=<token>`, plus at most one argument under `param`.
+	| { kind: 'view'; token: string; param?: string }
+	// Deliberately not addressable. `why` is not decoration: it is the thing a
+	// future reader needs in order to decide whether the answer has changed.
+	| { kind: 'none'; why: string };
+
+export const WEB_TOOL_ROUTING: Readonly<Record<string, WebRouting>> = {
+	view_page: { kind: 'path' },
+	browse_brain: { kind: 'root' },
+	view_graph: { kind: 'view', token: 'graph', param: 'focus' },
+	view_activity: { kind: 'view', token: 'activity', param: 'path' },
+	brain_access: { kind: 'view', token: 'access' },
+	// Not a widget tool (the app calls it and renders the hits itself), but it is a
+	// destination by the three tests above, and the query is the whole of its state.
+	search_pages: { kind: 'view', token: 'search', param: 'q' },
+
+	edit_page: {
+		kind: 'none',
+		why: 'unsaved text is not in the URL, so a link would open the editor on saved content and discard its own premise'
+	},
+	// Not that they are unworthy: they are ORG scope and this grammar is keyed on a
+	// BRAIN. `/b/owner/repo?view=members` asserts those people belong to that brain,
+	// the exact confusion the nav was restructured to remove (they take the back
+	// arrow, never the brain crumb, because every brain in one org shows the same
+	// roster). They need an org-scoped shape, and inventing a second grammar for two
+	// screens is not worth it yet.
+	members: { kind: 'none', why: 'org scope, and this grammar is keyed on a brain' },
+	analytics: { kind: 'none', why: 'org scope, and this grammar is keyed on a brain' },
+	connected_accounts: { kind: 'none', why: 'account scope, and personal to the viewer' },
+	// The switcher is a step on the way somewhere, and where it lands already has a
+	// URL of its own.
+	brains: {
+		kind: 'none',
+		why: 'a picker, not a destination: every choice it offers is itself a URL'
+	}
+};
+
+// The addressable tokens, derived rather than restated so the two cannot disagree.
+export type WebView = string;
+
+const VIEW_ROUTES = Object.values(WEB_TOOL_ROUTING).filter(
+	(r): r is Extract<WebRouting, { kind: 'view' }> => r.kind === 'view'
+);
+
 export interface WebTarget {
 	// "owner/repo", the same key the content index uses.
 	brain: string;
-	// Repo-relative page path, or '' for the brain's file tree.
+	// Repo-relative page path, or '' for a non-page destination.
 	path: string;
+	// A non-page destination's token, from `?view=`.
+	view?: WebView;
+	// That destination's single argument, under whatever param name its route
+	// declares (`q` for search, `focus` for the graph, `path` for activity). With no
+	// `view` it is the folder the file tree should reveal.
+	arg?: string;
 }
 
-// `/b/<owner>/<repo>/<path...>` -> the brain and page it names.
+// `/b/<owner>/<repo>/<path...>` (+ query) -> what to show.
 //
 // Built by `webPathFor` and read by both the Worker and the app, so a link that
 // opens the wrong page is a single test failure rather than a mismatch between
 // two parsers.
-export function parseWebPath(pathname: string): WebTarget | null {
+//
+// PATH SPACE IS ONLY EVER PAGES. Everything after the brain is a repo path, so a
+// destination cannot be a path segment without colliding with a real page called
+// `graph` or `search`. That is why the non-page destinations ride the query string
+// instead: it keeps page links unambiguous and leaves the path grammar closed.
+export function parseWebPath(pathname: string, search = ''): WebTarget | null {
 	const m = /^\/b\/([^/]+)\/([^/]+)(?:\/(.*))?$/.exec(pathname);
 	if (!m) return null;
+	const brain = `${m[1]}/${m[2]}`;
 	const raw = (m[3] ?? '').replace(/\/+$/, '');
-	if (!raw) return { brain: `${m[1]}/${m[2]}`, path: '' };
+
+	let params: URLSearchParams;
+	try {
+		params = new URLSearchParams(search);
+	} catch {
+		params = new URLSearchParams();
+	}
+	const extras: Omit<WebTarget, 'brain' | 'path'> = {};
+	// An unknown token is not a destination: fall through to the tree rather than
+	// invent a view kind from whatever the URL happened to say.
+	const route = VIEW_ROUTES.find((r) => r.token === params.get('view'));
+	// With no `view`, the one argument is the folder the file tree should reveal.
+	const param = route ? route.param : 'focus';
+	if (route) extras.view = route.token;
+	const arg = param ? params.get(param) : null;
+	// The argument names a page or folder in the same repo, so it is held to the
+	// same rule as a path: a traversal segment is a bad URL, not a destination. A
+	// free-text search query cannot contain a bare `..` segment either, so the one
+	// rule is safe to apply to all of them.
+	if (arg && !arg.split('/').some((seg) => seg === '..' || seg === '.')) {
+		extras.arg = arg;
+	}
+
+	if (!raw) return { brain, path: '', ...extras };
 	let path: string;
 	try {
 		path = raw
@@ -43,16 +152,33 @@ export function parseWebPath(pathname: string): WebTarget | null {
 	// A traversal segment can never be part of a repo path, and letting one
 	// through would hand `..` to the store as though the author had written it.
 	if (path.split('/').some((seg) => seg === '..' || seg === '.')) return null;
-	return { brain: `${m[1]}/${m[2]}`, path };
+	return { brain, path, ...extras };
 }
 
-export function webPathFor(brain: string, path: string): string {
-	if (!path) return `${WEB_ROUTE_PREFIX}${brain}`;
+export function webPathFor(
+	brain: string,
+	path: string,
+	extras: Omit<WebTarget, 'brain' | 'path'> = {}
+): string {
 	const encoded = path
-		.split('/')
-		.map((seg) => encodeURIComponent(seg))
-		.join('/');
-	return `${WEB_ROUTE_PREFIX}${brain}/${encoded}`;
+		? `/${path
+				.split('/')
+				.map((seg) => encodeURIComponent(seg))
+				.join('/')}`
+		: '';
+	// Insertion order is fixed rather than incidental, so the same destination
+	// always produces the same string: a URL that varies between renders is one
+	// the history stack cannot compare, and `syncAddressBar` compares it.
+	const params = new URLSearchParams();
+	const route = extras.view ? VIEW_ROUTES.find((r) => r.token === extras.view) : undefined;
+	if (route) params.set('view', route.token);
+	// The param name comes from the route, so it stays the inverse of the parser by
+	// construction rather than by two lists agreeing. No `view` means the tree, whose
+	// one argument is the folder to reveal.
+	const param = route ? route.param : 'focus';
+	if (param && extras.arg) params.set(param, extras.arg);
+	const qs = params.toString();
+	return `${WEB_ROUTE_PREFIX}${brain}${encoded}${qs ? `?${qs}` : ''}`;
 }
 
 // ---------- may this cookie-authenticated MCP call proceed? ----------

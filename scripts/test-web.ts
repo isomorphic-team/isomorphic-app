@@ -13,12 +13,14 @@
 //    exploits. Every rule is asserted in BOTH directions: a test that only
 //    proves good requests pass would stay green with the whole gate removed.
 
+import { readdirSync, readFileSync } from 'node:fs';
 import {
 	parseWebPath,
 	webPathFor,
 	checkWebMcpRequest,
 	webShell,
 	WEB_APP_HEADERS,
+	WEB_TOOL_ROUTING,
 	signInRedirect,
 	type WebMcpRequest
 } from '../src/lib/web-app.ts';
@@ -75,6 +77,124 @@ function check(name: string, cond: boolean, detail?: string) {
 	check('an encoded traversal is refused', parseWebPath('/b/acme/brain/wiki/%2e%2e/x') === null);
 	check('a bare dot segment is refused', parseWebPath('/b/acme/brain/./x') === null);
 	check('a malformed escape is refused', parseWebPath('/b/acme/brain/wiki/%zz.md') === null);
+}
+
+// ---------- the destinations that are not a page ----------
+//
+// These ride the QUERY STRING, and that is the whole design: everything after the
+// brain in the path is a repo path, so `/b/o/r/graph` is a page called `graph`. A
+// destination as a path segment would collide with a real page the day someone
+// writes one, and the collision would be silent.
+{
+	console.log('\nnon-page destinations');
+
+	const round = (path: string, extras: { view?: string; arg?: string }) => {
+		const url = webPathFor('acme/brain', path, extras);
+		return parseWebPath(url.split('?')[0], url.split('?')[1] ?? '');
+	};
+
+	// Every addressable destination, driven from the table itself, so a route added
+	// there without a working round trip fails here rather than shipping one-way.
+	for (const [tool, route] of Object.entries(WEB_TOOL_ROUTING)) {
+		if (route.kind !== 'view') continue;
+		const back = round('', { view: route.token, ...(route.param ? { arg: 'wiki/x.md' } : {}) });
+		check(
+			`${tool} round-trips as ?view=${route.token}`,
+			back?.view === route.token,
+			JSON.stringify(back)
+		);
+		if (route.param) {
+			check(`...carrying its ${route.param}`, back?.arg === 'wiki/x.md', JSON.stringify(back));
+		}
+	}
+
+	check(
+		'a query with URL punctuation survives',
+		round('', { view: 'search', arg: 'a&b=c?d #e' })?.arg === 'a&b=c?d #e'
+	);
+	check(
+		'the tree keeps its revealed folder',
+		round('', { arg: 'wiki/concepts' })?.arg === 'wiki/concepts'
+	);
+
+	// A page URL must stay exactly what it was: adding destinations must not have
+	// put a query string on the common case.
+	check(
+		'a plain page URL gains no query',
+		webPathFor('acme/brain', 'wiki/index.md') === '/b/acme/brain/wiki/index.md'
+	);
+	check('a plain tree URL gains no query', webPathFor('acme/brain', '') === '/b/acme/brain');
+
+	// Stable output, because syncAddressBar COMPARES the built URL against the one
+	// in the bar to decide whether to write history. A URL that varied between
+	// renders would push a duplicate entry on every navigation.
+	check(
+		'the same destination always builds the same string',
+		webPathFor('acme/brain', '', { view: 'graph', arg: 'a.md' }) ===
+			webPathFor('acme/brain', '', { arg: 'a.md', view: 'graph' })
+	);
+
+	// An unknown view is not a destination. Falling through to the tree is right;
+	// inventing a view kind from a URL is not.
+	check(
+		'an unknown view is ignored',
+		parseWebPath('/b/acme/brain', 'view=nonsense')?.view === undefined
+	);
+	// Held to the same rule as a path, since it names a page in the same repo.
+	check(
+		'a traversal in an argument is dropped',
+		parseWebPath('/b/acme/brain', 'focus=../../etc')?.arg === undefined
+	);
+	// The editor is deliberately absent from the grammar: unsaved text is not in
+	// the URL, so a link to it would open on saved content.
+	check(
+		'there is no editor destination',
+		parseWebPath('/b/acme/brain', 'view=edit')?.view === undefined
+	);
+}
+
+// ---------- every widget tool is classified ----------
+//
+// The guard against the drift that produced this table. The first version of the URL
+// grammar was written from the VIEW list rather than the TOOL list, and `view_activity`
+// and `brain_access` ended up with no URL for no reason anybody had decided. Scanning
+// the registration sites means a new widget tool cannot land unaddressed: it either
+// gets a route or an explicit `why` it has none. Same shape as `TOOL_KINDS` in the
+// usage analytics, for the same reason.
+{
+	console.log('\nrouting covers the widget tools');
+
+	const toolsDir = new URL('../src/tools/', import.meta.url);
+	const registered = new Set<string>();
+	for (const f of readdirSync(toolsDir).filter((f) => f.endsWith('.ts'))) {
+		const src = readFileSync(new URL(f, toolsDir), 'utf8');
+		// `registerAppTool(server, 'name'` is what makes a tool open the widget, so it
+		// is exactly the set that could want a URL.
+		for (const m of src.matchAll(/registerAppTool\(\s*server,\s*'([a-z_]+)'/g)) {
+			registered.add(m[1]);
+		}
+	}
+
+	check('the scan found the widget tools', registered.size >= 8, `${registered.size} found`);
+	const unclassified = [...registered].filter((t) => !WEB_TOOL_ROUTING[t]);
+	check(
+		'every widget tool is either addressable or explicitly not',
+		unclassified.length === 0,
+		unclassified.length ? `unclassified: ${unclassified.join(', ')}` : ''
+	);
+
+	// An exclusion has to say WHY. Without that the next person cannot tell a
+	// decision from an oversight, which is the state this table replaced.
+	const silent = Object.entries(WEB_TOOL_ROUTING)
+		.filter(([, r]) => r.kind === 'none' && !(r as { why: string }).why.trim())
+		.map(([t]) => t);
+	check('every exclusion carries its reason', silent.length === 0, silent.join(', '));
+
+	// Two destinations sharing a token would make one of them unreachable.
+	const tokens = Object.values(WEB_TOOL_ROUTING)
+		.filter((r) => r.kind === 'view')
+		.map((r) => (r as { token: string }).token);
+	check('tokens are unique', new Set(tokens).size === tokens.length, tokens.join(', '));
 }
 
 // ---------- the cookie gate ----------

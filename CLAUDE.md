@@ -636,12 +636,34 @@ Worker's `fetch`, ahead of the OAuth provider like `/health`.
   app, Forward could not return, and the URL you copied to send someone was never
   the page you were reading — which is the entire point of the web app. `show()` is
   the one chokepoint, so the sync rides it; `push: false` (a restore, or catching up
-  to a move the browser already made) replaces the entry instead of adding one.
-  **Only the two views the URL grammar can NAME are synced** — a page and a brain
-  root. Members, the editor and the graph leave the bar alone rather than inventing
-  a URL `parseWebPath` cannot read back, which is the inverse property the module
-  exists to hold. In the MCP App the whole thing is dead code: `isWebHost()` is
-  false and the host owns navigation.
+  to a move the browser already made) replaces the entry instead of adding one. In
+  the MCP App the whole thing is dead code: `isWebHost()` is false and the host owns
+  navigation.
+- **`WEB_TOOL_ROUTING` is the one list of what has a URL** (`src/lib/web-app.ts`),
+  and it is keyed on the WIDGET TOOL, not on the app's view kinds. A URL and a
+  widget tool call answer the same question, so a second vocabulary beside the tool
+  surface just drifts — which it did immediately: the first grammar grew `?q=` and
+  `?view=graph` while `view_activity` and `brain_access` had no URL at all, for no
+  reason anyone had decided. `pnpm test:web` scans `registerAppTool` call sites and
+  fails on any tool that is neither addressable nor carrying an explicit `why` it is
+  not, the same guard `TOOL_KINDS` gives the analytics.
+  - **The token is an ALIAS, deliberately not the tool name.** A URL is a permanent
+    contract (the two functions are inverses so links do not rot) while the tool
+    surface is actively consolidated (42 → 30; `list_members` + `view_members` →
+    `members`). Literal coupling would make every future merge break every link
+    already sent; with an alias a rename is one line.
+  - **PATH SPACE IS ONLY EVER PAGES.** Everything after the brain is a repo path, so
+    `/b/o/r/graph` is a page called `graph`. Destinations therefore ride the query
+    string (`?view=<token>` plus at most one argument, whose param name the route
+    declares) and page links stay unambiguous.
+  - **Three questions decide whether a tool earns one**, all of which must pass:
+    would you send it to someone, can the URL alone rebuild it, is arriving cold
+    harmless. `edit_page` fails the last two (unsaved text is not in the URL, so a
+    link would open the editor on saved content and discard its own premise).
+    `members` and `analytics` fail none of them but are ORG scope against a
+    brain-keyed grammar, so addressing them here would assert those people belong to
+    that brain — the confusion the nav was restructured to remove. They need an
+    org-scoped shape or none.
 - **`pnpm web:dev` is the web host's dev server, and `--project=web` its tests.**
   `pnpm app:dev` cannot stand in for either: it mounts the bundle in a sandboxed
   iframe over AppBridge, so `host-web.ts`, `parseWebPath` and the shell are

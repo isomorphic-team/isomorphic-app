@@ -11,7 +11,24 @@ import {
 	isContentPath,
 	normRoot
 } from '../../src/lib/brain-policy.ts';
-import { isWebHost, webPathFor, parseWebPath } from './host-web.ts';
+import {
+	isWebHost,
+	webPathFor,
+	parseWebPath,
+	WEB_TOOL_ROUTING,
+	type WebTarget
+} from './host-web.ts';
+
+type WebExtras = Omit<WebTarget, 'brain' | 'path'>;
+
+// The URL token for a tool, from the one table. Throwing rather than defaulting: a
+// view mapped to a tool with no `view` route is a programming error here, and a
+// silent fallback would give two destinations the same URL.
+function webToken(tool: string): string {
+	const route = WEB_TOOL_ROUTING[tool];
+	if (route?.kind !== 'view') throw new Error(`${tool} has no web view route`);
+	return route.token;
+}
 
 // NOTE: this shadows the global `history`. Anything wanting the browser's own
 // history stack (see syncAddressBar) must say `globalThis.history`.
@@ -194,17 +211,47 @@ function show(v: View, { push = true } = {}) {
 // app entirely. `webPathFor` existed for this and had no caller outside its own
 // round-trip test, which is why a green `pnpm test:web` never noticed.
 //
-// Only the two views the URL grammar can NAME are synced. `parseWebPath` understands
-// a brain and a path and nothing else, so Members, the editor and the graph leave the
-// bar on the last page it named rather than inventing a URL that cannot be read back
-// — the inverse property the whole module exists to hold.
+// Only the views the URL grammar can NAME are synced, and `webTargetFor` is the whole
+// list. Everything else leaves the bar on the last thing it named rather than
+// inventing a URL that cannot be read back, which is the inverse property the module
+// exists to hold. The editor is the pointed omission: its unsaved text is not in the
+// URL, so a link to it would open on saved content and discard its own premise.
 //
 // In the MCP App this is dead: `isWebHost()` is false, there is no address bar, and
 // the host owns navigation.
+// The tokens come from WEB_TOOL_ROUTING rather than being spelled again here, so a
+// destination cannot be addressable in one direction only.
+function webTargetFor(v: View): { path: string; extras: WebExtras } | null {
+	const at = (view: string, arg?: string): { path: string; extras: WebExtras } => ({
+		path: '',
+		extras: { view, ...(arg ? { arg } : {}) }
+	});
+	switch (v.kind) {
+		case 'page':
+			return { path: v.path, extras: {} };
+		// The tree's own argument is the folder a breadcrumb click reveals, so a link
+		// to a revealed folder reopens it there rather than at the root.
+		case 'browse':
+			return { path: '', extras: v.focus ? { arg: v.focus } : {} };
+		// The query is the whole state worth carrying: the hits are derived from it,
+		// and re-running the search is what the recipient of the link wants anyway.
+		case 'search':
+			return at(webToken('search_pages'), v.query);
+		case 'graph':
+			return at(webToken('view_graph'), v.focus);
+		case 'activity':
+			return at(webToken('view_activity'), v.scopePath);
+		case 'brain-access':
+			return at(webToken('brain_access'));
+		default:
+			return null;
+	}
+}
+
 function syncAddressBar(v: View, push: boolean): void {
 	if (!isWebHost()) return;
-	const path = v.kind === 'page' ? v.path : v.kind === 'browse' ? '' : null;
-	if (path === null) return;
+	const target = webTargetFor(v);
+	if (!target) return;
 	// The brain on screen, else the one the URL already names. The fallback is not
 	// belt-and-braces: `activeBrain` is set from the brains list, which fails open
 	// when a deployment does not register that tool (the local runtime does not),
@@ -212,8 +259,10 @@ function syncAddressBar(v: View, push: boolean): void {
 	// The URL's own brain is the right answer whenever we have nothing better.
 	const brain = activeBrain?.id ?? parseWebPath(location.pathname)?.brain;
 	if (!brain) return;
-	const url = webPathFor(brain, path);
-	if (url === location.pathname) return;
+	const url = webPathFor(brain, target.path, target.extras);
+	// Compared against path AND query, since two destinations now differ only in the
+	// query string.
+	if (url === `${location.pathname}${location.search}`) return;
 	// `push: false` means the view is being RESTORED — goBack, a refresh in place, or
 	// the popstate handler reacting to a move the browser already made. Pushing there
 	// would leave an entry pointing at where the user just was, so Back would have to

@@ -35,6 +35,7 @@ import type {
 	UsageBrain
 } from './types.ts';
 import { openLink, callTool, firstText } from './host.ts';
+import type { WebTarget } from './host-web.ts';
 import { isFolderNoteName, refreshOutcome } from './util.ts';
 import {
 	show,
@@ -579,6 +580,34 @@ function pageLabel(path: string): string {
 
 // ---------- navigation ----------
 
+// Open whatever a `/b/...` URL names. ONE dispatcher, used by both the cold boot
+// and the Back/Forward handler, because those two answering the same URL
+// differently is the bug the single-parser rule exists to prevent — and it would
+// show up only as "Back goes somewhere odd", which nobody reports precisely.
+//
+// None of these needs a `push: false`. The browser has already moved to this URL,
+// so the view they produce serializes back to the URL that is already in the bar,
+// and `syncAddressBar` writes nothing when those are equal. The intermediate
+// loading views are skipped there too, so nothing lands in the history stack.
+function openWebTarget(t: WebTarget): void {
+	if (t.path) return void navigateTo(t.path);
+	// Tokens come from WEB_TOOL_ROUTING, so this switch and the URL builder cannot
+	// name a destination differently.
+	switch (t.view) {
+		case 'search':
+			return void (t.arg ? runSearch(t.arg) : openSearch());
+		case 'graph':
+			return void openGraph(t.arg);
+		case 'activity':
+			return void openActivity(t.arg);
+		case 'access':
+			return void openBrainAccess();
+		// No view, so the tree, whose argument is the folder to reveal.
+		default:
+			return void openBrowse(t.arg);
+	}
+}
+
 // `push` is forwarded to the final `show`, which is what decides whether the web
 // host adds a browser history entry. It is false when the browser has already
 // moved and we are catching up to it (the popstate handler), where pushing would
@@ -1107,6 +1136,7 @@ function onProseClick(fromPath: string) {
 
 export {
 	handleToolResult,
+	openWebTarget,
 	confirmLeaveEdit,
 	guardNav,
 	brainsViewFromSc,

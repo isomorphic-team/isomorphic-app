@@ -31,7 +31,7 @@ import { parseWebPath, registerWebNavigation } from './core/host-web.ts';
 import {
 	handleToolResult,
 	ensureBrainList,
-	navigateTo,
+	openWebTarget,
 	openBrowse,
 	openGraph,
 	openMore,
@@ -479,15 +479,12 @@ function connectToHost() {
 			// spend the whole deadline before drawing anything.
 			if (isWeb()) {
 				void ensureBrainList();
-				// Back and forward. `push: false` because the browser has already
-				// moved; store.ts's syncAddressBar is the half that put the entry
-				// there.
-				registerWebNavigation((t) => {
-					if (t.path) void navigateTo(t.path, { push: false });
-					else openBrowse();
-				});
-				const target = parseWebPath(location.pathname);
-				if (target?.path) void navigateTo(target.path);
+				// Boot and Back/Forward go through the SAME dispatcher, so the two
+				// cannot answer one URL differently. store.ts's syncAddressBar is
+				// the half that puts the entries there.
+				registerWebNavigation(openWebTarget);
+				const target = parseWebPath(location.pathname, location.search);
+				if (target) openWebTarget(target);
 				else openBrowse();
 				return;
 			}
