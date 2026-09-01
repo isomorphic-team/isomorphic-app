@@ -29,7 +29,8 @@ pnpm worker:dev         # `wrangler dev` for the MCP Worker — http://localhost
 pnpm worker:deploy      # publish the Worker to Cloudflare
 pnpm worker:types       # regenerate Worker types from wrangler.jsonc
 pnpm app:dev            # local dev server for the MCP App UI — http://localhost:5175 (see dev/README.md)
-pnpm web:dev            # the same bundle as a WEB page — http://localhost:5177 (no auth; --reset re-seeds)
+pnpm web:dev            # seed the demo brains, then `pnpm try` them: the app as a WEB page at
+                        # http://127.0.0.1:8788/b/local/demo-brain (no auth; --reset re-seeds)
 pnpm gen:app            # codegen the ui:// app bundle (after editing app/ OR any src/lib/ file it imports)
 pnpm regen:pr <n>       # regenerate that bundle on a PR branch that could not (Dependabot); --push to send it
 pnpm test:roundtrip     # editor markdown round-trip golden test
@@ -682,14 +683,19 @@ Worker's `fetch`, ahead of the OAuth provider like `/health`.
     turns Back into "open the file tree" whenever two entries differ by `?view=`
     alone. Its test has to navigate IN-APP: two `page.goto`s and a `goBack` is a
     document load that re-boots from the URL and passes with the bug reinstated.
-- **`pnpm web:dev` is the web host's dev server, and `--project=web` its tests.**
-  `pnpm app:dev` cannot stand in for either: it mounts the bundle in a sandboxed
+- **The local runtime IS the web host locally, and `--project=web` its tests.**
+  `src/local.ts` serves the shell at `/b/local/<folder>` and gates its `/mcp` with
+  the same `webShell` / `WEB_APP_HEADERS` / `checkWebMcpRequest` the Worker uses, so
+  `pnpm try ~/vault` gives a browser UI over a folder with no accounts, and
+  `pnpm web:dev` is only "seed the demo brains, then `pnpm try`". It started as a
+  separate server proxying to the runtime on a second port, which was a second
+  copy of the routes plus a race between the two coming up; a browser host that
+  is not the real runtime is the harness sprawl this repo keeps having to undo.
+  `pnpm app:dev` cannot stand in for it: that mounts the bundle in a sandboxed
   iframe over AppBridge, so `host-web.ts`, `parseWebPath` and the shell are
-  unreachable from it however complete its fixtures are. `web:dev` serves the real
-  `webShell` + `WEB_APP_HEADERS` behind the real `checkWebMcpRequest`, proxied to
-  the local runtime (`pnpm try`) for real tool handlers over a git repo. **Both
-  hosts seed from `dev/seed.ts`** so a difference between them is a difference in
-  the APP rather than in what it was handed. What it does NOT reproduce is AUTH:
+  unreachable from it however complete its fixtures are. **Both hosts seed from
+  `dev/seed.ts`** so a difference between them is a difference in the APP rather
+  than in what it was handed. What the local runtime does NOT reproduce is AUTH:
   there is no session, no cookie, and the local runtime reports `owner` for
   everything, so it is the right tool for behaviour and the wrong one for access.
   The address-bar bug above is what the first run of it found, which is the case

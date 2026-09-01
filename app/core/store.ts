@@ -11,13 +11,7 @@ import {
 	isContentPath,
 	normRoot
 } from '../../src/lib/brain-policy.ts';
-import {
-	isWebHost,
-	webPathFor,
-	parseWebPath,
-	WEB_TOOL_ROUTING,
-	type WebTarget
-} from './host-web.ts';
+import { isWebHost, webPathFor, WEB_TOOL_ROUTING, type WebTarget } from './host-web.ts';
 
 type WebExtras = Omit<WebTarget, 'brain' | 'path'>;
 
@@ -258,12 +252,10 @@ function syncAddressBar(v: View, push: boolean): void {
 	if (!isWebHost()) return;
 	const target = webTargetFor(v);
 	if (!target) return;
-	// The brain on screen, else the one the URL already names. The fallback is not
-	// belt-and-braces: `activeBrain` is set from the brains list, which fails open
-	// when a deployment does not register that tool (the local runtime does not),
-	// and a null there would silently disable the address bar rather than degrade.
-	// The URL's own brain is the right answer whenever we have nothing better.
-	const brain = activeBrain?.id ?? parseWebPath(location.pathname)?.brain;
+	// The brain on screen. On the web it is set from the URL before anything is
+	// shown (main.tsx), so the only way to have none is a bare `/b` with no brain
+	// list yet, where there is nothing to write.
+	const brain = activeBrain?.id;
 	if (!brain) return;
 	const url = webPathFor(brain, target.path, target.extras);
 	// Compared against path AND query, since two destinations now differ only in the

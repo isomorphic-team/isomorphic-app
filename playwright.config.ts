@@ -26,11 +26,11 @@ import { basename, join } from 'node:path';
 // clash) just because they also ran the tests.
 export const UI_TEST_PORT = Number(process.env.UI_TEST_PORT) || 5176;
 
-// The WEB host's own server (`scripts/web-dev.ts`), which is a different program
-// from the harness: it serves the bundle as a top-level document and answers its
-// tool calls over HTTP from the local runtime. Same reasoning as above for the
-// port — not 5177 either, which is `pnpm web:dev`'s.
-export const WEB_TEST_PORT = Number(process.env.WEB_TEST_PORT) || 5178;
+// The WEB host is the local runtime itself (`src/local.ts`, started by
+// `scripts/web-dev.ts`): the bundle as a top-level document at `/b/`, and the real
+// tool handlers at `/mcp`, from one process. Same reasoning as above for the port:
+// not 8788, which is where `pnpm try` and `pnpm web:dev` listen.
+export const WEB_TEST_PORT = Number(process.env.WEB_TEST_PORT) || 8789;
 
 // Where the web harness materializes its brains for a test run. Outside the repo, so
 // it needs no gitignore entry and cannot be confused with the preview's copy; a
@@ -41,7 +41,6 @@ export const WEB_TEST_BRAIN_DIR = join(tmpdir(), 'isomorphic-web-tests');
 // The brain ids the specs address are derived from the folder names, so they follow
 // from this one constant rather than being spelled again in the specs.
 export const WEB_TEST_BRAIN = `local/${basename(WEB_TEST_BRAIN_DIR)}`;
-const WEB_TEST_UPSTREAM = Number(process.env.WEB_TEST_UPSTREAM) || 8789;
 
 export default defineConfig({
 	testDir: './tests/ui',
@@ -123,11 +122,10 @@ export default defineConfig({
 			// A temp path rather than a second checked-in one, so there is nothing to
 			// gitignore, nothing to collide with the preview, and nothing left behind.
 			command: 'pnpm exec tsx scripts/web-dev.ts --reset',
-			env: {
-				PORT: String(WEB_TEST_PORT),
-				UPSTREAM_PORT: String(WEB_TEST_UPSTREAM),
-				BRAIN_DIR: WEB_TEST_BRAIN_DIR
-			},
+			env: { PORT: String(WEB_TEST_PORT), BRAIN_DIR: WEB_TEST_BRAIN_DIR },
+			// The runtime answers the shell and `/mcp` from the same listener, so a 200
+			// here means the tools are up too. (With a proxy in front, the shell served
+			// before the process behind it was listening.)
 			url: `http://localhost:${WEB_TEST_PORT}/b/local/${basename(WEB_TEST_BRAIN_DIR)}`,
 			reuseExistingServer: !process.env.CI,
 			timeout: 180_000,

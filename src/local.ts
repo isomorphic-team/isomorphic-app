@@ -22,6 +22,14 @@
 // reason (they resolve through the org tables), so a caller SELECTS a brain with the
 // `brain` argument every tool already takes rather than by switching into one. No auth
 // either; it binds to loopback.
+//
+// TWO HOSTS reach it, as they reach the Worker. An MCP host connects to `/mcp`, and a
+// browser opens `/b/local/<folder>`: the same app bundle the Worker serves as the
+// `ui://` resource and at `/b/`, over the same `/mcp`. The web pieces are the shared
+// ones in src/lib/web-app.ts (the shell, its headers, the CSRF gate), so what a
+// browser exercises here is production code with the brain and the identity swapped
+// out, not a harness of it. Nothing sits between the browser and this process: no
+// proxy, no second port, and the shell and the tools come up together.
 
 import { serve } from '@hono/node-server';
 import { Hono } from 'hono';
@@ -40,6 +48,14 @@ import { loadBrainConfig } from './lib/brain-config.ts';
 import { SERVER_INSTRUCTIONS } from './lib/server-instructions.ts';
 import { ensureGitRepo, fsBrainStore } from './local/brain-store-fs.ts';
 import { localD1 } from './local/d1-sqlite.ts';
+import {
+	WEB_APP_HEADERS,
+	WEB_ROUTE_PREFIX,
+	checkWebMcpRequest,
+	webPathFor,
+	webShell
+} from './lib/web-app.ts';
+import { statSync } from 'node:fs';
 
 const args = process.argv.slice(2).filter((a) => !a.startsWith('-'));
 // Every positional argument is a brain. One is the old behaviour exactly.
@@ -175,6 +191,23 @@ function buildServer(): McpServer {
 
 const app = new Hono();
 app.post('/mcp', async (c) => {
+	// The same gate the Worker puts in front of its cookie path, on EVERY request
+	// here, because there is no credential to tell a browser from an MCP host: the
+	// browser sends no cookie (no auth) and the host sends no token (no provider).
+	// Every rule is one an MCP client satisfies anyway (a JSON POST with no
+	// cross-origin marker), and running it means the shell in a browser goes through
+	// exactly what production would refuse it for. `hasAuthorization` is false by
+	// construction: that rule says "the OAuth provider owns this request", and there
+	// is no provider here for a token to belong to.
+	const verdict = checkWebMcpRequest({
+		method: c.req.method,
+		selfOrigin: new URL(c.req.url).origin,
+		origin: c.req.header('origin') ?? null,
+		fetchSite: c.req.header('sec-fetch-site') ?? null,
+		contentType: c.req.header('content-type') ?? null,
+		hasAuthorization: false
+	});
+	if (!verdict.ok) return c.text(verdict.message, verdict.status as 403);
 	const transport = new WebStandardStreamableHTTPServerTransport({
 		sessionIdGenerator: undefined,
 		enableJsonResponse: true
@@ -185,6 +218,29 @@ app.post('/mcp', async (c) => {
 // Same 405 as the Worker: the stateless transport offers no server-to-client stream,
 // and answering GET makes compliant clients retry forever.
 app.all('/mcp', (c) => c.text('Method Not Allowed', 405, { Allow: 'POST' }));
+
+// ---------- the web app ----------
+
+// The generated bundle, re-imported when its file changes, so `pnpm gen:app` in
+// another terminal shows up on the next reload rather than being pinned to whatever
+// was on disk at launch. Keyed on mtime; the import cache never serves a stale one.
+const BUNDLE = new URL('./lib/app-bundle.generated.ts', import.meta.url);
+async function bundleHtml(): Promise<string> {
+	const stamp = statSync(BUNDLE).mtimeMs;
+	const mod = (await import(`${BUNDLE.href}?v=${stamp}`)) as { BRAIN_APP_HTML: string };
+	return mod.BRAIN_APP_HTML;
+}
+
+// The shell, exactly as the Worker serves it, minus the session check: the Worker
+// redirects a signed-out visitor to sign in, and there is nobody to sign in here.
+app.get(`${WEB_ROUTE_PREFIX}*`, async (c) =>
+	c.html(webShell(await bundleHtml()), 200, WEB_APP_HEADERS)
+);
+app.get(WEB_ROUTE_PREFIX.slice(0, -1), async (c) =>
+	c.html(webShell(await bundleHtml()), 200, WEB_APP_HEADERS)
+);
+// A bare visit lands on the default brain rather than a 404.
+app.get('/', (c) => c.redirect(webPathFor(defaultBrainId, '')));
 
 serve({ fetch: app.fetch, port, hostname: '127.0.0.1' }, () => {
 	const toolCount = Object.keys(
@@ -200,6 +256,8 @@ serve({ fetch: app.fetch, port, hostname: '127.0.0.1' }, () => {
 		`  tools:  ${toolCount}${custom.defs.length ? ` (${custom.defs.length} brain-authored)` : ''}`
 	);
 	console.log(`  commits as: ${author.name} <${author.email}>\n`);
+	console.log(`Open it in a browser:`);
+	console.log(`  http://127.0.0.1:${port}${webPathFor(defaultBrainId, '')}\n`);
 	console.log(`Connect a local MCP host:`);
 	console.log(`  claude mcp add --transport http isomorphic-local http://127.0.0.1:${port}/mcp\n`);
 });

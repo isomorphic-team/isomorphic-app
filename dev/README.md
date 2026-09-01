@@ -26,18 +26,21 @@ mounts the bundle in a sandboxed iframe and drives it over AppBridge, so the web
 transport (`app/core/host-web.ts`), the URL round-trip (`parseWebPath`) and the
 served shell are all unreachable from here no matter how good the fixtures are.
 
+The web host is **the local runtime itself**: `pnpm try <folder>` serves the shell at
+`/b/local/<folder>` and the real tool handlers at `/mcp`, from one process, exactly
+as the Worker does. `pnpm web:dev` only seeds the demo brains and starts it:
+
 ```sh
-pnpm web:dev              # → http://localhost:5177/b/local/demo-brain
+pnpm web:dev              # → http://127.0.0.1:8788/b/local/demo-brain
 pnpm web:dev --reset      # start over from a pristine seed
-pnpm web:dev ~/some/vault # point it at a real folder instead
+pnpm try ~/some/vault     # any folder, no seeding: http://127.0.0.1:8788/b/local/vault
 ```
 
-It serves the real `webShell` + `WEB_APP_HEADERS` behind the real
-`checkWebMcpRequest`, and proxies `/mcp` to the local runtime (`pnpm try`), so the
-tool handlers, the content index and the write path are all the production ones over
-a git repo on disk. It seeds that repo from **`dev/seed.ts`, the same module this
-harness uses**, so the two hosts show the same brain and a difference you notice
-between them is a difference in the app.
+The shell, its headers and the CSRF gate are the shared ones in `src/lib/web-app.ts`,
+and the tool handlers, the content index and the write path are the production ones
+over a git repo on disk. `web:dev` seeds that repo from **`dev/seed.ts`, the same
+module this harness uses**, so the two hosts show the same three brains and a
+difference you notice between them is a difference in the app.
 
 **It has no authentication at all.** Production checks an Auth.js session cookie and
 redirects to sign-in; here there is no session and the local runtime reports `owner`
@@ -191,10 +194,10 @@ with no watchers and no live-reload, because a rebuild landing mid-assertion rea
 a flaky app rather than a moving server.
 
 **Three projects, and `web` drives a different host.** `functional` and `visual` run
-against this harness; **`web`** (`tests/ui/web-nav.spec.ts`) runs against
-`scripts/web-dev.ts` on **5178**, with its own throwaway brain in
-`dev/web-test-brain` so a run never depends on, or disturbs, the one you have been
-editing. It exists because the web host had no browser coverage at all, and the first
+against this harness; **`web`** (`tests/ui/web-nav.spec.ts`) runs against the local
+runtime on **8789**, seeded by `scripts/web-dev.ts --reset` into a throwaway
+directory under the OS temp dir so a run never depends on, or disturbs, the brain
+you have been editing. It exists because the web host had no browser coverage at all, and the first
 run of it found a real defect: navigation never wrote the address bar, so Back left
 the app and the URL you copied was never the page you were reading. Those assertions
 read the **pair** (url, heading) every time — the bug was a heading that moved while a

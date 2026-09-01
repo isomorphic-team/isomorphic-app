@@ -273,22 +273,29 @@ test.describe('the app in a browser tab', () => {
 		}
 	});
 
-	test('a cookie-less tool call is refused by the real gate', async ({ page }) => {
-		await page.goto(`${BASE}${INDEX}`);
-		await settled(page);
-
+	test('a cross-origin tool call is refused by the real gate', async ({ request }) => {
 		// Same gate the Worker runs. `pnpm test:web` asserts the rules directly; this
 		// asserts they are actually MOUNTED in front of the endpoint, which is the
 		// half a pure test cannot reach.
-		const status = await page.evaluate(async (base) => {
-			const res = await fetch(`${base}/mcp`, {
-				method: 'POST',
-				// An HTML form can only send this content type, and cannot send JSON.
-				headers: { 'content-type': 'text/plain' },
-				body: '{}'
-			});
-			return res.status;
-		}, BASE);
-		expect(status).toBe(415);
+		//
+		// A cross-origin JSON POST, from outside the browser so the `Origin` can be
+		// set. Only the gate answers this with 403: without it the transport would
+		// accept the request, since it is otherwise well-formed. (A non-JSON body is
+		// NOT a discriminating probe: the transport refuses that with 415 on its own,
+		// so such a test stays green with the gate unmounted.)
+		const res = await request.post(`${BASE}/mcp`, {
+			headers: {
+				origin: 'https://evil.example',
+				'content-type': 'application/json',
+				accept: 'application/json, text/event-stream'
+			},
+			data: {
+				jsonrpc: '2.0',
+				id: 1,
+				method: 'tools/call',
+				params: { name: 'list_pages', arguments: {} }
+			}
+		});
+		expect(res.status()).toBe(403);
 	});
 });
