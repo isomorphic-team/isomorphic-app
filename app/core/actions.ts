@@ -35,7 +35,7 @@ import type {
 	UsageBrain
 } from './types.ts';
 import { openLink, callTool, firstText } from './host.ts';
-import type { WebTarget } from './host-web.ts';
+import { analyticsDays, type WebTarget } from './host-web.ts';
 import { isFolderNoteName, refreshOutcome } from './util.ts';
 import {
 	show,
@@ -602,6 +602,10 @@ function openWebTarget(t: WebTarget): void {
 			return void openActivity(t.arg);
 		case 'access':
 			return void openBrainAccess();
+		case 'members':
+			return void openMembers();
+		case 'analytics':
+			return void openAnalytics(analyticsDays(t.arg));
 		// No view, so the tree, whose argument is the folder to reveal.
 		default:
 			return void openBrowse(t.arg);

@@ -97,7 +97,10 @@ async function readEnvelope(res: Response): Promise<JsonRpcEnvelope> {
 // pushing here would re-add the entry it just left and make Back a no-op.
 export function registerWebNavigation(onNavigate: (target: WebTarget) => void): void {
 	addEventListener('popstate', () => {
-		const target = parseWebPath(location.pathname);
+		// BOTH halves. Every non-page destination lives in the query string, so
+		// parsing the pathname alone silently turns a Back into "open the file
+		// tree" whenever the two entries differ only by `?view=`.
+		const target = parseWebPath(location.pathname, location.search);
 		if (target) onNavigate(target);
 	});
 }
@@ -110,6 +113,7 @@ export {
 	parseWebPath,
 	webPathFor,
 	WEB_TOOL_ROUTING,
+	analyticsDays,
 	type WebTarget,
 	type WebRouting
 } from '../../src/lib/web-app.ts';

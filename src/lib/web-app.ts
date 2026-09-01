@@ -59,18 +59,30 @@ export const WEB_TOOL_ROUTING: Readonly<Record<string, WebRouting>> = {
 	// destination by the three tests above, and the query is the whole of its state.
 	search_pages: { kind: 'view', token: 'search', param: 'q' },
 
+	// ORG SCOPE, ADDRESSED THROUGH A BRAIN, and the wart is deliberate rather than
+	// unnoticed. These two answer the same thing for every brain in one org, so N
+	// brains give N URLs for one roster. The canonical alternative is an org-keyed
+	// prefix, and it is not worth it yet: `org_id` is a uuid (the only unique handle
+	// — `name` is mutable and `brain_owner` is SHARED by every platform-model org),
+	// so it would buy an unreadable second addressing scheme to serve two screens.
+	// The threshold to revisit is a third and fourth org-scope destination (billing,
+	// SSO, an audit log); at that point `/o/<org_id>` earns itself.
+	//
+	// This reads as "the roster of the org that owns this brain", which is true. The
+	// worry that it asserts those people belong to the BRAIN is a UI concern, and the
+	// nav already answers it by giving these the back arrow rather than the brain
+	// crumb — a URL is a locator, not a claim.
+	//
+	// What this does NOT fix: both tools resolve their org THROUGH a brain, so an org
+	// holding no brain still has no reachable roster. That is a resolution defect
+	// rather than an addressing one. See docs/design/org-scope-resolution.md.
+	members: { kind: 'view', token: 'members' },
+	analytics: { kind: 'view', token: 'analytics', param: 'days' },
+
 	edit_page: {
 		kind: 'none',
 		why: 'unsaved text is not in the URL, so a link would open the editor on saved content and discard its own premise'
 	},
-	// Not that they are unworthy: they are ORG scope and this grammar is keyed on a
-	// BRAIN. `/b/owner/repo?view=members` asserts those people belong to that brain,
-	// the exact confusion the nav was restructured to remove (they take the back
-	// arrow, never the brain crumb, because every brain in one org shows the same
-	// roster). They need an org-scoped shape, and inventing a second grammar for two
-	// screens is not worth it yet.
-	members: { kind: 'none', why: 'org scope, and this grammar is keyed on a brain' },
-	analytics: { kind: 'none', why: 'org scope, and this grammar is keyed on a brain' },
 	connected_accounts: { kind: 'none', why: 'account scope, and personal to the viewer' },
 	// The switcher is a step on the way somewhere, and where it lands already has a
 	// URL of its own.
@@ -98,6 +110,21 @@ export interface WebTarget {
 	// declares (`q` for search, `focus` for the graph, `path` for activity). With no
 	// `view` it is the folder the file tree should reveal.
 	arg?: string;
+}
+
+// `?days=` off an analytics URL, or undefined to let the tool pick its default.
+//
+// A URL is editable text, so this argument can say anything, and `analytics`
+// declares `days` as a `z.number()` — a NaN from `Number('later')` fails schema
+// validation, so a mistyped link would error instead of falling back. Deliberately
+// does NOT re-apply the tool's `[1, MAX_DAYS]` clamp: that lives in the tool, and a
+// second copy here would drift from it. This only decides usable-or-not.
+//
+// Pure, and here rather than in the app, because it is the thing that DECIDES.
+export function analyticsDays(arg: string | undefined): number | undefined {
+	if (!arg) return undefined;
+	const n = Number(arg);
+	return Number.isInteger(n) && n > 0 ? n : undefined;
 }
 
 // `/b/<owner>/<repo>/<path...>` (+ query) -> what to show.

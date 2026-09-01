@@ -660,10 +660,21 @@ Worker's `fetch`, ahead of the OAuth provider like `/health`.
     would you send it to someone, can the URL alone rebuild it, is arriving cold
     harmless. `edit_page` fails the last two (unsaved text is not in the URL, so a
     link would open the editor on saved content and discard its own premise).
-    `members` and `analytics` fail none of them but are ORG scope against a
-    brain-keyed grammar, so addressing them here would assert those people belong to
-    that brain — the confusion the nav was restructured to remove. They need an
-    org-scoped shape or none.
+  - **The org-scope pair is addressed THROUGH a brain**, and the wart is deliberate:
+    `members` and `analytics` answer the same for every brain in one org, so N brains
+    give N URLs for one roster. An org-keyed prefix is the canonical alternative and
+    is deferred, because `org_id` is a uuid (the only unique handle — `name` is
+    mutable and `brain_owner` is SHARED by every platform-model org), so it would buy
+    an unreadable second addressing scheme for two screens. Revisit at a third and
+    fourth org-scope destination. What this does not fix is that both tools resolve
+    their org through a brain, so an org holding none still has no reachable roster:
+    a resolution defect, written up in
+    [`docs/design/org-scope-resolution.md`](docs/design/org-scope-resolution.md).
+  - **Back/forward must parse `location.search` too.** Every non-page destination
+    lives in the query string, so a `popstate` handler reading only the pathname
+    turns Back into "open the file tree" whenever two entries differ by `?view=`
+    alone. Its test has to navigate IN-APP: two `page.goto`s and a `goBack` is a
+    document load that re-boots from the URL and passes with the bug reinstated.
 - **`pnpm web:dev` is the web host's dev server, and `--project=web` its tests.**
   `pnpm app:dev` cannot stand in for either: it mounts the bundle in a sandboxed
   iframe over AppBridge, so `host-web.ts`, `parseWebPath` and the shell are

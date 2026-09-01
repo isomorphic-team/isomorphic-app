@@ -186,6 +186,48 @@ test.describe('the app in a browser tab', () => {
 		expect(new URL(page.url()).searchParams.get('view')).toBe('activity');
 	});
 
+	// Back between two destinations that differ ONLY in the query string.
+	//
+	// The popstate handler parsed `location.pathname` and dropped `location.search`,
+	// so returning to `?view=search` landed on the file tree instead — the pathname
+	// is identical for every non-page destination, and the whole difference between
+	// them is the half that was being thrown away. Every earlier Back test moved
+	// between a page and something else, where the paths differ, so all of them
+	// stayed green through it.
+	// NAVIGATE IN-APP, never with a second `goto`. Two `goto`s and a `goBack` is a
+	// document LOAD, which re-boots the app from the URL and reads the query
+	// correctly — so a test written that way passes with the defect reinstated, which
+	// is exactly what happened on the first attempt here. Only a pushState
+	// navigation makes Back fire `popstate`, which is the code under test.
+	test('back between two query-only destinations keeps the query', async ({ page }) => {
+		await page.goto(`${BASE}${INDEX}`);
+		await settled(page);
+
+		await page.getByRole('button', { name: 'Search' }).click();
+		const field = page.locator('input').first();
+		await field.fill('vision');
+		await field.press('Enter');
+		await expect
+			.poll(() => new URL(page.url()).searchParams.get('q'), { timeout: 15_000 })
+			.toBe('vision');
+
+		await page.getByRole('button', { name: 'Graph' }).click();
+		await expect
+			.poll(() => new URL(page.url()).searchParams.get('view'), { timeout: 20_000 })
+			.toBe('graph');
+
+		await page.goBack();
+		await expect
+			.poll(() => new URL(page.url()).searchParams.get('view'), { timeout: 15_000 })
+			.toBe('search');
+		// And the VIEW, not just the bar: the defect left the address bar correct and
+		// put the file tree on screen, because the query it dropped was the whole
+		// difference between these two destinations.
+		await expect
+			.poll(() => page.locator('input').first().inputValue(), { timeout: 15_000 })
+			.toBe('vision');
+	});
+
 	test('a cookie-less tool call is refused by the real gate', async ({ page }) => {
 		await page.goto(`${BASE}${INDEX}`);
 		await settled(page);

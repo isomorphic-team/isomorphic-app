@@ -243,6 +243,12 @@ function webTargetFor(v: View): { path: string; extras: WebExtras } | null {
 			return at(webToken('view_activity'), v.scopePath);
 		case 'brain-access':
 			return at(webToken('brain_access'));
+		case 'members':
+			return at(webToken('members'));
+		// The window is the one thing a reader chose, so a link to "the last 90 days"
+		// reopens on 90 rather than silently on the default.
+		case 'analytics':
+			return at(webToken('analytics'), String(v.window.days));
 		default:
 			return null;
 	}
