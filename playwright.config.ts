@@ -18,11 +18,29 @@
 // claude.ai mount gap (docs/references.md), the real iframe CSP, and the auth round
 // trip stay invisible. Those need a real host; see dev/README.md.
 import { defineConfig, devices } from '@playwright/test';
+import { tmpdir } from 'node:os';
+import { basename, join } from 'node:path';
 
 // Deliberately NOT 5175. That is `pnpm app:dev`'s port, and a maintainer with the
 // preview open should not have their session hijacked (or the run fail on a port
 // clash) just because they also ran the tests.
 export const UI_TEST_PORT = Number(process.env.UI_TEST_PORT) || 5176;
+
+// The WEB host is the local runtime itself (`src/local.ts`, started by
+// `scripts/web-dev.ts`): the bundle as a top-level document at `/b/`, and the real
+// tool handlers at `/mcp`, from one process. Same reasoning as above for the port:
+// not 8788, which is where `pnpm try` and `pnpm web:dev` listen.
+export const WEB_TEST_PORT = Number(process.env.WEB_TEST_PORT) || 8789;
+
+// Where the web harness materializes its brains for a test run. Outside the repo, so
+// it needs no gitignore entry and cannot be confused with the preview's copy; a
+// STABLE name rather than a fresh mkdtemp, so `reuseExistingServer` locally still
+// finds the server it started last time. `--reset` makes it pristine each run, which
+// is safe precisely because nothing but the tests ever looks at it.
+export const WEB_TEST_BRAIN_DIR = join(tmpdir(), 'isomorphic-web-tests');
+// The brain ids the specs address are derived from the folder names, so they follow
+// from this one constant rather than being spelled again in the specs.
+export const WEB_TEST_BRAIN = `local/${basename(WEB_TEST_BRAIN_DIR)}`;
 
 export default defineConfig({
 	testDir: './tests/ui',
@@ -58,27 +76,61 @@ export default defineConfig({
 		{
 			name: 'functional',
 			use: { ...devices['Desktop Chrome'] },
-			testIgnore: /visual\.spec\.ts/
+			testIgnore: [/visual\.spec\.ts/, /web-nav\.spec\.ts/]
 		},
 		{
 			name: 'visual',
 			use: { ...devices['Desktop Chrome'] },
 			testMatch: /visual\.spec\.ts/
+		},
+		{
+			// The web host. A separate project because it has its own baseURL: these
+			// specs load a top-level document from the web server, not the harness.
+			name: 'web',
+			use: { ...devices['Desktop Chrome'], baseURL: `http://localhost:${WEB_TEST_PORT}` },
+			testMatch: /web-nav\.spec\.ts/
 		}
 	],
-	webServer: {
-		// --once: one build, then a static server. No watchers, no live-reload channel,
-		// so nothing can reload the page mid-assertion. See scripts/app-dev.ts.
-		command: 'pnpm exec tsx scripts/app-dev.ts --once',
-		env: { PORT: String(UI_TEST_PORT) },
-		url: `http://localhost:${UI_TEST_PORT}/`,
-		// Reuse a server a maintainer already has up locally; never in CI, where a
-		// leftover process would mean testing a stale bundle.
-		reuseExistingServer: !process.env.CI,
-		// The server runs `pnpm gen:app` before it can serve, which is tens of seconds on
-		// a cold CI runner.
-		timeout: 180_000,
-		stdout: 'pipe',
-		stderr: 'pipe'
-	}
+	webServer: [
+		{
+			// --once: one build, then a static server. No watchers, no live-reload channel,
+			// so nothing can reload the page mid-assertion. See scripts/app-dev.ts.
+			command: 'pnpm exec tsx scripts/app-dev.ts --once',
+			env: { PORT: String(UI_TEST_PORT) },
+			url: `http://localhost:${UI_TEST_PORT}/`,
+			// Reuse a server a maintainer already has up locally; never in CI, where a
+			// leftover process would mean testing a stale bundle.
+			reuseExistingServer: !process.env.CI,
+			// The server runs `pnpm gen:app` before it can serve, which is tens of seconds on
+			// a cold CI runner.
+			timeout: 180_000,
+			stdout: 'pipe',
+			stderr: 'pipe'
+		},
+		{
+			// The web app, over the SAME seed as every other harness (`dev/seed.ts`),
+			// in a throwaway directory.
+			//
+			// The data is shared and there is only one seed module. What cannot be
+			// shared is the DIRECTORY: alone among the harnesses this one materializes
+			// its brains to disk as real git repos that the app writes to, so pointing
+			// it at the preview's copy would make a run depend on whatever a maintainer
+			// last edited and then `--reset` it out from under them. `dev/harness.ts`
+			// has no such problem because its fixtures live in memory and are fresh per
+			// page load.
+			//
+			// A temp path rather than a second checked-in one, so there is nothing to
+			// gitignore, nothing to collide with the preview, and nothing left behind.
+			command: 'pnpm exec tsx scripts/web-dev.ts --reset',
+			env: { PORT: String(WEB_TEST_PORT), BRAIN_DIR: WEB_TEST_BRAIN_DIR },
+			// The runtime answers the shell and `/mcp` from the same listener, so a 200
+			// here means the tools are up too. (With a proxy in front, the shell served
+			// before the process behind it was listening.)
+			url: `http://localhost:${WEB_TEST_PORT}/b/local/${basename(WEB_TEST_BRAIN_DIR)}`,
+			reuseExistingServer: !process.env.CI,
+			timeout: 180_000,
+			stdout: 'pipe',
+			stderr: 'pipe'
+		}
+	]
 });

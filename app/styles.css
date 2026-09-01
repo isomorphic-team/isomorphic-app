@@ -38,6 +38,14 @@
 		--c-code: #26262b;
 	}
 }
+/* The web host (applyWebTheme stamps the class). The document IS the app there, so its
+   background is the app's: without this, overscroll and the instant before the root
+   mounts show the browser's default page colour, which in dark mode is a different
+   dark from the app's. Not in the MCP App, where the document behind the card belongs
+   to the host and the card's rounded corners let it show. */
+:root.web {
+	background: var(--c-bg);
+}
 /* Host theme wins when it stamps the document (applyDocumentTheme). */
 :root[data-theme='light'] {
 	--c-bg: #ffffff;

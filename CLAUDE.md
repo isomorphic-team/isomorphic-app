@@ -29,10 +29,13 @@ pnpm worker:dev         # `wrangler dev` for the MCP Worker — http://localhost
 pnpm worker:deploy      # publish the Worker to Cloudflare
 pnpm worker:types       # regenerate Worker types from wrangler.jsonc
 pnpm app:dev            # local dev server for the MCP App UI — http://localhost:5175 (see dev/README.md)
+pnpm web:dev            # seed the demo brains, then `pnpm try` them: the app as a WEB page at
+                        # http://127.0.0.1:8788/b/local/demo-brain (no auth; --reset re-seeds)
 pnpm gen:app            # codegen the ui:// app bundle (after editing app/ OR any src/lib/ file it imports)
 pnpm regen:pr <n>       # regenerate that bundle on a PR branch that could not (Dependabot); --push to send it
 pnpm test:roundtrip     # editor markdown round-trip golden test
 pnpm test:render        # the shared markdown renderer: parity + sanitization
+pnpm test:web           # web-app routes + the cookie-auth CSRF gate
 pnpm test:views         # derived-views (okf-view) engine golden test
 pnpm test:import        # bulk-import planner golden test
 pnpm test:tools         # user-defined (brain-authored) tools parse-layer golden test
@@ -590,6 +593,149 @@ source of truth (app tree re-exports). Engine: `src/lib/views.ts` (index-coupled
 - **Fail-open everywhere:** any view-computation failure falls back to raw content — a view
   never makes a page unreadable or blocks a save. Malformed directives render a visible note.
 - `pnpm test:views` is the engine's golden test (pure, stubbed index).
+
+## The web app (the same bundle, in a browser tab)
+
+Phase 3 of [`docs/design/link-sharing-and-the-web-app.md`](docs/design/link-sharing-and-the-web-app.md).
+`/b/<owner>/<repo>/<path>` serves the SAME generated bundle the `ui://` MCP App
+resource serves, authenticated by the Auth.js session cookie that already existed.
+Rules live in `src/lib/web-app.ts` (pure, `pnpm test:web`); routes live in the
+Worker's `fetch`, ahead of the OAuth provider like `/health`.
+
+- **It is another MCP CLIENT, holding a cookie instead of a Bearer token.**
+  `McpSession` reads identity from `props`, so the whole port is one branch that
+  builds `props` from a validated session. Tenant resolution, `effectiveBrainRole`,
+  the two-scope gating and usage analytics are the code that already runs, which
+  makes the web app **structurally incapable of doing something the connector
+  cannot**. Keep it that way: anything that widens what a caller can do belongs
+  in a tool, not in this route.
+- **The cookie branch claims a `/mcp` request by what it CARRIES, never by what it
+  lacks** (`claimsWebMcp`: a cookie and no Bearer token). The first version claimed
+  every request with no Bearer, which is exactly an MCP host's first contact: the
+  OAuth provider owes that request a `401` + `WWW-Authenticate: Bearer` so the host
+  can discover the authorization server, and `scripts/smoke.ts` asserts it, so the
+  deploy would have rolled itself back. `pnpm test:smoke` runs against a stub and
+  could not see it; the rule is pure so `pnpm test:web` can.
+- **The cookie `/mcp` branch is a credential-bearing WRITE endpoint reached with an
+  ambient cookie**, which is the exact shape CSRF exploits. `checkWebMcpRequest` is
+  the gate and is pure so it can be tested in both directions: a Bearer token is
+  refused outright (the two auth paths must never be confusable, or a cookie could
+  stand in for a token that failed validation), the `Origin` must match, a
+  `cross-site` `Sec-Fetch-Site` is refused, and the content type must be JSON
+  (an HTML form can only POST three types, none of them JSON, so a form cannot
+  reach the endpoint even carrying the cookie).
+- **The host seam is `app/core/host.ts`, and nothing outside it touches `App`.**
+  It used to export the raw AppBridge object and five call sites in four files
+  reached through it, so "swap this file and the bundle runs anywhere" was not
+  true. `callTool`, `openLink`, `connectHost` and `registerHostEvents` are the
+  seam now.
+- **Which host is serving is a FLAG stamped at serve time** (`window.__ISO_WEB__`),
+  not an AppBridge handshake the app waits on and gives up. Inferring it from a
+  timeout makes every web boot pay the timeout and makes a slow MCP host look like
+  a browser. `pnpm test:web` asserts the bundle never sets the flag itself, since
+  the same bytes are served to Claude.
+- **A tab has no conversation**, so no opening tool result is coming and the
+  self-boot deadlines do not apply: the URL says what to show. `parseWebPath` and
+  `webPathFor` are inverses in ONE module, imported by both the Worker and the app,
+  because two parsers is how a link opens a different page than it names.
+- **The URL is WRITTEN as well as read** (`syncAddressBar` in `app/core/store.ts`,
+  `registerWebNavigation` in `host-web.ts`). It was only read at first: the app
+  parsed `/b/...` once at boot and then navigated underneath it, so Back left the
+  app, Forward could not return, and the URL you copied to send someone was never
+  the page you were reading — which is the entire point of the web app. `show()` is
+  the one chokepoint, so the sync rides it; `push: false` (a restore, or catching up
+  to a move the browser already made) replaces the entry instead of adding one. In
+  the MCP App the whole thing is dead code: `isWebHost()` is false and the host owns
+  navigation.
+- **`WEB_TOOL_ROUTING` is the one list of what has a URL** (`src/lib/web-app.ts`),
+  and it is keyed on the WIDGET TOOL, not on the app's view kinds. A URL and a
+  widget tool call answer the same question, so a second vocabulary beside the tool
+  surface just drifts — which it did immediately: the first grammar grew `?q=` and
+  `?view=graph` while `view_activity` and `brain_access` had no URL at all, for no
+  reason anyone had decided. `pnpm test:web` scans `registerAppTool` call sites and
+  fails on any tool that is neither addressable nor carrying an explicit `why` it is
+  not, the same guard `TOOL_KINDS` gives the analytics.
+  - **The token is an ALIAS, deliberately not the tool name.** A URL is a permanent
+    contract (the two functions are inverses so links do not rot) while the tool
+    surface is actively consolidated (42 → 30; `list_members` + `view_members` →
+    `members`). Literal coupling would make every future merge break every link
+    already sent; with an alias a rename is one line.
+  - **PATH SPACE IS ONLY EVER PAGES.** Everything after the brain is a repo path, so
+    `/b/o/r/graph` is a page called `graph`. Destinations therefore ride the query
+    string (`?view=<token>` plus at most one argument, whose param name the route
+    declares) and page links stay unambiguous.
+  - **Three questions decide whether a tool earns one**, all of which must pass:
+    would you send it to someone, can the URL alone rebuild it, is arriving cold
+    harmless. `edit_page` fails the last two (unsaved text is not in the URL, so a
+    link would open the editor on saved content and discard its own premise).
+  - **The org-scope pair is addressed THROUGH a brain**, and the wart is deliberate:
+    `members` and `analytics` answer the same for every brain in one org, so N brains
+    give N URLs for one roster. An org-keyed prefix is the canonical alternative and
+    is deferred, because `org_id` is a uuid (the only unique handle — `name` is
+    mutable and `brain_owner` is SHARED by every platform-model org), so it would buy
+    an unreadable second addressing scheme for two screens. Revisit at a third and
+    fourth org-scope destination. What this does not fix is that both tools resolve
+    their org through a brain, so an org holding none still has no reachable roster:
+    a resolution defect, written up in
+    [`docs/design/org-scope-resolution.md`](docs/design/org-scope-resolution.md).
+  - **Back/forward must parse `location.search` too.** Every non-page destination
+    lives in the query string, so a `popstate` handler reading only the pathname
+    turns Back into "open the file tree" whenever two entries differ by `?view=`
+    alone. Its test has to navigate IN-APP: two `page.goto`s and a `goBack` is a
+    document load that re-boots from the URL and passes with the bug reinstated.
+- **The local runtime IS the web host locally, and `--project=web` its tests.**
+  `src/local.ts` serves the shell at `/b/local/<folder>` and gates its `/mcp` with
+  the same `webShell` / `WEB_APP_HEADERS` (`web-shell.ts`) and `checkWebMcpRequest` (`web-app.ts`) the Worker uses, so
+  `pnpm try ~/vault` gives a browser UI over a folder with no accounts, and
+  `pnpm web:dev` is only "seed the demo brains, then `pnpm try`". It started as a
+  separate server proxying to the runtime on a second port, which was a second
+  copy of the routes plus a race between the two coming up; a browser host that
+  is not the real runtime is the harness sprawl this repo keeps having to undo.
+  `pnpm app:dev` cannot stand in for it: that mounts the bundle in a sandboxed
+  iframe over AppBridge, so `host-web.ts`, `parseWebPath` and the shell are
+  unreachable from it however complete its fixtures are. **Both hosts seed from
+  `dev/seed.ts`** so a difference between them is a difference in the APP rather
+  than in what it was handed. What the local runtime does NOT reproduce is AUTH:
+  there is no session, no cookie, and the local runtime reports `owner` for
+  everything, so it is the right tool for behaviour and the wrong one for access.
+  The address-bar bug above is what the first run of it found, which is the case
+  for keeping it: `pnpm test:web` was green throughout, because `webPathFor` had no
+  caller outside its own round-trip test.
+- **A tab owns its window.** The web host starts in `fullscreen` display mode and
+  stamps `:root.web` so the document background is the app's. Left at `inline`, the
+  same bundle drew the chat-column card inside the tab (a rounded, bordered 560px box
+  scrolling within itself on the browser's default page colour), which is what
+  "border and background" complaints about the web app were. The tab title follows
+  the view through `pageTitle`, the one title resolver, so the tab says what the
+  header says. Nothing about the MCP App changed: it still starts inline and the
+  visual baselines pin it.
+- **The door from the card to the tab is "Open in browser" in the header's window
+  group** (`WindowControls` in `app/main.tsx`, beside the display-mode menu). The
+  widget builds the URL itself from the view (`webLinkFor` in `store.ts`, the same
+  `webTargetFor` + `webPathFor` the address bar uses) and a base the server sends on
+  the `brains` payload as `features.webBase` (`webBaseUrl` in `src/lib/web-app.ts`:
+  authjs + `PUBLIC_BASE_URL`, else absent). Same vehicle and reason as
+  `features.analytics`: a widget cannot ask what the server serves, and a control
+  whose click lands on a 404 is worse than none. Never on the web host, never for
+  the editor. Where the tab opens is the host's call, through `openLink`. Nothing
+  puts the URL in a tool result's TEXT yet, so Claude cannot link to a page in chat;
+  that is the deferred half, and `features.webBase` is the server side of it.
+- **`script-src` still carries `'unsafe-inline'`.** The bundle is one self-contained
+  HTML file with JS and CSS inlined (the MCP App iframe CSP forbids external hosts,
+  which is why it is built that way), so there is no external script for `'self'` to
+  point at. Hashes belong in `pnpm gen:app`, the only thing that knows where the
+  script tags are; a blind replace over minified JS risks rewriting the literal
+  text `<script` inside it. The threat that made this urgent was markdown-borne
+  XSS, and that is closed at the source by `src/lib/render.ts`.
+- **Verified in a browser now** (`tests/ui/web-nav.spec.ts`, the `web` project), which
+  is what caught the address-bar defect above. **Still unverified: AUTHENTICATION.**
+  `web:dev` has no session, no cookie and no org model, so the `/b/` redirect for a
+  signed-out visitor, the return through `callbackUrl`, `props` built from a real
+  Auth.js session, and every authorization path behind it have run NOWHERE: not in
+  a test, and not in production, since none of this has been deployed. Before the
+  first deploy, upload a preview version from the branch (`wrangler versions
+upload`, the same step `deploy.yml` takes) and click through sign-in on its
+  preview URL. No amount of green here speaks to that half.
 
 ## One markdown renderer (`src/lib/render.ts`)
 

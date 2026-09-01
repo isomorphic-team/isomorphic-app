@@ -152,6 +152,13 @@ export function registerBrainTools(
 		// deployment with usage recording off never shows a destination whose click
 		// would come back "unknown tool".
 		analyticsEnabled: boolean;
+		// The origin the WEB APP is served from (`webBaseUrl` in src/lib/web-app.ts),
+		// or undefined when this deployment has none. Same vehicle and same reason as
+		// `analyticsEnabled`: the widget cannot ask the server what it serves, and a
+		// control that offers a link into a route that is not mounted is worse than
+		// no control. The widget builds the page's own URL from this with
+		// `webPathFor`, so the grammar stays in one place.
+		webBaseUrl?: string;
 	}
 ) {
 	const {
@@ -162,9 +169,10 @@ export function registerBrainTools(
 		activeBrainId,
 		setActiveBrain,
 		invalidateConfig,
-		analyticsEnabled
+		analyticsEnabled,
+		webBaseUrl
 	} = deps;
-	const features = { analytics: analyticsEnabled };
+	const features = { analytics: analyticsEnabled, ...(webBaseUrl ? { webBase: webBaseUrl } : {}) };
 
 	// The orgs the app's "add a brain" flow may target: the ones the caller can
 	// actually adopt into (connect_brain is admin+). Sent with the brains list because

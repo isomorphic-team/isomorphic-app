@@ -18,6 +18,34 @@ PORT=5185 pnpm app:dev   # when 5175 is taken (another checkout's harness)
 Edit anything in `app/` (or `src/lib/wiki.ts`) and the browser live-reloads:
 `pnpm gen:app` regenerates the `ui://` bundle → esbuild rebuilds the harness → reload.
 
+## The OTHER host: `pnpm web:dev`
+
+The same bundle also runs as an ordinary **web page** (`/b/<owner>/<repo>/<path>`,
+see the web-app section of `CLAUDE.md`), and this harness cannot show you that. It
+mounts the bundle in a sandboxed iframe and drives it over AppBridge, so the web
+transport (`app/core/host-web.ts`), the URL round-trip (`parseWebPath`) and the
+served shell are all unreachable from here no matter how good the fixtures are.
+
+The web host is **the local runtime itself**: `pnpm try <folder>` serves the shell at
+`/b/local/<folder>` and the real tool handlers at `/mcp`, from one process, exactly
+as the Worker does. `pnpm web:dev` only seeds the demo brains and starts it:
+
+```sh
+pnpm web:dev              # → http://127.0.0.1:8788/b/local/demo-brain
+pnpm web:dev --reset      # start over from a pristine seed
+pnpm try ~/some/vault     # any folder, no seeding: http://127.0.0.1:8788/b/local/vault
+```
+
+The shell and its headers (`src/lib/web-shell.ts`) and the CSRF gate (`src/lib/web-app.ts`) are the shared ones,
+and the tool handlers, the content index and the write path are the production ones
+over a git repo on disk. `web:dev` seeds that repo from **`dev/seed.ts`, the same
+module this harness uses**, so the two hosts show the same three brains and a
+difference you notice between them is a difference in the app.
+
+**It has no authentication at all.** Production checks an Auth.js session cookie and
+redirects to sign-in; here there is no session and the local runtime reports `owner`
+for everything. Right tool for behaviour, wrong tool for access. Loopback only.
+
 ### Views (URL controls)
 
 | URL                                                   | Shows                            |
@@ -164,6 +192,16 @@ It serves on **5176**, not 5175, so it never collides with a preview you have op
 `scripts/app-dev.ts --once` is what it starts: one build, then a plain static server
 with no watchers and no live-reload, because a rebuild landing mid-assertion reads as
 a flaky app rather than a moving server.
+
+**Three projects, and `web` drives a different host.** `functional` and `visual` run
+against this harness; **`web`** (`tests/ui/web-nav.spec.ts`) runs against the local
+runtime on **8789**, seeded by `scripts/web-dev.ts --reset` into a throwaway
+directory under the OS temp dir so a run never depends on, or disturbs, the brain
+you have been editing. It exists because the web host had no browser coverage at all, and the first
+run of it found a real defect: navigation never wrote the address bar, so Back left
+the app and the URL you copied was never the page you were reading. Those assertions
+read the **pair** (url, heading) every time — the bug was a heading that moved while a
+URL stood still, and a spec watching either alone stays green through it.
 
 What the suite covers, and deliberately does not:
 

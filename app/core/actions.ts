@@ -34,7 +34,8 @@ import type {
 	UsagePerson,
 	UsageBrain
 } from './types.ts';
-import { app, callTool, firstText } from './host.ts';
+import { openLink, callTool, firstText } from './host.ts';
+import { analyticsDays, type WebTarget } from './host-web.ts';
 import { isFolderNoteName, refreshOutcome } from './util.ts';
 import {
 	show,
@@ -246,7 +247,7 @@ function ensureBrainList(): Promise<void> {
 			const sc = (res.structuredContent ?? {}) as {
 				brains?: BrainRow[];
 				active?: string;
-				features?: { analytics?: boolean };
+				features?: { analytics?: boolean; webBase?: string };
 			};
 			if (!Array.isArray(sc.brains)) throw new Error('brains: no list in the result');
 			setBrainList(sc.brains);
@@ -579,10 +580,46 @@ function pageLabel(path: string): string {
 
 // ---------- navigation ----------
 
-async function navigateTo(path: string) {
+// Open whatever a `/b/...` URL names. ONE dispatcher, used by both the cold boot
+// and the Back/Forward handler, because those two answering the same URL
+// differently is the bug the single-parser rule exists to prevent — and it would
+// show up only as "Back goes somewhere odd", which nobody reports precisely.
+//
+// None of these needs a `push: false`. The browser has already moved to this URL,
+// so the view they produce serializes back to the URL that is already in the bar,
+// and `syncAddressBar` writes nothing when those are equal. The intermediate
+// loading views are skipped there too, so nothing lands in the history stack.
+function openWebTarget(t: WebTarget): void {
+	if (t.path) return void navigateTo(t.path);
+	// Tokens come from WEB_TOOL_ROUTING, so this switch and the URL builder cannot
+	// name a destination differently.
+	switch (t.view) {
+		case 'search':
+			return void (t.arg ? runSearch(t.arg) : openSearch());
+		case 'graph':
+			return void openGraph(t.arg);
+		case 'activity':
+			return void openActivity(t.arg);
+		case 'access':
+			return void openBrainAccess();
+		case 'members':
+			return void openMembers();
+		case 'analytics':
+			return void openAnalytics(analyticsDays(t.arg));
+		// No view, so the tree, whose argument is the folder to reveal.
+		default:
+			return void openBrowse(t.arg);
+	}
+}
+
+// `push` is forwarded to the final `show`, which is what decides whether the web
+// host adds a browser history entry. It is false when the browser has already
+// moved and we are catching up to it (the popstate handler), where pushing would
+// re-add the entry the user just left.
+async function navigateTo(path: string, { push = true } = {}) {
 	show({ kind: 'loading', label: `Loading ${path}…`, task: 'page', subject: pageLabel(path) });
 	try {
-		show(pageView(path, await fetchPage(path)));
+		show(pageView(path, await fetchPage(path)), { push });
 	} catch (e) {
 		if (isNoBrain(String(e))) return openAddBrain();
 		show({
@@ -1089,7 +1126,7 @@ function onProseClick(fromPath: string) {
 			else toast(`No page found for [[${target}]]`, true);
 		} else if (/^https?:/i.test(href)) {
 			e.preventDefault();
-			app.openLink({ url: href });
+			openLink(href);
 		} else if (href.endsWith('.md') || href.includes('.md#')) {
 			e.preventDefault();
 			navigateTo(resolveRelative(fromPath, href));
@@ -1103,6 +1140,7 @@ function onProseClick(fromPath: string) {
 
 export {
 	handleToolResult,
+	openWebTarget,
 	confirmLeaveEdit,
 	guardNav,
 	brainsViewFromSc,

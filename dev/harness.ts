@@ -33,7 +33,13 @@ import {
 	FOOTNOTE,
 	type UsageRow
 } from '../src/lib/usage.ts';
-import PAGES from './fixtures.json';
+import {
+	personalPages,
+	ACME_PAGES,
+	NORTHWIND_PAGES,
+	SAMPLE_PNG,
+	PERSONAL_ASSET_PATH
+} from './seed.ts';
 
 // ---- the fixtures' clock ----
 //
@@ -60,53 +66,15 @@ let seq = 0;
 // couldn't tell them apart. Now each brain has its OWN content: the Personal brain
 // uses the rich shared fixtures; the team/client brains get small, obviously-distinct
 // sets. Keyed by brain id (matches brainsFixture ids below).
-const PERSONAL_PAGES = PAGES as Record<string, string>;
-// Seed an otherwise-empty folder (persisted by a hidden .gitkeep) so the preview
-// exercises the "empty folder shows" + "show hidden" behavior out of the box.
-PERSONAL_PAGES['wiki/Projects/.gitkeep'] ??= '';
-
-// Seed an attachment on a page of the DEFAULT brain, so opening the preview shows a
-// rendered image without switching brains or uploading anything first. Two links: one
-// that resolves and one that does not, because the missing-attachment state is the
-// one nobody remembers to look at.
-PERSONAL_PAGES['wiki/concepts/vision.md'] +=
-	'\n![The shape of the thing](assets/vision-sketch.png)\n\n![A sketch that was moved away](assets/gone.png)\n';
-
-// Seed the config file itself so the "show hidden" toggle has the real system
-// files to reveal (mirrors prod, where every brain repo carries one).
-PERSONAL_PAGES['.isomorphic.json'] ??=
-	'{\n  "paths": {\n    "wiki/": "content",\n    "raw/": "source",\n    "wiki/log.md": "log"\n  }\n}\n';
+// Shared with `pnpm web:dev`, which materializes the same pages onto disk for the
+// local runtime. One seed, two hosts: see dev/seed.ts.
+const PERSONAL_PAGES = personalPages();
 
 // Mirror of the server's visible/hidden split (list_pages): visible = content
 // pages; EVERYTHING else (system files, .gitkeep, source, the log) is hidden.
 // The fixtures all use the default wiki/+raw/ layout, so the default config is
 // the right policy here.
 const isContentPage = (p: string) => p.endsWith('.md') && isContentPath(p, DEFAULT_BRAIN_CONFIG);
-const ACME_PAGES: Record<string, string> = {
-	'wiki/index.md':
-		'---\ntitle: Acme\n---\n\nKnowledge base for **Acme**. Start with our [[mission]] and the [[onboarding]] program.\n',
-	'wiki/concepts/mission.md':
-		'---\ntitle: Mission\n---\n\nAcme builds tools for small teams. See the [[content-pipeline]] for how we publish.\n',
-	// Carries an attachment (seeded in brainAssets) plus a link to one that does not
-	// exist, so the preview shows BOTH states: a rendered image and the missing-file
-	// note. The broken case is the one nobody remembers to look at.
-	'wiki/programs/onboarding.md':
-		'---\ntitle: Onboarding\n---\n\nOur flagship customer onboarding program. Run by [[lead]].\n\n![The onboarding flow](assets/onboarding-flow.png)\n\n![A diagram that was moved away](assets/gone.png)\n',
-	'wiki/people/lead.md':
-		'---\ntitle: Team Lead\n---\n\nLeads Acme; owns the [[mission]] and the [[onboarding]] program.\n',
-	'wiki/playbooks/content-pipeline.md':
-		'---\ntitle: Content Pipeline\n---\n\nHow drafts move from research to published KB pages.\n'
-};
-const NORTHWIND_PAGES: Record<string, string> = {
-	'wiki/index.md':
-		'---\ntitle: Northwind\n---\n\nOperations wiki for **Northwind**. See the [[headquarters]] and [[intake]].\n',
-	'wiki/facilities/headquarters.md':
-		'---\ntitle: Headquarters\n---\n\nPrimary site. Intake follows the [[intake]] process; ops lead is the [[director]].\n',
-	'wiki/protocols/intake.md':
-		'---\ntitle: Intake\n---\n\nStandard intake process for [[headquarters]].\n',
-	'wiki/people/director.md':
-		'---\ntitle: Operations Director\n---\n\nOwns operational processes including [[intake]].\n'
-};
 const brainContent: Record<string, Record<string, string>> = {
 	'your-org/personal-wiki': PERSONAL_PAGES,
 	'acme-co/acme-wiki': ACME_PAGES,
@@ -124,16 +92,14 @@ function pagesFor(id: string): Record<string, string> {
 // preview could not show a picture at all: the iframe CSP allows no external origin,
 // so there is nowhere else the bytes could come from.
 //
-// A 64x64 palette PNG, 128 bytes. Small enough to sit inline here, and a real image
-// rather than a 1x1, so "did it render?" is answerable by looking.
-const SAMPLE_PNG =
-	'iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAMAAACdt4HsAAAADFBMVEU7StZbje+Px/fv9P+rZWLWAAAAL0lEQVR42u3MMREAIAwEsEL9e2bBwW9/iYDMAHwnJBAIeoIbEggEPcGGBAJBTfAA1t8YAcvRfzcAAAAASUVORK5CYII=';
+// The bytes and the default brain's attachment path come from dev/seed.ts, so
+// `pnpm web:dev` writes the same image to the same place on disk.
 const brainAssets: Record<string, Record<string, { data: string; mimeType: string }>> = {
 	// Referenced by the seeded links above. The default brain gets one so the preview
 	// shows an image immediately; Acme gets one so switching brains proves attachments
 	// are per-brain rather than global.
 	'your-org/personal-wiki': {
-		'wiki/concepts/assets/vision-sketch.png': { data: SAMPLE_PNG, mimeType: 'image/png' }
+		[PERSONAL_ASSET_PATH]: { data: SAMPLE_PNG, mimeType: 'image/png' }
 	},
 	'acme-co/acme-wiki': {
 		'wiki/programs/assets/onboarding-flow.png': { data: SAMPLE_PNG, mimeType: 'image/png' }
@@ -544,7 +510,9 @@ function brainsResult(msg: string, withView: boolean, switched = false): CallToo
 		// What the server registered. On here so the harness previews the nav with
 		// the Analytics row present; a real deployment sends false unless
 		// USAGE_ANALYTICS is set.
-		features: { analytics: true }
+		// `webBase` is what a deployment serving the web app sends (webBaseUrl in
+		// src/lib/web-app.ts); it puts the "Open in browser" control in the header.
+		features: { analytics: true, webBase: 'https://brain.example' }
 	};
 	if (withView) sc.view = 'brains';
 	if (switched) sc.switched = true;
@@ -1345,7 +1313,14 @@ bridge.oncalltool = async (params) => {
 		await new Promise((r) => setTimeout(r, SLOW_LIST_MS));
 	return handleTool(params.name, (params.arguments ?? {}) as Record<string, unknown>);
 };
-bridge.onopenlink = async () => ({}); // no-op; links would open a tab in a real host
+// No tab opens here; the request is recorded where a test can read it, since which
+// URL the app asked the host to open is the whole assertion for "Open in browser".
+const openedLinks: string[] = [];
+(window as unknown as { __openedLinks: string[] }).__openedLinks = openedLinks;
+bridge.onopenlink = async (req) => {
+	openedLinks.push(req.url);
+	return {};
+};
 bridge.onloggingmessage = async () => ({});
 // The app's autoResize reports content-height changes here; in inline mode we
 // resize the card to fit (bounded), mirroring how claude.ai grows/shrinks an

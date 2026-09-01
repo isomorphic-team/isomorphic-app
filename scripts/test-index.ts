@@ -11,6 +11,9 @@
 //   pnpm test:index
 
 import { DatabaseSync } from 'node:sqlite';
+import { mkdtempSync, readdirSync, readFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import {
 	backlinksTo,
 	ensureFresh,
@@ -927,6 +930,63 @@ console.log('\nContent index — bounded, resumable ensureFresh\n');
 		advanced && verifyCalls === 1 && batchCount === 0,
 		`calls=${verifyCalls} batches=${batchCount}`
 	);
+}
+
+// ---------- migrations against a database that OUTLIVES the process ----------
+//
+// The rest of this file, and every other battery, migrates a database that is empty
+// or in memory, so re-running a migration is free and nothing here could see the
+// bug this pins: `pnpm try` keeps its index in the brain's own `.isomorphic/`, and
+// its SECOND launch on any folder died with `duplicate column name: schema_version`
+// and stayed dead. `CREATE TABLE IF NOT EXISTS` repeats happily; the two
+// `ALTER TABLE ... ADD COLUMN` migrations cannot, and SQLite has no
+// `ADD COLUMN IF NOT EXISTS`.
+{
+	const dir = mkdtempSync(join(tmpdir(), 'iso-migrate-'));
+
+	// A file-backed database, opened and migrated twice, which is exactly what two
+	// launches of `pnpm try` on one folder do.
+	const file = join(dir, 'index.sqlite');
+	const first = new DatabaseSync(file);
+	applyMigrations(first);
+	first.close();
+
+	let reopened = '';
+	try {
+		const second = new DatabaseSync(file);
+		applyMigrations(second);
+		// The schema has to still be USABLE, not merely un-thrown: a migration step
+		// that silently did not run would leave a column the index writes to missing.
+		second.prepare('SELECT schema_version, rebuild_cursor FROM brain_index_meta').all();
+		second.close();
+	} catch (e) {
+		reopened = String(e);
+	}
+	check('migrations re-run on a persisted database', reopened === '', reopened);
+
+	// A database written by the code that HAD no ledger: every migration applied, no
+	// record of it. Those exist on disk in any checkout that ran `pnpm try` before,
+	// and they must adopt themselves rather than force the user to delete the file.
+	const legacyFile = join(dir, 'legacy.sqlite');
+	const legacy = new DatabaseSync(legacyFile);
+	const migrations = new URL('../migrations/', import.meta.url);
+	for (const f of readdirSync(migrations)
+		.filter((f) => f.endsWith('.sql'))
+		.sort()) {
+		legacy.exec(readFileSync(new URL(f, migrations), 'utf8'));
+	}
+	legacy.close();
+
+	let adopted = '';
+	try {
+		const reopen = new DatabaseSync(legacyFile);
+		applyMigrations(reopen);
+		reopen.prepare('SELECT schema_version, rebuild_cursor FROM brain_index_meta').all();
+		reopen.close();
+	} catch (e) {
+		adopted = String(e);
+	}
+	check('a pre-ledger database adopts itself', adopted === '', adopted);
 }
 
 done();

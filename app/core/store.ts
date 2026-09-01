@@ -11,7 +11,22 @@ import {
 	isContentPath,
 	normRoot
 } from '../../src/lib/brain-policy.ts';
+import { isWebHost, webPathFor, WEB_TOOL_ROUTING, type WebTarget } from './host-web.ts';
+import { pageTitle } from '../../src/lib/wiki.ts';
 
+type WebExtras = Omit<WebTarget, 'brain' | 'path'>;
+
+// The URL token for a tool, from the one table. Throwing rather than defaulting: a
+// view mapped to a tool with no `view` route is a programming error here, and a
+// silent fallback would give two destinations the same URL.
+function webToken(tool: string): string {
+	const route = WEB_TOOL_ROUTING[tool];
+	if (route?.kind !== 'view') throw new Error(`${tool} has no web view route`);
+	return route.token;
+}
+
+// NOTE: this shadows the global `history`. Anything wanting the browser's own
+// history stack (see syncAddressBar) must say `globalThis.history`.
 const history: View[] = [];
 // The whole last file-tree payload, not just its paths: the tree, the folder-note
 // lookup behind a breadcrumb click, and wikilink resolution all read the same cache,
@@ -93,9 +108,11 @@ function applyBrainContext(sc: Record<string, unknown>): void {
 // ones fail on click. Unknown until the list lands, and a missing flag reads as OFF:
 // a destination that quietly does not appear is a far smaller failure than one that
 // appears and errors.
-let features: { analytics: boolean } = { analytics: false };
-function setFeatures(v: Partial<{ analytics: boolean }> | undefined): void {
-	if (v && typeof v.analytics === 'boolean') features = { ...features, analytics: v.analytics };
+let features: { analytics: boolean; webBase?: string } = { analytics: false };
+function setFeatures(v: Partial<{ analytics: boolean; webBase: string }> | undefined): void {
+	if (!v) return;
+	if (typeof v.analytics === 'boolean') features = { ...features, analytics: v.analytics };
+	if (typeof v.webBase === 'string' && v.webBase) features = { ...features, webBase: v.webBase };
 }
 
 // Whether the caller is admin+ in the active brain's org (can auto-configure it).
@@ -178,7 +195,124 @@ function show(v: View, { push = true } = {}) {
 		if (history.length > HISTORY_LIMIT) history.shift();
 	}
 	currentView = v;
+	syncAddressBar(v, push);
 	bump();
+}
+
+// Keep the browser's address bar naming what is on screen (web host only).
+//
+// In a tab the URL is not decoration: it is what you copy to send someone the page
+// you are reading, and what Back returns you to. Nothing wrote it before, so the app
+// parsed `/b/...` once at boot and then navigated underneath it — every page you
+// reached by clicking still advertised the one you first opened, and Back left the
+// app entirely. `webPathFor` existed for this and had no caller outside its own
+// round-trip test, which is why a green `pnpm test:web` never noticed.
+//
+// Only the views the URL grammar can NAME are synced, and `webTargetFor` is the whole
+// list. Everything else leaves the bar on the last thing it named rather than
+// inventing a URL that cannot be read back, which is the inverse property the module
+// exists to hold. The editor is the pointed omission: its unsaved text is not in the
+// URL, so a link to it would open on saved content and discard its own premise.
+//
+// In the MCP App this is dead: `isWebHost()` is false, there is no address bar, and
+// the host owns navigation.
+// The tokens come from WEB_TOOL_ROUTING rather than being spelled again here, so a
+// destination cannot be addressable in one direction only.
+function webTargetFor(v: View): { path: string; extras: WebExtras } | null {
+	const at = (view: string, arg?: string): { path: string; extras: WebExtras } => ({
+		path: '',
+		extras: { view, ...(arg ? { arg } : {}) }
+	});
+	switch (v.kind) {
+		case 'page':
+			return { path: v.path, extras: {} };
+		// The tree's own argument is the folder a breadcrumb click reveals, so a link
+		// to a revealed folder reopens it there rather than at the root.
+		case 'browse':
+			return { path: '', extras: v.focus ? { arg: v.focus } : {} };
+		// The query is the whole state worth carrying: the hits are derived from it,
+		// and re-running the search is what the recipient of the link wants anyway.
+		case 'search':
+			return at(webToken('search_pages'), v.query);
+		case 'graph':
+			return at(webToken('view_graph'), v.focus);
+		case 'activity':
+			return at(webToken('view_activity'), v.scopePath);
+		case 'brain-access':
+			return at(webToken('brain_access'));
+		case 'members':
+			return at(webToken('members'));
+		// The window is the one thing a reader chose, so a link to "the last 90 days"
+		// reopens on 90 rather than silently on the default.
+		case 'analytics':
+			return at(webToken('analytics'), String(v.window.days));
+		default:
+			return null;
+	}
+}
+
+// What the tab is called, for the same reason the address bar is written: a tab strip
+// and a history menu are read by their titles, and "Brain" twelve times over is no
+// help. Names the destination and the brain, so two brains' index pages are told
+// apart. Only for the views that have a URL, like the bar itself.
+function webTitleFor(v: View): string | null {
+	switch (v.kind) {
+		// The ONE title resolver (frontmatter, then the H1, then the filename or the
+		// folder for a folder note), so the tab says what the header says.
+		case 'page':
+			return pageTitle(v.path, v.markdown);
+		case 'browse':
+			return v.focus ? v.focus.split('/').pop() || 'Files' : 'Files';
+		case 'search':
+			return v.query ? `Search: ${v.query}` : 'Search';
+		case 'graph':
+			return 'Graph';
+		case 'activity':
+			return 'Recent changes';
+		case 'brain-access':
+			return 'Sharing';
+		case 'members':
+			return 'Members';
+		case 'analytics':
+			return 'Analytics';
+		default:
+			return null;
+	}
+}
+
+// The web app's URL for what the widget is showing, for the "Open in browser"
+// control in the MCP App: the same page, same brain, in a full window. Null when
+// there is nothing to offer: on the web host itself (already there), on a
+// deployment with no web app (`features.webBase` never arrived), before a brain is
+// known, or on a view the URL grammar cannot name (the editor, deliberately).
+function webLinkFor(v: View): string | null {
+	if (isWebHost() || !features.webBase || !activeBrain) return null;
+	const target = webTargetFor(v);
+	if (!target) return null;
+	return `${features.webBase}${webPathFor(activeBrain.id, target.path, target.extras)}`;
+}
+
+function syncAddressBar(v: View, push: boolean): void {
+	if (!isWebHost()) return;
+	const target = webTargetFor(v);
+	if (!target) return;
+	// The brain on screen. On the web it is set from the URL before anything is
+	// shown (main.tsx), so the only way to have none is a bare `/b` with no brain
+	// list yet, where there is nothing to write.
+	const brain = activeBrain?.id;
+	if (!brain) return;
+	const url = webPathFor(brain, target.path, target.extras);
+	const title = webTitleFor(v);
+	if (title) document.title = `${title} · ${activeBrain?.label ?? brain}`;
+	// Compared against path AND query, since two destinations now differ only in the
+	// query string.
+	if (url === `${location.pathname}${location.search}`) return;
+	// `push: false` means the view is being RESTORED — goBack, a refresh in place, or
+	// the popstate handler reacting to a move the browser already made. Pushing there
+	// would leave an entry pointing at where the user just was, so Back would have to
+	// be pressed twice to go anywhere.
+	if (push) globalThis.history.pushState(null, '', url);
+	else globalThis.history.replaceState(null, '', url);
 }
 
 // Return to whatever pushed the current view.
@@ -236,6 +370,7 @@ export {
 	setOrgList,
 	applyBrainContext,
 	features,
+	webLinkFor,
 	setFeatures,
 	activeBrainCanManage,
 	brainArgs,
