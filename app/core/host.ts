@@ -31,7 +31,13 @@ export function isWeb(): boolean {
 	return web;
 }
 
-let displayMode: DisplayMode = 'inline';
+// A TAB OWNS ITS WINDOW, so the web host starts in fullscreen semantics: fill the
+// viewport, no height cap, no card border, the wide column. Left at 'inline' the
+// same bundle rendered as the chat-column card inside a browser tab: a 560px
+// rounded box scrolling within itself, sitting on the browser's default page
+// background, with dead space below. The MCP host still starts inline and moves
+// through host-context events exactly as before.
+let displayMode: DisplayMode = web ? 'fullscreen' : 'inline';
 let availableModes: DisplayMode[] = [];
 
 function applyHostContext(ctx: McpUiHostContext) {
@@ -53,6 +59,12 @@ function applyHostContext(ctx: McpUiHostContext) {
 // browser's own preference and keeps following it. A tab is already the size it
 // is going to be, which is why no display mode is advertised below.
 function applyWebTheme() {
+	// Marks the document as the web host for the stylesheet: the page background
+	// outside the app's root (overscroll, the moment before the root mounts) is the
+	// app's own, not the browser's default. Web only, because in the MCP App the
+	// document behind the card is the host's, and the card's rounded corners show
+	// it through.
+	document.documentElement.classList.add('web');
 	const query = window.matchMedia('(prefers-color-scheme: dark)');
 	const paint = () => {
 		applyDocumentTheme(query.matches ? 'dark' : 'light');

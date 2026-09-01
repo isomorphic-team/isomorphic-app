@@ -12,6 +12,7 @@ import {
 	normRoot
 } from '../../src/lib/brain-policy.ts';
 import { isWebHost, webPathFor, WEB_TOOL_ROUTING, type WebTarget } from './host-web.ts';
+import { pageTitle } from '../../src/lib/wiki.ts';
 
 type WebExtras = Omit<WebTarget, 'brain' | 'path'>;
 
@@ -248,6 +249,35 @@ function webTargetFor(v: View): { path: string; extras: WebExtras } | null {
 	}
 }
 
+// What the tab is called, for the same reason the address bar is written: a tab strip
+// and a history menu are read by their titles, and "Brain" twelve times over is no
+// help. Names the destination and the brain, so two brains' index pages are told
+// apart. Only for the views that have a URL, like the bar itself.
+function webTitleFor(v: View): string | null {
+	switch (v.kind) {
+		// The ONE title resolver (frontmatter, then the H1, then the filename or the
+		// folder for a folder note), so the tab says what the header says.
+		case 'page':
+			return pageTitle(v.path, v.markdown);
+		case 'browse':
+			return v.focus ? v.focus.split('/').pop() || 'Files' : 'Files';
+		case 'search':
+			return v.query ? `Search: ${v.query}` : 'Search';
+		case 'graph':
+			return 'Graph';
+		case 'activity':
+			return 'Recent changes';
+		case 'brain-access':
+			return 'Sharing';
+		case 'members':
+			return 'Members';
+		case 'analytics':
+			return 'Analytics';
+		default:
+			return null;
+	}
+}
+
 function syncAddressBar(v: View, push: boolean): void {
 	if (!isWebHost()) return;
 	const target = webTargetFor(v);
@@ -258,6 +288,8 @@ function syncAddressBar(v: View, push: boolean): void {
 	const brain = activeBrain?.id;
 	if (!brain) return;
 	const url = webPathFor(brain, target.path, target.extras);
+	const title = webTitleFor(v);
+	if (title) document.title = `${title} · ${activeBrain?.label ?? brain}`;
 	// Compared against path AND query, since two destinations now differ only in the
 	// query string.
 	if (url === `${location.pathname}${location.search}`) return;

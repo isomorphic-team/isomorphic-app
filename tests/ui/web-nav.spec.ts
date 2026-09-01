@@ -65,6 +65,39 @@ test.describe('the app in a browser tab', () => {
 		expect(errors).toEqual([]);
 	});
 
+	test('a tab is a window, not a card', async ({ page }) => {
+		await page.goto(`${BASE}${INDEX}`);
+		await settled(page, 'Index');
+
+		// The root fills the viewport with no height cap and no card border. Left in
+		// the MCP App's inline mode, the same bundle drew the chat-column card inside
+		// the tab: a rounded 560px box scrolling within itself on the browser's own
+		// page background. The MCP App keeps that card; the web host must not.
+		const root = page
+			.locator('main[data-view="page"]')
+			.locator('xpath=ancestor::div[contains(@class, "bg-bg")]')
+			.first();
+		const cls = (await root.getAttribute('class')) ?? '';
+		expect(cls).toContain('min-h-screen');
+		expect(cls).not.toContain('max-h-');
+		expect(cls).not.toContain('border');
+
+		// The document's own background is the app's, so overscroll and the instant
+		// before mount do not flash the browser default (a different dark in dark mode).
+		const bg = await page.evaluate(() => {
+			const root = getComputedStyle(document.documentElement);
+			return { html: root.backgroundColor, token: root.getPropertyValue('--c-bg').trim() };
+		});
+		expect(bg.html).not.toBe('rgba(0, 0, 0, 0)');
+
+		// The tab is named after what it shows, and which brain: a tab strip and a
+		// history menu are read by their titles, and "Brain" twelve times is no help.
+		await expect(page).toHaveTitle(/^Index · /);
+		await page.getByRole('link', { name: 'Organizations' }).first().click();
+		await settled(page, 'Organizations');
+		await expect(page).toHaveTitle(/^Organizations · /);
+	});
+
 	test('following a link moves the address bar with the page', async ({ page }) => {
 		await page.goto(`${BASE}${INDEX}`);
 		await settled(page);

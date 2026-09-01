@@ -701,6 +701,14 @@ Worker's `fetch`, ahead of the OAuth provider like `/health`.
   The address-bar bug above is what the first run of it found, which is the case
   for keeping it: `pnpm test:web` was green throughout, because `webPathFor` had no
   caller outside its own round-trip test.
+- **A tab owns its window.** The web host starts in `fullscreen` display mode and
+  stamps `:root.web` so the document background is the app's. Left at `inline`, the
+  same bundle drew the chat-column card inside the tab (a rounded, bordered 560px box
+  scrolling within itself on the browser's default page colour), which is what
+  "border and background" complaints about the web app were. The tab title follows
+  the view through `pageTitle`, the one title resolver, so the tab says what the
+  header says. Nothing about the MCP App changed: it still starts inline and the
+  visual baselines pin it.
 - **`script-src` still carries `'unsafe-inline'`.** The bundle is one self-contained
   HTML file with JS and CSS inlined (the MCP App iframe CSP forbids external hosts,
   which is why it is built that way), so there is no external script for `'self'` to
