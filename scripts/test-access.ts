@@ -24,7 +24,8 @@ import {
 	ASSIGNABLE_BRAIN_ROLES,
 	type Role
 } from '../src/lib/orgs.ts';
-import { commitAuthorFor } from '../src/lib/brain-repo.ts';
+import { commitAuthorFor, githubNoreplyAuthor } from '../src/lib/brain-repo.ts';
+import { staticAuth } from '../src/lib/github.ts';
 
 import { checker } from './check.ts';
 
@@ -544,6 +545,79 @@ check(
 check(
 	'a whitespace-only address counts as none',
 	commitAuthorFor({ name: 'Ada', email: '   ' }, '   ') === undefined
+);
+
+console.log('\ngithubNoreplyAuthor: the GitHub-identity attribution rule');
+// The third attribution rule, for the path with no app_users row to read. The format
+// is GitHub's canonical noreply form, and getting it wrong is silent: the commit still
+// lands, it just attributes to nobody, on every write that identity makes.
+check(
+	'the canonical <id>+<login>@users.noreply.github.com form',
+	githubNoreplyAuthor(1234, 'ada')?.email === '1234+ada@users.noreply.github.com'
+);
+check('the name is the login', githubNoreplyAuthor(1234, 'ada')?.name === 'ada');
+check(
+	'no login means no attribution, so the App authors instead',
+	githubNoreplyAuthor(1234, null) === undefined
+);
+check('...and an empty login too', githubNoreplyAuthor(1234, '') === undefined);
+check(
+	'a whitespace-only login counts as none, never as a blank address',
+	githubNoreplyAuthor(1234, '   ') === undefined
+);
+check(
+	'a padded login is trimmed on both sides of the address',
+	githubNoreplyAuthor(7, '  ada  ')?.email === '7+ada@users.noreply.github.com'
+);
+
+console.log('\nstaticAuth: what a self-hosted deployment resolves to, or is told');
+// AUTH_MODE=static is the documented self-hosting entry point, so these errors are
+// the first thing a stranger hits when their config is incomplete.
+const REPO = { BRAIN_REPO_OWNER: 'acme', BRAIN_REPO_NAME: 'brain' };
+check(
+	'a token resolves to the token path',
+	staticAuth({ ...REPO, GITHUB_TOKEN: 'ghp_x' }).kind === 'token'
+);
+check(
+	'an installation id resolves to the App path',
+	staticAuth({ ...REPO, GITHUB_APP_INSTALLATION_ID: '42' }).kind === 'installation'
+);
+check(
+	'...and parses to a number, not a string',
+	(() => {
+		const a = staticAuth({ ...REPO, GITHUB_APP_INSTALLATION_ID: '42' });
+		return a.kind === 'installation' && a.installationId === 42;
+	})()
+);
+check(
+	'the token wins when both are set, being the more specific act',
+	staticAuth({ ...REPO, GITHUB_TOKEN: 'ghp_x', GITHUB_APP_INSTALLATION_ID: '42' }).kind === 'token'
+);
+check(
+	'the repo travels with the choice',
+	staticAuth({ ...REPO, GITHUB_TOKEN: 'x' }).owner === 'acme'
+);
+check(
+	'no repo named at all is refused, whatever the credential',
+	threw(() => staticAuth({ GITHUB_TOKEN: 'ghp_x' }))
+);
+check(
+	'half a repo is refused too',
+	threw(() => staticAuth({ BRAIN_REPO_OWNER: 'acme', GITHUB_TOKEN: 'ghp_x' }))
+);
+check(
+	'a repo with no credential is refused',
+	threw(() => staticAuth(REPO))
+);
+// Deliberate improvement over the inline version, which accepted any non-empty
+// string here and sent Number('abc') = NaN to GitHub as an installation id.
+check(
+	'a non-numeric installation id is refused here, not at GitHub',
+	threw(() => staticAuth({ ...REPO, GITHUB_APP_INSTALLATION_ID: 'not-a-number' }))
+);
+check(
+	'a whitespace-only credential counts as absent',
+	threw(() => staticAuth({ ...REPO, GITHUB_TOKEN: '   ' }))
 );
 
 console.log('\nresolveOrgForPerson: the whole decision, against the real schema');
