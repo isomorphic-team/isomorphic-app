@@ -65,6 +65,7 @@ import {
 	WEB_ROUTE_PREFIX,
 	WEB_APP_HEADERS,
 	checkWebMcpRequest,
+	claimsWebMcp,
 	signInRedirect,
 	webShell
 } from './lib/web-app.ts';
@@ -1416,7 +1417,18 @@ export default {
 			// The web app's tool calls. Same handler, same session, same
 			// authorization: only the credential differs, so `props` is built from
 			// the Auth.js session exactly as the OAuth path builds it from a token.
-			if (url.pathname === '/mcp' && !request.headers.get('authorization')) {
+			//
+			// Claimed only when the request carries a cookie. One with neither a
+			// cookie nor a Bearer token is an MCP host making first contact, and it
+			// falls through to the provider for the `WWW-Authenticate` challenge it
+			// needs (see `claimsWebMcp`).
+			if (
+				url.pathname === '/mcp' &&
+				claimsWebMcp({
+					hasAuthorization: request.headers.has('authorization'),
+					hasCookie: request.headers.has('cookie')
+				})
+			) {
 				const verdict = checkWebMcpRequest({
 					method: request.method,
 					selfOrigin: url.origin,

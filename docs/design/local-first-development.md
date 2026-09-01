@@ -274,11 +274,11 @@ split nobody had decided on.
 There are now three ways this app runs locally, and they should differ in exactly one
 dimension:
 
-| harness | host | backend | brains |
-| --- | --- | --- | --- |
-| `pnpm app:dev` (`functional`, `visual`) | AppBridge, sandboxed iframe | **stubbed** in `dev/harness.ts` | 3, in memory |
-| `pnpm web:dev` (`web`) | top-level document, `fetch('/mcp')` | **real** tool handlers via `pnpm try` | 3, on disk |
-| `pnpm try` | none (an MCP host connects) | real | N folders |
+| harness                                 | host                                | backend                               | brains       |
+| --------------------------------------- | ----------------------------------- | ------------------------------------- | ------------ |
+| `pnpm app:dev` (`functional`, `visual`) | AppBridge, sandboxed iframe         | **stubbed** in `dev/harness.ts`       | 3, in memory |
+| `pnpm web:dev` (`web`)                  | top-level document, `fetch('/mcp')` | **real** tool handlers via `pnpm try` | 3, on disk   |
+| `pnpm try`                              | none (an MCP host connects)         | real                                  | N folders    |
 
 **The HOST difference is essential** — it is the thing under test, and the web app exists
 precisely because the two hosts are not the same. **The BACKEND difference is accidental.**

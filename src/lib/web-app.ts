@@ -221,6 +221,28 @@ export function webPathFor(
 	return `${WEB_ROUTE_PREFIX}${brain}${encoded}${qs ? `?${qs}` : ''}`;
 }
 
+// ---------- is this /mcp request the web app's at all? ----------
+
+// Which of the two auth paths a `/mcp` POST belongs to, decided on what the request
+// CARRIES rather than on what it lacks.
+//
+// The first version claimed every request with no Bearer token, and that broke the
+// other client. An MCP host's first contact is a POST with no credential at all: the
+// OAuth provider answers it with `401` + `WWW-Authenticate: Bearer`, which is how the
+// host discovers the authorization server (and what `scripts/smoke.ts` asserts, so a
+// deploy carrying that version would have rolled itself back). Routed to the cookie
+// branch, the same request got a bare `401 Not signed in` and the host had nothing
+// to go on.
+//
+// A cookie is what a browser sends and an MCP client never does, so its presence is
+// the discriminator. Whether the cookie holds a VALID session is the next question,
+// answered by the session lookup; an expired one simply means a 401 from this path,
+// which the app turns into a sign-in redirect. A Bearer token always wins: the
+// provider owns that request, and the two paths must never be confusable.
+export function claimsWebMcp(req: { hasAuthorization: boolean; hasCookie: boolean }): boolean {
+	return !req.hasAuthorization && req.hasCookie;
+}
+
 // ---------- may this cookie-authenticated MCP call proceed? ----------
 
 export interface WebMcpRequest {

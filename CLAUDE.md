@@ -608,6 +608,13 @@ Worker's `fetch`, ahead of the OAuth provider like `/health`.
   makes the web app **structurally incapable of doing something the connector
   cannot**. Keep it that way: anything that widens what a caller can do belongs
   in a tool, not in this route.
+- **The cookie branch claims a `/mcp` request by what it CARRIES, never by what it
+  lacks** (`claimsWebMcp`: a cookie and no Bearer token). The first version claimed
+  every request with no Bearer, which is exactly an MCP host's first contact: the
+  OAuth provider owes that request a `401` + `WWW-Authenticate: Bearer` so the host
+  can discover the authorization server, and `scripts/smoke.ts` asserts it, so the
+  deploy would have rolled itself back. `pnpm test:smoke` runs against a stub and
+  could not see it; the rule is pure so `pnpm test:web` can.
 - **The cookie `/mcp` branch is a credential-bearing WRITE endpoint reached with an
   ambient cookie**, which is the exact shape CSRF exploits. `checkWebMcpRequest` is
   the gate and is pure so it can be tested in both directions: a Bearer token is
@@ -698,9 +705,12 @@ Worker's `fetch`, ahead of the OAuth provider like `/health`.
 - **Verified in a browser now** (`tests/ui/web-nav.spec.ts`, the `web` project), which
   is what caught the address-bar defect above. **Still unverified: AUTHENTICATION.**
   `web:dev` has no session, no cookie and no org model, so the `/b/` redirect for a
-  signed-out visitor, `props` built from a real Auth.js session, and every
-  authorization path behind it have run nowhere but production. That is the half to
-  be careful about, and no amount of green here speaks to it.
+  signed-out visitor, the return through `callbackUrl`, `props` built from a real
+  Auth.js session, and every authorization path behind it have run NOWHERE: not in
+  a test, and not in production, since none of this has been deployed. Before the
+  first deploy, upload a preview version from the branch (`wrangler versions
+upload`, the same step `deploy.yml` takes) and click through sign-in on its
+  preview URL. No amount of green here speaks to that half.
 
 ## One markdown renderer (`src/lib/render.ts`)
 

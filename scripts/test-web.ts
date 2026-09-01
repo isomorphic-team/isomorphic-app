@@ -18,6 +18,7 @@ import {
 	parseWebPath,
 	webPathFor,
 	checkWebMcpRequest,
+	claimsWebMcp,
 	webShell,
 	WEB_APP_HEADERS,
 	WEB_TOOL_ROUTING,
@@ -195,6 +196,34 @@ function check(name: string, cond: boolean, detail?: string) {
 		.filter((r) => r.kind === 'view')
 		.map((r) => (r as { token: string }).token);
 	check('tokens are unique', new Set(tokens).size === tokens.length, tokens.join(', '));
+}
+
+// ---------- which /mcp requests are the web app's ----------
+//
+// The decision in FRONT of the gate, and the one that broke the other client when it
+// was wrong. An MCP host's first contact is a POST with no credential at all, and it
+// must reach the OAuth provider for its `WWW-Authenticate` challenge; claiming it here
+// answered `401 Not signed in` with no challenge, which the deploy smoke asserts
+// against. So the exact shape `scripts/smoke.ts` sends is pinned as NOT ours.
+{
+	console.log('\nclaiming /mcp');
+
+	check(
+		'a cookie and no token is the web app',
+		claimsWebMcp({ hasAuthorization: false, hasCookie: true })
+	);
+	check(
+		'no credential at all is an MCP host making first contact, not ours',
+		!claimsWebMcp({ hasAuthorization: false, hasCookie: false })
+	);
+	check(
+		"a Bearer token is the provider's, even beside a cookie",
+		!claimsWebMcp({ hasAuthorization: true, hasCookie: true })
+	);
+	check(
+		"a Bearer token alone is the provider's",
+		!claimsWebMcp({ hasAuthorization: true, hasCookie: false })
+	);
 }
 
 // ---------- the cookie gate ----------
