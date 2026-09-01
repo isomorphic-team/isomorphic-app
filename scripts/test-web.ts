@@ -287,6 +287,14 @@ function check(name: string, cond: boolean, detail?: string) {
 		`flag at ${shell.indexOf('window.__ISO_WEB__=true')}, first style at ${shell.indexOf('<style')}`
 	);
 	check('the bundle itself is unchanged otherwise', shell.includes(BRAIN_APP_HTML.slice(200, 400)));
+	// The tab icon rides in the shell, not the bundle: the MCP App has no tab.
+	check(
+		'the shell carries the tab icon as a data URI',
+		/<link rel="icon" type="image\/svg\+xml" href="data:image\/svg\+xml,/.test(shell)
+	);
+	check('the MCP App resource carries no icon', !BRAIN_APP_HTML.includes('rel="icon"'));
+	// One <head> in the output, since the shell rewrites the tag it matched.
+	check('the shell still has exactly one head', shell.split('<head>').length === 2);
 	// The bundle READS the flag (that is `isWebHost`), so the identifier is in
 	// there either way. What must never be true is the bundle SETTING it: the
 	// same bytes are served as the MCP App resource, and a bundle that declared

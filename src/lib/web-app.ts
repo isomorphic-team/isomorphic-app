@@ -302,11 +302,25 @@ export function checkWebMcpRequest(req: WebMcpRequest): WebMcpVerdict {
 // would make every web boot pay the timeout and make a slow MCP host look like a
 // browser.
 export function webShell(bundleHtml: string): string {
-	const flag = '<head>\n<script>window.__ISO_WEB__=true</script>';
+	const head = `<head>\n<script>window.__ISO_WEB__=true</script>\n${WEB_FAVICON_LINK}`;
 	// Replacer function, never a string: a `$&` in the payload would be treated
 	// as a pattern reference. See docs/references.md.
-	return bundleHtml.replace('<head>', () => flag);
+	return bundleHtml.replace('<head>', () => head);
 }
+
+// The tab icon: the Isomorphic mark, from the marketing site's `static/brand/`
+// (isomorphic-website), inlined as a data URI because the shell may load nothing
+// from another origin and there is no static asset route on this Worker. Web only:
+// the same bundle served as the MCP App resource has no tab to name. Kept as the
+// source SVG rather than pre-encoded so it can be read and updated.
+export const WEB_FAVICON_SVG =
+	'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">' +
+	'<rect width="512" height="512" rx="96" fill="#0f172a"/>' +
+	'<path d="M112 183C159 139 207 139 257 170C314 206 360 222 400 180" fill="none" stroke="#fff" stroke-linecap="round" stroke-width="30"/>' +
+	'<path d="M112 286H400M112 366H400" fill="none" stroke="#fff" stroke-linecap="round" stroke-width="30"/>' +
+	'</svg>';
+
+const WEB_FAVICON_LINK = `<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,${encodeURIComponent(WEB_FAVICON_SVG)}">`;
 
 // Response headers for the shell.
 //
