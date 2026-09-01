@@ -24,6 +24,7 @@ import {
 	ASSIGNABLE_BRAIN_ROLES,
 	type Role
 } from '../src/lib/orgs.ts';
+import { commitAuthorFor } from '../src/lib/brain-repo.ts';
 
 import { checker } from './check.ts';
 
@@ -163,6 +164,7 @@ import {
 	linkedUserIds,
 	matchOrg,
 	chooseOrg,
+	chooseBrain,
 	getDefaultBrainForUser,
 	listBrainAccess,
 	setBrainGrant,
@@ -450,6 +452,98 @@ check(
 check(
 	'no orgs at all throws',
 	threw(() => chooseOrg([], {}))
+);
+
+console.log('\nchooseBrain: which brain a read or a write actually lands on');
+// chooseOrg's twin, and until it was extracted it was the untested half: the same
+// ladder sat inline in a private method on McpSession. It decides the target of
+// every read and every write, so it gets the same treatment as the org side.
+{
+	// Alice reaches the org-visible brain and her own private one, oldest first.
+	const aliceBrains = await listAccessibleBrains(db, ['alice']);
+	const ids = aliceBrains.map((b) => b.id);
+	// Three, not two: the org-visible one, her own private one, and Bob's private one,
+	// which she reaches through the org-admin floor rather than a grant.
+	check('the fixture gives this caller three brains', aliceBrains.length === 3, ids.join(', '));
+
+	check(
+		'a named handle wins',
+		chooseBrain(aliceBrains, { brain: 'alicep' }).repo_name === 'alicep'
+	);
+	check(
+		'...over the brain the caller is working in',
+		chooseBrain(aliceBrains, { brain: 'alicep', activeBrainId: ids[0] }).repo_name === 'alicep'
+	);
+	check(
+		'with no handle, the brain the caller is working in wins',
+		chooseBrain(aliceBrains, { activeBrainId: ids[1] }).id === ids[1]
+	);
+	check(
+		'with neither, the first brain the query returned',
+		chooseBrain(aliceBrains, {}).id === ids[0]
+	);
+	// The same fallback chooseOrg has: a stale pointer must not strand the caller.
+	check(
+		'an active brain the caller lost access to falls back rather than throwing',
+		chooseBrain(aliceBrains, { activeBrainId: 'northwind/gone' }).id === ids[0]
+	);
+	check(
+		'an unmatched handle throws rather than picking one',
+		threw(() => chooseBrain(aliceBrains, { brain: 'nonexistent' }))
+	);
+	// The case that matters most: silently taking the first of several would write
+	// into a brain the caller did not name.
+	check(
+		'an AMBIGUOUS handle throws too',
+		threw(() => chooseBrain(aliceBrains, { brain: 'northwind' })),
+		'the org owns both repos, so the handle cannot pick one'
+	);
+	check(
+		'no brains at all throws',
+		threw(() => chooseBrain([], {}))
+	);
+	// A blank handle THROWS rather than falling through to the active brain. That is
+	// the behavior the Worker already had and it matches chooseOrg: a caller who
+	// passed a `brain` argument asked for a specific one, and quietly acting on a
+	// different brain because their string was empty is the silent-wrong-target case
+	// this whole function exists to prevent.
+	check(
+		'a blank handle throws rather than silently falling back to the active brain',
+		threw(() => chooseBrain(aliceBrains, { brain: '   ', activeBrainId: ids[1] }))
+	);
+}
+
+console.log('\ncommitAuthorFor: how a human edit is attributed in git history');
+// Nothing tested this before: it lived inline in McpSession, in two copies, and it
+// decides what `git blame` shows for every write a person makes.
+check(
+	'the app_users row wins, since its address is the verified one',
+	commitAuthorFor({ name: 'Ada', email: 'ada@example.com' }, 'token@example.com')?.email ===
+		'ada@example.com'
+);
+check(
+	'the token email is the fallback when there is no row yet',
+	commitAuthorFor(null, 'token@example.com')?.email === 'token@example.com'
+);
+check(
+	'...and when the row carries no address',
+	commitAuthorFor({ name: 'Ada', email: null }, 'token@example.com')?.email === 'token@example.com'
+);
+check(
+	'a person with no name is attributed under their address, not dropped',
+	commitAuthorFor({ name: null, email: 'ada@example.com' }, '')?.name === 'ada@example.com'
+);
+check(
+	'no address anywhere means no attribution, so the App authors instead',
+	commitAuthorFor(null, '') === undefined
+);
+check(
+	'whitespace is trimmed rather than written into history',
+	commitAuthorFor({ name: '  Ada  ', email: '  ada@example.com  ' }, '')?.name === 'Ada'
+);
+check(
+	'a whitespace-only address counts as none',
+	commitAuthorFor({ name: 'Ada', email: '   ' }, '   ') === undefined
 );
 
 console.log('\nresolveOrgForPerson: the whole decision, against the real schema');
