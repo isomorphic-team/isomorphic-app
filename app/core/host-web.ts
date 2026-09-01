@@ -114,6 +114,7 @@ export {
 	webPathFor,
 	WEB_TOOL_ROUTING,
 	analyticsDays,
+	brainLabelFor,
 	type WebTarget,
 	type WebRouting
 } from '../../src/lib/web-app.ts';

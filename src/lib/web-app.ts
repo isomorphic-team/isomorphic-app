@@ -112,6 +112,19 @@ export interface WebTarget {
 	arg?: string;
 }
 
+// A provisional display name for a brain the URL named, before the brain list has
+// arrived to supply the real one.
+//
+// The repo half of "owner/repo", which is what the crumb would show anyway for a
+// brain whose `name` was never set. Deliberately provisional: `ensureBrainList`
+// replaces it with the brain's actual label a moment later, and showing the repo
+// name in the meantime is better than showing "owner/repo" or nothing while the
+// page loads.
+export function brainLabelFor(brain: string): string {
+	const repo = brain.split('/')[1];
+	return repo && repo.trim() ? repo : brain;
+}
+
 // `?days=` off an analytics URL, or undefined to let the tool pick its default.
 //
 // A URL is editable text, so this argument can say anything, and `analytics`

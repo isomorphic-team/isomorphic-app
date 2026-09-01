@@ -14,7 +14,7 @@ import type { ComponentChildren } from 'preact';
 import { useSyncExternalStore } from 'preact/compat';
 import type { View } from './core/types.ts';
 import type { ViewAction } from './core/view-registry.ts';
-import { subscribeStore, version, currentView, show } from './core/store.ts';
+import { subscribeStore, version, currentView, show, setActiveBrain } from './core/store.ts';
 import { activeDestination, isMorePlace } from './core/nav.ts';
 import { destinations } from './components/Destinations.tsx';
 import {
@@ -27,7 +27,7 @@ import {
 	MODE_LABEL,
 	availableModeList
 } from './core/host.ts';
-import { parseWebPath, registerWebNavigation } from './core/host-web.ts';
+import { parseWebPath, registerWebNavigation, brainLabelFor } from './core/host-web.ts';
 import {
 	handleToolResult,
 	ensureBrainList,
@@ -478,12 +478,32 @@ function connectToHost() {
 			// says what to show, and waiting on a result that cannot arrive would
 			// spend the whole deadline before drawing anything.
 			if (isWeb()) {
+				const target = parseWebPath(location.pathname, location.search);
+				// THE URL NAMES THE BRAIN, AND IT HAS TO WIN. This runs BEFORE
+				// `ensureBrainList`, and before anything fetches, because every
+				// widget call passes `brainArgs()` — so with no brain set, the
+				// first `read_page` carries none and the server answers from the
+				// connection's active-brain pointer instead. A link to one brain
+				// then rendered a DIFFERENT brain's page at the same path, silently
+				// whenever that path existed in both (`wiki/index.md` exists in
+				// most). Issue #26 in reverse: there the pointer overrode the brain
+				// a RESULT named, here it overrode the brain the URL named.
+				//
+				// Trusting the URL grants nothing: `tenantContext` resolves a
+				// `brain` argument against `listAccessibleBrains` and then
+				// `effectiveBrainRole`, so a link naming a brain you cannot reach is
+				// refused by the code that already refuses it.
+				//
+				// The label is provisional — the repo name — because only the brain
+				// list knows the real one. `ensureBrainList` corrects it, and
+				// `pickShownBrain` checks the shown brain FIRST, so setting it here
+				// is also what stops the list from retargeting us.
+				if (target) setActiveBrain({ id: target.brain, label: brainLabelFor(target.brain) });
 				void ensureBrainList();
 				// Boot and Back/Forward go through the SAME dispatcher, so the two
 				// cannot answer one URL differently. store.ts's syncAddressBar is
 				// the half that puts the entries there.
 				registerWebNavigation(openWebTarget);
-				const target = parseWebPath(location.pathname, location.search);
 				if (target) openWebTarget(target);
 				else openBrowse();
 				return;

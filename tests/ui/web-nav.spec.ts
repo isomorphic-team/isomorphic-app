@@ -19,10 +19,16 @@
 // itself stays green through it.
 
 import { test, expect, type Page } from '@playwright/test';
-import { WEB_TEST_PORT } from '../../playwright.config.ts';
+import { WEB_TEST_PORT, WEB_TEST_BRAIN } from '../../playwright.config.ts';
 
 const BASE = `http://localhost:${WEB_TEST_PORT}`;
-const BRAIN = 'local/web-test-brain';
+// Derived from the config's one constant, so the seed directory and the URLs the
+// specs address cannot drift apart.
+const BRAIN = WEB_TEST_BRAIN;
+// The sibling brains web-dev seeds alongside it, named after the root for the same
+// reason. Same three brains `pnpm app:dev` shows, from the same dev/seed.ts.
+const ACME = `${BRAIN}-acme`;
+const NORTHWIND = `${BRAIN}-northwind`;
 const INDEX = `/b/${BRAIN}/wiki/index.md`;
 
 // The app renders the page body into `.prose`; the heading is what the reader sees
@@ -226,6 +232,45 @@ test.describe('the app in a browser tab', () => {
 		await expect
 			.poll(() => page.locator('input').first().inputValue(), { timeout: 15_000 })
 			.toBe('vision');
+	});
+
+	// THE URL NAMES THE BRAIN, AND THE CALLS HAVE TO GO THERE.
+	//
+	// This is the test the harness could not previously hold, and the reason it now
+	// serves three brains. With one brain, a URL naming any brain rendered that one,
+	// so being wrong looked exactly like being right — and it WAS wrong: nothing read
+	// the URL's brain, every call carried no `brain` at all, and the server answered
+	// from the connection's active-brain pointer. A link to one brain silently showed
+	// another's page whenever the path existed in both, which `wiki/index.md` does.
+	//
+	// Asserted on BOTH halves. The heading alone would pass if the app rendered the
+	// right brain for the wrong reason; the request argument alone would pass if the
+	// argument were sent and ignored.
+	test('a URL opens the brain it names, not the active one', async ({ context }) => {
+		for (const [brain, heading] of [
+			[BRAIN, 'Index'],
+			[ACME, 'Acme'],
+			[NORTHWIND, 'Northwind']
+		] as const) {
+			const page = await context.newPage();
+			const sent: string[] = [];
+			await page.route('**/mcp', async (route) => {
+				try {
+					const body = JSON.parse(route.request().postData() ?? '{}');
+					if (body.method === 'tools/call' && body.params?.name === 'read_page') {
+						sent.push(body.params?.arguments?.brain ?? '(none)');
+					}
+				} catch {
+					// Not a JSON-RPC body we care about; the request still goes through.
+				}
+				await route.continue();
+			});
+
+			await page.goto(`${BASE}/b/${brain}/wiki/index.md`);
+			await settled(page, heading);
+			expect(sent[0], `read_page for ${brain}`).toBe(brain);
+			await page.close();
+		}
 	});
 
 	test('a cookie-less tool call is refused by the real gate', async ({ page }) => {
