@@ -61,14 +61,8 @@ import { githubHandler } from './oauth/github-handler.ts';
 import { authHandler } from './oauth/auth-handler.ts';
 import { getAuthSession } from './auth/config.ts';
 import { BRAIN_APP_HTML } from './lib/app-bundle.generated.ts';
-import {
-	WEB_ROUTE_PREFIX,
-	WEB_APP_HEADERS,
-	checkWebMcpRequest,
-	claimsWebMcp,
-	signInRedirect,
-	webShell
-} from './lib/web-app.ts';
+import { WEB_ROUTE_PREFIX, checkWebMcpRequest, claimsWebMcp } from './lib/web-app.ts';
+import { WEB_APP_HEADERS, signInRedirect, webShell } from './lib/web-shell.ts';
 import { registerLibrarianTools } from './tools/librarian.ts';
 import { registerImportTools } from './tools/importer.ts';
 import { registerBrainApp } from './tools/apps.ts';

@@ -26,10 +26,11 @@
 // TWO HOSTS reach it, as they reach the Worker. An MCP host connects to `/mcp`, and a
 // browser opens `/b/local/<folder>`: the same app bundle the Worker serves as the
 // `ui://` resource and at `/b/`, over the same `/mcp`. The web pieces are the shared
-// ones in src/lib/web-app.ts (the shell, its headers, the CSRF gate), so what a
-// browser exercises here is production code with the brain and the identity swapped
-// out, not a harness of it. Nothing sits between the browser and this process: no
-// proxy, no second port, and the shell and the tools come up together.
+// ones (src/lib/web-shell.ts for the shell and its headers, src/lib/web-app.ts for
+// the CSRF gate), so what a browser exercises here is production code with the brain
+// and the identity swapped out, not a harness of it. Nothing sits between the browser
+// and this process: no proxy, no second port, and the shell and the tools come up
+// together.
 
 import { serve } from '@hono/node-server';
 import { Hono } from 'hono';
@@ -48,13 +49,8 @@ import { loadBrainConfig } from './lib/brain-config.ts';
 import { SERVER_INSTRUCTIONS } from './lib/server-instructions.ts';
 import { ensureGitRepo, fsBrainStore } from './local/brain-store-fs.ts';
 import { localD1 } from './local/d1-sqlite.ts';
-import {
-	WEB_APP_HEADERS,
-	WEB_ROUTE_PREFIX,
-	checkWebMcpRequest,
-	webPathFor,
-	webShell
-} from './lib/web-app.ts';
+import { WEB_ROUTE_PREFIX, checkWebMcpRequest, webPathFor } from './lib/web-app.ts';
+import { WEB_APP_HEADERS, webShell } from './lib/web-shell.ts';
 import { statSync } from 'node:fs';
 
 const args = process.argv.slice(2).filter((a) => !a.startsWith('-'));

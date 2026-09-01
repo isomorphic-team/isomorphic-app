@@ -36,7 +36,7 @@ pnpm web:dev --reset      # start over from a pristine seed
 pnpm try ~/some/vault     # any folder, no seeding: http://127.0.0.1:8788/b/local/vault
 ```
 
-The shell, its headers and the CSRF gate are the shared ones in `src/lib/web-app.ts`,
+The shell and its headers (`src/lib/web-shell.ts`) and the CSRF gate (`src/lib/web-app.ts`) are the shared ones,
 and the tool handlers, the content index and the write path are the production ones
 over a git repo on disk. `web:dev` seeds that repo from **`dev/seed.ts`, the same
 module this harness uses**, so the two hosts show the same three brains and a

@@ -19,12 +19,10 @@ import {
 	webPathFor,
 	checkWebMcpRequest,
 	claimsWebMcp,
-	webShell,
-	WEB_APP_HEADERS,
 	WEB_TOOL_ROUTING,
-	signInRedirect,
 	type WebMcpRequest
 } from '../src/lib/web-app.ts';
+import { webShell, WEB_APP_HEADERS, signInRedirect } from '../src/lib/web-shell.ts';
 import { BRAIN_APP_HTML } from '../src/lib/app-bundle.generated.ts';
 
 let failures = 0;
@@ -292,7 +290,18 @@ function check(name: string, cond: boolean, detail?: string) {
 		'the shell carries the tab icon as a data URI',
 		/<link rel="icon" type="image\/svg\+xml" href="data:image\/svg\+xml,/.test(shell)
 	);
-	check('the MCP App resource carries no icon', !BRAIN_APP_HTML.includes('rel="icon"'));
+	// Read from the HEAD, where a tag would be: the bundle's JavaScript may legitimately
+	// hold any string.
+	const bundleHead = BRAIN_APP_HTML.slice(0, BRAIN_APP_HTML.indexOf('</head>'));
+	check('the MCP App resource carries no icon', !/<link[^>]*rel="icon"/.test(bundleHead));
+	// And carries none of the shell either: that module is server-only.
+	check('the bundle does not carry the shell', !BRAIN_APP_HTML.includes('__ISO_WEB__=true'));
+	// What the tab says before a view has named it (loading, or a boot that failed):
+	// the product, not the noun the bundle happened to be called.
+	check(
+		'the tab is called Isomorphic until a view names it',
+		shell.includes('<title>Isomorphic</title>')
+	);
 	// One <head> in the output, since the shell rewrites the tag it matched.
 	check('the shell still has exactly one head', shell.split('<head>').length === 2);
 	// The bundle READS the flag (that is `isWebHost`), so the identifier is in

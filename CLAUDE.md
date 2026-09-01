@@ -685,7 +685,7 @@ Worker's `fetch`, ahead of the OAuth provider like `/health`.
     document load that re-boots from the URL and passes with the bug reinstated.
 - **The local runtime IS the web host locally, and `--project=web` its tests.**
   `src/local.ts` serves the shell at `/b/local/<folder>` and gates its `/mcp` with
-  the same `webShell` / `WEB_APP_HEADERS` / `checkWebMcpRequest` the Worker uses, so
+  the same `webShell` / `WEB_APP_HEADERS` (`web-shell.ts`) and `checkWebMcpRequest` (`web-app.ts`) the Worker uses, so
   `pnpm try ~/vault` gives a browser UI over a folder with no accounts, and
   `pnpm web:dev` is only "seed the demo brains, then `pnpm try`". It started as a
   separate server proxying to the runtime on a second port, which was a second
