@@ -33,7 +33,13 @@ import {
 	FOOTNOTE,
 	type UsageRow
 } from '../src/lib/usage.ts';
-import { personalPages, SAMPLE_PNG, PERSONAL_ASSET_PATH } from './seed.ts';
+import {
+	personalPages,
+	ACME_PAGES,
+	NORTHWIND_PAGES,
+	SAMPLE_PNG,
+	PERSONAL_ASSET_PATH
+} from './seed.ts';
 
 // ---- the fixtures' clock ----
 //
@@ -69,31 +75,6 @@ const PERSONAL_PAGES = personalPages();
 // The fixtures all use the default wiki/+raw/ layout, so the default config is
 // the right policy here.
 const isContentPage = (p: string) => p.endsWith('.md') && isContentPath(p, DEFAULT_BRAIN_CONFIG);
-const ACME_PAGES: Record<string, string> = {
-	'wiki/index.md':
-		'---\ntitle: Acme\n---\n\nKnowledge base for **Acme**. Start with our [[mission]] and the [[onboarding]] program.\n',
-	'wiki/concepts/mission.md':
-		'---\ntitle: Mission\n---\n\nAcme builds tools for small teams. See the [[content-pipeline]] for how we publish.\n',
-	// Carries an attachment (seeded in brainAssets) plus a link to one that does not
-	// exist, so the preview shows BOTH states: a rendered image and the missing-file
-	// note. The broken case is the one nobody remembers to look at.
-	'wiki/programs/onboarding.md':
-		'---\ntitle: Onboarding\n---\n\nOur flagship customer onboarding program. Run by [[lead]].\n\n![The onboarding flow](assets/onboarding-flow.png)\n\n![A diagram that was moved away](assets/gone.png)\n',
-	'wiki/people/lead.md':
-		'---\ntitle: Team Lead\n---\n\nLeads Acme; owns the [[mission]] and the [[onboarding]] program.\n',
-	'wiki/playbooks/content-pipeline.md':
-		'---\ntitle: Content Pipeline\n---\n\nHow drafts move from research to published KB pages.\n'
-};
-const NORTHWIND_PAGES: Record<string, string> = {
-	'wiki/index.md':
-		'---\ntitle: Northwind\n---\n\nOperations wiki for **Northwind**. See the [[headquarters]] and [[intake]].\n',
-	'wiki/facilities/headquarters.md':
-		'---\ntitle: Headquarters\n---\n\nPrimary site. Intake follows the [[intake]] process; ops lead is the [[director]].\n',
-	'wiki/protocols/intake.md':
-		'---\ntitle: Intake\n---\n\nStandard intake process for [[headquarters]].\n',
-	'wiki/people/director.md':
-		'---\ntitle: Operations Director\n---\n\nOwns operational processes including [[intake]].\n'
-};
 const brainContent: Record<string, Record<string, string>> = {
 	'your-org/personal-wiki': PERSONAL_PAGES,
 	'acme-co/acme-wiki': ACME_PAGES,

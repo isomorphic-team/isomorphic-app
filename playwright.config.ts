@@ -18,6 +18,8 @@
 // claude.ai mount gap (docs/references.md), the real iframe CSP, and the auth round
 // trip stay invisible. Those need a real host; see dev/README.md.
 import { defineConfig, devices } from '@playwright/test';
+import { tmpdir } from 'node:os';
+import { basename, join } from 'node:path';
 
 // Deliberately NOT 5175. That is `pnpm app:dev`'s port, and a maintainer with the
 // preview open should not have their session hijacked (or the run fail on a port
@@ -29,6 +31,16 @@ export const UI_TEST_PORT = Number(process.env.UI_TEST_PORT) || 5176;
 // tool calls over HTTP from the local runtime. Same reasoning as above for the
 // port — not 5177 either, which is `pnpm web:dev`'s.
 export const WEB_TEST_PORT = Number(process.env.WEB_TEST_PORT) || 5178;
+
+// Where the web harness materializes its brains for a test run. Outside the repo, so
+// it needs no gitignore entry and cannot be confused with the preview's copy; a
+// STABLE name rather than a fresh mkdtemp, so `reuseExistingServer` locally still
+// finds the server it started last time. `--reset` makes it pristine each run, which
+// is safe precisely because nothing but the tests ever looks at it.
+export const WEB_TEST_BRAIN_DIR = join(tmpdir(), 'isomorphic-web-tests');
+// The brain ids the specs address are derived from the folder names, so they follow
+// from this one constant rather than being spelled again in the specs.
+export const WEB_TEST_BRAIN = `local/${basename(WEB_TEST_BRAIN_DIR)}`;
 const WEB_TEST_UPSTREAM = Number(process.env.WEB_TEST_UPSTREAM) || 8789;
 
 export default defineConfig({
@@ -97,17 +109,26 @@ export default defineConfig({
 			stderr: 'pipe'
 		},
 		{
-			// The web app, over its own brain. `--reset` and a dedicated BRAIN_DIR
-			// because this one is a real git repo the app WRITES to: sharing the
-			// preview's brain would make a run depend on whatever a maintainer last
-			// edited, and would edit it back.
+			// The web app, over the SAME seed as every other harness (`dev/seed.ts`),
+			// in a throwaway directory.
+			//
+			// The data is shared and there is only one seed module. What cannot be
+			// shared is the DIRECTORY: alone among the harnesses this one materializes
+			// its brains to disk as real git repos that the app writes to, so pointing
+			// it at the preview's copy would make a run depend on whatever a maintainer
+			// last edited and then `--reset` it out from under them. `dev/harness.ts`
+			// has no such problem because its fixtures live in memory and are fresh per
+			// page load.
+			//
+			// A temp path rather than a second checked-in one, so there is nothing to
+			// gitignore, nothing to collide with the preview, and nothing left behind.
 			command: 'pnpm exec tsx scripts/web-dev.ts --reset',
 			env: {
 				PORT: String(WEB_TEST_PORT),
 				UPSTREAM_PORT: String(WEB_TEST_UPSTREAM),
-				BRAIN_DIR: 'dev/web-test-brain'
+				BRAIN_DIR: WEB_TEST_BRAIN_DIR
 			},
-			url: `http://localhost:${WEB_TEST_PORT}/b/local/web-test-brain`,
+			url: `http://localhost:${WEB_TEST_PORT}/b/local/${basename(WEB_TEST_BRAIN_DIR)}`,
 			reuseExistingServer: !process.env.CI,
 			timeout: 180_000,
 			stdout: 'pipe',

@@ -40,7 +40,13 @@ import {
 	webPathFor,
 	WEB_ROUTE_PREFIX
 } from '../src/lib/web-app.ts';
-import { personalPages, SAMPLE_PNG, PERSONAL_ASSET_PATH } from '../dev/seed.ts';
+import {
+	personalPages,
+	ACME_PAGES,
+	NORTHWIND_PAGES,
+	SAMPLE_PNG,
+	PERSONAL_ASSET_PATH
+} from '../dev/seed.ts';
 
 const abs = (rel: string) => fileURLToPath(new URL(`../${rel}`, import.meta.url));
 const BUNDLE = abs('src/lib/app-bundle.generated.ts');
@@ -52,8 +58,27 @@ const RESET = process.argv.includes('--reset');
 // `BRAIN_DIR` is for callers that own the directory and want it seeded anyway —
 // the web UI tests point it at a throwaway path so a run never depends on, or
 // disturbs, the brain a maintainer has been editing.
-const dir = args[0] ? resolve(args[0]) : resolve(process.env.BRAIN_DIR ?? abs('dev/demo-brain'));
+const root = args[0] ? resolve(args[0]) : resolve(process.env.BRAIN_DIR ?? abs('dev/demo-brain'));
 const seeded = !args[0];
+
+// THREE BRAINS, the same three `pnpm app:dev` shows, because one brain cannot
+// exercise the question "did that reach the brain it named". The web app's
+// brain-targeting defect was invisible here for exactly that reason: the URL named a
+// brain, the runtime had only one, and being wrong looked identical to being right.
+//
+// Seeded as sibling folders so the local runtime's `local/<folder>` ids line up with
+// the URLs: `/b/local/demo-brain`, `/b/local/acme`, `/b/local/northwind`.
+const SEEDS: { name: string; pages: () => Record<string, string>; asset?: string }[] = [
+	{ name: basename(root), pages: personalPages, asset: PERSONAL_ASSET_PATH },
+	{ name: 'acme', pages: () => ({ ...ACME_PAGES }) },
+	{ name: 'northwind', pages: () => ({ ...NORTHWIND_PAGES }) }
+];
+// Siblings NAMED AFTER the root, not bare `acme`/`northwind`. The test server runs
+// with its own BRAIN_DIR and `--reset`, so unprefixed siblings would be shared with
+// the preview and wiped out from under a maintainer mid-session.
+const dirFor = (name: string) =>
+	name === basename(root) ? root : resolve(root, '..', `${basename(root)}-${name}`);
+const dir = root;
 // NOT 5175 (`pnpm app:dev`) and NOT 5176 (UI_TEST_PORT in playwright.config.ts):
 // a maintainer with the preview open, or a test run in flight, must not have this
 // steal the port.
@@ -74,16 +99,18 @@ const brainId = `local/${basename(dir)}`;
 // edits you made last time, which is the opposite of what a local brain is for.
 // `--reset` is the way back to a pristine one.
 if (seeded) {
-	if (RESET) rmSync(dir, { recursive: true, force: true });
-	if (!existsSync(dir)) {
+	for (const seed of SEEDS) {
+		const target = dirFor(seed.name);
+		if (RESET) rmSync(target, { recursive: true, force: true });
+		if (existsSync(target)) continue;
 		const write = (rel: string, body: string | Buffer) => {
-			const file = resolve(dir, rel);
+			const file = resolve(target, rel);
 			mkdirSync(dirname(file), { recursive: true });
 			writeFileSync(file, body);
 		};
-		for (const [path, body] of Object.entries(personalPages())) write(path, body);
-		write(PERSONAL_ASSET_PATH, Buffer.from(SAMPLE_PNG, 'base64'));
-		console.log(`  seeded ${dir} from dev/seed.ts`);
+		for (const [path, body] of Object.entries(seed.pages())) write(path, body);
+		if (seed.asset) write(seed.asset, Buffer.from(SAMPLE_PNG, 'base64'));
+		console.log(`  seeded ${target} from dev/seed.ts`);
 	}
 }
 
@@ -109,7 +136,7 @@ async function bundleHtml(): Promise<string> {
 // The local runtime: the real tool handlers, over the folder.
 // Its PORT is passed explicitly rather than left to the runtime's own default, so
 // two of these (a preview and a test run) do not fight over one upstream.
-const upstream = spawn('pnpm', ['try', dir], {
+const upstream = spawn('pnpm', ['try', ...SEEDS.map((s) => dirFor(s.name))], {
 	cwd: abs('.'),
 	stdio: 'inherit',
 	env: { ...process.env, PORT: String(UPSTREAM_PORT) }

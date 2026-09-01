@@ -30,8 +30,7 @@ app/.tailwind.out.css
 dev/bundle.js
 # `pnpm web:dev` materializes dev/seed.ts here as a real git repo and then WRITES
 # to it. Generated, disposable, and re-created by --reset.
-dev/demo-brain/
-dev/web-test-brain/
+dev/demo-brain*/
 
 # Playwright run artifacts (traces, failure screenshots, the HTML report). The visual
 # BASELINES under tests/ui/__screenshots__/ are committed on purpose — they are the

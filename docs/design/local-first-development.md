@@ -265,3 +265,58 @@ fs adapter first because it is the interesting part.
   fails partway must leave the repo unchanged.
 - **Token mode quietly becoming a second auth model.** It is a development and single-user
   affordance. If it starts accumulating roles, that is the signal to stop.
+
+## Follow-up (2026-09-01): converging the harnesses
+
+Status: **partly done**. Written while adding the web app's own harness, which exposed a
+split nobody had decided on.
+
+There are now three ways this app runs locally, and they should differ in exactly one
+dimension:
+
+| harness | host | backend | brains |
+| --- | --- | --- | --- |
+| `pnpm app:dev` (`functional`, `visual`) | AppBridge, sandboxed iframe | **stubbed** in `dev/harness.ts` | 3, in memory |
+| `pnpm web:dev` (`web`) | top-level document, `fetch('/mcp')` | **real** tool handlers via `pnpm try` | 3, on disk |
+| `pnpm try` | none (an MCP host connects) | real | N folders |
+
+**The HOST difference is essential** — it is the thing under test, and the web app exists
+precisely because the two hosts are not the same. **The BACKEND difference is accidental.**
+Nothing about driving an MCP App over AppBridge requires the tools to be stubbed; that is
+just how the harness was first built, before a second runtime existed to point it at.
+
+What that split cost, concretely: the web harness had ONE brain while the stubbed harness
+had three, so multi-brain behaviour was exercisable only where the tools were fake. The web
+app shipped a defect where the URL's brain was ignored entirely and every call fell back to
+the active-brain pointer — invisible in a one-brain harness, because being wrong looked
+exactly like being right. Fixed, and `src/local.ts` is multi-brain now (`pnpm try a b c`,
+`getContext({ brain })` resolving against the set) so the case can be tested at all.
+
+Also fixed: the seeds. `dev/seed.ts` is the single source for all three brains, materialized
+to disk by `web:dev` and held in memory by `dev/harness.ts`, so a difference between the two
+hosts is a difference in the APP rather than in what it was handed.
+
+### What remains
+
+**Point `dev/harness.ts` at the real tool handlers**, deleting its ~650-line stub layer
+(`handleTool` and the fixture maps it closes over) and answering `oncalltool` by proxying to
+the local runtime. Then the two harnesses differ only in host, which is the goal.
+
+It is blocked on one thing, and it is the same blocker as the org-scope work: several
+existing specs (`members`, `sharing`, `analytics`) depend on org-model fixtures the local
+runtime does not have, because it registers no org tools at all. Converging without that
+would delete coverage rather than move it.
+
+So the order is: **give the local runtime a minimal org model** (a handful of rows in the
+shimmed D1 — one org, a few memberships, some `usage_daily`), which also unblocks
+[`org-scope-resolution.md`](./org-scope-resolution.md), **then** converge the harness. Doing
+it in the other order means rewriting the harness twice.
+
+Two things that will need care, and are the reason this is not a mechanical change:
+
+- **The frozen clock.** `?now=` freezes every date the fixtures produce, and the visual
+  baselines depend on it. Real tool handlers date things from real git commits, so the
+  harness would need to control the brain's history rather than its clock.
+- **The timing scenarios.** `#slow-result`, `#pending-input` and `#cold` are about the HOST's
+  delivery of a tool result, not about the tools, so they survive; `#stale` mutates content
+  behind the widget, which becomes a real write to the repo rather than a fixture poke.
