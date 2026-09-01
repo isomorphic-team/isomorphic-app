@@ -71,6 +71,42 @@ export function validCommitAuthor(author?: CommitAuthor): CommitAuthor | undefin
 	return { name, email };
 }
 
+// WHO to attribute to, as opposed to validCommitAuthor's WHETHER the result is
+// usable. The app_users row wins because it holds the verified address and the name
+// the person actually chose; the token's email is the fallback for a caller with no
+// row yet. A person with no name is attributed under their address rather than being
+// dropped, since a real address in `git blame` beats the App.
+//
+// Extracted from McpSession.resolveProductContext, where it decided how every human
+// edit appears in a brain's history from inside a private method no test could call.
+export function commitAuthorFor(
+	user: { name?: string | null; email?: string | null } | null | undefined,
+	tokenEmail: string
+): CommitAuthor | undefined {
+	const email = (user?.email || tokenEmail || '').trim();
+	if (!email) return undefined;
+	const name = (user?.name || email).trim();
+	return { name, email };
+}
+
+// The third attribution rule, for the GitHub identity path, where there is no
+// app_users row to read an address off. GitHub's canonical noreply form is
+// `<id>+<login>@users.noreply.github.com`, and using it is what links a commit to
+// the person's profile without publishing a private address.
+//
+// The format is load-bearing and silent when wrong: a malformed address still
+// commits, it just attributes to nobody, on every write that identity ever makes.
+// It was written inline in a private method on McpSession and appeared exactly
+// once in the codebase, so nothing would have caught a typo in it.
+export function githubNoreplyAuthor(
+	ghUserId: number,
+	login: string | null | undefined
+): CommitAuthor | undefined {
+	const name = (login ?? '').trim();
+	if (!name) return undefined;
+	return { name, email: `${ghUserId}+${name}@users.noreply.github.com` };
+}
+
 // Upper bound on a single content scan. This is NOT a subrequest limit anymore —
 // fetchPages batches blob reads through GraphQL (see below), so a scan costs
 // ceil(pages / GRAPHQL_BLOB_BATCH) subrequests, not one per page. The cap is now

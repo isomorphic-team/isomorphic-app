@@ -24,6 +24,8 @@ import {
 	ASSIGNABLE_BRAIN_ROLES,
 	type Role
 } from '../src/lib/orgs.ts';
+import { commitAuthorFor, githubNoreplyAuthor } from '../src/lib/brain-repo.ts';
+import { staticAuth } from '../src/lib/github.ts';
 
 import { checker } from './check.ts';
 
@@ -154,8 +156,7 @@ check(
 // (same shim the e2e batteries use), and the real exported functions are called.
 // No network: node:sqlite is a Node builtin.
 
-import { DatabaseSync } from 'node:sqlite';
-import { applyMigrations } from '../src/local/d1-sqlite.ts';
+import { localD1 } from '../src/local/d1-sqlite.ts';
 import {
 	listAccessibleBrains,
 	listAccessibleOrgs,
@@ -164,6 +165,7 @@ import {
 	linkedUserIds,
 	matchOrg,
 	chooseOrg,
+	chooseBrain,
 	getDefaultBrainForUser,
 	listBrainAccess,
 	setBrainGrant,
@@ -176,23 +178,7 @@ import {
 // Schema comes from the REAL migrations, not src/db/auth-schema.sql, which is
 // reference only. This battery pins the access rule, so it is the last place that
 // should be asserting against a schema production does not run.
-const sqlite = new DatabaseSync(':memory:');
-applyMigrations(sqlite);
-function shimStatement(sql: string, params: unknown[] = []) {
-	return {
-		bind: (...p: unknown[]) => shimStatement(sql, p),
-		first: async () => sqlite.prepare(sql).get(...(params as [])) ?? null,
-		all: async () => ({ results: sqlite.prepare(sql).all(...(params as [])) }),
-		run: async () => {
-			// `meta.changes` is load-bearing: d1WriteLedger.claim decides it won a claim
-			// with `(res.meta?.changes ?? 0) > 0`, and writeThroughIndex reads it the
-			// same way. A shim without it reports every write as a no-op.
-			const r = sqlite.prepare(sql).run(...(params as []));
-			return { success: true, meta: { changes: Number(r.changes ?? 0) } };
-		}
-	};
-}
-const db = { prepare: (sql: string) => shimStatement(sql) } as never;
+const { db, sqlite } = localD1();
 
 // One customer org, three people at three org roles, three brains covering each
 // access source: grandfathered org-visible, and two private ones owned by
@@ -467,6 +453,171 @@ check(
 check(
 	'no orgs at all throws',
 	threw(() => chooseOrg([], {}))
+);
+
+console.log('\nchooseBrain: which brain a read or a write actually lands on');
+// chooseOrg's twin, and until it was extracted it was the untested half: the same
+// ladder sat inline in a private method on McpSession. It decides the target of
+// every read and every write, so it gets the same treatment as the org side.
+{
+	// Alice reaches the org-visible brain and her own private one, oldest first.
+	const aliceBrains = await listAccessibleBrains(db, ['alice']);
+	const ids = aliceBrains.map((b) => b.id);
+	// Three, not two: the org-visible one, her own private one, and Bob's private one,
+	// which she reaches through the org-admin floor rather than a grant.
+	check('the fixture gives this caller three brains', aliceBrains.length === 3, ids.join(', '));
+
+	check(
+		'a named handle wins',
+		chooseBrain(aliceBrains, { brain: 'alicep' }).repo_name === 'alicep'
+	);
+	check(
+		'...over the brain the caller is working in',
+		chooseBrain(aliceBrains, { brain: 'alicep', activeBrainId: ids[0] }).repo_name === 'alicep'
+	);
+	check(
+		'with no handle, the brain the caller is working in wins',
+		chooseBrain(aliceBrains, { activeBrainId: ids[1] }).id === ids[1]
+	);
+	check(
+		'with neither, the first brain the query returned',
+		chooseBrain(aliceBrains, {}).id === ids[0]
+	);
+	// The same fallback chooseOrg has: a stale pointer must not strand the caller.
+	check(
+		'an active brain the caller lost access to falls back rather than throwing',
+		chooseBrain(aliceBrains, { activeBrainId: 'northwind/gone' }).id === ids[0]
+	);
+	check(
+		'an unmatched handle throws rather than picking one',
+		threw(() => chooseBrain(aliceBrains, { brain: 'nonexistent' }))
+	);
+	// The case that matters most: silently taking the first of several would write
+	// into a brain the caller did not name.
+	check(
+		'an AMBIGUOUS handle throws too',
+		threw(() => chooseBrain(aliceBrains, { brain: 'northwind' })),
+		'the org owns both repos, so the handle cannot pick one'
+	);
+	check(
+		'no brains at all throws',
+		threw(() => chooseBrain([], {}))
+	);
+	// A blank handle THROWS rather than falling through to the active brain. That is
+	// the behavior the Worker already had and it matches chooseOrg: a caller who
+	// passed a `brain` argument asked for a specific one, and quietly acting on a
+	// different brain because their string was empty is the silent-wrong-target case
+	// this whole function exists to prevent.
+	check(
+		'a blank handle throws rather than silently falling back to the active brain',
+		threw(() => chooseBrain(aliceBrains, { brain: '   ', activeBrainId: ids[1] }))
+	);
+}
+
+console.log('\ncommitAuthorFor: how a human edit is attributed in git history');
+// Nothing tested this before: it lived inline in McpSession, in two copies, and it
+// decides what `git blame` shows for every write a person makes.
+check(
+	'the app_users row wins, since its address is the verified one',
+	commitAuthorFor({ name: 'Ada', email: 'ada@example.com' }, 'token@example.com')?.email ===
+		'ada@example.com'
+);
+check(
+	'the token email is the fallback when there is no row yet',
+	commitAuthorFor(null, 'token@example.com')?.email === 'token@example.com'
+);
+check(
+	'...and when the row carries no address',
+	commitAuthorFor({ name: 'Ada', email: null }, 'token@example.com')?.email === 'token@example.com'
+);
+check(
+	'a person with no name is attributed under their address, not dropped',
+	commitAuthorFor({ name: null, email: 'ada@example.com' }, '')?.name === 'ada@example.com'
+);
+check(
+	'no address anywhere means no attribution, so the App authors instead',
+	commitAuthorFor(null, '') === undefined
+);
+check(
+	'whitespace is trimmed rather than written into history',
+	commitAuthorFor({ name: '  Ada  ', email: '  ada@example.com  ' }, '')?.name === 'Ada'
+);
+check(
+	'a whitespace-only address counts as none',
+	commitAuthorFor({ name: 'Ada', email: '   ' }, '   ') === undefined
+);
+
+console.log('\ngithubNoreplyAuthor: the GitHub-identity attribution rule');
+// The third attribution rule, for the path with no app_users row to read. The format
+// is GitHub's canonical noreply form, and getting it wrong is silent: the commit still
+// lands, it just attributes to nobody, on every write that identity makes.
+check(
+	'the canonical <id>+<login>@users.noreply.github.com form',
+	githubNoreplyAuthor(1234, 'ada')?.email === '1234+ada@users.noreply.github.com'
+);
+check('the name is the login', githubNoreplyAuthor(1234, 'ada')?.name === 'ada');
+check(
+	'no login means no attribution, so the App authors instead',
+	githubNoreplyAuthor(1234, null) === undefined
+);
+check('...and an empty login too', githubNoreplyAuthor(1234, '') === undefined);
+check(
+	'a whitespace-only login counts as none, never as a blank address',
+	githubNoreplyAuthor(1234, '   ') === undefined
+);
+check(
+	'a padded login is trimmed on both sides of the address',
+	githubNoreplyAuthor(7, '  ada  ')?.email === '7+ada@users.noreply.github.com'
+);
+
+console.log('\nstaticAuth: what a self-hosted deployment resolves to, or is told');
+// AUTH_MODE=static is the documented self-hosting entry point, so these errors are
+// the first thing a stranger hits when their config is incomplete.
+const REPO = { BRAIN_REPO_OWNER: 'acme', BRAIN_REPO_NAME: 'brain' };
+check(
+	'a token resolves to the token path',
+	staticAuth({ ...REPO, GITHUB_TOKEN: 'ghp_x' }).kind === 'token'
+);
+check(
+	'an installation id resolves to the App path',
+	staticAuth({ ...REPO, GITHUB_APP_INSTALLATION_ID: '42' }).kind === 'installation'
+);
+check(
+	'...and parses to a number, not a string',
+	(() => {
+		const a = staticAuth({ ...REPO, GITHUB_APP_INSTALLATION_ID: '42' });
+		return a.kind === 'installation' && a.installationId === 42;
+	})()
+);
+check(
+	'the token wins when both are set, being the more specific act',
+	staticAuth({ ...REPO, GITHUB_TOKEN: 'ghp_x', GITHUB_APP_INSTALLATION_ID: '42' }).kind === 'token'
+);
+check(
+	'the repo travels with the choice',
+	staticAuth({ ...REPO, GITHUB_TOKEN: 'x' }).owner === 'acme'
+);
+check(
+	'no repo named at all is refused, whatever the credential',
+	threw(() => staticAuth({ GITHUB_TOKEN: 'ghp_x' }))
+);
+check(
+	'half a repo is refused too',
+	threw(() => staticAuth({ BRAIN_REPO_OWNER: 'acme', GITHUB_TOKEN: 'ghp_x' }))
+);
+check(
+	'a repo with no credential is refused',
+	threw(() => staticAuth(REPO))
+);
+// Deliberate improvement over the inline version, which accepted any non-empty
+// string here and sent Number('abc') = NaN to GitHub as an installation id.
+check(
+	'a non-numeric installation id is refused here, not at GitHub',
+	threw(() => staticAuth({ ...REPO, GITHUB_APP_INSTALLATION_ID: 'not-a-number' }))
+);
+check(
+	'a whitespace-only credential counts as absent',
+	threw(() => staticAuth({ ...REPO, GITHUB_TOKEN: '   ' }))
 );
 
 console.log('\nresolveOrgForPerson: the whole decision, against the real schema');

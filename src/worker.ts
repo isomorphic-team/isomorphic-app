@@ -34,8 +34,13 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js';
 import { OAuthProvider, type OAuthHelpers } from '@cloudflare/workers-oauth-provider';
-import { installationOctokit, tokenOctokit, type AppCreds } from './lib/github.ts';
-import { githubStore, type BrainStore } from './lib/brain-repo.ts';
+import { installationOctokit, tokenOctokit, staticAuth, type AppCreds } from './lib/github.ts';
+import {
+	githubStore,
+	commitAuthorFor,
+	githubNoreplyAuthor,
+	type BrainStore
+} from './lib/brain-repo.ts';
 import { getTenantByUserId, NoTenantError } from './lib/tenants.ts';
 import { provisionBrainForUser, provisionOrgForUser } from './lib/provision.ts';
 import { claimPendingInvites } from './lib/invites.ts';
@@ -47,9 +52,8 @@ import {
 	getAppUserByGithubUserId,
 	listAccessibleOrgs,
 	resolveOrgForPerson,
-	matchBrain,
+	chooseBrain,
 	brainLabel,
-	brainLabelQualified,
 	type AccessibleBrain,
 	type Org,
 	type OrgScope,
@@ -534,10 +538,7 @@ class McpSession {
 			// GitHub identity: attribute to their account via GitHub's canonical
 			// noreply address (<id>+<login>@users.noreply.github.com), which links the
 			// commit to their profile without exposing a private email.
-			const login = this.props?.gh_login;
-			const author: CommitAuthor | undefined = login
-				? { name: login, email: `${ghUserId}+${login}@users.noreply.github.com` }
-				: undefined;
+			const author = githubNoreplyAuthor(ghUserId, this.props?.gh_login);
 			return {
 				octokit,
 				store: githubStore(octokit),
@@ -562,25 +563,14 @@ class McpSession {
 		//                        for App-authored commits or an org-owned installation.
 		//
 		// Both need BRAIN_REPO_OWNER/NAME, since there is no tenant table to resolve.
-		const owner = env.BRAIN_REPO_OWNER;
-		const repo = env.BRAIN_REPO_NAME;
-		if (!owner || !repo) {
-			throw new Error(
-				'AUTH_MODE=static requires BRAIN_REPO_OWNER and BRAIN_REPO_NAME (which brain to serve), plus either GITHUB_TOKEN (simplest) or GITHUB_APP_INSTALLATION_ID with the platform App credentials. Run `pnpm doctor` to see what is missing.'
-			);
-		}
-		const installationId = env.GITHUB_APP_INSTALLATION_ID;
-		if (!env.GITHUB_TOKEN && !installationId) {
-			throw new Error(
-				'AUTH_MODE=static needs a way to reach GitHub: set GITHUB_TOKEN (a fine-grained PAT with Contents and Pull requests write on the brain repo), or set GITHUB_APP_INSTALLATION_ID and the platform App credentials. Run `pnpm doctor` to see what is missing.'
-			);
-		}
+		const auth = staticAuth(env);
 		assertRole('owner', opts?.requires);
 		assertRole('owner', opts?.requiresOrg);
-		const octokit = env.GITHUB_TOKEN
-			? tokenOctokit(env.GITHUB_TOKEN)
-			: await installationOctokit(appCreds(env), Number(installationId));
-		const repoArgs = { owner, repo };
+		const octokit =
+			auth.kind === 'token'
+				? tokenOctokit(auth.token)
+				: await installationOctokit(appCreds(env), auth.installationId);
+		const repoArgs = { owner: auth.owner, repo: auth.repo };
 		return {
 			octokit,
 			store: githubStore(octokit),
@@ -637,24 +627,8 @@ class McpSession {
 				visibility: p.brain.visibility
 			};
 		} else {
-			if (brainArg) {
-				const m = matchBrain(brains, brainArg);
-				if (!m.brain) {
-					const names = (m.candidates ?? brains).map(brainLabelQualified);
-					throw new Error(
-						m.candidates
-							? `"${brainArg}" matches multiple brains: ${names.join(', ')}. Be more specific.`
-							: `No brain matching "${brainArg}". You have access to: ${names.join(', ')}.`
-					);
-				}
-				target = m.brain;
-			} else {
-				// Active brain if it's still accessible; otherwise the default (oldest).
-				const active = this.activeBrainId
-					? brains.find((b) => b.id === this.activeBrainId)
-					: undefined;
-				target = active ?? brains[0];
-			}
+			// Named brain, else the one the caller is working in, else the oldest.
+			target = chooseBrain(brains, { brain: brainArg, activeBrainId: this.activeBrainId });
 		}
 
 		const octokit = await installationOctokit(appCreds(env), target.installation_id);
@@ -663,12 +637,7 @@ class McpSession {
 		// name + verified email); fall back to the token email. A member with no
 		// GitHub account still gets legible authorship — GitHub just won't link it
 		// to a profile unless the email matches a verified GitHub email.
-		const user = await getAppUser(env.PLATFORM_DB, userId);
-		const authorEmail = (user?.email || email).trim();
-		const authorName = (user?.name || authorEmail).trim();
-		const author: CommitAuthor | undefined = authorEmail
-			? { name: authorName, email: authorEmail }
-			: undefined;
+		const author = commitAuthorFor(await getAppUser(env.PLATFORM_DB, userId), email);
 		this.noteScope(target.org_id, target.id);
 		return {
 			octokit,
@@ -750,11 +719,7 @@ class McpSession {
 		}
 		assertRole(membership.role, opts?.requires);
 		const octokit = await installationOctokit(appCreds(env), membership.org.installation_id);
-		const user = await getAppUser(env.PLATFORM_DB, userId);
-		const authorEmail = (user?.email || email).trim();
-		const author: CommitAuthor | undefined = authorEmail
-			? { name: (user?.name || authorEmail).trim(), email: authorEmail }
-			: undefined;
+		const author = commitAuthorFor(await getAppUser(env.PLATFORM_DB, userId), email);
 		// Org scope resolves no brain, so usage rows for these calls carry ''.
 		this.noteScope(membership.org.org_id);
 		return {
