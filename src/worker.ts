@@ -42,7 +42,7 @@ import {
 	type BrainStore
 } from './lib/brain-repo.ts';
 import { getTenantByUserId, NoTenantError } from './lib/tenants.ts';
-import { provisionBrainForUser, provisionOrgForUser } from './lib/provision.ts';
+import { platformInstall, provisionBrainForUser, provisionOrgForUser } from './lib/provision.ts';
 import { claimPendingInvites } from './lib/invites.ts';
 import {
 	getAppUser,
@@ -539,18 +539,7 @@ class McpSession {
 			// noreply address (<id>+<login>@users.noreply.github.com), which links the
 			// commit to their profile without exposing a private email.
 			const author = githubNoreplyAuthor(ghUserId, this.props?.gh_login);
-			return {
-				octokit,
-				store: githubStore(octokit),
-				repoArgs,
-				role: 'owner',
-				orgRole: 'owner',
-				config: await this.loadConfig(githubStore(octokit), repoArgs),
-				author,
-				db: env.PLATFORM_DB,
-				brainId: `${repoArgs.owner}/${repoArgs.repo}`,
-				activeBrain: { id: `${repoArgs.owner}/${repoArgs.repo}`, label: repoArgs.repo }
-			};
+			return this.singleTenantContext(octokit, repoArgs, author);
 		}
 		// Single-tenant path: one human, one brain, no org model. Two ways to reach the
 		// repo; GITHUB_TOKEN takes precedence.
@@ -570,17 +559,34 @@ class McpSession {
 			auth.kind === 'token'
 				? tokenOctokit(auth.token)
 				: await installationOctokit(appCreds(env), auth.installationId);
-		const repoArgs = { owner: auth.owner, repo: auth.repo };
+		// No signed-in human on this path, so no author: writes stay App-authored.
+		return this.singleTenantContext(octokit, { owner: auth.owner, repo: auth.repo });
+	}
+
+	// The context shape shared by the two paths with NO ORG MODEL: the legacy
+	// gh_user_id tenant row and AUTH_MODE=static. Both are one human with one
+	// brain, so both scopes report 'owner', and both key the brain on the repo
+	// itself because there is no brains row to carry a name. The two copies of
+	// this differed only in where the octokit came from and whether an author was
+	// known, and each built githubStore twice over the same client.
+	private async singleTenantContext(
+		octokit: TenantContext['octokit'],
+		repoArgs: { owner: string; repo: string },
+		author?: CommitAuthor
+	): Promise<TenantContext> {
+		const store = githubStore(octokit);
+		const brainId = `${repoArgs.owner}/${repoArgs.repo}`;
 		return {
 			octokit,
-			store: githubStore(octokit),
+			store,
 			repoArgs,
 			role: 'owner',
 			orgRole: 'owner',
-			config: await this.loadConfig(githubStore(octokit), repoArgs),
-			db: env.PLATFORM_DB,
-			brainId: `${repoArgs.owner}/${repoArgs.repo}`,
-			activeBrain: { id: `${repoArgs.owner}/${repoArgs.repo}`, label: repoArgs.repo }
+			config: await this.loadConfig(store, repoArgs),
+			author,
+			db: this.env.PLATFORM_DB,
+			brainId,
+			activeBrain: { id: brainId, label: repoArgs.repo }
 		};
 	}
 
@@ -663,19 +669,15 @@ class McpSession {
 	private async autoProvisionOrg(userId: string, email: string) {
 		const env = this.env;
 		const autoProvision = env.AUTO_PROVISION === 'true';
-		if (autoProvision && (!env.PLATFORM_ORG || !env.PLATFORM_INSTALLATION_ID)) {
-			throw new Error(
-				'AUTO_PROVISION is on but PLATFORM_ORG / PLATFORM_INSTALLATION_ID are not configured. ' +
-					'Run admin setup (pnpm bootstrap) to install the platform App on an org.'
-			);
-		}
+		// Only read when it is going to be used: joining by invitation mints nothing
+		// and so needs neither value, which is what lets an invite-only deployment
+		// run with no platform org configured at all.
+		const platform = autoProvision ? platformInstall(env) : undefined;
 		return provisionOrgForUser({
 			db: env.PLATFORM_DB,
 			user: { user_id: userId, email, name: null },
-			org: env.PLATFORM_ORG,
-			installationId: env.PLATFORM_INSTALLATION_ID
-				? Number(env.PLATFORM_INSTALLATION_ID)
-				: undefined,
+			org: platform?.org,
+			installationId: platform?.installationId,
 			autoProvision
 		});
 	}
@@ -742,21 +744,15 @@ class McpSession {
 		if (env.AUTO_PROVISION !== 'true') {
 			throw new NoTenantError(ghUserId);
 		}
-		if (!env.PLATFORM_ORG || !env.PLATFORM_INSTALLATION_ID) {
-			throw new Error(
-				'AUTO_PROVISION is on but PLATFORM_ORG / PLATFORM_INSTALLATION_ID are not configured. ' +
-					'Run admin setup (pnpm bootstrap) to install the platform App on an org.'
-			);
-		}
-		const installationId = Number(env.PLATFORM_INSTALLATION_ID);
-		const octokit = await installationOctokit(appCreds(env), installationId);
+		const platform = platformInstall(env);
+		const octokit = await installationOctokit(appCreds(env), platform.installationId);
 		return provisionBrainForUser({
 			octokit,
 			db: env.PLATFORM_DB,
 			ghUserId,
 			ghLogin: this.props?.gh_login ?? null,
-			org: env.PLATFORM_ORG,
-			installationId
+			org: platform.org,
+			installationId: platform.installationId
 		});
 	}
 
