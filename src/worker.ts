@@ -34,8 +34,13 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js';
 import { OAuthProvider, type OAuthHelpers } from '@cloudflare/workers-oauth-provider';
-import { installationOctokit, tokenOctokit, type AppCreds } from './lib/github.ts';
-import { githubStore, commitAuthorFor, type BrainStore } from './lib/brain-repo.ts';
+import { installationOctokit, tokenOctokit, staticAuth, type AppCreds } from './lib/github.ts';
+import {
+	githubStore,
+	commitAuthorFor,
+	githubNoreplyAuthor,
+	type BrainStore
+} from './lib/brain-repo.ts';
 import { getTenantByUserId, NoTenantError } from './lib/tenants.ts';
 import { provisionBrainForUser, provisionOrgForUser } from './lib/provision.ts';
 import { claimPendingInvites } from './lib/invites.ts';
@@ -529,10 +534,7 @@ class McpSession {
 			// GitHub identity: attribute to their account via GitHub's canonical
 			// noreply address (<id>+<login>@users.noreply.github.com), which links the
 			// commit to their profile without exposing a private email.
-			const login = this.props?.gh_login;
-			const author: CommitAuthor | undefined = login
-				? { name: login, email: `${ghUserId}+${login}@users.noreply.github.com` }
-				: undefined;
+			const author = githubNoreplyAuthor(ghUserId, this.props?.gh_login);
 			return {
 				octokit,
 				store: githubStore(octokit),
@@ -557,25 +559,14 @@ class McpSession {
 		//                        for App-authored commits or an org-owned installation.
 		//
 		// Both need BRAIN_REPO_OWNER/NAME, since there is no tenant table to resolve.
-		const owner = env.BRAIN_REPO_OWNER;
-		const repo = env.BRAIN_REPO_NAME;
-		if (!owner || !repo) {
-			throw new Error(
-				'AUTH_MODE=static requires BRAIN_REPO_OWNER and BRAIN_REPO_NAME (which brain to serve), plus either GITHUB_TOKEN (simplest) or GITHUB_APP_INSTALLATION_ID with the platform App credentials. Run `pnpm doctor` to see what is missing.'
-			);
-		}
-		const installationId = env.GITHUB_APP_INSTALLATION_ID;
-		if (!env.GITHUB_TOKEN && !installationId) {
-			throw new Error(
-				'AUTH_MODE=static needs a way to reach GitHub: set GITHUB_TOKEN (a fine-grained PAT with Contents and Pull requests write on the brain repo), or set GITHUB_APP_INSTALLATION_ID and the platform App credentials. Run `pnpm doctor` to see what is missing.'
-			);
-		}
+		const auth = staticAuth(env);
 		assertRole('owner', opts?.requires);
 		assertRole('owner', opts?.requiresOrg);
-		const octokit = env.GITHUB_TOKEN
-			? tokenOctokit(env.GITHUB_TOKEN)
-			: await installationOctokit(appCreds(env), Number(installationId));
-		const repoArgs = { owner, repo };
+		const octokit =
+			auth.kind === 'token'
+				? tokenOctokit(auth.token)
+				: await installationOctokit(appCreds(env), auth.installationId);
+		const repoArgs = { owner: auth.owner, repo: auth.repo };
 		return {
 			octokit,
 			store: githubStore(octokit),

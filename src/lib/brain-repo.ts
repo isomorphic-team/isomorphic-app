@@ -89,6 +89,24 @@ export function commitAuthorFor(
 	return { name, email };
 }
 
+// The third attribution rule, for the GitHub identity path, where there is no
+// app_users row to read an address off. GitHub's canonical noreply form is
+// `<id>+<login>@users.noreply.github.com`, and using it is what links a commit to
+// the person's profile without publishing a private address.
+//
+// The format is load-bearing and silent when wrong: a malformed address still
+// commits, it just attributes to nobody, on every write that identity ever makes.
+// It was written inline in a private method on McpSession and appeared exactly
+// once in the codebase, so nothing would have caught a typo in it.
+export function githubNoreplyAuthor(
+	ghUserId: number,
+	login: string | null | undefined
+): CommitAuthor | undefined {
+	const name = (login ?? '').trim();
+	if (!name) return undefined;
+	return { name, email: `${ghUserId}+${name}@users.noreply.github.com` };
+}
+
 // Upper bound on a single content scan. This is NOT a subrequest limit anymore —
 // fetchPages batches blob reads through GraphQL (see below), so a scan costs
 // ceil(pages / GRAPHQL_BLOB_BATCH) subrequests, not one per page. The cap is now
