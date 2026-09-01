@@ -154,7 +154,7 @@ export interface BrainContext {
 	// member-management tools authorize roster changes on THIS one: gating them on
 	// `role` would let someone who was merely shared a brain as admin edit the org
 	// roster. Legacy single-tenant paths report 'owner'.
-	orgRole: Role;
+	orgRole: Role | null;
 	// The resolved org's id + the acting user's id, present only on the product-native
 	// (authjs) path. The member-management tools need these to scope roster queries and
 	// enforce self-guards; they're undefined on the legacy single-tenant paths, which
@@ -1984,7 +1984,9 @@ export function registerLibrarianTools(
 			const where = wide ? ` across ${targets.length} brains` : '';
 			if (hits.length === 0) {
 				return {
-					...ok(`No matches for "${query}"${where}.${note}${probeNote}${truncationNote(truncated)}`),
+					...ok(
+						`No matches for "${query}"${where}.${note}${probeNote}${truncationNote(truncated)}`
+					),
 					structuredContent: {
 						hits: [],
 						terms,

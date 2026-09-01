@@ -101,7 +101,12 @@ sqlite.exec(`
 interface Persona {
 	label: string;
 	userId: string;
-	orgRole: Role;
+	// NULL for a caller who holds no membership in the organization that owns the
+	// brain they reached. Distinct from 'viewer' on purpose, and that distinction is
+	// the whole reason the field is nullable: the org roster and the per-person
+	// analytics table are precisely what someone from outside must never see, and
+	// "not a member" has to be a different answer from "a member with few powers".
+	orgRole: Role | null;
 	role: Role;
 }
 const sharedAdmin: Persona = {
@@ -127,6 +132,15 @@ const lurker: Persona = {
 	userId: 'u-lurker',
 	orgRole: 'viewer',
 	role: 'viewer'
+};
+// Reaches the brain at editor with NO role in the organization that owns it. This is
+// the shape no test exercised before org roles could be absent, and the one where an
+// accidental pass reads as a permissions bug rather than as a leak.
+const outsider: Persona = {
+	label: 'an outsider: editor on this brain, not a member of its organization',
+	userId: 'u-outside',
+	orgRole: null,
+	role: 'editor'
 };
 
 // Any octokit call means a handler reached the network on a path that should not.
@@ -209,6 +223,9 @@ function toolsFor(
 		orgContext: async (opts?: { requires?: Role; org?: string }) => {
 			orgAsks.push(opts);
 			assertRole(p.orgRole, opts?.requires);
+			// assertRole threw for a null above when a role was required; an org-scope
+			// call with no requirement from a non-member is not a shape any tool makes.
+			if (!p.orgRole) throw new Error('not a member of any organization');
 			return {
 				octokit,
 				org: {
@@ -243,12 +260,17 @@ function toolsFor(
 			})) as AccessibleBrain[],
 		// Two orgs, one of which holds no brain at all: the case the brains payload has
 		// to carry, since the widget cannot derive it from a list of brains.
+		// A non-member belongs to no organization, so the list is empty rather than a
+		// list carrying a null role.
 		listOrgs: async () =>
-			[
-				{ org_id: 'org1', name: 'Northwind', brain_owner: 'northwind' },
-				{ org_id: 'org2', name: 'Contoso Group', brain_owner: 'contoso-io' }
-			].map((o) => ({
-				role: p.orgRole,
+			(p.orgRole
+				? [
+						{ org_id: 'org1', name: 'Northwind', brain_owner: 'northwind' },
+						{ org_id: 'org2', name: 'Contoso Group', brain_owner: 'contoso-io' }
+					]
+				: []
+			).map((o) => ({
+				role: p.orgRole as Role,
 				org: {
 					...o,
 					model: 'customer',
@@ -653,6 +675,54 @@ async function analyticsPayload(p: Persona) {
 		'an org editor is not an admin here either',
 		(await analyticsPayload(writer)).canSeePeople === false
 	);
+}
+
+// ---------------------------------------------------------------------------
+console.log('\nAN OUTSIDER reaches the brain and nothing around it');
+// ---------------------------------------------------------------------------
+// Someone from another organization can resolve a brain, and everything ORG-scope
+// hanging off that brain must still refuse them. Every one of these gates reads
+// ctx.orgRole, which is null for them.
+{
+	const denials = [
+		['members', {}],
+		['invite_member', { email: 'x@example.com', role: 'viewer' }],
+		['set_member_role', { email: 'lurker@example.com', role: 'admin' }],
+		['remove_member', { email: 'lurker@example.com' }]
+	] as const;
+	for (const [tool, args] of denials) {
+		const r = await attempt(outsider, tool, args as Record<string, unknown>);
+		check(`${tool} refuses them`, r.outcome === 'denied', `${r.outcome}: ${r.detail}`);
+		// The message has to SAY they are not a member. Before assertRole took a nullable
+		// role it interpolated the absent value straight into the sentence ("your role is
+		// undefined"), which fails closed by accident and reads to a person as a bug
+		// rather than as an answer.
+		if (tool !== 'members')
+			check(
+				`  ...and the refusal says they are not a member`,
+				/not a member/.test(r.detail) && !/your role is (undefined|null)/.test(r.detail),
+				r.detail
+			);
+	}
+
+	// Content reads stay open: they resolved the brain legitimately. It is the
+	// surrounding ORGANIZATION that is not theirs.
+	const read = await attempt(outsider, 'search_pages', { query: 'anything' });
+	check(
+		'but a content read still passes the gate',
+		await passesGate(outsider, 'search_pages', { query: 'anything' }),
+		`${read.outcome}: ${read.detail}`
+	);
+
+	// Asserted on the PAYLOAD, not on a flag: the rows have to be absent, not merely
+	// marked. Same rule the org-viewer cases above already follow.
+	const payload = await analyticsPayload(outsider);
+	check(
+		'analytics withholds the per-person table entirely',
+		Array.isArray(payload.people) && payload.people.length === 0,
+		JSON.stringify(payload.people)
+	);
+	check('and says so', payload.canSeePeople === false, String(payload.canSeePeople));
 }
 
 // ---------------------------------------------------------------------------

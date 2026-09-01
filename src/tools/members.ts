@@ -58,13 +58,28 @@ const brainArg = brainArgFor(
 // Resolve the org scope, or throw the caller-facing "org accounts only" error. The
 // product-native (authjs) path always sets both; the legacy single-tenant paths
 // never do — member management doesn't apply to a single-tenant install.
-function requireOrg(ctx: BrainContext): { orgId: string; actorUserId: string } {
+// The single place "this caller belongs to an organization" is established, which is
+// why the org ROLE comes back through it too. `ctx.orgRole` is null for a caller who
+// holds no membership in the org that owns the brain they reached, so none of the
+// ceilings below have anything to compare against. Narrowing it here rather than at
+// each use means a new member tool cannot forget.
+//
+// In practice the `requiresOrg: 'admin'` gate on every mutation rejects such a caller
+// first. This is the backstop for the day one of those gates is relaxed.
+function requireOrg(ctx: BrainContext): {
+	orgId: string;
+	actorUserId: string;
+	orgRole: Role;
+} {
 	if (!ctx.orgId || !ctx.actorUserId) {
 		throw new Error(
 			'Member management is only available for organization accounts (this connection is a single-tenant install).'
 		);
 	}
-	return { orgId: ctx.orgId, actorUserId: ctx.actorUserId };
+	if (!ctx.orgRole) {
+		throw new Error('You are not a member of this organization, so you cannot manage it.');
+	}
+	return { orgId: ctx.orgId, actorUserId: ctx.actorUserId, orgRole: ctx.orgRole };
 }
 
 // The roster payload shared by every member tool's structuredContent, so the app
@@ -72,6 +87,7 @@ function requireOrg(ctx: BrainContext): { orgId: string; actorUserId: string } {
 // mutation. `me` lets the UI gate affordances (admin+ manages; you can't edit your
 // own row) without a second round-trip.
 async function roster(ctx: BrainContext, orgId: string, actorUserId: string) {
+	const { orgRole } = requireOrg(ctx);
 	const [members, invites] = await Promise.all([
 		listMembers(ctx.db, orgId),
 		listPendingInvites(ctx.db, orgId)
@@ -80,7 +96,7 @@ async function roster(ctx: BrainContext, orgId: string, actorUserId: string) {
 		view: 'members' as const,
 		members,
 		invites,
-		me: { user_id: actorUserId, role: ctx.orgRole },
+		me: { user_id: actorUserId, role: orgRole },
 		activeBrain: ctx.activeBrain
 	};
 }
@@ -150,13 +166,13 @@ export function registerMemberTools(
 		},
 		async ({ email, role, brain }) => {
 			const ctx = await getContext({ requiresOrg: 'admin', brain });
-			const { orgId, actorUserId } = requireOrg(ctx);
+			const { orgId, actorUserId, orgRole } = requireOrg(ctx);
 			const emailTrim = email.trim();
 			if (!emailTrim || !emailTrim.includes('@'))
 				return fail(`"${email}" is not a valid email address.`);
 			const target: Role = role ?? 'editor';
-			if (!roleAtLeast(ctx.orgRole, target)) {
-				return fail(`You can't grant a role higher than your own (${roleLabel(ctx.orgRole)}).`);
+			if (!roleAtLeast(orgRole, target)) {
+				return fail(`You can't grant a role higher than your own (${roleLabel(orgRole)}).`);
 			}
 
 			const existing = await getAppUserByEmail(ctx.db, emailTrim);
@@ -219,11 +235,11 @@ export function registerMemberTools(
 		},
 		async ({ email, role, brain }) => {
 			const ctx = await getContext({ requiresOrg: 'admin', brain });
-			const { orgId, actorUserId } = requireOrg(ctx);
+			const { orgId, actorUserId, orgRole } = requireOrg(ctx);
 			const next = parseRole(role);
 			if (!next || next === 'owner') return fail(`"${role}" is not an assignable role.`);
-			if (!roleAtLeast(ctx.orgRole, next)) {
-				return fail(`You can't grant a role higher than your own (${roleLabel(ctx.orgRole)}).`);
+			if (!roleAtLeast(orgRole, next)) {
+				return fail(`You can't grant a role higher than your own (${roleLabel(orgRole)}).`);
 			}
 
 			const user = await getAppUserByEmail(ctx.db, email.trim());

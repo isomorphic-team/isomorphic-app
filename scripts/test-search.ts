@@ -688,7 +688,7 @@ function result(paths: string[], budgetHit = false): SearchResult {
 	);
 	const loudOut = m.hits.filter((h) => h.brainId === 'acme/wiki').map((h) => h.path);
 	check(
-		'within a brain the engine\'s rank order survives',
+		"within a brain the engine's rank order survives",
 		loudOut.every((p, i) => p === `wiki/loud-${i}.md`),
 		JSON.stringify(loudOut)
 	);
@@ -702,10 +702,14 @@ function result(paths: string[], budgetHit = false): SearchResult {
 	const m = mergeBrainResults([{ brainId: 'acme/wiki', result: one }], 50);
 	check(
 		'one brain comes back exactly as ranked',
-		JSON.stringify(m.hits.map((h) => h.path)) === JSON.stringify(['wiki/b.md', 'wiki/a.md', 'wiki/c.md'])
+		JSON.stringify(m.hits.map((h) => h.path)) ===
+			JSON.stringify(['wiki/b.md', 'wiki/a.md', 'wiki/c.md'])
 	);
 	check('and no budget is reported hit', !m.budgetHit);
-	check("a brain's own budgetHit is carried through", mergeBrainResults([{ brainId: 'x', result: result(['a'], true) }], 50).budgetHit);
+	check(
+		"a brain's own budgetHit is carried through",
+		mergeBrainResults([{ brainId: 'x', result: result(['a'], true) }], 50).budgetHit
+	);
 	check('no brains, no hits', mergeBrainResults([], 50).hits.length === 0);
 }
 
@@ -722,8 +726,20 @@ function result(paths: string[], budgetHit = false): SearchResult {
 		ins.run('acme/wiki', path, `Page ${i}`, 'sha-' + path, '# Page\nthe kickoff plan\n');
 	}
 	ins.run('northwind/wiki', 'wiki/kickoff.md', 'Kickoff', 's1', '# Kickoff\nthe kickoff agenda\n');
-	ins.run('northwind/wiki', 'wiki/notes/later.md', 'Later', 's2', 'nothing here\nkickoff follow-up\n');
-	ins.run('private/wiki', 'wiki/secret.md', 'Secret', 's3', '# Secret\nthe kickoff nobody may see\n');
+	ins.run(
+		'northwind/wiki',
+		'wiki/notes/later.md',
+		'Later',
+		's2',
+		'nothing here\nkickoff follow-up\n'
+	);
+	ins.run(
+		'private/wiki',
+		'wiki/secret.md',
+		'Secret',
+		's3',
+		'# Secret\nthe kickoff nobody may see\n'
+	);
 
 	const wide = await searchBrains(db, ['acme/wiki', 'northwind/wiki'], 'kickoff', undefined, {
 		perBrain: 15,
@@ -737,7 +753,10 @@ function result(paths: string[], budgetHit = false): SearchResult {
 	const acme = wide.hits.filter((h) => h.brainId === 'acme/wiki');
 	check('the quiet brain still reports its hits', nw.length >= 2, `got ${nw.length}`);
 	check('the loud brain is held to its own budget', acme.length === 15, `got ${acme.length}`);
-	check('every hit names its brain', wide.hits.every((h) => h.brainId));
+	check(
+		'every hit names its brain',
+		wide.hits.every((h) => h.brainId)
+	);
 	check(
 		'per-brain results ride along for per-brain notes',
 		wide.perBrain.get('northwind/wiki')?.pagesMatched === 2,
@@ -782,7 +801,11 @@ function brain(id: string, name: string): AccessibleBrain {
 		]
 	};
 	const t = await searchTargets(ctxFor('acme/wiki', 'Acme'), deps);
-	check('fanning out reaches every accessible brain', t.length === 3, JSON.stringify(t.map((x) => x.id)));
+	check(
+		'fanning out reaches every accessible brain',
+		t.length === 3,
+		JSON.stringify(t.map((x) => x.id))
+	);
 	// Leading matters twice over: the active brain wins the round-robin under the global
 	// cap, and it reads first in the output.
 	check('the active brain leads', t[0].id === 'acme/wiki', JSON.stringify(t.map((x) => x.id)));

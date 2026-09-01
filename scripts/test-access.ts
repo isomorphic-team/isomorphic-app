@@ -145,6 +145,61 @@ check(
 	effectiveBrainRole({ visibility: '', orgRole: 'viewer' }) === 'viewer'
 );
 
+// ---------------------------------------------------------------------------
+console.log('\nNo org role at all: the sources that need a membership are skipped');
+// ---------------------------------------------------------------------------
+// A caller who holds no membership in the organization that owns a brain. Sources (1)
+// org-visibility and (3) the org-admin floor have nobody to apply to, so they
+// contribute nothing. Before this was explicit the function returned `undefined` for
+// an org-visible brain with a null org role: neither a role nor null, and it only
+// failed closed because the caller happened to test `if (!role)`.
+for (const visibility of ['org', 'private', 'team-only', '']) {
+	check(
+		`${visibility || '(empty)'}: no membership, no grant → NO ACCESS`,
+		effectiveBrainRole({ visibility, orgRole: null }) === null,
+		String(effectiveBrainRole({ visibility, orgRole: null }))
+	);
+}
+check(
+	'a grant still works with no membership',
+	effectiveBrainRole({ visibility: 'private', orgRole: null, grant: 'editor' }) === 'editor'
+);
+check(
+	"and an org-visible brain does not widen a non-member's grant",
+	effectiveBrainRole({ visibility: 'org', orgRole: null, grant: 'viewer' }) === 'viewer'
+);
+
+// ---------------------------------------------------------------------------
+console.log('\nRead-only caps the whole computation');
+// ---------------------------------------------------------------------------
+// A read-only brain has to be inert to EVERYONE, including the admins of the
+// organization holding it. A viewer grant cannot do that: source (3) hands an org
+// admin their own role straight back, and an org-visible brain hands every member
+// theirs. So the cap is applied last, to whatever the sources produced.
+for (const orgRole of ORG_ROLES) {
+	check(
+		`read-only: org ${orgRole} → viewer`,
+		effectiveBrainRole({ visibility: 'org', orgRole, readOnly: true }) === 'viewer'
+	);
+}
+check(
+	'read-only: an explicit admin grant is still only viewer',
+	effectiveBrainRole({
+		visibility: 'private',
+		orgRole: 'viewer',
+		grant: 'admin',
+		readOnly: true
+	}) === 'viewer'
+);
+check(
+	'read-only does not CREATE access where there was none',
+	effectiveBrainRole({ visibility: 'private', orgRole: null, readOnly: true }) === null
+);
+check(
+	'and is off by default',
+	effectiveBrainRole({ visibility: 'org', orgRole: 'owner', readOnly: false }) === 'owner'
+);
+
 // ===========================================================================
 // The QUERIES that apply the rule, run for real against the real schema.
 // ===========================================================================
@@ -241,6 +296,42 @@ check(
 	"editor lands on the oldest brain they can reach, skipping the other person's private one",
 	(await getDefaultBrainForUser(db, 'org1', 'bob', 'editor'))?.brain_id === 'b-legacy'
 );
+
+console.log('\nlifecycle columns through the real query: archived is gone, read-only is viewer');
+// archived_at is filtered in SQL (existence, not policy); read_only reaches the rule
+// as its ceiling. Both ride the row every consumer already reads, so a wrong column
+// name here would surface as an owner writing to a frozen brain, or a retired brain
+// still in the switcher.
+sqlite.exec(`
+  INSERT INTO brains (brain_id, org_id, repo_owner, repo_name, name, visibility, created_at, read_only, archived_at) VALUES
+    ('b-frozen', 'org1', 'northwind', 'frozen', 'Frozen', 'org', '2026-04-01', 1, NULL),
+    ('b-gone',   'org1', 'northwind', 'gone',   'Gone',   'org', '2026-05-01', 0, '2026-06-01');
+`);
+check(
+	'an archived brain is invisible to everyone, the org owner included',
+	!(await ids('alice')).includes('northwind/gone'),
+	JSON.stringify(await ids('alice'))
+);
+check(
+	'a read-only brain is still listed',
+	(await ids('carol')).includes('northwind/frozen'),
+	JSON.stringify(await ids('carol'))
+);
+check(
+	'and the org OWNER holds only viewer on it',
+	(await roleOn('alice', 'northwind/frozen')) === 'viewer',
+	String(await roleOn('alice', 'northwind/frozen'))
+);
+check(
+	'the flag rides on the row so the app can say so',
+	(await listAccessibleBrains(db, ['alice'])).find((b) => b.id === 'northwind/frozen')
+		?.read_only === true
+);
+check(
+	'getDefaultBrainForUser never lands on an archived brain',
+	(await getDefaultBrainForUser(db, 'org1', 'carol', 'viewer'))?.brain_id !== 'b-gone'
+);
+sqlite.exec(`DELETE FROM brains WHERE brain_id IN ('b-frozen', 'b-gone')`);
 
 console.log('\nshare_brain round trip: grant, change, revoke');
 await setBrainGrant(db, {

@@ -72,6 +72,8 @@ interface BrainRow {
 	visibility: string; // 'org' | 'private': drives the shared/private badge
 	orgId: string; // so the UI can group brains by org and target adds per-org
 	orgLabel: string;
+	// Readable, never writable, by anyone including the admins of the org holding it.
+	readOnly?: boolean;
 	needsConfig?: boolean; // adopted repo with no content under its roots — offer "Set up"
 	configPrUrl?: string; // a "configure" PR is open (protected repo) — show pending
 }
@@ -85,11 +87,12 @@ function brainRows(brains: AccessibleBrain[], activeId: string | undefined): Bra
 		// Two different powers, two different scopes: disconnecting a brain removes
 		// it from the ORG (org admin), sharing it changes who reaches its content
 		// (brain admin). Someone can hold either without the other.
-		canManage: roleAtLeast(b.org_role, 'admin'),
+		canManage: !!b.org_role && roleAtLeast(b.org_role, 'admin'),
 		canShare: roleAtLeast(b.role, 'admin'),
 		visibility: b.visibility,
 		orgId: b.org_id,
-		orgLabel: orgDisplay(b)
+		orgLabel: orgDisplay(b),
+		...(b.read_only ? { readOnly: true } : {})
 	}));
 }
 
@@ -647,7 +650,7 @@ export function registerBrainTools(
 			const target = m.brain;
 			// ORG-scope, like connect_brain: removing a brain from the org is an org
 			// admin's call, not something brain-admin-by-share confers.
-			if (!roleAtLeast(target.org_role, 'admin')) {
+			if (!target.org_role || !roleAtLeast(target.org_role, 'admin')) {
 				return fail(`You need organization admin access to disconnect ${brainLabel(target)}.`);
 			}
 			if (all.filter((b) => b.org_id === target.org_id).length <= 1) {

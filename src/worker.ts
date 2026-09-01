@@ -225,7 +225,9 @@ interface TenantContext {
 	// membership governs managing people and adding/removing brains, brain access
 	// governs the content. Tools that manage the ORG must gate on this one
 	// (TenantOpts.requiresOrg), or a brain admin could edit the org roster.
-	orgRole: Role;
+	// Null when the caller holds no membership in the org that owns the resolved brain.
+	// Every gate reading this treats null as "not a member", never as "no gate".
+	orgRole: Role | null;
 	// The resolved org's id + the acting user's id — set only on the product-native
 	// (authjs) path, where an org table row exists. The member-management tools need
 	// them to scope the roster and enforce self-guards; undefined on the legacy

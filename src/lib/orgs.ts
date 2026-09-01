@@ -60,6 +60,12 @@ function maxRole(a: Role, b: Role): Role {
 	return ROLE_RANK[a] >= ROLE_RANK[b] ? a : b;
 }
 
+// The one thing that LOWERS a role, and it is a ceiling rather than a demotion: a
+// read-only brain is capped at viewer.
+function minRole(a: Role, b: Role): Role {
+	return ROLE_RANK[a] <= ROLE_RANK[b] ? a : b;
+}
+
 // ---------- brain-scope access (the per-brain permission rule) ----------
 //
 // Two roles, two scopes, deliberately separate:
@@ -85,23 +91,40 @@ function maxRole(a: Role, b: Role): Role {
 // directly, so hiding a brain from them in our UI would be theater. It also stops
 // a brain orphaning when the only person granted access leaves.
 //
-// Returns null when none of the three applies: the caller cannot see this brain
-// and it must not appear in any listing.
+// `orgRole` is NULLABLE, and a null means "not a member of the organization holding
+// this brain". Sources (1) and (3) are both about membership, so for a non-member they
+// are skipped and only an explicit grant can admit them. That is the shape any access
+// from outside an organization takes, and making it a designed input rather than an
+// accident of `undefined` is what lets the gates downstream tell "not a member" from
+// "a member with few powers".
+//
+// `readOnly` is the one thing that lowers the result rather than raising it. It is a
+// CEILING on the whole computation, applied last, because a read-only brain has to be
+// inert to everyone including the admins of the organization holding it: source (3)
+// would otherwise hand them their own role straight back, and an org-visible brain
+// would hand every member theirs. This is why a viewer grant cannot make a brain
+// read-only and a column on the brain can.
+//
+// Returns null when none of the sources applies: the caller cannot see this brain and
+// it must not appear in any listing.
 export function effectiveBrainRole(input: {
 	visibility: string;
-	orgRole: Role;
+	orgRole: Role | null;
 	grant?: Role | null;
+	readOnly?: boolean;
 }): Role | null {
-	const { visibility, orgRole, grant } = input;
+	const { visibility, orgRole, grant, readOnly } = input;
 	let role: Role | null = null;
-	// (1) An 'org'-visible brain is reachable by every member at their org role.
+	// (1) An 'org'-visible brain is reachable by every MEMBER at their org role.
 	// Anything other than 'private' is treated as org-visible, so an unrecognized
 	// future value fails OPEN to today's behavior rather than locking a brain out.
-	if (visibility !== 'private') role = orgRole;
+	if (orgRole && visibility !== 'private') role = orgRole;
 	// (2) An explicit per-brain grant.
 	if (grant) role = role ? maxRole(role, grant) : grant;
-	// (3) Org admin/owner floor.
-	if (roleAtLeast(orgRole, 'admin')) role = role ? maxRole(role, orgRole) : orgRole;
+	// (3) Org admin/owner floor. Also needs a membership to be a member of.
+	if (orgRole && roleAtLeast(orgRole, 'admin')) role = role ? maxRole(role, orgRole) : orgRole;
+	// A read-only brain caps whatever the sources produced.
+	if (role && readOnly) role = minRole(role, 'viewer');
 	return role;
 }
 
@@ -134,9 +157,21 @@ export interface TenantOpts {
 	sticky?: boolean;
 }
 
-// Throw a caller-facing authorization error when `actual` outranks below `required`.
-export function assertRole(actual: Role, required?: Role): void {
-	if (required && !roleAtLeast(actual, required)) {
+// Throw a caller-facing authorization error when `actual` ranks below `required`.
+//
+// `actual` is nullable because a caller can reach a brain without holding any role in
+// the organization that owns it. That has to read as "you are not a member", not as
+// the literal string "undefined": with the old signature ROLE_RANK[undefined] is
+// undefined and every comparison against it is false, so it failed closed by accident
+// rather than by design, and rendered the accident to the user.
+export function assertRole(actual: Role | null, required?: Role): void {
+	if (!required) return;
+	if (!actual) {
+		throw new Error(
+			`This action requires ${required} access in the organization, and you are not a member of it.`
+		);
+	}
+	if (!roleAtLeast(actual, required)) {
 		throw new Error(
 			`This action requires ${required} access or higher, but your role is ${actual}.`
 		);
@@ -175,6 +210,8 @@ export interface Brain {
 	created_by?: string | null;
 	visibility: string;
 	created_at: string;
+	archived_at?: string | null;
+	read_only?: number | null;
 }
 
 export interface MembershipWithOrg {
@@ -457,7 +494,7 @@ export async function getDefaultBrainForUser(
 			   FROM brains b
 			   LEFT JOIN brain_memberships bm
 			          ON bm.brain_id = b.brain_id AND bm.user_id = ?2
-			  WHERE b.org_id = ?1
+			  WHERE b.org_id = ?1 AND b.archived_at IS NULL
 			  ORDER BY b.created_at ASC, b.brain_id ASC`
 		)
 		.bind(orgId, userId)
@@ -466,7 +503,8 @@ export async function getDefaultBrainForUser(
 		const role = effectiveBrainRole({
 			visibility: row.visibility,
 			orgRole,
-			grant: row.grant_role as Role | null
+			grant: row.grant_role as Role | null,
+			readOnly: !!row.read_only
 		});
 		if (role) {
 			const { grant_role: _drop, ...brain } = row;
@@ -905,8 +943,14 @@ export interface AccessibleBrain {
 	// the two scopes diverge: you can be an org Admin holding only viewer on a
 	// brain someone shared with you read-only, or an org Editor holding admin on
 	// a brain you created.
-	org_role: Role;
+	// NULL when the caller holds no membership in the organization that owns this
+	// brain. Every consumer that gates on this has to read a null as "not a member",
+	// never as "no gate".
+	org_role: Role | null;
 	visibility: string; // 'org' | 'private'
+	// Readable, never writable, by anyone including the admins of the org holding it.
+	// The cap lives in effectiveBrainRole; this is only the flag.
+	read_only?: boolean;
 }
 
 // A human label for a brain — what the switcher shows and what fuzzy `brain` matches
@@ -984,7 +1028,8 @@ export async function listAccessibleBrains(
 			        b.name AS name, b.visibility AS visibility, b.org_id AS org_id,
 			        o.name AS org_name, o.model AS org_model,
 			        o.installation_id AS installation_id, m.role AS org_role,
-			        bm.role AS grant_role, b.created_at AS created_at
+			        bm.role AS grant_role, b.created_at AS created_at,
+			        b.read_only AS read_only
 			   FROM memberships m
 			   JOIN orgs o   ON o.org_id = m.org_id
 			   JOIN brains b ON b.org_id = o.org_id
@@ -992,6 +1037,7 @@ export async function listAccessibleBrains(
 			          ON bm.brain_id = b.brain_id AND bm.user_id = m.user_id
 			  WHERE m.user_id IN (${placeholders})
 			    AND o.suspended_at IS NULL
+			    AND b.archived_at IS NULL
 			  ORDER BY b.created_at ASC, b.brain_id ASC`
 		)
 		.bind(...userIds)
@@ -1007,6 +1053,7 @@ export async function listAccessibleBrains(
 			installation_id: number;
 			org_role: string;
 			grant_role: string | null;
+			read_only: number | null;
 		}>();
 
 	const byId = new Map<string, AccessibleBrain>();
@@ -1016,14 +1063,16 @@ export async function listAccessibleBrains(
 		const role = effectiveBrainRole({
 			visibility: r.visibility,
 			orgRole,
-			grant: r.grant_role as Role | null
+			grant: r.grant_role as Role | null,
+			readOnly: !!r.read_only
 		});
 		if (!role) continue; // private brain, no grant, not an org admin: invisible.
 		const existing = byId.get(id);
 		if (existing) {
 			// Same brain reached via two linked identities: keep the higher of each.
 			if (roleAtLeast(role, existing.role)) existing.role = role;
-			if (roleAtLeast(orgRole, existing.org_role)) existing.org_role = orgRole;
+			if (!existing.org_role || roleAtLeast(orgRole, existing.org_role))
+				existing.org_role = orgRole;
 			continue;
 		}
 		byId.set(id, {
@@ -1038,7 +1087,8 @@ export async function listAccessibleBrains(
 			name: r.name,
 			role,
 			org_role: orgRole,
-			visibility: r.visibility
+			visibility: r.visibility,
+			read_only: !!r.read_only
 		});
 	}
 	return [...byId.values()];

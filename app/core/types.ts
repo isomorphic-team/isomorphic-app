@@ -155,6 +155,9 @@ export interface BrainRow {
 	orgLabel?: string;
 	needsConfig?: boolean; // adopted repo with no content under its roots — offer "Set up"
 	configPrUrl?: string; // a configure PR is pending (protected repo) — show "Review PR"
+	// Readable, never writable, by anyone including the org's admins. The role the row
+	// carries is already capped to viewer; this is the flag the cap came from.
+	readOnly?: boolean;
 }
 
 // An org the caller can add a brain to. Identified by its own id rather than by a
