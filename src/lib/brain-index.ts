@@ -757,6 +757,20 @@ export async function loadResolvedGraph(
 // The brain's content pages with display titles, straight from the index (no link
 // resolution). Backs list_pages / browse_brain so the file tree can show titles.
 // Call ensureFresh first so the list reflects the current repo.
+/**
+ * Whether the index holds ANY page for this brain. One indexed row, no fetch, no
+ * freshness check: the question is "has this brain ever had content", which a
+ * stale index answers as well as a fresh one. `listIndexedPages` returns every
+ * path and title, which for a 3,000-page brain is the wrong tool for a yes/no.
+ */
+export async function hasIndexedPages(db: D1Database, brainId: string): Promise<boolean> {
+	const row = await db
+		.prepare(`SELECT 1 AS one FROM brain_pages WHERE brain_id = ?1 LIMIT 1`)
+		.bind(brainId)
+		.first<{ one: number }>();
+	return row !== null;
+}
+
 export async function listIndexedPages(
 	db: D1Database,
 	brainId: string
