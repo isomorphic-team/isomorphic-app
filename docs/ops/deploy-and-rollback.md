@@ -47,7 +47,7 @@ quiet.
 
 ## What the checks assert
 
-All four are unauthenticated reads, safe against any origin including one sharing
+All five are unauthenticated reads, safe against any origin including one sharing
 production's bindings:
 
 - `GET /health` returns exactly `200 ok`. The Worker booted.
@@ -58,6 +58,10 @@ production's bindings:
   authorization server.
 - `/.well-known/oauth-authorization-server` has a matching issuer and three endpoints on
   this origin. A host can begin a connection.
+- `GET /b/example/brain` with no cookie is refused: a same-origin redirect to sign-in, or
+  a `404` where the web app is not mounted (static and github identity modes). Never a
+  `200`, which would be a version handing authenticated content to a stranger. Added
+  2026-09-01 with the web app.
 
 ### What they do not assert
 
@@ -71,6 +75,14 @@ production's bindings:
   trip. Not scripted, and not planned.
 - **Data correctness.** A version that boots, authenticates, and returns wrong page content
   is a green deploy. That is what the golden batteries on the pull request are for.
+
+## Looking at a branch before it merges
+
+The same `versions upload` step, run by hand from a branch, gives a URL that serves no
+traffic and shares production's bindings. That makes it a read-only look, not a place to
+run arbitrary code: the rules and the procedure are in
+[`../design/preview-environments.md`](../design/preview-environments.md#until-it-is-built-the-manual-version-preview),
+and an isolated preview Worker is the design's unbuilt half.
 
 ## What a rollback does not undo
 

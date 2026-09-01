@@ -52,6 +52,11 @@ function healthyRoutes(origin = ORIGIN): Routes {
 				}),
 				{ status: 200 }
 			),
+		'GET /b/example/brain': () =>
+			new Response(null, {
+				status: 302,
+				headers: { location: `${origin}/auth/signin?callbackUrl=%2Fb%2Fexample%2Fbrain` }
+			}),
 		'GET /.well-known/oauth-authorization-server': () =>
 			new Response(
 				JSON.stringify({
@@ -92,7 +97,7 @@ function named(checks: Check[], fragment: string): Check {
 console.log('\na healthy origin passes every assertion');
 {
 	const checks = await run(healthyRoutes());
-	check('four checks ran', checks.length === 4, `got ${checks.length}`);
+	check('five checks ran', checks.length === 5, `got ${checks.length}`);
 	check('all passed', allPassed(checks), JSON.stringify(checks.filter((c) => !c.ok)));
 }
 
@@ -102,7 +107,7 @@ console.log('\nthe Worker did not boot');
 		withRoute({ 'GET /health': () => new Response('error', { status: 500 }) })
 	);
 	check('a 500 on /health fails', !named(checks, '/health').ok);
-	check('the other three are still evaluated', checks.length === 4);
+	check('the other four are still evaluated', checks.length === 5);
 	check('the failure names the status', named(checks, '/health').detail?.includes('500') === true);
 }
 {
@@ -258,6 +263,49 @@ console.log('\nmetadata must point back at the origin that served it');
 	);
 }
 
+console.log('\nthe web app hands its shell to a stranger');
+{
+	const shell = () => new Response('<!doctype html><html>', { status: 200 });
+	const checks = await run(withRoute({ 'GET /b/example/brain': shell }));
+	check('a 200 on /b/ fails', !named(checks, '/b/').ok);
+	check('the failure names the status', named(checks, '/b/').detail?.includes('200') === true);
+}
+{
+	// A redirect somewhere other than sign-in, or to another origin, is not a
+	// session check: the first is a route that lost its way, the second an open
+	// redirect.
+	const checks = await run(
+		withRoute({
+			'GET /b/example/brain': () =>
+				new Response(null, { status: 302, headers: { location: `${ORIGIN}/health` } })
+		})
+	);
+	check('a redirect that is not to sign-in fails', !named(checks, '/b/').ok);
+	const off = await run(
+		withRoute({
+			'GET /b/example/brain': () =>
+				new Response(null, {
+					status: 302,
+					headers: { location: 'https://elsewhere.example/auth/signin' }
+				})
+		})
+	);
+	check('an off-origin redirect fails', !named(off, '/b/').ok);
+	check('and says so', named(off, '/b/').detail?.includes('off-origin') === true);
+}
+{
+	// Not mounted at all. Static and github identity modes have no browser session,
+	// so the route does not exist there, and this script gates their deploys too.
+	const checks = await run(
+		withRoute({ 'GET /b/example/brain': () => new Response('not found', { status: 404 }) })
+	);
+	check('a 404 passes: the route is optional, serving the shell is not', named(checks, '/b/').ok);
+	const err = await run(
+		withRoute({ 'GET /b/example/brain': () => new Response('boom', { status: 500 }) })
+	);
+	check('a 500 fails', !named(err, '/b/').ok);
+}
+
 console.log('\na broken response is a failed check, never a thrown error');
 {
 	// Cloudflare's own error pages are HTML. Parsing one must not crash the run,
@@ -280,8 +328,8 @@ console.log('\na broken response is a failed check, never a thrown error');
 	};
 	const checks = await smokeOrigin(ORIGIN, throwing);
 	check(
-		'a connection error fails all four without throwing',
-		checks.length === 4 && checks.every((c) => !c.ok)
+		'a connection error fails all five without throwing',
+		checks.length === 5 && checks.every((c) => !c.ok)
 	);
 }
 
