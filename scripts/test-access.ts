@@ -24,7 +24,7 @@ import {
 	ASSIGNABLE_BRAIN_ROLES,
 	type Role
 } from '../src/lib/orgs.ts';
-import { commitAuthorFor, githubNoreplyAuthor } from '../src/lib/brain-repo.ts';
+import { commitAuthorFor, githubNoreplyAuthor, validCommitAuthor } from '../src/lib/brain-repo.ts';
 import { staticAuth } from '../src/lib/github.ts';
 import { platformInstall } from '../src/lib/provision.ts';
 
@@ -569,6 +569,59 @@ check(
 check(
 	'a padded login is trimmed on both sides of the address',
 	githubNoreplyAuthor(7, '  ada  ')?.email === '7+ada@users.noreply.github.com'
+);
+
+console.log('\nvalidCommitAuthor: WHETHER a computed attribution is usable');
+// The guard the other two rules feed into, and the last of the three that had no
+// test. It decides whether a commit carries a human at all: createCommit rejects a
+// garbage email, and a bad value is worse than falling back to the App author.
+check(
+	'a well-formed author is kept',
+	validCommitAuthor({ name: 'Ada', email: 'ada@example.com' })?.email === 'ada@example.com'
+);
+check('no author at all is undefined, not a throw', validCommitAuthor(undefined) === undefined);
+check(
+	'a blank name is refused: git blame on an empty string helps nobody',
+	validCommitAuthor({ name: '   ', email: 'ada@example.com' }) === undefined
+);
+check(
+	'an address with no @ is refused rather than sent to createCommit',
+	validCommitAuthor({ name: 'Ada', email: 'not-an-email' }) === undefined
+);
+check(
+	'...and one with no dot in the domain',
+	validCommitAuthor({ name: 'Ada', email: 'ada@localhost' }) === undefined
+);
+check(
+	'...and one carrying whitespace inside it',
+	validCommitAuthor({ name: 'Ada', email: 'ada @example.com' }) === undefined
+);
+check(
+	'both sides are trimmed, so padding never reaches history',
+	(() => {
+		const a = validCommitAuthor({ name: '  Ada  ', email: '  ada@example.com  ' });
+		return a?.name === 'Ada' && a?.email === 'ada@example.com';
+	})()
+);
+
+// The three rules COMPOSE: the two that decide WHO both hand their answer to this
+// one, so a tightening here silently unattributes an entire identity path. These
+// two checks are the seam, and they are the reason the guard is worth pinning at
+// all rather than merely reading.
+check(
+	'what commitAuthorFor produces survives the guard',
+	validCommitAuthor(commitAuthorFor({ name: 'Ada', email: 'ada@example.com' }, ''))?.name === 'Ada'
+);
+check(
+	'a person with no name is attributed under their address, not dropped',
+	validCommitAuthor(commitAuthorFor({ name: null, email: 'ada@example.com' }, ''))?.name ===
+		'ada@example.com'
+);
+check(
+	'the GitHub noreply address survives the guard, + and all',
+	validCommitAuthor(githubNoreplyAuthor(1234, 'ada'))?.email ===
+		'1234+ada@users.noreply.github.com',
+	'a stricter email pattern here would silently unattribute every GitHub-identity commit'
 );
 
 console.log('\nstaticAuth: what a self-hosted deployment resolves to, or is told');
