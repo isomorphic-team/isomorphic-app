@@ -24,8 +24,9 @@ import {
 	ASSIGNABLE_BRAIN_ROLES,
 	type Role
 } from '../src/lib/orgs.ts';
-import { commitAuthorFor, githubNoreplyAuthor } from '../src/lib/brain-repo.ts';
+import { commitAuthorFor, githubNoreplyAuthor, validCommitAuthor } from '../src/lib/brain-repo.ts';
 import { staticAuth } from '../src/lib/github.ts';
+import { platformInstall } from '../src/lib/provision.ts';
 
 import { checker } from './check.ts';
 
@@ -661,6 +662,59 @@ check(
 	githubNoreplyAuthor(7, '  ada  ')?.email === '7+ada@users.noreply.github.com'
 );
 
+console.log('\nvalidCommitAuthor: WHETHER a computed attribution is usable');
+// The guard the other two rules feed into, and the last of the three that had no
+// test. It decides whether a commit carries a human at all: createCommit rejects a
+// garbage email, and a bad value is worse than falling back to the App author.
+check(
+	'a well-formed author is kept',
+	validCommitAuthor({ name: 'Ada', email: 'ada@example.com' })?.email === 'ada@example.com'
+);
+check('no author at all is undefined, not a throw', validCommitAuthor(undefined) === undefined);
+check(
+	'a blank name is refused: git blame on an empty string helps nobody',
+	validCommitAuthor({ name: '   ', email: 'ada@example.com' }) === undefined
+);
+check(
+	'an address with no @ is refused rather than sent to createCommit',
+	validCommitAuthor({ name: 'Ada', email: 'not-an-email' }) === undefined
+);
+check(
+	'...and one with no dot in the domain',
+	validCommitAuthor({ name: 'Ada', email: 'ada@localhost' }) === undefined
+);
+check(
+	'...and one carrying whitespace inside it',
+	validCommitAuthor({ name: 'Ada', email: 'ada @example.com' }) === undefined
+);
+check(
+	'both sides are trimmed, so padding never reaches history',
+	(() => {
+		const a = validCommitAuthor({ name: '  Ada  ', email: '  ada@example.com  ' });
+		return a?.name === 'Ada' && a?.email === 'ada@example.com';
+	})()
+);
+
+// The three rules COMPOSE: the two that decide WHO both hand their answer to this
+// one, so a tightening here silently unattributes an entire identity path. These
+// two checks are the seam, and they are the reason the guard is worth pinning at
+// all rather than merely reading.
+check(
+	'what commitAuthorFor produces survives the guard',
+	validCommitAuthor(commitAuthorFor({ name: 'Ada', email: 'ada@example.com' }, ''))?.name === 'Ada'
+);
+check(
+	'a person with no name is attributed under their address, not dropped',
+	validCommitAuthor(commitAuthorFor({ name: null, email: 'ada@example.com' }, ''))?.name ===
+		'ada@example.com'
+);
+check(
+	'the GitHub noreply address survives the guard, + and all',
+	validCommitAuthor(githubNoreplyAuthor(1234, 'ada'))?.email ===
+		'1234+ada@users.noreply.github.com',
+	'a stricter email pattern here would silently unattribute every GitHub-identity commit'
+);
+
 console.log('\nstaticAuth: what a self-hosted deployment resolves to, or is told');
 // AUTH_MODE=static is the documented self-hosting entry point, so these errors are
 // the first thing a stranger hits when their config is incomplete.
@@ -709,6 +763,81 @@ check(
 check(
 	'a whitespace-only credential counts as absent',
 	threw(() => staticAuth({ ...REPO, GITHUB_TOKEN: '   ' }))
+);
+
+console.log('\nplatformInstall: the config both provisioning paths read');
+// The two call sites in the Worker each read these two variables inline and threw
+// the same sentence. The copies had drifted on the one thing that matters: the
+// GitHub path coerced the id unconditionally, so `Number('abc')` reached
+// provisionBrainForUser as NaN and failed later, at GitHub, as an auth problem.
+const PLATFORM = { PLATFORM_ORG: 'acme-brains', PLATFORM_INSTALLATION_ID: '99' };
+check(
+	'a configured platform resolves to its org and installation',
+	(() => {
+		const p = platformInstall(PLATFORM);
+		return p.org === 'acme-brains' && p.installationId === 99;
+	})()
+);
+check(
+	'the installation id is a number, not the string it arrives as',
+	typeof platformInstall(PLATFORM).installationId === 'number'
+);
+check(
+	'a missing org is refused',
+	threw(() => platformInstall({ PLATFORM_INSTALLATION_ID: '99' }))
+);
+check(
+	'a missing installation id is refused',
+	threw(() => platformInstall({ PLATFORM_ORG: 'acme-brains' }))
+);
+check(
+	'both errors name both variables, since either one alone is not enough',
+	(() => {
+		try {
+			platformInstall({});
+			return false;
+		} catch (e) {
+			const m = String((e as Error).message);
+			return m.includes('PLATFORM_ORG') && m.includes('PLATFORM_INSTALLATION_ID');
+		}
+	})()
+);
+check(
+	'a whitespace-only value counts as unset rather than as an org named " "',
+	threw(() => platformInstall({ PLATFORM_ORG: '   ', PLATFORM_INSTALLATION_ID: '99' }))
+);
+check(
+	'a non-numeric installation id is refused here, not passed on as NaN',
+	threw(() => platformInstall({ ...PLATFORM, PLATFORM_INSTALLATION_ID: 'not-a-number' })),
+	'this is the defect the two inline copies shared'
+);
+check(
+	'...and that error names the variable and shows what was read',
+	(() => {
+		try {
+			platformInstall({ ...PLATFORM, PLATFORM_INSTALLATION_ID: 'abc' });
+			return false;
+		} catch (e) {
+			const m = String((e as Error).message);
+			return m.includes('PLATFORM_INSTALLATION_ID') && m.includes('abc');
+		}
+	})()
+);
+check(
+	'a fractional id is refused: installation ids are whole numbers',
+	threw(() => platformInstall({ ...PLATFORM, PLATFORM_INSTALLATION_ID: '9.5' }))
+);
+check(
+	'zero and negatives are refused rather than sent to GitHub',
+	threw(() => platformInstall({ ...PLATFORM, PLATFORM_INSTALLATION_ID: '0' })) &&
+		threw(() => platformInstall({ ...PLATFORM, PLATFORM_INSTALLATION_ID: '-3' }))
+);
+check(
+	'surrounding whitespace is tolerated on both, since these come from env files',
+	(() => {
+		const p = platformInstall({ PLATFORM_ORG: ' acme-brains ', PLATFORM_INSTALLATION_ID: ' 99 ' });
+		return p.org === 'acme-brains' && p.installationId === 99;
+	})()
 );
 
 console.log('\nresolveOrgForPerson: the whole decision, against the real schema');

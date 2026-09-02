@@ -170,8 +170,14 @@ const store = new Proxy(
 // assertions against two independent fields. If this test's copy and worker.ts ever
 // diverge the test is worthless, so it is deliberately these two lines and nothing
 // else: the thing under test is which OPTION each tool passes, not how assertRole works.
+// Which brain each context resolution named. A resolution is not free (in the
+// Worker it mints an installation token and reads the brain's config), so a tool
+// that resolves one for a brain it did not need to has a cost no role assertion sees.
+const brainAsks: (string | undefined)[] = [];
+
 function contextFor(p: Persona) {
 	return async (opts?: TenantOpts): Promise<BrainContext> => {
+		brainAsks.push(opts?.brain);
 		assertRole(p.role, opts?.requires);
 		assertRole(p.orgRole, opts?.requiresOrg);
 		return {
@@ -285,6 +291,7 @@ function toolsFor(
 		setActiveBrain: async () => {},
 		invalidateConfig: () => {},
 		analyticsEnabled: true,
+		db,
 		webBaseUrl: deployment.webBaseUrl
 	});
 	return handlers;
@@ -437,6 +444,34 @@ check(
 			!('webBase' in without.structuredContent.features),
 		`got ${JSON.stringify(without.structuredContent?.features)}`
 	);
+}
+
+// `brains` runs on every widget open and checks every manageable brain for "connected
+// but not configured". A CONFIGURED brain must cost nothing: resolving its context
+// mints a token and reads its config, and the freshness check behind that reached
+// GitHub per brain and reindexed inline, which on an account with several brains was
+// a 17-second call that Anthropic's edge cut off as a 502 (issues #50, #85). One
+// indexed row is the whole answer.
+console.log('\nbrains answers a configured brain from the index alone');
+{
+	sqlite
+		.prepare(
+			`INSERT INTO brain_pages (brain_id, path, title, blob_sha, content) VALUES (?, ?, ?, ?, ?)`
+		)
+		.run('northwind/main', 'wiki/index.md', 'Index', 'sha', '# Index');
+	brainAsks.length = 0;
+	await toolsFor(orgBoss).get('brains')!({});
+	check(
+		'a brain with an indexed page resolves no context at all',
+		!brainAsks.includes('northwind/main'),
+		`asked for: ${JSON.stringify(brainAsks)}`
+	);
+	check(
+		'a brain with an empty index still does, since "no pages" may mean "not indexed yet"',
+		brainAsks.includes('northwind/other'),
+		`asked for: ${JSON.stringify(brainAsks)}`
+	);
+	sqlite.prepare(`DELETE FROM brain_pages WHERE brain_id = ?`).run('northwind/main');
 }
 
 // ===========================================================================
