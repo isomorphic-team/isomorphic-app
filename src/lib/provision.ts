@@ -147,6 +147,40 @@ export async function provisionBrainForUser(input: ProvisionInput): Promise<Tena
 	return tenant;
 }
 
+// The platform org and its App installation, which is what both provisioning
+// paths need and the only configuration either of them reads. The two call sites
+// in the Worker each did this inline and threw the same sentence, and the copies
+// had already drifted on the one thing that matters: the GitHub path coerced the
+// id with Number() unconditionally, so a non-numeric value arrived at
+// provisionBrainForUser as NaN and surfaced later as a GitHub auth failure rather
+// than as the config mistake it is. An id that is not a positive integer is
+// refused here, where the message can name the variable.
+export interface PlatformInstall {
+	org: string;
+	installationId: number;
+}
+
+export function platformInstall(env: {
+	PLATFORM_ORG?: string;
+	PLATFORM_INSTALLATION_ID?: string;
+}): PlatformInstall {
+	const org = (env.PLATFORM_ORG ?? '').trim();
+	const raw = (env.PLATFORM_INSTALLATION_ID ?? '').trim();
+	if (!org || !raw) {
+		throw new Error(
+			'AUTO_PROVISION is on but PLATFORM_ORG / PLATFORM_INSTALLATION_ID are not configured. ' +
+				'Run admin setup (pnpm bootstrap) to install the platform App on an org.'
+		);
+	}
+	const installationId = Number(raw);
+	if (!Number.isInteger(installationId) || installationId <= 0) {
+		throw new Error(
+			`PLATFORM_INSTALLATION_ID must be a positive whole number (the App installation id), got "${raw}".`
+		);
+	}
+	return { org, installationId };
+}
+
 // ---------- Product-identity (Auth.js) provisioning ----------
 
 export interface ProvisionOrgInput {
