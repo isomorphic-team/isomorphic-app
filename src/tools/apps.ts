@@ -17,6 +17,7 @@
 // in-client editor opens via edit_page and saves through the librarian's
 // write_page, passing the blob sha from edit_page for optimistic concurrency.
 
+import { webUrlFor } from '../lib/web-app.ts';
 import { ResourceTemplate, type McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import {
 	registerAppResource,
@@ -165,8 +166,20 @@ async function buildGraph(
 
 export function registerBrainApp(
 	server: McpServer,
-	getContext: (opts?: TenantOpts) => Promise<BrainContext>
+	getContext: (opts?: TenantOpts) => Promise<BrainContext>,
+	opts: { webBaseUrl?: string } = {}
 ) {
+	// THE LINK IN THE CHAT. Each widget result's text ends with the page's web URL
+	// when this deployment serves the web app, so the model can hand the user a
+	// link ("here's the page: …") and "send me that" has an answer. The URL comes
+	// from the same table the app's address bar reads (webUrlFor), so the link in
+	// the chat and the URL in the tab cannot disagree. Text only: the widget builds
+	// its own from `features.webBase`, and read_page (the model's reading channel)
+	// deliberately carries none, since nobody clicks there.
+	const withLink = (text: string, tool: string, brain: string, path?: string): string => {
+		const url = webUrlFor(opts.webBaseUrl, tool, brain, path);
+		return url ? `${text}\n\nOpen in browser: ${url}` : text;
+	};
 	// ---------- the ui:// resource ----------
 	// One read body, served at two registrations: the concrete current-hash URI
 	// (for resources/list discovery + fresh sessions) and the version catch-all
@@ -241,7 +254,9 @@ export function registerBrainApp(
 			});
 			const markdown = views?.display ?? file.content;
 			return {
-				content: [{ type: 'text' as const, text: markdown }],
+				content: [
+					{ type: 'text' as const, text: withLink(markdown, 'view_page', activeBrain.id, path) }
+				],
 				structuredContent: {
 					view: 'page',
 					path,
@@ -297,7 +312,12 @@ export function registerBrainApp(
 			const tree = { paths, pages, assets, hidden };
 			const inline = treeFitsInline(tree);
 			return {
-				content: [{ type: 'text' as const, text: browseSummary(activeBrain.label, tree) }],
+				content: [
+					{
+						type: 'text' as const,
+						text: withLink(browseSummary(activeBrain.label, tree), 'browse_brain', activeBrain.id)
+					}
+				],
 				structuredContent: {
 					view: 'browse',
 					...(inline ? tree : {}),
@@ -360,7 +380,9 @@ export function registerBrainApp(
 						.join('\n')}`
 				: `No recorded changes for ${scopeLabel} yet.`;
 			return {
-				content: [{ type: 'text' as const, text }],
+				content: [
+					{ type: 'text' as const, text: withLink(text, 'view_activity', activeBrain.id, path) }
+				],
 				structuredContent: {
 					view: 'activity',
 					scope: { path },
@@ -398,7 +420,9 @@ export function registerBrainApp(
 				`Brain graph: ${nodes.length} page(s), ${edges.length} link(s).` +
 				(truncated ? ` Only the first ${MAX_SCAN_PAGES} pages were scanned.` : '');
 			return {
-				content: [{ type: 'text' as const, text }],
+				content: [
+					{ type: 'text' as const, text: withLink(text, 'view_graph', activeBrain.id, focus) }
+				],
 				structuredContent: {
 					view: 'graph',
 					nodes,
