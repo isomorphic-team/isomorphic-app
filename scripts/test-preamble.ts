@@ -26,7 +26,12 @@
 //   pnpm test:preamble
 
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { peekJsonRpc, needsBrainPreamble, jsonRpcError } from '../src/lib/mcp-preamble.ts';
+import {
+	peekJsonRpc,
+	needsBrainPreamble,
+	jsonRpcError,
+	describeRequest
+} from '../src/lib/mcp-preamble.ts';
 import { registerLibrarianTools, type BrainContext } from '../src/tools/librarian.ts';
 import type { TenantOpts } from '../src/lib/orgs.ts';
 
@@ -78,6 +83,48 @@ console.log('\npeekJsonRpc');
 // ---------------------------------------------------------------------------
 // needsBrainPreamble: the skip, in both directions
 // ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// describeRequest: what the Worker logs about a refused or slow request
+// ---------------------------------------------------------------------------
+// The SDK's request schema is strict, so a client one protocol version ahead is
+// answered 400 for a field the SDK has never seen, and the only way to learn WHICH
+// field is a log line naming the message's shape. Names only: the body may carry a
+// page's content or a token, and none of it may reach the log.
+console.log('\ndescribeRequest');
+{
+	const secret = 'ghp_SECRETVALUE';
+	const body = `{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"x","arguments":{"t":"${secret}"}},"novel":"${secret}"}`;
+	const peek = peekJsonRpc(body);
+	check(
+		"the peek records each message's top-level key names, sorted",
+		JSON.stringify(peek.shapes) ===
+			JSON.stringify([['id', 'jsonrpc', 'method', 'novel', 'params']]),
+		JSON.stringify(peek.shapes)
+	);
+	const line = describeRequest(peek, {
+		status: 400,
+		ms: 1424.6,
+		error: 'Parse error: Invalid JSON-RPC message'
+	});
+	check(
+		'the line names the method, status, timing and shape',
+		line ===
+			'mcp 400 1425ms tools/call [id+jsonrpc+method+novel+params] Parse error: Invalid JSON-RPC message',
+		line
+	);
+	check('and carries no value from the body', !line.includes(secret));
+	check(
+		'an unparsed body says so rather than crashing the log',
+		describeRequest(peekJsonRpc('not json'), { status: 400, ms: 1 }) === 'mcp 400 1ms (unparsed) []'
+	);
+	check(
+		'a batch lists every shape',
+		peekJsonRpc(
+			'[{"jsonrpc":"2.0","id":1,"method":"a"},{"jsonrpc":"2.0","method":"notifications/b"}]'
+		).shapes.length === 2
+	);
+}
+
 console.log('\nneedsBrainPreamble');
 {
 	const needs = (body: string) => needsBrainPreamble(peekJsonRpc(body));
