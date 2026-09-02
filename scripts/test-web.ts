@@ -20,6 +20,7 @@ import {
 	checkWebMcpRequest,
 	claimsWebMcp,
 	webBaseUrl,
+	webUrlFor,
 	WEB_TOOL_ROUTING,
 	type WebMcpRequest
 } from '../src/lib/web-app.ts';
@@ -214,6 +215,43 @@ function check(name: string, cond: boolean, detail?: string) {
 	check(
 		'unset is not a link either',
 		webBaseUrl({ ...on, publicBaseUrl: undefined }) === undefined
+	);
+}
+
+// ---------- the link a widget result carries ----------
+//
+// From the routing table, so a link Claude writes in chat and the URL the tab shows
+// for the same view are one string. The page path is the tool's own argument.
+{
+	console.log('\nresult links');
+
+	const b = 'https://brain.example';
+	check(
+		'view_page links the page',
+		webUrlFor(b, 'view_page', 'o/r', 'wiki/x y.md') === `${b}/b/o/r/wiki/x%20y.md`
+	);
+	check('browse_brain links the brain', webUrlFor(b, 'browse_brain', 'o/r') === `${b}/b/o/r`);
+	check(
+		'...revealed at a folder',
+		webUrlFor(b, 'browse_brain', 'o/r', 'wiki/c') === `${b}/b/o/r?focus=wiki%2Fc`
+	);
+	check(
+		'view_graph links the graph',
+		webUrlFor(b, 'view_graph', 'o/r', 'wiki/x.md') === `${b}/b/o/r?view=graph&focus=wiki%2Fx.md`
+	);
+	check(
+		'view_activity links recent changes',
+		webUrlFor(b, 'view_activity', 'o/r') === `${b}/b/o/r?view=activity`
+	);
+	check('edit_page has no link', webUrlFor(b, 'edit_page', 'o/r', 'wiki/x.md') === undefined);
+	check('no web app, no link', webUrlFor(undefined, 'view_page', 'o/r', 'wiki/x.md') === undefined);
+	check('a page tool with no path has no link', webUrlFor(b, 'view_page', 'o/r') === undefined);
+	// The inverse: what the tab would show for that link is the same target.
+	const url = new URL(webUrlFor(b, 'view_graph', 'o/r', 'wiki/x.md')!);
+	const back = parseWebPath(url.pathname, url.search);
+	check(
+		'the link parses back to the same destination',
+		back?.view === 'graph' && back.arg === 'wiki/x.md' && back.brain === 'o/r'
 	);
 }
 
