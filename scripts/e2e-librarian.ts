@@ -1548,6 +1548,7 @@ try {
 		orgContext,
 		listOrgs: () => listAccessibleOrgs(db, [USER]),
 		listBrains: () => listAccessibleBrains(db, [USER]),
+		db,
 		activeBrainId: () => activeId,
 		setActiveBrain: async (id: string) => {
 			activeId = id;

@@ -14,6 +14,7 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { registerAppTool } from '@modelcontextprotocol/ext-apps/server';
 import { z } from 'zod';
 import type { Octokit } from 'octokit';
+import type { D1Database } from '@cloudflare/workers-types';
 import type { BrainContext } from './librarian.ts';
 import { BRAIN_APP_URI } from './apps.ts';
 import {
@@ -41,6 +42,7 @@ import {
 	resetIndex,
 	detectNeedsConfig,
 	ensureFresh,
+	hasIndexedPages,
 	listIndexedPages
 } from '../lib/brain-index.ts';
 import { CONFIG_PATH, DEFAULT_BRAIN_CONFIG } from '../lib/brain-config.ts';
@@ -109,14 +111,28 @@ function rowsText(rows: BrainRow[]): string {
 }
 
 // Whether one brain is "connected but not configured" — empty of content and adopted
-// with no .isomorphic.json. Resolves that brain's own context so it works for any brain
-// the caller manages, not just the active one. Cheap for configured brains (the index
-// has pages → returns before the tree scan); best-effort (never throws).
+// with no .isomorphic.json. Best-effort (never throws).
+//
+// A CONFIGURED BRAIN MUST COST NOTHING HERE. This runs for every brain the caller
+// manages, on every `brains` call, and the widget makes that call on every open.
+// The first version resolved each brain's context (an installation-token mint and a
+// config read, both GitHub) and then ran `ensureFresh` (a `getHead` per brain, plus
+// an inline reindex for any brain whose branch had moved) BEFORE asking the index
+// whether the brain had pages — so the "cheap for configured brains" it promised
+// never happened. On an account with several brains that was a 17-second call;
+// Anthropic's edge gives up at about 15 and reports a bare 502 (issues #50, #85),
+// the widget's `ensureBrainList` swallows the failure, and everything that rides on
+// the payload (the brain list, `features`, the Open-in-browser control) is missing
+// for that open. Now: one indexed row answers it, with no context, no token and no
+// network. Only a brain with an EMPTY index pays for freshness and the tree scan,
+// because that is the one case where "no pages" might mean "not indexed yet".
 async function detectRowSetup(
+	db: D1Database,
 	getContext: (opts?: TenantOpts) => Promise<BrainContext>,
 	brainId: string
 ): Promise<{ needsConfig: boolean; configPrUrl?: string }> {
 	try {
+		if (await hasIndexedPages(db, brainId)) return { needsConfig: false };
 		const c = await getContext({ requires: 'admin', brain: brainId });
 		await ensureFresh(c.db, c.store, c.repoArgs, c.brainId, c.config);
 		const pages = await listIndexedPages(c.db, c.brainId);
@@ -152,6 +168,9 @@ export function registerBrainTools(
 		// deployment with usage recording off never shows a destination whose click
 		// would come back "unknown tool".
 		analyticsEnabled: boolean;
+		// The platform database, for the one read `brains` makes per brain without
+		// resolving that brain's context: whether its index holds any page.
+		db: D1Database;
 		// The origin the WEB APP is served from (`webBaseUrl` in src/lib/web-app.ts),
 		// or undefined when this deployment has none. Same vehicle and same reason as
 		// `analyticsEnabled`: the widget cannot ask the server what it serves, and a
@@ -170,6 +189,7 @@ export function registerBrainTools(
 		setActiveBrain,
 		invalidateConfig,
 		analyticsEnabled,
+		db,
 		webBaseUrl
 	} = deps;
 	const features = { analytics: analyticsEnabled, ...(webBaseUrl ? { webBase: webBaseUrl } : {}) };
@@ -270,7 +290,7 @@ export function registerBrainTools(
 			await Promise.all(
 				rows.map(async (r) => {
 					if (!r.canManage) return;
-					const s = await detectRowSetup(getContext, r.id);
+					const s = await detectRowSetup(db, getContext, r.id);
 					r.needsConfig = s.needsConfig;
 					r.configPrUrl = s.configPrUrl;
 				})

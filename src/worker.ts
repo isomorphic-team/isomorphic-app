@@ -85,7 +85,12 @@ import { dayKey, countedCall } from './lib/usage.ts';
 import { loadCustomToolDefs, registerCustomTools, type CustomToolLoad } from './tools/custom.ts';
 import { resolveInstallationOrg, connectCustomerOrg } from './lib/org-connect.ts';
 import { loadBrainConfig, type BrainConfig } from './lib/brain-config.ts';
-import { peekJsonRpc, needsBrainPreamble, jsonRpcError } from './lib/mcp-preamble.ts';
+import {
+	peekJsonRpc,
+	needsBrainPreamble,
+	jsonRpcError,
+	describeRequest
+} from './lib/mcp-preamble.ts';
 
 interface Env {
 	// Auth mode selector
@@ -1022,6 +1027,7 @@ class McpSession {
 			setActiveBrain: (id) => this.setActiveBrain(id),
 			invalidateConfig: (owner, repo) => this.invalidateConfig(owner, repo),
 			analyticsEnabled: this.usageEnabled(),
+			db: this.env.PLATFORM_DB,
 			webBaseUrl: webBaseUrl({
 				authMode: this.env.AUTH_MODE,
 				identityMode: this.env.IDENTITY_MODE,
@@ -1084,6 +1090,8 @@ const mcpApiHandler = {
 		// failure can still be answered.
 		const raw = await request.text();
 		const peek = peekJsonRpc(raw);
+		// Past this, a call is at risk of being cut off upstream before it answers.
+		const SLOW_REQUEST_MS = 5_000;
 		const forwarded = new Request(request, { body: raw });
 
 		const props = (ctx as ExecutionContext & { props?: McpProps }).props;
@@ -1103,8 +1111,26 @@ const mcpApiHandler = {
 				sessionIdGenerator: undefined,
 				enableJsonResponse: true
 			});
+			// The transport answers a message it cannot parse with 400 and, without
+			// this, says nothing about why. Its schema is `.strict()`, so a client one
+			// protocol version ahead (Claude speaks 2026-07-28; SDK 1.30 knows up to
+			// 2025-11-25) is refused for a field the SDK has never heard of, and the
+			// log has to name the shape or the next person is guessing. Key names only.
+			let transportError: string | undefined;
+			transport.onerror = (e) => {
+				transportError = e instanceof Error ? e.message : String(e);
+			};
 			await server.connect(transport);
-			return await transport.handleRequest(forwarded);
+			const started = Date.now();
+			const res = await transport.handleRequest(forwarded);
+			const ms = Date.now() - started;
+			// Refusals and slow calls, which are the two things that reach a user as a
+			// bare gateway error from Anthropic's edge: a call the Worker answers in 17s
+			// is one the edge gave up on at ~15s, and only this line says which it was.
+			if (res.status >= 400 || ms > SLOW_REQUEST_MS) {
+				console.warn(describeRequest(peek, { status: res.status, ms, error: transportError }));
+			}
+			return res;
 		} catch (err) {
 			// Nothing above this point was inside a tool handler, so the SDK's own
 			// error mapping never saw it and `workers-oauth-provider` does not catch
