@@ -173,7 +173,8 @@ function buildServer(): McpServer {
 	registerMediaTools(server, getContext);
 	registerLibrarianTools(server, getContext);
 	registerImportTools(server, getContext);
-	registerBrainApp(server, getContext);
+	// This process IS the web host, so results carry links into it.
+	registerBrainApp(server, getContext, { webBaseUrl: `http://127.0.0.1:${port}` });
 	registerCustomTools(server, getContext, custom.defs);
 
 	// The claude.ai compatibility shim, as in worker.ts: SDK 1.29 stamps `execution` on

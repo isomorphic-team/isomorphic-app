@@ -221,6 +221,25 @@ export function webPathFor(
 	return `${WEB_ROUTE_PREFIX}${brain}${encoded}${qs ? `?${qs}` : ''}`;
 }
 
+// The web URL a widget tool's RESULT should carry, from the same table the app's
+// address bar reads, so a link in the chat and the URL in the tab never disagree.
+// Undefined for a tool with no URL, or a deployment with no web app (no `base`).
+// `path` is the tool's own path argument: the page for view_page, the focus for
+// view_graph, the scope for view_activity, the revealed folder for browse_brain.
+export function webUrlFor(
+	base: string | undefined,
+	tool: string,
+	brain: string,
+	path?: string
+): string | undefined {
+	if (!base) return undefined;
+	const route = WEB_TOOL_ROUTING[tool];
+	if (!route || route.kind === 'none') return undefined;
+	if (route.kind === 'path') return path ? `${base}${webPathFor(brain, path)}` : undefined;
+	if (route.kind === 'root') return `${base}${webPathFor(brain, '', path ? { arg: path } : {})}`;
+	return `${base}${webPathFor(brain, '', { view: route.token, ...(path ? { arg: path } : {}) })}`;
+}
+
 // ---------- does this deployment have a web app, and where? ----------
 
 // The origin the web app is served from, or undefined when this deployment has no

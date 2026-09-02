@@ -454,6 +454,15 @@ class McpSession {
 	// Per-repo brain config, cached for this Durable Object's lifetime — config
 	// changes rarely and the DO recycles, so a request-time read on first touch
 	// (then memoized) avoids a GitHub round-trip on every tool call.
+	// Where the web app is served, or undefined on a deployment without one.
+	private webBase(): string | undefined {
+		return webBaseUrl({
+			authMode: this.env.AUTH_MODE,
+			identityMode: this.env.IDENTITY_MODE,
+			publicBaseUrl: this.env.PUBLIC_BASE_URL
+		});
+	}
+
 	private configCache = new Map<string, BrainConfig>();
 
 	private async loadConfig(
@@ -922,7 +931,9 @@ class McpSession {
 		// model's subsequent bare calls all track the brain the user is looking at. Without
 		// this, a one-shot `brain:` view left the persisted active brain behind, so the
 		// widget showed one brain while its own bare actions hit another.
-		registerBrainApp(server, (opts) => this.tenantContext({ ...opts, sticky: true }));
+		registerBrainApp(server, (opts) => this.tenantContext({ ...opts, sticky: true }), {
+			webBaseUrl: this.webBase()
+		});
 
 		// Single-tenant deployments (AUTH_MODE=static, whether reaching GitHub through a
 		// token or an App installation) have one human and one brain, and no `orgs` /
@@ -1024,11 +1035,7 @@ class McpSession {
 			invalidateConfig: (owner, repo) => this.invalidateConfig(owner, repo),
 			analyticsEnabled: this.usageEnabled(),
 			db: this.env.PLATFORM_DB,
-			webBaseUrl: webBaseUrl({
-				authMode: this.env.AUTH_MODE,
-				identityMode: this.env.IDENTITY_MODE,
-				publicBaseUrl: this.env.PUBLIC_BASE_URL
-			})
+			webBaseUrl: this.webBase()
 		});
 
 		// ---------- user-defined tools (brain-tools) ----------
