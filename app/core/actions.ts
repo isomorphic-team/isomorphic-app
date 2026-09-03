@@ -1080,7 +1080,12 @@ async function runSearch(query: string, scope?: 'all') {
 // so the switch has to land BEFORE the fetch.
 async function openHit(hit: Hit) {
 	if (!hit.brain || hit.brain === activeBrain?.id) return navigateTo(hit.path);
-	show({ kind: 'loading', label: `Loading ${hit.path}…`, task: 'page', subject: pageLabel(hit.path) });
+	show({
+		kind: 'loading',
+		label: `Loading ${hit.path}…`,
+		task: 'page',
+		subject: pageLabel(hit.path)
+	});
 	try {
 		await adoptBrain(hit.brain);
 	} catch (e) {
