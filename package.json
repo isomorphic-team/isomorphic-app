@@ -85,14 +85,14 @@
 		"zod": "^4.4.3"
 	},
 	"devDependencies": {
-		"@cloudflare/workers-types": "^5.20260828.1",
+		"@cloudflare/workers-types": "^5.20260904.1",
 		"@playwright/test": "^1.62.1",
 		"@tailwindcss/cli": "^4.3.3",
-		"@types/node": "^26.4.0",
+		"@types/node": "^26.4.1",
 		"class-variance-authority": "^0.7.1",
 		"clsx": "^2.1.1",
 		"esbuild": "^0.28.2",
-		"lucide-preact": "^1.35.0",
+		"lucide-preact": "^1.40.0",
 		"markdown-it": "^15.0.1",
 		"preact": "^10.29.8",
 		"prettier": "^3.9.6",
@@ -100,7 +100,7 @@
 		"prosemirror-history": "^1.5.0",
 		"prosemirror-inputrules": "^1.5.1",
 		"prosemirror-keymap": "^1.2.3",
-		"prosemirror-markdown": "^1.13.6",
+		"prosemirror-markdown": "^1.13.7",
 		"prosemirror-model": "^1.25.11",
 		"prosemirror-schema-list": "^1.5.1",
 		"prosemirror-state": "^1.4.4",
@@ -108,9 +108,9 @@
 		"prosemirror-view": "^1.42.3",
 		"tailwind-merge": "^3.6.0",
 		"tailwindcss": "^4.3.3",
-		"tsx": "^4.23.12",
+		"tsx": "^4.23.13",
 		"typescript": "^7.0.2",
-		"wrangler": "^4.127.1"
+		"wrangler": "^4.129.0"
 	},
 	"pnpm": {
 		"overrides": {
