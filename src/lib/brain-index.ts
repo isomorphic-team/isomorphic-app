@@ -663,13 +663,21 @@ export async function resetIndex(db: D1Database, brainId: string): Promise<void>
 // True when there's NO .isomorphic.json and markdown exists but none of it falls under
 // the (default) content roots — the "connected but shows no pages" trap. Fetches the
 // tree, so callers gate it on "the page list came back empty" to avoid the cost.
+//
+// The tree is listed WITHOUT the `.md` filter (issue #94). `listTree` defaults to
+// markdown only, so `.isomorphic.json` was never in the list it returned and the
+// "author configured it explicitly" branch below could not fire: a repo with a valid
+// config whose roots were not the defaults came back `needsConfig: true` from
+// connect_brain, whose recommended remedy (configure_brain) would have overwritten
+// that config with a whole-repo default. GitHub's recursive tree call returns every
+// blob regardless, so listing everything costs no extra request.
 export async function detectNeedsConfig(
 	store: BrainStore,
 	repo: RepoRef,
 	config: BrainConfig
 ): Promise<boolean> {
 	const head = await store.getHead(repo, config.defaultBranch);
-	const tree = await store.listTree(repo, head);
+	const tree = await store.listTree(repo, head, { extension: '*' });
 	if (tree.some((e) => e.path === CONFIG_PATH)) return false; // author configured it explicitly
 	const md = tree.filter((e) => e.path.endsWith('.md'));
 	if (md.length === 0) return false; // genuinely empty repo, not a misconfig

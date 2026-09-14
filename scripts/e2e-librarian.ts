@@ -1643,10 +1643,29 @@ try {
 		adopted?.org_id === ORG_EMPTY,
 		`org_id = ${adopted?.org_id}`
 	);
+	// PRIVATE, the same default as create_brain (issue #93). It used to be org-wide,
+	// which put a private GitHub repo in front of every org member on adoption.
 	check(
-		'...org-visible, unlike create_brain’s private default',
-		adopted?.visibility === 'org',
+		'...PRIVATE by default, the same as create_brain',
+		adopted?.visibility === 'private',
 		`visibility = ${adopted?.visibility}`
+	);
+	const adoptGrant = (await db
+		.prepare(
+			`SELECT bm.role FROM brain_memberships bm JOIN brains b ON b.brain_id = bm.brain_id
+			 WHERE b.repo_name = ?1 AND bm.user_id = ?2`
+		)
+		.bind(adoptRepo, USER)
+		.first()) as { role?: string } | null;
+	check(
+		'...with an explicit admin grant for whoever connected it',
+		adoptGrant?.role === 'admin',
+		`grant = ${adoptGrant?.role}`
+	);
+	check(
+		'...and the response SAYS it is private, not just the payload',
+		/private to you/i.test(br.text),
+		br.text
 	);
 	check(
 		'...under the caller’s chosen name',
@@ -1708,7 +1727,7 @@ try {
 			`org_id = ${made?.org_id}`
 		);
 		check(
-			'...PRIVATE by default, the opposite of connect_brain',
+			'...PRIVATE by default, the same as connect_brain',
 			made?.visibility === 'private',
 			`visibility = ${made?.visibility}`
 		);
@@ -1832,6 +1851,37 @@ try {
 			refused2.text
 		);
 		check('dedupe: ...and neither wrote anything', (await commitCount()) === before);
+	}
+
+	// ---- configure_brain leaves an existing config alone (issue #94) ------------
+	// Runs last on purpose: the overwrite below replaces the scaffold's config with
+	// a whole-repo one, and every check above assumes the scaffold's roots. The
+	// scaffold commits a .isomorphic.json, so the brain under test is exactly the
+	// repo the guard exists for.
+	{
+		const configBefore = (await fileText('.isomorphic.json')) ?? '';
+		check('the brain under test has a config to protect', configBefore.includes('"wiki/"'));
+		let before = await commitCount();
+		br = await callBrain('configure_brain', {});
+		check('configure_brain refuses when a config already exists', br.isError, br.text);
+		check(
+			'...and shows the current config so the caller can decide',
+			br.text.includes('"wiki/": "content"') && /overwrite: true/.test(br.text),
+			br.text
+		);
+		check(
+			'...without writing anything',
+			(await commitCount()) === before && (await fileText('.isomorphic.json')) === configBefore
+		);
+		before = await commitCount();
+		br = await callBrain('configure_brain', { overwrite: true, content_roots: ['docs/'] });
+		check('configure_brain with overwrite: true replaces it', !br.isError, br.text);
+		await assertOneCommit('configure_brain overwrite', before);
+		check(
+			'...and the new config is what landed',
+			((await fileText('.isomorphic.json')) ?? '').includes('"docs/": "content"'),
+			(await fileText('.isomorphic.json')) ?? ''
+		);
 	}
 
 	await brainClient.close();
