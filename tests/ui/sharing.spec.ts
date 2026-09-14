@@ -26,6 +26,23 @@ test('the panel lists everyone the access rule admits, labelled by how', async (
 	// Devon is an org viewer with no grant on a private brain: the rule excludes them,
 	// and a panel that listed them would be claiming access that does not exist.
 	await expect(main.getByText('devon@example.com')).toHaveCount(0);
+
+	// Tomás holds a grant and no membership: a GUEST, shown as one, after the
+	// members, and offered only the roles a guest can hold.
+	await expect(main.getByText('Tomás Rivera')).toBeVisible();
+	await expect(main.getByText('Guest · tomas@client.example')).toBeVisible();
+	const rows = main.locator('li');
+	await expect(rows.last()).toContainText('Tomás Rivera');
+	const guestSelect = rows.last().getByRole('combobox', { name: 'Role' });
+	await expect(guestSelect).toHaveValue('editor');
+	await expect(guestSelect.locator('option')).toHaveText(['Viewer', 'Editor']);
+	// A member's select still offers admin, so the cap is the guest's, not the panel's.
+	const memberRow = main.locator('li', { hasText: 'Katherine Johnson' });
+	await expect(memberRow.getByRole('combobox', { name: 'Role' }).locator('option')).toHaveText([
+		'Viewer',
+		'Editor',
+		'Admin'
+	]);
 });
 
 test('changing a role refreshes the panel in place', async ({ page }) => {

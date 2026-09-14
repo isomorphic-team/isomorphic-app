@@ -186,15 +186,16 @@ export interface BrainAccessEntry {
 	email: string;
 	name: string | null;
 	role: MemberRole;
-	via: 'grant' | 'org' | 'org-admin';
+	// 'guest' is a grant held by someone outside the organization.
+	via: 'grant' | 'org' | 'org-admin' | 'guest';
 	granted_at?: string;
 }
 // The caller, in both scopes at once: the panel gates sharing controls on the
-// BRAIN role and shows org context from the org role.
+// BRAIN role and shows org context from the org role, which is null for a guest.
 export interface BrainAccessSelf {
 	user_id: string;
 	role: MemberRole;
-	orgRole: MemberRole;
+	orgRole: MemberRole | null;
 }
 
 // One entry in the "Connected accounts" roster (see src/tools/connected-accounts.ts):

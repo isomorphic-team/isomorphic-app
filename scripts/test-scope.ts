@@ -220,7 +220,7 @@ function toolsFor(
 	} as never;
 	const getContext = contextFor(p);
 	registerMemberTools(server, getContext);
-	registerBrainAccessTools(server, getContext);
+	registerBrainAccessTools(server, getContext, { webBaseUrl: deployment.webBaseUrl });
 	registerMediaTools(server, getContext);
 	registerAnalyticsTools(server, getContext);
 	registerLibrarianTools(server, getContext);
@@ -302,14 +302,18 @@ function toolsFor(
 // are refusals, and a test that accepted only one would miss a gate moving between them.
 async function attempt(p: Persona, tool: string, args: Record<string, unknown> = {}) {
 	const handler = toolsFor(p).get(tool);
-	if (!handler) return { outcome: 'missing' as const, detail: `tool ${tool} not registered` };
+	if (!handler) {
+		return { outcome: 'missing' as const, detail: `tool ${tool} not registered`, text: '' };
+	}
 	try {
 		const res = await handler(args);
+		const content = (res?.content ?? []) as { type?: string; text?: string }[];
+		const text = content.map((c) => (c.type === 'text' ? (c.text ?? '') : '')).join('\n');
 		return res?.isError
-			? { outcome: 'denied' as const, detail: JSON.stringify(res.content) }
-			: { outcome: 'allowed' as const, detail: '' };
+			? { outcome: 'denied' as const, detail: JSON.stringify(res.content), text }
+			: { outcome: 'allowed' as const, detail: '', text };
 	} catch (e) {
-		return { outcome: 'denied' as const, detail: String(e) };
+		return { outcome: 'denied' as const, detail: String(e), text: '' };
 	}
 }
 const denies = async (p: Persona, tool: string, args?: Record<string, unknown>) =>
@@ -592,19 +596,83 @@ const grantOf = (brainId: string, userId: string) =>
 		.prepare(`SELECT role FROM brain_memberships WHERE brain_id = ? AND user_id = ?`)
 		.get(brainId, userId) as { role?: string } | undefined;
 
+const inviteOf = (brainId: string, email: string) =>
+	sqlite
+		.prepare(
+			`SELECT role, org_id FROM invitations
+			  WHERE brain_id = ? AND lower(email) = lower(?) AND accepted_at IS NULL`
+		)
+		.get(brainId, email) as { role?: string; org_id?: string } | undefined;
+const memberOf = (orgId: string, userId: string) =>
+	sqlite
+		.prepare(`SELECT role FROM memberships WHERE org_id = ? AND user_id = ?`)
+		.get(orgId, userId);
+
+// GUESTS (docs/design/guest-access.md). Someone outside the organization is shared
+// ONE brain: an account gets a grant, an unknown address gets a brain invite, and
+// neither path ever writes a membership, which is what keeps a share from widening
+// what they reach beyond the brain. Admin is refused for them in both paths.
 check(
-	'refuses an email with no account at all',
-	await denies(sharedAdmin, 'share_brain', { email: 'nobody@example.com', access: 'viewer' })
+	'shares with someone who has an account but is not in this org (a guest)',
+	await allows(sharedAdmin, 'share_brain', { email: 'outside@example.com', access: 'viewer' })
+);
+check('...writing a grant', grantOf('b-main', 'u-outside')?.role === 'viewer');
+check(
+	'...and NO membership',
+	memberOf('org1', 'u-outside') === undefined,
+	'a share to an outsider made them a member'
 );
 check(
-	'refuses someone who has an account but is not in this org',
-	await denies(sharedAdmin, 'share_brain', { email: 'outside@example.com', access: 'viewer' })
+	'refuses admin for a guest',
+	await denies(sharedAdmin, 'share_brain', { email: 'outside@example.com', access: 'admin' })
 );
 check(
-	'...and wrote no grant for them',
-	grantOf('b-main', 'u-outside') === undefined,
-	'a grant leaked through a rejected share'
+	'...leaving their grant where it was',
+	grantOf('b-main', 'u-outside')?.role === 'viewer',
+	'a refused admin share changed the row'
 );
+check(
+	'the refusal says why',
+	(
+		await attempt(sharedAdmin, 'share_brain', { email: 'outside@example.com', access: 'admin' })
+	).detail.includes('guest')
+);
+check(
+	'revoking a guest is accepted',
+	await allows(sharedAdmin, 'share_brain', { email: 'outside@example.com', access: 'none' })
+);
+check('...and the grant is gone', grantOf('b-main', 'u-outside') === undefined);
+
+check(
+	'an address with no account is INVITED to the brain',
+	await allows(sharedAdmin, 'share_brain', { email: 'Nobody@Example.com', access: 'editor' })
+);
+check(
+	"...as a brain invite in the brain's own org",
+	inviteOf('b-main', 'nobody@example.com')?.role === 'editor' &&
+		inviteOf('b-main', 'nobody@example.com')?.org_id === 'org1'
+);
+check(
+	'refuses admin for an address with no account too',
+	await denies(sharedAdmin, 'share_brain', { email: 'nobody2@example.com', access: 'admin' })
+);
+check('...and wrote no invite', inviteOf('b-main', 'nobody2@example.com') === undefined);
+check(
+	'the reply tells the sharer where the guest signs in',
+	(
+		await attempt(sharedAdmin, 'share_brain', { email: 'nobody3@example.com', access: 'viewer' })
+	).text.includes('https://brain.example/b/northwind/main')
+);
+check(
+	'revoking an invited address cancels the invite',
+	await allows(sharedAdmin, 'share_brain', { email: 'nobody@example.com', access: 'none' })
+);
+check('...and it is gone', inviteOf('b-main', 'nobody@example.com') === undefined);
+check(
+	'the invite rides the ordinary share gate: a brain editor cannot send one',
+	await denies(writer, 'share_brain', { email: 'nobody4@example.com', access: 'viewer' })
+);
+sqlite.exec(`DELETE FROM invitations WHERE brain_id = 'b-main'`);
 check(
 	'refuses revoking your own access (no self-lockout)',
 	await denies(sharedAdmin, 'share_brain', { email: 'shared@example.com', access: 'none' })

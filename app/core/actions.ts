@@ -493,7 +493,8 @@ function brainAccessViewFromSc(sc: Record<string, unknown>): View {
 		me: {
 			user_id: String(me.user_id ?? ''),
 			role: (me.role as MemberSelf['role']) ?? 'viewer',
-			orgRole: (me.orgRole as MemberSelf['role']) ?? 'viewer'
+			// Null for a guest: the server sends it as null, and 'viewer' would be a lie.
+			orgRole: me.orgRole ? (me.orgRole as MemberSelf['role']) : null
 		}
 	};
 }

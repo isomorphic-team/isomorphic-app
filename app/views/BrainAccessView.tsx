@@ -7,7 +7,7 @@ import { refreshBrainAccess, openShareBrain } from '../core/actions.ts';
 import { toast } from '../core/toast.tsx';
 import { InitialsAvatar, CloseIcon } from '../core/icons.tsx';
 import { defineView } from '../core/view-registry.ts';
-import { RoleSelect, ROLE_LABEL } from '../components/RoleSelect.tsx';
+import { RoleSelect, ROLE_LABEL, GUEST_ROLES } from '../components/RoleSelect.tsx';
 import { Button, List, ListRow } from '../ui/index.ts';
 
 // Per-brain sharing: who can reach THIS brain, at what level, and whether it's
@@ -83,7 +83,7 @@ function BrainAccessView({
 					// Only an explicit share can be edited or revoked. Access inherited from
 					// org visibility or the org-admin floor has no row to change; offering a
 					// control that silently does nothing is worse than none.
-					const editable = canManage && !isSelf && a.via === 'grant';
+					const editable = canManage && !isSelf && (a.via === 'grant' || a.via === 'guest');
 					return (
 						<ListRow key={a.user_id}>
 							<InitialsAvatar name={a.name || a.email} />
@@ -99,15 +99,20 @@ function BrainAccessView({
 										? a.name
 											? a.email
 											: 'Shared directly'
-										: a.via === 'org'
-											? 'Via organization'
-											: 'Organization admin'}
+										: a.via === 'guest'
+											? a.name
+												? `Guest · ${a.email}`
+												: 'Guest · not in the organization'
+											: a.via === 'org'
+												? 'Via organization'
+												: 'Organization admin'}
 								</div>
 							</div>
 							{editable ? (
 								<RoleSelect
 									value={a.role}
 									disabled={busy}
+									roles={a.via === 'guest' ? GUEST_ROLES : undefined}
 									onChange={(r) => {
 										if (r !== a.role) run({ email: a.email, access: r });
 									}}
