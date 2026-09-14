@@ -7,6 +7,11 @@ others use your version over a network, in which case those users are entitled t
 modified source. See [`docs/licensing.md`](licensing.md) for the detail, including what the
 copyleft does not reach (your brain content, and any MCP client).
 
+**The one-line version:** for one person on one machine you need Node 24 and git, and nothing
+else (path 0). For anyone else to reach it you need a Cloudflare account (Workers, D1, KV; the
+free tier is enough for a small team), a GitHub repository for the brain, and a GitHub token or
+GitHub App. There is no Docker image and no Postgres path.
+
 This guide has four paths. Pick the smallest one that does what you need.
 
 | Path                            | Who it is for                                             | You need                                        | Time     |
@@ -63,6 +68,10 @@ MCP host at it:
 ```sh
 claude mcp add --transport http isomorphic-local http://127.0.0.1:8788/mcp
 ```
+
+Or skip the MCP host and open `http://127.0.0.1:8788/b/local/notes` in a browser: the same
+viewer and editor the connector renders inside Claude, served as an ordinary web page, over the
+same tools.
 
 **Your brain is a git repository.** If the folder is not one yet, `pnpm try` runs
 `git init` and commits what is already there. Every write lands as a commit, which is

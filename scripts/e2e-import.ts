@@ -91,7 +91,9 @@ if (GITHUB_MODE) {
 	brainId = `local/${name}`;
 	await store.commitFiles(repoArgs, { message: 'Scaffold brain', writes: buildScaffoldFiles() });
 	cleanup = async () => {
-		await rm(dir, { recursive: true, force: true });
+		// Retried for the same reason as e2e-librarian: git's background work after a
+		// commit can leave `.git` non-empty mid-removal.
+		await rm(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
 	};
 }
 

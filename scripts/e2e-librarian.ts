@@ -144,7 +144,11 @@ if (GITHUB_MODE) {
 		writes: buildScaffoldFiles()
 	});
 	cleanup = async () => {
-		await rm(dir, { recursive: true, force: true });
+		// Retried, because git can still be writing under .git when the last awaited
+		// command has already returned (auto gc detaches into the background after a
+		// commit), and a plain recursive rm then fails ENOTEMPTY on `.git` after every
+		// check passed. Seen on CI 2026-09-14. Node retries exactly that error.
+		await rm(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
 	};
 	// The offline stand-in for GitHub-as-a-platform. Narrow on purpose: it answers
 	// only the two reads connect_brain makes, and answers them from a fixed set, so
