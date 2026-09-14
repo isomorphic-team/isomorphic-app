@@ -747,9 +747,14 @@ Worker's `fetch`, ahead of the OAuth provider like `/health`.
   authjs + `PUBLIC_BASE_URL`, else absent). Same vehicle and reason as
   `features.analytics`: a widget cannot ask what the server serves, and a control
   whose click lands on a 404 is worse than none. Never on the web host, never for
-  the editor. Where the tab opens is the host's call, through `openLink`. Nothing
-  puts the URL in a tool result's TEXT yet, so Claude cannot link to a page in chat;
-  that is the deferred half, and `features.webBase` is the server side of it.
+  the editor. Where the tab opens is the host's call, through `openLink`. The URL
+  also rides every widget result (`view_page`, `browse_brain`, `view_graph`,
+  `view_activity`) as `webUrl` in `structuredContent` AND as an `Open in browser:`
+  line in the text, so Claude can link to a page in chat. Both halves are needed
+  (fixed 2026-09-14): the first version put it in the text only, and a host that
+  receives `structuredContent` hands the model that and drops the text, so the link
+  was on the wire and no model ever saw it. `test:e2e-librarian` pins both.
+  `read_page` carries none: nobody clicks in the reading channel.
 - **`script-src` still carries `'unsafe-inline'`.** The bundle is one self-contained
   HTML file with JS and CSS inlined (the MCP App iframe CSP forbids external hosts,
   which is why it is built that way), so there is no external script for `'self'` to
