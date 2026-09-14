@@ -198,7 +198,10 @@ registerMediaTools(server, getContext);
 // contract below: only a real store hands out real blob shas, so a stub could not
 // tell whether the sha a render reports is the one that page actually has.
 registerCoreTools(server, getContext);
-registerBrainApp(server, getContext);
+// With a web base, so the result-link contract below runs against the real
+// handlers rather than only against webUrlFor.
+const WEB_BASE = 'https://brain.example';
+registerBrainApp(server, getContext, { webBaseUrl: WEB_BASE });
 const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
 await server.connect(serverTransport);
 const client = new Client({ name: 'e2e', version: '0.0.0' });
@@ -1202,6 +1205,29 @@ try {
 			'view_page reports the same sha for the same page',
 			!!viewed.sc.sha && viewed.sc.sha === read.sc.sha,
 			`${String(viewed.sc.sha)} vs ${String(read.sc.sha)}`
+		);
+
+		// The page's web URL rides BOTH halves of the result. A host that receives
+		// structuredContent hands the model that and drops the text, so a link only
+		// in the text block is a link no model sees (which is how the first version
+		// shipped). Whole-string equality, not a substring search.
+		const expectedUrl = `${WEB_BASE}/b/${brainId}/${path}`;
+		check(
+			'view_page carries the page URL in structuredContent',
+			viewed.sc.webUrl === expectedUrl,
+			String(viewed.sc.webUrl)
+		);
+		check(
+			'...and the same URL in its text',
+			/https?:\/\/\S+/.exec(viewed.text)?.[0] === expectedUrl,
+			viewed.text.slice(-120)
+		);
+		check('read_page carries none: nobody clicks in the reading channel', !('webUrl' in read.sc));
+		const browsed = await callSc('browse_brain', {});
+		check(
+			'browse_brain carries the brain URL',
+			browsed.sc.webUrl === `${WEB_BASE}/b/${brainId}`,
+			String(browsed.sc.webUrl)
 		);
 
 		// The assertion the refresh control rests on. Without it the sha could be any
