@@ -26,6 +26,23 @@ test('the panel lists everyone the access rule admits, labelled by how', async (
 	// Devon is an org viewer with no grant on a private brain: the rule excludes them,
 	// and a panel that listed them would be claiming access that does not exist.
 	await expect(main.getByText('devon@example.com')).toHaveCount(0);
+
+	// Tomás holds a grant and no membership: a GUEST, shown as one, after the
+	// members, and offered only the roles a guest can hold.
+	await expect(main.getByText('Tomás Rivera')).toBeVisible();
+	await expect(main.getByText('Guest · tomas@client.example')).toBeVisible();
+	const rows = main.locator('li');
+	await expect(rows.last()).toContainText('Tomás Rivera');
+	const guestSelect = rows.last().getByRole('combobox', { name: 'Role' });
+	await expect(guestSelect).toHaveValue('editor');
+	await expect(guestSelect.locator('option')).toHaveText(['Viewer', 'Editor']);
+	// A member's select still offers admin, so the cap is the guest's, not the panel's.
+	const memberRow = main.locator('li', { hasText: 'Katherine Johnson' });
+	await expect(memberRow.getByRole('combobox', { name: 'Role' }).locator('option')).toHaveText([
+		'Viewer',
+		'Editor',
+		'Admin'
+	]);
 });
 
 test('changing a role refreshes the panel in place', async ({ page }) => {
@@ -72,4 +89,30 @@ test('sharing is gated on the brain role, not the org role', async ({ page }) =>
 	// above is testing the gate rather than a Share button that renders nowhere.
 	const personal = rows.filter({ hasText: 'Owner' });
 	await expect(personal.getByRole('button', { name: 'Share' }).first()).toBeVisible();
+});
+
+test('a share to an address with no account shows up as an invite, and can be cancelled', async ({
+	page
+}) => {
+	const app = await openApp(page, 'access');
+	await expectView(app, 'brain-access');
+	const main = app.locator('main[data-view="brain-access"]');
+	await expect(main.getByText('Invited')).toHaveCount(0);
+
+	// The share flow off the header, with an email nobody here has.
+	await app.getByRole('banner').getByRole('button', { name: 'Share' }).click();
+	await expectView(app, 'share-brain');
+	await app.getByRole('textbox').first().fill('newperson@client.example');
+	await app.getByRole('button', { name: 'Share', exact: true }).last().click();
+
+	// Back on the panel, the invite is the evidence the share happened.
+	await expectView(app, 'brain-access');
+	await expect(main.getByText('Invited', { exact: true })).toBeVisible();
+	const row = main.locator('li', { hasText: 'newperson@client.example' });
+	await expect(row).toContainText('Guest once they sign in');
+	await expect(row).toContainText('Editor');
+
+	await row.getByRole('button', { name: 'Cancel invite for newperson@client.example' }).click();
+	await expect(main.locator('li', { hasText: 'newperson@client.example' })).toHaveCount(0);
+	await expect(main.getByText('Invited', { exact: true })).toHaveCount(0);
 });

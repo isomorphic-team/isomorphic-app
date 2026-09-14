@@ -483,6 +483,7 @@ function brainAccessViewFromSc(sc: Record<string, unknown>): View {
 	return {
 		kind: 'brain-access',
 		access: Array.isArray(sc.access) ? (sc.access as BrainAccessEntry[]) : [],
+		invites: Array.isArray(sc.invites) ? (sc.invites as Invite[]) : [],
 		visibility: typeof sc.visibility === 'string' ? sc.visibility : 'org',
 		// Carried so the panel and its share flow keep acting on the brain the user
 		// opened, not on whatever happens to be active: the Share control in the
@@ -493,7 +494,8 @@ function brainAccessViewFromSc(sc: Record<string, unknown>): View {
 		me: {
 			user_id: String(me.user_id ?? ''),
 			role: (me.role as MemberSelf['role']) ?? 'viewer',
-			orgRole: (me.orgRole as MemberSelf['role']) ?? 'viewer'
+			// Null for a guest: the server sends it as null, and 'viewer' would be a lie.
+			orgRole: me.orgRole ? (me.orgRole as MemberSelf['role']) : null
 		}
 	};
 }

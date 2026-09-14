@@ -41,9 +41,10 @@ function ShareBrainView({ brainId, brainLabel }: { brainId: string; brainLabel: 
 			<Flow
 				icon={<BrainGlyph />}
 				title={`Share ${brainLabel}`}
-				// States the one guardrail people hit: sharing reaches org members only,
-				// because a grant to anyone else resolves to nothing (see brain-access.ts).
-				subtitle="They must already be a member of this organization. Invite them first if they are not."
+				// Anyone by email. Someone outside the organization becomes a guest of
+				// this one brain, viewer or editor; an address with no account yet is
+				// invited and joins as a guest at first sign-in (see brain-access.ts).
+				subtitle="Anyone, by email. Someone outside the organization becomes a guest of this brain only."
 				footer={
 					<>
 						<Button
