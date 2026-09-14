@@ -122,8 +122,7 @@ merged pull request is never served stale. No webhook required.
 - **`move_page`**: move or rename a page or a whole folder, repointing every inbound link,
   markdown and wikilink, in the same commit.
 - **`delete_page`**: delete a page or folder, and report what still links to it.
-- **`edit_page`**: open the WYSIWYG editor in the app. ProseMirror with a markdown round-trip
-  golden test, so what it saves is the markdown you would have written by hand.
+- **`edit_page`**: open the page in [the editor](#the-editor).
 - **`attach_media`** / **`read_media`**: images and PDFs, fetched from a URL by the server or
   uploaded from the app, stored in the repo and optionally embedded in a page.
 - **`configure_brain`**: tell an adopted repository where its content lives, for a repo whose
@@ -168,13 +167,56 @@ which means Claude authoring Claude's own future tools. Capped at 25 per brain.
 
 ### The app
 
-The viewer, editor, file tree, search, link graph, activity feed, sharing panel, member roster,
-and analytics render inside the conversation as an
-[MCP App](https://modelcontextprotocol.io/extensions/apps/overview), in three display modes
-and both themes, and as a web page at `/b/<owner>/<repo>/<path>` for people who are not in the
-conversation.
+The app is an [MCP App](https://modelcontextprotocol.io/extensions/apps/overview): the server
+declares one `ui://` HTML resource, the widget tools link to it, the host renders it in a
+sandboxed iframe, and the iframe calls the same tools back over `tools/call`. It has no
+privileges of its own. Everything it shows or changes goes through a tool the model could also
+call, at the caller's role, so the app is structurally incapable of doing something the
+connector cannot. The same bundle is served as a web page at `/b/<owner>/<repo>/<path>` for
+people who are not in the conversation, signed in with the same email link.
+
+What is in it:
+
+- **Viewer.** Rendered markdown with clickable links in both syntaxes, wikilinks resolved by
+  the same function `validate` uses, so a link the viewer refuses to open is one validate
+  reports. Frontmatter renders as a properties panel, editable in place. Computed views render
+  live. Linked references at the foot of every page. A refresh control that reports the page's
+  age and says so when the page moved underneath you.
+- **File tree.** Clicking a folder opens its folder note (`index.md`) when it has one; a
+  note-less folder offers to create one, pre-seeded with a directory view.
+- **Search**, with ranked hits and the lines that matched.
+- **Link graph**, nodes sized by degree and colored by folder, focusable on one page.
+- **Activity feed**: who changed what and when, for the brain or for one page.
+- **Brain switcher**, when you can reach more than one.
+- **Sharing panel, member roster, analytics** for the org-scope tools, with their controls
+  shown only at the role that can use them.
+- **Three display modes** (inline card, fullscreen, picture-in-picture), light and dark
+  themes following the host, and reduced-motion support.
 
 ![The link graph over a 37-page brain: nodes sized by how many links touch them, colored by folder](docs/images/graph.png)
+
+### The editor
+
+A WYSIWYG editor over the page body, built on ProseMirror. What it saves is the markdown you
+would have written by hand, which is the whole design constraint: a brain is read on
+github.com, in Obsidian, and by agents, and an editor that reformats every page it touches
+would make every diff unreadable.
+
+- **Formatting:** headings, bold, italic, inline code, bullet and numbered lists, checklists,
+  blockquotes, and GFM tables with column resizing. Undo and redo, with keyboard shortcuts.
+- **Images:** paste or drop a file into the body. It uploads through `attach_media`, lands in
+  the repo beside the page, and is embedded as an ordinary relative image link. Save is held
+  until the upload finishes so a page never links to a file the brain does not have.
+- **Round trip.** `pnpm test:roundtrip` is a golden test over the brain's own conventions: `-`
+  bullets rather than `*`, `[[wikilinks]]` kept byte-stable rather than backslash-escaped,
+  tables preserved rather than destroyed. Frontmatter is never sent to the editor at all, so
+  nested blocks, provenance, and unknown keys survive a save untouched.
+- **Computed views** are stripped before the body reaches the editor and regenerated on save,
+  so generated content never round-trips through ProseMirror.
+- **Concurrency.** Every save carries the sha the editor opened, and the server refuses a
+  save over a page someone else changed first, keeping your text on screen rather than
+  overwriting theirs. On a protected branch the save opens a pull request, and the editor says
+  so instead of claiming the change is live.
 
 ![The editor: a formatting toolbar, the page's properties, and the body as rich text, saved back as plain markdown](docs/images/editor.png)
 
