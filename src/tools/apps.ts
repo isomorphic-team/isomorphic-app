@@ -169,16 +169,27 @@ export function registerBrainApp(
 	getContext: (opts?: TenantOpts) => Promise<BrainContext>,
 	opts: { webBaseUrl?: string } = {}
 ) {
-	// THE LINK IN THE CHAT. Each widget result's text ends with the page's web URL
-	// when this deployment serves the web app, so the model can hand the user a
-	// link ("here's the page: …") and "send me that" has an answer. The URL comes
-	// from the same table the app's address bar reads (webUrlFor), so the link in
-	// the chat and the URL in the tab cannot disagree. Text only: the widget builds
-	// its own from `features.webBase`, and read_page (the model's reading channel)
-	// deliberately carries none, since nobody clicks there.
+	// THE LINK IN THE CHAT. Each widget result carries the page's web URL when this
+	// deployment serves the web app, so the model can hand the user a link ("here's
+	// the page: …") and "send me that" has an answer. The URL comes from the same
+	// table the app's address bar reads (webUrlFor), so the link in the chat and the
+	// URL in the tab cannot disagree.
+	//
+	// It rides BOTH the text block and structuredContent (`webUrl`), because they
+	// reach different readers: a host that receives structuredContent hands the
+	// model THAT and drops the text, which is how the first version (text only,
+	// 2026-09-02) shipped a link no model ever saw. The widget still builds its own
+	// from `features.webBase`; read_page (the model's reading channel) deliberately
+	// carries none, since nobody clicks there.
+	const linkFor = (tool: string, brain: string, path?: string): string | undefined =>
+		webUrlFor(opts.webBaseUrl, tool, brain, path);
 	const withLink = (text: string, tool: string, brain: string, path?: string): string => {
-		const url = webUrlFor(opts.webBaseUrl, tool, brain, path);
+		const url = linkFor(tool, brain, path);
 		return url ? `${text}\n\nOpen in browser: ${url}` : text;
+	};
+	const webUrl = (tool: string, brain: string, path?: string): { webUrl?: string } => {
+		const url = linkFor(tool, brain, path);
+		return url ? { webUrl: url } : {};
 	};
 	// ---------- the ui:// resource ----------
 	// One read body, served at two registrations: the concrete current-hash URI
@@ -261,6 +272,7 @@ export function registerBrainApp(
 					view: 'page',
 					path,
 					markdown,
+					...webUrl('view_page', activeBrain.id, path),
 					// The blob sha of what this render is OF. readFile already returns it
 					// and every write path already treats a page as versioned (write_page
 					// refuses a save against a stale sha); only the read path threw the
@@ -320,6 +332,7 @@ export function registerBrainApp(
 				],
 				structuredContent: {
 					view: 'browse',
+					...webUrl('browse_brain', activeBrain.id),
 					...(inline ? tree : {}),
 					config: editPolicy(config),
 					activeBrain,
@@ -385,6 +398,7 @@ export function registerBrainApp(
 				],
 				structuredContent: {
 					view: 'activity',
+					...webUrl('view_activity', activeBrain.id, path),
 					scope: { path },
 					entries,
 					config: editPolicy(config),
@@ -425,6 +439,7 @@ export function registerBrainApp(
 				],
 				structuredContent: {
 					view: 'graph',
+					...webUrl('view_graph', activeBrain.id, focus),
 					nodes,
 					edges,
 					focus,
