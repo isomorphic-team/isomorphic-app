@@ -262,8 +262,9 @@ different questions:
 | Analytics totals and the per-brain table                              | org **viewer**   |
 | Analytics per-person table                                            | org **admin**    |
 
-Brains a person creates are **private** to them by default; brains adopted with `connect_brain`
-are **org-visible**. Sharing stays inside the brain's org, never grants above your own brain
+A brain is **private** to whoever created or adopted it by default, whether it came from
+`create_brain` or `connect_brain`; widening it to the org is one `share_brain` call, and the
+response says which it is. Sharing stays inside the brain's org, never grants above your own brain
 role, and never lets you revoke yourself. `owner` is the org's anti-lockout anchor: it is never
 assignable, demotable, or removable, and nobody can edit their own membership. A brain whose
 default branch is protected gets pull requests instead of commits, whatever the caller's role.
