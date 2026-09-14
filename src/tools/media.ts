@@ -242,6 +242,7 @@ export function registerMediaTools(
 					? ''
 					: ` It was named ${target.split('/').pop()} because ${desired.split('/').pop()} was taken.`;
 			const result = landed(
+				ctx,
 				outcome,
 				`Stored ${target} (${formatBytes(bytes)})${where}. The change was logged.${renamed}`,
 				`Proposed storing ${target} (${formatBytes(bytes)})${where}.${renamed}`

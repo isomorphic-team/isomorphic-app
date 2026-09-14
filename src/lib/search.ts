@@ -524,3 +524,52 @@ export function elisionNote(r: SearchResult, opts: SearchOptions): string {
 	if (otherPages > 0) parts.push(`${otherPages} other page(s) also matched`);
 	return parts.length ? `\n\n(${parts.join('; ')}.)` : '';
 }
+
+// ------------------------------------------------------------ across brains ----
+
+export interface BrainSearchHit extends SearchHit {
+	brainId: string;
+}
+
+/**
+ * Fold one ranked result per brain into a single list under a global ceiling.
+ *
+ * Each brain is searched on its own, with its own budget, because ranking is per
+ * brain: scores are relative to a corpus and mean nothing across two of them. What
+ * this decides is how the global ceiling is spent. It is taken ROUND-ROBIN, one hit
+ * from each brain in turn in the caller's order, rather than in path order or brain
+ * order, because a single cap filled from the first brain silently starves every brain
+ * after it: the result reads as "the other brains have no matches" when the truth is
+ * "we stopped looking". With one brain the loop is the identity and the hits come back
+ * exactly as the engine ranked them.
+ *
+ * Selection is interleaved so the ceiling stays fair; presentation is GROUPED by brain
+ * in the caller's order (the active brain first), because interleaved output is
+ * unreadable. Within a brain the engine's order survives, since the sort is stable and
+ * keys on the brain alone.
+ */
+export function mergeBrainResults(
+	results: { brainId: string; result: SearchResult }[],
+	total: number
+): { hits: BrainSearchHit[]; budgetHit: boolean; pagesMatched: number } {
+	const buckets = results.map((r) => r.result.hits.map((h) => ({ ...h, brainId: r.brainId })));
+	const picked: BrainSearchHit[] = [];
+	let budgetHit = results.some((r) => r.result.budgetHit);
+	outer: for (let i = 0; ; i++) {
+		let more = false;
+		for (const b of buckets) {
+			if (i >= b.length) continue;
+			more = true;
+			if (picked.length >= total) {
+				budgetHit = true;
+				break outer;
+			}
+			picked.push(b[i]);
+		}
+		if (!more) break;
+	}
+	const rank = new Map(results.map((r, i) => [r.brainId, i]));
+	const hits = picked.slice().sort((a, b) => rank.get(a.brainId)! - rank.get(b.brainId)!);
+	const pagesMatched = results.reduce((n, r) => n + r.result.pagesMatched, 0);
+	return { hits, budgetHit, pagesMatched };
+}

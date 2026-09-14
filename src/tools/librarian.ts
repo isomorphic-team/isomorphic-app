@@ -60,7 +60,7 @@ import {
 	ensureFresh,
 	loadResolvedGraph,
 	backlinksTo,
-	searchIndex,
+	searchBrains,
 	loadAllFields,
 	loadPageContents,
 	writeThroughIndex,
@@ -102,7 +102,7 @@ import { elisionNote } from '../lib/search.ts';
 import { parseLedger } from '../lib/brain-import.ts';
 import { dedupeWrite, writeFingerprint, secondsSince } from '../lib/write-dedupe.ts';
 import { d1WriteLedger } from '../lib/write-dedupe-store.ts';
-import type { TenantOpts, Role } from '../lib/orgs.ts';
+import { brainLabel, type TenantOpts, type Role, type AccessibleBrain } from '../lib/orgs.ts';
 import { brainArg, fail, ok } from './shared.ts';
 
 // Shared optional `brain` arg — every tool takes it so the model can one-shot a
@@ -154,7 +154,7 @@ export interface BrainContext {
 	// member-management tools authorize roster changes on THIS one: gating them on
 	// `role` would let someone who was merely shared a brain as admin edit the org
 	// roster. Legacy single-tenant paths report 'owner'.
-	orgRole: Role;
+	orgRole: Role | null;
 	// The resolved org's id + the acting user's id, present only on the product-native
 	// (authjs) path. The member-management tools need these to scope roster queries and
 	// enforce self-guards; they're undefined on the legacy single-tenant paths, which
@@ -188,13 +188,24 @@ function normFolderPath(p: string): string {
 //   - PR, auto-merged immediately → "done" (it's already live on the branch)
 //   - PR, auto-merge armed        → "proposed", will merge itself once checks pass
 //   - PR, no auto-merge           → "proposed", needs a human to merge
-export function landed(outcome: WriteOutcome, done: string, proposed: string) {
-	if (!outcome.prUrl) return ok(done);
-	if (outcome.merged) return ok(`${done} (via PR ${outcome.prUrl})`);
+// The single composer for every write's user-facing message, which is why the brain is
+// named here rather than in eight call sites.
+//
+// WHY NAME IT AT ALL: a write takes an optional `brain` handle resolved by fuzzy match.
+// Ambiguity is refused outright, so the dangerous case is not ambiguity but
+// confident-and-wrong: a unique substring match on the wrong brain puts a real page in
+// a real client's repository, and nothing in the response would have said so. Naming
+// the brain the write LANDED in makes that mistake visible in the same turn instead of
+// a week later. It is one short line on an operation that is both rare and hard to
+// undo.
+export function landed(ctx: BrainContext, outcome: WriteOutcome, done: string, proposed: string) {
+	const where = `\n\nBrain: ${ctx.activeBrain?.label || ctx.brainId}.`;
+	if (!outcome.prUrl) return ok(`${done}${where}`);
+	if (outcome.merged) return ok(`${done} (via PR ${outcome.prUrl})${where}`);
 	const tail = outcome.autoMergeEnabled
 		? `It will merge automatically once checks pass: ${outcome.prUrl}`
 		: `Review and merge it here: ${outcome.prUrl}`;
-	return ok(`${proposed} ${tail}`);
+	return ok(`${proposed} ${tail}${where}`);
 }
 
 function truncationNote(truncated: boolean): string {
@@ -502,6 +513,7 @@ async function createPageWrite(
 		prBody: `Create \`${target}\`${description ? ` — ${description}` : ''}. Proposed via the Isomorphic brain tools.`
 	});
 	return landed(
+		ctx,
 		outcome,
 		`Created "${finalTitle}" at ${target}${statusNote}. The change was logged.${toolRosterNote(target)}`,
 		`Proposed a new page "${finalTitle}" at ${target}${statusNote}.${toolRosterNote(target)}`
@@ -657,6 +669,7 @@ async function updatePageWrite(
 		prBody: `Update \`${path}\`. Proposed via the Isomorphic brain tools.`
 	});
 	const res = landed(
+		ctx,
 		outcome,
 		`Saved "${newTitle ?? path}". ${notes.length ? notes.join('; ') + '. ' : ''}The change was logged.`,
 		`Proposed an update to "${newTitle ?? path}". ${notes.length ? notes.join('; ') + '. ' : ''}`
@@ -864,6 +877,7 @@ async function moveFolderWrite(
 				.join(', ')}.`
 		: '';
 	return landed(
+		ctx,
 		outcome,
 		`Moved folder "${folder}" to ${newFolder}.${mergeNote} Links in ${repointedPages} page(s) were repointed; the change was logged.${truncationNote(truncated)}${toolRosterNote(folder, newFolder)}`,
 		`Proposed moving folder "${folder}" to ${newFolder}.${mergeNote} Links in ${repointedPages} page(s) repointed.${truncationNote(truncated)}${toolRosterNote(folder, newFolder)}`
@@ -966,6 +980,7 @@ async function moveFileWrite(
 		prBody: `Move \`${path}\` to \`${newPath}\`. Proposed via the Isomorphic brain tools.`
 	});
 	return landed(
+		ctx,
 		outcome,
 		`Moved "${path}" to ${newPath}. Links in ${repointedPages} page(s) were repointed; the change was logged.${truncationNote(truncated)}`,
 		`Proposed moving "${path}" to ${newPath}; links in ${repointedPages} page(s) repointed.${truncationNote(truncated)}`
@@ -1030,6 +1045,7 @@ async function deleteFileWrite(ctx: BrainContext, head: Head, args: { path: stri
 				.join('\n')}${refs.length > 20 ? `\n…and ${refs.length - 20} more.` : ''}`
 		: '';
 	return landed(
+		ctx,
 		outcome,
 		`Deleted "${path}". The deletion was logged.${refNote}${truncationNote(truncated)}`,
 		`Proposed deleting "${path}".${refNote}${truncationNote(truncated)}`
@@ -1098,15 +1114,51 @@ async function deleteFolderWrite(
 				.join('\n')}`
 		: '';
 	return landed(
+		ctx,
 		outcome,
 		`Deleted folder "${folder}" (${label}). The change was logged.${refNote}${truncationNote(truncated)}${toolRosterNote(folder)}`,
 		`Proposed deleting folder "${folder}" (${label}).${refNote}${truncationNote(truncated)}${toolRosterNote(folder)}`
 	);
 }
 
+// Optional wiring, supplied only where there is more than one brain to search.
+// `listBrains` is the caller's whole accessible set, which is the one thing a fan-out
+// needs and a single BrainContext cannot express: a context resolves exactly one brain.
+// It is the same dep the brain tools already take (worker.ts), and it is absent in the
+// local runtime and in single-tenant mode, where one brain means `scope: "all"` is the
+// same search as the default.
+export interface LibrarianDeps {
+	listBrains?: () => Promise<AccessibleBrain[]>;
+}
+
+// Which brains a search runs over. The active brain always leads, so it wins the
+// round-robin under the global cap and reads first in the output.
+//
+// Exported only so `pnpm test:search` can call it. This is the function that DECIDES
+// which brains a fan-out reaches, and therefore whose content can appear in one answer;
+// leaving it private would have put that decision somewhere no test could reach.
+export async function searchTargets(
+	ctx: BrainContext,
+	deps: LibrarianDeps | undefined
+): Promise<{ id: string; label: string }[]> {
+	const here = { id: ctx.brainId, label: ctx.activeBrain?.label || ctx.brainId };
+	if (!deps?.listBrains) return [here];
+	try {
+		const rest = (await deps.listBrains())
+			.filter((b) => b.id !== here.id)
+			.map((b) => ({ id: b.id, label: brainLabel(b) }));
+		return [here, ...rest];
+	} catch {
+		// A search that can still answer for the brain you are IN must not fail because
+		// the wider set could not be resolved.
+		return [here];
+	}
+}
+
 export function registerLibrarianTools(
 	server: McpServer,
-	getContext: (opts?: TenantOpts) => Promise<BrainContext>
+	getContext: (opts?: TenantOpts) => Promise<BrainContext>,
+	deps?: LibrarianDeps
 ) {
 	// ---------- write_page (create or update) ----------
 	server.registerTool(
@@ -1472,6 +1524,7 @@ export function registerLibrarianTools(
 					prBody: `Move \`${path}\` to \`${newPath}\`; inbound links repointed. Proposed via the Isomorphic brain tools.`
 				});
 				return landed(
+					ctx,
 					outcome,
 					`Moved "${oldTitle}" to ${newPath}${newTitle !== oldTitle ? ` and renamed it "${newTitle}"` : ''}. Links in ${repointedPages} page(s) were repointed; the change was logged.${truncationNote(truncated)}${toolRosterNote(path, newPath)}`,
 					`Proposed moving "${oldTitle}" to ${newPath}${newTitle !== oldTitle ? ` (renamed "${newTitle}")` : ''}; links in ${repointedPages} page(s) repointed.${truncationNote(truncated)}${toolRosterNote(path, newPath)}`
@@ -1563,6 +1616,7 @@ export function registerLibrarianTools(
 							.join('\n')}\nUpdate those pages to remove or repoint the references.`
 					: '';
 				return landed(
+					ctx,
 					outcome,
 					`Deleted "${title}" (${path}). The change was logged.${refNote}${truncationNote(truncated)}${toolRosterNote(path)}`,
 					`Proposed deleting "${title}" (${path}).${refNote}${truncationNote(truncated)}${toolRosterNote(path)}`
@@ -1827,6 +1881,10 @@ export function registerLibrarianTools(
 	);
 
 	// ---------- search_pages ----------
+	// Names ITSELF in its own description, and says when to reach for it. A tool an
+	// agent hunts for by name mid-task must be findable by that name: `view_page` once
+	// outranked `read_page` in a host tool-search because read_page's own one-liner
+	// never said "read_page", and the agent concluded it could not read pages at all.
 	server.registerTool(
 		'search_pages',
 		{
@@ -1837,7 +1895,7 @@ export function registerLibrarianTools(
 			// states that a question works, because the previous engine's inability to
 			// answer one is the habit a model arrives with.
 			description:
-				'search_pages: full-text search across this brain\'s wiki pages, case-insensitive. Takes a phrase, a question, or a single term — the query is split into words and pages are ranked by how many of them they carry, so "who owns the referral program" works as well as "referral". Returns the best matching lines, best page first, each with its page path and line number. Use read_page or view_page to open a page it names.',
+				'search_pages: full-text search across a brain\'s wiki pages, case-insensitive. Takes a phrase, a question, or a single term — the query is split into words and pages are ranked by how many of them they carry, so "who owns the referral program" works as well as "referral". Returns the best matching lines, best page first, each with its page path and line number. By default it searches the brain you are in. Pass scope: "all" to search every brain you can reach in one call, which is how to find something when you are not sure which brain holds it; every result then names the brain it came from. Results from other brains are served from the search index and can lag a very recent edit there; read_page on any hit always returns the authoritative page. Use read_page or view_page to open a page it names.',
 			inputSchema: {
 				brain: brainArg,
 				query: z.string().min(2).describe('Text to search for.'),
@@ -1847,26 +1905,63 @@ export function registerLibrarianTools(
 					.describe(
 						'Restrict to a path prefix, e.g. "internal/frameworks/". Defaults to all content.'
 					),
+				scope: z
+					.enum(['brain', 'all'])
+					.optional()
+					.describe(
+						'"brain" (default) searches one brain: the one named by `brain`, else the active one. "all" searches every brain you can reach, and each result names its brain. Use "all" when you do not know which brain holds what you are after.'
+					),
 				expect: z
 					.string()
 					.optional()
 					.describe(
-						'Path of the page that SHOULD answer this query. Adds a line saying where it ranked and what beat it, without changing the results. Use it to check that a page is findable by the questions it owns, and to see whether a retitle helped.'
+						'Path of the page that SHOULD answer this query. Adds a line saying where it ranked and what beat it, without changing the results. Use it to check that a page is findable by the questions it owns, and to see whether a retitle helped. Measured against the brain you are in.'
 					)
 			}
 		},
-		async ({ query, prefix, brain, expect }) => {
-			const { store, repoArgs, config, db, brainId } = await getContext({ brain });
+		async ({ query, prefix, brain, scope, expect }) => {
+			const ctx = await getContext({ brain });
+			const { store, repoArgs, config, db, brainId } = ctx;
+			// FRESHNESS IS PER BRAIN, and only the brain you are in keeps it. ensureFresh
+			// costs one branchCommitSha per brain, plus a full reindex for any whose HEAD
+			// moved since it was last touched, which for a rarely-opened brain is the
+			// common case rather than the rare one. Fanning that out would spend N
+			// subrequests and an unbounded reindex before answering. So the other brains
+			// are served from whatever is indexed, and the result says so. A read_page on
+			// any hit resolves the authoritative blob anyway, and slightly stale discovery
+			// followed by a fresh read is correct behaviour for a search.
 			const { truncated } = await ensureFresh(db, store, repoArgs, brainId, config);
+
+			const targets = await searchTargets(ctx, scope === 'all' ? deps : undefined);
+			const wide = targets.length > 1;
+			const labelOf = new Map(targets.map((t) => [t.id, t.label]));
 
 			// The per-page cap is what keeps breadth: without it one page with a common
 			// term takes the whole budget and every other page is invisible, which on a
 			// large brain is the difference between a search and a lucky sort order.
 			const opts = { max: 50, perPage: 3 };
-			// Structured hits ride along for UI consumers (the brain MCP App);
-			// the text block stays the source of truth for chat/agent consumers.
-			const result = await searchIndex(db, brainId, query, prefix, opts.max, opts.perPage);
-			const { hits, terms } = result;
+			// A per-brain budget only when there is more than one brain; with one, the two
+			// limits collapse and the result is identical to the single-brain search.
+			const perBrain = wide ? 15 : opts.max;
+			const found = await searchBrains(
+				db,
+				targets.map((t) => t.id),
+				query,
+				prefix,
+				{ perBrain, total: opts.max, perPage: opts.perPage }
+			);
+			const { terms } = found;
+			// Structured hits ride along for UI consumers (the brain MCP App); the text
+			// block stays the source of truth for chat/agent consumers. Both carry the
+			// brain, because a result set that does not say where each line came from is
+			// how one client's material gets quoted into another client's conversation.
+			const hits = found.hits.map((h) => ({
+				path: h.path,
+				line: h.line,
+				text: h.text,
+				brain: h.brainId,
+				brainLabel: labelOf.get(h.brainId) ?? h.brainId
+			}));
 
 			// Naming the terms is the difference between "the brain does not say" and
 			// "I asked the wrong question". A model that gets a bare no-match rephrases
@@ -1879,24 +1974,55 @@ export function registerLibrarianTools(
 			// `expect` measures the retrieval path rather than changing it: the results
 			// are identical with and without it. It answers the one question a rewrite
 			// otherwise cannot check — did the page that owns this question come back,
-			// and did it come back first.
-			const probe = expect ? scoreProbe(query, expect, hits, opts.max) : null;
+			// and did it come back first. A path names a page in ONE brain, so under
+			// fan-out the probe reads the active brain's own ranking rather than the
+			// merged list, where another brain's hits would count as things that beat it.
+			const here = found.perBrain.get(brainId);
+			const probe = expect && here ? scoreProbe(query, expect, here.hits, perBrain) : null;
 			const probeNote = probe ? `\n\n${describeProbe(probe)}` : '';
 
+			const where = wide ? ` across ${targets.length} brains` : '';
 			if (hits.length === 0) {
 				return {
-					...ok(`No matches for "${query}".${note}${probeNote}${truncationNote(truncated)}`),
-					structuredContent: { hits: [], terms, pagesMatched: 0, probe }
+					...ok(
+						`No matches for "${query}"${where}.${note}${probeNote}${truncationNote(truncated)}`
+					),
+					structuredContent: {
+						hits: [],
+						terms,
+						pagesMatched: 0,
+						probe,
+						scope: wide ? 'all' : 'brain'
+					}
 				};
 			}
-			const capped = result.budgetHit ? ` (the top ${opts.max})` : '';
-			const lines = hits.map((h) => `${h.path}:${h.line}: ${h.text}`).join('\n');
+			const capped = found.budgetHit ? ` (the top ${opts.max})` : '';
+			// The brain is named on every line for a fan-out and never for a single-brain
+			// search: the confusion this guards against is crossing brains, and repeating
+			// the brain you are already in on all fifty lines is noise.
+			const lines = hits
+				.map((h) => (wide ? `${h.brainLabel} · ` : '') + `${h.path}:${h.line}: ${h.text}`)
+				.join('\n');
+			const pagesShown = wide
+				? new Set(hits.map((h) => `${h.brain}\0${h.path}`)).size
+				: (here?.pagesShown ?? 0);
+			const elision = wide
+				? `\nOther brains are searched from the index; read_page returns the live page.`
+				: here
+					? elisionNote(here, opts)
+					: '';
 			return {
 				...ok(
-					`${hits.length} match(es)${capped} for "${query}" across ${result.pagesShown} page(s), best first.${note}\n${lines}` +
-						`${elisionNote(result, opts)}${probeNote}${truncationNote(truncated)}`
+					`${hits.length} match(es)${capped} for "${query}"${where} across ${pagesShown} page(s), best first${wide ? ', grouped by brain' : ''}.${note}\n${lines}` +
+						`${elision}${probeNote}${truncationNote(truncated)}`
 				),
-				structuredContent: { hits, terms, pagesMatched: result.pagesMatched, probe }
+				structuredContent: {
+					hits,
+					terms,
+					pagesMatched: found.pagesMatched,
+					probe,
+					scope: wide ? 'all' : 'brain'
+				}
 			};
 		}
 	);

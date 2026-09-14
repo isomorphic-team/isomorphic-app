@@ -69,6 +69,8 @@ CREATE TABLE IF NOT EXISTS brains (
   created_by TEXT,                       -- app_users.user_id of the creator (audit)
   visibility TEXT NOT NULL DEFAULT 'org',     -- 'org' (every org member) | 'private' (grants only)
   created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  archived_at TEXT,                      -- set = gone from every listing (existence, not policy)
+  read_only  INTEGER NOT NULL DEFAULT 0, -- caps the resolved role at viewer, for everyone
   UNIQUE (repo_owner, repo_name)
 );
 

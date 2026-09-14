@@ -112,7 +112,7 @@ export function registerAnalyticsTools(
 
 			const orgName =
 				org?.model === 'platform' ? 'Personal' : (org?.name?.trim() ?? 'your organization');
-			const canSeePeople = roleAtLeast(ctx.orgRole, 'admin');
+			const canSeePeople = !!ctx.orgRole && roleAtLeast(ctx.orgRole, 'admin');
 			// Withheld rather than hidden: a non-admin's payload never carries the
 			// per-person numbers at all, so the gate does not depend on the widget.
 			const people = canSeePeople ? summary.people : [];

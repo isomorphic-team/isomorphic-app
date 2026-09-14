@@ -55,6 +55,7 @@
 		"probe:report": "tsx scripts/probe-report.ts",
 		"test:media": "tsx scripts/test-media.ts",
 		"test:index": "tsx scripts/test-index.ts",
+		"test:search": "tsx scripts/test-search.ts",
 		"test:links": "tsx scripts/test-links.ts",
 		"test:search": "tsx scripts/test-search.ts",
 		"test:policy": "tsx scripts/test-policy.ts",

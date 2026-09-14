@@ -799,17 +799,37 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
 		}
 		case 'search_pages': {
 			const q = String(args?.query ?? '').toLowerCase();
-			const hits: { path: string; line: number; text: string }[] = [];
-			for (const p of pth) {
-				stripFrontmatter(pg[p])
-					.split('\n')
-					.forEach((ln, i) => {
-						if (q && ln.toLowerCase().includes(q))
-							hits.push({ path: p, line: i + 1, text: ln.trim() });
-					});
+			// Mirrors the server: `scope: "all"` reaches every brain the caller can see and
+			// every hit names its brain, with the brain the call resolved leading. The
+			// default is that one brain, so an ordinary search stays where it was.
+			const wide = args?.scope === 'all';
+			const targets = wide
+				? [bid, ...brainsFixture.map((b) => b.id).filter((id) => id !== bid)]
+				: [bid];
+			const hits: {
+				path: string;
+				line: number;
+				text: string;
+				brain: string;
+				brainLabel: string;
+			}[] = [];
+			for (const id of targets) {
+				const label = brainsFixture.find((b) => b.id === id)?.label ?? id;
+				const pages = pagesFor(id);
+				for (const p of Object.keys(pages)) {
+					stripFrontmatter(pages[p])
+						.split('\n')
+						.forEach((ln, i) => {
+							if (q && ln.toLowerCase().includes(q))
+								hits.push({ path: p, line: i + 1, text: ln.trim(), brain: id, brainLabel: label });
+						});
+				}
 			}
 			const r = text(`${hits.length} match(es) for "${args?.query}".`);
-			return { ...r, structuredContent: { hits: hits.slice(0, 50) } };
+			return {
+				...r,
+				structuredContent: { hits: hits.slice(0, 50), scope: wide ? 'all' : 'brain' }
+			};
 		}
 		case 'edit_page': {
 			const md = pg[path];

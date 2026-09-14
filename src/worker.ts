@@ -230,7 +230,9 @@ interface TenantContext {
 	// membership governs managing people and adding/removing brains, brain access
 	// governs the content. Tools that manage the ORG must gate on this one
 	// (TenantOpts.requiresOrg), or a brain admin could edit the org roster.
-	orgRole: Role;
+	// Null when the caller holds no membership in the org that owns the resolved brain.
+	// Every gate reading this treats null as "not a member", never as "no gate".
+	orgRole: Role | null;
 	// The resolved org's id + the acting user's id — set only on the product-native
 	// (authjs) path, where an org table row exists. The member-management tools need
 	// them to scope the roster and enforce self-guards; undefined on the legacy
@@ -912,7 +914,13 @@ class McpSession {
 		// writes are atomic bundles (page + changelog, plus any repointed links, in one
 		// commit) and all responses speak in wiki terms, never git terms. See
 		// src/tools/librarian.ts.
-		registerLibrarianTools(server, (opts) => this.tenantContext(opts));
+		// `listBrains` is what lets search_pages fan out over every brain the caller can
+		// reach (scope: "all"). It is the SAME dep the brain tools take below, deliberately:
+		// the accessible set is one question with one answer, and a second way of computing
+		// it would eventually disagree with the switcher about which brains exist.
+		registerLibrarianTools(server, (opts) => this.tenantContext(opts), {
+			listBrains: () => this.listAccessibleBrainsForCaller()
+		});
 
 		// ---------- bulk import (derived-views PRD Phase 3) ----------
 		// sync_records: non-destructive upsert-by-key from an external source.

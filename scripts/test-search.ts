@@ -14,14 +14,18 @@
 
 import {
 	elisionNote,
+	mergeBrainResults,
 	rankPages,
 	scorePage,
 	searchCorpus,
 	signalsFromContent,
 	tokenizeQuery,
-	type PageSignal
+	type PageSignal,
+	type SearchResult
 } from '../src/lib/search.ts';
-import { escapeLike, searchIndex } from '../src/lib/brain-index.ts';
+import { escapeLike, searchBrains, searchIndex } from '../src/lib/brain-index.ts';
+import { searchTargets, type BrainContext } from '../src/tools/librarian.ts';
+import type { AccessibleBrain } from '../src/lib/orgs.ts';
 import { localD1 } from '../src/local/d1-sqlite.ts';
 
 import { checker } from './check.ts';
@@ -632,6 +636,202 @@ function seed(pages: { path: string; title: string | null; content: string }[]) 
 	check(
 		'the two ways of deriving a page signal agree',
 		fromContent.has.every(Boolean) && fromContent.phrase && r.hits.length > 0
+	);
+}
+
+// ------------------------------------------------------------ across brains ----
+//
+// Two decisions, both of which fail SILENTLY rather than loudly, which is why each has
+// its failing direction asserted:
+//
+//   searchTargets      WHICH brains a search reaches. Wrong, and one client's material
+//                      appears in another client's conversation, or a search claims to
+//                      span brains while quietly answering for one.
+//   mergeBrainResults  HOW the global ceiling is spent across those brains. The failure
+//                      is a fan-out where the first brain fills the cap and every later
+//                      brain reports nothing, which reads as "the others have no
+//                      matches" rather than "we stopped looking".
+
+function result(paths: string[], budgetHit = false): SearchResult {
+	return {
+		hits: paths.map((path, i) => ({ path, line: i + 1, text: path })),
+		terms: ['x'],
+		pagesMatched: paths.length,
+		pagesShown: paths.length,
+		linesElided: 0,
+		budgetHit
+	};
+}
+
+{
+	// The loud brain has 40 hits of its own; the quiet one has 3. A ceiling of 20 taken
+	// in order would be spent entirely on the loud one.
+	const loud = result(Array.from({ length: 40 }, (_, i) => `wiki/loud-${i}.md`));
+	const quiet = result(['wiki/q1.md', 'wiki/q2.md', 'wiki/q3.md']);
+	const m = mergeBrainResults(
+		[
+			{ brainId: 'acme/wiki', result: loud },
+			{ brainId: 'northwind/wiki', result: quiet }
+		],
+		20
+	);
+	const nw = m.hits.filter((h) => h.brainId === 'northwind/wiki');
+	check('the quiet brain keeps every one of its hits under the ceiling', nw.length === 3);
+	check('the ceiling holds', m.hits.length === 20, `${m.hits.length}`);
+	check('and hitting it is reported', m.budgetHit);
+	// Grouped for reading, in the caller's order, even though selection interleaved.
+	const ids = m.hits.map((h) => h.brainId);
+	check(
+		'hits are grouped by brain, caller order',
+		ids.lastIndexOf('acme/wiki') < ids.indexOf('northwind/wiki'),
+		JSON.stringify(ids)
+	);
+	const loudOut = m.hits.filter((h) => h.brainId === 'acme/wiki').map((h) => h.path);
+	check(
+		"within a brain the engine's rank order survives",
+		loudOut.every((p, i) => p === `wiki/loud-${i}.md`),
+		JSON.stringify(loudOut)
+	);
+	check('pagesMatched sums across brains', m.pagesMatched === 43, `${m.pagesMatched}`);
+}
+
+{
+	// One brain: the identity. This is what keeps the single-brain search byte-identical
+	// to what it was before fan-out existed.
+	const one = result(['wiki/b.md', 'wiki/a.md', 'wiki/c.md']);
+	const m = mergeBrainResults([{ brainId: 'acme/wiki', result: one }], 50);
+	check(
+		'one brain comes back exactly as ranked',
+		JSON.stringify(m.hits.map((h) => h.path)) ===
+			JSON.stringify(['wiki/b.md', 'wiki/a.md', 'wiki/c.md'])
+	);
+	check('and no budget is reported hit', !m.budgetHit);
+	check(
+		"a brain's own budgetHit is carried through",
+		mergeBrainResults([{ brainId: 'x', result: result(['a'], true) }], 50).budgetHit
+	);
+	check('no brains, no hits', mergeBrainResults([], 50).hits.length === 0);
+}
+
+{
+	// Through the real SQL path, three brains in one D1, deliberately lopsided. The
+	// third brain matches the needle and is in nobody's list, which is what makes
+	// isolation an assertion rather than a tautology.
+	sqlite.prepare('DELETE FROM brain_pages').run();
+	const ins = sqlite.prepare(
+		'INSERT INTO brain_pages (brain_id, path, title, blob_sha, content) VALUES (?, ?, ?, ?, ?)'
+	);
+	for (let i = 0; i < 60; i++) {
+		const path = `wiki/acme-${String(i).padStart(2, '0')}.md`;
+		ins.run('acme/wiki', path, `Page ${i}`, 'sha-' + path, '# Page\nthe kickoff plan\n');
+	}
+	ins.run('northwind/wiki', 'wiki/kickoff.md', 'Kickoff', 's1', '# Kickoff\nthe kickoff agenda\n');
+	ins.run(
+		'northwind/wiki',
+		'wiki/notes/later.md',
+		'Later',
+		's2',
+		'nothing here\nkickoff follow-up\n'
+	);
+	ins.run(
+		'private/wiki',
+		'wiki/secret.md',
+		'Secret',
+		's3',
+		'# Secret\nthe kickoff nobody may see\n'
+	);
+
+	const wide = await searchBrains(db, ['acme/wiki', 'northwind/wiki'], 'kickoff', undefined, {
+		perBrain: 15,
+		total: 50
+	});
+	check(
+		'a brain absent from the list contributes nothing',
+		!wide.hits.some((h) => h.brainId === 'private/wiki')
+	);
+	const nw = wide.hits.filter((h) => h.brainId === 'northwind/wiki');
+	const acme = wide.hits.filter((h) => h.brainId === 'acme/wiki');
+	check('the quiet brain still reports its hits', nw.length >= 2, `got ${nw.length}`);
+	check('the loud brain is held to its own budget', acme.length === 15, `got ${acme.length}`);
+	check(
+		'every hit names its brain',
+		wide.hits.every((h) => h.brainId)
+	);
+	check(
+		'per-brain results ride along for per-brain notes',
+		wide.perBrain.get('northwind/wiki')?.pagesMatched === 2,
+		`${wide.perBrain.get('northwind/wiki')?.pagesMatched}`
+	);
+	check('the terms are reported once', wide.terms.includes('kickoff'), JSON.stringify(wide.terms));
+
+	const scoped = await searchBrains(db, ['northwind/wiki'], 'kickoff', 'wiki/notes/', {
+		perBrain: 50,
+		total: 50
+	});
+	check(
+		'prefix restricts to a subtree, per brain',
+		scoped.hits.length === 1 && scoped.hits[0].path === 'wiki/notes/later.md',
+		JSON.stringify(scoped.hits)
+	);
+	const none = await searchBrains(db, [], 'kickoff', undefined, { perBrain: 50, total: 50 });
+	check('no brains means no hits', none.hits.length === 0);
+}
+
+// searchTargets: which brains a fan-out is allowed to reach.
+function ctxFor(id: string, label: string): BrainContext {
+	return { brainId: id, activeBrain: { id, label } } as BrainContext;
+}
+function brain(id: string, name: string): AccessibleBrain {
+	const [repo_owner, repo_name] = id.split('/');
+	return { id, repo_owner, repo_name, name } as AccessibleBrain;
+}
+
+{
+	const t = await searchTargets(ctxFor('acme/wiki', 'Acme'), undefined);
+	check('with no wiring, a search reaches exactly the brain you are in', t.length === 1);
+	check('and it is labelled', t[0].id === 'acme/wiki' && t[0].label === 'Acme', JSON.stringify(t));
+}
+
+{
+	const deps = {
+		listBrains: async () => [
+			brain('northwind/wiki', 'Northwind'),
+			brain('acme/wiki', 'Acme'),
+			brain('personal/brain', 'Personal')
+		]
+	};
+	const t = await searchTargets(ctxFor('acme/wiki', 'Acme'), deps);
+	check(
+		'fanning out reaches every accessible brain',
+		t.length === 3,
+		JSON.stringify(t.map((x) => x.id))
+	);
+	// Leading matters twice over: the active brain wins the round-robin under the global
+	// cap, and it reads first in the output.
+	check('the active brain leads', t[0].id === 'acme/wiki', JSON.stringify(t.map((x) => x.id)));
+	check(
+		'and is not listed twice',
+		t.filter((x) => x.id === 'acme/wiki').length === 1,
+		JSON.stringify(t.map((x) => x.id))
+	);
+	check(
+		'the others carry their display names',
+		t.some((x) => x.id === 'northwind/wiki' && x.label === 'Northwind'),
+		JSON.stringify(t)
+	);
+}
+
+{
+	const t = await searchTargets(ctxFor('acme/wiki', 'Acme'), {
+		listBrains: async () => {
+			throw new Error('D1 unavailable');
+		}
+	});
+	// A search that can still answer for the brain you are IN must not fail because the
+	// wider set could not be resolved.
+	check(
+		'a broken brain list falls back to the active brain',
+		t.length === 1 && t[0].id === 'acme/wiki'
 	);
 }
 
