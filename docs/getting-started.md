@@ -8,8 +8,10 @@ This is the guide for **using** Isomorphic. To run a server of your own, see
 
 ## What you need
 
-A Claude account, and the URL of an Isomorphic server. That is all. You do not need a
-GitHub account, a Cloudflare account, or anything installed locally.
+An MCP client, and the URL of an Isomorphic server. That is all. You do not need a GitHub
+account, a Cloudflare account, or anything installed locally. This guide uses claude.ai
+because it renders the in-conversation app; [other MCP hosts](#other-mcp-hosts) get the same
+tools, and the same app runs in a browser tab on a multi-tenant deployment (`/b/<owner>/<repo>/`).
 
 Every Isomorphic server exposes MCP at **`/mcp`** on its own origin:
 
@@ -92,9 +94,15 @@ people sign into, use `oauth` and give everyone their own identity.
 
 ## Other MCP hosts
 
-The endpoint is ordinary MCP over Streamable HTTP with OAuth, so any compliant host works.
-The in-client app UI (viewer, editor, graph) requires a host that implements MCP Apps; in
-other hosts the tools still work and return text.
+The endpoint is ordinary MCP over Streamable HTTP with OAuth, so any compliant host works,
+and the server never calls a model itself: the host brings the model. What varies by host is
+the UI, not the tools.
+
+| Surface                                                            | Works with                                                                                                                                                                                                     |
+| ------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| The tools (search, read, write, move, validate, views, import)     | Any MCP client: claude.ai, Claude Code, Claude Desktop, the MCP Inspector, and anything else that speaks the protocol.                                                                                         |
+| The in-conversation app (viewer, editor, file tree, graph, roster) | Hosts that implement the [MCP Apps](https://modelcontextprotocol.io/extensions/apps/overview) extension. claude.ai does; the MCP Inspector and VS Code Copilot render it too. Elsewhere the tools return text. |
+| The same app in a browser tab                                      | Any browser, no MCP host: `https://<server>/b/<owner>/<repo>/<path>` on a multi-tenant deployment, with the same email sign-in. Locally, `pnpm try` serves it at `http://127.0.0.1:8788/b/local/<folder>`.     |
 
 **Claude Code:**
 
