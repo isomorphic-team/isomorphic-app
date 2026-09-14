@@ -659,9 +659,12 @@ check(
 check('...and wrote no invite', inviteOf('b-main', 'nobody2@example.com') === undefined);
 check(
 	'the reply tells the sharer where the guest signs in',
-	(
-		await attempt(sharedAdmin, 'share_brain', { email: 'nobody3@example.com', access: 'viewer' })
-	).text.includes('https://brain.example/b/northwind/main')
+	// The one URL in the reply, compared whole rather than searched for as a
+	// substring, which CodeQL reads as an allow-list check and flags.
+	/https?:\/\/\S+/.exec(
+		(await attempt(sharedAdmin, 'share_brain', { email: 'nobody3@example.com', access: 'viewer' }))
+			.text
+	)?.[0] === 'https://brain.example/b/northwind/main'
 );
 check(
 	'revoking an invited address cancels the invite',
