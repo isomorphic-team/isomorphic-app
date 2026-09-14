@@ -34,16 +34,22 @@ import {
 	type Role,
 	type BrainAccessEntry,
 	listBrainAccess,
+	listPendingBrainInvites,
 	getBrainGrant,
 	setBrainGrant,
 	removeBrainGrant,
 	setBrainVisibility,
 	getAppUserByEmail,
 	getMemberRole,
+	createInvitation,
+	getPendingBrainInvite,
+	cancelBrainInvites,
 	roleAtLeast,
 	roleLabel,
-	parseRole
+	parseRole,
+	GUEST_ROLE_CAP
 } from '../lib/orgs.ts';
+import { webPathFor } from '../lib/web-app.ts';
 import { brainArgFor, fail } from './shared.ts';
 
 const brainArg = brainArgFor(
@@ -71,10 +77,15 @@ async function accessPayload(
 	ctx: BrainContext,
 	row: { brain_id: string; visibility: string; org_id: string }
 ) {
-	const entries = await listBrainAccess(ctx.db, row.brain_id, row.org_id, row.visibility);
+	const [entries, invites] = await Promise.all([
+		listBrainAccess(ctx.db, row.brain_id, row.org_id, row.visibility),
+		listPendingBrainInvites(ctx.db, row.brain_id)
+	]);
 	return {
 		view: 'brain-access' as const,
 		access: entries,
+		// Shares to addresses with no account yet, claimed as grants at first sign-in.
+		invites,
 		visibility: row.visibility,
 		activeBrain: ctx.activeBrain,
 		me: { user_id: ctx.actorUserId ?? '', role: ctx.role, orgRole: ctx.orgRole }
@@ -83,7 +94,12 @@ async function accessPayload(
 
 // Plain-text rendering for non-UI hosts (Claude Code, Inspector) and as the
 // summary the model narrates back.
-function accessText(label: string, visibility: string, entries: BrainAccessEntry[]): string {
+function accessText(
+	label: string,
+	visibility: string,
+	entries: BrainAccessEntry[],
+	invites: { email: string; role: Role }[] = []
+): string {
 	const head =
 		visibility === 'private'
 			? `"${label}" is private: ${entries.length} ${entries.length === 1 ? 'person has' : 'people have'} access:`
@@ -94,18 +110,44 @@ function accessText(label: string, visibility: string, entries: BrainAccessEntry
 		const how =
 			e.via === 'grant'
 				? 'shared directly'
-				: e.via === 'org'
-					? 'via organization'
-					: 'via organization admin';
+				: e.via === 'guest'
+					? 'guest, not in the organization'
+					: e.via === 'org'
+						? 'via organization'
+						: 'via organization admin';
 		return `- ${who}: ${roleLabel(e.role)} (${how})`;
 	});
-	return `${head}\n${lines.join('\n')}`;
+	const pending = invites.map(
+		(i) => `- ${i.email}: ${roleLabel(i.role)} (invited, not signed in yet)`
+	);
+	return [head, ...lines, ...pending].join('\n');
+}
+
+// Why a share to someone outside the organization cannot be written, or null.
+// Admin on a brain is the power to decide who reaches it, and that stays with
+// people the organization can see on its roster (effectiveBrainRole caps a guest
+// the same way, so this is the message and that is the invariant).
+function guestRefusal(actorRole: Role, target: Role): string | null {
+	if (!roleAtLeast(actorRole, target)) {
+		return `You can't grant more access than you have on this brain (${roleLabel(actorRole)}).`;
+	}
+	if (roleAtLeast(target, 'admin')) {
+		return `Someone outside the organization can be a guest ${roleLabel(GUEST_ROLE_CAP)} of this brain at most, not an admin. Invite them to the organization with invite_member if they should manage who reaches it.`;
+	}
+	return null;
 }
 
 export function registerBrainAccessTools(
 	server: McpServer,
-	getContext: (opts?: TenantOpts) => Promise<BrainContext>
+	getContext: (opts?: TenantOpts) => Promise<BrainContext>,
+	opts: { webBaseUrl?: string } = {}
 ) {
+	// Where a guest who has never signed in goes. The web app's URL for the brain
+	// when this deployment serves one; otherwise the connector is the only door.
+	const signInHint = (brainId: string): string =>
+		opts.webBaseUrl
+			? `They sign in at ${opts.webBaseUrl}${webPathFor(brainId, '')} with that email address (a magic link), or connect Isomorphic in Claude with it.`
+			: `They connect Isomorphic in Claude and sign in with that email address (a magic link).`;
 	// ---------- brain_access (sharing panel: interactive widget + data) ----------
 	registerAppTool(
 		server,
@@ -127,7 +169,7 @@ export function registerBrainAccessTools(
 				content: [
 					{
 						type: 'text' as const,
-						text: accessText(ctx.activeBrain.label, sc.visibility, sc.access)
+						text: accessText(ctx.activeBrain.label, sc.visibility, sc.access, sc.invites)
 					}
 				],
 				structuredContent: sc
@@ -144,7 +186,7 @@ export function registerBrainAccessTools(
 		{
 			title: 'Share a brain / change who can access it',
 			description:
-				"Change who can access a brain. Either share it with ONE person by email at a given level (`email` + `access`: viewer | editor | admin, or `none` to revoke), or change the brain's overall `visibility` ('private' = only people it's shared with, 'org' = everyone in the organization). Use when the user wants to share / unshare a brain, give someone access, change what someone can do in a brain, or make a brain private or organization-wide. Requires admin on that brain. The person must already be a member of the organization: invite them with invite_member first. To change someone's ORGANIZATION role instead, use set_member_role.",
+				"Change who can access a brain. Either share it with ONE person by email at a given level (`email` + `access`: viewer | editor | admin, or `none` to revoke), or change the brain's overall `visibility` ('private' = only people it's shared with, 'org' = everyone in the organization). Use when the user wants to share / unshare a brain, give someone access, change what someone can do in a brain, or make a brain private or organization-wide. Requires admin on that brain. The person does NOT need to be in the organization: someone outside it becomes a GUEST of this one brain (viewer or editor, never admin) and reaches nothing else, and an address with no account yet is invited and joins as a guest when they first sign in. To make someone a member of the whole organization instead, use invite_member; to change someone's ORGANIZATION role, use set_member_role.",
 			inputSchema: {
 				email: z
 					.string()
@@ -203,23 +245,52 @@ export function registerBrainAccessTools(
 			// ----- per-person grant -----
 			if (email) {
 				const emailTrim = email.trim();
+				if (!emailTrim.includes('@')) return fail(`"${emailTrim}" is not an email address.`);
 				const user = await getAppUserByEmail(ctx.db, emailTrim);
+
+				// No account yet: a BRAIN invite, claimed as a grant on first sign-in.
+				// Never a membership, so sharing cannot widen what they reach.
 				if (!user) {
-					return fail(
-						`${emailTrim} doesn't have an account yet. Invite them to the organization first with invite_member: then you can share this brain with them.`
-					);
-				}
-				// A brain can only be shared inside its own org: a grant to a non-member
-				// would be unreachable anyway (listAccessibleBrains starts from
-				// memberships), so writing one would be a silent no-op.
-				const orgRole = await getMemberRole(ctx.db, ctx.orgId, user.user_id);
-				if (!orgRole) {
-					return fail(
-						`${user.email} isn't a member of this organization. Invite them with invite_member first, then share the brain.`
-					);
+					const pending = await getPendingBrainInvite(ctx.db, row.brain_id, emailTrim);
+					if (access === 'none') {
+						if (!pending) {
+							notes.push(`${emailTrim} has no account and no pending invitation to this brain.`);
+						} else {
+							await cancelBrainInvites(ctx.db, row.brain_id, emailTrim);
+							notes.push(`Cancelled ${emailTrim}'s invitation to "${ctx.activeBrain.label}".`);
+						}
+					} else {
+						const target: Role = access ? (parseRole(access) ?? 'editor') : 'editor';
+						const refused = guestRefusal(ctx.role, target);
+						if (refused) return fail(refused);
+						if (pending) await cancelBrainInvites(ctx.db, row.brain_id, emailTrim);
+						await createInvitation(ctx.db, {
+							invite_id: crypto.randomUUID(),
+							org_id: ctx.orgId,
+							brain_id: row.brain_id,
+							email: emailTrim,
+							role: target,
+							invited_by: ctx.actorUserId
+						});
+						notes.push(
+							`Invited ${emailTrim} to "${ctx.activeBrain.label}" as ${roleLabel(target)}: they'll be a guest of this brain once they sign in. ${signInHint(ctx.activeBrain.id)}`
+						);
+					}
+					const sc = await accessPayload(ctx, row);
+					return {
+						content: [{ type: 'text' as const, text: notes.join(' ') }],
+						structuredContent: sc
+					};
 				}
 
+				// A non-member is a GUEST of this one brain: reachable now that
+				// listAccessibleBrains walks grants as well as memberships, and capped
+				// at editor by the rule and by the refusal below.
+				const orgRole = await getMemberRole(ctx.db, ctx.orgId, user.user_id);
+				const guest = !orgRole;
+
 				if (access === 'none') {
+					await cancelBrainInvites(ctx.db, row.brain_id, user.email);
 					if (user.user_id === ctx.actorUserId) {
 						return fail(
 							"You can't revoke your own access to a brain. Ask another admin to remove you."
@@ -247,6 +318,10 @@ export function registerBrainAccessTools(
 							`You can't grant more access than you have on this brain (${roleLabel(ctx.role)}).`
 						);
 					}
+					if (guest) {
+						const refused = guestRefusal(ctx.role, target);
+						if (refused) return fail(refused);
+					}
 					const existing = await getBrainGrant(ctx.db, row.brain_id, user.user_id);
 					await setBrainGrant(ctx.db, {
 						brain_id: row.brain_id,
@@ -254,11 +329,13 @@ export function registerBrainAccessTools(
 						role: target,
 						granted_by: ctx.actorUserId
 					});
+					const asWhat = guest ? `a guest ${roleLabel(target)}` : roleLabel(target);
 					notes.push(
 						existing
-							? `${user.email} is now ${roleLabel(target)} on "${ctx.activeBrain.label}".`
-							: `Shared "${ctx.activeBrain.label}" with ${user.email} as ${roleLabel(target)}.`
+							? `${user.email} is now ${asWhat} on "${ctx.activeBrain.label}".`
+							: `Shared "${ctx.activeBrain.label}" with ${user.email} as ${asWhat}.`
 					);
+					if (guest && !existing) notes.push(signInHint(ctx.activeBrain.id));
 				}
 			}
 
