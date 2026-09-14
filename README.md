@@ -85,52 +85,152 @@ So the substrate is one markdown file per concept, in a normal git repository, i
 You can read it on github.com, edit it in Obsidian, grep it, diff it, and review a change in a
 pull request. If you stop using Isomorphic tomorrow you still have everything.
 
-## What it does
+## Features
 
-**Reads that scale.** `search_pages`, `find_inbound_links`, `view_graph`, and `validate` query
-a derived index in D1 rather than GitHub. The earlier live-scan path capped out around 40 pages
-and cost hundreds of milliseconds; an index query is one or two local statements and is
-unbounded. The index is a cache, never the source of truth: every read compares the branch HEAD
-to the indexed commit first, so a page edited on github.com, by another agent, or by a merged
-pull request is never served stale. No webhook required.
+Every tool is listed, grouped by what it is for. The gate each one sits behind is in
+[Permissions](#permissions).
 
-**Writes that do not lose your work.** `write_page` takes exact find-and-replace edits or an
-append, so an agent changes a paragraph without rewriting the page. An anchor that matches zero
-times or several times aborts the whole call, so a batch is never half-applied. `move_page`
-repoints every inbound link, in both markdown and wikilink syntax, in the same commit.
-`delete_page` reports what still points at what you are removing. Writes to a protected brain
-open a pull request instead of committing.
+### Read and search
 
-**Views that compute.** A fenced ` ```okf-view ` block declares a listing, a table, or a count,
-derived from backlinks or from the pages under a prefix, filtered and grouped by frontmatter.
-Executing consumers always compute it live. A cached snapshot is written into the file so that
-github.com and other plain-markdown readers still see a real table; it is allowed to go stale,
-because whatever reads it cannot compute.
+- **`search_pages`**: ranked full-text search over the content index. Terms are ORed and scored
+  by coverage, so a question-shaped query still finds the page that answers half of it. The
+  response says which terms it searched and what it left out.
+- **`read_page`** / **`view_page`**: the raw markdown for the model, or the rendered page in the
+  app for the person. Kept separate so an agent can read quietly.
+- **`list_pages`** / **`browse_brain`**: the tree, or a summary of the brain's shape with the
+  tree attached while it is small.
+- **`find_inbound_links`**: every page pointing at a page, in both link syntaxes.
+- **`view_graph`**: the link graph, optionally focused on one page.
+- **`view_activity`**: who changed what, when, for the brain or for one page.
+- **`validate`**: broken links (defects, never silenced) plus advisory findings: concepts
+  inlined as sections of a folder note, pages missing a `type:`, two pages answering to one
+  title, orphans, folder notes that list none of their pages, two pages telling the same story,
+  and unanswered import questions. **`resolve`** records a decision on any finding by its key
+  so it stops being reported.
+- **`whoami`**: who the server thinks you are, in which org, at which roles.
 
-**An app, not a wall of text.** The viewer, editor, file tree, link graph, activity feed, and
-member roster render inside Claude as an
-[MCP App](https://modelcontextprotocol.io/extensions/apps/overview). The editor is ProseMirror
-with a markdown round-trip golden test, so what it writes back is the markdown you would have
-written by hand. The same bundle is served as a web app in a browser tab, for people who are
-not in the conversation.
+All reads query a derived index in D1 rather than GitHub, and every read compares the branch
+HEAD to the indexed commit first, so a page edited on github.com, by another agent, or by a
+merged pull request is never served stale. No webhook required.
+
+### Write
+
+- **`write_page`**: create or update. `content` replaces the body; `edits` is a list of exact
+  find-and-replace pairs; `append` adds at the end; `fields` sets or removes frontmatter keys
+  without touching the body; `type` is the one field OKF requires. An edit anchor that matches
+  zero or several times aborts the whole call, so a batch is never half-applied.
+- **`move_page`**: move or rename a page or a whole folder, repointing every inbound link,
+  markdown and wikilink, in the same commit.
+- **`delete_page`**: delete a page or folder, and report what still links to it.
+- **`edit_page`**: open the WYSIWYG editor in the app. ProseMirror with a markdown round-trip
+  golden test, so what it saves is the markdown you would have written by hand.
+- **`attach_media`** / **`read_media`**: images and PDFs, fetched from a URL by the server or
+  uploaded from the app, stored in the repo and optionally embedded in a page.
+- **`configure_brain`**: tell an adopted repository where its content lives, for a repo whose
+  markdown sits under `docs/` or elsewhere. Writes `.isomorphic.json`, which also holds the
+  optional list of frontmatter keys to index.
+
+Every write is one atomic commit, or a pull request when the default branch is protected,
+detected automatically. An identical retry inside ten minutes, the kind a client
+sends after a gateway timeout, is answered from a ledger rather than applied twice, so a
+retried append does not duplicate and a retried create does not fail claiming the page exists.
+
+### Computed views
+
+A fenced ` ```okf-view ` block declares a listing, a table, or a count, derived from backlinks
+or from the pages under a prefix, filtered and grouped by frontmatter. Executing consumers
+always compute it live. A cached snapshot is written into the file so that github.com and other
+plain-markdown readers still see a real table; it is allowed to go stale, because whatever
+reads it cannot compute.
+
+### Tools your brain defines
+
+Any page under a `tools/` folder becomes an MCP tool named `tool_<filename>`, declared in a
+small fenced block. Three read-only kinds: return an instruction payload, run one whitelisted
+read, or render one view. Arguments are interpolated as data and never evaluated, and a
+brain-authored tool cannot exceed its caller's access. These are written conversationally,
+which means Claude authoring Claude's own future tools. Capped at 25 per brain.
+
+### Bulk import
+
+- **`sync_records`**: upsert from a spreadsheet or CRM by key, without clobbering human edits.
+  Only declared source-owned fields are written, the body is written at create only, deletions
+  are proposed rather than applied, and a page a human deleted is never silently resurrected.
+  Unanswered questions persist and surface in `validate` until `resolve` answers them.
+
+### Several brains
+
+- **`brains`** / **`switch_brain`**: the switcher, and the brain every later call targets. Every
+  tool also takes an explicit `brain` argument.
+- **`create_brain`**: scaffold a fresh repository under the org and switch to it.
+- **`connect_brain`** / **`disconnect_brain`**: adopt an existing repository of markdown, or
+  drop it from the org (the repository itself is untouched).
+
+### The app
+
+The viewer, editor, file tree, search, link graph, activity feed, sharing panel, member roster,
+and analytics render inside the conversation as an
+[MCP App](https://modelcontextprotocol.io/extensions/apps/overview), in three display modes
+and both themes, and as a web page at `/b/<owner>/<repo>/<path>` for people who are not in the
+conversation.
+
+![The link graph over a 37-page brain: nodes sized by how many links touch them, colored by folder](docs/images/graph.png)
 
 ![The editor: a formatting toolbar, the page's properties, and the body as rich text, saved back as plain markdown](docs/images/editor.png)
 
-**Tools your brain defines.** Any page under a `tools/` folder becomes an MCP tool in Claude's
-tool list, declared in a small fenced block. Three read-only kinds: return an instruction
-payload, run one whitelisted read, or render one view. Arguments are interpolated as data and
-never evaluated, and a brain-authored tool cannot exceed its caller's access. These are written
-conversationally, which means Claude authoring Claude's own future tools.
+### Organization
 
-**Multi-tenant when you need it.** Orgs, roles (`viewer < editor < admin < owner`), a member
-roster with email invitations, several brains per person, and magic-link sign-in so teammates
-never need a GitHub account. All of it is in this repository and all of it is configuration
-rather than a hosted-only tier. See
-[the open-source boundary](docs/design/open-source-boundary.md).
+- **`members`**, **`invite_member`**, **`set_member_role`**, **`remove_member`**: the roster,
+  email invitations (no GitHub account needed), and org roles.
+- **`brain_access`** / **`share_brain`**: who can open a brain and at what level; grant,
+  change, revoke, and flip a brain between private and org-visible.
+- **`connect_github_org`**: install the GitHub App on a customer's own org so their brains live
+  in repositories they own.
+- **`connected_accounts`**, **`link_identity`**, **`unlink_identity`**: one person, several
+  email addresses, one set of brains.
+- **`analytics`**: is the organization using its brains, and who is not. Per-day counters in
+  the deployment's own database, never sent anywhere.
+- **`submit_feedback`**: file a bug or idea on the project tracker from inside the
+  conversation, with nothing identifying published.
 
-**Non-destructive bulk import.** `sync_records` upserts from a spreadsheet or CRM without
-clobbering human edits: only declared source-owned fields are written, deletions are proposed
-rather than applied, and a page a human deleted is never silently resurrected.
+All of it is in this repository and all of it is configuration rather than a hosted-only tier.
+See [the open-source boundary](docs/design/open-source-boundary.md).
+
+## Permissions
+
+Four roles, ordered: **`viewer < editor < admin < owner`**. Two scopes, deliberately separate,
+because "can you manage this organization's people?" and "can you write in this brain?" are
+different questions:
+
+- **Org role** comes from membership in the organization. It governs people and which brains
+  exist.
+- **Brain role** is what you can do inside one brain. It is the highest of three sources: your
+  org role if the brain is org-visible, an explicit share, and an admin floor (an org admin or
+  owner is at least admin on every brain in the org, since they control the GitHub org that
+  physically holds it). A share can only raise access, never lower it.
+
+| Action                                                                | Needs            |
+| --------------------------------------------------------------------- | ---------------- |
+| Read, search, browse, graph, activity, validate, brain-authored tools | brain **viewer** |
+| Write, move, delete pages; attach media; import; resolve findings     | brain **editor** |
+| Configure the brain; share it; make it private or org-visible         | brain **admin**  |
+| Create a brain                                                        | org **editor**   |
+| Connect or disconnect a repository; connect the GitHub org            | org **admin**    |
+| Invite, change roles, remove members                                  | org **admin**    |
+| Analytics totals and the per-brain table                              | org **viewer**   |
+| Analytics per-person table                                            | org **admin**    |
+
+Brains a person creates are **private** to them by default; brains adopted with `connect_brain`
+are **org-visible**. Sharing stays inside the brain's org, never grants above your own brain
+role, and never lets you revoke yourself. `owner` is the org's anti-lockout anchor: it is never
+assignable, demotable, or removable, and nobody can edit their own membership. A brain whose
+default branch is protected gets pull requests instead of commits, whatever the caller's role.
+
+The single-tenant deployment (`AUTH_MODE=static`, one shared bearer token) and the local
+runtime (`pnpm try`) have no org model: every caller is `owner`, and the org tools are not
+registered at all rather than advertised and refused. The rule itself is one pure function,
+`effectiveBrainRole`, and `pnpm test:access` walks its whole input space; `pnpm test:scope` pins
+which of the two roles each tool gates on, in both directions.
 
 ## Use it
 
