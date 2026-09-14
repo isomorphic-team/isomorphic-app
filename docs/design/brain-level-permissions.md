@@ -63,9 +63,14 @@ eventually disagree with itself. `pnpm test:access` walks the rule's whole input
 
 - **`create_brain` → `private`**, plus an explicit admin grant for the creator. A brain you just
   made is yours until you share it.
-- **`connect_brain` → `org`.** Adopting an existing repo is an _admin_ act on a repo the
-  organization already owns; the intent is "this org repo is now a brain for the team". Narrow it
-  afterwards with `share_brain`.
+- **`connect_brain` → `private`**, plus the same admin grant for whoever connected it (changed
+  2026-09-14, issue #93). It defaulted to `org` at first, on the reasoning that adopting is an admin
+  act on a repo the organization already owns. Two tools producing the same object with opposite
+  defaults was the problem: an admin who had learned "new brains are private" from `create_brain`
+  adopted a private GitHub repo and every org member could read it, with nothing in the response
+  saying so. Widening on request costs one `share_brain` call; widening silently is a disclosure.
+  The response now states the visibility in its sentence rather than leaving it as one field in
+  the brains array.
 - **Existing brains are grandfathered.** They keep `visibility='org'` and behave exactly as before.
   The change is not retroactive, so nobody loses access on deploy.
 

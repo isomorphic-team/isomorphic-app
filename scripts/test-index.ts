@@ -16,6 +16,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
 	backlinksTo,
+	detectNeedsConfig,
 	ensureFresh,
 	INDEX_SCHEMA_VERSION,
 	listIndexedPages,
@@ -202,11 +203,14 @@ const octokit = {
 			},
 			getTree: async () => {
 				getTreeCalls++;
-				return {
-					data: {
-						tree: currentPages.map((p) => ({ type: 'blob', path: p.path, sha: p.sha }))
-					}
-				};
+				// The config file is a blob in the tree at any revision that has one,
+				// exactly as GitHub's recursive tree reports it. detectNeedsConfig
+				// reads it from here rather than from getContent.
+				const tree = currentPages.map((p) => ({ type: 'blob', path: p.path, sha: p.sha }));
+				if (configFilesByRef.has(currentHead)) {
+					tree.push({ type: 'blob', path: '.isomorphic.json', sha: `config-${currentHead}` });
+				}
+				return { data: { tree } };
 			},
 			getBlob: async () => {
 				throw new Error('getBlob should not be needed (no oversized blobs in this fixture)');
@@ -685,6 +689,39 @@ console.log('\nContent index — bounded, resumable ensureFresh\n');
 		'blob sha matches git (empty blob)',
 		row.blob_sha === 'e69de29bb2d1d6434b8b29ae775ad8c2e48c5391',
 		row.blob_sha
+	);
+}
+
+// ---------------------------------------------------------------- scenario 7b
+// The "needs setup" flag (issue #94). It must see the config file: listTree
+// defaults to markdown only, so the file was never in the tree it inspected and a
+// repo whose config put its content under a non-default root was flagged as
+// unconfigured. The recommended remedy for that flag overwrites the config, which
+// is what makes a false positive here destructive rather than cosmetic.
+{
+	console.log('\nneeds-config detection sees an existing config');
+	resetDb();
+	currentHead = 'commit-needs-config';
+	currentPages = [{ path: 'brain/page.md', sha: 'sha-brain-page', content: '# Page\n' }];
+	check(
+		'markdown outside the default roots with NO config is flagged',
+		(await detectNeedsConfig(store, repo, config)) === true
+	);
+	configFilesByRef.set(currentHead, JSON.stringify({ paths: { 'brain/': 'content' } }));
+	check(
+		'the same tree WITH a .isomorphic.json is not flagged, whatever config the caller holds',
+		(await detectNeedsConfig(store, repo, config)) === false
+	);
+	configFilesByRef.clear();
+	currentPages = [];
+	check(
+		'an empty repo is not flagged (nothing to configure)',
+		(await detectNeedsConfig(store, repo, config)) === false
+	);
+	currentPages = [{ path: 'wiki/page.md', sha: 'sha-wiki-page', content: '# Page\n' }];
+	check(
+		'markdown under the default roots is not flagged',
+		(await detectNeedsConfig(store, repo, config)) === false
 	);
 }
 
