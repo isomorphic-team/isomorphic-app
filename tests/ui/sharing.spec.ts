@@ -90,3 +90,29 @@ test('sharing is gated on the brain role, not the org role', async ({ page }) =>
 	const personal = rows.filter({ hasText: 'Owner' });
 	await expect(personal.getByRole('button', { name: 'Share' }).first()).toBeVisible();
 });
+
+test('a share to an address with no account shows up as an invite, and can be cancelled', async ({
+	page
+}) => {
+	const app = await openApp(page, 'access');
+	await expectView(app, 'brain-access');
+	const main = app.locator('main[data-view="brain-access"]');
+	await expect(main.getByText('Invited')).toHaveCount(0);
+
+	// The share flow off the header, with an email nobody here has.
+	await app.getByRole('banner').getByRole('button', { name: 'Share' }).click();
+	await expectView(app, 'share-brain');
+	await app.getByRole('textbox').first().fill('newperson@client.example');
+	await app.getByRole('button', { name: 'Share', exact: true }).last().click();
+
+	// Back on the panel, the invite is the evidence the share happened.
+	await expectView(app, 'brain-access');
+	await expect(main.getByText('Invited', { exact: true })).toBeVisible();
+	const row = main.locator('li', { hasText: 'newperson@client.example' });
+	await expect(row).toContainText('Guest once they sign in');
+	await expect(row).toContainText('Editor');
+
+	await row.getByRole('button', { name: 'Cancel invite for newperson@client.example' }).click();
+	await expect(main.locator('li', { hasText: 'newperson@client.example' })).toHaveCount(0);
+	await expect(main.getByText('Invited', { exact: true })).toHaveCount(0);
+});

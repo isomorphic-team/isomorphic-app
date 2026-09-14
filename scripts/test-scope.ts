@@ -203,7 +203,9 @@ function contextFor(p: Persona) {
 // Register the real tools against a stub server that only captures handlers.
 // ---------------------------------------------------------------------------
 // registerAppTool delegates to server.registerTool, so one method covers both.
-type Handler = (args: Record<string, unknown>) => Promise<{ isError?: boolean; content?: unknown }>;
+type Handler = (
+	args: Record<string, unknown>
+) => Promise<{ isError?: boolean; content?: unknown; structuredContent?: unknown }>;
 
 // What each org-scope resolution was asked for. The `org` argument only does anything
 // if the tool actually forwards it. A tool that accepts it and drops it silently
@@ -303,17 +305,18 @@ function toolsFor(
 async function attempt(p: Persona, tool: string, args: Record<string, unknown> = {}) {
 	const handler = toolsFor(p).get(tool);
 	if (!handler) {
-		return { outcome: 'missing' as const, detail: `tool ${tool} not registered`, text: '' };
+		return { outcome: 'missing' as const, detail: `tool ${tool} not registered`, text: '', sc: {} };
 	}
 	try {
 		const res = await handler(args);
 		const content = (res?.content ?? []) as { type?: string; text?: string }[];
 		const text = content.map((c) => (c.type === 'text' ? (c.text ?? '') : '')).join('\n');
+		const sc = (res?.structuredContent ?? {}) as Record<string, unknown>;
 		return res?.isError
-			? { outcome: 'denied' as const, detail: JSON.stringify(res.content), text }
-			: { outcome: 'allowed' as const, detail: '', text };
+			? { outcome: 'denied' as const, detail: JSON.stringify(res.content), text, sc }
+			: { outcome: 'allowed' as const, detail: '', text, sc };
 	} catch (e) {
-		return { outcome: 'denied' as const, detail: String(e), text: '' };
+		return { outcome: 'denied' as const, detail: String(e), text: '', sc: {} };
 	}
 }
 const denies = async (p: Persona, tool: string, args?: Record<string, unknown>) =>
@@ -653,6 +656,18 @@ check(
 		inviteOf('b-main', 'nobody@example.com')?.org_id === 'org1'
 );
 check(
+	'...and the panel payload carries it as evidence',
+	(
+		(await attempt(sharedAdmin, 'brain_access', {})).sc as { invites?: { email: string }[] }
+	).invites?.some((i) => i.email.toLowerCase() === 'nobody@example.com') === true
+);
+check(
+	'...while the org roster does not list it as a pending member',
+	!(
+		(await attempt(sharedAdmin, 'members', {})).sc as { invites?: { email: string }[] }
+	).invites?.some((i) => i.email === 'nobody@example.com')
+);
+check(
 	'refuses admin for an address with no account too',
 	await denies(sharedAdmin, 'share_brain', { email: 'nobody2@example.com', access: 'admin' })
 );
@@ -671,6 +686,12 @@ check(
 	await allows(sharedAdmin, 'share_brain', { email: 'nobody@example.com', access: 'none' })
 );
 check('...and it is gone', inviteOf('b-main', 'nobody@example.com') === undefined);
+check(
+	'...from the panel too',
+	!(
+		(await attempt(sharedAdmin, 'brain_access', {})).sc as { invites?: { email: string }[] }
+	).invites?.some((i) => i.email.toLowerCase() === 'nobody@example.com')
+);
 check(
 	'the invite rides the ordinary share gate: a brain editor cannot send one',
 	await denies(writer, 'share_brain', { email: 'nobody4@example.com', access: 'viewer' })

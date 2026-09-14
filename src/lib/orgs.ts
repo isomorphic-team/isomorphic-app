@@ -680,18 +680,38 @@ export async function listMembers(db: D1Database, orgId: string): Promise<Member
 	return results ?? [];
 }
 
-// Pending (unaccepted, unexpired) invitations for an org, newest first.
+// Pending (unaccepted, unexpired) invitations for an org, newest first. ORG
+// invites only: a brain invite carries the brain's org_id too, and listing it here
+// would show the roster a member who was never invited to join.
 export async function listPendingInvites(db: D1Database, orgId: string): Promise<Invite[]> {
 	const { results } = await db
 		.prepare(
 			`SELECT invite_id, email, role, invited_at, expires_at
 			   FROM invitations
 			  WHERE org_id = ?1
+			    AND brain_id IS NULL
 			    AND accepted_at IS NULL
 			    AND expires_at > datetime('now')
 			  ORDER BY invited_at DESC`
 		)
 		.bind(orgId)
+		.all<Invite>();
+	return results ?? [];
+}
+
+// Pending brain invites for one brain, newest first: the sharing panel's evidence
+// that a share to an address with no account happened, until they sign in.
+export async function listPendingBrainInvites(db: D1Database, brainId: string): Promise<Invite[]> {
+	const { results } = await db
+		.prepare(
+			`SELECT invite_id, email, role, invited_at, expires_at
+			   FROM invitations
+			  WHERE brain_id = ?1
+			    AND accepted_at IS NULL
+			    AND expires_at > datetime('now')
+			  ORDER BY invited_at DESC`
+		)
+		.bind(brainId)
 		.all<Invite>();
 	return results ?? [];
 }

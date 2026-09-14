@@ -34,6 +34,7 @@ import {
 	type Role,
 	type BrainAccessEntry,
 	listBrainAccess,
+	listPendingBrainInvites,
 	getBrainGrant,
 	setBrainGrant,
 	removeBrainGrant,
@@ -76,10 +77,15 @@ async function accessPayload(
 	ctx: BrainContext,
 	row: { brain_id: string; visibility: string; org_id: string }
 ) {
-	const entries = await listBrainAccess(ctx.db, row.brain_id, row.org_id, row.visibility);
+	const [entries, invites] = await Promise.all([
+		listBrainAccess(ctx.db, row.brain_id, row.org_id, row.visibility),
+		listPendingBrainInvites(ctx.db, row.brain_id)
+	]);
 	return {
 		view: 'brain-access' as const,
 		access: entries,
+		// Shares to addresses with no account yet, claimed as grants at first sign-in.
+		invites,
 		visibility: row.visibility,
 		activeBrain: ctx.activeBrain,
 		me: { user_id: ctx.actorUserId ?? '', role: ctx.role, orgRole: ctx.orgRole }
@@ -88,7 +94,12 @@ async function accessPayload(
 
 // Plain-text rendering for non-UI hosts (Claude Code, Inspector) and as the
 // summary the model narrates back.
-function accessText(label: string, visibility: string, entries: BrainAccessEntry[]): string {
+function accessText(
+	label: string,
+	visibility: string,
+	entries: BrainAccessEntry[],
+	invites: { email: string; role: Role }[] = []
+): string {
 	const head =
 		visibility === 'private'
 			? `"${label}" is private: ${entries.length} ${entries.length === 1 ? 'person has' : 'people have'} access:`
@@ -106,7 +117,10 @@ function accessText(label: string, visibility: string, entries: BrainAccessEntry
 						: 'via organization admin';
 		return `- ${who}: ${roleLabel(e.role)} (${how})`;
 	});
-	return `${head}\n${lines.join('\n')}`;
+	const pending = invites.map(
+		(i) => `- ${i.email}: ${roleLabel(i.role)} (invited, not signed in yet)`
+	);
+	return [head, ...lines, ...pending].join('\n');
 }
 
 // Why a share to someone outside the organization cannot be written, or null.
@@ -155,7 +169,7 @@ export function registerBrainAccessTools(
 				content: [
 					{
 						type: 'text' as const,
-						text: accessText(ctx.activeBrain.label, sc.visibility, sc.access)
+						text: accessText(ctx.activeBrain.label, sc.visibility, sc.access, sc.invites)
 					}
 				],
 				structuredContent: sc

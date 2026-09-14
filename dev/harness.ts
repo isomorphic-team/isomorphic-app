@@ -386,6 +386,12 @@ let brainGrants: Record<string, Record<string, PreviewRole>> = {
 const guestAccounts: { user_id: string; email: string; name: string | null }[] = [
 	{ user_id: 'u-tomas', email: 'tomas@client.example', name: 'Tomás Rivera' }
 ];
+// Brain invites: shares to addresses with no account, per brain. What the panel
+// shows under "Invited" until they sign in (the server's listPendingBrainInvites).
+const brainInvites: Record<
+	string,
+	{ invite_id: string; email: string; role: PreviewRole; invited_at: string; expires_at: string }[]
+> = {};
 // The orgs I belong to, which is NOT the same list as the orgs my brains are in.
 // `org-empty` holds no brain at all, and that is the point: it cannot be derived from
 // brainsFixture, so it is the case that proves the picker reads the server's org list
@@ -488,6 +494,7 @@ function accessResult(brainId: string, msg: string): CallToolResult {
 		structuredContent: {
 			view: 'brain-access',
 			access,
+			invites: brainInvites[b.id] ?? [],
 			visibility: b.visibility,
 			activeBrain: brainMeta(b.id),
 			me: { user_id: ME.user_id, role: myBrainRole(b) ?? 'viewer', orgRole: b.orgRole }
@@ -1148,8 +1155,24 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
 				// No account: the server writes a brain invite. Nothing to show on the
 				// panel until they sign in, so only the note changes.
 				if (!m) {
+					brainInvites[b.id] ??= [];
+					const list = brainInvites[b.id];
+					if (access === 'none') {
+						const i = list.findIndex((x) => x.email.toLowerCase() === email.toLowerCase());
+						if (i < 0) return errText(`${email} has no account and no pending invitation.`);
+						list.splice(i, 1);
+						notes.push(`Cancelled ${email}'s invitation to "${b.label}".`);
+						return accessResult(b.id, notes.join(' '));
+					}
 					if (access === 'admin')
 						return errText('Someone outside the organization can be a guest editor at most.');
+					list.unshift({
+						invite_id: `inv-${list.length + 1}`,
+						email,
+						role: access as PreviewRole,
+						invited_at: nowDate().toISOString(),
+						expires_at: new Date(nowMs() + 30 * 86_400_000).toISOString()
+					});
 					notes.push(`Invited ${email} to "${b.label}" as ${roleLabel(access as Role)}.`);
 					return accessResult(b.id, notes.join(' '));
 				}

@@ -241,6 +241,9 @@ import {
 	chooseBrain,
 	getDefaultBrainForUser,
 	listBrainAccess,
+	listPendingInvites,
+	listPendingBrainInvites,
+	createInvitation,
 	setBrainGrant,
 	removeBrainGrant,
 	setBrainVisibility,
@@ -457,6 +460,36 @@ await setBrainGrant(db, {
 	);
 }
 sqlite.exec(`DELETE FROM brain_memberships WHERE user_id = 'gus'`);
+
+// A brain invite carries the brain's org_id, so the two pending lists have to
+// tell them apart: the roster must not show a member who was never invited to
+// join, and the panel must not show the org's own invites.
+console.log('\npending invites: a brain invite is on the panel, never on the roster');
+await createInvitation(db, {
+	invite_id: 'inv-org',
+	org_id: 'org1',
+	email: 'hire@example.com',
+	role: 'editor',
+	invited_by: 'alice'
+});
+await createInvitation(db, {
+	invite_id: 'inv-brain',
+	org_id: 'org1',
+	brain_id: 'b-alice',
+	email: 'client@example.com',
+	role: 'viewer',
+	invited_by: 'alice'
+});
+{
+	const roster = (await listPendingInvites(db, 'org1')).map((i) => i.invite_id);
+	check('the roster lists the org invite', roster.includes('inv-org'));
+	check('...and NOT the brain invite', !roster.includes('inv-brain'), roster.join(','));
+	const panel = (await listPendingBrainInvites(db, 'b-alice')).map((i) => i.invite_id);
+	check('the panel lists the brain invite', panel.includes('inv-brain'));
+	check('...and NOT the org invite', !panel.includes('inv-org'), panel.join(','));
+	check("...nor another brain's", (await listPendingBrainInvites(db, 'b-bob')).length === 0);
+}
+sqlite.exec(`DELETE FROM invitations WHERE invite_id IN ('inv-org', 'inv-brain')`);
 
 console.log('\nvisibility flip, and grants survive it');
 await setBrainVisibility(db, 'b-bob', 'org');

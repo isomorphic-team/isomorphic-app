@@ -57,7 +57,11 @@ writes `memberships`, so sharing with an outsider cannot widen what they reach b
 brain.
 
 **The app.** The share form no longer says "they must already be a member". The panel shows a
-guest row with a "Guest" caption and offers viewer or editor for it, never admin.
+guest row with a "Guest" caption and offers viewer or editor for it, never admin, and an
+"Invited" group listing brain invites not yet claimed, each with a cancel. That group is the
+only in-app evidence a share to a new address happened until they sign in. The org roster's
+pending list excludes brain invites (they carry the brain's `org_id`), or it would show a
+member who was never invited to join.
 
 ## What was deliberately not built
 
@@ -83,7 +87,8 @@ guest row with a "Guest" caption and offers viewer or editor for it, never admin
 - `pnpm test:invites`: a brain invite claims as a grant and writes no membership; an org
   invite is unchanged; a brain invite to someone who already holds a grant rewrites nothing.
 - `pnpm test:scope`: `share_brain` writes a grant for an outsider with an account, refuses
-  `admin` for them, writes a brain invite for an unknown address, and `access: 'none'` cancels
-  it. The `outsider` persona from #86 still reaches nothing at org scope.
+  `admin` for them, writes a brain invite for an unknown address that the `brain_access`
+  payload then carries and the `members` payload does not, and `access: 'none'` cancels it.
+  The `outsider` persona from #86 still reaches nothing at org scope.
 
 Each was verified red against the pre-change code, per the rule in `CLAUDE.md`.
