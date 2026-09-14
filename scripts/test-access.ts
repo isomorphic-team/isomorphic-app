@@ -169,6 +169,23 @@ check(
 	"and an org-visible brain does not widen a non-member's grant",
 	effectiveBrainRole({ visibility: 'org', orgRole: null, grant: 'viewer' }) === 'viewer'
 );
+// A non-member is a GUEST, and a guest is capped: admin on a brain is the power to
+// decide who reaches it, which stays with the organization's own people. share_brain
+// refuses to write the row; this is what makes that refusal an invariant, since a
+// row can reach the table by more than one path.
+check(
+	"a guest's admin grant resolves to editor",
+	effectiveBrainRole({ visibility: 'private', orgRole: null, grant: 'admin' }) === 'editor'
+);
+check(
+	"a MEMBER's admin grant is not capped",
+	effectiveBrainRole({ visibility: 'private', orgRole: 'viewer', grant: 'admin' }) === 'admin'
+);
+check(
+	'read-only still applies on top of the guest cap',
+	effectiveBrainRole({ visibility: 'private', orgRole: null, grant: 'admin', readOnly: true }) ===
+		'viewer'
+);
 
 // ---------------------------------------------------------------------------
 console.log('\nRead-only caps the whole computation');
@@ -224,6 +241,9 @@ import {
 	chooseBrain,
 	getDefaultBrainForUser,
 	listBrainAccess,
+	listPendingInvites,
+	listPendingBrainInvites,
+	createInvitation,
 	setBrainGrant,
 	removeBrainGrant,
 	setBrainVisibility,
@@ -287,6 +307,42 @@ check(
 	'org role rides alongside the brain role',
 	(await listAccessibleBrains(db, ['bob'])).every((b) => b.org_role === 'editor')
 );
+
+// A GUEST: a grant on a brain in an organization they hold no membership in.
+// Reachable only because the query walks grants as well as memberships; it used
+// to begin at memberships, and a guest produced no row at all.
+console.log('\nlistAccessibleBrains: a guest reaches the one brain and nothing else');
+sqlite.exec(`
+  INSERT INTO app_users (user_id, email, name) VALUES ('gus', 'gus@client.example', 'Gus');
+  INSERT INTO brain_memberships (brain_id, user_id, role, granted_by) VALUES
+    ('b-alice', 'gus', 'admin', 'alice');
+`);
+{
+	const gus = await listAccessibleBrains(db, ['gus']);
+	check(
+		'the shared brain is listed',
+		JSON.stringify(gus.map((b) => b.id)) === JSON.stringify(['northwind/alicep']),
+		JSON.stringify(gus.map((b) => b.id))
+	);
+	check('with a null org role, since they are not a member', gus[0]?.org_role === null);
+	check('and capped at editor whatever the row says', gus[0]?.role === 'editor');
+	check(
+		'the org-visible brain is NOT among them: visibility is for members',
+		!gus.some((b) => b.id === 'northwind/legacy')
+	);
+	// A member with a grant reached by both legs folds to one row that keeps the
+	// membership: the union must not turn a member into a guest.
+	const bob = await listAccessibleBrains(db, ['bob']);
+	check(
+		"a member's own brain is listed once",
+		bob.filter((b) => b.id === 'northwind/bobp').length === 1
+	);
+	check(
+		'...still carrying their org role',
+		bob.find((b) => b.id === 'northwind/bobp')?.org_role === 'editor'
+	);
+}
+sqlite.exec(`DELETE FROM brain_memberships WHERE user_id = 'gus'`);
 
 console.log('\ngetDefaultBrainForUser: never lands someone in a brain they cannot open');
 check(
@@ -373,6 +429,67 @@ check(
 	legacyAccess.every((e) => e.via === 'org') &&
 		legacyAccess.find((e) => e.user_id === 'carol')?.role === 'viewer'
 );
+// The panel shows guests, after members, and says so. `guest` is derived from
+// the absence of a membership rather than stored, so the same row reads `grant`
+// the day its holder joins the organization.
+await setBrainGrant(db, {
+	brain_id: 'b-alice',
+	user_id: 'gus',
+	role: 'editor',
+	granted_by: 'alice'
+});
+{
+	const panel = await listBrainAccess(db, 'b-alice', 'org1', 'private');
+	const gus = panel.find((e) => e.user_id === 'gus');
+	check('a guest appears on the panel', !!gus);
+	check(
+		'...marked as a guest, at the granted role',
+		gus?.via === 'guest' && gus?.role === 'editor'
+	);
+	check('...after the members', panel.findIndex((e) => e.user_id === 'gus') === panel.length - 1);
+	sqlite.exec(`INSERT INTO memberships (org_id, user_id, role) VALUES ('org1', 'gus', 'viewer')`);
+	const joined = (await listBrainAccess(db, 'b-alice', 'org1', 'private')).find(
+		(e) => e.user_id === 'gus'
+	);
+	check('the day they join the org, the same row reads as a direct share', joined?.via === 'grant');
+	sqlite.exec(`DELETE FROM memberships WHERE user_id = 'gus'`);
+	const gone = await listBrainAccess(db, 'b-legacy', 'org1', 'org');
+	check(
+		'a guest of one brain is not on the panel of another',
+		!gone.some((e) => e.user_id === 'gus')
+	);
+}
+sqlite.exec(`DELETE FROM brain_memberships WHERE user_id = 'gus'`);
+
+// A brain invite carries the brain's org_id, so the two pending lists have to
+// tell them apart: the roster must not show a member who was never invited to
+// join, and the panel must not show the org's own invites.
+console.log('\npending invites: a brain invite is on the panel, never on the roster');
+await createInvitation(db, {
+	invite_id: 'inv-org',
+	org_id: 'org1',
+	email: 'hire@example.com',
+	role: 'editor',
+	invited_by: 'alice'
+});
+await createInvitation(db, {
+	invite_id: 'inv-brain',
+	org_id: 'org1',
+	brain_id: 'b-alice',
+	email: 'client@example.com',
+	role: 'viewer',
+	invited_by: 'alice'
+});
+{
+	const roster = (await listPendingInvites(db, 'org1')).map((i) => i.invite_id);
+	check('the roster lists the org invite', roster.includes('inv-org'));
+	check('...and NOT the brain invite', !roster.includes('inv-brain'), roster.join(','));
+	const panel = (await listPendingBrainInvites(db, 'b-alice')).map((i) => i.invite_id);
+	check('the panel lists the brain invite', panel.includes('inv-brain'));
+	check('...and NOT the org invite', !panel.includes('inv-org'), panel.join(','));
+	check("...nor another brain's", (await listPendingBrainInvites(db, 'b-bob')).length === 0);
+}
+sqlite.exec(`DELETE FROM invitations WHERE invite_id IN ('inv-org', 'inv-brain')`);
 
 console.log('\nvisibility flip, and grants survive it');
 await setBrainVisibility(db, 'b-bob', 'org');

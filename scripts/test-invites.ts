@@ -94,6 +94,42 @@ check(
 	planInviteClaims([inv('i1', 'orgB', 'editor', 'work-id')], [])[0].user_id === 'work-id'
 );
 
+// A BRAIN invite (docs/design/guest-access.md): the same rules, keyed on the
+// brain, and it never joins the org the brain lives in.
+const binv = (id: string, brain: string, role: Role): MatchedInvite => ({
+	...inv(id, 'orgB', role),
+	brain_id: brain
+});
+{
+	const claims = planInviteClaims([binv('i1', 'b-x', 'editor')], []);
+	check('a brain invite grants on its brain', claims[0].grants && claims[0].brain_id === 'b-x');
+	check('and joins NO org, even though it names one', !claims[0].joins);
+}
+{
+	const claims = planInviteClaims([binv('i1', 'b-x', 'admin')], [], ['b-x']);
+	check('an existing grant is never rewritten', !claims[0].grants);
+	check('but the invite is still accepted', claims.length === 1);
+}
+{
+	const claims = planInviteClaims([binv('i1', 'b-x', 'viewer'), binv('i2', 'b-x', 'editor')], []);
+	check(
+		'two invites to one brain collapse to one grant',
+		claims.filter((c) => c.grants).length === 1
+	);
+	check('at the highest role invited', claims.find((c) => c.grants)?.role === 'editor');
+}
+{
+	const claims = planInviteClaims([inv('i1', 'orgB', 'viewer'), binv('i2', 'b-x', 'editor')], []);
+	check(
+		'an org invite and a brain invite to the same org each do their own thing',
+		claims[0].joins && !claims[0].grants && claims[1].grants && !claims[1].joins
+	);
+}
+check(
+	'an org invite never grants',
+	planInviteClaims([inv('i1', 'orgB', 'editor')], []).every((c) => !c.grants && !c.brain_id)
+);
+
 // ---------------------------------------------------------------------------
 console.log('\nnoBrainOutcome: what a member with no reachable brain is told');
 // ---------------------------------------------------------------------------
@@ -256,6 +292,71 @@ check(
 	(await claimPendingInvites(db, await linkedUserIds(db, 'ada-home'))).length === 0 &&
 		(await listPendingInvites(db, 'orgC')).some((i) => i.invite_id === 'inv-stranger')
 );
+
+// ---------------------------------------------------------------------------
+console.log('\nA brain invite is claimed as a grant, and the org never learns a member');
+// ---------------------------------------------------------------------------
+// Cy is a Contoso person being shown ONE Northwind brain. The invite names the
+// brain; claiming it must write brain_memberships and nothing in memberships, and
+// the brain must then be reachable through the ordinary listing with no org role.
+await createInvitation(db, {
+	invite_id: 'inv-guest',
+	org_id: 'orgB',
+	brain_id: 'b-northwind',
+	email: 'CY@contoso.example',
+	role: 'editor',
+	invited_by: 'boss'
+});
+{
+	const claims = await claimPendingInvites(db, ['cy']);
+	check('the brain invite is claimed', claims.length === 1 && claims[0].grants);
+	check(
+		'as a grant on the brain',
+		sqlite
+			.prepare(
+				`SELECT role FROM brain_memberships WHERE brain_id = 'b-northwind' AND user_id = 'cy'`
+			)
+			.get()?.role === 'editor'
+	);
+	check(
+		'and NOT as a membership',
+		(await listMembers(db, 'orgB')).every((m) => m.user_id !== 'cy')
+	);
+	check(
+		'the invite is marked accepted',
+		!(await listPendingInvites(db, 'orgB')).some((i) => i.invite_id === 'inv-guest')
+	);
+	const reach = await listAccessibleBrains(db, ['cy']);
+	check(
+		'the guest now reaches that brain',
+		reach.some((b) => b.brain_id === 'b-northwind' && b.role === 'editor')
+	);
+	check('with no org role', reach.find((b) => b.brain_id === 'b-northwind')?.org_role === null);
+	check('a second claim writes nothing', (await claimPendingInvites(db, ['cy'])).length === 0);
+}
+// A second brain invite to someone who already holds a grant leaves it alone:
+// the grant is what the sharer wants NOW.
+await createInvitation(db, {
+	invite_id: 'inv-guest-again',
+	org_id: 'orgB',
+	brain_id: 'b-northwind',
+	email: 'cy@contoso.example',
+	role: 'viewer',
+	invited_by: 'boss'
+});
+{
+	const claims = await claimPendingInvites(db, ['cy']);
+	check('a repeat invite is accepted without a grant', claims.length === 1 && !claims[0].grants);
+	check(
+		'and the existing grant is untouched',
+		sqlite
+			.prepare(
+				`SELECT role FROM brain_memberships WHERE brain_id = 'b-northwind' AND user_id = 'cy'`
+			)
+			.get()?.role === 'editor'
+	);
+}
+sqlite.exec(`DELETE FROM brain_memberships WHERE user_id = 'cy'`);
 
 // ===========================================================================
 // 3. provisionOrgForUser: first touch, and the AUTO_PROVISION gate.

@@ -377,10 +377,21 @@ let brainsFixture = [
 //              disappears, because sharing needs admin ON THE BRAIN and my org
 //              role there is only viewer.
 let brainGrants: Record<string, Record<string, PreviewRole>> = {
-	'your-org/personal-wiki': { 'u-me': 'admin', 'u-mira': 'viewer' },
+	'your-org/personal-wiki': { 'u-me': 'admin', 'u-mira': 'viewer', 'u-tomas': 'editor' },
 	'acme-co/acme-wiki': {},
 	'northwind/northwind-wiki': { 'u-me': 'viewer' }
 };
+// Accounts that belong to NO org here. A grant to one of them is a GUEST of that
+// brain (docs/design/guest-access.md): Tomás is a client's person shown my wiki.
+const guestAccounts: { user_id: string; email: string; name: string | null }[] = [
+	{ user_id: 'u-tomas', email: 'tomas@client.example', name: 'Tomás Rivera' }
+];
+// Brain invites: shares to addresses with no account, per brain. What the panel
+// shows under "Invited" until they sign in (the server's listPendingBrainInvites).
+const brainInvites: Record<
+	string,
+	{ invite_id: string; email: string; role: PreviewRole; invited_at: string; expires_at: string }[]
+> = {};
 // The orgs I belong to, which is NOT the same list as the orgs my brains are in.
 // `org-empty` holds no brain at all, and that is the point: it cannot be derived from
 // brainsFixture, so it is the case that proves the picker reads the server's org list
@@ -471,11 +482,19 @@ function accessResult(brainId: string, msg: string): CallToolResult {
 			};
 		})
 		.filter(Boolean);
+	// The second leg of listBrainAccess: grant holders outside the org, after members.
+	for (const g of guestAccounts) {
+		const grant = grants[g.user_id] ?? null;
+		const role = effectiveBrainRole({ visibility: b.visibility, orgRole: null, grant });
+		if (!role) continue;
+		access.push({ ...g, role, via: 'guest', granted_at: '2026-06-01T00:00:00Z' });
+	}
 	return {
 		content: [{ type: 'text', text: msg }],
 		structuredContent: {
 			view: 'brain-access',
 			access,
+			invites: brainInvites[b.id] ?? [],
 			visibility: b.visibility,
 			activeBrain: brainMeta(b.id),
 			me: { user_id: ME.user_id, role: myBrainRole(b) ?? 'viewer', orgRole: b.orgRole }
@@ -1129,15 +1148,43 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
 			}
 			const email = args?.email ? String(args.email).trim() : '';
 			if (email) {
-				const m = orgMembers.find((x) => x.email.toLowerCase() === email.toLowerCase());
-				if (!m) return errText(`${email} isn't a member of this organization.`);
-				brainGrants[b.id] ??= {};
+				const m =
+					orgMembers.find((x) => x.email.toLowerCase() === email.toLowerCase()) ??
+					guestAccounts.find((x) => x.email.toLowerCase() === email.toLowerCase());
 				const access = String(args?.access ?? 'editor');
+				// No account: the server writes a brain invite. Nothing to show on the
+				// panel until they sign in, so only the note changes.
+				if (!m) {
+					brainInvites[b.id] ??= [];
+					const list = brainInvites[b.id];
+					if (access === 'none') {
+						const i = list.findIndex((x) => x.email.toLowerCase() === email.toLowerCase());
+						if (i < 0) return errText(`${email} has no account and no pending invitation.`);
+						list.splice(i, 1);
+						notes.push(`Cancelled ${email}'s invitation to "${b.label}".`);
+						return accessResult(b.id, notes.join(' '));
+					}
+					if (access === 'admin')
+						return errText('Someone outside the organization can be a guest editor at most.');
+					list.unshift({
+						invite_id: `inv-${list.length + 1}`,
+						email,
+						role: access as PreviewRole,
+						invited_at: nowDate().toISOString(),
+						expires_at: new Date(nowMs() + 30 * 86_400_000).toISOString()
+					});
+					notes.push(`Invited ${email} to "${b.label}" as ${roleLabel(access as Role)}.`);
+					return accessResult(b.id, notes.join(' '));
+				}
+				const guest = !('role' in m);
+				brainGrants[b.id] ??= {};
 				if (access === 'none') {
 					if (m.user_id === ME.user_id) return errText("You can't revoke your own access.");
 					delete brainGrants[b.id][m.user_id];
 					notes.push(`Removed ${m.email} from "${b.label}".`);
 				} else {
+					if (guest && access === 'admin')
+						return errText('Someone outside the organization can be a guest editor at most.');
 					brainGrants[b.id][m.user_id] = access as PreviewRole;
 					notes.push(`${m.email} is now ${roleLabel(access as Role)} on "${b.label}".`);
 				}

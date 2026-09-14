@@ -967,7 +967,9 @@ class McpSession {
 		// brains list) therefore has to move the active brain with it, or the widget shows
 		// one brain's audience under another brain's name and its own bare follow-up calls
 		// hit the wrong one.
-		registerBrainAccessTools(server, (opts) => this.tenantContext({ ...opts, sticky: true }));
+		registerBrainAccessTools(server, (opts) => this.tenantContext({ ...opts, sticky: true }), {
+			webBaseUrl: this.webBase()
+		});
 
 		// ---------- connected accounts (identity linking) ----------
 		// The per-person "Your settings → Connected accounts" surface: connected_accounts

@@ -22,6 +22,9 @@ export const ROLE_LABEL: Record<MemberRole, string> = {
 
 // The roles an admin can assign in the UI (owner is never offered — see members.ts).
 export const ASSIGNABLE_ROLES: MemberRole[] = ['viewer', 'editor', 'admin'];
+// What someone outside the organization can be on one of its brains: admin on a
+// brain decides who reaches it, and that stays with the organization's own people.
+export const GUEST_ROLES: MemberRole[] = ['viewer', 'editor'];
 
 /** What each assignable ORG role can do, for surfaces with room to say so. */
 export const ROLE_BLURB: Record<MemberRole, string> = {
@@ -44,11 +47,14 @@ export const BRAIN_ROLE_BLURB: Record<MemberRole, string> = {
 export function RoleSelect({
 	value,
 	disabled,
-	onChange
+	onChange,
+	roles = ASSIGNABLE_ROLES
 }: {
 	value: MemberRole;
 	disabled?: boolean;
 	onChange: (r: MemberRole) => void;
+	// The offered roles. A guest row passes the ones a guest can hold.
+	roles?: MemberRole[];
 }) {
 	return (
 		<Select
@@ -58,7 +64,7 @@ export function RoleSelect({
 			onChange={(e) => onChange((e.target as HTMLSelectElement).value as MemberRole)}
 			class="shrink-0 py-1 pl-2 pr-1"
 		>
-			{ASSIGNABLE_ROLES.map((r) => (
+			{roles.map((r) => (
 				<option key={r} value={r}>
 					{ROLE_LABEL[r]}
 				</option>
