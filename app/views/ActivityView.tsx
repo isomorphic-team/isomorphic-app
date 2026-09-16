@@ -1,5 +1,5 @@
 import type { ActivityEntry } from '../core/types.ts';
-import { app } from '../core/host.ts';
+import { openLink } from '../core/host.ts';
 import { navigateTo } from '../core/actions.ts';
 import { relativeTime } from '../core/util.ts';
 import { InitialsAvatar } from '../core/icons.tsx';
@@ -58,7 +58,7 @@ function ActivityView({ entries, scopePath }: { entries: ActivityEntry[]; scopeP
 									<span aria-hidden="true">·</span>
 									<button
 										type="button"
-										onClick={() => app.openLink({ url: e.url })}
+										onClick={() => openLink(e.url)}
 										title={`View commit ${e.sha}`}
 										class="shrink-0 border-none bg-transparent p-0 text-muted hover:text-fg hover:underline"
 									>

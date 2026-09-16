@@ -40,14 +40,9 @@ import { renderAge, refreshOutcome } from '../app/core/util.ts';
 import { DEST_META, destinationsIn, activeDestination, isMorePlace } from '../app/core/nav.ts';
 import { panelPlacement, GAP, COMFORTABLE } from '../app/core/menu-placement.ts';
 
-let failures = 0;
-function check(label: string, cond: boolean, detail = '') {
-	if (cond) console.log(`  ✓ ${label}`);
-	else {
-		failures++;
-		console.log(`  ✗ ${label}${detail ? ` — ${detail}` : ''}`);
-	}
-}
+import { checker } from './check.ts';
+
+const { check, done } = checker('wire-contract checks');
 
 // A whole-repo brain, exactly as a live .isomorphic.json declares it.
 const wholeRepo = { paths: parsePaths({ contentRoots: ['.'], sourceRoots: [], logPath: '' }) };
@@ -532,7 +527,4 @@ console.log('\nmenu placement');
 	);
 }
 
-console.log(
-	failures === 0 ? '\nAll wire-contract checks passed.\n' : `\n${failures} check(s) FAILED.\n`
-);
-process.exit(failures === 0 ? 0 : 1);
+done();

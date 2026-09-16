@@ -1,14 +1,16 @@
 // ---------- brain access (sharing) view ----------
 
 import { useState } from 'preact/hooks';
-import type { BrainAccessEntry, BrainAccessSelf } from '../core/types.ts';
+import type { BrainAccessEntry, BrainAccessSelf, Invite } from '../core/types.ts';
+import { relativeTime } from '../core/util.ts';
 import { callTool, firstText } from '../core/host.ts';
 import { refreshBrainAccess, openShareBrain } from '../core/actions.ts';
 import { toast } from '../core/toast.tsx';
 import { InitialsAvatar, CloseIcon } from '../core/icons.tsx';
 import { defineView } from '../core/view-registry.ts';
-import { RoleSelect, ROLE_LABEL } from '../components/RoleSelect.tsx';
+import { RoleSelect, ROLE_LABEL, GUEST_ROLES } from '../components/RoleSelect.tsx';
 import { Button, List, ListRow } from '../ui/index.ts';
+import { eyebrow } from '../ui/typography.ts';
 
 // Per-brain sharing: who can reach THIS brain, at what level, and whether it's
 // private or open to the whole organization. The brain-scope sibling of MembersView
@@ -22,12 +24,16 @@ import { Button, List, ListRow } from '../ui/index.ts';
 // in this list. See app/ui/Flow.tsx.
 function BrainAccessView({
 	access,
+	invites,
 	visibility,
 	brainId,
 	brainLabel,
 	me
 }: {
 	access: BrainAccessEntry[];
+	// Shares to addresses with no account yet (guests-to-be): the only evidence,
+	// until they sign in, that the share happened.
+	invites: Invite[];
 	visibility: string;
 	brainId: string;
 	brainLabel: string;
@@ -83,7 +89,7 @@ function BrainAccessView({
 					// Only an explicit share can be edited or revoked. Access inherited from
 					// org visibility or the org-admin floor has no row to change; offering a
 					// control that silently does nothing is worse than none.
-					const editable = canManage && !isSelf && a.via === 'grant';
+					const editable = canManage && !isSelf && (a.via === 'grant' || a.via === 'guest');
 					return (
 						<ListRow key={a.user_id}>
 							<InitialsAvatar name={a.name || a.email} />
@@ -99,15 +105,20 @@ function BrainAccessView({
 										? a.name
 											? a.email
 											: 'Shared directly'
-										: a.via === 'org'
-											? 'Via organization'
-											: 'Organization admin'}
+										: a.via === 'guest'
+											? a.name
+												? `Guest · ${a.email}`
+												: 'Guest · not in the organization'
+											: a.via === 'org'
+												? 'Via organization'
+												: 'Organization admin'}
 								</div>
 							</div>
 							{editable ? (
 								<RoleSelect
 									value={a.role}
 									disabled={busy}
+									roles={a.via === 'guest' ? GUEST_ROLES : undefined}
 									onChange={(r) => {
 										if (r !== a.role) run({ email: a.email, access: r });
 									}}
@@ -135,6 +146,46 @@ function BrainAccessView({
 			{access.length === 0 && (
 				<div class="py-6 text-center text-sm text-muted">Nobody else has access yet.</div>
 			)}
+
+			{invites.length > 0 && (
+				<div class="mt-6">
+					<div class={`mb-1.5 ${eyebrow}`}>Invited</div>
+					<List>
+						{invites.map((inv) => (
+							<ListRow key={inv.invite_id}>
+								<span
+									class="flex h-[18px] w-[18px] shrink-0 items-center justify-center rounded-full border border-dashed border-border text-2xs text-muted"
+									aria-hidden="true"
+								>
+									@
+								</span>
+								<div class="min-w-0 flex-1">
+									<div class="truncate text-sm text-fg" title={inv.email}>
+										{inv.email}
+									</div>
+									<div class="text-xs text-muted" title={inv.invited_at || undefined}>
+										Guest once they sign in · invited
+										{inv.invited_at ? ` ${relativeTime(inv.invited_at)}` : ''}
+									</div>
+								</div>
+								<span class="shrink-0 text-sm text-muted">{ROLE_LABEL[inv.role]}</span>
+								{canManage && (
+									<Button
+										variant="ghost"
+										size="icon"
+										disabled={busy}
+										title={`Cancel invite for ${inv.email}`}
+										aria-label={`Cancel invite for ${inv.email}`}
+										onClick={() => run({ email: inv.email, access: 'none' })}
+									>
+										<CloseIcon />
+									</Button>
+								)}
+							</ListRow>
+						))}
+					</List>
+				</div>
+			)}
 		</div>
 	);
 }
@@ -145,6 +196,7 @@ declare module '../core/view-registry.ts' {
 	interface ViewProps {
 		'brain-access': {
 			access: BrainAccessEntry[];
+			invites: Invite[];
 			visibility: string;
 			brainId: string;
 			brainLabel: string;
@@ -158,6 +210,7 @@ export default defineView(
 	(v) => (
 		<BrainAccessView
 			access={v.access}
+			invites={v.invites}
 			visibility={v.visibility}
 			brainId={v.brainId}
 			brainLabel={v.brainLabel}

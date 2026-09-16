@@ -40,14 +40,9 @@ const workflowFiles = readdirSync(new URL('.github/workflows/', root)).filter(
 	(f) => f.endsWith('.yml') || f.endsWith('.yaml')
 );
 
-let failures = 0;
-function check(label: string, cond: boolean, detail = '') {
-	if (cond) console.log(`  ✓ ${label}`);
-	else {
-		failures++;
-		console.log(`  ✗ ${label}${detail ? ` — ${detail}` : ''}`);
-	}
-}
+import { checker } from './check.ts';
+
+const { check, done } = checker('test-wiring checks');
 
 const batteries = Object.keys(pkg.scripts).filter((s) => s.startsWith('test:'));
 const aggregate = pkg.scripts.test ?? '';
@@ -167,7 +162,4 @@ for (const { file, version } of pinned) {
 	);
 }
 
-console.log(
-	failures === 0 ? '\nAll test-wiring checks passed.\n' : `\n${failures} check(s) FAILED.\n`
-);
-process.exit(failures === 0 ? 0 : 1);
+done();

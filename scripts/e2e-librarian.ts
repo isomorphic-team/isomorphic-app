@@ -144,7 +144,11 @@ if (GITHUB_MODE) {
 		writes: buildScaffoldFiles()
 	});
 	cleanup = async () => {
-		await rm(dir, { recursive: true, force: true });
+		// Retried, because git can still be writing under .git when the last awaited
+		// command has already returned (auto gc detaches into the background after a
+		// commit), and a plain recursive rm then fails ENOTEMPTY on `.git` after every
+		// check passed. Seen on CI 2026-09-14. Node retries exactly that error.
+		await rm(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
 	};
 	// The offline stand-in for GitHub-as-a-platform. Narrow on purpose: it answers
 	// only the two reads connect_brain makes, and answers them from a fixed set, so
@@ -198,7 +202,10 @@ registerMediaTools(server, getContext);
 // contract below: only a real store hands out real blob shas, so a stub could not
 // tell whether the sha a render reports is the one that page actually has.
 registerCoreTools(server, getContext);
-registerBrainApp(server, getContext);
+// With a web base, so the result-link contract below runs against the real
+// handlers rather than only against webUrlFor.
+const WEB_BASE = 'https://brain.example';
+registerBrainApp(server, getContext, { webBaseUrl: WEB_BASE });
 const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
 await server.connect(serverTransport);
 const client = new Client({ name: 'e2e', version: '0.0.0' });
@@ -223,14 +230,9 @@ async function eventually<T>(
 	return last;
 }
 
-let failures = 0;
-function check(label: string, cond: boolean, detail?: string) {
-	if (cond) console.log(`  ok  ${label}`);
-	else {
-		failures++;
-		console.error(`FAIL  ${label}${detail ? `\n      ${detail}` : ''}`);
-	}
-}
+import { checker } from './check.ts';
+
+const { check, done } = checker('librarian E2E checks');
 async function call(tool: string, args: Record<string, unknown>) {
 	const res = (await client.callTool({ name: tool, arguments: args })) as {
 		isError?: boolean;
@@ -1209,6 +1211,29 @@ try {
 			`${String(viewed.sc.sha)} vs ${String(read.sc.sha)}`
 		);
 
+		// The page's web URL rides BOTH halves of the result. A host that receives
+		// structuredContent hands the model that and drops the text, so a link only
+		// in the text block is a link no model sees (which is how the first version
+		// shipped). Whole-string equality, not a substring search.
+		const expectedUrl = `${WEB_BASE}/b/${brainId}/${path}`;
+		check(
+			'view_page carries the page URL in structuredContent',
+			viewed.sc.webUrl === expectedUrl,
+			String(viewed.sc.webUrl)
+		);
+		check(
+			'...and the same URL in its text',
+			/https?:\/\/\S+/.exec(viewed.text)?.[0] === expectedUrl,
+			viewed.text.slice(-120)
+		);
+		check('read_page carries none: nobody clicks in the reading channel', !('webUrl' in read.sc));
+		const browsed = await callSc('browse_brain', {});
+		check(
+			'browse_brain carries the brain URL',
+			browsed.sc.webUrl === `${WEB_BASE}/b/${brainId}`,
+			String(browsed.sc.webUrl)
+		);
+
 		// The assertion the refresh control rests on. Without it the sha could be any
 		// stable string (the path, a constant) and every comparison would report "no
 		// change" forever, which is the failure the reader would never see through.
@@ -1553,6 +1578,7 @@ try {
 		orgContext,
 		listOrgs: () => listAccessibleOrgs(db, [USER]),
 		listBrains: () => listAccessibleBrains(db, [USER]),
+		db,
 		activeBrainId: () => activeId,
 		setActiveBrain: async (id: string) => {
 			activeId = id;
@@ -1621,10 +1647,29 @@ try {
 		adopted?.org_id === ORG_EMPTY,
 		`org_id = ${adopted?.org_id}`
 	);
+	// PRIVATE, the same default as create_brain (issue #93). It used to be org-wide,
+	// which put a private GitHub repo in front of every org member on adoption.
 	check(
-		'...org-visible, unlike create_brain’s private default',
-		adopted?.visibility === 'org',
+		'...PRIVATE by default, the same as create_brain',
+		adopted?.visibility === 'private',
 		`visibility = ${adopted?.visibility}`
+	);
+	const adoptGrant = (await db
+		.prepare(
+			`SELECT bm.role FROM brain_memberships bm JOIN brains b ON b.brain_id = bm.brain_id
+			 WHERE b.repo_name = ?1 AND bm.user_id = ?2`
+		)
+		.bind(adoptRepo, USER)
+		.first()) as { role?: string } | null;
+	check(
+		'...with an explicit admin grant for whoever connected it',
+		adoptGrant?.role === 'admin',
+		`grant = ${adoptGrant?.role}`
+	);
+	check(
+		'...and the response SAYS it is private, not just the payload',
+		/private to you/i.test(br.text),
+		br.text
 	);
 	check(
 		'...under the caller’s chosen name',
@@ -1686,7 +1731,7 @@ try {
 			`org_id = ${made?.org_id}`
 		);
 		check(
-			'...PRIVATE by default, the opposite of connect_brain',
+			'...PRIVATE by default, the same as connect_brain',
 			made?.visibility === 'private',
 			`visibility = ${made?.visibility}`
 		);
@@ -1812,6 +1857,37 @@ try {
 		check('dedupe: ...and neither wrote anything', (await commitCount()) === before);
 	}
 
+	// ---- configure_brain leaves an existing config alone (issue #94) ------------
+	// Runs last on purpose: the overwrite below replaces the scaffold's config with
+	// a whole-repo one, and every check above assumes the scaffold's roots. The
+	// scaffold commits a .isomorphic.json, so the brain under test is exactly the
+	// repo the guard exists for.
+	{
+		const configBefore = (await fileText('.isomorphic.json')) ?? '';
+		check('the brain under test has a config to protect', configBefore.includes('"wiki/"'));
+		let before = await commitCount();
+		br = await callBrain('configure_brain', {});
+		check('configure_brain refuses when a config already exists', br.isError, br.text);
+		check(
+			'...and shows the current config so the caller can decide',
+			br.text.includes('"wiki/": "content"') && /overwrite: true/.test(br.text),
+			br.text
+		);
+		check(
+			'...without writing anything',
+			(await commitCount()) === before && (await fileText('.isomorphic.json')) === configBefore
+		);
+		before = await commitCount();
+		br = await callBrain('configure_brain', { overwrite: true, content_roots: ['docs/'] });
+		check('configure_brain with overwrite: true replaces it', !br.isError, br.text);
+		await assertOneCommit('configure_brain overwrite', before);
+		check(
+			'...and the new config is what landed',
+			((await fileText('.isomorphic.json')) ?? '').includes('"docs/": "content"'),
+			(await fileText('.isomorphic.json')) ?? ''
+		);
+	}
+
 	await brainClient.close();
 	await brainServer.close();
 } finally {
@@ -1820,5 +1896,4 @@ try {
 	await server.close();
 }
 
-console.log(failures === 0 ? '\nALL PASS' : `\n${failures} FAILURES`);
-process.exit(failures === 0 ? 0 : 1);
+done();

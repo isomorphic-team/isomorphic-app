@@ -24,7 +24,7 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import type { BrainContext } from './librarian.ts';
-import { fail, landed } from './librarian.ts';
+import { landed } from './librarian.ts';
 import type { TenantOpts } from '../lib/orgs.ts';
 import { isContentPath, isSourcePath, isToolMaintained, logPathOf } from '../lib/brain-policy.ts';
 import { insertLogEntry, todayIso } from '../lib/wiki.ts';
@@ -40,11 +40,7 @@ import {
 	uniqueAttachmentPath,
 	validateAttachment
 } from '../lib/media.ts';
-
-const brainArg = z
-	.string()
-	.optional()
-	.describe('Which brain to target (name/handle). Defaults to the active brain.');
+import { brainArg, fail } from './shared.ts';
 
 // Strip a `data:` URL wrapper if a caller sends one. The app reads files with
 // FileReader, whose readAsDataURL output is the most likely thing to arrive by
@@ -246,6 +242,7 @@ export function registerMediaTools(
 					? ''
 					: ` It was named ${target.split('/').pop()} because ${desired.split('/').pop()} was taken.`;
 			const result = landed(
+				ctx,
 				outcome,
 				`Stored ${target} (${formatBytes(bytes)})${where}. The change was logged.${renamed}`,
 				`Proposed storing ${target} (${formatBytes(bytes)})${where}.${renamed}`

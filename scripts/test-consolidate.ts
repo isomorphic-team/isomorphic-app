@@ -22,14 +22,9 @@ import {
 	isImportKey
 } from '../src/lib/findings.ts';
 
-let failures = 0;
-function check(name: string, cond: boolean, detail?: string) {
-	if (cond) console.log(`  ok  ${name}`);
-	else {
-		failures++;
-		console.error(`FAIL  ${name}${detail ? `\n      ${detail}` : ''}`);
-	}
-}
+import { checker } from './check.ts';
+
+const { check, done } = checker('consolidate checks');
 
 const page = (path: string, title = path.split('/').pop()!.replace(/\.md$/, '')) => ({
 	path,
@@ -379,5 +374,4 @@ const of = (ts: Tension[], kind: string) => ts.filter((t) => t.kind === kind);
 	);
 }
 
-console.log(failures === 0 ? '\nAll consolidate checks passed.' : `\n${failures} check(s) failed.`);
-process.exit(failures === 0 ? 0 : 1);
+done();

@@ -17,6 +17,7 @@
 // in-client editor opens via edit_page and saves through the librarian's
 // write_page, passing the blob sha from edit_page for optimistic concurrency.
 
+import { webUrlFor } from '../lib/web-app.ts';
 import { ResourceTemplate, type McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import {
 	registerAppResource,
@@ -45,6 +46,7 @@ import {
 	pathPolicyOf
 } from '../lib/brain-config.ts';
 import type { TenantOpts } from '../lib/orgs.ts';
+import { brainArgFor, fail } from './shared.ts';
 
 // The editability policy the in-client app needs to gate its own UI. Lives in
 // brain-policy.ts (pathPolicyOf) so the tools OUTSIDE this file that also feed
@@ -56,12 +58,9 @@ const editPolicy = pathPolicyOf;
 // data tools' `brain`: the widget follows the brain each result names and passes it
 // back on its own calls, so opening another brain here never moves the active brain.
 // Use switch_brain for that.
-const brainArg = z
-	.string()
-	.optional()
-	.describe(
-		'Which brain to open (name/handle). Defaults to the active brain. Opening another brain here is one-shot; use switch_brain to change the default.'
-	);
+const brainArg = brainArgFor(
+	'Which brain to open (name/handle). Defaults to the active brain. Opening another brain here is one-shot; use switch_brain to change the default.'
+);
 
 // A stable content fingerprint of the app bundle (FNV-1a 32-bit → base36). Not
 // cryptographic — just enough to change when the bytes change and stay identical
@@ -111,10 +110,6 @@ const BRAIN_APP_URI_TEMPLATE = 'ui://isomorphic-mind/brain-app.{v}.html';
 // keeps `false`, while handing the chrome to the host means `true` here AND
 // dropping the app's own border, since the two must never both draw one.
 const APP_UI_META = { ui: { prefersBorder: false } } as const;
-
-function fail(text: string) {
-	return { isError: true as const, content: [{ type: 'text' as const, text }] };
-}
 
 // One node per content page; one edge per link between two pages. Sized to the
 // in-client graph view (view_graph). Both shapes mirror what app/main.tsx expects.
@@ -171,8 +166,31 @@ async function buildGraph(
 
 export function registerBrainApp(
 	server: McpServer,
-	getContext: (opts?: TenantOpts) => Promise<BrainContext>
+	getContext: (opts?: TenantOpts) => Promise<BrainContext>,
+	opts: { webBaseUrl?: string } = {}
 ) {
+	// THE LINK IN THE CHAT. Each widget result carries the page's web URL when this
+	// deployment serves the web app, so the model can hand the user a link ("here's
+	// the page: …") and "send me that" has an answer. The URL comes from the same
+	// table the app's address bar reads (webUrlFor), so the link in the chat and the
+	// URL in the tab cannot disagree.
+	//
+	// It rides BOTH the text block and structuredContent (`webUrl`), because they
+	// reach different readers: a host that receives structuredContent hands the
+	// model THAT and drops the text, which is how the first version (text only,
+	// 2026-09-02) shipped a link no model ever saw. The widget still builds its own
+	// from `features.webBase`; read_page (the model's reading channel) deliberately
+	// carries none, since nobody clicks there.
+	const linkFor = (tool: string, brain: string, path?: string): string | undefined =>
+		webUrlFor(opts.webBaseUrl, tool, brain, path);
+	const withLink = (text: string, tool: string, brain: string, path?: string): string => {
+		const url = linkFor(tool, brain, path);
+		return url ? `${text}\n\nOpen in browser: ${url}` : text;
+	};
+	const webUrl = (tool: string, brain: string, path?: string): { webUrl?: string } => {
+		const url = linkFor(tool, brain, path);
+		return url ? { webUrl: url } : {};
+	};
 	// ---------- the ui:// resource ----------
 	// One read body, served at two registrations: the concrete current-hash URI
 	// (for resources/list discovery + fresh sessions) and the version catch-all
@@ -247,11 +265,14 @@ export function registerBrainApp(
 			});
 			const markdown = views?.display ?? file.content;
 			return {
-				content: [{ type: 'text' as const, text: markdown }],
+				content: [
+					{ type: 'text' as const, text: withLink(markdown, 'view_page', activeBrain.id, path) }
+				],
 				structuredContent: {
 					view: 'page',
 					path,
 					markdown,
+					...webUrl('view_page', activeBrain.id, path),
 					// The blob sha of what this render is OF. readFile already returns it
 					// and every write path already treats a page as versioned (write_page
 					// refuses a save against a stale sha); only the read path threw the
@@ -303,9 +324,15 @@ export function registerBrainApp(
 			const tree = { paths, pages, assets, hidden };
 			const inline = treeFitsInline(tree);
 			return {
-				content: [{ type: 'text' as const, text: browseSummary(activeBrain.label, tree) }],
+				content: [
+					{
+						type: 'text' as const,
+						text: withLink(browseSummary(activeBrain.label, tree), 'browse_brain', activeBrain.id)
+					}
+				],
 				structuredContent: {
 					view: 'browse',
+					...webUrl('browse_brain', activeBrain.id),
 					...(inline ? tree : {}),
 					config: editPolicy(config),
 					activeBrain,
@@ -366,9 +393,12 @@ export function registerBrainApp(
 						.join('\n')}`
 				: `No recorded changes for ${scopeLabel} yet.`;
 			return {
-				content: [{ type: 'text' as const, text }],
+				content: [
+					{ type: 'text' as const, text: withLink(text, 'view_activity', activeBrain.id, path) }
+				],
 				structuredContent: {
 					view: 'activity',
+					...webUrl('view_activity', activeBrain.id, path),
 					scope: { path },
 					entries,
 					config: editPolicy(config),
@@ -404,9 +434,12 @@ export function registerBrainApp(
 				`Brain graph: ${nodes.length} page(s), ${edges.length} link(s).` +
 				(truncated ? ` Only the first ${MAX_SCAN_PAGES} pages were scanned.` : '');
 			return {
-				content: [{ type: 'text' as const, text }],
+				content: [
+					{ type: 'text' as const, text: withLink(text, 'view_graph', activeBrain.id, focus) }
+				],
 				structuredContent: {
 					view: 'graph',
+					...webUrl('view_graph', activeBrain.id, focus),
 					nodes,
 					edges,
 					focus,

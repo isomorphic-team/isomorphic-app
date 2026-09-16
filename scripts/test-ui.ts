@@ -71,7 +71,10 @@ if (!browserPath) {
 const shots = new URL(`tests/ui/__screenshots__/${process.platform}/`, root);
 const hasBaselines = existsSync(shots) && readdirSync(shots).some((f) => f.endsWith('.png'));
 
-const projects = ['functional'];
+// `web` runs unconditionally beside `functional`: it needs the same browser and no
+// baselines. It is a separate project because it drives a different HOST — the
+// bundle as a top-level document over its own server — not because it is optional.
+const projects = ['functional', 'web'];
 if (hasBaselines) {
 	projects.push('visual');
 } else {

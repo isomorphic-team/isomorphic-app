@@ -11,8 +11,12 @@
 //   pnpm test:index
 
 import { DatabaseSync } from 'node:sqlite';
+import { mkdtempSync, readdirSync, readFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import {
 	backlinksTo,
+	detectNeedsConfig,
 	ensureFresh,
 	INDEX_SCHEMA_VERSION,
 	listIndexedPages,
@@ -24,14 +28,9 @@ import { applyMigrations } from '../src/local/d1-sqlite.ts';
 import { DEFAULT_BRAIN_CONFIG, type BrainConfig } from '../src/lib/brain-policy.ts';
 import { pageTitle } from '../src/lib/wiki.ts';
 
-let failures = 0;
-function check(label: string, cond: boolean, detail = '') {
-	if (cond) console.log(`  ✓ ${label}`);
-	else {
-		failures++;
-		console.log(`  ✗ ${label}${detail ? ` — ${detail}` : ''}`);
-	}
-}
+import { checker } from './check.ts';
+
+const { check, done } = checker('content-index checks');
 
 // ---- D1 shim over node:sqlite, instrumented to count the work each read does ----
 //
@@ -204,11 +203,14 @@ const octokit = {
 			},
 			getTree: async () => {
 				getTreeCalls++;
-				return {
-					data: {
-						tree: currentPages.map((p) => ({ type: 'blob', path: p.path, sha: p.sha }))
-					}
-				};
+				// The config file is a blob in the tree at any revision that has one,
+				// exactly as GitHub's recursive tree reports it. detectNeedsConfig
+				// reads it from here rather than from getContent.
+				const tree = currentPages.map((p) => ({ type: 'blob', path: p.path, sha: p.sha }));
+				if (configFilesByRef.has(currentHead)) {
+					tree.push({ type: 'blob', path: '.isomorphic.json', sha: `config-${currentHead}` });
+				}
+				return { data: { tree } };
 			},
 			getBlob: async () => {
 				throw new Error('getBlob should not be needed (no oversized blobs in this fixture)');
@@ -690,6 +692,39 @@ console.log('\nContent index — bounded, resumable ensureFresh\n');
 	);
 }
 
+// ---------------------------------------------------------------- scenario 7b
+// The "needs setup" flag (issue #94). It must see the config file: listTree
+// defaults to markdown only, so the file was never in the tree it inspected and a
+// repo whose config put its content under a non-default root was flagged as
+// unconfigured. The recommended remedy for that flag overwrites the config, which
+// is what makes a false positive here destructive rather than cosmetic.
+{
+	console.log('\nneeds-config detection sees an existing config');
+	resetDb();
+	currentHead = 'commit-needs-config';
+	currentPages = [{ path: 'brain/page.md', sha: 'sha-brain-page', content: '# Page\n' }];
+	check(
+		'markdown outside the default roots with NO config is flagged',
+		(await detectNeedsConfig(store, repo, config)) === true
+	);
+	configFilesByRef.set(currentHead, JSON.stringify({ paths: { 'brain/': 'content' } }));
+	check(
+		'the same tree WITH a .isomorphic.json is not flagged, whatever config the caller holds',
+		(await detectNeedsConfig(store, repo, config)) === false
+	);
+	configFilesByRef.clear();
+	currentPages = [];
+	check(
+		'an empty repo is not flagged (nothing to configure)',
+		(await detectNeedsConfig(store, repo, config)) === false
+	);
+	currentPages = [{ path: 'wiki/page.md', sha: 'sha-wiki-page', content: '# Page\n' }];
+	check(
+		'markdown under the default roots is not flagged',
+		(await detectNeedsConfig(store, repo, config)) === false
+	);
+}
+
 // ---------------------------------------------------------------- scenario 8
 // The request context can predate a config commit. The stale path must read the
 // index-shaping config from the exact HEAD it is about to record, otherwise the
@@ -934,7 +969,61 @@ console.log('\nContent index — bounded, resumable ensureFresh\n');
 	);
 }
 
-console.log(
-	failures === 0 ? '\nAll content-index checks passed.\n' : `\n${failures} check(s) FAILED.\n`
-);
-process.exit(failures === 0 ? 0 : 1);
+// ---------- migrations against a database that OUTLIVES the process ----------
+//
+// The rest of this file, and every other battery, migrates a database that is empty
+// or in memory, so re-running a migration is free and nothing here could see the
+// bug this pins: `pnpm try` keeps its index in the brain's own `.isomorphic/`, and
+// its SECOND launch on any folder died with `duplicate column name: schema_version`
+// and stayed dead. `CREATE TABLE IF NOT EXISTS` repeats happily; the two
+// `ALTER TABLE ... ADD COLUMN` migrations cannot, and SQLite has no
+// `ADD COLUMN IF NOT EXISTS`.
+{
+	const dir = mkdtempSync(join(tmpdir(), 'iso-migrate-'));
+
+	// A file-backed database, opened and migrated twice, which is exactly what two
+	// launches of `pnpm try` on one folder do.
+	const file = join(dir, 'index.sqlite');
+	const first = new DatabaseSync(file);
+	applyMigrations(first);
+	first.close();
+
+	let reopened = '';
+	try {
+		const second = new DatabaseSync(file);
+		applyMigrations(second);
+		// The schema has to still be USABLE, not merely un-thrown: a migration step
+		// that silently did not run would leave a column the index writes to missing.
+		second.prepare('SELECT schema_version, rebuild_cursor FROM brain_index_meta').all();
+		second.close();
+	} catch (e) {
+		reopened = String(e);
+	}
+	check('migrations re-run on a persisted database', reopened === '', reopened);
+
+	// A database written by the code that HAD no ledger: every migration applied, no
+	// record of it. Those exist on disk in any checkout that ran `pnpm try` before,
+	// and they must adopt themselves rather than force the user to delete the file.
+	const legacyFile = join(dir, 'legacy.sqlite');
+	const legacy = new DatabaseSync(legacyFile);
+	const migrations = new URL('../migrations/', import.meta.url);
+	for (const f of readdirSync(migrations)
+		.filter((f) => f.endsWith('.sql'))
+		.sort()) {
+		legacy.exec(readFileSync(new URL(f, migrations), 'utf8'));
+	}
+	legacy.close();
+
+	let adopted = '';
+	try {
+		const reopen = new DatabaseSync(legacyFile);
+		applyMigrations(reopen);
+		reopen.prepare('SELECT schema_version, rebuild_cursor FROM brain_index_meta').all();
+		reopen.close();
+	} catch (e) {
+		adopted = String(e);
+	}
+	check('a pre-ledger database adopts itself', adopted === '', adopted);
+}
+
+done();

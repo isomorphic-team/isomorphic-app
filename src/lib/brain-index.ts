@@ -29,13 +29,16 @@ import {
 	buildWikilinkIndex,
 	resolveWikilink,
 	wikilinkKey,
-	wikilinkTargetName
+	wikilinkTargetName,
+	slugOf
 } from './wiki.ts';
 import {
 	DEFAULT_SEARCH_OPTIONS,
 	rankPages,
 	searchCorpus,
 	tokenizeQuery,
+	mergeBrainResults,
+	type BrainSearchHit,
 	type PageSignal,
 	type SearchResult
 } from './search.ts';
@@ -55,7 +58,6 @@ export const INDEX_SCHEMA_VERSION = 4;
 
 // ---------- shared helpers ----------
 
-const slugOf = (path: string) => path.split('/').pop()!.replace(/\.md$/, '');
 const deslug = (path: string) => slugOf(path).replace(/-/g, ' ');
 
 // Title resolution lives in wiki.ts (pageTitle) as the single source of truth —
@@ -643,16 +645,6 @@ export async function writeThroughIndex(
 	return (final?.meta?.changes ?? 0) > 0;
 }
 
-// Mark a brain's index stale so the next read forces a reconcile against HEAD.
-// (No-op in the always-check design — HEAD is compared every read — but exposed so
-// a future sha-check TTL cache / write-through path can invalidate explicitly.)
-export async function invalidateIndex(db: D1Database, brainId: string): Promise<void> {
-	await db
-		.prepare(`UPDATE brain_index_meta SET indexed_commit_sha = NULL WHERE brain_id = ?1`)
-		.bind(brainId)
-		.run();
-}
-
 // Drop a brain's index entirely so the next ensureFresh does a FULL rebuild. Needed
 // when the CONTENT SHAPE changes (e.g. .isomorphic.json contentRoots edited): the
 // content blobs are unchanged, so an incremental (sha-diff) reindex wouldn't pick up
@@ -671,13 +663,21 @@ export async function resetIndex(db: D1Database, brainId: string): Promise<void>
 // True when there's NO .isomorphic.json and markdown exists but none of it falls under
 // the (default) content roots — the "connected but shows no pages" trap. Fetches the
 // tree, so callers gate it on "the page list came back empty" to avoid the cost.
+//
+// The tree is listed WITHOUT the `.md` filter (issue #94). `listTree` defaults to
+// markdown only, so `.isomorphic.json` was never in the list it returned and the
+// "author configured it explicitly" branch below could not fire: a repo with a valid
+// config whose roots were not the defaults came back `needsConfig: true` from
+// connect_brain, whose recommended remedy (configure_brain) would have overwritten
+// that config with a whole-repo default. GitHub's recursive tree call returns every
+// blob regardless, so listing everything costs no extra request.
 export async function detectNeedsConfig(
 	store: BrainStore,
 	repo: RepoRef,
 	config: BrainConfig
 ): Promise<boolean> {
 	const head = await store.getHead(repo, config.defaultBranch);
-	const tree = await store.listTree(repo, head);
+	const tree = await store.listTree(repo, head, { extension: '*' });
 	if (tree.some((e) => e.path === CONFIG_PATH)) return false; // author configured it explicitly
 	const md = tree.filter((e) => e.path.endsWith('.md'));
 	if (md.length === 0) return false; // genuinely empty repo, not a misconfig
@@ -767,6 +767,20 @@ export async function loadResolvedGraph(
 // The brain's content pages with display titles, straight from the index (no link
 // resolution). Backs list_pages / browse_brain so the file tree can show titles.
 // Call ensureFresh first so the list reflects the current repo.
+/**
+ * Whether the index holds ANY page for this brain. One indexed row, no fetch, no
+ * freshness check: the question is "has this brain ever had content", which a
+ * stale index answers as well as a fresh one. `listIndexedPages` returns every
+ * path and title, which for a 3,000-page brain is the wrong tool for a yes/no.
+ */
+export async function hasIndexedPages(db: D1Database, brainId: string): Promise<boolean> {
+	const row = await db
+		.prepare(`SELECT 1 AS one FROM brain_pages WHERE brain_id = ?1 LIMIT 1`)
+		.bind(brainId)
+		.first<{ one: number }>();
+	return row !== null;
+}
+
 export async function listIndexedPages(
 	db: D1Database,
 	brainId: string
@@ -975,6 +989,49 @@ export async function searchIndex(
 	// known. It only refines the phase-1 order (frequency is one saturating term of a
 	// score coverage dominates), so a page cannot leapfrog a strictly better match.
 	return searchCorpus(pages, query, { max, perPage }, signals.length - chosen.length);
+}
+
+// The same search over a SET of brains. Each brain runs through searchIndex on its own,
+// with its own budget, and the global ceiling is spent by mergeBrainResults, which is
+// where the round-robin lives so pnpm test:search can pin it without a database.
+//
+// What fan-out costs is not here. Every brain's index lives in the same D1 and the
+// phase-1 query is a handful of booleans per matching page, so N brains are N cheap
+// statements. The cost is FRESHNESS: ensureFresh is one branchCommitSha per brain plus
+// a full reindex for any whose HEAD moved, which for a rarely-opened brain is the common
+// case. So the caller decides which brains to bring up to date (search_pages does only
+// the active one) rather than this function doing it for all of them.
+//
+// `perBrain` results ride along keyed by brain, so a caller can still answer a
+// per-brain question (the `expect` probe, an elision note) about the brain it is in.
+export interface BrainSearch {
+	hits: BrainSearchHit[];
+	terms: string[];
+	pagesMatched: number;
+	budgetHit: boolean;
+	perBrain: Map<string, SearchResult>;
+}
+
+export async function searchBrains(
+	db: D1Database,
+	brainIds: string[],
+	query: string,
+	prefix: string | undefined,
+	limits: { perBrain: number; total: number; perPage?: number }
+): Promise<BrainSearch> {
+	const perPage = limits.perPage ?? DEFAULT_SEARCH_OPTIONS.perPage;
+	const results = await Promise.all(
+		brainIds.map(async (brainId) => ({
+			brainId,
+			result: await searchIndex(db, brainId, query, prefix, limits.perBrain, perPage)
+		}))
+	);
+	const merged = mergeBrainResults(results, limits.total);
+	return {
+		...merged,
+		terms: results[0]?.result.terms ?? tokenizeQuery(query).terms,
+		perBrain: new Map(results.map((r) => [r.brainId, r.result]))
+	};
 }
 
 // Escape LIKE wildcards so a query containing % or _ is matched literally.

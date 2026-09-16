@@ -33,7 +33,13 @@ import {
 	FOOTNOTE,
 	type UsageRow
 } from '../src/lib/usage.ts';
-import PAGES from './fixtures.json';
+import {
+	personalPages,
+	ACME_PAGES,
+	NORTHWIND_PAGES,
+	SAMPLE_PNG,
+	PERSONAL_ASSET_PATH
+} from './seed.ts';
 
 // ---- the fixtures' clock ----
 //
@@ -60,53 +66,15 @@ let seq = 0;
 // couldn't tell them apart. Now each brain has its OWN content: the Personal brain
 // uses the rich shared fixtures; the team/client brains get small, obviously-distinct
 // sets. Keyed by brain id (matches brainsFixture ids below).
-const PERSONAL_PAGES = PAGES as Record<string, string>;
-// Seed an otherwise-empty folder (persisted by a hidden .gitkeep) so the preview
-// exercises the "empty folder shows" + "show hidden" behavior out of the box.
-PERSONAL_PAGES['wiki/Projects/.gitkeep'] ??= '';
-
-// Seed an attachment on a page of the DEFAULT brain, so opening the preview shows a
-// rendered image without switching brains or uploading anything first. Two links: one
-// that resolves and one that does not, because the missing-attachment state is the
-// one nobody remembers to look at.
-PERSONAL_PAGES['wiki/concepts/vision.md'] +=
-	'\n![The shape of the thing](assets/vision-sketch.png)\n\n![A sketch that was moved away](assets/gone.png)\n';
-
-// Seed the config file itself so the "show hidden" toggle has the real system
-// files to reveal (mirrors prod, where every brain repo carries one).
-PERSONAL_PAGES['.isomorphic.json'] ??=
-	'{\n  "paths": {\n    "wiki/": "content",\n    "raw/": "source",\n    "wiki/log.md": "log"\n  }\n}\n';
+// Shared with `pnpm web:dev`, which materializes the same pages onto disk for the
+// local runtime. One seed, two hosts: see dev/seed.ts.
+const PERSONAL_PAGES = personalPages();
 
 // Mirror of the server's visible/hidden split (list_pages): visible = content
 // pages; EVERYTHING else (system files, .gitkeep, source, the log) is hidden.
 // The fixtures all use the default wiki/+raw/ layout, so the default config is
 // the right policy here.
 const isContentPage = (p: string) => p.endsWith('.md') && isContentPath(p, DEFAULT_BRAIN_CONFIG);
-const ACME_PAGES: Record<string, string> = {
-	'wiki/index.md':
-		'---\ntitle: Acme\n---\n\nKnowledge base for **Acme**. Start with our [[mission]] and the [[onboarding]] program.\n',
-	'wiki/concepts/mission.md':
-		'---\ntitle: Mission\n---\n\nAcme builds tools for small teams. See the [[content-pipeline]] for how we publish.\n',
-	// Carries an attachment (seeded in brainAssets) plus a link to one that does not
-	// exist, so the preview shows BOTH states: a rendered image and the missing-file
-	// note. The broken case is the one nobody remembers to look at.
-	'wiki/programs/onboarding.md':
-		'---\ntitle: Onboarding\n---\n\nOur flagship customer onboarding program. Run by [[lead]].\n\n![The onboarding flow](assets/onboarding-flow.png)\n\n![A diagram that was moved away](assets/gone.png)\n',
-	'wiki/people/lead.md':
-		'---\ntitle: Team Lead\n---\n\nLeads Acme; owns the [[mission]] and the [[onboarding]] program.\n',
-	'wiki/playbooks/content-pipeline.md':
-		'---\ntitle: Content Pipeline\n---\n\nHow drafts move from research to published KB pages.\n'
-};
-const NORTHWIND_PAGES: Record<string, string> = {
-	'wiki/index.md':
-		'---\ntitle: Northwind\n---\n\nOperations wiki for **Northwind**. See the [[headquarters]] and [[intake]].\n',
-	'wiki/facilities/headquarters.md':
-		'---\ntitle: Headquarters\n---\n\nPrimary site. Intake follows the [[intake]] process; ops lead is the [[director]].\n',
-	'wiki/protocols/intake.md':
-		'---\ntitle: Intake\n---\n\nStandard intake process for [[headquarters]].\n',
-	'wiki/people/director.md':
-		'---\ntitle: Operations Director\n---\n\nOwns operational processes including [[intake]].\n'
-};
 const brainContent: Record<string, Record<string, string>> = {
 	'your-org/personal-wiki': PERSONAL_PAGES,
 	'acme-co/acme-wiki': ACME_PAGES,
@@ -124,16 +92,14 @@ function pagesFor(id: string): Record<string, string> {
 // preview could not show a picture at all: the iframe CSP allows no external origin,
 // so there is nowhere else the bytes could come from.
 //
-// A 64x64 palette PNG, 128 bytes. Small enough to sit inline here, and a real image
-// rather than a 1x1, so "did it render?" is answerable by looking.
-const SAMPLE_PNG =
-	'iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAMAAACdt4HsAAAADFBMVEU7StZbje+Px/fv9P+rZWLWAAAAL0lEQVR42u3MMREAIAwEsEL9e2bBwW9/iYDMAHwnJBAIeoIbEggEPcGGBAJBTfAA1t8YAcvRfzcAAAAASUVORK5CYII=';
+// The bytes and the default brain's attachment path come from dev/seed.ts, so
+// `pnpm web:dev` writes the same image to the same place on disk.
 const brainAssets: Record<string, Record<string, { data: string; mimeType: string }>> = {
 	// Referenced by the seeded links above. The default brain gets one so the preview
 	// shows an image immediately; Acme gets one so switching brains proves attachments
 	// are per-brain rather than global.
 	'your-org/personal-wiki': {
-		'wiki/concepts/assets/vision-sketch.png': { data: SAMPLE_PNG, mimeType: 'image/png' }
+		[PERSONAL_ASSET_PATH]: { data: SAMPLE_PNG, mimeType: 'image/png' }
 	},
 	'acme-co/acme-wiki': {
 		'wiki/programs/assets/onboarding-flow.png': { data: SAMPLE_PNG, mimeType: 'image/png' }
@@ -411,10 +377,21 @@ let brainsFixture = [
 //              disappears, because sharing needs admin ON THE BRAIN and my org
 //              role there is only viewer.
 let brainGrants: Record<string, Record<string, PreviewRole>> = {
-	'your-org/personal-wiki': { 'u-me': 'admin', 'u-mira': 'viewer' },
+	'your-org/personal-wiki': { 'u-me': 'admin', 'u-mira': 'viewer', 'u-tomas': 'editor' },
 	'acme-co/acme-wiki': {},
 	'northwind/northwind-wiki': { 'u-me': 'viewer' }
 };
+// Accounts that belong to NO org here. A grant to one of them is a GUEST of that
+// brain (docs/design/guest-access.md): Tomás is a client's person shown my wiki.
+const guestAccounts: { user_id: string; email: string; name: string | null }[] = [
+	{ user_id: 'u-tomas', email: 'tomas@client.example', name: 'Tomás Rivera' }
+];
+// Brain invites: shares to addresses with no account, per brain. What the panel
+// shows under "Invited" until they sign in (the server's listPendingBrainInvites).
+const brainInvites: Record<
+	string,
+	{ invite_id: string; email: string; role: PreviewRole; invited_at: string; expires_at: string }[]
+> = {};
 // The orgs I belong to, which is NOT the same list as the orgs my brains are in.
 // `org-empty` holds no brain at all, and that is the point: it cannot be derived from
 // brainsFixture, so it is the case that proves the picker reads the server's org list
@@ -505,11 +482,19 @@ function accessResult(brainId: string, msg: string): CallToolResult {
 			};
 		})
 		.filter(Boolean);
+	// The second leg of listBrainAccess: grant holders outside the org, after members.
+	for (const g of guestAccounts) {
+		const grant = grants[g.user_id] ?? null;
+		const role = effectiveBrainRole({ visibility: b.visibility, orgRole: null, grant });
+		if (!role) continue;
+		access.push({ ...g, role, via: 'guest', granted_at: '2026-06-01T00:00:00Z' });
+	}
 	return {
 		content: [{ type: 'text', text: msg }],
 		structuredContent: {
 			view: 'brain-access',
 			access,
+			invites: brainInvites[b.id] ?? [],
 			visibility: b.visibility,
 			activeBrain: brainMeta(b.id),
 			me: { user_id: ME.user_id, role: myBrainRole(b) ?? 'viewer', orgRole: b.orgRole }
@@ -544,7 +529,9 @@ function brainsResult(msg: string, withView: boolean, switched = false): CallToo
 		// What the server registered. On here so the harness previews the nav with
 		// the Analytics row present; a real deployment sends false unless
 		// USAGE_ANALYTICS is set.
-		features: { analytics: true }
+		// `webBase` is what a deployment serving the web app sends (webBaseUrl in
+		// src/lib/web-app.ts); it puts the "Open in browser" control in the header.
+		features: { analytics: true, webBase: 'https://brain.example' }
 	};
 	if (withView) sc.view = 'brains';
 	if (switched) sc.switched = true;
@@ -831,17 +818,37 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
 		}
 		case 'search_pages': {
 			const q = String(args?.query ?? '').toLowerCase();
-			const hits: { path: string; line: number; text: string }[] = [];
-			for (const p of pth) {
-				stripFrontmatter(pg[p])
-					.split('\n')
-					.forEach((ln, i) => {
-						if (q && ln.toLowerCase().includes(q))
-							hits.push({ path: p, line: i + 1, text: ln.trim() });
-					});
+			// Mirrors the server: `scope: "all"` reaches every brain the caller can see and
+			// every hit names its brain, with the brain the call resolved leading. The
+			// default is that one brain, so an ordinary search stays where it was.
+			const wide = args?.scope === 'all';
+			const targets = wide
+				? [bid, ...brainsFixture.map((b) => b.id).filter((id) => id !== bid)]
+				: [bid];
+			const hits: {
+				path: string;
+				line: number;
+				text: string;
+				brain: string;
+				brainLabel: string;
+			}[] = [];
+			for (const id of targets) {
+				const label = brainsFixture.find((b) => b.id === id)?.label ?? id;
+				const pages = pagesFor(id);
+				for (const p of Object.keys(pages)) {
+					stripFrontmatter(pages[p])
+						.split('\n')
+						.forEach((ln, i) => {
+							if (q && ln.toLowerCase().includes(q))
+								hits.push({ path: p, line: i + 1, text: ln.trim(), brain: id, brainLabel: label });
+						});
+				}
 			}
 			const r = text(`${hits.length} match(es) for "${args?.query}".`);
-			return { ...r, structuredContent: { hits: hits.slice(0, 50) } };
+			return {
+				...r,
+				structuredContent: { hits: hits.slice(0, 50), scope: wide ? 'all' : 'brain' }
+			};
 		}
 		case 'edit_page': {
 			const md = pg[path];
@@ -1141,15 +1148,43 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
 			}
 			const email = args?.email ? String(args.email).trim() : '';
 			if (email) {
-				const m = orgMembers.find((x) => x.email.toLowerCase() === email.toLowerCase());
-				if (!m) return errText(`${email} isn't a member of this organization.`);
-				brainGrants[b.id] ??= {};
+				const m =
+					orgMembers.find((x) => x.email.toLowerCase() === email.toLowerCase()) ??
+					guestAccounts.find((x) => x.email.toLowerCase() === email.toLowerCase());
 				const access = String(args?.access ?? 'editor');
+				// No account: the server writes a brain invite. Nothing to show on the
+				// panel until they sign in, so only the note changes.
+				if (!m) {
+					brainInvites[b.id] ??= [];
+					const list = brainInvites[b.id];
+					if (access === 'none') {
+						const i = list.findIndex((x) => x.email.toLowerCase() === email.toLowerCase());
+						if (i < 0) return errText(`${email} has no account and no pending invitation.`);
+						list.splice(i, 1);
+						notes.push(`Cancelled ${email}'s invitation to "${b.label}".`);
+						return accessResult(b.id, notes.join(' '));
+					}
+					if (access === 'admin')
+						return errText('Someone outside the organization can be a guest editor at most.');
+					list.unshift({
+						invite_id: `inv-${list.length + 1}`,
+						email,
+						role: access as PreviewRole,
+						invited_at: nowDate().toISOString(),
+						expires_at: new Date(nowMs() + 30 * 86_400_000).toISOString()
+					});
+					notes.push(`Invited ${email} to "${b.label}" as ${roleLabel(access as Role)}.`);
+					return accessResult(b.id, notes.join(' '));
+				}
+				const guest = !('role' in m);
+				brainGrants[b.id] ??= {};
 				if (access === 'none') {
 					if (m.user_id === ME.user_id) return errText("You can't revoke your own access.");
 					delete brainGrants[b.id][m.user_id];
 					notes.push(`Removed ${m.email} from "${b.label}".`);
 				} else {
+					if (guest && access === 'admin')
+						return errText('Someone outside the organization can be a guest editor at most.');
 					brainGrants[b.id][m.user_id] = access as PreviewRole;
 					notes.push(`${m.email} is now ${roleLabel(access as Role)} on "${b.label}".`);
 				}
@@ -1345,7 +1380,14 @@ bridge.oncalltool = async (params) => {
 		await new Promise((r) => setTimeout(r, SLOW_LIST_MS));
 	return handleTool(params.name, (params.arguments ?? {}) as Record<string, unknown>);
 };
-bridge.onopenlink = async () => ({}); // no-op; links would open a tab in a real host
+// No tab opens here; the request is recorded where a test can read it, since which
+// URL the app asked the host to open is the whole assertion for "Open in browser".
+const openedLinks: string[] = [];
+(window as unknown as { __openedLinks: string[] }).__openedLinks = openedLinks;
+bridge.onopenlink = async (req) => {
+	openedLinks.push(req.url);
+	return {};
+};
 bridge.onloggingmessage = async () => ({});
 // The app's autoResize reports content-height changes here; in inline mode we
 // resize the card to fit (bounded), mirroring how claude.ai grows/shrinks an

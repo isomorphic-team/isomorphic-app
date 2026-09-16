@@ -60,6 +60,12 @@ function maxRole(a: Role, b: Role): Role {
 	return ROLE_RANK[a] >= ROLE_RANK[b] ? a : b;
 }
 
+// The one thing that LOWERS a role, and it is a ceiling rather than a demotion: a
+// read-only brain is capped at viewer.
+function minRole(a: Role, b: Role): Role {
+	return ROLE_RANK[a] <= ROLE_RANK[b] ? a : b;
+}
+
 // ---------- brain-scope access (the per-brain permission rule) ----------
 //
 // Two roles, two scopes, deliberately separate:
@@ -85,23 +91,50 @@ function maxRole(a: Role, b: Role): Role {
 // directly, so hiding a brain from them in our UI would be theater. It also stops
 // a brain orphaning when the only person granted access leaves.
 //
-// Returns null when none of the three applies: the caller cannot see this brain
-// and it must not appear in any listing.
+// `orgRole` is NULLABLE, and a null means "not a member of the organization holding
+// this brain". Sources (1) and (3) are both about membership, so for a non-member they
+// are skipped and only an explicit grant can admit them. That is the shape any access
+// from outside an organization takes, and making it a designed input rather than an
+// accident of `undefined` is what lets the gates downstream tell "not a member" from
+// "a member with few powers".
+//
+// `readOnly` is the one thing that lowers the result rather than raising it. It is a
+// CEILING on the whole computation, applied last, because a read-only brain has to be
+// inert to everyone including the admins of the organization holding it: source (3)
+// would otherwise hand them their own role straight back, and an org-visible brain
+// would hand every member theirs. This is why a viewer grant cannot make a brain
+// read-only and a column on the brain can.
+//
+// A non-member is a GUEST of the brain, and a guest is capped at editor. Deciding who
+// reaches a brain is the organization's decision, and `admin` on a brain is exactly that
+// power, so it stays with people the org can see on its roster. share_brain refuses to
+// write an admin grant for a non-member; this cap is what makes the refusal an
+// invariant rather than a courtesy, since a row can be written by more than one path.
+//
+// Returns null when none of the sources applies: the caller cannot see this brain and
+// it must not appear in any listing.
+export const GUEST_ROLE_CAP: Role = 'editor';
+
 export function effectiveBrainRole(input: {
 	visibility: string;
-	orgRole: Role;
+	orgRole: Role | null;
 	grant?: Role | null;
+	readOnly?: boolean;
 }): Role | null {
-	const { visibility, orgRole, grant } = input;
+	const { visibility, orgRole, grant, readOnly } = input;
 	let role: Role | null = null;
-	// (1) An 'org'-visible brain is reachable by every member at their org role.
+	// (1) An 'org'-visible brain is reachable by every MEMBER at their org role.
 	// Anything other than 'private' is treated as org-visible, so an unrecognized
 	// future value fails OPEN to today's behavior rather than locking a brain out.
-	if (visibility !== 'private') role = orgRole;
+	if (orgRole && visibility !== 'private') role = orgRole;
 	// (2) An explicit per-brain grant.
 	if (grant) role = role ? maxRole(role, grant) : grant;
-	// (3) Org admin/owner floor.
-	if (roleAtLeast(orgRole, 'admin')) role = role ? maxRole(role, orgRole) : orgRole;
+	// (3) Org admin/owner floor. Also needs a membership to be a member of.
+	if (orgRole && roleAtLeast(orgRole, 'admin')) role = role ? maxRole(role, orgRole) : orgRole;
+	// A guest (no membership) never exceeds the guest cap.
+	if (role && !orgRole) role = minRole(role, GUEST_ROLE_CAP);
+	// A read-only brain caps whatever the sources produced.
+	if (role && readOnly) role = minRole(role, 'viewer');
 	return role;
 }
 
@@ -130,9 +163,21 @@ export interface TenantOpts {
 	brain?: string;
 }
 
-// Throw a caller-facing authorization error when `actual` outranks below `required`.
-export function assertRole(actual: Role, required?: Role): void {
-	if (required && !roleAtLeast(actual, required)) {
+// Throw a caller-facing authorization error when `actual` ranks below `required`.
+//
+// `actual` is nullable because a caller can reach a brain without holding any role in
+// the organization that owns it. That has to read as "you are not a member", not as
+// the literal string "undefined": with the old signature ROLE_RANK[undefined] is
+// undefined and every comparison against it is false, so it failed closed by accident
+// rather than by design, and rendered the accident to the user.
+export function assertRole(actual: Role | null, required?: Role): void {
+	if (!required) return;
+	if (!actual) {
+		throw new Error(
+			`This action requires ${required} access in the organization, and you are not a member of it.`
+		);
+	}
+	if (!roleAtLeast(actual, required)) {
 		throw new Error(
 			`This action requires ${required} access or higher, but your role is ${actual}.`
 		);
@@ -171,6 +216,8 @@ export interface Brain {
 	created_by?: string | null;
 	visibility: string;
 	created_at: string;
+	archived_at?: string | null;
+	read_only?: number | null;
 }
 
 export interface MembershipWithOrg {
@@ -376,8 +423,15 @@ export async function unlinkGithubLink(
 	await db.prepare(`DELETE FROM github_links WHERE github_user_id = ?1`).bind(githubUserId).run();
 }
 
-// Resolve a user's single membership plus its org. One org per user today
-// (multi-org membership is a later concern), so LIMIT 1.
+// One membership of this user id, oldest first, plus its org.
+//
+// A person CAN belong to several orgs: `memberships` is keyed (org_id, user_id),
+// invitations put someone in a second one, and every resolution path that picks
+// where to act unions across them (listAccessibleBrains, listAccessibleOrgs,
+// resolveOrgForPerson, chooseOrg). This is not one of those paths. It answers
+// "does this user id belong anywhere yet", for first-touch provisioning, so the
+// LIMIT 1 is deliberate; it is ordered so the answer is the same on every call
+// rather than whichever row the query plan reached first.
 export async function getMembershipWithOrg(
 	db: D1Database,
 	userId: string
@@ -388,6 +442,7 @@ export async function getMembershipWithOrg(
          FROM memberships m
          JOIN orgs o ON o.org_id = m.org_id
         WHERE m.user_id = ?1
+        ORDER BY m.added_at ASC, m.org_id ASC
         LIMIT 1`
 		)
 		.bind(userId)
@@ -445,7 +500,7 @@ export async function getDefaultBrainForUser(
 			   FROM brains b
 			   LEFT JOIN brain_memberships bm
 			          ON bm.brain_id = b.brain_id AND bm.user_id = ?2
-			  WHERE b.org_id = ?1
+			  WHERE b.org_id = ?1 AND b.archived_at IS NULL
 			  ORDER BY b.created_at ASC, b.brain_id ASC`
 		)
 		.bind(orgId, userId)
@@ -454,7 +509,8 @@ export async function getDefaultBrainForUser(
 		const role = effectiveBrainRole({
 			visibility: row.visibility,
 			orgRole,
-			grant: row.grant_role as Role | null
+			grant: row.grant_role as Role | null,
+			readOnly: !!row.read_only
 		});
 		if (role) {
 			const { grant_role: _drop, ...brain } = row;
@@ -555,42 +611,18 @@ export async function deleteBrain(db: D1Database, brainId: string): Promise<void
 	await db.prepare(`DELETE FROM brains WHERE brain_id = ?1`).bind(brainId).run();
 }
 
-// ---------- email invitations (pre-membership) ----------
+// ---------- email invitations ----------
 //
-// An `invitations` row is how an admin puts a user into an org BEFORE that user
-// has ever signed in — the only way a member with no GitHub account joins a
-// specific org (otherwise first sign-in would auto-provision them a personal
-// Model-A brain). Matching is by email: magic-link/SSO already proves the user
-// owns the address, so no separate invite token is required for this path (the
-// token_hash column stays for a future link-based flow).
-
-export interface PendingInvite {
-	invite_id: string;
-	org_id: string;
-	role: Role;
-}
-
-// The most recent unexpired, unaccepted invite for an email (case-insensitive),
-// or null. Callers consume it at first sign-in to place the user in that org.
-export async function getPendingInviteByEmail(
-	db: D1Database,
-	email: string
-): Promise<PendingInvite | null> {
-	const row = await db
-		.prepare(
-			`SELECT invite_id, org_id, role
-         FROM invitations
-        WHERE lower(email) = lower(?1)
-          AND accepted_at IS NULL
-          AND expires_at > datetime('now')
-        ORDER BY rowid DESC
-        LIMIT 1`
-		)
-		.bind(email)
-		.first<{ invite_id: string; org_id: string; role: string }>();
-	if (!row) return null;
-	return { invite_id: row.invite_id, org_id: row.org_id, role: row.role as Role };
-}
+// An `invitations` row is how an admin puts someone in an org without touching
+// GitHub: it is the only way a member with no GitHub account joins a SPECIFIC
+// org (a first sign-in otherwise mints them a personal Model-A one). Matching is
+// by email, because magic-link/SSO already proves the person owns the address,
+// so no separate invite token is required for this path (the token_hash column
+// stays for a future link-based flow).
+//
+// Claiming lives in lib/invites.ts, and is not restricted to a first sign-in:
+// an existing account can be invited to a second org, and an address linked to
+// an existing account carries its invitation with it (issue #69).
 
 export async function acceptInvite(db: D1Database, inviteId: string): Promise<void> {
 	await db
@@ -644,18 +676,38 @@ export async function listMembers(db: D1Database, orgId: string): Promise<Member
 	return results ?? [];
 }
 
-// Pending (unaccepted, unexpired) invitations for an org, newest first.
+// Pending (unaccepted, unexpired) invitations for an org, newest first. ORG
+// invites only: a brain invite carries the brain's org_id too, and listing it here
+// would show the roster a member who was never invited to join.
 export async function listPendingInvites(db: D1Database, orgId: string): Promise<Invite[]> {
 	const { results } = await db
 		.prepare(
 			`SELECT invite_id, email, role, invited_at, expires_at
 			   FROM invitations
 			  WHERE org_id = ?1
+			    AND brain_id IS NULL
 			    AND accepted_at IS NULL
 			    AND expires_at > datetime('now')
 			  ORDER BY invited_at DESC`
 		)
 		.bind(orgId)
+		.all<Invite>();
+	return results ?? [];
+}
+
+// Pending brain invites for one brain, newest first: the sharing panel's evidence
+// that a share to an address with no account happened, until they sign in.
+export async function listPendingBrainInvites(db: D1Database, brainId: string): Promise<Invite[]> {
+	const { results } = await db
+		.prepare(
+			`SELECT invite_id, email, role, invited_at, expires_at
+			   FROM invitations
+			  WHERE brain_id = ?1
+			    AND accepted_at IS NULL
+			    AND expires_at > datetime('now')
+			  ORDER BY invited_at DESC`
+		)
+		.bind(brainId)
 		.all<Invite>();
 	return results ?? [];
 }
@@ -706,20 +758,65 @@ export async function removeMembership(
 }
 
 // Record an email invitation. Matched by email and consumed at the invitee's first
-// sign-in (provisionOrgForUser → getPendingInviteByEmail → acceptInvite). token_hash
+// sign-in or on the invitee's next request (claimPendingInvites). token_hash
 // stays empty: email possession is proven by magic-link/SSO, so no link token is
 // needed for this path (the column is reserved for a future link-based flow).
+//
+// With `brain_id` it is a BRAIN invite: claimed as a grant on that one brain, not
+// as a membership in `org_id`, which is the brain's own org.
 export async function createInvitation(
 	db: D1Database,
-	inv: { invite_id: string; org_id: string; email: string; role: Role; invited_by: string }
+	inv: {
+		invite_id: string;
+		org_id: string;
+		email: string;
+		role: Role;
+		invited_by: string;
+		brain_id?: string;
+	}
 ): Promise<void> {
 	await db
 		.prepare(
 			`INSERT INTO invitations
-			   (invite_id, org_id, email, role, invited_by, token_hash, invited_at, expires_at)
-			 VALUES (?1, ?2, ?3, ?4, ?5, '', datetime('now'), datetime('now', '+30 days'))`
+			   (invite_id, org_id, email, role, invited_by, token_hash, invited_at, expires_at, brain_id)
+			 VALUES (?1, ?2, ?3, ?4, ?5, '', datetime('now'), datetime('now', '+30 days'), ?6)`
 		)
-		.bind(inv.invite_id, inv.org_id, inv.email, inv.role, inv.invited_by)
+		.bind(inv.invite_id, inv.org_id, inv.email, inv.role, inv.invited_by, inv.brain_id ?? null)
+		.run();
+}
+
+// The pending brain invite for an address, if any. What share_brain reports as
+// "invited, not yet signed in", and what `access: 'none'` cancels.
+export async function getPendingBrainInvite(
+	db: D1Database,
+	brainId: string,
+	email: string
+): Promise<{ invite_id: string; role: Role } | null> {
+	const row = await db
+		.prepare(
+			`SELECT invite_id, role FROM invitations
+			  WHERE brain_id = ?1 AND lower(email) = lower(?2)
+			    AND accepted_at IS NULL AND expires_at > datetime('now')
+			  ORDER BY rowid DESC LIMIT 1`
+		)
+		.bind(brainId, email)
+		.first<{ invite_id: string; role: string }>();
+	return row ? { invite_id: row.invite_id, role: row.role as Role } : null;
+}
+
+// Cancel every pending brain invite for an address. A revoke that only deleted the
+// grant would leave the invite to be claimed on the guest's first sign-in.
+export async function cancelBrainInvites(
+	db: D1Database,
+	brainId: string,
+	email: string
+): Promise<void> {
+	await db
+		.prepare(
+			`DELETE FROM invitations
+			  WHERE brain_id = ?1 AND lower(email) = lower(?2) AND accepted_at IS NULL`
+		)
+		.bind(brainId, email)
 		.run();
 }
 
@@ -748,13 +845,15 @@ export interface BrainAccessEntry {
 	email: string;
 	name: string | null;
 	role: Role;
-	via: 'grant' | 'org' | 'org-admin';
+	via: 'grant' | 'org' | 'org-admin' | 'guest';
 	granted_at?: string;
 }
 
-// Everyone who can reach a brain, and at what role. Walks every org member (that
-// is the candidate pool: a brain can only be shared inside its own org) plus
-// their grant, and admits them through the same pure rule the read path uses.
+// Everyone who can reach a brain, and at what role. Two candidate pools, each
+// admitted through the same pure rule the read path uses: every org member plus
+// their grant, then every grant holder who is NOT a member (a guest). `guest` is
+// derived here rather than stored on the row: the same grant reads `grant` the
+// day its holder joins the organization, and a stored flag would say otherwise.
 export async function listBrainAccess(
 	db: D1Database,
 	brainId: string,
@@ -780,21 +879,42 @@ export async function listBrainAccess(
 			user_id: string;
 			email: string;
 			name: string | null;
-			org_role: string;
+			org_role: string | null;
 			grant_role: string | null;
 			granted_at: string | null;
 		}>();
+	const { results: guests } = await db
+		.prepare(
+			`SELECT u.user_id AS user_id, u.email AS email, u.name AS name,
+			        NULL AS org_role, bm.role AS grant_role, bm.granted_at AS granted_at
+			   FROM brain_memberships bm
+			   JOIN app_users u ON u.user_id = bm.user_id
+			   LEFT JOIN memberships m ON m.org_id = ?2 AND m.user_id = bm.user_id
+			  WHERE bm.brain_id = ?1 AND m.user_id IS NULL
+			  ORDER BY bm.granted_at ASC, u.email ASC`
+		)
+		.bind(brainId, orgId)
+		.all<{
+			user_id: string;
+			email: string;
+			name: string | null;
+			org_role: null;
+			grant_role: string;
+			granted_at: string | null;
+		}>();
 	const out: BrainAccessEntry[] = [];
-	for (const r of results ?? []) {
-		const orgRole = r.org_role as Role;
+	for (const r of [...(results ?? []), ...(guests ?? [])]) {
+		const orgRole = r.org_role as Role | null;
 		const grant = r.grant_role as Role | null;
 		const role = effectiveBrainRole({ visibility, orgRole, grant });
 		if (!role) continue;
-		const via: BrainAccessEntry['via'] = grant
-			? 'grant'
-			: visibility !== 'private'
-				? 'org'
-				: 'org-admin';
+		const via: BrainAccessEntry['via'] = !orgRole
+			? 'guest'
+			: grant
+				? 'grant'
+				: visibility !== 'private'
+					? 'org'
+					: 'org-admin';
 		out.push({
 			user_id: r.user_id,
 			email: r.email,
@@ -917,8 +1037,14 @@ export interface AccessibleBrain {
 	// the two scopes diverge: you can be an org Admin holding only viewer on a
 	// brain someone shared with you read-only, or an org Editor holding admin on
 	// a brain you created.
-	org_role: Role;
+	// NULL when the caller holds no membership in the organization that owns this
+	// brain. Every consumer that gates on this has to read a null as "not a member",
+	// never as "no gate".
+	org_role: Role | null;
 	visibility: string; // 'org' | 'private'
+	// Readable, never writable, by anyone including the admins of the org holding it.
+	// The cap lives in effectiveBrainRole; this is only the flag.
+	read_only?: boolean;
 }
 
 // A human label for a brain — what the switcher shows and what fuzzy `brain` matches
@@ -984,19 +1110,30 @@ export function brainLabelQualified(b: AccessibleBrain): string {
 // row is then admitted or dropped by the pure rule. Keeping the policy out of the
 // WHERE clause is what lets `pnpm test:access` pin it exhaustively: a filter
 // expressed twice (here and in getAccessibleBrain) is a filter that will disagree.
+//
+// Two legs, one per way in. The first walks memberships (every brain in every org
+// you belong to, with whatever grant you hold under that same identity). The
+// second walks GRANTS, which is how a guest reaches a brain in an organization they
+// are not a member of: it used to be unreachable, since the query began at
+// memberships and a non-member produced no row at all. Each leg is driven by its
+// own user index; the dedupe below folds a brain reached by both, or by two linked
+// identities, to the highest of each role. A guest's org_role is null, and the rule
+// caps them.
 export async function listAccessibleBrains(
 	db: D1Database,
 	userIds: string[]
 ): Promise<AccessibleBrain[]> {
 	if (userIds.length === 0) return [];
 	const placeholders = userIds.map((_, i) => `?${i + 1}`).join(', ');
-	const { results } = await db
-		.prepare(
-			`SELECT b.brain_id AS brain_id, b.repo_owner AS repo_owner, b.repo_name AS repo_name,
+	const columns = `b.brain_id AS brain_id, b.repo_owner AS repo_owner, b.repo_name AS repo_name,
 			        b.name AS name, b.visibility AS visibility, b.org_id AS org_id,
 			        o.name AS org_name, o.model AS org_model,
 			        o.installation_id AS installation_id, m.role AS org_role,
-			        bm.role AS grant_role, b.created_at AS created_at
+			        bm.role AS grant_role, b.created_at AS created_at,
+			        b.read_only AS read_only`;
+	const { results } = await db
+		.prepare(
+			`SELECT ${columns}
 			   FROM memberships m
 			   JOIN orgs o   ON o.org_id = m.org_id
 			   JOIN brains b ON b.org_id = o.org_id
@@ -1004,7 +1141,18 @@ export async function listAccessibleBrains(
 			          ON bm.brain_id = b.brain_id AND bm.user_id = m.user_id
 			  WHERE m.user_id IN (${placeholders})
 			    AND o.suspended_at IS NULL
-			  ORDER BY b.created_at ASC, b.brain_id ASC`
+			    AND b.archived_at IS NULL
+			 UNION ALL
+			 SELECT ${columns}
+			   FROM brain_memberships bm
+			   JOIN brains b ON b.brain_id = bm.brain_id
+			   JOIN orgs o   ON o.org_id = b.org_id
+			   LEFT JOIN memberships m
+			          ON m.org_id = b.org_id AND m.user_id IN (${placeholders})
+			  WHERE bm.user_id IN (${placeholders})
+			    AND o.suspended_at IS NULL
+			    AND b.archived_at IS NULL
+			  ORDER BY created_at ASC, brain_id ASC`
 		)
 		.bind(...userIds)
 		.all<{
@@ -1017,25 +1165,29 @@ export async function listAccessibleBrains(
 			org_name: string;
 			org_model: string;
 			installation_id: number;
-			org_role: string;
+			org_role: string | null;
 			grant_role: string | null;
+			read_only: number | null;
 		}>();
 
 	const byId = new Map<string, AccessibleBrain>();
 	for (const r of results ?? []) {
 		const id = `${r.repo_owner}/${r.repo_name}`;
-		const orgRole = r.org_role as Role;
+		const orgRole = r.org_role as Role | null;
 		const role = effectiveBrainRole({
 			visibility: r.visibility,
 			orgRole,
-			grant: r.grant_role as Role | null
+			grant: r.grant_role as Role | null,
+			readOnly: !!r.read_only
 		});
 		if (!role) continue; // private brain, no grant, not an org admin: invisible.
 		const existing = byId.get(id);
 		if (existing) {
-			// Same brain reached via two linked identities: keep the higher of each.
+			// Same brain reached via two legs or two linked identities: keep the higher
+			// of each. A null org role never overwrites a membership found by the other.
 			if (roleAtLeast(role, existing.role)) existing.role = role;
-			if (roleAtLeast(orgRole, existing.org_role)) existing.org_role = orgRole;
+			if (orgRole && (!existing.org_role || roleAtLeast(orgRole, existing.org_role)))
+				existing.org_role = orgRole;
 			continue;
 		}
 		byId.set(id, {
@@ -1050,7 +1202,8 @@ export async function listAccessibleBrains(
 			name: r.name,
 			role,
 			org_role: orgRole,
-			visibility: r.visibility
+			visibility: r.visibility,
+			read_only: !!r.read_only
 		});
 	}
 	return [...byId.values()];
@@ -1170,6 +1323,37 @@ export function chooseOrg(
 		);
 	}
 	return orgs.find((o) => o.org.org_id === opts.activeOrgId) ?? orgs[0];
+}
+
+// Which brain a brain-scope call acts on. The exact twin of chooseOrg above, and it
+// was the half that never got extracted: the same ladder (named handle, then the
+// brain the caller is working in, then the oldest) sat inline in a private method on
+// McpSession, where no test could reach it. That is the decision routing every read
+// and every write, so the two halves of one rule should not have different standards
+// of proof.
+//
+// Throws rather than guessing for the same reason chooseOrg does: a handle matching
+// several brains that silently picked one would act on a brain the caller did not
+// name. A BLANK handle throws too — a caller who passed `brain` asked for a specific
+// one, and quietly falling back to a different brain is the same failure wearing a
+// friendlier face. Callers resolve the empty-list case before reaching here (it means
+// provision, not fail), but throwing is still the right answer if one does not.
+export function chooseBrain(
+	brains: AccessibleBrain[],
+	opts: { brain?: string; activeBrainId?: string } = {}
+): AccessibleBrain {
+	if (brains.length === 0) throw new Error('You do not have access to any brain yet.');
+	if (opts.brain) {
+		const m = matchBrain(brains, opts.brain);
+		if (m.brain) return m.brain;
+		const names = (m.candidates ?? brains).map(brainLabelQualified);
+		throw new Error(
+			m.candidates
+				? `"${opts.brain}" matches multiple brains: ${names.join(', ')}. Be more specific.`
+				: `No brain matching "${opts.brain}". You have access to: ${names.join(', ')}.`
+		);
+	}
+	return brains.find((b) => b.id === opts.activeBrainId) ?? brains[0];
 }
 
 // The whole org-selection decision for a person, in one function a test can drive

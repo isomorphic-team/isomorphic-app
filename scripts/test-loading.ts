@@ -33,14 +33,9 @@ import {
 	type LoadingFacts
 } from '../src/lib/loading-lines.ts';
 
-let failures = 0;
-function check(label: string, cond: boolean, detail = '') {
-	if (cond) console.log(`  ✓ ${label}`);
-	else {
-		failures++;
-		console.log(`  ✗ ${label}${detail ? `: ${detail}` : ''}`);
-	}
-}
+import { checker } from './check.ts';
+
+const { check, done } = checker('loading-line checks');
 
 // Comments out, so PROSE about a loading state is never mistaken for one. The walk
 // below found `{ kind: 'loading' }` inside LoadingView's own header comment on its
@@ -313,7 +308,4 @@ console.log('\nWiring: every loading state in the app declares its task:');
 	check('every task has at least two lines of its own', thin.length === 0, thin.join(', '));
 }
 
-console.log(
-	failures === 0 ? '\nAll loading-line checks passed.\n' : `\n${failures} check(s) FAILED.\n`
-);
-process.exit(failures === 0 ? 0 : 1);
+done();

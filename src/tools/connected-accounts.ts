@@ -30,16 +30,13 @@ import {
 	unlinkIdentity,
 	unlinkGithubLink
 } from '../lib/orgs.ts';
+import { fail } from './shared.ts';
 
 // The bits of the Worker Env these tools need: KV for the pending-link challenge
 // and the public origin to build the sign-in URL (a tool handler has no request URL).
 interface ConnectedAccountsEnv {
 	OAUTH_KV: KVNamespace;
 	PUBLIC_BASE_URL?: string;
-}
-
-function fail(text: string) {
-	return { isError: true as const, content: [{ type: 'text' as const, text }] };
 }
 
 // Narrow to the signed-in person, or throw the caller-facing "not available" error.

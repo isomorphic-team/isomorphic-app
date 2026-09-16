@@ -28,14 +28,9 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { registerBrainApp, BRAIN_APP_URI } from '../src/tools/apps.ts';
 
-let failures = 0;
-function check(label: string, cond: boolean, detail = '') {
-	if (cond) console.log(`  ✓ ${label}`);
-	else {
-		failures++;
-		console.log(`  ✗ ${label}${detail ? ` — ${detail}` : ''}`);
-	}
-}
+import { checker } from './check.ts';
+
+const { check, done } = checker('app-resource checks');
 
 // A resource content item is text OR blob; the app bundle is always text.
 function bodyText(item: unknown): string {
@@ -145,7 +140,4 @@ console.log('\ntools/list: every widget tool points at a resource that exists');
 
 await client.close();
 
-console.log(
-	failures === 0 ? '\nAll app-resource checks passed.\n' : `\n${failures} check(s) FAILED.\n`
-);
-process.exit(failures === 0 ? 0 : 1);
+done();

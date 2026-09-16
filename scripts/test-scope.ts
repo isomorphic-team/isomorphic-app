@@ -27,7 +27,7 @@
 //   pnpm test:scope
 
 import { readFileSync, readdirSync } from 'node:fs';
-import { DatabaseSync } from 'node:sqlite';
+import { localD1 } from '../src/local/d1-sqlite.ts';
 import { assertRole, type Role, type TenantOpts, type AccessibleBrain } from '../src/lib/orgs.ts';
 import { registerMemberTools } from '../src/tools/members.ts';
 import { registerBrainAccessTools } from '../src/tools/brain-access.ts';
@@ -37,36 +37,26 @@ import { registerBrainTools } from '../src/tools/brains.ts';
 import { registerAnalyticsTools } from '../src/tools/analytics.ts';
 import { registerLibrarianTools, type BrainContext } from '../src/tools/librarian.ts';
 
-let failures = 0;
-function check(label: string, cond: boolean, detail = '') {
-	if (cond) console.log(`  ✓ ${label}`);
-	else {
-		failures++;
-		console.log(`  ✗ ${label}${detail ? `: ${detail}` : ''}`);
-	}
-}
+import { checker } from './check.ts';
+
+const { check, done } = checker('scope checks');
 
 // ---------------------------------------------------------------------------
 // The schema, real, over node:sqlite shimmed to the D1 surface.
 // ---------------------------------------------------------------------------
-// Same shim shape as test-access.ts and the e2e batteries. Kept local rather than
-// shared so each golden test still runs as one self-contained file.
-const sqlite = new DatabaseSync(':memory:');
-sqlite.exec(readFileSync(new URL('../src/db/auth-schema.sql', import.meta.url), 'utf8'));
-// The analytics tool reads usage_daily, so the scope test needs its table too.
-sqlite.exec(readFileSync(new URL('../migrations/0006_usage_daily.sql', import.meta.url), 'utf8'));
-function shimStatement(sql: string, params: unknown[] = []) {
-	return {
-		bind: (...p: unknown[]) => shimStatement(sql, p),
-		first: async () => sqlite.prepare(sql).get(...(params as [])) ?? null,
-		all: async () => ({ results: sqlite.prepare(sql).all(...(params as [])) }),
-		run: async () => {
-			sqlite.prepare(sql).run(...(params as []));
-			return { success: true };
-		}
-	};
-}
-const db = { prepare: (sql: string) => shimStatement(sql) } as never;
+// localD1() rather than a copy of the shim. This file used to carry its own, on
+// the grounds that a golden test should run as one self-contained file, and the
+// cost of that showed up: the copies drifted, and the one that omitted
+// `meta.changes` made the write-dedupe ledger report a fresh write as already in
+// flight. A battery is still self-contained in what it ASSERTS; the D1 surface it
+// asserts against is not the part worth re-deriving per file. test-index.ts keeps
+// its own because it instruments the shim to count statements and batches, which
+// is that battery's whole subject.
+//
+// The schema comes from the real migrations, not from src/db/auth-schema.sql,
+// which is reference only. This battery pins the authorization model, so it is
+// the last place that should assert against a schema production does not run.
+const { db, sqlite } = localD1();
 
 sqlite.exec(`
   INSERT INTO orgs (org_id, name, model, installation_id, brain_owner, created_by)
@@ -112,7 +102,12 @@ sqlite.exec(`
 interface Persona {
 	label: string;
 	userId: string;
-	orgRole: Role;
+	// NULL for a caller who holds no membership in the organization that owns the
+	// brain they reached. Distinct from 'viewer' on purpose, and that distinction is
+	// the whole reason the field is nullable: the org roster and the per-person
+	// analytics table are precisely what someone from outside must never see, and
+	// "not a member" has to be a different answer from "a member with few powers".
+	orgRole: Role | null;
 	role: Role;
 }
 const sharedAdmin: Persona = {
@@ -138,6 +133,15 @@ const lurker: Persona = {
 	userId: 'u-lurker',
 	orgRole: 'viewer',
 	role: 'viewer'
+};
+// Reaches the brain at editor with NO role in the organization that owns it. This is
+// the shape no test exercised before org roles could be absent, and the one where an
+// accidental pass reads as a permissions bug rather than as a leak.
+const outsider: Persona = {
+	label: 'an outsider: editor on this brain, not a member of its organization',
+	userId: 'u-outside',
+	orgRole: null,
+	role: 'editor'
 };
 
 // Any octokit call means a handler reached the network on a path that should not.
@@ -167,8 +171,14 @@ const store = new Proxy(
 // assertions against two independent fields. If this test's copy and worker.ts ever
 // diverge the test is worthless, so it is deliberately these two lines and nothing
 // else: the thing under test is which OPTION each tool passes, not how assertRole works.
+// Which brain each context resolution named. A resolution is not free (in the
+// Worker it mints an installation token and reads the brain's config), so a tool
+// that resolves one for a brain it did not need to has a cost no role assertion sees.
+const brainAsks: (string | undefined)[] = [];
+
 function contextFor(p: Persona) {
 	return async (opts?: TenantOpts): Promise<BrainContext> => {
+		brainAsks.push(opts?.brain);
 		assertRole(p.role, opts?.requires);
 		assertRole(p.orgRole, opts?.requiresOrg);
 		return {
@@ -194,7 +204,9 @@ function contextFor(p: Persona) {
 // Register the real tools against a stub server that only captures handlers.
 // ---------------------------------------------------------------------------
 // registerAppTool delegates to server.registerTool, so one method covers both.
-type Handler = (args: Record<string, unknown>) => Promise<{ isError?: boolean; content?: unknown }>;
+type Handler = (
+	args: Record<string, unknown>
+) => Promise<{ isError?: boolean; content?: unknown; structuredContent?: unknown }>;
 
 // What each org-scope resolution was asked for. The `org` argument only does anything
 // if the tool actually forwards it. A tool that accepts it and drops it silently
@@ -208,7 +220,10 @@ const moves: string[] = [];
 // Each tool's registration config, for the checks that read `_meta` rather than call.
 const configs = new Map<string, Record<string, unknown>>();
 
-function toolsFor(p: Persona): Map<string, Handler> {
+function toolsFor(
+	p: Persona,
+	deployment: { webBaseUrl?: string } = { webBaseUrl: 'https://brain.example' }
+): Map<string, Handler> {
 	const handlers = new Map<string, Handler>();
 	const server = {
 		registerTool: (name: string, cfg: unknown, handler: Handler) => {
@@ -218,7 +233,7 @@ function toolsFor(p: Persona): Map<string, Handler> {
 	} as never;
 	const getContext = contextFor(p);
 	registerMemberTools(server, getContext);
-	registerBrainAccessTools(server, getContext);
+	registerBrainAccessTools(server, getContext, { webBaseUrl: deployment.webBaseUrl });
 	registerMediaTools(server, getContext);
 	registerAnalyticsTools(server, getContext);
 	registerLibrarianTools(server, getContext);
@@ -227,6 +242,9 @@ function toolsFor(p: Persona): Map<string, Handler> {
 		orgContext: async (opts?: { requires?: Role; org?: string }) => {
 			orgAsks.push(opts);
 			assertRole(p.orgRole, opts?.requires);
+			// assertRole threw for a null above when a role was required; an org-scope
+			// call with no requirement from a non-member is not a shape any tool makes.
+			if (!p.orgRole) throw new Error('not a member of any organization');
 			return {
 				octokit,
 				org: {
@@ -261,12 +279,17 @@ function toolsFor(p: Persona): Map<string, Handler> {
 			})) as AccessibleBrain[],
 		// Two orgs, one of which holds no brain at all: the case the brains payload has
 		// to carry, since the widget cannot derive it from a list of brains.
+		// A non-member belongs to no organization, so the list is empty rather than a
+		// list carrying a null role.
 		listOrgs: async () =>
-			[
-				{ org_id: 'org1', name: 'Northwind', brain_owner: 'northwind' },
-				{ org_id: 'org2', name: 'Contoso Group', brain_owner: 'contoso-io' }
-			].map((o) => ({
-				role: p.orgRole,
+			(p.orgRole
+				? [
+						{ org_id: 'org1', name: 'Northwind', brain_owner: 'northwind' },
+						{ org_id: 'org2', name: 'Contoso Group', brain_owner: 'contoso-io' }
+					]
+				: []
+			).map((o) => ({
+				role: p.orgRole as Role,
 				org: {
 					...o,
 					model: 'customer',
@@ -282,7 +305,9 @@ function toolsFor(p: Persona): Map<string, Handler> {
 			moves.push(id);
 		},
 		invalidateConfig: () => {},
-		analyticsEnabled: true
+		analyticsEnabled: true,
+		db,
+		webBaseUrl: deployment.webBaseUrl
 	});
 	return handlers;
 }
@@ -292,14 +317,19 @@ function toolsFor(p: Persona): Map<string, Handler> {
 // are refusals, and a test that accepted only one would miss a gate moving between them.
 async function attempt(p: Persona, tool: string, args: Record<string, unknown> = {}) {
 	const handler = toolsFor(p).get(tool);
-	if (!handler) return { outcome: 'missing' as const, detail: `tool ${tool} not registered` };
+	if (!handler) {
+		return { outcome: 'missing' as const, detail: `tool ${tool} not registered`, text: '', sc: {} };
+	}
 	try {
 		const res = await handler(args);
+		const content = (res?.content ?? []) as { type?: string; text?: string }[];
+		const text = content.map((c) => (c.type === 'text' ? (c.text ?? '') : '')).join('\n');
+		const sc = (res?.structuredContent ?? {}) as Record<string, unknown>;
 		return res?.isError
-			? { outcome: 'denied' as const, detail: JSON.stringify(res.content) }
-			: { outcome: 'allowed' as const, detail: '' };
+			? { outcome: 'denied' as const, detail: JSON.stringify(res.content), text, sc }
+			: { outcome: 'allowed' as const, detail: '', text, sc };
 	} catch (e) {
-		return { outcome: 'denied' as const, detail: String(e) };
+		return { outcome: 'denied' as const, detail: String(e), text: '', sc: {} };
 	}
 }
 const denies = async (p: Persona, tool: string, args?: Record<string, unknown>) =>
@@ -413,6 +443,56 @@ check(
 	viewerPayload.structuredContent?.orgs?.length === 0,
 	'a picker that offers an org the click would refuse'
 );
+// The web base rides on the same payload, for the same reason as `analytics`: the
+// widget cannot ask what the server serves. Present exactly when the deployment
+// supplied one; a deployment without a web app must not hand out a base for a
+// route it does not mount.
+{
+	const features = (brainsPayload.structuredContent as { features?: { webBase?: string } })
+		?.features;
+	check(
+		'the brains payload carries the web base when the deployment has one',
+		features?.webBase === 'https://brain.example',
+		`got ${JSON.stringify(features)}`
+	);
+	const without = (await toolsFor(orgBoss, { webBaseUrl: undefined }).get('brains')!({})) as {
+		structuredContent?: { features?: { webBase?: string } };
+	};
+	check(
+		'...and none when it has none',
+		without.structuredContent?.features !== undefined &&
+			!('webBase' in without.structuredContent.features),
+		`got ${JSON.stringify(without.structuredContent?.features)}`
+	);
+}
+
+// `brains` runs on every widget open and checks every manageable brain for "connected
+// but not configured". A CONFIGURED brain must cost nothing: resolving its context
+// mints a token and reads its config, and the freshness check behind that reached
+// GitHub per brain and reindexed inline, which on an account with several brains was
+// a 17-second call that Anthropic's edge cut off as a 502 (issues #50, #85). One
+// indexed row is the whole answer.
+console.log('\nbrains answers a configured brain from the index alone');
+{
+	sqlite
+		.prepare(
+			`INSERT INTO brain_pages (brain_id, path, title, blob_sha, content) VALUES (?, ?, ?, ?, ?)`
+		)
+		.run('northwind/main', 'wiki/index.md', 'Index', 'sha', '# Index');
+	brainAsks.length = 0;
+	await toolsFor(orgBoss).get('brains')!({});
+	check(
+		'a brain with an indexed page resolves no context at all',
+		!brainAsks.includes('northwind/main'),
+		`asked for: ${JSON.stringify(brainAsks)}`
+	);
+	check(
+		'a brain with an empty index still does, since "no pages" may mean "not indexed yet"',
+		brainAsks.includes('northwind/other'),
+		`asked for: ${JSON.stringify(brainAsks)}`
+	);
+	sqlite.prepare(`DELETE FROM brain_pages WHERE brain_id = ?`).run('northwind/main');
+}
 
 // ===========================================================================
 console.log('\nBRAIN-scope tools gate on the BRAIN role, never the org role');
@@ -532,19 +612,104 @@ const grantOf = (brainId: string, userId: string) =>
 		.prepare(`SELECT role FROM brain_memberships WHERE brain_id = ? AND user_id = ?`)
 		.get(brainId, userId) as { role?: string } | undefined;
 
+const inviteOf = (brainId: string, email: string) =>
+	sqlite
+		.prepare(
+			`SELECT role, org_id FROM invitations
+			  WHERE brain_id = ? AND lower(email) = lower(?) AND accepted_at IS NULL`
+		)
+		.get(brainId, email) as { role?: string; org_id?: string } | undefined;
+const memberOf = (orgId: string, userId: string) =>
+	sqlite
+		.prepare(`SELECT role FROM memberships WHERE org_id = ? AND user_id = ?`)
+		.get(orgId, userId);
+
+// GUESTS (docs/design/guest-access.md). Someone outside the organization is shared
+// ONE brain: an account gets a grant, an unknown address gets a brain invite, and
+// neither path ever writes a membership, which is what keeps a share from widening
+// what they reach beyond the brain. Admin is refused for them in both paths.
 check(
-	'refuses an email with no account at all',
-	await denies(sharedAdmin, 'share_brain', { email: 'nobody@example.com', access: 'viewer' })
+	'shares with someone who has an account but is not in this org (a guest)',
+	await allows(sharedAdmin, 'share_brain', { email: 'outside@example.com', access: 'viewer' })
+);
+check('...writing a grant', grantOf('b-main', 'u-outside')?.role === 'viewer');
+check(
+	'...and NO membership',
+	memberOf('org1', 'u-outside') === undefined,
+	'a share to an outsider made them a member'
 );
 check(
-	'refuses someone who has an account but is not in this org',
-	await denies(sharedAdmin, 'share_brain', { email: 'outside@example.com', access: 'viewer' })
+	'refuses admin for a guest',
+	await denies(sharedAdmin, 'share_brain', { email: 'outside@example.com', access: 'admin' })
 );
 check(
-	'...and wrote no grant for them',
-	grantOf('b-main', 'u-outside') === undefined,
-	'a grant leaked through a rejected share'
+	'...leaving their grant where it was',
+	grantOf('b-main', 'u-outside')?.role === 'viewer',
+	'a refused admin share changed the row'
 );
+check(
+	'the refusal says why',
+	(
+		await attempt(sharedAdmin, 'share_brain', { email: 'outside@example.com', access: 'admin' })
+	).detail.includes('guest')
+);
+check(
+	'revoking a guest is accepted',
+	await allows(sharedAdmin, 'share_brain', { email: 'outside@example.com', access: 'none' })
+);
+check('...and the grant is gone', grantOf('b-main', 'u-outside') === undefined);
+
+check(
+	'an address with no account is INVITED to the brain',
+	await allows(sharedAdmin, 'share_brain', { email: 'Nobody@Example.com', access: 'editor' })
+);
+check(
+	"...as a brain invite in the brain's own org",
+	inviteOf('b-main', 'nobody@example.com')?.role === 'editor' &&
+		inviteOf('b-main', 'nobody@example.com')?.org_id === 'org1'
+);
+check(
+	'...and the panel payload carries it as evidence',
+	(
+		(await attempt(sharedAdmin, 'brain_access', {})).sc as { invites?: { email: string }[] }
+	).invites?.some((i) => i.email.toLowerCase() === 'nobody@example.com') === true
+);
+check(
+	'...while the org roster does not list it as a pending member',
+	!(
+		(await attempt(sharedAdmin, 'members', {})).sc as { invites?: { email: string }[] }
+	).invites?.some((i) => i.email === 'nobody@example.com')
+);
+check(
+	'refuses admin for an address with no account too',
+	await denies(sharedAdmin, 'share_brain', { email: 'nobody2@example.com', access: 'admin' })
+);
+check('...and wrote no invite', inviteOf('b-main', 'nobody2@example.com') === undefined);
+check(
+	'the reply tells the sharer where the guest signs in',
+	// The one URL in the reply, compared whole rather than searched for as a
+	// substring, which CodeQL reads as an allow-list check and flags.
+	/https?:\/\/\S+/.exec(
+		(await attempt(sharedAdmin, 'share_brain', { email: 'nobody3@example.com', access: 'viewer' }))
+			.text
+	)?.[0] === 'https://brain.example/b/northwind/main'
+);
+check(
+	'revoking an invited address cancels the invite',
+	await allows(sharedAdmin, 'share_brain', { email: 'nobody@example.com', access: 'none' })
+);
+check('...and it is gone', inviteOf('b-main', 'nobody@example.com') === undefined);
+check(
+	'...from the panel too',
+	!(
+		(await attempt(sharedAdmin, 'brain_access', {})).sc as { invites?: { email: string }[] }
+	).invites?.some((i) => i.email.toLowerCase() === 'nobody@example.com')
+);
+check(
+	'the invite rides the ordinary share gate: a brain editor cannot send one',
+	await denies(writer, 'share_brain', { email: 'nobody4@example.com', access: 'viewer' })
+);
+sqlite.exec(`DELETE FROM invitations WHERE brain_id = 'b-main'`);
 check(
 	'refuses revoking your own access (no self-lockout)',
 	await denies(sharedAdmin, 'share_brain', { email: 'shared@example.com', access: 'none' })
@@ -653,6 +818,53 @@ async function analyticsPayload(p: Persona) {
 }
 
 // ---------------------------------------------------------------------------
+console.log('\nAN OUTSIDER reaches the brain and nothing around it');
+// ---------------------------------------------------------------------------
+// Someone from another organization can resolve a brain, and everything ORG-scope
+// hanging off that brain must still refuse them. Every one of these gates reads
+// ctx.orgRole, which is null for them.
+{
+	const denials = [
+		['members', {}],
+		['invite_member', { email: 'x@example.com', role: 'viewer' }],
+		['set_member_role', { email: 'lurker@example.com', role: 'admin' }],
+		['remove_member', { email: 'lurker@example.com' }]
+	] as const;
+	for (const [tool, args] of denials) {
+		const r = await attempt(outsider, tool, args as Record<string, unknown>);
+		check(`${tool} refuses them`, r.outcome === 'denied', `${r.outcome}: ${r.detail}`);
+		// The message has to SAY they are not a member. Before assertRole took a nullable
+		// role it interpolated the absent value straight into the sentence ("your role is
+		// undefined"), which fails closed by accident and reads to a person as a bug
+		// rather than as an answer.
+		if (tool !== 'members')
+			check(
+				`  ...and the refusal says they are not a member`,
+				/not a member/.test(r.detail) && !/your role is (undefined|null)/.test(r.detail),
+				r.detail
+			);
+	}
+
+	// Content reads stay open: they resolved the brain legitimately. It is the
+	// surrounding ORGANIZATION that is not theirs.
+	const read = await attempt(outsider, 'search_pages', { query: 'anything' });
+	check(
+		'but a content read still passes the gate',
+		await passesGate(outsider, 'search_pages', { query: 'anything' }),
+		`${read.outcome}: ${read.detail}`
+	);
+
+	// Asserted on the PAYLOAD, not on a flag: the rows have to be absent, not merely
+	// marked. Same rule the org-viewer cases above already follow.
+	const payload = await analyticsPayload(outsider);
+	check(
+		'analytics withholds the per-person table entirely',
+		Array.isArray(payload.people) && payload.people.length === 0,
+		JSON.stringify(payload.people)
+	);
+	check('and says so', payload.canSeePeople === false, String(payload.canSeePeople));
+}
+
 console.log('\nThe active brain moves only on an explicit act');
 // The pointer is one KV key per USER, not per conversation (the transport is
 // stateless), so anything that moves it as a side effect retargets every other open
@@ -740,8 +952,4 @@ console.log('\nbrains is data, not a widget');
 }
 
 // ---------------------------------------------------------------------------
-if (failures) {
-	console.error(`\n${failures} scope check(s) FAILED.`);
-	process.exit(1);
-}
-console.log('\nAll scope checks passed.');
+done();

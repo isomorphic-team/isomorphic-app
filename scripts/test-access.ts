@@ -24,15 +24,13 @@ import {
 	ASSIGNABLE_BRAIN_ROLES,
 	type Role
 } from '../src/lib/orgs.ts';
+import { commitAuthorFor, githubNoreplyAuthor, validCommitAuthor } from '../src/lib/brain-repo.ts';
+import { staticAuth } from '../src/lib/github.ts';
+import { platformInstall } from '../src/lib/provision.ts';
 
-let failures = 0;
-function check(label: string, cond: boolean, detail = '') {
-	if (cond) console.log(`  ✓ ${label}`);
-	else {
-		failures++;
-		console.log(`  ✗ ${label}${detail ? `: ${detail}` : ''}`);
-	}
-}
+import { checker } from './check.ts';
+
+const { check, done } = checker('access-rule checks');
 
 const ORG_ROLES: Role[] = ['viewer', 'editor', 'admin', 'owner'];
 const GRANTS: (Role | null)[] = [null, 'viewer', 'editor', 'admin'];
@@ -148,6 +146,78 @@ check(
 	effectiveBrainRole({ visibility: '', orgRole: 'viewer' }) === 'viewer'
 );
 
+// ---------------------------------------------------------------------------
+console.log('\nNo org role at all: the sources that need a membership are skipped');
+// ---------------------------------------------------------------------------
+// A caller who holds no membership in the organization that owns a brain. Sources (1)
+// org-visibility and (3) the org-admin floor have nobody to apply to, so they
+// contribute nothing. Before this was explicit the function returned `undefined` for
+// an org-visible brain with a null org role: neither a role nor null, and it only
+// failed closed because the caller happened to test `if (!role)`.
+for (const visibility of ['org', 'private', 'team-only', '']) {
+	check(
+		`${visibility || '(empty)'}: no membership, no grant → NO ACCESS`,
+		effectiveBrainRole({ visibility, orgRole: null }) === null,
+		String(effectiveBrainRole({ visibility, orgRole: null }))
+	);
+}
+check(
+	'a grant still works with no membership',
+	effectiveBrainRole({ visibility: 'private', orgRole: null, grant: 'editor' }) === 'editor'
+);
+check(
+	"and an org-visible brain does not widen a non-member's grant",
+	effectiveBrainRole({ visibility: 'org', orgRole: null, grant: 'viewer' }) === 'viewer'
+);
+// A non-member is a GUEST, and a guest is capped: admin on a brain is the power to
+// decide who reaches it, which stays with the organization's own people. share_brain
+// refuses to write the row; this is what makes that refusal an invariant, since a
+// row can reach the table by more than one path.
+check(
+	"a guest's admin grant resolves to editor",
+	effectiveBrainRole({ visibility: 'private', orgRole: null, grant: 'admin' }) === 'editor'
+);
+check(
+	"a MEMBER's admin grant is not capped",
+	effectiveBrainRole({ visibility: 'private', orgRole: 'viewer', grant: 'admin' }) === 'admin'
+);
+check(
+	'read-only still applies on top of the guest cap',
+	effectiveBrainRole({ visibility: 'private', orgRole: null, grant: 'admin', readOnly: true }) ===
+		'viewer'
+);
+
+// ---------------------------------------------------------------------------
+console.log('\nRead-only caps the whole computation');
+// ---------------------------------------------------------------------------
+// A read-only brain has to be inert to EVERYONE, including the admins of the
+// organization holding it. A viewer grant cannot do that: source (3) hands an org
+// admin their own role straight back, and an org-visible brain hands every member
+// theirs. So the cap is applied last, to whatever the sources produced.
+for (const orgRole of ORG_ROLES) {
+	check(
+		`read-only: org ${orgRole} → viewer`,
+		effectiveBrainRole({ visibility: 'org', orgRole, readOnly: true }) === 'viewer'
+	);
+}
+check(
+	'read-only: an explicit admin grant is still only viewer',
+	effectiveBrainRole({
+		visibility: 'private',
+		orgRole: 'viewer',
+		grant: 'admin',
+		readOnly: true
+	}) === 'viewer'
+);
+check(
+	'read-only does not CREATE access where there was none',
+	effectiveBrainRole({ visibility: 'private', orgRole: null, readOnly: true }) === null
+);
+check(
+	'and is off by default',
+	effectiveBrainRole({ visibility: 'org', orgRole: 'owner', readOnly: false }) === 'owner'
+);
+
 // ===========================================================================
 // The QUERIES that apply the rule, run for real against the real schema.
 // ===========================================================================
@@ -159,8 +229,7 @@ check(
 // (same shim the e2e batteries use), and the real exported functions are called.
 // No network: node:sqlite is a Node builtin.
 
-import { readFileSync } from 'node:fs';
-import { DatabaseSync } from 'node:sqlite';
+import { localD1 } from '../src/local/d1-sqlite.ts';
 import {
 	listAccessibleBrains,
 	listAccessibleOrgs,
@@ -169,8 +238,12 @@ import {
 	linkedUserIds,
 	matchOrg,
 	chooseOrg,
+	chooseBrain,
 	getDefaultBrainForUser,
 	listBrainAccess,
+	listPendingInvites,
+	listPendingBrainInvites,
+	createInvitation,
 	setBrainGrant,
 	removeBrainGrant,
 	setBrainVisibility,
@@ -178,20 +251,10 @@ import {
 	deleteUserBrainGrantsInOrg
 } from '../src/lib/orgs.ts';
 
-const sqlite = new DatabaseSync(':memory:');
-sqlite.exec(readFileSync(new URL('../src/db/auth-schema.sql', import.meta.url), 'utf8'));
-function shimStatement(sql: string, params: unknown[] = []) {
-	return {
-		bind: (...p: unknown[]) => shimStatement(sql, p),
-		first: async () => sqlite.prepare(sql).get(...(params as [])) ?? null,
-		all: async () => ({ results: sqlite.prepare(sql).all(...(params as [])) }),
-		run: async () => {
-			sqlite.prepare(sql).run(...(params as []));
-			return { success: true };
-		}
-	};
-}
-const db = { prepare: (sql: string) => shimStatement(sql) } as never;
+// Schema comes from the REAL migrations, not src/db/auth-schema.sql, which is
+// reference only. This battery pins the access rule, so it is the last place that
+// should be asserting against a schema production does not run.
+const { db, sqlite } = localD1();
 
 // One customer org, three people at three org roles, three brains covering each
 // access source: grandfathered org-visible, and two private ones owned by
@@ -245,6 +308,42 @@ check(
 	(await listAccessibleBrains(db, ['bob'])).every((b) => b.org_role === 'editor')
 );
 
+// A GUEST: a grant on a brain in an organization they hold no membership in.
+// Reachable only because the query walks grants as well as memberships; it used
+// to begin at memberships, and a guest produced no row at all.
+console.log('\nlistAccessibleBrains: a guest reaches the one brain and nothing else');
+sqlite.exec(`
+  INSERT INTO app_users (user_id, email, name) VALUES ('gus', 'gus@client.example', 'Gus');
+  INSERT INTO brain_memberships (brain_id, user_id, role, granted_by) VALUES
+    ('b-alice', 'gus', 'admin', 'alice');
+`);
+{
+	const gus = await listAccessibleBrains(db, ['gus']);
+	check(
+		'the shared brain is listed',
+		JSON.stringify(gus.map((b) => b.id)) === JSON.stringify(['northwind/alicep']),
+		JSON.stringify(gus.map((b) => b.id))
+	);
+	check('with a null org role, since they are not a member', gus[0]?.org_role === null);
+	check('and capped at editor whatever the row says', gus[0]?.role === 'editor');
+	check(
+		'the org-visible brain is NOT among them: visibility is for members',
+		!gus.some((b) => b.id === 'northwind/legacy')
+	);
+	// A member with a grant reached by both legs folds to one row that keeps the
+	// membership: the union must not turn a member into a guest.
+	const bob = await listAccessibleBrains(db, ['bob']);
+	check(
+		"a member's own brain is listed once",
+		bob.filter((b) => b.id === 'northwind/bobp').length === 1
+	);
+	check(
+		'...still carrying their org role',
+		bob.find((b) => b.id === 'northwind/bobp')?.org_role === 'editor'
+	);
+}
+sqlite.exec(`DELETE FROM brain_memberships WHERE user_id = 'gus'`);
+
 console.log('\ngetDefaultBrainForUser: never lands someone in a brain they cannot open');
 check(
 	'viewer lands on the org-visible brain',
@@ -254,6 +353,42 @@ check(
 	"editor lands on the oldest brain they can reach, skipping the other person's private one",
 	(await getDefaultBrainForUser(db, 'org1', 'bob', 'editor'))?.brain_id === 'b-legacy'
 );
+
+console.log('\nlifecycle columns through the real query: archived is gone, read-only is viewer');
+// archived_at is filtered in SQL (existence, not policy); read_only reaches the rule
+// as its ceiling. Both ride the row every consumer already reads, so a wrong column
+// name here would surface as an owner writing to a frozen brain, or a retired brain
+// still in the switcher.
+sqlite.exec(`
+  INSERT INTO brains (brain_id, org_id, repo_owner, repo_name, name, visibility, created_at, read_only, archived_at) VALUES
+    ('b-frozen', 'org1', 'northwind', 'frozen', 'Frozen', 'org', '2026-04-01', 1, NULL),
+    ('b-gone',   'org1', 'northwind', 'gone',   'Gone',   'org', '2026-05-01', 0, '2026-06-01');
+`);
+check(
+	'an archived brain is invisible to everyone, the org owner included',
+	!(await ids('alice')).includes('northwind/gone'),
+	JSON.stringify(await ids('alice'))
+);
+check(
+	'a read-only brain is still listed',
+	(await ids('carol')).includes('northwind/frozen'),
+	JSON.stringify(await ids('carol'))
+);
+check(
+	'and the org OWNER holds only viewer on it',
+	(await roleOn('alice', 'northwind/frozen')) === 'viewer',
+	String(await roleOn('alice', 'northwind/frozen'))
+);
+check(
+	'the flag rides on the row so the app can say so',
+	(await listAccessibleBrains(db, ['alice'])).find((b) => b.id === 'northwind/frozen')
+		?.read_only === true
+);
+check(
+	'getDefaultBrainForUser never lands on an archived brain',
+	(await getDefaultBrainForUser(db, 'org1', 'carol', 'viewer'))?.brain_id !== 'b-gone'
+);
+sqlite.exec(`DELETE FROM brains WHERE brain_id IN ('b-frozen', 'b-gone')`);
 
 console.log('\nshare_brain round trip: grant, change, revoke');
 await setBrainGrant(db, {
@@ -294,6 +429,67 @@ check(
 	legacyAccess.every((e) => e.via === 'org') &&
 		legacyAccess.find((e) => e.user_id === 'carol')?.role === 'viewer'
 );
+// The panel shows guests, after members, and says so. `guest` is derived from
+// the absence of a membership rather than stored, so the same row reads `grant`
+// the day its holder joins the organization.
+await setBrainGrant(db, {
+	brain_id: 'b-alice',
+	user_id: 'gus',
+	role: 'editor',
+	granted_by: 'alice'
+});
+{
+	const panel = await listBrainAccess(db, 'b-alice', 'org1', 'private');
+	const gus = panel.find((e) => e.user_id === 'gus');
+	check('a guest appears on the panel', !!gus);
+	check(
+		'...marked as a guest, at the granted role',
+		gus?.via === 'guest' && gus?.role === 'editor'
+	);
+	check('...after the members', panel.findIndex((e) => e.user_id === 'gus') === panel.length - 1);
+	sqlite.exec(`INSERT INTO memberships (org_id, user_id, role) VALUES ('org1', 'gus', 'viewer')`);
+	const joined = (await listBrainAccess(db, 'b-alice', 'org1', 'private')).find(
+		(e) => e.user_id === 'gus'
+	);
+	check('the day they join the org, the same row reads as a direct share', joined?.via === 'grant');
+	sqlite.exec(`DELETE FROM memberships WHERE user_id = 'gus'`);
+	const gone = await listBrainAccess(db, 'b-legacy', 'org1', 'org');
+	check(
+		'a guest of one brain is not on the panel of another',
+		!gone.some((e) => e.user_id === 'gus')
+	);
+}
+sqlite.exec(`DELETE FROM brain_memberships WHERE user_id = 'gus'`);
+
+// A brain invite carries the brain's org_id, so the two pending lists have to
+// tell them apart: the roster must not show a member who was never invited to
+// join, and the panel must not show the org's own invites.
+console.log('\npending invites: a brain invite is on the panel, never on the roster');
+await createInvitation(db, {
+	invite_id: 'inv-org',
+	org_id: 'org1',
+	email: 'hire@example.com',
+	role: 'editor',
+	invited_by: 'alice'
+});
+await createInvitation(db, {
+	invite_id: 'inv-brain',
+	org_id: 'org1',
+	brain_id: 'b-alice',
+	email: 'client@example.com',
+	role: 'viewer',
+	invited_by: 'alice'
+});
+{
+	const roster = (await listPendingInvites(db, 'org1')).map((i) => i.invite_id);
+	check('the roster lists the org invite', roster.includes('inv-org'));
+	check('...and NOT the brain invite', !roster.includes('inv-brain'), roster.join(','));
+	const panel = (await listPendingBrainInvites(db, 'b-alice')).map((i) => i.invite_id);
+	check('the panel lists the brain invite', panel.includes('inv-brain'));
+	check('...and NOT the org invite', !panel.includes('inv-org'), panel.join(','));
+	check("...nor another brain's", (await listPendingBrainInvites(db, 'b-bob')).length === 0);
+}
+sqlite.exec(`DELETE FROM invitations WHERE invite_id IN ('inv-org', 'inv-brain')`);
 
 console.log('\nvisibility flip, and grants survive it');
 await setBrainVisibility(db, 'b-bob', 'org');
@@ -468,6 +664,299 @@ check(
 	threw(() => chooseOrg([], {}))
 );
 
+console.log('\nchooseBrain: which brain a read or a write actually lands on');
+// chooseOrg's twin, and until it was extracted it was the untested half: the same
+// ladder sat inline in a private method on McpSession. It decides the target of
+// every read and every write, so it gets the same treatment as the org side.
+{
+	// Alice reaches the org-visible brain and her own private one, oldest first.
+	const aliceBrains = await listAccessibleBrains(db, ['alice']);
+	const ids = aliceBrains.map((b) => b.id);
+	// Three, not two: the org-visible one, her own private one, and Bob's private one,
+	// which she reaches through the org-admin floor rather than a grant.
+	check('the fixture gives this caller three brains', aliceBrains.length === 3, ids.join(', '));
+
+	check(
+		'a named handle wins',
+		chooseBrain(aliceBrains, { brain: 'alicep' }).repo_name === 'alicep'
+	);
+	check(
+		'...over the brain the caller is working in',
+		chooseBrain(aliceBrains, { brain: 'alicep', activeBrainId: ids[0] }).repo_name === 'alicep'
+	);
+	check(
+		'with no handle, the brain the caller is working in wins',
+		chooseBrain(aliceBrains, { activeBrainId: ids[1] }).id === ids[1]
+	);
+	check(
+		'with neither, the first brain the query returned',
+		chooseBrain(aliceBrains, {}).id === ids[0]
+	);
+	// The same fallback chooseOrg has: a stale pointer must not strand the caller.
+	check(
+		'an active brain the caller lost access to falls back rather than throwing',
+		chooseBrain(aliceBrains, { activeBrainId: 'northwind/gone' }).id === ids[0]
+	);
+	check(
+		'an unmatched handle throws rather than picking one',
+		threw(() => chooseBrain(aliceBrains, { brain: 'nonexistent' }))
+	);
+	// The case that matters most: silently taking the first of several would write
+	// into a brain the caller did not name.
+	check(
+		'an AMBIGUOUS handle throws too',
+		threw(() => chooseBrain(aliceBrains, { brain: 'northwind' })),
+		'the org owns both repos, so the handle cannot pick one'
+	);
+	check(
+		'no brains at all throws',
+		threw(() => chooseBrain([], {}))
+	);
+	// A blank handle THROWS rather than falling through to the active brain. That is
+	// the behavior the Worker already had and it matches chooseOrg: a caller who
+	// passed a `brain` argument asked for a specific one, and quietly acting on a
+	// different brain because their string was empty is the silent-wrong-target case
+	// this whole function exists to prevent.
+	check(
+		'a blank handle throws rather than silently falling back to the active brain',
+		threw(() => chooseBrain(aliceBrains, { brain: '   ', activeBrainId: ids[1] }))
+	);
+}
+
+console.log('\ncommitAuthorFor: how a human edit is attributed in git history');
+// Nothing tested this before: it lived inline in McpSession, in two copies, and it
+// decides what `git blame` shows for every write a person makes.
+check(
+	'the app_users row wins, since its address is the verified one',
+	commitAuthorFor({ name: 'Ada', email: 'ada@example.com' }, 'token@example.com')?.email ===
+		'ada@example.com'
+);
+check(
+	'the token email is the fallback when there is no row yet',
+	commitAuthorFor(null, 'token@example.com')?.email === 'token@example.com'
+);
+check(
+	'...and when the row carries no address',
+	commitAuthorFor({ name: 'Ada', email: null }, 'token@example.com')?.email === 'token@example.com'
+);
+check(
+	'a person with no name is attributed under their address, not dropped',
+	commitAuthorFor({ name: null, email: 'ada@example.com' }, '')?.name === 'ada@example.com'
+);
+check(
+	'no address anywhere means no attribution, so the App authors instead',
+	commitAuthorFor(null, '') === undefined
+);
+check(
+	'whitespace is trimmed rather than written into history',
+	commitAuthorFor({ name: '  Ada  ', email: '  ada@example.com  ' }, '')?.name === 'Ada'
+);
+check(
+	'a whitespace-only address counts as none',
+	commitAuthorFor({ name: 'Ada', email: '   ' }, '   ') === undefined
+);
+
+console.log('\ngithubNoreplyAuthor: the GitHub-identity attribution rule');
+// The third attribution rule, for the path with no app_users row to read. The format
+// is GitHub's canonical noreply form, and getting it wrong is silent: the commit still
+// lands, it just attributes to nobody, on every write that identity makes.
+check(
+	'the canonical <id>+<login>@users.noreply.github.com form',
+	githubNoreplyAuthor(1234, 'ada')?.email === '1234+ada@users.noreply.github.com'
+);
+check('the name is the login', githubNoreplyAuthor(1234, 'ada')?.name === 'ada');
+check(
+	'no login means no attribution, so the App authors instead',
+	githubNoreplyAuthor(1234, null) === undefined
+);
+check('...and an empty login too', githubNoreplyAuthor(1234, '') === undefined);
+check(
+	'a whitespace-only login counts as none, never as a blank address',
+	githubNoreplyAuthor(1234, '   ') === undefined
+);
+check(
+	'a padded login is trimmed on both sides of the address',
+	githubNoreplyAuthor(7, '  ada  ')?.email === '7+ada@users.noreply.github.com'
+);
+
+console.log('\nvalidCommitAuthor: WHETHER a computed attribution is usable');
+// The guard the other two rules feed into, and the last of the three that had no
+// test. It decides whether a commit carries a human at all: createCommit rejects a
+// garbage email, and a bad value is worse than falling back to the App author.
+check(
+	'a well-formed author is kept',
+	validCommitAuthor({ name: 'Ada', email: 'ada@example.com' })?.email === 'ada@example.com'
+);
+check('no author at all is undefined, not a throw', validCommitAuthor(undefined) === undefined);
+check(
+	'a blank name is refused: git blame on an empty string helps nobody',
+	validCommitAuthor({ name: '   ', email: 'ada@example.com' }) === undefined
+);
+check(
+	'an address with no @ is refused rather than sent to createCommit',
+	validCommitAuthor({ name: 'Ada', email: 'not-an-email' }) === undefined
+);
+check(
+	'...and one with no dot in the domain',
+	validCommitAuthor({ name: 'Ada', email: 'ada@localhost' }) === undefined
+);
+check(
+	'...and one carrying whitespace inside it',
+	validCommitAuthor({ name: 'Ada', email: 'ada @example.com' }) === undefined
+);
+check(
+	'both sides are trimmed, so padding never reaches history',
+	(() => {
+		const a = validCommitAuthor({ name: '  Ada  ', email: '  ada@example.com  ' });
+		return a?.name === 'Ada' && a?.email === 'ada@example.com';
+	})()
+);
+
+// The three rules COMPOSE: the two that decide WHO both hand their answer to this
+// one, so a tightening here silently unattributes an entire identity path. These
+// two checks are the seam, and they are the reason the guard is worth pinning at
+// all rather than merely reading.
+check(
+	'what commitAuthorFor produces survives the guard',
+	validCommitAuthor(commitAuthorFor({ name: 'Ada', email: 'ada@example.com' }, ''))?.name === 'Ada'
+);
+check(
+	'a person with no name is attributed under their address, not dropped',
+	validCommitAuthor(commitAuthorFor({ name: null, email: 'ada@example.com' }, ''))?.name ===
+		'ada@example.com'
+);
+check(
+	'the GitHub noreply address survives the guard, + and all',
+	validCommitAuthor(githubNoreplyAuthor(1234, 'ada'))?.email ===
+		'1234+ada@users.noreply.github.com',
+	'a stricter email pattern here would silently unattribute every GitHub-identity commit'
+);
+
+console.log('\nstaticAuth: what a self-hosted deployment resolves to, or is told');
+// AUTH_MODE=static is the documented self-hosting entry point, so these errors are
+// the first thing a stranger hits when their config is incomplete.
+const REPO = { BRAIN_REPO_OWNER: 'acme', BRAIN_REPO_NAME: 'brain' };
+check(
+	'a token resolves to the token path',
+	staticAuth({ ...REPO, GITHUB_TOKEN: 'ghp_x' }).kind === 'token'
+);
+check(
+	'an installation id resolves to the App path',
+	staticAuth({ ...REPO, GITHUB_APP_INSTALLATION_ID: '42' }).kind === 'installation'
+);
+check(
+	'...and parses to a number, not a string',
+	(() => {
+		const a = staticAuth({ ...REPO, GITHUB_APP_INSTALLATION_ID: '42' });
+		return a.kind === 'installation' && a.installationId === 42;
+	})()
+);
+check(
+	'the token wins when both are set, being the more specific act',
+	staticAuth({ ...REPO, GITHUB_TOKEN: 'ghp_x', GITHUB_APP_INSTALLATION_ID: '42' }).kind === 'token'
+);
+check(
+	'the repo travels with the choice',
+	staticAuth({ ...REPO, GITHUB_TOKEN: 'x' }).owner === 'acme'
+);
+check(
+	'no repo named at all is refused, whatever the credential',
+	threw(() => staticAuth({ GITHUB_TOKEN: 'ghp_x' }))
+);
+check(
+	'half a repo is refused too',
+	threw(() => staticAuth({ BRAIN_REPO_OWNER: 'acme', GITHUB_TOKEN: 'ghp_x' }))
+);
+check(
+	'a repo with no credential is refused',
+	threw(() => staticAuth(REPO))
+);
+// Deliberate improvement over the inline version, which accepted any non-empty
+// string here and sent Number('abc') = NaN to GitHub as an installation id.
+check(
+	'a non-numeric installation id is refused here, not at GitHub',
+	threw(() => staticAuth({ ...REPO, GITHUB_APP_INSTALLATION_ID: 'not-a-number' }))
+);
+check(
+	'a whitespace-only credential counts as absent',
+	threw(() => staticAuth({ ...REPO, GITHUB_TOKEN: '   ' }))
+);
+
+console.log('\nplatformInstall: the config both provisioning paths read');
+// The two call sites in the Worker each read these two variables inline and threw
+// the same sentence. The copies had drifted on the one thing that matters: the
+// GitHub path coerced the id unconditionally, so `Number('abc')` reached
+// provisionBrainForUser as NaN and failed later, at GitHub, as an auth problem.
+const PLATFORM = { PLATFORM_ORG: 'acme-brains', PLATFORM_INSTALLATION_ID: '99' };
+check(
+	'a configured platform resolves to its org and installation',
+	(() => {
+		const p = platformInstall(PLATFORM);
+		return p.org === 'acme-brains' && p.installationId === 99;
+	})()
+);
+check(
+	'the installation id is a number, not the string it arrives as',
+	typeof platformInstall(PLATFORM).installationId === 'number'
+);
+check(
+	'a missing org is refused',
+	threw(() => platformInstall({ PLATFORM_INSTALLATION_ID: '99' }))
+);
+check(
+	'a missing installation id is refused',
+	threw(() => platformInstall({ PLATFORM_ORG: 'acme-brains' }))
+);
+check(
+	'both errors name both variables, since either one alone is not enough',
+	(() => {
+		try {
+			platformInstall({});
+			return false;
+		} catch (e) {
+			const m = String((e as Error).message);
+			return m.includes('PLATFORM_ORG') && m.includes('PLATFORM_INSTALLATION_ID');
+		}
+	})()
+);
+check(
+	'a whitespace-only value counts as unset rather than as an org named " "',
+	threw(() => platformInstall({ PLATFORM_ORG: '   ', PLATFORM_INSTALLATION_ID: '99' }))
+);
+check(
+	'a non-numeric installation id is refused here, not passed on as NaN',
+	threw(() => platformInstall({ ...PLATFORM, PLATFORM_INSTALLATION_ID: 'not-a-number' })),
+	'this is the defect the two inline copies shared'
+);
+check(
+	'...and that error names the variable and shows what was read',
+	(() => {
+		try {
+			platformInstall({ ...PLATFORM, PLATFORM_INSTALLATION_ID: 'abc' });
+			return false;
+		} catch (e) {
+			const m = String((e as Error).message);
+			return m.includes('PLATFORM_INSTALLATION_ID') && m.includes('abc');
+		}
+	})()
+);
+check(
+	'a fractional id is refused: installation ids are whole numbers',
+	threw(() => platformInstall({ ...PLATFORM, PLATFORM_INSTALLATION_ID: '9.5' }))
+);
+check(
+	'zero and negatives are refused rather than sent to GitHub',
+	threw(() => platformInstall({ ...PLATFORM, PLATFORM_INSTALLATION_ID: '0' })) &&
+		threw(() => platformInstall({ ...PLATFORM, PLATFORM_INSTALLATION_ID: '-3' }))
+);
+check(
+	'surrounding whitespace is tolerated on both, since these come from env files',
+	(() => {
+		const p = platformInstall({ PLATFORM_ORG: ' acme-brains ', PLATFORM_INSTALLATION_ID: ' 99 ' });
+		return p.org === 'acme-brains' && p.installationId === 99;
+	})()
+);
+
 console.log('\nresolveOrgForPerson: the whole decision, against the real schema');
 // This is what the Worker's orgContext calls. It lives here rather than inline in the
 // Worker so the empty case is drivable, because empty is where the subtlety is:
@@ -524,7 +1013,4 @@ check(
 		thunkCalls === 0
 );
 
-console.log(
-	failures === 0 ? '\nAll access-rule checks passed.\n' : `\n${failures} check(s) FAILED.\n`
-);
-process.exit(failures === 0 ? 0 : 1);
+done();

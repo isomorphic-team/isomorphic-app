@@ -29,16 +29,22 @@ pnpm worker:dev         # `wrangler dev` for the MCP Worker — http://localhost
 pnpm worker:deploy      # publish the Worker to Cloudflare
 pnpm worker:types       # regenerate Worker types from wrangler.jsonc
 pnpm app:dev            # local dev server for the MCP App UI — http://localhost:5175 (see dev/README.md)
+pnpm web:dev            # seed the demo brains, then `pnpm try` them: the app as a WEB page at
+                        # http://127.0.0.1:8788/b/local/demo-brain (no auth; --reset re-seeds)
 pnpm gen:app            # codegen the ui:// app bundle (after editing app/ OR any src/lib/ file it imports)
 pnpm regen:pr <n>       # regenerate that bundle on a PR branch that could not (Dependabot); --push to send it
 pnpm test:roundtrip     # editor markdown round-trip golden test
+pnpm test:render        # the shared markdown renderer: parity + sanitization
+pnpm test:web           # web-app routes + the cookie-auth CSRF gate
 pnpm test:views         # derived-views (okf-view) engine golden test
 pnpm test:import        # bulk-import planner golden test
 pnpm test:tools         # user-defined (brain-authored) tools parse-layer golden test
 pnpm test:patch         # write_page append/edits (page-patch) golden test
 pnpm test:structure     # OKF conformance golden test (granularity, type:, nested frontmatter)
+pnpm test:search        # search relevance, plus cross-brain: which brains, and the per-brain budget
 pnpm test:links         # wikilink resolution + the broken-link report golden test
 pnpm test:access        # per-brain access rule (effectiveBrainRole) golden test
+pnpm test:invites       # invitation claiming: who joins which org, and when
 pnpm test:scope         # org-vs-brain scope: which role each tool gates on
 pnpm test:loading       # loading-line engine: slot eligibility + per-task wiring
 pnpm test:preamble      # the /mcp preamble: which requests need a brain, and what a
@@ -76,6 +82,9 @@ rules that make the difference between coverage and its appearance:
 
 **Tests.** All offline, all fork-safe, all wired into CI and into the `test` script
 (`pnpm test` runs everything): `pnpm test:roundtrip` (editor markdown round-trip),
+`pnpm test:render` (the ONE markdown renderer: that the viewer's output is unchanged,
+and that every raw-HTML and URL-scheme payload comes back inert — see [One markdown
+renderer](#one-markdown-renderer-srclibrenderts) below),
 `pnpm test:views` (okf-view engine), `pnpm test:import` (import planner),
 `pnpm test:tools` (brain-authored tool parsing), `pnpm test:patch` (write_page
 append/edits), `pnpm test:structure` (OKF conformance), `pnpm test:links`
@@ -83,6 +92,10 @@ append/edits), `pnpm test:structure` (OKF conformance), `pnpm test:links`
 broken-link report says about the ones that match nothing), `pnpm test:index`
 (content-index freshness guard: bounded, resumable work per read; wraps an octokit
 stub in the REAL `githubStore` so it still covers `fetchPages`'s GraphQL batching),
+`pnpm test:search` (search: the relevance engine in `src/lib/search.ts`, plus the
+cross-brain half: `searchTargets`, which decides which brains one answer may contain,
+and `mergeBrainResults`, the per-brain hit budget, whose failure mode is a fan-out where
+the first brain fills a global cap and every later one silently reports nothing),
 `pnpm test:policy` (the path-policy wire contract between Worker and app),
 `pnpm test:preamble` (the /mcp request preamble: which methods need a brain resolved,
 in both directions, and the JSON-RPC error a failure in front of the SDK answers with),
@@ -98,6 +111,8 @@ serves),
 does not have is never eligible, and that every loading state in the app declares a
 task, which is optional in the type and so invisible to typecheck),
 `pnpm test:access` (the per-brain access rule: every input to `effectiveBrainRole`),
+`pnpm test:invites` (invitation claiming: the pure rule, the queries over the real
+schema, and `provisionOrgForUser` on an invite-only deployment),
 `pnpm test:scope` (which role each TOOL gates on: the real handlers over a stub server
 and a fake `getContext`, asserting org-scope tools read `orgRole` and brain-scope tools
 read `role`, plus the `share_brain` and lockout guardrails that live in the tool rather
@@ -456,6 +471,31 @@ platform-db --remote` **before** the code ships (schema-first), so a merge to `m
   Bounded by inbound-link count rather than brain size, and uncapped: a linker beyond the
   old `MAX_SCAN_PAGES` ceiling is no longer silently missed. (The whole-brain `scanContent`
   helper is gone as of this change.)
+- **Search can span brains, and freshness is what that costs** (`scope: 'all'` on
+  `search_pages`, built 2026-08-19 as phase 1 of `docs/design/brain-seams.md`). At the
+  storage layer fan-out is nearly free: one D1 holds every brain's index, so
+  `searchBrains` (`brain-index.ts`) runs the ranked `searchIndex` once per brain and
+  folds the results with `mergeBrainResults` (`src/lib/search.ts`, pure). Ranking stays
+  per brain: a score is relative to a corpus and means nothing across two of them. The
+  cost is `ensureFresh`, one `branchCommitSha` per brain plus a full reindex for any
+  whose HEAD moved, which for a rarely-opened brain is the common case. So **the
+  freshness guarantee is per brain and only the ACTIVE brain keeps it**: the others are
+  served from whatever is indexed and the result says so, and a `read_page` on any hit
+  resolves the authoritative blob anyway. Two consequences that are load-bearing rather
+  than tidy. **The hit cap is per brain, not global**: one cap taken in order is right
+  for one brain and silently starves every brain after the first, which reads as "the
+  others have no matches" rather than "we stopped looking", so each brain has its own
+  budget and the ceiling is filled round-robin (grouped by brain for reading; with one
+  brain the merge is the identity, so a plain search is byte-identical to before).
+  **Every result names its brain**,
+  because the leak here is conversational rather than mechanical: a conversation rooted
+  in one client's brain surfaces another engagement's material and a human pastes it
+  onward. Fan-out is opt-in per call and never ambient, and a WRITE never fans out (it
+  names exactly one brain, and `landed` now reports which, since a unique-but-wrong
+  fuzzy match otherwise puts a real page in a real client's repository silently).
+  `searchTargets` (`src/tools/librarian.ts`) is the pick and is exported so
+  `pnpm test:search` can pin it; `find_inbound_links` is deliberately NOT fanned out,
+  being two live GitHub reads plus a whole-graph load per brain.
 - **Writes are WRITE-THROUGH** (issue #31). A successful DIRECT commit upserts the index rows
   for exactly the pages its bundle touched (`writeThroughIndex` in `brain-index.ts`, called from
   the `commitBundle` chokepoint in `librarian.ts`) and advances `indexed_commit_sha`, so the
@@ -583,6 +623,198 @@ source of truth (app tree re-exports). Engine: `src/lib/views.ts` (index-coupled
 - **Fail-open everywhere:** any view-computation failure falls back to raw content — a view
   never makes a page unreadable or blocks a save. Malformed directives render a visible note.
 - `pnpm test:views` is the engine's golden test (pure, stubbed index).
+
+## The web app (the same bundle, in a browser tab)
+
+Phase 3 of [`docs/design/link-sharing-and-the-web-app.md`](docs/design/link-sharing-and-the-web-app.md).
+`/b/<owner>/<repo>/<path>` serves the SAME generated bundle the `ui://` MCP App
+resource serves, authenticated by the Auth.js session cookie that already existed.
+Rules live in `src/lib/web-app.ts` (pure, `pnpm test:web`); routes live in the
+Worker's `fetch`, ahead of the OAuth provider like `/health`.
+
+- **It is another MCP CLIENT, holding a cookie instead of a Bearer token.**
+  `McpSession` reads identity from `props`, so the whole port is one branch that
+  builds `props` from a validated session. Tenant resolution, `effectiveBrainRole`,
+  the two-scope gating and usage analytics are the code that already runs, which
+  makes the web app **structurally incapable of doing something the connector
+  cannot**. Keep it that way: anything that widens what a caller can do belongs
+  in a tool, not in this route.
+- **The cookie branch claims a `/mcp` request by what it CARRIES, never by what it
+  lacks** (`claimsWebMcp`: a cookie and no Bearer token). The first version claimed
+  every request with no Bearer, which is exactly an MCP host's first contact: the
+  OAuth provider owes that request a `401` + `WWW-Authenticate: Bearer` so the host
+  can discover the authorization server, and `scripts/smoke.ts` asserts it, so the
+  deploy would have rolled itself back. `pnpm test:smoke` runs against a stub and
+  could not see it; the rule is pure so `pnpm test:web` can.
+- **The cookie `/mcp` branch is a credential-bearing WRITE endpoint reached with an
+  ambient cookie**, which is the exact shape CSRF exploits. `checkWebMcpRequest` is
+  the gate and is pure so it can be tested in both directions: a Bearer token is
+  refused outright (the two auth paths must never be confusable, or a cookie could
+  stand in for a token that failed validation), the `Origin` must match, a
+  `cross-site` `Sec-Fetch-Site` is refused, and the content type must be JSON
+  (an HTML form can only POST three types, none of them JSON, so a form cannot
+  reach the endpoint even carrying the cookie).
+- **The host seam is `app/core/host.ts`, and nothing outside it touches `App`.**
+  It used to export the raw AppBridge object and five call sites in four files
+  reached through it, so "swap this file and the bundle runs anywhere" was not
+  true. `callTool`, `openLink`, `connectHost` and `registerHostEvents` are the
+  seam now.
+- **Which host is serving is a FLAG stamped at serve time** (`window.__ISO_WEB__`),
+  not an AppBridge handshake the app waits on and gives up. Inferring it from a
+  timeout makes every web boot pay the timeout and makes a slow MCP host look like
+  a browser. `pnpm test:web` asserts the bundle never sets the flag itself, since
+  the same bytes are served to Claude.
+- **A tab has no conversation**, so no opening tool result is coming and the
+  self-boot deadlines do not apply: the URL says what to show. `parseWebPath` and
+  `webPathFor` are inverses in ONE module, imported by both the Worker and the app,
+  because two parsers is how a link opens a different page than it names.
+- **The URL is WRITTEN as well as read** (`syncAddressBar` in `app/core/store.ts`,
+  `registerWebNavigation` in `host-web.ts`). It was only read at first: the app
+  parsed `/b/...` once at boot and then navigated underneath it, so Back left the
+  app, Forward could not return, and the URL you copied to send someone was never
+  the page you were reading — which is the entire point of the web app. `show()` is
+  the one chokepoint, so the sync rides it; `push: false` (a restore, or catching up
+  to a move the browser already made) replaces the entry instead of adding one. In
+  the MCP App the whole thing is dead code: `isWebHost()` is false and the host owns
+  navigation.
+- **`WEB_TOOL_ROUTING` is the one list of what has a URL** (`src/lib/web-app.ts`),
+  and it is keyed on the WIDGET TOOL, not on the app's view kinds. A URL and a
+  widget tool call answer the same question, so a second vocabulary beside the tool
+  surface just drifts — which it did immediately: the first grammar grew `?q=` and
+  `?view=graph` while `view_activity` and `brain_access` had no URL at all, for no
+  reason anyone had decided. `pnpm test:web` scans `registerAppTool` call sites and
+  fails on any tool that is neither addressable nor carrying an explicit `why` it is
+  not, the same guard `TOOL_KINDS` gives the analytics.
+  - **The token is an ALIAS, deliberately not the tool name.** A URL is a permanent
+    contract (the two functions are inverses so links do not rot) while the tool
+    surface is actively consolidated (42 → 30; `list_members` + `view_members` →
+    `members`). Literal coupling would make every future merge break every link
+    already sent; with an alias a rename is one line.
+  - **PATH SPACE IS ONLY EVER PAGES.** Everything after the brain is a repo path, so
+    `/b/o/r/graph` is a page called `graph`. Destinations therefore ride the query
+    string (`?view=<token>` plus at most one argument, whose param name the route
+    declares) and page links stay unambiguous.
+  - **Three questions decide whether a tool earns one**, all of which must pass:
+    would you send it to someone, can the URL alone rebuild it, is arriving cold
+    harmless. `edit_page` fails the last two (unsaved text is not in the URL, so a
+    link would open the editor on saved content and discard its own premise).
+  - **The org-scope pair is addressed THROUGH a brain**, and the wart is deliberate:
+    `members` and `analytics` answer the same for every brain in one org, so N brains
+    give N URLs for one roster. An org-keyed prefix is the canonical alternative and
+    is deferred, because `org_id` is a uuid (the only unique handle — `name` is
+    mutable and `brain_owner` is SHARED by every platform-model org), so it would buy
+    an unreadable second addressing scheme for two screens. Revisit at a third and
+    fourth org-scope destination. What this does not fix is that both tools resolve
+    their org through a brain, so an org holding none still has no reachable roster:
+    a resolution defect, written up in
+    [`docs/design/org-scope-resolution.md`](docs/design/org-scope-resolution.md).
+  - **Back/forward must parse `location.search` too.** Every non-page destination
+    lives in the query string, so a `popstate` handler reading only the pathname
+    turns Back into "open the file tree" whenever two entries differ by `?view=`
+    alone. Its test has to navigate IN-APP: two `page.goto`s and a `goBack` is a
+    document load that re-boots from the URL and passes with the bug reinstated.
+- **The local runtime IS the web host locally, and `--project=web` its tests.**
+  `src/local.ts` serves the shell at `/b/local/<folder>` and gates its `/mcp` with
+  the same `webShell` / `WEB_APP_HEADERS` (`web-shell.ts`) and `checkWebMcpRequest` (`web-app.ts`) the Worker uses, so
+  `pnpm try ~/vault` gives a browser UI over a folder with no accounts, and
+  `pnpm web:dev` is only "seed the demo brains, then `pnpm try`". It started as a
+  separate server proxying to the runtime on a second port, which was a second
+  copy of the routes plus a race between the two coming up; a browser host that
+  is not the real runtime is the harness sprawl this repo keeps having to undo.
+  `pnpm app:dev` cannot stand in for it: that mounts the bundle in a sandboxed
+  iframe over AppBridge, so `host-web.ts`, `parseWebPath` and the shell are
+  unreachable from it however complete its fixtures are. **Both hosts seed from
+  `dev/seed.ts`** so a difference between them is a difference in the APP rather
+  than in what it was handed. What the local runtime does NOT reproduce is AUTH:
+  there is no session, no cookie, and the local runtime reports `owner` for
+  everything, so it is the right tool for behaviour and the wrong one for access.
+  The address-bar bug above is what the first run of it found, which is the case
+  for keeping it: `pnpm test:web` was green throughout, because `webPathFor` had no
+  caller outside its own round-trip test.
+- **A tab owns its window.** The web host starts in `fullscreen` display mode and
+  stamps `:root.web` so the document background is the app's. Left at `inline`, the
+  same bundle drew the chat-column card inside the tab (a rounded, bordered 560px box
+  scrolling within itself on the browser's default page colour), which is what
+  "border and background" complaints about the web app were. The tab title follows
+  the view through `pageTitle`, the one title resolver, so the tab says what the
+  header says. Nothing about the MCP App changed: it still starts inline and the
+  visual baselines pin it.
+- **The door from the card to the tab is "Open in browser" in the header's window
+  group** (`WindowControls` in `app/main.tsx`, beside the display-mode menu). The
+  widget builds the URL itself from the view (`webLinkFor` in `store.ts`, the same
+  `webTargetFor` + `webPathFor` the address bar uses) and a base the server sends on
+  the `brains` payload as `features.webBase` (`webBaseUrl` in `src/lib/web-app.ts`:
+  authjs + `PUBLIC_BASE_URL`, else absent). Same vehicle and reason as
+  `features.analytics`: a widget cannot ask what the server serves, and a control
+  whose click lands on a 404 is worse than none. Never on the web host, never for
+  the editor. Where the tab opens is the host's call, through `openLink`. The URL
+  also rides every widget result (`view_page`, `browse_brain`, `view_graph`,
+  `view_activity`) as `webUrl` in `structuredContent` AND as an `Open in browser:`
+  line in the text, so Claude can link to a page in chat. Both halves are needed
+  (fixed 2026-09-14): the first version put it in the text only, and a host that
+  receives `structuredContent` hands the model that and drops the text, so the link
+  was on the wire and no model ever saw it. `test:e2e-librarian` pins both.
+  `read_page` carries none: nobody clicks in the reading channel.
+- **`script-src` still carries `'unsafe-inline'`.** The bundle is one self-contained
+  HTML file with JS and CSS inlined (the MCP App iframe CSP forbids external hosts,
+  which is why it is built that way), so there is no external script for `'self'` to
+  point at. Hashes belong in `pnpm gen:app`, the only thing that knows where the
+  script tags are; a blind replace over minified JS risks rewriting the literal
+  text `<script` inside it. The threat that made this urgent was markdown-borne
+  XSS, and that is closed at the source by `src/lib/render.ts`.
+- **Verified in a browser now** (`tests/ui/web-nav.spec.ts`, the `web` project), which
+  is what caught the address-bar defect above. **Still unverified: AUTHENTICATION.**
+  `web:dev` has no session, no cookie and no org model, so the `/b/` redirect for a
+  signed-out visitor, the return through `callbackUrl`, `props` built from a real
+  Auth.js session, and every authorization path behind it have run NOWHERE: not in
+  a test, and not in production, since none of this has been deployed. Before the
+  first deploy, upload a preview version from the branch (`wrangler versions
+upload`, the same step `deploy.yml` takes) and click through sign-in on its
+  preview URL. No amount of green here speaks to that half.
+
+## One markdown renderer (`src/lib/render.ts`)
+
+Markdown-to-HTML is in `src/lib/` rather than the app bundle, pure and Worker-safe, so
+every surface that shows a page produces the same HTML. It used to live in
+`app/core/actions.ts`, which meant a second surface rendering pages needed a second
+implementation, and those drift exactly the way `wikilinkKey` and `FOLDER_NOTE_NAMES`
+drifted before they were extracted. `pnpm test:render` is the golden test.
+
+- **It sanitizes, and that is new.** `marked` sanitizes nothing at all (see
+  `docs/references.md`), and the app rendered its output straight into
+  `dangerouslySetInnerHTML`. Inside the MCP App that was bounded by the host iframe's
+  CSP and by the author already having write access. Served from our own origin next to
+  a session cookie, the same page body is stored XSS. **Treat every change to the policy
+  constants as a security change**, and break the sanitizer deliberately to confirm the
+  battery goes red before believing it.
+- **Raw HTML is a TAG ALLOWLIST with ZERO ATTRIBUTES.** That single rule is what makes
+  the list safe to read: with no attributes there is no `on*` handler, no `style`, and no
+  `href`/`src`, so a listed tag cannot carry a payload however it is written. `a` and
+  `img` are deliberately NOT on it, because markdown's own link and image syntax goes
+  through the renderer where the scheme is checked, and a raw `<a href="javascript:…">`
+  would walk straight past that. Anything not on the list is **escaped, never dropped**,
+  so an unsupported tag becomes visible to its author instead of quietly disappearing.
+- **Scheme checks decode entities first.** `&#106;avascript:` and `javascript&colon;`
+  reach the browser as `javascript:` while a scheme test on the raw string sees no scheme
+  at all. Both were live bypasses; `isSafeUrl` is the one place that closes them.
+- **Three hooks, and returning `null` from each means "refuse".** `wikilink` (where a
+  `[[link]]` points), `href` (where a markdown link points, and the reader's horizon
+  rule: **flatten** to plain text rather than 404, because a dead link still advertises
+  the title and existence of a page the reader was not given), `image` (falls back to alt
+  text). The app relies on the defaults: the `#wikilink=` sentinel that `onProseClick`
+  parses, and an untouched repo-relative `src` that `media.ts` swaps for a data URI
+  after render. **Changing a default breaks app navigation**, which is why the exact
+  sentinel string is asserted.
+- **Overrides are a plain object, not a `Renderer` subclass.** `Marked.use` walks the
+  renderer with `for...in` and throws on any property that is not a renderer method (so
+  an instance field is a hard error), then invokes each override with ITS OWN renderer as
+  `this`. Setting `token.href` and returning `false` is marked's documented "fall back to
+  the default", which re-renders the mutated token, so this module never reproduces
+  marked's attribute formatting or escaping.
+- **Wikilinks are rewritten outside code only**, through the same `maskCode` that
+  `extractLinks` uses (now exported from `wiki.ts`). `[[Name]]` in a fence on a
+  conventions page is a syntax example; the old string pre-pass rewrote it and the code
+  block displayed `[Name](#wikilink=Name)`.
 
 ## Folder notes
 
@@ -1120,21 +1352,96 @@ Auth.js specifics that bite: config MUST be built per-request with `env.PLATFORM
 
 `docs/design/org-roles-permissions.md` is the full RFC. Phase 2 is **built and live**. The tenant layer for authjs identities is the org model, NOT the `gh_user_id` `tenants` table:
 
-- **Tables** (`src/db/auth-schema.sql`, app-level; Auth.js's own `users`/`sessions`/etc. are separate, created by `@auth/d1-adapter`): `app_users` (Auth.js user projection — named apart from Auth.js `users` to avoid collision), `orgs` (Model A `platform` / Model B `customer`, holds `installation_id` + `brain_owner`), `memberships` (user→org + `role`), `brains` (org→repo, supersedes `tenants.brain_*`), `invitations` (email invites; written by `invite_member`, consumed at first sign-in via `provisionOrgForUser`).
+- **Tables** (`src/db/auth-schema.sql`, app-level; Auth.js's own `users`/`sessions`/etc. are separate, created by `@auth/d1-adapter`): `app_users` (Auth.js user projection — named apart from Auth.js `users` to avoid collision), `orgs` (Model A `platform` / Model B `customer`, holds `installation_id` + `brain_owner`), `memberships` (user→org + `role`), `brains` (org→repo, supersedes `tenants.brain_*`), `invitations` (email invites; written by `invite_member`, claimed by `claimPendingInvites` in `src/lib/invites.ts`).
 - **Resolution** (`tenantContext()` in `worker.ts`, via `src/lib/orgs.ts`): `props.user_id` → `app_users` → `memberships` → `orgs` (+ role) → default `brains` row → mint installation token from `org.installation_id`. First-touch users with no membership get a Model-A **org only** (no brain) via `provisionOrgForUser()` when `AUTO_PROVISION=true`; brains are then created **explicitly** (see below). When the org has no brain yet, brain-scope resolution throws `NoBrainError` and the app shows the "create your first brain" state. Org-scope actions (create_brain) resolve via `orgContext()`, which needs no brain.
 - **Brain creation & init** (Phase 8, `docs/design/brain-creation-and-init.md`): brains are stood up EXPLICITLY, not auto-provisioned. `create_brain` (any `editor`+, authjs-only) scaffolds a fresh repo via `createAndScaffoldBrain`, writes a `brains` row with a user-given `name` (repo_name is the derived slug; `brainLabel` shows `name`), and switches to it. The app has a "New brain" switcher entry + a create-first-brain empty state (`CreateBrainView` in `app/main.tsx`). **Access is unchanged in this slice** — new brains keep `visibility='org'` (per-brain membership/private-by-default is the deferred follow-up in the design doc).
 - **Roles & authz**: `viewer < editor < admin < owner` (`src/lib/orgs.ts`). `tenantContext({ requires })` gates: write tools pass `requires: 'editor'`; reads are open to `viewer`+. The github/static paths report `owner`. (The role token was renamed `member`→`editor` on 2026-07-13 — see `src/db/migrations/`. "member" the noun still means org membership; it's no longer a role name.)
-- **TWO ROLES, TWO SCOPES: don't collapse them** (brain-level permissions, built 2026-07-28, `docs/design/brain-level-permissions.md`). `TenantContext` carries `role` (the caller's role **on the resolved brain**) and `orgRole` (their role **in that brain's org**), and `TenantOpts` gates on either: `requires` for brain scope, `requiresOrg` for org scope. Org scope = manage people, connect the GitHub org, create/connect/disconnect brains. Brain scope = read, write, move/delete, configure, share. Gating an org action on `role` is the bug this split exists to prevent: `members.ts` did exactly that, so being shared one brain as admin would have conferred the whole org roster. **`src/lib/orgs.ts:effectiveBrainRole` is the single authority** on whether a caller can reach a brain and at what role: three additive sources (org visibility, an explicit `brain_memberships` grant, the org-admin floor), highest wins, never demotes, unknown `visibility` fails OPEN. It is pure; `pnpm test:access` walks its whole input space, and `pnpm test:scope` pins the other half (which of the two roles each tool actually gates on, in both directions). Every consumer (`listAccessibleBrains`, `getDefaultBrainForUser`, `listBrainAccess`) resolves rows in SQL and then admits them through that function: **do not re-express the policy in a WHERE clause**, or the two copies will eventually disagree. `create_brain` defaults to `visibility='private'` + an admin grant for the creator; `connect_brain` defaults to `'org'` (an admin act on a repo the org already owns); brains that predate the change keep `'org'` and are unaffected. Revocation must actually revoke, so grants are torn down with what they hang off: `disconnect_brain` → `deleteBrainGrants`, `remove_member` → `deleteUserBrainGrantsInOrg`.
-- **Brain sharing** (`src/tools/brain-access.ts`): `brain_access` (any access to the brain) opens the inline sharing panel and returns the list as data; `share_brain` (brain admin+) is every mutation in one verb: grant, change level, revoke (`access: 'none'`), and the `private`/`org` visibility flip. Guardrails: share only within the brain's org (a grant to a non-member is unreachable anyway, since resolution starts from `memberships`), never above your own brain role, never revoke yourself. UI is `app/views/BrainAccessView.tsx`. Sharing is a **brain-scope destination** (in `brainDestinations()` and the ⋯ menu's "This brain" group, beside Files/Graph/Recent changes/Members) because it passes the trail's scope test: switching brains shows a different answer. Ungated in both, since `brain_access` is read-only and open to anyone with access; only its controls are admin-gated. Its payload carries `activeBrain` like the other in-client view tools, so the **Share** control in the brains list opens it for a NAMED brain under that brain's crumb (`pickShownBrain`). Share is gated on `canShare` (brain role), which is deliberately not `canManage` (org role, gates disconnect). Adding someone is `app/views/ShareBrainView.tsx`, a pushed flow off that panel's header (the `app/ui/Flow.tsx` convention that every add-shaped action follows) and the brain-scope twin of `InviteMemberView`. Role NAMES are shared between the two scopes, descriptions are not: `ROLE_BLURB` vs `BRAIN_ROLE_BLURB` in `app/components/RoleSelect.tsx`.
-- **Member management** (built 2026-07-13, `src/tools/members.ts`): the org-admin roster surface. `members` (viewer+) both opens the in-client roster UI (`app/views/MembersView.tsx`) and returns the roster as data; **it is an ORG-scope destination in the nav, not a brain one** (`orgDestinations()` in `app/components/Breadcrumb.tsx`, and the ⋯ menu's "Organization" group) because every brain in one org shows the same roster: it takes the back arrow rather than the brain crumb, so it never reads as "these people belong to this brain". Contrast `brain_access`, which IS brain-scope. The three nav scopes (`brain` / `org` / `account`) are the `Scope` type there, and `DESTINATIONS`/`SCOPE_LABEL` are the one place each list and its wording live; the mutations `invite_member` / `set_member_role` / `remove_member` are admin+. (The former split `list_members`/`view_members` pair was merged into `members` on 2026-07-24, tool-surface consolidation.) Lockout-proof guardrails live in `members.ts`: `owner` is never assignable/removable/demotable, you can't edit your own membership, and you can't grant above your own role. Admins can make Admins; all members can see the roster (incl. emails). Invites are consumed at first sign-in by the already-wired `provisionOrgForUser` path. `orgId`/`actorUserId` ride on `TenantContext` (authjs path only; single-tenant paths reject with "org accounts only").
+- **TWO ROLES, TWO SCOPES: don't collapse them** (brain-level permissions, built 2026-07-28, `docs/design/brain-level-permissions.md`). `TenantContext` carries `role` (the caller's role **on the resolved brain**) and `orgRole` (their role **in that brain's org**), and `TenantOpts` gates on either: `requires` for brain scope, `requiresOrg` for org scope. Org scope = manage people, connect the GitHub org, create/connect/disconnect brains. Brain scope = read, write, move/delete, configure, share. Gating an org action on `role` is the bug this split exists to prevent: `members.ts` did exactly that, so being shared one brain as admin would have conferred the whole org roster. **`src/lib/orgs.ts:effectiveBrainRole` is the single authority** on whether a caller can reach a brain and at what role: three additive sources (org visibility, an explicit `brain_memberships` grant, the org-admin floor), highest wins, never demotes, unknown `visibility` fails OPEN. It is pure; `pnpm test:access` walks its whole input space, and `pnpm test:scope` pins the other half (which of the two roles each tool actually gates on, in both directions). Every consumer (`listAccessibleBrains`, `getDefaultBrainForUser`, `listBrainAccess`) resolves rows in SQL and then admits them through that function: **do not re-express the policy in a WHERE clause**, or the two copies will eventually disagree. Two later additions to the rule (2026-09-01): **`orgRole` is nullable**, meaning "not a member of the org that owns this brain", so sources (1) and (3) are skipped and only a grant can admit them, and every org-scope gate has to read a null as "not a member" rather than as "no gate" (`assertRole`, `members.ts`'s `requireOrg`, the analytics people table, `disconnect_brain`; `pnpm test:scope` drives an outsider persona through all of them and asserts the refusal never says "your role is undefined"). And **`brains.read_only` is the rule's one CEILING**, applied last: a viewer grant cannot freeze a brain because the org-admin floor hands an admin their own role straight back. **`brains.archived_at` is deliberately NOT in the rule**: an archived brain does not exist for the product, which is not a question about who the caller is, so it is filtered in the SQL of the two queries every consumer reads from (`migrations/0008_brain_lifecycle.sql`). `create_brain` AND `connect_brain` both default to `visibility='private'` + an admin grant for the caller (`connect_brain` defaulted to `'org'` until 2026-09-14, issue #93: the two tools produced the same object with opposite defaults, and an adopted private GitHub repo came back readable by the whole org with nothing in the response saying so); brains that predate the change keep `'org'` and are unaffected. Revocation must actually revoke, so grants are torn down with what they hang off: `disconnect_brain` → `deleteBrainGrants`, `remove_member` → `deleteUserBrainGrantsInOrg`.
+- **Brain sharing** (`src/tools/brain-access.ts`): `brain_access` (any access to the brain) opens the inline sharing panel and returns the list as data; `share_brain` (brain admin+) is every mutation in one verb: grant, change level, revoke (`access: 'none'`), and the `private`/`org` visibility flip. Guardrails: never above your own brain role, never revoke yourself, never `admin` for a guest (below). UI is `app/views/BrainAccessView.tsx`. Sharing is a **brain-scope destination** (in `brainDestinations()` and the ⋯ menu's "This brain" group, beside Files/Graph/Recent changes/Members) because it passes the trail's scope test: switching brains shows a different answer. Ungated in both, since `brain_access` is read-only and open to anyone with access; only its controls are admin-gated. Its payload carries `activeBrain` like the other in-client view tools, so the **Share** control in the brains list opens it for a NAMED brain under that brain's crumb (`pickShownBrain`). Share is gated on `canShare` (brain role), which is deliberately not `canManage` (org role, gates disconnect). Adding someone is `app/views/ShareBrainView.tsx`, a pushed flow off that panel's header (the `app/ui/Flow.tsx` convention that every add-shaped action follows) and the brain-scope twin of `InviteMemberView`. Role NAMES are shared between the two scopes, descriptions are not: `ROLE_BLURB` vs `BRAIN_ROLE_BLURB` in `app/components/RoleSelect.tsx`.
+- **Guests: a brain can be shared OUTSIDE its organization** (built 2026-09-14, [`docs/design/guest-access.md`](docs/design/guest-access.md)). A guest is a person holding a `brain_memberships` grant on a brain in an org they are not a member of; that is the whole definition, and `via: 'guest'` on the panel is DERIVED (grant, no membership), never stored, so the same row reads `grant` the day they join the org. `listAccessibleBrains` is now the UNION of a memberships leg and a grants leg (it used to begin at `memberships`, so a non-member's grant produced no row and `share_brain` refused non-members for exactly that reason); `listBrainAccess` has the same second leg. A guest is **capped at editor** in `effectiveBrainRole` (`GUEST_ROLE_CAP`: admin on a brain decides who reaches it, and that stays with the org's own people) and `share_brain` refuses to write an admin grant for one, so the cap is never silent. An address with NO account gets a **brain invite** (`invitations.brain_id`, migration 0009; `org_id` stays the brain's own org) which `claimPendingInvites` plans as a grant, never a membership, under the same never-rewrite rules as an org invite; `access: 'none'` cancels a pending invite as well as deleting a grant, and the panel lists pending brain invites under "Invited" (`listPendingBrainInvites`), while the org roster's `listPendingInvites` EXCLUDES them (`brain_id IS NULL`), since a brain invite carries the brain's `org_id` and would otherwise read as a pending member. **No invitation email is sent** (none is for `invite_member` either); the reply carries the sign-in sentence to forward, with the web URL when the deployment has one. A guest at org scope is just a first-touch person (`orgContext` → auto-provision or "an admin must invite you"), by design. Covered by `test:access` (cap, both legs), `test:invites` (a brain invite grants and never joins), `test:scope` (the tool: grant for an outsider, admin refused, invite written and cancelled, editor cannot send one).
+- **Member management** (built 2026-07-13, `src/tools/members.ts`): the org-admin roster surface. `members` (viewer+) both opens the in-client roster UI (`app/views/MembersView.tsx`) and returns the roster as data; **it is an ORG-scope destination in the nav, not a brain one** (`orgDestinations()` in `app/components/Breadcrumb.tsx`, and the ⋯ menu's "Organization" group) because every brain in one org shows the same roster: it takes the back arrow rather than the brain crumb, so it never reads as "these people belong to this brain". Contrast `brain_access`, which IS brain-scope. The three nav scopes (`brain` / `org` / `account`) are the `Scope` type there, and `DESTINATIONS`/`SCOPE_LABEL` are the one place each list and its wording live; the mutations `invite_member` / `set_member_role` / `remove_member` are admin+. (The former split `list_members`/`view_members` pair was merged into `members` on 2026-07-24, tool-surface consolidation.) Lockout-proof guardrails live in `members.ts`: `owner` is never assignable/removable/demotable, you can't edit your own membership, and you can't grant above your own role. Admins can make Admins; all members can see the roster (incl. emails). Invites are claimed by `claimPendingInvites` (see [Claiming invitations](#claiming-invitations-issue-69)), not only at first sign-in. `orgId`/`actorUserId` ride on `TenantContext` (authjs path only; single-tenant paths reject with "org accounts only").
 - **Multi-brain selection** (P1, built 2026-07-14, `src/tools/brains.ts`): one connection can reach several brains (personal / team / client). `tenantContext({ requires, brain })` now resolves the CHOSEN brain — explicit `brain` arg (fuzzy-matched) → the connection's **active brain** → the default (oldest). Per-brain org token + role + commit attribution; the content index already isolates by `brainId`, so a call never crosses brains. Tools: `brains` (the list, as data) / `switch_brain`, plus an optional **`brain` arg on every tool**. (`list_brains`/`view_brains` were merged into `brains` on 2026-07-24; on 2026-09-15 the merged tool lost its `_meta.ui`, because the model's usual reason to call it is "which brains exist?" and every such lookup was rendering a brain list in the chat. The interactive list is inside the app, reached through any view tool; the app still calls `brains` from the widget, where a plain result is what the switcher reads. Not in `test:appmeta`, which only registers the app tools, so `pnpm test:scope` pins the absence.) Active brain is persisted in `OAUTH_KV` (`active_brain:<userKey>`), **per-user** (the stateless transport has no per-connection DO state); loaded once per request, and the write is **awaited** rather than fired into `waitUntil` (see below). **Only an explicit act moves it**: `switch_brain`, `create_brain`, and `disconnect_brain` falling a dangling pointer back to a survivor. Until 2026-09-15 the in-client view tools and `brain_access` were registered `sticky`, so merely opening a page in the widget rewrote the pointer; because the key is per USER, a view in one conversation retargeted every other open conversation's bare calls. The widget never depended on it (every widget call passes `brain`, and `pickShownBrain` follows the result), so `sticky` is gone from `TenantOpts` and `pnpm test:scope` pins the three writers. The app's **top-left nav becomes a brain switcher** when there are 2+ brains (`BrainSwitcher` in `app/main.tsx`; still the Files button with one brain). Key seam for P2: `personUserIds(userId)` (worker.ts) and `listAccessibleBrains(db, userIds[])` (orgs.ts) take a SET of user ids — identity-linking just widens that set. **No schema change.**
 - **Multi-brain P2 (identity linking)** is built. A person's emails share an `app_users.person_id`; `linkedUserIds` turns one signed-in id into the person's whole set, and resolution unions across it. Surface: `connected_accounts` / `link_identity` / `unlink_identity`, verified by a magic-link round trip. **Org scope was the last path still keyed on a single user id** (`orgContext` called `getMembershipWithOrg(db, userId)`), so `create_brain` and `connect_github_org` behaved as though nothing had been linked while every brain query already unioned. It reads `listAccessibleOrgs(db, personUserIds)` now. See `docs/design/org-roles-permissions.md`.
 - **The brain a RESULT names beats the active-brain pointer, in the app** (built 2026-08-11, issue #26). Both answer "which brain", and they are not the same question: the pointer is one KV key per user, while a `brain:`-targeted `view_page` / `browse_brain` opens a widget on a brain the pointer may not have caught up to. The pointer does not move for a view, and the app fetches its brain list (`ensureBrainList`) on every open, so the list came back naming the DEFAULT brain and the app adopted it: crumb, file tree, picker tick and every subsequent widget call retargeted, while the model reported the brain it had actually opened. `pickShownBrain` (`app/core/store.ts`) is the rule: the pointer wins only when the widget has no brain of its own yet (the self-boot) or when the result declares a deliberate move (`switched`, set by `switch_brain` / `create_brain`; `connect_brain` adopts a repo without moving anyone into it). `setActiveBrain` is the single seam that also drops what belonged to the brain being left — the cached file tree, which backs folder-note lookup and wikilink resolution, and the path policy — because a brain can now be entered from any result, not just `switchBrain`. The Worker's own write is awaited so the next request cannot read a write that had not started; KV stays eventually consistent across locations, which is why the app treats the result as authoritative rather than trusting the fix. Covered by `pnpm test:policy` (the store rule, pure) and `pnpm test:ui` (the `#other-brain` harness route, which is the whole scenario end to end).
+- **`brains` must cost NOTHING for a configured brain** (fixed 2026-09-01). The widget
+  calls it on every open, and it checks every manageable brain for "connected but not
+  configured". The first version resolved each brain's context (a token mint and a
+  config read, both GitHub) and ran `ensureFresh` (a `getHead` per brain plus an
+  inline reindex for any brain whose branch moved) BEFORE asking the index whether
+  the brain had pages, so on an account with several brains it was a 17-second call.
+  Anthropic's edge gives up at about 15 and reports a bare 502 `origin_bad_gateway`
+  with `zone: api.anthropic.com` (issues #50 and #85); the widget's `ensureBrainList`
+  swallows the failure, and the brain list, `features`, and anything riding on them
+  are missing for that open. Now `hasIndexedPages` (one `SELECT 1 … LIMIT 1`, no
+  context) answers a configured brain, and only an EMPTY index pays for freshness and
+  the tree scan. `pnpm test:scope` pins it: a brain with an indexed page resolves no
+  context at all. **Any per-brain work added to `brains` needs the same shape**: answer
+  from the index first, reach GitHub only when the index cannot say.
+- **The Worker logs what the transport refuses and what runs slow** (`describeRequest`
+  in `mcp-preamble.ts`, `pnpm test:preamble`): any `/mcp` answer at 4xx or over 5s gets
+  one `console.warn` naming the methods, the message SHAPES (top-level key names only,
+  never a value), the status, the duration and the transport's own error. Two reasons.
+  The SDK's request schema is `.strict()` and Claude's client speaks a protocol version
+  (`2026-07-28`) newer than any published SDK knows (`2025-11-25` in 1.30), so a field
+  the SDK has never seen is answered 400 "Invalid JSON-RPC message" and, before this,
+  nothing said which field. And a slow call reaches the user as the edge's 502, not as
+  ours, so only our own log can say which tool it was. Read them in the dashboard's
+  Workers Logs, or `wrangler tail --status error`; note macOS has no `timeout`, so
+  bound a tail with a backgrounded process and `kill`.
 - **`browse_brain` returns a SUMMARY, and the tree only while it is small** (`src/lib/browse.ts`, same issue). It used to send every path twice — as text and again in `structuredContent` with a title per page — which on a 556-page brain was 83,708 characters, over the host's tool-result limit and spilled to a file. The text block is now the brain's shape (page count, per-folder tallies below the shared root, where to get the rest); the tree rides along only under `MAX_INLINE_TREE_CHARS`, measured on the serialized payload rather than a page count. Above it the app fetches the tree with `list_pages`, which is a widget-initiated call the conversation never pays for — the `else openBrowse()` branch of `handleToolResult`, which predates this. `list_pages` itself is unchanged: the widget parses its text block for the path list.
+- **`needsConfig` must SEE the config file, and `configure_brain` must not clobber one** (issue #94, 2026-09-14). `detectNeedsConfig` in `brain-index.ts` checked the tree for `.isomorphic.json`, but `listTree` defaults to `.md` files only, so the file was never in the list and the "author configured it explicitly" branch was dead. The other callers never noticed because they run it only after `ensureFresh` came back with zero pages under the REAL config; `connect_brain` runs it against `DEFAULT_BRAIN_CONFIG` on a repo it has not loaded, so a valid config with non-default roots came back `needsConfig: true`, and the remedy that flag names (`configure_brain`, whole-repo default) would have replaced the config it was wrong about. Fix: the detector lists the whole tree (GitHub's recursive tree call returns every blob anyway, so it costs no extra request), and `configure_brain` refuses when a config exists, prints it, and takes `overwrite: true` to replace it. Both pinned: `pnpm test:index` (the detector, through the real `githubStore`) and `pnpm test:e2e-librarian` (the guard, last in the run since the overwrite changes the scaffold's roots).
 - **Placing a brain uses `listAccessibleOrgs`, never `listAccessibleBrains`.** The latter inner-joins `brains`, so an org holding none produces no row: correct for choosing a brain to act on, wrong for choosing where to PUT one. That made the first brain in a freshly connected org unreachable. `connect_brain` picked its org by naming a brain already in it, and `create_brain` had no org argument at all and resolved through a `LIMIT 1` with no `ORDER BY`, so a person in two orgs got an arbitrary one. Both take an optional **`org`** now (fuzzy-matched on name / GitHub owner / org id by `matchOrg`); `connect_brain`'s `brain` argument is gone, since it only ever meant "which org". `chooseOrg` is the pure pick and throws rather than guessing: named handle > the active brain's org > oldest. The `brains` payload carries the org list, because the widget's picker could not derive a brainless org either. Covered by `pnpm test:access` (the query and the pick) and `pnpm test:scope` (that both tools forward `org`, and that the payload carries the list).
 - **Founding operator**: `src/db/seed-operator-org.sql` is a one-shot migration template that maps the founding operator's email onto a pre-existing brain (adopt, not re-provision) — fill in the placeholders and apply to local + remote D1.
 - **Model-B onboarding** (built, `docs/ops/onboarding-a-customer-org.md`): standing up a customer-owned org now has two paths. **Self-serve** — `connect_github_org` (`src/tools/org-onboarding.ts`) returns a GitHub App install URL carrying a KV-stashed `state`; installing redirects to `/github/install-callback`, which resolves the installation (App JWT) and writes the `customer` org + owner membership via `connectCustomerOrg` (`src/lib/org-connect.ts`), idempotent on re-install. The user then adopts a repo with `connect_brain`. Needs `GITHUB_APP_SLUG` on the Worker. **Operator** — `pnpm onboard-org` (`scripts/onboard-org.ts`) is the scripted replacement for hand-editing `seed-customer-org.sql`: it resolves `installation_id` from GitHub, verifies repo reachability, bakes the operator email into `created_by`/`invited_by`, and writes the org/brain/invite rows (dry-run by default; `--apply local|remote|both`).
 - **Not yet built** (design steps 4/6): invitations/admin UI, Google/SSO providers.
+
+## Claiming invitations (issue #69)
+
+An `invitations` row becomes a `memberships` row in exactly one place:
+`claimPendingInvites` (`src/lib/invites.ts`, pure rule + D1 half, `pnpm test:invites`).
+Before 2026-08-31 that logic lived inside `provisionOrgForUser`, behind three gates
+that between them meant an invitation only ever reached a person who was brand new,
+signed in with the invited address, and on a deployment with `AUTO_PROVISION=true`.
+Anyone else stayed un-joined with nothing surfaced: the invitee saw no brain, the
+admin saw a pending invite that looked unopened, and the row expired.
+
+- **An invite names an EMAIL, and a person owns a SET of them.** Claiming is keyed
+  on the person's `app_users` rows (`linkedUserIds`), and the membership lands on
+  the `user_id` whose address was invited. That is what makes an invitation
+  survive account linking: the address is proven by the same sign-in either way.
+- **It runs wherever an address is proven, and once per request.** `/link/complete`
+  (`auth-handler.ts`) claims for the address just verified; `McpSession.personUserIds`
+  claims for the whole person before anything reads their memberships, so an invite
+  takes effect on the invitee's next call rather than at their next re-auth. Both
+  are FAIL-OPEN: an invitation that cannot be claimed leaves a working session
+  working and is retried on the next request.
+- **`AUTO_PROVISION` does not gate it.** That flag governs MINTING a personal org
+  for someone nobody invited. An invite-only deployment is precisely the one that
+  needs invitations to work, and the old ordering answered it with "an admin must
+  invite you", which is what had just happened. `provisionOrgForUser` claims first
+  and takes `autoProvision` as an argument; the invite path touches no GitHub at
+  all, so it needs neither `PLATFORM_ORG` nor an installation token.
+- **A membership is never rewritten by an invite.** The invite is what an admin
+  wanted when they sent it; the membership row is what they want now. An invite to
+  an org the person already belongs to is marked accepted and writes nothing, so a
+  stale invite cannot demote anyone and the roster stops showing it as pending.
+- **Multi-org membership is real and always was.** `memberships` is keyed
+  `(org_id, user_id)`, and every path that picks where to act unions across a
+  person's orgs (`listAccessibleBrains`, `listAccessibleOrgs`, `resolveOrgForPerson`,
+  `chooseOrg`). `getMembershipWithOrg`'s `LIMIT 1` is not one of those paths: it
+  answers "does this user id belong anywhere yet" for first-touch provisioning, and
+  is now ordered so the answer does not depend on the query plan.
+- **`noBrainOutcome`** (`provision.ts`, pure) decides what a member with no
+  reachable brain gets, keyed on the state rather than on having just been
+  invited. Anyone who can create one (editor+) still lands in the app's "create
+  your first brain" state, which is what this path did for every role. A VIEWER
+  can create nothing, so that state strands them: they are told which of the two
+  problems they have, since brains are private by default and the difference is
+  invisible from their side (none of the org's brains are shared with you, versus
+  the org holds none yet).
+- **Uncovered:** the two call sites themselves (the Worker method and the link
+  callback), as with the rest of the request wiring. The rule, the queries, and
+  `provisionOrgForUser` are covered.
 
 ## State of the repo
 

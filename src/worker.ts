@@ -34,10 +34,16 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js';
 import { OAuthProvider, type OAuthHelpers } from '@cloudflare/workers-oauth-provider';
-import { installationOctokit, tokenOctokit, type AppCreds } from './lib/github.ts';
-import { githubStore, type BrainStore } from './lib/brain-repo.ts';
+import { installationOctokit, tokenOctokit, staticAuth, type AppCreds } from './lib/github.ts';
+import {
+	githubStore,
+	commitAuthorFor,
+	githubNoreplyAuthor,
+	type BrainStore
+} from './lib/brain-repo.ts';
 import { getTenantByUserId, NoTenantError } from './lib/tenants.ts';
-import { provisionBrainForUser, provisionOrgForUser } from './lib/provision.ts';
+import { platformInstall, provisionBrainForUser, provisionOrgForUser } from './lib/provision.ts';
+import { claimPendingInvites } from './lib/invites.ts';
 import {
 	getAppUser,
 	assertRole,
@@ -46,9 +52,8 @@ import {
 	getAppUserByGithubUserId,
 	listAccessibleOrgs,
 	resolveOrgForPerson,
-	matchBrain,
+	chooseBrain,
 	brainLabel,
-	brainLabelQualified,
 	type AccessibleBrain,
 	type Org,
 	type OrgScope,
@@ -58,6 +63,10 @@ import {
 import type { CommitAuthor } from './lib/brain-repo.ts';
 import { githubHandler } from './oauth/github-handler.ts';
 import { authHandler } from './oauth/auth-handler.ts';
+import { getAuthSession } from './auth/config.ts';
+import { BRAIN_APP_HTML } from './lib/app-bundle.generated.ts';
+import { WEB_ROUTE_PREFIX, checkWebMcpRequest, claimsWebMcp, webBaseUrl } from './lib/web-app.ts';
+import { WEB_APP_HEADERS, signInRedirect, webShell } from './lib/web-shell.ts';
 import { registerLibrarianTools } from './tools/librarian.ts';
 import { registerImportTools } from './tools/importer.ts';
 import { registerBrainApp } from './tools/apps.ts';
@@ -76,7 +85,12 @@ import { dayKey, countedCall } from './lib/usage.ts';
 import { loadCustomToolDefs, registerCustomTools, type CustomToolLoad } from './tools/custom.ts';
 import { resolveInstallationOrg, connectCustomerOrg } from './lib/org-connect.ts';
 import { loadBrainConfig, type BrainConfig } from './lib/brain-config.ts';
-import { peekJsonRpc, needsBrainPreamble, jsonRpcError } from './lib/mcp-preamble.ts';
+import {
+	peekJsonRpc,
+	needsBrainPreamble,
+	jsonRpcError,
+	describeRequest
+} from './lib/mcp-preamble.ts';
 
 interface Env {
 	// Auth mode selector
@@ -216,7 +230,9 @@ interface TenantContext {
 	// membership governs managing people and adding/removing brains, brain access
 	// governs the content. Tools that manage the ORG must gate on this one
 	// (TenantOpts.requiresOrg), or a brain admin could edit the org roster.
-	orgRole: Role;
+	// Null when the caller holds no membership in the org that owns the resolved brain.
+	// Every gate reading this treats null as "not a member", never as "no gate".
+	orgRole: Role | null;
 	// The resolved org's id + the acting user's id — set only on the product-native
 	// (authjs) path, where an org table row exists. The member-management tools need
 	// them to scope the roster and enforce self-guards; undefined on the legacy
@@ -273,6 +289,9 @@ class McpSession {
 	// state; it is now per-USER (KV key) preference, which is the intended
 	// semantic change of the stateless move.
 	private _activeBrainId?: string;
+
+	// One invite claim per request, however many times a person is resolved.
+	private invitesClaimed = false;
 
 	private userKey(): string {
 		return (
@@ -380,7 +399,32 @@ class McpSession {
 	// their brains from any linked email — this is the single seam the linking work
 	// plugs into (see linkedUserIds in lib/orgs.ts).
 	private async personUserIds(userId: string): Promise<string[]> {
-		return linkedUserIds(this.env.PLATFORM_DB, userId);
+		const ids = await linkedUserIds(this.env.PLATFORM_DB, userId);
+		await this.claimInvites(ids);
+		return ids;
+	}
+
+	// Join any org this person has been invited to, once per request, before
+	// anything reads their memberships. It lives here rather than in provisioning
+	// because provisioning is only reached by a person with no brain anywhere: an
+	// invitation to a SECOND org would otherwise stay pending until it expired,
+	// with nothing surfaced to either side (issue #69). Claiming is a no-op SELECT
+	// when there is nothing pending, which is almost always.
+	//
+	// Fail-open: an invite that cannot be claimed must not break a session that
+	// was working without it. The invitation stays pending and the next request
+	// tries again.
+	private async claimInvites(userIds: string[]): Promise<void> {
+		if (this.invitesClaimed) return;
+		this.invitesClaimed = true;
+		try {
+			const claimed = await claimPendingInvites(this.env.PLATFORM_DB, userIds);
+			for (const c of claimed) {
+				if (c.joins) console.log(`[invites] ${c.user_id} joined org ${c.org_id} as ${c.role}`);
+			}
+		} catch (err) {
+			console.warn(`[invites] claim failed: ${err instanceof Error ? err.message : String(err)}`);
+		}
 	}
 
 	// The org holding the connection's active brain. Lets an org-scope action default
@@ -402,6 +446,15 @@ class McpSession {
 	// Per-repo brain config, cached for this Durable Object's lifetime — config
 	// changes rarely and the DO recycles, so a request-time read on first touch
 	// (then memoized) avoids a GitHub round-trip on every tool call.
+	// Where the web app is served, or undefined on a deployment without one.
+	private webBase(): string | undefined {
+		return webBaseUrl({
+			authMode: this.env.AUTH_MODE,
+			identityMode: this.env.IDENTITY_MODE,
+			publicBaseUrl: this.env.PUBLIC_BASE_URL
+		});
+	}
+
 	private configCache = new Map<string, BrainConfig>();
 
 	private async loadConfig(
@@ -489,22 +542,8 @@ class McpSession {
 			// GitHub identity: attribute to their account via GitHub's canonical
 			// noreply address (<id>+<login>@users.noreply.github.com), which links the
 			// commit to their profile without exposing a private email.
-			const login = this.props?.gh_login;
-			const author: CommitAuthor | undefined = login
-				? { name: login, email: `${ghUserId}+${login}@users.noreply.github.com` }
-				: undefined;
-			return {
-				octokit,
-				store: githubStore(octokit),
-				repoArgs,
-				role: 'owner',
-				orgRole: 'owner',
-				config: await this.loadConfig(githubStore(octokit), repoArgs),
-				author,
-				db: env.PLATFORM_DB,
-				brainId: `${repoArgs.owner}/${repoArgs.repo}`,
-				activeBrain: { id: `${repoArgs.owner}/${repoArgs.repo}`, label: repoArgs.repo }
-			};
+			const author = githubNoreplyAuthor(ghUserId, this.props?.gh_login);
+			return this.singleTenantContext(octokit, repoArgs, author);
 		}
 		// Single-tenant path: one human, one brain, no org model. Two ways to reach the
 		// repo; GITHUB_TOKEN takes precedence.
@@ -517,35 +556,41 @@ class McpSession {
 		//                        for App-authored commits or an org-owned installation.
 		//
 		// Both need BRAIN_REPO_OWNER/NAME, since there is no tenant table to resolve.
-		const owner = env.BRAIN_REPO_OWNER;
-		const repo = env.BRAIN_REPO_NAME;
-		if (!owner || !repo) {
-			throw new Error(
-				'AUTH_MODE=static requires BRAIN_REPO_OWNER and BRAIN_REPO_NAME (which brain to serve), plus either GITHUB_TOKEN (simplest) or GITHUB_APP_INSTALLATION_ID with the platform App credentials. Run `pnpm doctor` to see what is missing.'
-			);
-		}
-		const installationId = env.GITHUB_APP_INSTALLATION_ID;
-		if (!env.GITHUB_TOKEN && !installationId) {
-			throw new Error(
-				'AUTH_MODE=static needs a way to reach GitHub: set GITHUB_TOKEN (a fine-grained PAT with Contents and Pull requests write on the brain repo), or set GITHUB_APP_INSTALLATION_ID and the platform App credentials. Run `pnpm doctor` to see what is missing.'
-			);
-		}
+		const auth = staticAuth(env);
 		assertRole('owner', opts?.requires);
 		assertRole('owner', opts?.requiresOrg);
-		const octokit = env.GITHUB_TOKEN
-			? tokenOctokit(env.GITHUB_TOKEN)
-			: await installationOctokit(appCreds(env), Number(installationId));
-		const repoArgs = { owner, repo };
+		const octokit =
+			auth.kind === 'token'
+				? tokenOctokit(auth.token)
+				: await installationOctokit(appCreds(env), auth.installationId);
+		// No signed-in human on this path, so no author: writes stay App-authored.
+		return this.singleTenantContext(octokit, { owner: auth.owner, repo: auth.repo });
+	}
+
+	// The context shape shared by the two paths with NO ORG MODEL: the legacy
+	// gh_user_id tenant row and AUTH_MODE=static. Both are one human with one
+	// brain, so both scopes report 'owner', and both key the brain on the repo
+	// itself because there is no brains row to carry a name. The two copies of
+	// this differed only in where the octokit came from and whether an author was
+	// known, and each built githubStore twice over the same client.
+	private async singleTenantContext(
+		octokit: TenantContext['octokit'],
+		repoArgs: { owner: string; repo: string },
+		author?: CommitAuthor
+	): Promise<TenantContext> {
+		const store = githubStore(octokit);
+		const brainId = `${repoArgs.owner}/${repoArgs.repo}`;
 		return {
 			octokit,
-			store: githubStore(octokit),
+			store,
 			repoArgs,
 			role: 'owner',
 			orgRole: 'owner',
-			config: await this.loadConfig(githubStore(octokit), repoArgs),
-			db: env.PLATFORM_DB,
-			brainId: `${repoArgs.owner}/${repoArgs.repo}`,
-			activeBrain: { id: `${repoArgs.owner}/${repoArgs.repo}`, label: repoArgs.repo }
+			config: await this.loadConfig(store, repoArgs),
+			author,
+			db: this.env.PLATFORM_DB,
+			brainId,
+			activeBrain: { id: brainId, label: repoArgs.repo }
 		};
 	}
 
@@ -592,24 +637,8 @@ class McpSession {
 				visibility: p.brain.visibility
 			};
 		} else {
-			if (brainArg) {
-				const m = matchBrain(brains, brainArg);
-				if (!m.brain) {
-					const names = (m.candidates ?? brains).map(brainLabelQualified);
-					throw new Error(
-						m.candidates
-							? `"${brainArg}" matches multiple brains: ${names.join(', ')}. Be more specific.`
-							: `No brain matching "${brainArg}". You have access to: ${names.join(', ')}.`
-					);
-				}
-				target = m.brain;
-			} else {
-				// Active brain if it's still accessible; otherwise the default (oldest).
-				const active = this.activeBrainId
-					? brains.find((b) => b.id === this.activeBrainId)
-					: undefined;
-				target = active ?? brains[0];
-			}
+			// Named brain, else the one the caller is working in, else the oldest.
+			target = chooseBrain(brains, { brain: brainArg, activeBrainId: this.activeBrainId });
 		}
 
 		const octokit = await installationOctokit(appCreds(env), target.installation_id);
@@ -618,12 +647,7 @@ class McpSession {
 		// name + verified email); fall back to the token email. A member with no
 		// GitHub account still gets legible authorship — GitHub just won't link it
 		// to a profile unless the email matches a verified GitHub email.
-		const user = await getAppUser(env.PLATFORM_DB, userId);
-		const authorEmail = (user?.email || email).trim();
-		const authorName = (user?.name || authorEmail).trim();
-		const author: CommitAuthor | undefined = authorEmail
-			? { name: authorName, email: authorEmail }
-			: undefined;
+		const author = commitAuthorFor(await getAppUser(env.PLATFORM_DB, userId), email);
 		this.noteScope(target.org_id, target.id);
 		return {
 			octokit,
@@ -641,29 +665,24 @@ class McpSession {
 		};
 	}
 
-	// Product-identity analog of autoProvision(): first-touch org+brain for an
-	// Auth.js user with no membership. Gated by AUTO_PROVISION.
+	// Product-identity analog of autoProvision(): first-touch org for an Auth.js
+	// user with no membership. AUTO_PROVISION governs MINTING a personal org, and
+	// is passed down rather than checked here, because the same call also claims a
+	// pending invitation and an invite-only deployment must still honour those.
+	// Touches no GitHub: no brain is created on this path.
 	private async autoProvisionOrg(userId: string, email: string) {
 		const env = this.env;
-		if (env.AUTO_PROVISION !== 'true') {
-			throw new Error(
-				`No org configured for ${email} and AUTO_PROVISION is off. An admin must invite you.`
-			);
-		}
-		if (!env.PLATFORM_ORG || !env.PLATFORM_INSTALLATION_ID) {
-			throw new Error(
-				'AUTO_PROVISION is on but PLATFORM_ORG / PLATFORM_INSTALLATION_ID are not configured. ' +
-					'Run admin setup (pnpm bootstrap) to install the platform App on an org.'
-			);
-		}
-		const installationId = Number(env.PLATFORM_INSTALLATION_ID);
-		const octokit = await installationOctokit(appCreds(env), installationId);
+		const autoProvision = env.AUTO_PROVISION === 'true';
+		// Only read when it is going to be used: joining by invitation mints nothing
+		// and so needs neither value, which is what lets an invite-only deployment
+		// run with no platform org configured at all.
+		const platform = autoProvision ? platformInstall(env) : undefined;
 		return provisionOrgForUser({
-			octokit,
 			db: env.PLATFORM_DB,
 			user: { user_id: userId, email, name: null },
-			org: env.PLATFORM_ORG,
-			installationId
+			org: platform?.org,
+			installationId: platform?.installationId,
+			autoProvision
 		});
 	}
 
@@ -706,11 +725,7 @@ class McpSession {
 		}
 		assertRole(membership.role, opts?.requires);
 		const octokit = await installationOctokit(appCreds(env), membership.org.installation_id);
-		const user = await getAppUser(env.PLATFORM_DB, userId);
-		const authorEmail = (user?.email || email).trim();
-		const author: CommitAuthor | undefined = authorEmail
-			? { name: (user?.name || authorEmail).trim(), email: authorEmail }
-			: undefined;
+		const author = commitAuthorFor(await getAppUser(env.PLATFORM_DB, userId), email);
 		// Org scope resolves no brain, so usage rows for these calls carry ''.
 		this.noteScope(membership.org.org_id);
 		return {
@@ -733,21 +748,15 @@ class McpSession {
 		if (env.AUTO_PROVISION !== 'true') {
 			throw new NoTenantError(ghUserId);
 		}
-		if (!env.PLATFORM_ORG || !env.PLATFORM_INSTALLATION_ID) {
-			throw new Error(
-				'AUTO_PROVISION is on but PLATFORM_ORG / PLATFORM_INSTALLATION_ID are not configured. ' +
-					'Run admin setup (pnpm bootstrap) to install the platform App on an org.'
-			);
-		}
-		const installationId = Number(env.PLATFORM_INSTALLATION_ID);
-		const octokit = await installationOctokit(appCreds(env), installationId);
+		const platform = platformInstall(env);
+		const octokit = await installationOctokit(appCreds(env), platform.installationId);
 		return provisionBrainForUser({
 			octokit,
 			db: env.PLATFORM_DB,
 			ghUserId,
 			ghLogin: this.props?.gh_login ?? null,
-			org: env.PLATFORM_ORG,
-			installationId
+			org: platform.org,
+			installationId: platform.installationId
 		});
 	}
 
@@ -893,7 +902,13 @@ class McpSession {
 		// writes are atomic bundles (page + changelog, plus any repointed links, in one
 		// commit) and all responses speak in wiki terms, never git terms. See
 		// src/tools/librarian.ts.
-		registerLibrarianTools(server, (opts) => this.tenantContext(opts));
+		// `listBrains` is what lets search_pages fan out over every brain the caller can
+		// reach (scope: "all"). It is the SAME dep the brain tools take below, deliberately:
+		// the accessible set is one question with one answer, and a second way of computing
+		// it would eventually disagree with the switcher about which brains exist.
+		registerLibrarianTools(server, (opts) => this.tenantContext(opts), {
+			listBrains: () => this.listAccessibleBrainsForCaller()
+		});
 
 		// ---------- bulk import (derived-views PRD Phase 3) ----------
 		// sync_records: non-destructive upsert-by-key from an external source.
@@ -913,7 +928,9 @@ class McpSession {
 		// `brain:` view is self-contained. The pointer is per-USER, not per-conversation,
 		// so moving it from a view retargeted every other open conversation's bare calls
 		// as a side effect of looking at something (removed 2026-09-15).
-		registerBrainApp(server, (opts) => this.tenantContext(opts));
+		registerBrainApp(server, (opts) => this.tenantContext(opts), {
+			webBaseUrl: this.webBase()
+		});
 
 		// Single-tenant deployments (AUTH_MODE=static, whether reaching GitHub through a
 		// token or an App installation) have one human and one brain, and no `orgs` /
@@ -935,7 +952,9 @@ class McpSession {
 		// these move who can reach ONE brain. See src/tools/brain-access.ts. Its result
 		// carries `activeBrain`, so the Share control in the brains list opens the panel
 		// under the named brain's crumb without moving the pointer (see registerBrainApp).
-		registerBrainAccessTools(server, (opts) => this.tenantContext(opts));
+		registerBrainAccessTools(server, (opts) => this.tenantContext(opts), {
+			webBaseUrl: this.webBase()
+		});
 
 		// ---------- connected accounts (identity linking) ----------
 		// The per-person "Your settings → Connected accounts" surface: connected_accounts
@@ -1009,7 +1028,9 @@ class McpSession {
 			activeBrainId: () => this.activeBrainId,
 			setActiveBrain: (id) => this.setActiveBrain(id),
 			invalidateConfig: (owner, repo) => this.invalidateConfig(owner, repo),
-			analyticsEnabled: this.usageEnabled()
+			analyticsEnabled: this.usageEnabled(),
+			db: this.env.PLATFORM_DB,
+			webBaseUrl: this.webBase()
 		});
 
 		// ---------- user-defined tools (brain-tools) ----------
@@ -1067,6 +1088,8 @@ const mcpApiHandler = {
 		// failure can still be answered.
 		const raw = await request.text();
 		const peek = peekJsonRpc(raw);
+		// Past this, a call is at risk of being cut off upstream before it answers.
+		const SLOW_REQUEST_MS = 5_000;
 		const forwarded = new Request(request, { body: raw });
 
 		const props = (ctx as ExecutionContext & { props?: McpProps }).props;
@@ -1086,8 +1109,26 @@ const mcpApiHandler = {
 				sessionIdGenerator: undefined,
 				enableJsonResponse: true
 			});
+			// The transport answers a message it cannot parse with 400 and, without
+			// this, says nothing about why. Its schema is `.strict()`, so a client one
+			// protocol version ahead (Claude speaks 2026-07-28; SDK 1.30 knows up to
+			// 2025-11-25) is refused for a field the SDK has never heard of, and the
+			// log has to name the shape or the next person is guessing. Key names only.
+			let transportError: string | undefined;
+			transport.onerror = (e) => {
+				transportError = e instanceof Error ? e.message : String(e);
+			};
 			await server.connect(transport);
-			return await transport.handleRequest(forwarded);
+			const started = Date.now();
+			const res = await transport.handleRequest(forwarded);
+			const ms = Date.now() - started;
+			// Refusals and slow calls, which are the two things that reach a user as a
+			// bare gateway error from Anthropic's edge: a call the Worker answers in 17s
+			// is one the edge gave up on at ~15s, and only this line says which it was.
+			if (res.status >= 400 || ms > SLOW_REQUEST_MS) {
+				console.warn(describeRequest(peek, { status: res.status, ms, error: transportError }));
+			}
+			return res;
 		} catch (err) {
 			// Nothing above this point was inside a tool handler, so the SDK's own
 			// error mapping never saw it and `workers-oauth-provider` does not catch
@@ -1334,6 +1375,75 @@ export default {
 				return handleOrgConnectCallback(url, state, installationId, env);
 			}
 			return installedPage(url);
+		}
+
+		// ---------- the web app ----------
+		//
+		// Both routes sit AHEAD of the OAuth provider, like /health and the
+		// install callback, because the provider owns `/mcp` and would reject a
+		// cookie-authenticated call before it ever reached the handler.
+		//
+		// authjs only: the cookie session is what Auth.js issues, and the github
+		// and static identity paths have no browser session to read.
+		if (env.AUTH_MODE === 'oauth' && env.IDENTITY_MODE === 'authjs') {
+			// The shell. Serving the same bundle the MCP App resource serves, with
+			// a flag telling it which host it is running in.
+			if (
+				url.pathname === WEB_ROUTE_PREFIX.slice(0, -1) ||
+				url.pathname.startsWith(WEB_ROUTE_PREFIX)
+			) {
+				const session = await getAuthSession(request, env);
+				if (!session?.user?.id) {
+					return Response.redirect(
+						new URL(signInRedirect(url.pathname, url.search), url.origin).toString(),
+						302
+					);
+				}
+				return new Response(webShell(BRAIN_APP_HTML), { headers: { ...WEB_APP_HEADERS } });
+			}
+
+			// The web app's tool calls. Same handler, same session, same
+			// authorization: only the credential differs, so `props` is built from
+			// the Auth.js session exactly as the OAuth path builds it from a token.
+			//
+			// Claimed only when the request carries a cookie. One with neither a
+			// cookie nor a Bearer token is an MCP host making first contact, and it
+			// falls through to the provider for the `WWW-Authenticate` challenge it
+			// needs (see `claimsWebMcp`).
+			if (
+				url.pathname === '/mcp' &&
+				claimsWebMcp({
+					hasAuthorization: request.headers.has('authorization'),
+					hasCookie: request.headers.has('cookie')
+				})
+			) {
+				const verdict = checkWebMcpRequest({
+					method: request.method,
+					selfOrigin: url.origin,
+					origin: request.headers.get('origin'),
+					fetchSite: request.headers.get('sec-fetch-site'),
+					contentType: request.headers.get('content-type'),
+					hasAuthorization: false
+				});
+				if (!verdict.ok) {
+					return new Response(verdict.message, { status: verdict.status });
+				}
+				const session = await getAuthSession(request, env);
+				if (!session?.user?.id) {
+					// The app turns this into a sign-in redirect. A body is not much
+					// use to it, but the status is.
+					return new Response('Not signed in', { status: 401 });
+				}
+				const props: McpProps = { user_id: session.user.id, email: session.user.email };
+				// `mcpApiHandler` reads identity off `ctx.props`. Bind rather than
+				// spread: an ExecutionContext's methods need their own `this`.
+				const webCtx = {
+					waitUntil: ctx.waitUntil.bind(ctx),
+					passThroughOnException: ctx.passThroughOnException.bind(ctx),
+					props
+				} as unknown as ExecutionContext;
+				return mcpApiHandler.fetch(request, env, webCtx);
+			}
 		}
 
 		if (env.AUTH_MODE === 'oauth') {

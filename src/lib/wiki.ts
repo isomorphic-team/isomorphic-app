@@ -24,6 +24,13 @@ import { isFolderNoteName } from './view-directives.ts';
 
 // ---------- page types ----------
 
+// A page's bare filename: last path segment, `.md` dropped. This is the form
+// wikilink resolution and link rewriting key on, so brain-index.ts and
+// librarian.ts both need exactly it.
+export function slugOf(path: string): string {
+	return path.split('/').pop()!.replace(/\.md$/, '');
+}
+
 export function slugify(text: string, fallback = 'untitled'): string {
 	const slug = text
 		.toLowerCase()
@@ -54,14 +61,6 @@ export type Frontmatter = Record<string, FrontmatterValue>;
 
 export function isFrontmatterBlock(v: FrontmatterValue | undefined): v is FrontmatterBlock {
 	return typeof v === 'object' && v !== null && !Array.isArray(v) && Array.isArray(v.raw);
-}
-
-// The flat projection of a value, for the many callers that only handle scalars:
-// a scalar returns itself, a list its first element, an opaque block undefined.
-export function scalarOf(v: FrontmatterValue | undefined): string | undefined {
-	if (typeof v === 'string') return v;
-	if (Array.isArray(v)) return typeof v[0] === 'string' ? v[0] : undefined;
-	return undefined;
 }
 
 // The list projection: a list returns itself, a scalar a single-element list, an
@@ -263,7 +262,11 @@ const INLINE_CODE_RE = /(`+)(?:(?!\1)[\s\S])*?\1/g;
 // Fences are scanned line by line rather than matched by one regex: an unterminated
 // fence has to swallow the rest of the document, and expressing that as a regex
 // alternation on `$` silently ends the block at the first line break under /m.
-function maskCode(md: string): string {
+// Blank out fenced and inline code, preserving every character offset, so a
+// caller can scan for links in the result and splice back into the original.
+// Exported because the renderer needs the same answer: a `[[Name]]` inside a
+// fence is a syntax example on a conventions page, not a link.
+export function maskCode(md: string): string {
 	const blank = (s: string) => s.replace(/[^\n]/g, ' ');
 	let fence: string | null = null;
 	const lines = md.split('\n').map((line) => {
@@ -473,13 +476,6 @@ export function insertLogEntry(currentLog: string, dateIso: string, bullet: stri
 // ---------- base64 (Worker-safe, UTF-8 correct) ----------
 
 // `btoa`/`atob` only handle single-byte strings; markdown contains Unicode.
-export function utf8ToBase64(text: string): string {
-	const bytes = new TextEncoder().encode(text);
-	let binary = '';
-	for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
-	return btoa(binary);
-}
-
 export function base64ToUtf8(b64: string): string {
 	const binary = atob(b64.replace(/\n/g, ''));
 	const bytes = new Uint8Array(binary.length);

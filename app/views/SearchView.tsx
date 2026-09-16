@@ -8,11 +8,12 @@
 // while you read the results, and somewhere to put the empty state.
 import { useEffect, useRef } from 'preact/hooks';
 import type { Hit } from '../core/types.ts';
-import { navigateTo, runSearch } from '../core/actions.ts';
+import { openHit, runSearch } from '../core/actions.ts';
 import { SearchIcon } from '../core/icons.tsx';
+import { brainList } from '../core/store.ts';
 import { defineView } from '../core/view-registry.ts';
 
-function SearchView({ query, hits }: { query: string; hits: Hit[] }) {
+function SearchView({ query, hits, scope }: { query: string; hits: Hit[]; scope?: 'all' }) {
 	const ref = useRef<HTMLInputElement>(null);
 	// Focus on arrival: reaching this page is the act of intending to type. Keyed on the
 	// query so running a search does not steal focus back on every re-render, and so
@@ -20,6 +21,18 @@ function SearchView({ query, hits }: { query: string; hits: Hit[] }) {
 	useEffect(() => {
 		if (!query) ref.current?.focus();
 	}, [query]);
+	// Offered only when there is somewhere else to look. Widening is a deliberate second
+	// click rather than the default, so an ordinary search keeps an ordinary reach.
+	const canWiden = !!query && scope !== 'all' && (brainList?.length ?? 0) > 1;
+	const wider = canWiden ? (
+		<button
+			type="button"
+			onClick={() => runSearch(query, 'all')}
+			class="mt-3 cursor-pointer self-center text-sm text-muted underline hover:text-fg"
+		>
+			Search all your brains
+		</button>
+	) : null;
 	return (
 		<div class="flex flex-col gap-4">
 			<div class="flex items-center gap-2 rounded-lg border border-border px-3 py-2 focus-within:border-accent">
@@ -35,9 +48,9 @@ function SearchView({ query, hits }: { query: string; hits: Hit[] }) {
 					// field fighting the user's typing on every keystroke.
 					key={query}
 					defaultValue={query}
-					placeholder="Search this brain…"
+					placeholder={scope === 'all' ? 'Search all your brains…' : 'Search this brain…'}
 					onKeyDown={(e) => {
-						if (e.key === 'Enter') runSearch((e.target as HTMLInputElement).value);
+						if (e.key === 'Enter') runSearch((e.target as HTMLInputElement).value, scope);
 					}}
 					class="min-w-0 flex-1 bg-transparent text-sm text-fg outline-none placeholder:text-muted"
 				/>
@@ -49,21 +62,32 @@ function SearchView({ query, hits }: { query: string; hits: Hit[] }) {
 					Search the pages of this brain by their text.
 				</div>
 			) : !hits.length ? (
-				<div class="mt-6 text-center text-muted">No matches for “{query}”.</div>
+				<div class="mt-6 flex flex-col text-center text-muted">
+					<div>No matches for “{query}”.</div>
+					{wider}
+				</div>
 			) : (
 				<div class="flex flex-col gap-2">
 					{hits.map((h) => (
 						<button
+							key={`${h.brain ?? ''}:${h.path}:${h.line}`}
 							type="button"
-							onClick={() => navigateTo(h.path)}
+							onClick={() => openHit(h)}
 							class="cursor-pointer rounded-lg border border-border p-2.5 text-left hover:border-accent"
 						>
-							<div class="text-xs text-muted">
-								{h.path}:{h.line}
+							<div class="flex gap-1.5 text-xs text-muted">
+								{/* The brain rides in front of the path, not behind it: a result set that
+								    does not say which brain each line came from is how one client's
+								    material gets quoted into another client's conversation. */}
+								{h.brainLabel && <span class="shrink-0 text-accent">{h.brainLabel}</span>}
+								<span class="min-w-0 truncate">
+									{h.path}:{h.line}
+								</span>
 							</div>
 							<div>{h.text}</div>
 						</button>
 					))}
+					{wider}
 				</div>
 			)}
 		</div>
@@ -74,8 +98,10 @@ export { SearchView };
 
 declare module '../core/view-registry.ts' {
 	interface ViewProps {
-		search: { query: string; hits: Hit[] };
+		search: { query: string; hits: Hit[]; scope?: 'all' };
 	}
 }
 
-export default defineView('search', (v) => <SearchView query={v.query} hits={v.hits} />);
+export default defineView('search', (v) => (
+	<SearchView query={v.query} hits={v.hits} scope={v.scope} />
+));

@@ -127,6 +127,40 @@ export async function smokeOrigin(baseUrl: string, fetchImpl: FetchLike = fetch)
 		})
 	);
 
+	// 5. The web app never hands its shell to a stranger. `/b/...` is the one route
+	//    on this Worker that serves authenticated CONTENT on a GET, so a version
+	//    answering it with 200 to a request carrying no cookie has lost its session
+	//    check. The two acceptable answers are a redirect to sign-in on the same
+	//    origin (an authjs deployment) or a 404 (the route is not mounted: static or
+	//    github identity modes, where there is no browser session to read). A 404 is
+	//    deliberately NOT a failure, because this script gates every deployment that
+	//    uses deploy.yml, not only ours, and reverting a self-hoster's healthy deploy
+	//    for a route they do not have is the too-strict failure the header warns of.
+	checks.push(
+		await attempt('GET /b/ unauthenticated is refused', async () => {
+			const name = 'GET /b/ unauthenticated is refused';
+			const res = await fetchImpl(`${origin}/b/example/brain`, {
+				redirect: 'manual',
+				signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS)
+			});
+			if (res.status === 404) return ok(name);
+			if (res.status === 302 || res.status === 303 || res.status === 307) {
+				const to = res.headers.get('location') ?? '';
+				let target: URL;
+				try {
+					target = new URL(to, origin);
+				} catch {
+					return bad(name, `unparseable location ${JSON.stringify(to)}`);
+				}
+				if (target.origin !== origin) return bad(name, `redirects off-origin to ${to}`);
+				if (!target.pathname.endsWith('/signin'))
+					return bad(name, `redirects to ${to}, not sign-in`);
+				return ok(name);
+			}
+			return bad(name, `status ${res.status}, expected a sign-in redirect or 404`);
+		})
+	);
+
 	return checks;
 }
 

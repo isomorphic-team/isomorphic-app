@@ -21,9 +21,17 @@ export interface JsonRpcPeek {
 	id: string | number | null;
 	/** False when the body was not JSON-RPC we recognise — callers stay conservative. */
 	parsed: boolean;
+	/**
+	 * The top-level key NAMES of each message, sorted. Names only, never values, so
+	 * a log line can say what SHAPE a client sent without carrying any of its content.
+	 * Exists because the SDK's request schema is `.strict()`: a client one protocol
+	 * version ahead of the SDK sends a field it has never heard of, the transport
+	 * answers 400 "Invalid JSON-RPC message", and nothing said which field.
+	 */
+	shapes: string[][];
 }
 
-const UNPARSED: JsonRpcPeek = { methods: [], id: null, parsed: false };
+const UNPARSED: JsonRpcPeek = { methods: [], id: null, parsed: false, shapes: [] };
 
 // Methods answered entirely from the static tool surface, needing no brain.
 // `ping` and `initialize` are the whole set on purpose: `tools/list` DOES need
@@ -50,6 +58,7 @@ export function peekJsonRpc(body: string): JsonRpcPeek {
 	}
 	const items = Array.isArray(payload) ? payload : [payload];
 	const methods: string[] = [];
+	const shapes: string[][] = [];
 	let id: string | number | null = null;
 	let sawMessage = false;
 	for (const item of items) {
@@ -58,9 +67,31 @@ export function peekJsonRpc(body: string): JsonRpcPeek {
 		sawMessage = true;
 		if (typeof msg.method === 'string') methods.push(msg.method);
 		if (id === null && (typeof msg.id === 'string' || typeof msg.id === 'number')) id = msg.id;
+		shapes.push(Object.keys(msg).sort());
 	}
 	if (!sawMessage && !Array.isArray(payload)) return UNPARSED;
-	return { methods, id, parsed: true };
+	return { methods, id, parsed: true, shapes };
+}
+
+/**
+ * One line describing a request for the Worker's log, from the peek and the
+ * outcome: the methods, the message shapes (key names only), the status and how
+ * long it took. Pure, so `pnpm test:preamble` can pin that no value from the body
+ * ever reaches it.
+ */
+export function describeRequest(
+	peek: JsonRpcPeek,
+	outcome: { status: number; ms: number; error?: string }
+): string {
+	const shape = peek.shapes.map((keys) => keys.join('+')).join(' ');
+	const method = peek.methods.length
+		? peek.methods.join(',')
+		: peek.parsed
+			? '(no method)'
+			: '(unparsed)';
+	return `mcp ${outcome.status} ${Math.round(outcome.ms)}ms ${method} [${shape}]${
+		outcome.error ? ` ${outcome.error}` : ''
+	}`;
 }
 
 /**

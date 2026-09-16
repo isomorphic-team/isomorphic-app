@@ -4,7 +4,7 @@
 // import freely without a cycle.
 
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
-import { marked } from 'marked';
+import { renderMarkdown } from '../../src/lib/render.ts';
 import {
 	resolveRelative,
 	buildWikilinkIndex,
@@ -34,7 +34,8 @@ import type {
 	UsagePerson,
 	UsageBrain
 } from './types.ts';
-import { app, callTool, firstText } from './host.ts';
+import { openLink, callTool, firstText } from './host.ts';
+import { analyticsDays, type WebTarget } from './host-web.ts';
 import { isFolderNoteName, refreshOutcome } from './util.ts';
 import {
 	show,
@@ -246,7 +247,7 @@ function ensureBrainList(): Promise<void> {
 			const sc = (res.structuredContent ?? {}) as {
 				brains?: BrainRow[];
 				active?: string;
-				features?: { analytics?: boolean };
+				features?: { analytics?: boolean; webBase?: string };
 			};
 			if (!Array.isArray(sc.brains)) throw new Error('brains: no list in the result');
 			setBrainList(sc.brains);
@@ -274,6 +275,16 @@ function ensureBrainList(): Promise<void> {
 
 // Switch the active brain, then land on its file tree. Selecting the already-active
 // brain just (re)opens its files — so the switcher doubles as the Files action.
+// Move the active brain WITHOUT deciding where to land. switchBrain lands on the file
+// tree; a search hit lands on the page it named. Both go through brainsViewFromSc,
+// because adopting a brain is what drops the previous one's file tree and path policy
+// (setActiveBrain in the store) and no path into a brain may skip that seam.
+async function adoptBrain(id: string): Promise<void> {
+	const res = await callTool('switch_brain', { brain: id });
+	if (res.isError) throw new Error(firstText(res));
+	brainsViewFromSc((res.structuredContent ?? {}) as Record<string, unknown>, true);
+}
+
 async function switchBrain(id: string) {
 	if (activeBrain?.id === id) {
 		openBrowse();
@@ -286,11 +297,7 @@ async function switchBrain(id: string) {
 		subject: brainList?.find((b) => b.id === id)?.label
 	});
 	try {
-		const res = await callTool('switch_brain', { brain: id });
-		if (res.isError) throw new Error(firstText(res));
-		// Adopting the new brain is what drops the old one's file tree and path policy
-		// (setActiveBrain in the store) — one seam, so no path into a brain can forget.
-		brainsViewFromSc((res.structuredContent ?? {}) as Record<string, unknown>, true);
+		await adoptBrain(id);
 		openBrowse();
 	} catch (e) {
 		show({
@@ -476,6 +483,7 @@ function brainAccessViewFromSc(sc: Record<string, unknown>): View {
 	return {
 		kind: 'brain-access',
 		access: Array.isArray(sc.access) ? (sc.access as BrainAccessEntry[]) : [],
+		invites: Array.isArray(sc.invites) ? (sc.invites as Invite[]) : [],
 		visibility: typeof sc.visibility === 'string' ? sc.visibility : 'org',
 		// Carried so the panel and its share flow keep acting on the brain the user
 		// opened, not on whatever happens to be active: the Share control in the
@@ -486,7 +494,8 @@ function brainAccessViewFromSc(sc: Record<string, unknown>): View {
 		me: {
 			user_id: String(me.user_id ?? ''),
 			role: (me.role as MemberSelf['role']) ?? 'viewer',
-			orgRole: (me.orgRole as MemberSelf['role']) ?? 'viewer'
+			// Null for a guest: the server sends it as null, and 'viewer' would be a lie.
+			orgRole: me.orgRole ? (me.orgRole as MemberSelf['role']) : null
 		}
 	};
 }
@@ -579,10 +588,46 @@ function pageLabel(path: string): string {
 
 // ---------- navigation ----------
 
-async function navigateTo(path: string) {
+// Open whatever a `/b/...` URL names. ONE dispatcher, used by both the cold boot
+// and the Back/Forward handler, because those two answering the same URL
+// differently is the bug the single-parser rule exists to prevent — and it would
+// show up only as "Back goes somewhere odd", which nobody reports precisely.
+//
+// None of these needs a `push: false`. The browser has already moved to this URL,
+// so the view they produce serializes back to the URL that is already in the bar,
+// and `syncAddressBar` writes nothing when those are equal. The intermediate
+// loading views are skipped there too, so nothing lands in the history stack.
+function openWebTarget(t: WebTarget): void {
+	if (t.path) return void navigateTo(t.path);
+	// Tokens come from WEB_TOOL_ROUTING, so this switch and the URL builder cannot
+	// name a destination differently.
+	switch (t.view) {
+		case 'search':
+			return void (t.arg ? runSearch(t.arg) : openSearch());
+		case 'graph':
+			return void openGraph(t.arg);
+		case 'activity':
+			return void openActivity(t.arg);
+		case 'access':
+			return void openBrainAccess();
+		case 'members':
+			return void openMembers();
+		case 'analytics':
+			return void openAnalytics(analyticsDays(t.arg));
+		// No view, so the tree, whose argument is the folder to reveal.
+		default:
+			return void openBrowse(t.arg);
+	}
+}
+
+// `push` is forwarded to the final `show`, which is what decides whether the web
+// host adds a browser history entry. It is false when the browser has already
+// moved and we are catching up to it (the popstate handler), where pushing would
+// re-add the entry the user just left.
+async function navigateTo(path: string, { push = true } = {}) {
 	show({ kind: 'loading', label: `Loading ${path}…`, task: 'page', subject: pageLabel(path) });
 	try {
-		show(pageView(path, await fetchPage(path)));
+		show(pageView(path, await fetchPage(path)), { push });
 	} catch (e) {
 		if (isNoBrain(String(e))) return openAddBrain();
 		show({
@@ -1004,23 +1049,57 @@ function openMore() {
 	show({ kind: 'more' });
 }
 
-async function runSearch(query: string) {
-	// An empty submit is a no-op rather than a search for nothing, and it leaves the
-	// page as it is: you are already ON the search view, with the field in front of you.
+// `scope` is opt-in and never ambient: the box searches the brain you are in, and
+// widening is a second, deliberate click (SearchView's footer). An ordinary search
+// keeps an ordinary blast radius, which matters because the leak here is
+// conversational — one client's material surfacing in another client's window.
+async function runSearch(query: string, scope?: 'all') {
 	if (!query.trim()) return;
 	show({ kind: 'loading', label: `Searching for “${query}”…`, task: 'search', subject: query });
 	try {
-		const result = await callTool('search_pages', { query, ...brainArgs() });
+		const result = await callTool('search_pages', {
+			query,
+			...(scope ? { scope } : {}),
+			...brainArgs()
+		});
+		// A failed tool call comes back as a RESULT carrying isError, it does not throw.
+		// Without this an error rendered as "No matches", which is a different and much
+		// more misleading answer than "search failed".
+		if (result.isError) throw new Error(firstText(result));
 		const sc = (result.structuredContent ?? {}) as { hits?: Hit[] };
-		show({ kind: 'search', query, hits: sc.hits ?? [] });
+		show({ kind: 'search', query, scope, hits: sc.hits ?? [] });
 	} catch (e) {
 		show({
 			kind: 'error',
 			headline: 'Search failed.',
 			detail: String(e),
-			retry: () => runSearch(query)
+			retry: () => runSearch(query, scope)
 		});
 	}
+}
+
+// Open a search hit. A fan-out result can name a brain other than the one you are in,
+// so the switch has to land BEFORE the fetch.
+async function openHit(hit: Hit) {
+	if (!hit.brain || hit.brain === activeBrain?.id) return navigateTo(hit.path);
+	show({
+		kind: 'loading',
+		label: `Loading ${hit.path}…`,
+		task: 'page',
+		subject: pageLabel(hit.path)
+	});
+	try {
+		await adoptBrain(hit.brain);
+	} catch (e) {
+		show({
+			kind: 'error',
+			headline: "Couldn't open that brain.",
+			detail: String(e),
+			retry: () => openHit(hit)
+		});
+		return;
+	}
+	await navigateTo(hit.path);
 }
 
 async function openEditor(path: string) {
@@ -1057,19 +1136,10 @@ async function resolveWikilink(target: string): Promise<string | null> {
 
 // ---------- markdown rendering (viewer) ----------
 
-function renderMarkdown(body: string): string {
-	const withWikilinks = body.replace(
-		/\[\[([^\]|]+)(?:\|([^\]]*))?\]\]/g,
-		(_m, target: string, label?: string) =>
-			`[${(label || target).trim()}](#wikilink=${encodeURIComponent(target.trim())})`
-	);
-	const html = marked.parse(withWikilinks, { async: false }) as string;
-	// marked emits a literal space between a task-list checkbox and its label
-	// (`<input type="checkbox"> Text`). Drop it so the gap is governed purely by CSS
-	// (`margin-right`), matching the editor's flex `gap` exactly — otherwise the viewer
-	// reads 0.4em + a space and the box-to-text spacing visibly shifts between modes.
-	return html.replace(/(<input\b[^>]*\btype="checkbox"[^>]*>) /g, '$1');
-}
+// Rendering lives in `src/lib/render.ts` so the Worker produces the same HTML.
+// The app's defaults are the ones baked in there: a `[[wikilink]]` becomes the
+// `#wikilink=` sentinel `onProseClick` resolves below, and an image keeps its
+// repo-relative `src` for `media.ts` to swap for a data URI after render.
 
 // Delegated link handling for rendered markdown.
 function onProseClick(fromPath: string) {
@@ -1098,7 +1168,7 @@ function onProseClick(fromPath: string) {
 			else toast(`No page found for [[${target}]]`, true);
 		} else if (/^https?:/i.test(href)) {
 			e.preventDefault();
-			app.openLink({ url: href });
+			openLink(href);
 		} else if (href.endsWith('.md') || href.includes('.md#')) {
 			e.preventDefault();
 			navigateTo(resolveRelative(fromPath, href));
@@ -1112,6 +1182,7 @@ function onProseClick(fromPath: string) {
 
 export {
 	handleToolResult,
+	openWebTarget,
 	confirmLeaveEdit,
 	guardNav,
 	brainsViewFromSc,
@@ -1154,6 +1225,7 @@ export {
 	openSearch,
 	openMore,
 	runSearch,
+	openHit,
 	openEditor,
 	resolveWikilink,
 	renderMarkdown,

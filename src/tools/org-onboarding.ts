@@ -14,16 +14,13 @@
 
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { OrgScope, Role } from '../lib/orgs.ts';
+import { fail } from './shared.ts';
 
 // The Worker Env bits this tool needs: KV for the pending-connect challenge and
 // the App slug to build the install URL (a tool handler has no request context).
 interface OrgOnboardingEnv {
 	OAUTH_KV: KVNamespace;
 	GITHUB_APP_SLUG?: string;
-}
-
-function fail(text: string) {
-	return { isError: true as const, content: [{ type: 'text' as const, text }] };
 }
 
 export function registerOrgOnboardingTools(

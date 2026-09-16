@@ -63,9 +63,14 @@ eventually disagree with itself. `pnpm test:access` walks the rule's whole input
 
 - **`create_brain` → `private`**, plus an explicit admin grant for the creator. A brain you just
   made is yours until you share it.
-- **`connect_brain` → `org`.** Adopting an existing repo is an _admin_ act on a repo the
-  organization already owns; the intent is "this org repo is now a brain for the team". Narrow it
-  afterwards with `share_brain`.
+- **`connect_brain` → `private`**, plus the same admin grant for whoever connected it (changed
+  2026-09-14, issue #93). It defaulted to `org` at first, on the reasoning that adopting is an admin
+  act on a repo the organization already owns. Two tools producing the same object with opposite
+  defaults was the problem: an admin who had learned "new brains are private" from `create_brain`
+  adopted a private GitHub repo and every org member could read it, with nothing in the response
+  saying so. Widening on request costs one `share_brain` call; widening silently is a disclosure.
+  The response now states the visibility in its sentence rather than leaving it as one field in
+  the brains array.
 - **Existing brains are grandfathered.** They keep `visibility='org'` and behave exactly as before.
   The change is not retroactive, so nobody loses access on deploy.
 
@@ -80,10 +85,11 @@ Two tools, mirroring `members.ts` one scope down:
   re-share are the same verb from the user's side; a separate `unshare_brain` would be a third
   name for it.
 
-Guardrails, enforced in `src/tools/brain-access.ts`: you can only share with people already in the
-brain's org (a grant to a non-member is unreachable anyway, since resolution starts from
-`memberships`; writing one would be a silent no-op); you can't grant above your own brain role;
-you can't revoke your own access.
+Guardrails, enforced in `src/tools/brain-access.ts`: you can't grant above your own brain role;
+you can't revoke your own access; someone outside the org can be a guest viewer or editor, never
+admin. (Until 2026-09-14 you could only share with people already in the brain's org, because
+resolution started from `memberships` and a grant to anyone else was unreachable. See
+[`guest-access.md`](./guest-access.md).)
 
 UI: `app/views/BrainAccessView.tsx`. Sharing is a **view of the brain**, a peer of Files, Graph
 and Recent changes: it is in `brainDestinations()` so every brain crumb's picker offers it, and
@@ -136,8 +142,8 @@ be wrong:
   worker.ts's two assertions, and both directions are asserted: an org viewer holding brain
   admin is refused by every org-scope tool and admitted by `share_brain`, while an org owner
   holding only brain viewer is the reverse. It also covers the guardrails that live in the tool
-  rather than in `orgs.ts` (share with a non-member, share with a strange email, revoking
-  yourself, the member-management lockout rules).
+  rather than in `orgs.ts` (share with a non-member, which is a guest now; share with a strange
+  email; revoking yourself; the member-management lockout rules).
 
 Both were mutation-tested when written: reverting `members.ts` to `requires: 'admin'` turns
 `test:scope` red in five places, and flipping `share_brain` to `requiresOrg` turns it red in
@@ -147,7 +153,6 @@ two. A scope test that stays green under those edits is not testing anything.
 
 - **No audit trail on access changes.** `brain_memberships` records `granted_by`/`granted_at`, but
   a revoke deletes the row, so there is no history of who removed whom.
-- **Invited-user landing.** A user invited to an org whose brains are all private lands with no
-  brain and is told to ask an admin to share one. That is correct but it is a manual step; an
-  invite that names a brain to share would be better.
-- **No per-brain invite.** You must be an org member before a brain can be shared with you.
+- ~~**Invited-user landing.**~~ ~~**No per-brain invite.**~~ Both closed by
+  [`guest-access.md`](./guest-access.md): `share_brain` takes any email, and an address with no
+  account gets an invite that names the brain.

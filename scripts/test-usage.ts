@@ -24,7 +24,7 @@
 //      window claims to cover.
 
 import { readFileSync, readdirSync } from 'node:fs';
-import { DatabaseSync } from 'node:sqlite';
+import { localD1 } from '../src/local/d1-sqlite.ts';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
@@ -43,14 +43,9 @@ import {
 } from '../src/lib/usage.ts';
 import { recordUsage, readUsage } from '../src/lib/usage-store.ts';
 
-let failures = 0;
-function check(label: string, cond: boolean, detail = '') {
-	if (cond) console.log(`  ✓ ${label}`);
-	else {
-		failures++;
-		console.log(`  ✗ ${label}${detail ? `: ${detail}` : ''}`);
-	}
-}
+import { checker } from './check.ts';
+
+const { check, done } = checker('usage checks');
 
 console.log('\nclassification: every registered tool is classified');
 {
@@ -440,24 +435,10 @@ console.log('\nusage_daily: the real migration and the real statements');
 {
 	// The pure fold above never touches SQL, so the upsert that keeps this table
 	// bounded was previously verified by hand and by nothing repeatable. Runs the
-	// ACTUAL migration file over node:sqlite (same shim shape as test-access /
-	// test-scope), so a syntax error or a changed key now fails CI.
-	const sqlite = new DatabaseSync(':memory:');
-	sqlite.exec(readFileSync(new URL('../migrations/0006_usage_daily.sql', import.meta.url), 'utf8'));
-	const db = {
-		prepare(sql: string) {
-			const mk = (params: unknown[]) => ({
-				bind: (...p: unknown[]) => mk(p),
-				first: async () => sqlite.prepare(sql).get(...(params as [])) ?? null,
-				all: async () => ({ results: sqlite.prepare(sql).all(...(params as [])) }),
-				run: async () => {
-					sqlite.prepare(sql).run(...(params as []));
-					return { success: true };
-				}
-			});
-			return mk([]);
-		}
-	} as unknown as Parameters<typeof recordUsage>[0];
+	// REAL migrations over node:sqlite, so a syntax error or a changed key fails CI.
+	// This used to name migrations/0006 by filename, which pinned the table to the
+	// one migration that created it and would have missed any later alteration.
+	const db = localD1().db as unknown as Parameters<typeof recordUsage>[0];
 
 	const base = { orgId: 'o1', userId: 'u1', tool: 'read_page' };
 	await recordUsage(db, { ...base, day: '2026-08-04', brainId: 'a/b', ok: true });
@@ -512,7 +493,4 @@ console.log('\nusage_daily: the real migration and the real statements');
 	check('the brain row joins its label', folded.brains[0]?.label === 'Team brain');
 }
 
-console.log(
-	failures === 0 ? '\nAll usage checks passed.\n' : `\n${failures} usage check(s) FAILED.\n`
-);
-process.exit(failures === 0 ? 0 : 1);
+done();

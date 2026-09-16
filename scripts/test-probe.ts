@@ -25,14 +25,9 @@ import {
 	type ProbeHit
 } from '../src/lib/probe.ts';
 
-let failures = 0;
-function check(name: string, cond: boolean, detail?: string) {
-	if (cond) console.log(`  ok  ${name}`);
-	else {
-		failures++;
-		console.error(`FAIL  ${name}${detail ? `\n      ${detail}` : ''}`);
-	}
-}
+import { checker } from './check.ts';
+
+const { check, done } = checker('probe checks');
 
 const hit = (path: string, line = 1): ProbeHit => ({ path, line, text: 'x' });
 const BUDGET = 50;
@@ -248,5 +243,4 @@ function rankLast(d: ReturnType<typeof diffProbeRuns>): boolean {
 	);
 }
 
-console.log(failures === 0 ? '\nAll probe checks passed.' : `\n${failures} check(s) failed.`);
-process.exit(failures === 0 ? 0 : 1);
+done();

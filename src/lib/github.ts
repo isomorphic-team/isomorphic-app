@@ -89,3 +89,45 @@ export async function installationOctokit(creds: AppCreds, installationId: numbe
 export function tokenOctokit(token: string): Octokit {
 	return new Octokit({ auth: token });
 }
+
+// ---------- static (single-tenant) mode: which credential, or which error ----------
+
+// What a static-mode deployment resolved to. The caller turns this into an Octokit;
+// the choosing and the refusing happen here, where they can be tested.
+export type StaticAuth =
+	| { kind: 'token'; token: string; owner: string; repo: string }
+	| { kind: 'installation'; installationId: number; owner: string; repo: string };
+
+// AUTH_MODE=static is the documented SELF-HOSTING entry point, so these two error
+// messages are the first thing someone standing this up hits when their config is
+// incomplete. They were written inline in a private method on McpSession and had no
+// test at all, which for the errors a stranger reads is the wrong way round.
+//
+// GITHUB_TOKEN wins over the App installation when both are set: it is the simpler
+// path and naming it is the more specific act.
+export function staticAuth(env: {
+	BRAIN_REPO_OWNER?: string;
+	BRAIN_REPO_NAME?: string;
+	GITHUB_TOKEN?: string;
+	GITHUB_APP_INSTALLATION_ID?: string;
+}): StaticAuth {
+	const owner = env.BRAIN_REPO_OWNER?.trim();
+	const repo = env.BRAIN_REPO_NAME?.trim();
+	if (!owner || !repo) {
+		throw new Error(
+			'AUTH_MODE=static requires BRAIN_REPO_OWNER and BRAIN_REPO_NAME (which brain to serve), plus either GITHUB_TOKEN (simplest) or GITHUB_APP_INSTALLATION_ID with the platform App credentials. Run `pnpm doctor` to see what is missing.'
+		);
+	}
+	const token = env.GITHUB_TOKEN?.trim();
+	if (token) return { kind: 'token', token, owner, repo };
+
+	// Number() on a non-numeric string is NaN, which would reach GitHub as a
+	// nonsense installation id and fail far from the cause.
+	const installationId = Number(env.GITHUB_APP_INSTALLATION_ID);
+	if (!env.GITHUB_APP_INSTALLATION_ID?.trim() || !Number.isFinite(installationId)) {
+		throw new Error(
+			'AUTH_MODE=static needs a way to reach GitHub: set GITHUB_TOKEN (a fine-grained PAT with Contents and Pull requests write on the brain repo), or set GITHUB_APP_INSTALLATION_ID and the platform App credentials. Run `pnpm doctor` to see what is missing.'
+		);
+	}
+	return { kind: 'installation', installationId, owner, repo };
+}

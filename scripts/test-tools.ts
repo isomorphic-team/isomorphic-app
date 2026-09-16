@@ -11,14 +11,9 @@ import {
 	fill
 } from '../src/lib/custom-tools.ts';
 
-let failures = 0;
-function check(name: string, cond: boolean, detail?: string) {
-	if (cond) console.log(`  ok  ${name}`);
-	else {
-		failures++;
-		console.error(`FAIL  ${name}${detail ? `\n      ${detail}` : ''}`);
-	}
-}
+import { checker } from './check.ts';
+
+const { check, done } = checker('tool checks');
 
 // ---------- discovery predicate ----------
 check('tool page: wiki/tools/x.md', isToolPagePath('wiki/tools/standup.md'));
@@ -170,8 +165,4 @@ check('fill: unknown → empty', fill('x{{nope}}y', {}) === 'xy');
 check('fill: value is data, not code', fill('{{a}}', { a: '{{b}}' }) === '{{b}}');
 check('fill: coerces non-strings', fill('n={{n}}', { n: 7 }) === 'n=7');
 
-if (failures) {
-	console.error(`\n${failures} check(s) FAILED`);
-	process.exit(1);
-}
-console.log('\nAll tool checks passed.');
+done();

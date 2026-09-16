@@ -1,9 +1,15 @@
 # Design: preview environments
 
-Status: **proposed** (2026-08-10; updated 2026-08-18). The preview environment itself is not
-built. `wrangler.template.jsonc` already carries `"preview_urls": true`, so the platform
-capability is on; what is missing is an isolated place for a preview to run and a workflow to
-put it there.
+Status: **proposed** (2026-08-10; updated 2026-08-18 and 2026-09-01). The preview environment
+itself is not built. `wrangler.template.jsonc` already carries `"preview_urls": true`, so the
+platform capability is on; what is missing is an isolated place for a preview to run and a
+workflow to put it there. Until then, [the manual version preview](#until-it-is-built-the-manual-version-preview)
+below is the procedure, and it was run for the first time on 2026-09-01.
+
+The 2026-09-01 update comes from the web app
+([`link-sharing-and-the-web-app.md`](./link-sharing-and-the-web-app.md), Phase 3), which
+changes what a preview is FOR and settles the two open questions. See
+[What the web app changes](#what-the-web-app-changes-2026-09-01).
 
 Two things changed on 2026-08-18, both from the versioned-deploy work in `deploy.yml`:
 
@@ -176,8 +182,8 @@ github.repository`. Secrets are unavailable to fork PRs by design, so the job ca
      --tag "${GITHUB_SHA}"
    ```
 6. **Smoke check** the resulting origin (below).
-7. **Comment on the PR** with the connector URL, updating the existing comment rather than
-   appending one per push.
+7. **Comment on the PR** with the web URL (`/b`) and the connector URL (`/mcp`), updating the
+   existing comment rather than appending one per push.
 
 ### The smoke check is the part that makes this CI rather than a link
 
@@ -191,8 +197,12 @@ origin the workflow just created:
 - `GET /.well-known/oauth-protected-resource/mcp` and the authorization server metadata parse and
   are self-consistent, so a host can begin a connection.
 
+- (Added 2026-09-01) `GET /b/example/brain` with no cookie is refused: a same-origin redirect
+  to sign-in, or 404 where the web app is not mounted. Never 200.
+
 A full authenticated `initialize` plus `tools/list` needs a magic-link round trip and is not
-worth scripting. That is what the human paste-into-Claude step is for.
+worth scripting. That is what the human step is for, and since 2026-09-01 the human step is
+opening `/b` in a browser rather than pasting a connector into Claude.
 
 **What the smoke check cannot catch:** a wrong `PUBLIC_BASE_URL`.
 `@cloudflare/workers-oauth-provider` builds the resource metadata URL from `url.origin` of the
@@ -228,6 +238,103 @@ Two consequences for this design:
 Gradual rollout (`@10%` then `@100%`) is available and deliberately not used: with traffic split,
 a smoke request hits a random version, so the check becomes probabilistic and can pass while the
 bad version is live.
+
+## What the web app changes (2026-09-01)
+
+The web app (`/b/<owner>/<repo>/<path>`, the same bundle in a browser tab, authenticated by
+the Auth.js session cookie) gives a preview a second consumer, and it is the cheaper one.
+
+- **The human step no longer needs Claude.** Everything above assumed the only way to
+  exercise a preview was to paste its `/mcp` URL into a host as a connector, sign in through
+  the OAuth bridge, and drive tools from a conversation. A preview now also has a URL a person
+  simply opens: `/b` lands on their brain, and every page, search, graph and roster is a link.
+  The PR comment in step 7 should carry BOTH URLs, and the web one first.
+- **It is the surface a preview verifies that nothing else can.** The local runtime (`pnpm
+try`, and the `web` Playwright project) covers the app's behaviour in a browser and
+  deliberately has no session, no cookie and no org model. The signed-out redirect, the return
+  through `callbackUrl`, `props` built from a real session, and every authorization path behind
+  them run only on a real origin. Before this a preview mostly re-checked what `test:ui`
+  already covered from the other side; now it owns a layer.
+- **It works on any alias with nothing registered in advance.** Auth.js runs with
+  `trustHost: true` and every redirect derives its origin from the request, and the web app's
+  own paths are relative. So a per-PR alias needs no `PUBLIC_BASE_URL` for the web app to be
+  correct, which narrows the known hole in the smoke check to the two places that still read
+  the variable (`/link/start` and `src/manifest.ts`).
+- **The smoke check gained an assertion, and it gates the web app's one security property.**
+  `scripts/smoke.ts` now asserts that `GET /b/example/brain` with no cookie is refused: a
+  same-origin redirect to sign-in, or a 404 where the route is not mounted (static and github
+  identity modes have no browser session, and this script gates their deploys too). A 200 is
+  the failure, because that is a version handing authenticated content to a stranger.
+  `pnpm test:smoke` pins all four directions.
+- **The existing `/mcp` assertion just earned its place.** The web app's cookie branch sits
+  ahead of the OAuth provider, and its first version claimed every request with no Bearer
+  token, which is exactly an MCP host's first contact: the `401 + WWW-Authenticate` challenge
+  this check asserts is how a host discovers the authorization server, and that version
+  answered with a bare 401. It never reached production because the review caught it, but the
+  deploy pipeline would have: rolled back on the first promotion. A preview run before the
+  merge would have said the same thing a day earlier, which is the whole argument for this
+  document.
+
+### The two open questions, answered
+
+**Resend (question 2): share the verified domain, with a distinct From address.** A sending
+domain is not a data boundary; nothing a preview emails can reach production, and the
+isolation this design cares about is bindings. A second domain is DNS work and a second
+verification for no gain. `AUTH_EMAIL_FROM` is already a template token, so the preview
+profile sets it to a `preview@` address on the same domain and a tester can see which
+deployment mailed them.
+
+**Provisioning (question 4): `AUTO_PROVISION=true`, and accept the accumulation.** The
+alternative, an invite-only preview with one seeded org, means every tester must be invited by
+hand before they can see anything, and the seeded brain repo is one the PR's code writes to,
+so it needs resetting between previews. Repositories piling up in a throwaway organization is
+the cheaper problem: it is a `gh repo delete` loop in the runbook until it hurts, and a
+scheduled cleanup then. It also keeps the first-touch path (sign in, get an org, create a
+brain) previewable, which is the path a new customer hits and the one most worth seeing before
+a merge. The web app makes this concrete: a tester opens `/b`, gets the create-your-first-brain
+state, and can go end to end without a conversation.
+
+## Until it is built: the manual version preview
+
+What exists today, run for the first time on 2026-09-01 for pull request #79. It is a
+version of the **production** Worker, uploaded with `wrangler versions upload` and never
+promoted, so it serves no traffic and has a preview URL. It is the same step `deploy.yml`
+takes, done by hand from a branch.
+
+**It shares production's bindings**, which is the trap this document opens with. That makes
+it wrong as a place to run arbitrary code and acceptable for one narrow purpose, under rules:
+
+- **A maintainer only**, signing in **as themselves**. The session lands in production's
+  D1 and the OAuth grants in production's KV, exactly as signing in to production does.
+- **Read-only use.** Every write the web app makes is a real commit to a real brain through
+  the production installation, and the web app can do nothing the connector cannot, so the
+  exposure is the maintainer's own existing access and nothing more. Do not create a brain,
+  do not invite anyone.
+- **Never promoted.** The version exists to be looked at. `versions deploy` is what
+  `deploy.yml` does after a merge, and nothing about a manual preview should touch it.
+- **Run `scripts/smoke.ts` against it first.** It is read-only and unauthenticated by
+  construction, so it is safe against an origin sharing production's bindings, and it is
+  the same five assertions the pipeline will run on promotion.
+
+The procedure, mirroring `deploy.yml`'s config and upload steps:
+
+```sh
+# Resolve the same repository variables the deploy resolves, then generate the config.
+eval "$(gh variable list --json name,value --jq '.[] | "export \(.name)=\(.value)"')"
+pnpm setup:config --force && pnpm gen:templates
+# Upload a version. Serves no traffic; prints a preview URL.
+pnpm exec wrangler versions upload --tag "pr<N>-<sha>" --message "PR #<N> manual preview"
+pnpm exec tsx scripts/smoke.ts https://<version>-<worker>.<subdomain>.workers.dev
+rm wrangler.jsonc   # it carries production ids; never leave it in a checkout
+```
+
+The generated `wrangler.jsonc` is gitignored, and removing it afterward is still the right
+habit: a checkout carrying production ids is one forced add away from a public commit.
+
+What this cannot verify, so the built design still has to: anything that WRITES (the editor,
+`create_brain`, invitations), the first-touch provisioning path, and any migration the branch
+carries, since `versions upload` applies none and running one against production's D1 from a
+branch is a deploy, not a preview.
 
 ## Setup cost
 
@@ -359,12 +466,13 @@ The first two were done on 2026-08-18 alongside the promotion work; the last two
    the question that could have ended the design, so it is worth being precise about what it does
    and does not license: preview URLs exist for this Worker, which is necessary for the plan above
    and not sufficient for any of it. Everything in Setup cost is still unbuilt.
-2. Does the preview Worker justify a second Resend sending domain, or does it share production's
-   verified domain with a different From address? **Still open.**
+2. ~~Does the preview Worker justify a second Resend sending domain, or does it share
+   production's verified domain with a different From address?~~ **Answered 2026-09-01: share
+   the domain, distinct From address.** See [The two open questions, answered](#the-two-open-questions-answered).
 3. ~~Should `deploy.yml` move to `versions upload` plus `versions deploy` so the shipped artifact
    is the previewed artifact, or stay on `wrangler deploy`?~~ **Answered 2026-08-18: it moved**,
    and shipped ahead of this design. See Promotion above.
-4. Is `AUTO_PROVISION=true` right for preview, given it silently accumulates repositories, or
-   should preview be invite-only with one seeded test org? **Still open**, and now the largest
-   unanswered question here, since it is the one that decides whether the preview environment
-   needs a cleanup job on day one.
+4. ~~Is `AUTO_PROVISION=true` right for preview, given it silently accumulates repositories, or
+   should preview be invite-only with one seeded test org?~~ **Answered 2026-09-01: `true`, and
+   a manual cleanup loop until it hurts.** See the same section. The scheduled cleanup remains
+   unbuilt and is the first thing the built environment will want.

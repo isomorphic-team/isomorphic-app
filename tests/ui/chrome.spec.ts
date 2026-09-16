@@ -20,7 +20,7 @@
 // same-document navigation, and specs were asserting against whatever the previous step
 // had left on screen (see openApp in harness.ts). Splitting is kept anyway: two starting
 // states in one test is two tests' worth of failure to read from one red line.
-import { test, expect } from '@playwright/test';
+import { test, expect, type Page } from '@playwright/test';
 import { openApp, expectView, settle } from './harness.ts';
 
 type App = Awaited<ReturnType<typeof openApp>>;
@@ -34,6 +34,39 @@ const railNames = (app: App) =>
 	rail(app)
 		.locator('button')
 		.evaluateAll((els) => els.map((e) => e.getAttribute('aria-label')));
+
+// The door from the card to the web app. What matters is the URL the app hands the
+// HOST: the same page, same brain, at the base the server sent. The harness records
+// every openLink request (dev/harness.ts) because no tab opens under test, and which
+// browser it would open in is the host's decision, not the app's.
+test.describe('open in browser', () => {
+	const opened = (page: Page) =>
+		page.evaluate(() => (window as unknown as { __openedLinks: string[] }).__openedLinks);
+
+	test('asks the host to open the page you are reading', async ({ page }) => {
+		const app = await openApp(page, '');
+		await expectView(app, 'page');
+		await app.getByRole('button', { name: 'Open in browser' }).click();
+		expect(await opened(page)).toEqual([
+			'https://brain.example/b/your-org/personal-wiki/wiki/concepts/vision.md'
+		]);
+	});
+
+	test('names the destination, not just the brain, for a non-page view', async ({ page }) => {
+		const app = await openApp(page, 'graph');
+		await expectView(app, 'graph');
+		await app.getByRole('button', { name: 'Open in browser' }).click();
+		expect((await opened(page))[0]).toBe(
+			'https://brain.example/b/your-org/personal-wiki?view=graph'
+		);
+	});
+
+	test('is not offered in the editor, where unsaved text would be lost', async ({ page }) => {
+		const app = await openApp(page, 'edit');
+		await expectView(app, 'edit');
+		await expect(app.getByRole('button', { name: 'Open in browser' })).toHaveCount(0);
+	});
+});
 
 test.describe('the rail', () => {
 	test('holds the brain’s own views, in order, and each one arrives', async ({ page }) => {
@@ -176,6 +209,10 @@ test.describe('the trail', () => {
 			'concepts',
 			'Refresh this page',
 			'Edit',
+			// The window group, after the rule: the door to the web app, then the
+			// display mode. The harness sends `features.webBase`, as a deployment
+			// serving the web app does.
+			'Open in browser',
 			'Display: Inline'
 		]);
 	});

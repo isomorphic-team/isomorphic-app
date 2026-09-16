@@ -104,6 +104,8 @@ jobs:
       # runs in exactly one of the two places and nobody notices which. Either job
       # counts; `pnpm test:wiring` reads the whole file.
       - run: pnpm test:roundtrip
+      - run: pnpm test:render
+      - run: pnpm test:web
       - run: pnpm test:views
       - run: pnpm test:import
       - run: pnpm test:tools
@@ -120,6 +122,7 @@ jobs:
       - run: pnpm test:appmeta
       - run: pnpm test:loading
       - run: pnpm test:access
+      - run: pnpm test:invites
       - run: pnpm test:scope
       - run: pnpm test:feedback
       - run: pnpm test:usage
@@ -189,7 +192,7 @@ jobs:
     # this tag against the version pnpm resolves and fails if they drift, so the bump
     # cannot be forgotten and the failure names itself rather than arriving as a
     # confusing missing-browser in CI.
-    container: mcr.microsoft.com/playwright:v1.62.1-noble
+    container: mcr.microsoft.com/playwright:v1.63.0-noble
     # Roughly four minutes when healthy, most of it the image pull and the app bundle
     # build. Same backstop reasoning as the job above.
     timeout-minutes: 20

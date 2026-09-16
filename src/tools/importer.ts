@@ -40,27 +40,12 @@ import {
 } from '../lib/findings.ts';
 import type { BrainContext } from './librarian.ts';
 import type { TenantOpts } from '../lib/orgs.ts';
+import { brainArg, fail, ok } from './shared.ts';
 
 const MAX_RECORDS_PER_CALL = 200;
 
 // Keys the importer itself owns — a source may never write them via `fields`.
 const RESERVED_FIELDS = new Set([SOURCE_KEY_FIELD, SOURCE_KEYS_FIELD, 'updated']);
-
-const brainArg = z
-	.string()
-	.optional()
-	.describe('Which brain to target (name/handle). Defaults to the active brain.');
-
-function ok(text: string, structured?: Record<string, unknown>) {
-	return {
-		content: [{ type: 'text' as const, text }],
-		...(structured ? { structuredContent: structured } : {})
-	};
-}
-
-function fail(text: string) {
-	return { isError: true as const, content: [{ type: 'text' as const, text }] };
-}
 
 export function registerImportTools(
 	server: McpServer,

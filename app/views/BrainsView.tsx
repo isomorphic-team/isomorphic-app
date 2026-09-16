@@ -1,7 +1,7 @@
 import { Fragment } from 'preact';
 import { useState } from 'preact/hooks';
 import type { BrainRow } from '../core/types.ts';
-import { app, callTool, firstText } from '../core/host.ts';
+import { openLink, callTool, firstText } from '../core/host.ts';
 import { show } from '../core/store.ts';
 import {
 	switchBrain,
@@ -107,7 +107,7 @@ function BrainsView({ brains, active }: { brains: BrainRow[]; active: string }) 
 											<Button
 												variant="link"
 												title="Review the setup pull request"
-												onClick={() => app.openLink({ url: b.configPrUrl! })}
+												onClick={() => openLink(b.configPrUrl!)}
 												class="mr-1"
 											>
 												Review PR ↗

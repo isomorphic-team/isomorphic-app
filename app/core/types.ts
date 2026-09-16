@@ -21,6 +21,11 @@ export interface Hit {
 	path: string;
 	line: number;
 	text: string;
+	// Set when the search spanned brains (scope: 'all'). Not decoration: opening a hit
+	// from another brain has to switch first, because navigateTo resolves its path
+	// against the ACTIVE brain and would otherwise look it up in the wrong one.
+	brain?: string;
+	brainLabel?: string;
 }
 
 // The file-tree payload (one list_pages call). Cached in the store so reopening the
@@ -150,6 +155,9 @@ export interface BrainRow {
 	orgLabel?: string;
 	needsConfig?: boolean; // adopted repo with no content under its roots — offer "Set up"
 	configPrUrl?: string; // a configure PR is pending (protected repo) — show "Review PR"
+	// Readable, never writable, by anyone including the org's admins. The role the row
+	// carries is already capped to viewer; this is the flag the cap came from.
+	readOnly?: boolean;
 }
 
 // An org the caller can add a brain to. Identified by its own id rather than by a
@@ -178,15 +186,16 @@ export interface BrainAccessEntry {
 	email: string;
 	name: string | null;
 	role: MemberRole;
-	via: 'grant' | 'org' | 'org-admin';
+	// 'guest' is a grant held by someone outside the organization.
+	via: 'grant' | 'org' | 'org-admin' | 'guest';
 	granted_at?: string;
 }
 // The caller, in both scopes at once: the panel gates sharing controls on the
-// BRAIN role and shows org context from the org role.
+// BRAIN role and shows org context from the org role, which is null for a guest.
 export interface BrainAccessSelf {
 	user_id: string;
 	role: MemberRole;
-	orgRole: MemberRole;
+	orgRole: MemberRole | null;
 }
 
 // One entry in the "Connected accounts" roster (see src/tools/connected-accounts.ts):

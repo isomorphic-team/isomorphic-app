@@ -14,21 +14,32 @@ import type { ComponentChildren } from 'preact';
 import { useSyncExternalStore } from 'preact/compat';
 import type { View } from './core/types.ts';
 import type { ViewAction } from './core/view-registry.ts';
-import { subscribeStore, version, currentView, show } from './core/store.ts';
+import {
+	subscribeStore,
+	version,
+	currentView,
+	show,
+	setActiveBrain,
+	webLinkFor
+} from './core/store.ts';
 import { activeDestination, isMorePlace } from './core/nav.ts';
 import { destinations } from './components/Destinations.tsx';
 import {
-	app,
-	applyHostContext,
+	connectHost,
+	registerHostEvents,
+	isWeb,
 	displayMode,
 	setDisplayMode,
+	openLink,
 	MODE_ICON,
 	MODE_LABEL,
 	availableModeList
 } from './core/host.ts';
+import { parseWebPath, registerWebNavigation, brainLabelFor } from './core/host-web.ts';
 import {
 	handleToolResult,
 	ensureBrainList,
+	openWebTarget,
 	openBrowse,
 	openGraph,
 	openMore,
@@ -45,9 +56,9 @@ import { EditorToolbar, editCtl } from './views/EditView.tsx';
 
 // ---------- host wiring ----------
 
-app.onhostcontextchanged = applyHostContext;
-app.onerror = (e) => toast(String(e), true);
-app.ontoolresult = handleToolResult;
+// The host pushes results and errors at us. On the web none of this fires: a tab
+// has no conversation attached, so the app opens the page its URL names instead
+// (see connectToHost below).
 
 // A RESULT IS COMING. The host announces the tool call that opened this widget when the
 // call STARTS and delivers its result when the tool FINISHES, so silence at the
@@ -60,15 +71,18 @@ app.ontoolresult = handleToolResult;
 // These are one-shot events, so the handlers are registered here at module scope, before
 // connect() — the host may send them the moment the handshake completes.
 let resultPending = false;
-function noteResultComing() {
-	resultPending = true;
-}
-app.ontoolinput = noteResultComing;
-app.ontoolinputpartial = noteResultComing;
-// Cancelled means the result is NOT coming after all, so stop holding the screen for it.
-app.ontoolcancelled = () => {
-	resultPending = false;
-};
+registerHostEvents({
+	onToolResult: (r) => handleToolResult(r as Parameters<typeof handleToolResult>[0]),
+	onError: (message) => toast(message, true),
+	onResultComing: () => {
+		resultPending = true;
+	},
+	// Cancelled means the result is NOT coming after all, so stop holding the
+	// screen for it.
+	onResultCancelled: () => {
+		resultPending = false;
+	}
+});
 
 // ---------- chrome ----------
 
@@ -86,15 +100,48 @@ app.ontoolcancelled = () => {
 // short card, which is why that column is top-anchored. The honest wrinkle: this end of
 // the bar is otherwise the current VIEW's actions, and display mode belongs to the app.
 // The gap before it is what separates the two.
+// THE WINDOW GROUP: the controls about where the app is showing, as opposed to what
+// it is showing (the view's own actions, to the left). Two of them, behind one rule:
+//
+//   Open in browser  the same page, same brain, in a full browser tab. The door from
+//                    the card in the chat to the web app, and the one control that
+//                    is in front of you every time you are reading. The URL is built
+//                    by the widget from the base the server sent on `features`
+//                    (webLinkFor), so it exists only where the deployment serves the
+//                    web app, never on the web host itself, and never for the editor.
+//                    Where the tab opens (Claude's own browser or the system one) is
+//                    the host's decision, made in `openLink`.
+//   Display          inline / fullscreen / pip, where the host offers a choice.
+//
+// Nothing here on the web host: a tab is already the window.
+function WindowControls({ view }: { view: View }) {
+	const link = webLinkFor(view);
+	const modes = availableModeList();
+	if (!link && modes.length < 2) return null;
+	return (
+		<span class="ml-1 flex items-center gap-0.5 border-l border-border pl-1.5">
+			{link && (
+				<Button
+					variant="ghost"
+					size="icon"
+					title="Open in browser"
+					aria-label="Open in browser"
+					onClick={() => openLink(link)}
+				>
+					↗
+				</Button>
+			)}
+			{modes.length >= 2 && <DisplayMenu />}
+		</span>
+	);
+}
+
 function DisplayMenu() {
 	const modes = availableModeList();
-	// One mode is not a choice. A host that offers no alternative gets no control.
-	if (modes.length < 2) return null;
 	return (
 		<Menu
 			label="Display"
 			align="end"
-			class="ml-1 border-l border-border pl-1.5"
 			trigger={({ props }) => (
 				<Button
 					variant="ghost"
@@ -351,7 +398,7 @@ function Header({ view }: { view: View }) {
 					))}
 					{/* Then the window itself, after a rule. Not one of the view's actions, and
 					    the separator is what says so. */}
-					<DisplayMenu />
+					<WindowControls view={view} />
 				</span>
 			</div>
 			{/* The formatting toolbar slides in / out as you enter / leave edit — grid-rows
@@ -464,12 +511,44 @@ function connectToHost() {
 			);
 		}
 	}, 5000);
-	app
-		.connect()
+	connectHost()
 		.then(() => {
 			clearTimeout(timeout);
-			const ctx = app.getHostContext();
-			if (ctx) applyHostContext(ctx); // may auto-request fullscreen (see applyHostContext)
+			// THE WEB HAS NO OPENING TOOL RESULT. There is no conversation behind a
+			// tab, so none of the self-boot timing below applies: the URL already
+			// says what to show, and waiting on a result that cannot arrive would
+			// spend the whole deadline before drawing anything.
+			if (isWeb()) {
+				const target = parseWebPath(location.pathname, location.search);
+				// THE URL NAMES THE BRAIN, AND IT HAS TO WIN. This runs BEFORE
+				// `ensureBrainList`, and before anything fetches, because every
+				// widget call passes `brainArgs()` — so with no brain set, the
+				// first `read_page` carries none and the server answers from the
+				// connection's active-brain pointer instead. A link to one brain
+				// then rendered a DIFFERENT brain's page at the same path, silently
+				// whenever that path existed in both (`wiki/index.md` exists in
+				// most). Issue #26 in reverse: there the pointer overrode the brain
+				// a RESULT named, here it overrode the brain the URL named.
+				//
+				// Trusting the URL grants nothing: `tenantContext` resolves a
+				// `brain` argument against `listAccessibleBrains` and then
+				// `effectiveBrainRole`, so a link naming a brain you cannot reach is
+				// refused by the code that already refuses it.
+				//
+				// The label is provisional — the repo name — because only the brain
+				// list knows the real one. `ensureBrainList` corrects it, and
+				// `pickShownBrain` checks the shown brain FIRST, so setting it here
+				// is also what stops the list from retargeting us.
+				if (target) setActiveBrain({ id: target.brain, label: brainLabelFor(target.brain) });
+				void ensureBrainList();
+				// Boot and Back/Forward go through the SAME dispatcher, so the two
+				// cannot answer one URL differently. store.ts's syncAddressBar is
+				// the half that puts the entries there.
+				registerWebNavigation(openWebTarget);
+				if (target) openWebTarget(target);
+				else openBrowse();
+				return;
+			}
 			// SELF-BOOT: no tool result arrived, so open the tree ourselves — and fetch the
 			// nav's own data too, which handleToolResult would otherwise have been the only
 			// thing to ask for. Without this the app came up with no brain list: no brain

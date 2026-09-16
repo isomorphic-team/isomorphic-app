@@ -17,6 +17,7 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import type { Octokit } from 'octokit';
+import type { D1Database } from '@cloudflare/workers-types';
 import type { BrainContext } from './librarian.ts';
 import {
 	type TenantOpts,
@@ -43,9 +44,11 @@ import {
 	resetIndex,
 	detectNeedsConfig,
 	ensureFresh,
+	hasIndexedPages,
 	listIndexedPages
 } from '../lib/brain-index.ts';
 import { CONFIG_PATH, DEFAULT_BRAIN_CONFIG } from '../lib/brain-config.ts';
+import { fail } from './shared.ts';
 
 // The GitHub client, for the three operations in this file that are GitHub as a
 // platform rather than a brain as storage: create a repository, list the repos an
@@ -61,10 +64,6 @@ function githubClient(ctx: { octokit?: Octokit }): Octokit {
 	return ctx.octokit;
 }
 
-function fail(text: string) {
-	return { isError: true as const, content: [{ type: 'text' as const, text }] };
-}
-
 // One row per brain for the UI / text: stable id, human label (disambiguated when an
 // org has several brains), the caller's role in it, and whether it's active.
 interface BrainRow {
@@ -77,6 +76,8 @@ interface BrainRow {
 	visibility: string; // 'org' | 'private': drives the shared/private badge
 	orgId: string; // so the UI can group brains by org and target adds per-org
 	orgLabel: string;
+	// Readable, never writable, by anyone including the admins of the org holding it.
+	readOnly?: boolean;
 	needsConfig?: boolean; // adopted repo with no content under its roots — offer "Set up"
 	configPrUrl?: string; // a "configure" PR is open (protected repo) — show pending
 }
@@ -90,11 +91,12 @@ function brainRows(brains: AccessibleBrain[], activeId: string | undefined): Bra
 		// Two different powers, two different scopes: disconnecting a brain removes
 		// it from the ORG (org admin), sharing it changes who reaches its content
 		// (brain admin). Someone can hold either without the other.
-		canManage: roleAtLeast(b.org_role, 'admin'),
+		canManage: !!b.org_role && roleAtLeast(b.org_role, 'admin'),
 		canShare: roleAtLeast(b.role, 'admin'),
 		visibility: b.visibility,
 		orgId: b.org_id,
-		orgLabel: orgDisplay(b)
+		orgLabel: orgDisplay(b),
+		...(b.read_only ? { readOnly: true } : {})
 	}));
 }
 
@@ -114,14 +116,28 @@ function rowsText(rows: BrainRow[]): string {
 }
 
 // Whether one brain is "connected but not configured" — empty of content and adopted
-// with no .isomorphic.json. Resolves that brain's own context so it works for any brain
-// the caller manages, not just the active one. Cheap for configured brains (the index
-// has pages → returns before the tree scan); best-effort (never throws).
+// with no .isomorphic.json. Best-effort (never throws).
+//
+// A CONFIGURED BRAIN MUST COST NOTHING HERE. This runs for every brain the caller
+// manages, on every `brains` call, and the widget makes that call on every open.
+// The first version resolved each brain's context (an installation-token mint and a
+// config read, both GitHub) and then ran `ensureFresh` (a `getHead` per brain, plus
+// an inline reindex for any brain whose branch had moved) BEFORE asking the index
+// whether the brain had pages — so the "cheap for configured brains" it promised
+// never happened. On an account with several brains that was a 17-second call;
+// Anthropic's edge gives up at about 15 and reports a bare 502 (issues #50, #85),
+// the widget's `ensureBrainList` swallows the failure, and everything that rides on
+// the payload (the brain list, `features`, the Open-in-browser control) is missing
+// for that open. Now: one indexed row answers it, with no context, no token and no
+// network. Only a brain with an EMPTY index pays for freshness and the tree scan,
+// because that is the one case where "no pages" might mean "not indexed yet".
 async function detectRowSetup(
+	db: D1Database,
 	getContext: (opts?: TenantOpts) => Promise<BrainContext>,
 	brainId: string
 ): Promise<{ needsConfig: boolean; configPrUrl?: string }> {
 	try {
+		if (await hasIndexedPages(db, brainId)) return { needsConfig: false };
 		const c = await getContext({ requires: 'admin', brain: brainId });
 		await ensureFresh(c.db, c.store, c.repoArgs, c.brainId, c.config);
 		const pages = await listIndexedPages(c.db, c.brainId);
@@ -157,6 +173,16 @@ export function registerBrainTools(
 		// deployment with usage recording off never shows a destination whose click
 		// would come back "unknown tool".
 		analyticsEnabled: boolean;
+		// The platform database, for the one read `brains` makes per brain without
+		// resolving that brain's context: whether its index holds any page.
+		db: D1Database;
+		// The origin the WEB APP is served from (`webBaseUrl` in src/lib/web-app.ts),
+		// or undefined when this deployment has none. Same vehicle and same reason as
+		// `analyticsEnabled`: the widget cannot ask the server what it serves, and a
+		// control that offers a link into a route that is not mounted is worse than
+		// no control. The widget builds the page's own URL from this with
+		// `webPathFor`, so the grammar stays in one place.
+		webBaseUrl?: string;
 	}
 ) {
 	const {
@@ -167,9 +193,11 @@ export function registerBrainTools(
 		activeBrainId,
 		setActiveBrain,
 		invalidateConfig,
-		analyticsEnabled
+		analyticsEnabled,
+		db,
+		webBaseUrl
 	} = deps;
-	const features = { analytics: analyticsEnabled };
+	const features = { analytics: analyticsEnabled, ...(webBaseUrl ? { webBase: webBaseUrl } : {}) };
 
 	// The orgs the app's "add a brain" flow may target: the ones the caller can
 	// actually adopt into (connect_brain is admin+). Sent with the brains list because
@@ -269,7 +297,7 @@ export function registerBrainTools(
 			await Promise.all(
 				rows.map(async (r) => {
 					if (!r.canManage) return;
-					const s = await detectRowSetup(getContext, r.id);
+					const s = await detectRowSetup(db, getContext, r.id);
 					r.needsConfig = s.needsConfig;
 					r.configPrUrl = s.configPrUrl;
 				})
@@ -404,7 +432,7 @@ export function registerBrainTools(
 		{
 			title: 'Connect a repo as a brain',
 			description:
-				"Adopt an existing GitHub repository as a brain in an organization you admin, so it appears in the switcher (the brains tool). The repo must be under the org's GitHub owner and covered by the org's Isomorphic App installation. Call with no `repo` to list the repos that can become brains (candidates the installation can reach that aren't brains yet). Adds to the organization you are working in by default; pass `org` to add to a different one, including one that holds no brains yet. Admin only.",
+				"Adopt an existing GitHub repository as a brain in an organization you admin, so it appears in the switcher (the brains tool). The repo must be under the org's GitHub owner and covered by the org's Isomorphic App installation. Call with no `repo` to list the repos that can become brains (candidates the installation can reach that aren't brains yet). Adds to the organization you are working in by default; pass `org` to add to a different one, including one that holds no brains yet. Admin only. The adopted brain is PRIVATE to whoever connected it, exactly like create_brain: use share_brain afterwards to give teammates access, or to make it visible to the whole organization.",
 			inputSchema: {
 				repo: z
 					.string()
@@ -489,20 +517,33 @@ export function registerBrainTools(
 				);
 			}
 
-			// Org-visible, unlike create_brain's private default, and deliberately so.
-			// Adopting an existing repo is an ADMIN act on a repo the organization
-			// already owns: the intent is "this org repo is now a brain for the team",
-			// not "here is my private scratch space". Narrow it afterwards with
-			// share_brain if it should not be org-wide.
+			// PRIVATE BY DEFAULT, the same as create_brain (issue #93). This used to
+			// default to org-wide on the reasoning that adopting is an admin act on a
+			// repo the org already owns. In practice the two tools produce the same
+			// object with opposite defaults, and the adopted repo tends to be the
+			// substantive one: a private GitHub repo came back readable by every org
+			// member, with nothing in the response saying so. Widening on request costs
+			// a share_brain call; widening silently is a disclosure. The adopter gets
+			// the same explicit admin grant the creator does, so they show on the
+			// brain's Share list rather than relying on the org-admin floor alone.
+			const newBrainId = brainIdFor(owner, name);
 			await createBrain(ctx.db, {
-				brain_id: brainIdFor(owner, name),
+				brain_id: newBrainId,
 				org_id: orgId,
 				repo_owner: owner,
 				repo_name: name,
 				name: displayName?.trim() || null,
 				created_by: ctx.actorUserId,
-				visibility: 'org'
+				visibility: 'private'
 			});
+			if (ctx.actorUserId) {
+				await setBrainGrant(ctx.db, {
+					brain_id: newBrainId,
+					user_id: ctx.actorUserId,
+					role: 'admin',
+					granted_by: ctx.actorUserId
+				});
+			}
 
 			// Guard: an adopted repo whose content isn't under the default layout would
 			// connect but show no pages. Detect it now so the app can offer to configure.
@@ -516,9 +557,14 @@ export function registerBrainTools(
 			).catch(() => false);
 
 			const rows = brainRows(await listBrains(), activeBrainId());
+			// Visibility is said in the sentence, not left as one field in the brains
+			// array: that field is the one a reader skims past, and the consequence of
+			// missing it is who can read the repo.
+			const visibilityNote =
+				'It is private to you: share it with share_brain, or make it visible to your whole organization.';
 			const text = needsConfig
-				? `Connected ${connectedId}, but its content isn't under the default layout, so no pages show yet. Open it and choose Auto-configure (or run configure_brain) to index it.`
-				: `Connected ${connectedId} as a brain.`;
+				? `Connected ${connectedId}, but its content isn't under the default layout, so no pages show yet. Open it and choose Auto-configure (or run configure_brain) to index it. ${visibilityNote}`
+				: `Connected ${connectedId} as a brain. ${visibilityNote}`;
 			return {
 				content: [{ type: 'text' as const, text }],
 				structuredContent: {
@@ -541,7 +587,7 @@ export function registerBrainTools(
 		{
 			title: 'Configure a brain’s content layout',
 			description:
-				"Set up an adopted repo so its pages appear — writes a .isomorphic.json describing where its content lives. Use when a connected brain shows no pages because its markdown isn't under the default 'wiki/' layout. Defaults to indexing the whole repo. Admin only.",
+				"Set up an adopted repo so its pages appear — writes a .isomorphic.json describing where its content lives. Use when a connected brain shows no pages because its markdown isn't under the default 'wiki/' layout. Defaults to indexing the whole repo. If the repo already has a .isomorphic.json, this refuses and shows the current one; pass `overwrite: true` to replace it deliberately. Admin only.",
 			inputSchema: {
 				brain: z
 					.string()
@@ -550,11 +596,29 @@ export function registerBrainTools(
 				content_roots: z
 					.array(z.string())
 					.optional()
-					.describe('Folders that hold content, e.g. ["docs/"]. Default ["."] = the whole repo.')
+					.describe('Folders that hold content, e.g. ["docs/"]. Default ["."] = the whole repo.'),
+				overwrite: z
+					.boolean()
+					.optional()
+					.describe(
+						'Replace an existing .isomorphic.json. Without this, a repo that already has one is left alone and its current config is shown.'
+					)
 			}
 		},
-		async ({ brain, content_roots }) => {
+		async ({ brain, content_roots, overwrite }) => {
 			const ctx = await getContext({ requires: 'admin', brain });
+
+			// A config that exists is a decision somebody made (issue #94). Overwriting
+			// it with a whole-repo default was one call away, and that call is the one
+			// the "needs setup" flag recommends, so a wrong flag turned into a broader
+			// index that pulled raw source files into the content set. Show what is
+			// there and require the replacement to be asked for by name.
+			const current = await ctx.store.readFile(ctx.repoArgs, CONFIG_PATH);
+			if (current && !overwrite) {
+				return fail(
+					`This brain already has a ${CONFIG_PATH}, so nothing was written. Its current contents:\n\n${current.content.trim()}\n\nPass overwrite: true to replace it.`
+				);
+			}
 
 			// Don't open a second PR if a configure PR is already pending (protected repo).
 			const pending = await ctx.store.findOpenConfigPr(ctx.repoArgs);
@@ -646,7 +710,7 @@ export function registerBrainTools(
 			const target = m.brain;
 			// ORG-scope, like connect_brain: removing a brain from the org is an org
 			// admin's call, not something brain-admin-by-share confers.
-			if (!roleAtLeast(target.org_role, 'admin')) {
+			if (!target.org_role || !roleAtLeast(target.org_role, 'admin')) {
 				return fail(`You need organization admin access to disconnect ${brainLabel(target)}.`);
 			}
 			if (all.filter((b) => b.org_id === target.org_id).length <= 1) {
