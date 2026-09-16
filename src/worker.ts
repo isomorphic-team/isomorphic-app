@@ -374,16 +374,6 @@ class McpSession {
 		);
 	}
 
-	// Persist the resolved brain as active when a tool opts into stickiness (the
-	// in-client view tools do — see TenantOpts.sticky). Guarded on an actual change so
-	// a read of the already-active brain doesn't churn the KV write. This is what collapses
-	// the two "current brain" pointers into one: viewing/editing a brain in the widget
-	// moves the connection's active brain, so the model's subsequent bare calls and the
-	// widget's own bare actions all target the brain the user is looking at.
-	private async maybeStick(brainId: string, opts?: TenantOpts): Promise<void> {
-		if (opts?.sticky && brainId !== this.activeBrainId) await this.setActiveBrain(brainId);
-	}
-
 	// The set of user ids that make up the CALLER as a person: the signed-in user plus
 	// every identity linked to it via app_users.person_id (identity-linking). Every
 	// accessible-brains query below unions across these ids, so a person reaches all
@@ -452,7 +442,6 @@ class McpSession {
 				);
 				assertRole(ctx.role, opts?.requires);
 				assertRole(ctx.orgRole, opts?.requiresOrg);
-				await this.maybeStick(ctx.activeBrain.id, opts);
 				return ctx;
 			}
 			// GitHub identity (legacy/admin path): the flat, gh_user_id-keyed tenants
@@ -479,7 +468,6 @@ class McpSession {
 					const ctx = await this.resolveProductContext(linked.user_id, linked.email, opts?.brain);
 					assertRole(ctx.role, opts?.requires);
 					assertRole(ctx.orgRole, opts?.requiresOrg);
-					await this.maybeStick(ctx.activeBrain.id, opts);
 					return ctx;
 				}
 			}
@@ -919,12 +907,13 @@ class McpSession {
 		// in a sandboxed iframe; others get the plain-text fallback blocks.
 		// See src/tools/apps.ts and app/.
 		//
-		// `sticky: true` — opening/browsing/editing a brain through the widget makes it
-		// the connection's ACTIVE brain, so the file tree, Edit button policy, and the
-		// model's subsequent bare calls all track the brain the user is looking at. Without
-		// this, a one-shot `brain:` view left the persisted active brain behind, so the
-		// widget showed one brain while its own bare actions hit another.
-		registerBrainApp(server, (opts) => this.tenantContext({ ...opts, sticky: true }));
+		// Opening a brain in the widget does NOT move the active brain. Every widget-
+		// initiated call names its brain explicitly (brainArgs in app/core/store.ts) and
+		// the crumb follows the brain the RESULT names (pickShownBrain), so a one-shot
+		// `brain:` view is self-contained. The pointer is per-USER, not per-conversation,
+		// so moving it from a view retargeted every other open conversation's bare calls
+		// as a side effect of looking at something (removed 2026-09-15).
+		registerBrainApp(server, (opts) => this.tenantContext(opts));
 
 		// Single-tenant deployments (AUTH_MODE=static, whether reaching GitHub through a
 		// token or an App installation) have one human and one brain, and no `orgs` /
@@ -943,14 +932,10 @@ class McpSession {
 
 		// ---------- brain sharing (per-brain access) ----------
 		// The brain-scope sibling of the member tools: members moves the ORG roster,
-		// these move who can reach ONE brain. See src/tools/brain-access.ts.
-		// `sticky: true`, for the same reason registerBrainApp is: the sharing panel is an
-		// in-client view OF a brain, and the app's trail treats it as a peer of the file
-		// tree and the graph. Opening it for a named brain (the Share control in the
-		// brains list) therefore has to move the active brain with it, or the widget shows
-		// one brain's audience under another brain's name and its own bare follow-up calls
-		// hit the wrong one.
-		registerBrainAccessTools(server, (opts) => this.tenantContext({ ...opts, sticky: true }));
+		// these move who can reach ONE brain. See src/tools/brain-access.ts. Its result
+		// carries `activeBrain`, so the Share control in the brains list opens the panel
+		// under the named brain's crumb without moving the pointer (see registerBrainApp).
+		registerBrainAccessTools(server, (opts) => this.tenantContext(opts));
 
 		// ---------- connected accounts (identity linking) ----------
 		// The per-person "Your settings → Connected accounts" surface: connected_accounts
@@ -1005,9 +990,9 @@ class McpSession {
 		);
 
 		// ---------- brain selection (multi-brain) ----------
-		// brains (the interactive switcher + data) + switch_brain. A bare tool call
-		// acts on the active brain; switch_brain changes it (persisted
-		// in agent state); any tool's `brain` arg one-shots another. See src/tools/brains.ts.
+		// brains (the list, as data) + switch_brain. A bare tool call acts on the active
+		// brain; switch_brain changes it (persisted in KV, per user); any tool's `brain`
+		// arg one-shots another. See src/tools/brains.ts.
 		//
 		// Registered in single-tenant mode too, unlike the org tools above: the app's nav
 		// calls `brains` on every open and learns which destinations exist from the

@@ -100,11 +100,13 @@ screens get the brain crumb; the other two take the back arrow, so neither claim
 that is not there. Showing the ORG roster as a property of whichever brain you were in was the
 same conflation the tool gating exists to prevent, drawn in the UI instead of in code.
 
-That placement is what makes `brain_access` **sticky** in `worker.ts`, like the other in-client
-view tools: opening the panel for a named brain moves the active brain with it. Otherwise the
-**Share** control in the brains list (gated on `canShare`, the brain role, as distinct from
-`canManage`, the org role that gates disconnect) would open one brain's audience under another
-brain's crumb. The list also badges private brains. Adding someone opens `app/views/ShareBrainView.tsx`, a pushed
+That placement is why `brain_access`'s payload carries `activeBrain`, like the other in-client
+view tools: the crumb follows the brain the result names (`pickShownBrain`), so the **Share**
+control in the brains list (gated on `canShare`, the brain role, as distinct from `canManage`,
+the org role that gates disconnect) opens one brain's audience under that brain's crumb. It was
+registered `sticky` for this until 2026-09-15, moving the active brain as a side effect of
+opening the panel; the pointer is per user rather than per conversation, so that retargeted
+every other open conversation, and the result already carried what the crumb needs. The list also badges private brains. Adding someone opens `app/views/ShareBrainView.tsx`, a pushed
 flow off the panel's header, which is the brain-scope twin of `InviteMemberView`: the two are
 deliberately the same screen one scope apart, because "add to the org" and "add to this brain"
 are exactly the pair a user is liable to confuse. `BRAIN_ROLE_BLURB` (in

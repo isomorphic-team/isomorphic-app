@@ -26,7 +26,7 @@
 //
 //   pnpm test:scope
 
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
 import { assertRole, type Role, type TenantOpts, type AccessibleBrain } from '../src/lib/orgs.ts';
 import { registerMemberTools } from '../src/tools/members.ts';
@@ -201,10 +201,20 @@ type Handler = (args: Record<string, unknown>) => Promise<{ isError?: boolean; c
 // writes into the wrong organization, which no role assertion would catch.
 const orgAsks: ({ requires?: Role; org?: string } | undefined)[] = [];
 
+// Every write to the active-brain pointer the brain tools made. Only an explicit act
+// may move it (see the last section), so most calls must leave this empty.
+const moves: string[] = [];
+
+// Each tool's registration config, for the checks that read `_meta` rather than call.
+const configs = new Map<string, Record<string, unknown>>();
+
 function toolsFor(p: Persona): Map<string, Handler> {
 	const handlers = new Map<string, Handler>();
 	const server = {
-		registerTool: (name: string, _cfg: unknown, handler: Handler) => handlers.set(name, handler)
+		registerTool: (name: string, cfg: unknown, handler: Handler) => {
+			configs.set(name, cfg as Record<string, unknown>);
+			handlers.set(name, handler);
+		}
 	} as never;
 	const getContext = contextFor(p);
 	registerMemberTools(server, getContext);
@@ -268,7 +278,9 @@ function toolsFor(p: Persona): Map<string, Handler> {
 				}
 			})),
 		activeBrainId: () => 'northwind/main',
-		setActiveBrain: async () => {},
+		setActiveBrain: async (id) => {
+			moves.push(id);
+		},
 		invalidateConfig: () => {},
 		analyticsEnabled: true
 	});
@@ -637,6 +649,93 @@ async function analyticsPayload(p: Persona) {
 	check(
 		'an org editor is not an admin here either',
 		(await analyticsPayload(writer)).canSeePeople === false
+	);
+}
+
+// ---------------------------------------------------------------------------
+console.log('\nThe active brain moves only on an explicit act');
+// The pointer is one KV key per USER, not per conversation (the transport is
+// stateless), so anything that moves it as a side effect retargets every other open
+// conversation's bare calls. It used to move whenever a widget tool merely RESOLVED a
+// brain (`sticky` on TenantOpts, applied in worker.ts to the view tools and
+// brain_access), which meant looking at a page in one chat silently changed which
+// brain another chat's next write_page landed in. The widget never needed it: every
+// widget-initiated call names its brain (brainArgs) and the crumb follows the brain
+// the result names (pickShownBrain). Removed 2026-09-15.
+//
+// The half that decided lived in worker.ts's registration lambdas, which no handler
+// test can reach, so this half is a source scan like test-usage's: the option must
+// not exist, and the only writers must be the three tools that mean it.
+{
+	moves.length = 0;
+	check(
+		'switch_brain moves the pointer',
+		(await allows(lurker, 'switch_brain', { brain: 'other' })) &&
+			moves.length === 1 &&
+			moves[0] === 'northwind/other',
+		JSON.stringify(moves)
+	);
+	moves.length = 0;
+	await attempt(lurker, 'brain_access', { brain: 'other' });
+	await attempt(lurker, 'brains');
+	check(
+		'opening the sharing panel for another brain does not',
+		moves.length === 0,
+		JSON.stringify(moves)
+	);
+
+	const src = (rel: string) => readFileSync(new URL(`../${rel}`, import.meta.url), 'utf8');
+	const worker = src('src/worker.ts');
+	check('worker.ts has no sticky resolution', !/\bsticky\b|maybeStick/.test(worker));
+	check('TenantOpts has no sticky option', !/sticky\?:/.test(src('src/lib/orgs.ts')));
+	// The Worker writes the pointer in exactly one place: the dependency it hands the
+	// brain tools. A second `this.setActiveBrain(` is a new side effect to justify here.
+	const workerWrites = worker.match(/this\.setActiveBrain\(/g) ?? [];
+	check(
+		'the Worker hands the pointer to the brain tools and writes it nowhere else',
+		workerWrites.length === 1,
+		String(workerWrites.length)
+	);
+
+	// Inside src/tools, every writer sits in switch_brain, create_brain or
+	// disconnect_brain (the last only falls a dangling pointer back to a survivor).
+	const allowed = new Set(['switch_brain', 'create_brain', 'disconnect_brain']);
+	const toolsDir = new URL('../src/tools/', import.meta.url);
+	const offenders: string[] = [];
+	for (const f of readdirSync(toolsDir).filter((n) => n.endsWith('.ts'))) {
+		const text = readFileSync(new URL(f, toolsDir), 'utf8');
+		const re = /\bsetActiveBrain\(/g;
+		let m: RegExpExecArray | null;
+		while ((m = re.exec(text))) {
+			const before = text.slice(0, m.index);
+			// The last registerTool('name' above the call is the tool it belongs to.
+			const names = [...before.matchAll(/registerTool\(\s*'([a-z_]+)'/g)];
+			const owner = names.length ? names[names.length - 1][1] : '(none)';
+			if (!allowed.has(owner)) offenders.push(`${f}:${owner}`);
+		}
+	}
+	check(
+		'in src/tools only those three tools write it',
+		offenders.length === 0,
+		offenders.join(', ')
+	);
+}
+
+console.log('\nbrains is data, not a widget');
+// The model's usual reason to call `brains` is "which brains exist?", and while the
+// tool carried `_meta.ui` every such lookup rendered a brain list in the chat that
+// nobody asked to see. The app reads the same result from inside the widget, where
+// no widget metadata is needed. test-app-resource registers only the app tools, so
+// this is the one place that sees the brain tools' `_meta`.
+{
+	toolsFor(lurker);
+	const meta = configs.get('brains')?._meta as Record<string, unknown> | undefined;
+	check('brains is registered', configs.has('brains'));
+	check('and carries no _meta.ui', !meta || !('ui' in meta), JSON.stringify(meta));
+	check(
+		'and none of the deprecated flat key either',
+		!meta || !Object.keys(meta).some((k) => k.startsWith('ui/')),
+		JSON.stringify(meta)
 	);
 }
 

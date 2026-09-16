@@ -176,7 +176,7 @@ function handleToolResult(result: CallToolResult) {
 	else if (view === 'brain-access') show(brainAccessViewFromSc(sc), { push: false });
 	else if (view === 'brains') {
 		const bv = brainsViewFromSc(sc);
-		// Zero brains (e.g. view_brains on a fresh account) → the create-your-first-brain
+		// Zero brains (the Manage brains screen on a fresh account) → the create-your-first-brain
 		// state instead of an empty list.
 		if (bv.kind === 'brains' && bv.brains.length === 0)
 			show({ kind: 'add-brain', orgs: [], first: true }, { push: false });

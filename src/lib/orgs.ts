@@ -112,12 +112,9 @@ export const ASSIGNABLE_BRAIN_ROLES: Role[] = ['viewer', 'editor', 'admin'];
 // Options threaded from a tool handler into context resolution. `requires` is the
 // minimum role the tool needs; resolution throws if the caller ranks below it.
 // `brain` selects WHICH brain to act on (a fuzzy handle/label/id) — when omitted,
-// resolution uses the connection's active brain, else the caller's default.
-// `sticky` persists the RESOLVED brain as the connection's active brain (see
-// tenantContext) — set by the in-client view tools so that opening/browsing a brain
-// in the widget makes it active, keeping the widget and the model's bare calls on
-// the same brain. Left off for pure data tools, so a one-shot `brain:` read stays
-// one-shot and doesn't move the working brain.
+// resolution uses the caller's active brain, else their default. Resolving never
+// moves the active brain: only switch_brain, create_brain and disconnect_brain
+// write that pointer (see setActiveBrain in worker.ts).
 export interface TenantOpts {
 	// Minimum BRAIN role: content actions (read, write, move/delete, configure,
 	// share). Resolved by effectiveBrainRole against the target brain.
@@ -131,7 +128,6 @@ export interface TenantOpts {
 	// would let a brain admin manage the whole org roster.
 	requiresOrg?: Role;
 	brain?: string;
-	sticky?: boolean;
 }
 
 // Throw a caller-facing authorization error when `actual` outranks below `required`.
