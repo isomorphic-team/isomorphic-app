@@ -54,12 +54,12 @@ import { brainArgFor, fail } from './shared.ts';
 // switch — ship the identical shape.
 const editPolicy = pathPolicyOf;
 
-// Shared optional `brain` arg for the in-client view/edit tools. Unlike the data
-// tools' one-shot `brain`, opening a brain in the app MAKES IT ACTIVE (sticky — see
-// registerBrainApp in worker.ts), because the user is now looking at it and the
-// viewer follows the active brain; subsequent bare calls stay on it.
+// Shared optional `brain` arg for the in-client view/edit tools. One-shot, like the
+// data tools' `brain`: the widget follows the brain each result names and passes it
+// back on its own calls, so opening another brain here never moves the active brain.
+// Use switch_brain for that.
 const brainArg = brainArgFor(
-	'Which brain to open (name/handle). Defaults to the active brain; opening another makes it the active brain.'
+	'Which brain to open (name/handle). Defaults to the active brain. Opening another brain here is one-shot; use switch_brain to change the default.'
 );
 
 // A stable content fingerprint of the app bundle (FNV-1a 32-bit → base36). Not

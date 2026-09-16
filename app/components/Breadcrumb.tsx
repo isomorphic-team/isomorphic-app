@@ -370,10 +370,9 @@ export function Breadcrumb({ view }: { view: View }) {
 	// and switching brains shows a different answer. So it is a view OF the brain and a
 	// peer of Files, Graph and Recent changes, pickable from any of them.
 	//
-	// That only holds because opening it MAKES ITS BRAIN ACTIVE (brain_access is
-	// registered sticky in worker.ts, like the other in-client view tools). Without
-	// that, the Share control in the brains list could open a panel for one brain under
-	// a crumb naming another.
+	// The crumb names the brain the RESULT carries (`activeBrain` on brain_access's
+	// payload, adopted by pickShownBrain), so the Share control in the brains list opens
+	// a panel for one brain under that brain's crumb without moving the active pointer.
 	if (view.kind === 'brain-access')
 		return (
 			<DestinationCrumb>

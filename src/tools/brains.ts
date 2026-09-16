@@ -1,22 +1,24 @@
 // Brain selection tools — the multi-brain surface.
 //
 // One connection can reach several brains (your personal brain, team brains, a
-// client brain). `brains` both opens the interactive switcher in the Isomorphic app
-// (which also drives the nav's brain switcher) AND returns the list as text, so the
-// user can see them and the model can reason over "what can I reach?". `switch_brain`
-// makes one active, so the user can just tell Claude "switch to my Acme brain."
+// client brain). `brains` returns the list as data: text the model reasons over, and
+// the `structuredContent` the app's nav switcher reads on every open. It opens no
+// widget. It carried `_meta.ui` until 2026-09-15, and the model's most common reason
+// to call it is "which brains exist?", so nearly every such lookup put a brain list
+// in the chat that nobody had asked to see. The interactive list lives inside the app
+// (the nav switcher and the Manage brains destination), reached through any view
+// tool. `switch_brain` makes one active, so the user can just tell Claude "switch to
+// my Acme brain."
 //
 // Targeting model (see tenantContext in worker.ts): a bare tool call acts on the
-// connection's ACTIVE brain; any tool may also take a `brain` arg to one-shot a
-// different one. `switch_brain` changes the active brain (persisted in agent state).
+// caller's ACTIVE brain; any tool may also take a `brain` arg to one-shot a different
+// one. Only switch_brain / create_brain / disconnect_brain move the active brain.
 
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { registerAppTool } from '@modelcontextprotocol/ext-apps/server';
 import { z } from 'zod';
 import type { Octokit } from 'octokit';
 import type { D1Database } from '@cloudflare/workers-types';
 import type { BrainContext } from './librarian.ts';
-import { BRAIN_APP_URI } from './apps.ts';
 import {
 	type TenantOpts,
 	type AccessibleBrain,
@@ -259,20 +261,22 @@ export function registerBrainTools(
 		}
 	);
 
-	// ---------- brains (switcher: interactive widget + data) ----------
-	// One tool, both modes: renders the inline brain switcher for the user (selecting
-	// one switches to it) AND returns the list as text the model can reason over. Also
-	// resolves the org first so a freshly-invited user's brain shows on first open.
-	registerAppTool(
-		server,
+	// ---------- brains (the list, as data) ----------
+	// Text for the model and structuredContent for the app's switcher, which calls it
+	// on every open. Also resolves the org first so a freshly-invited user's brain
+	// shows on first open.
+	//
+	// Deliberately NOT a widget tool (no `_meta.ui`): see the header. The app still
+	// calls it from inside the widget, where a plain tool result is exactly what the
+	// switcher needs.
+	server.registerTool(
 		'brains',
 		{
 			title: 'Your brains',
 			description:
-				"The knowledge bases (brains) this user can access — personal, team, and client — with the user's role in each and the active one highlighted. Shown inline as the interactive Isomorphic switcher (selecting one switches to it) AND returned as text you can reason over. Use to answer 'what brains do I have?', to let the user see or switch brains, or when YOU need the list as data before switching. Most tools act on the active brain; pass `brain` to any tool to target another, or switch_brain to change the active one.",
+				"The knowledge bases (brains) this user can access — personal, team, and client — with the user's role in each and the active one marked. Returns the list as text; opens nothing in the chat. Use to answer 'what brains do I have?' or when YOU need the list before targeting one. Most tools act on the active brain; pass `brain` to any tool to target another, or switch_brain to change the active one. To let the user pick visually, open a brain with browse_brain: the app's nav has the switcher.",
 			inputSchema: {},
-			annotations: { readOnlyHint: true },
-			_meta: { ui: { resourceUri: BRAIN_APP_URI } }
+			annotations: { readOnlyHint: true }
 		},
 		async () => {
 			// Org-scope: works with zero brains (renders the empty "create your first

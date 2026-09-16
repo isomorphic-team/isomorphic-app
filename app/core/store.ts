@@ -62,13 +62,13 @@ function setActiveBrain(v: { id: string; label: string } | null): void {
 // Which brain a `brains`-shaped payload (brains / switch_brain / create_brain /
 // connect_brain) leaves the widget showing.
 //
-// Its `active` field is the CONNECTION's pointer, which is a different question from
-// "which brain is this widget showing". A widget opened by view_page or browse_brain
-// with an explicit `brain:` is showing THAT brain, while the pointer is written by the
-// request that opened us and read back by a later one — so the brain list the app fetches
-// on every open (ensureBrainList) could answer with the previous brain and retarget
-// the crumb, the tree, and every subsequent widget call to it, while the model
-// reported the brain it actually opened (issue #26).
+// Its `active` field is the USER's default (the active-brain pointer), which is a
+// different question from "which brain is this widget showing". A widget opened by
+// view_page or browse_brain with an explicit `brain:` is showing THAT brain, and the
+// pointer does not move for a view (only switch_brain / create_brain write it), so the
+// brain list the app fetches on every open (ensureBrainList) names a different brain.
+// Adopting it retargeted the crumb, the tree, and every subsequent widget call, while
+// the model reported the brain it actually opened (issue #26).
 //
 // So the pointer wins only when it is an answer to this question: the widget has no
 // brain of its own yet (the self-boot, where nothing else has said), or the call was a

@@ -340,9 +340,9 @@ already exists and the gap is narrower than it looks.
 carry `brainArg`, resolved by `matchBrain` against the caller's accessible set. Three properties
 that make this safe today and are worth not breaking:
 
-- **A targeted call does not move you.** `maybeStick` fires only when a tool passes `sticky`
-  (the in-client view tools and `brain_access`), so reading or writing another brain leaves the
-  active brain alone.
+- **A targeted call does not move you.** Resolution never writes the active-brain pointer; only
+  `switch_brain`, `create_brain` and `disconnect_brain` do (pinned by `pnpm test:scope`). Reading,
+  writing or viewing another brain leaves the active brain alone.
 - **Authorization is per brain.** Resolution runs `effectiveBrainRole` for the brain actually
   named, so a write into another brain is checked against that brain, not the one you came from.
 - **Ambiguity is refused, not guessed.** `matchBrain` returns candidates on a multi-hit and the
