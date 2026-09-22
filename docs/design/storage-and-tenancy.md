@@ -119,7 +119,10 @@ plus the default connection.
 
 ### Move a brain to another org
 
-`update_brain(brain, org, confirm)`. Without `confirm` it writes nothing and returns a
+`connect_brain(repo: <brain>, org, confirm)`. The same tool adopts a repository; it
+moves instead when `repo` names, exactly, a brain the caller can see in another org.
+(Exactly: a partial name falling through to a move would turn "adopt the repo called
+wiki" into "move client-wiki".) Without `confirm` it writes nothing and returns a
 preview:
 
 - where the brain is stored, and that storage does not move;
@@ -148,8 +151,9 @@ account, and the preview says so. Custody changing hands is relocation, a separa
 
 ### Rename a brain
 
-`update_brain(brain, name)`. A field write. Brain admin, since the name is a property of
-the brain rather than of the org. There was previously no way to rename a brain at all.
+`configure_brain(brain, name)`. A field write, beside the content layout that tool
+already set: both are the brain's own settings, gated at brain admin. A call with only
+`name` never touches the repository. There was previously no way to rename a brain.
 
 ### Relocate storage (step 5, not built)
 
@@ -162,14 +166,27 @@ survive.
 
 `create_brain` creates on the org's default connection and writes the binding.
 `connect_brain` adopts a repository through the org's connection and writes the binding,
-and refuses when that connection is platform-owned, since adopting through the shared
-platform account would let any org claim repositories it does not own.
+and refuses to adopt when that connection is platform-owned, since adopting through the
+shared platform account would let any org claim repositories it does not own. Moving a
+brain INTO such an org is allowed: a move reads nothing through the destination's
+connection.
 
 ## 6. Tool surface
 
-One tool added, `update_brain`, which fills two gaps (rename and move). A move is a
-change to a brain's own properties, so it sits beside rename rather than inside
-`connect_brain`, which is about adopting storage.
+No tools added. The two gaps (move and rename) are split along their gates:
+
+- **Move** is in `connect_brain`. From the caller's side that tool means "put this brain
+  in this org", adopting a repo or moving a brain, and both are org-scope, gated at org
+  admin.
+- **Rename** is in `configure_brain`, beside the content layout: a brain's own settings,
+  gated at brain admin.
+
+A dedicated `update_brain` was built first and folded in before merge. Merging further,
+into one `manage_brain` or `manage_org`, was considered and rejected: hosts decide
+approval prompts from per-tool read-only and destructive hints and grant "always allow"
+per tool, so a tool mixing reads with removals either prompts on every read or approves
+removals silently. Merges follow shared gate, annotation class and meaning, as
+`share_brain` already does for grant, change and revoke.
 
 `create_org` replaced `connect_github_org` in step 2, so creating an org and choosing
 where its storage lives are one verb: hosted by default, `github: true` for the
@@ -186,7 +203,8 @@ its deploy window, because a rollback reverts code and never schema.
    backfilled from `orgs.installation_id`. Brain resolution reads the binding and falls
    back to the org. `create_brain` and `connect_brain` write it. No behavior change for
    an existing brain.
-2. **Move and rename (built).** `update_brain`, the `hosted` org model, and
+2. **Move and rename (built).** Move in `connect_brain`, rename in `configure_brain`,
+   the `hosted` org model, and
    `create_org`, which replaces `connect_github_org` and creates a hosted org in
    product (gated on `AUTO_PROVISION`) or starts the GitHub install.
 3. **Key derived state by `brain_id`.** The content index, write-attempt ledger and
@@ -218,9 +236,10 @@ has equivalents of all three.
 
 ## 9. Rejected alternatives
 
-- **Move inside `connect_brain`.** Adoption and move look alike under the current
-  schema, where both are "attach this repo to that org". Once storage is separate, a
-  move touches no storage, and a tool about adopting storage is the wrong home for it.
+- **A separate `update_brain` for move and rename.** Built, then folded into
+  `connect_brain` (move) and `configure_brain` (rename), which cost no new tool. The
+  objection to the first, that `connect_brain` is about adopting storage, was a schema
+  argument; from the caller's side it puts a brain in an org, which is what a move does.
 - **Move by disconnect and reconnect.** Drops grants and invites, loses the name, and
   resets visibility, with nothing in either response saying so.
 - **Re-point the binding to the destination org's connection on move.** Requires the

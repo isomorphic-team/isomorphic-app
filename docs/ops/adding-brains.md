@@ -101,9 +101,9 @@ its org. The content index (`ensureFresh`) self-builds on the first read — no 
 - **Remove:** `disconnect_brain`, or `DELETE FROM brains WHERE brain_id = '<brain_id>';`
   (local + remote). The repo and its content are untouched: you're only detaching it
   from the org.
-- **Rename:** `update_brain` with `name` (brain admin).
-- **Move to another org:** `update_brain` with `org`, then again with `confirm: true`
-  (org admin in both orgs). The first call previews whose access changes. The brain
+- **Rename:** `configure_brain` with `name` (brain admin).
+- **Move to another org:** `connect_brain` with the brain's name or id as `repo` and the
+  destination `org`, then again with `confirm: true` (org admin in both orgs). The first call previews whose access changes. The brain
   keeps its storage binding, so it stays in the same GitHub account and is read
   through the same installation. See `docs/design/storage-and-tenancy.md`.
 
@@ -113,7 +113,7 @@ its org. The content index (`ensureFresh`) self-builds on the first read — no 
 installation (a personal org, or a `hosted` one made by `create_org`).
 Adopting through it would let any org claim a repository another org's brain left
 behind in the platform account. Those orgs create brains with `create_brain`, or
-receive them with `update_brain`.
+receive them by a move (`connect_brain` naming an existing brain).
 
 A `brains` row written by hand (step 3 above) needs no `storage_connection_id`: a NULL
 binding resolves through the org's installation, exactly as before migration 0010.

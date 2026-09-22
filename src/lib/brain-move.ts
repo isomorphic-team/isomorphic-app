@@ -189,7 +189,7 @@ export function describeMove(input: {
 	lines.push(
 		`Usage history stays with ${input.from}.`,
 		'',
-		'Nothing has changed yet. Call update_brain again with confirm: true to move it.'
+		'Nothing has changed yet. Call connect_brain again with confirm: true to move it.'
 	);
 	return lines.join('\n');
 }

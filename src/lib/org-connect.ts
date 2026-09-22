@@ -28,7 +28,7 @@ export const MAX_ORG_NAME = 80;
 
 // Why a name cannot be used for a new org, or null when it can. Pure. A duplicate
 // among the caller's OWN orgs is refused because every `org` argument (create_brain,
-// connect_brain, update_brain) is resolved by name: two orgs one person belongs to
+// connect_brain) is resolved by name: two orgs one person belongs to
 // under one name would make the second unreachable by the name they chose.
 export function orgNameProblem(name: string, mine: AccessibleOrg[]): string | null {
 	const n = name.trim();

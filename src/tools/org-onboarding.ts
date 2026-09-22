@@ -58,7 +58,7 @@ export function registerOrgOnboardingTools(
 		{
 			title: 'Create an organization',
 			description:
-				"Create a new organization (a team, company or client) on Isomorphic, with the user as its owner. By default its brains are stored on Isomorphic, so nobody needs GitHub: use this for a new team or client org, then create_brain to start a brain in it, or update_brain to move an existing brain in. Pass `github: true` to connect the user's own GitHub organization instead (formerly connect_github_org): that returns a link to install the Isomorphic app on their GitHub org, installing creates the org, and connect_brain then adopts a repo as a brain. Product (email/SSO) sign-ins only.",
+				"Create a new organization (a team, company or client) on Isomorphic, with the user as its owner. By default its brains are stored on Isomorphic, so nobody needs GitHub: use this for a new team or client org, then create_brain to start a brain in it, or connect_brain to move an existing brain in. Pass `github: true` to connect the user's own GitHub organization instead (formerly connect_github_org): that returns a link to install the Isomorphic app on their GitHub org, installing creates the org, and connect_brain then adopts a repo as a brain. Product (email/SSO) sign-ins only.",
 			inputSchema: z.object({
 				name: z.string().describe('What to call the organization, e.g. "Acme Corp".'),
 				github: z
@@ -135,7 +135,7 @@ export function registerOrgOnboardingTools(
 				content: [
 					{
 						type: 'text' as const,
-						text: `Created "${org.name}", with you as its owner. Its brains are stored on Isomorphic. Start one with create_brain (org: "${org.name}"), or move an existing one in with update_brain (org: "${org.name}").`
+						text: `Created "${org.name}", with you as its owner. Its brains are stored on Isomorphic. Start one with create_brain (org: "${org.name}"), or move an existing one in with connect_brain (org: "${org.name}").`
 					}
 				],
 				structuredContent: { created: { orgId: org.org_id, orgLabel: org.name } }

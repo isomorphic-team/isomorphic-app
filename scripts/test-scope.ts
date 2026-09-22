@@ -113,7 +113,7 @@ interface Persona {
 	orgRole: Role | null;
 	role: Role;
 	// A different role in a NAMED org, for the one tool that acts in two orgs at once
-	// (update_brain's move). Absent: the persona holds `orgRole` wherever they look.
+	// (connect_brain's move). Absent: the persona holds `orgRole` wherever they look.
 	orgRoleIn?: Record<string, Role>;
 }
 const sharedAdmin: Persona = {
@@ -1016,7 +1016,7 @@ console.log('\nbrains is data, not a widget');
 }
 
 // ===========================================================================
-console.log('\nupdate_brain: rename is BRAIN scope, move is ORG scope in both orgs');
+console.log('\nconfigure_brain renames at BRAIN scope; connect_brain moves at ORG scope in both');
 // ===========================================================================
 // Last in the file because the admit cases really write: they rename and move
 // b-main, and restore it afterwards so the file stays order-independent.
@@ -1031,26 +1031,27 @@ console.log('\nupdate_brain: rename is BRAIN scope, move is ORG scope in both or
 			  WHERE brain_id = 'b-main';`
 		);
 
-	check('a brain viewer cannot rename', await denies(lurker, 'update_brain', { name: 'Renamed' }));
+	const rename = { name: 'Renamed' };
+	check('a brain viewer cannot rename', await denies(lurker, 'configure_brain', rename));
 	check(
 		'an org OWNER holding only brain viewer cannot rename either: the name is the brain’s',
-		await denies(orgBoss, 'update_brain', { name: 'Renamed' })
+		await denies(orgBoss, 'configure_brain', rename)
 	);
-	const renamed = await attempt(sharedAdmin, 'update_brain', { name: 'Renamed' });
+	const renamed = await attempt(sharedAdmin, 'configure_brain', rename);
 	check(
-		'a brain admin with no org power can rename',
+		'a brain admin with no org power can rename, without touching the repository',
 		renamed.outcome === 'allowed' && brainRow().name === 'Renamed',
 		renamed.detail
 	);
 	restore();
 
-	const move = { org: 'Contoso Group' };
+	const move = { repo: 'northwind/main', org: 'Contoso Group' };
 	check(
 		'a brain admin who is only an org viewer cannot move it out of the org',
-		await denies(sharedAdmin, 'update_brain', move)
+		await denies(sharedAdmin, 'connect_brain', move)
 	);
-	check('nor can an outsider holding a grant', await denies(outsider, 'update_brain', move));
-	check('nor an org editor', await denies(writer, 'update_brain', move));
+	check('nor can an outsider holding a grant', await denies(outsider, 'connect_brain', move));
+	check('nor an org editor', await denies(writer, 'connect_brain', move));
 	const destOnly: Persona = {
 		...writer,
 		label: 'org editor here, org ADMIN in the destination',
@@ -1058,11 +1059,11 @@ console.log('\nupdate_brain: rename is BRAIN scope, move is ORG scope in both or
 	};
 	check(
 		'admin in the destination alone is not enough: taking it out needs admin here too',
-		await denies(destOnly, 'update_brain', move)
+		await denies(destOnly, 'connect_brain', move)
 	);
 
 	orgAsks.length = 0;
-	const preview = await attempt(orgBoss, 'update_brain', move);
+	const preview = await attempt(orgBoss, 'connect_brain', move);
 	const ask = orgAsks.at(-1);
 	check(
 		'the destination is resolved at org ADMIN, by the name the caller gave',
@@ -1077,21 +1078,42 @@ console.log('\nupdate_brain: rename is BRAIN scope, move is ORG scope in both or
 			brainRow().storage_connection_id === null,
 		preview.detail
 	);
-	// Admin on the brain AND in the org, so both halves of the call pass their gates
-	// and only the missing `confirm` stops the rename.
-	const fullAdmin: Persona = { ...orgBoss, label: 'org owner, brain admin', role: 'admin' };
-	const both = await attempt(fullAdmin, 'update_brain', { ...move, name: 'Elsewhere' });
+	const named = await attempt(orgBoss, 'connect_brain', { ...move, name: 'Elsewhere' });
 	check(
-		'...and a rename in the same call is not applied either',
-		both.outcome === 'allowed' && brainRow().name === 'Main',
-		both.detail
+		'...and a name given with the move is not applied either',
+		named.outcome === 'allowed' && brainRow().name === 'Main',
+		named.detail
+	);
+	check(
+		'a brain is found by its name as well as its id',
+		(await attempt(orgBoss, 'connect_brain', { repo: 'Main', org: 'Contoso Group' })).text.includes(
+			'Move "Main" from Northwind to Contoso Group?'
+		)
+	);
+	const partial = await attempt(orgBoss, 'connect_brain', { repo: 'mai', org: 'Contoso Group' });
+	check(
+		'a PARTIAL name is not a move: it is read as a repository to adopt',
+		!partial.text.includes('Move') &&
+			partial.detail.includes('octokit') &&
+			brainRow().org_id === 'org1',
+		partial.detail
+	);
+	check(
+		'moving INTO a hosted org is allowed: the hosted refusal is about adopting',
+		(await attempt(orgBoss, 'connect_brain', { ...move, org: 'Hosted Co' })).text.includes(
+			'Nothing has changed yet'
+		)
 	);
 	check(
 		'moving into the org it is already in is refused',
-		await denies(orgBoss, 'update_brain', { org: 'Northwind', confirm: true })
+		await denies(orgBoss, 'connect_brain', {
+			repo: 'northwind/main',
+			org: 'Northwind',
+			confirm: true
+		})
 	);
 
-	const done_ = await attempt(orgBoss, 'update_brain', { ...move, confirm: true });
+	const done_ = await attempt(orgBoss, 'connect_brain', { ...move, confirm: true });
 	check(
 		'with confirm, it moves, pinned to the connection it was read through',
 		done_.outcome === 'allowed' &&
@@ -1105,6 +1127,8 @@ console.log('\nupdate_brain: rename is BRAIN scope, move is ORG scope in both or
 		done_.text
 	);
 	restore();
+
+	check('update_brain is gone', !toolsFor(orgBoss).has('update_brain'));
 
 	console.log('\nconnect_brain: no adopting through hosted storage');
 	const hosted = await attempt(orgBoss, 'connect_brain', { org: 'Hosted Co' });

@@ -438,31 +438,35 @@ export function registerBrainTools(
 		}
 	);
 
-	// ---------- connect_brain (admin+) ----------
-	// Adopt a repo as a brain. Called with no `repo`, it lists the connectable
-	// candidates instead (repos under the org's App installation that aren't brains
-	// yet) — the picker the app shows before the user chooses one to adopt.
+	// ---------- connect_brain (org admin) ----------
+	// Put a brain in an organization. Three shapes, one question ("which brain goes in
+	// which org"), one gate family (org admin):
+	//   - no `repo`: list the repos the org's installation can reach that are not
+	//     brains yet, the picker the app shows before adopting;
+	//   - a repo that is not a brain yet: ADOPT it;
+	//   - a brain the caller can see in ANOTHER org: MOVE it there. A move touches no
+	//     storage (the brain keeps its binding, docs/design/storage-and-tenancy.md),
+	//     so it previews until `confirm: true`.
+	// The description says "move" in its own words, so a model hunting for a way to
+	// move a brain finds this tool.
 	server.registerTool(
 		'connect_brain',
 		{
-			title: 'Connect a repo as a brain',
+			title: 'Connect a brain to an organization: adopt a repo, or move a brain',
 			description:
-				"Adopt an existing GitHub repository as a brain in an organization you admin, so it appears in the switcher (the brains tool). The repo must be under the org's GitHub owner and covered by the org's Isomorphic App installation. Call with no `repo` to list the repos that can become brains (candidates the installation can reach that aren't brains yet). Adds to the organization you are working in by default; pass `org` to add to a different one, including one that holds no brains yet. Admin only. The adopted brain is PRIVATE to whoever connected it, exactly like create_brain: use share_brain afterwards to give teammates access, or to make it visible to the whole organization.",
+				"Put a brain in an organization you admin. Two uses. ADOPT: pass a GitHub repository that is not a brain yet (it must be under the org's GitHub owner and covered by the org's Isomorphic App installation); call with no `repo` to list the repos that can become brains. MOVE: pass an existing brain (by name or owner/repo) and the `org` to move it to; this changes which organization owns the brain, and so who reaches it through org membership, but never where it is stored, and grants, links and history come with it. A move is two calls: without `confirm: true` it changes nothing and returns a preview naming everyone whose access changes. Adding needs organization admin in the destination; moving also needs it in the brain's current organization. An adopted brain is PRIVATE to whoever connected it, exactly like create_brain: use share_brain afterwards to give teammates access. To rename a brain, use configure_brain.",
 			inputSchema: z.object({
 				repo: z
 					.string()
 					.optional()
 					.describe(
-						'The repo to adopt — "owner/name", or just "name" (defaults to the org’s GitHub owner). Omit to list the repos that can become brains.'
+						'The repo to adopt ("owner/name", or just "name" under the org’s GitHub owner), or an existing brain to move (its name or owner/repo). Omit to list the repos that can become brains.'
 					),
-				// Without this an adopted brain had no name until someone renamed it with
-				// update_brain, and the label fell back to the repo, which is why it used
-				// to borrow the org's name instead.
 				name: z
 					.string()
 					.optional()
 					.describe(
-						'What to call this brain in the switcher, e.g. "Editorial". Defaults to the repo name.'
+						'What to call the brain in the switcher, e.g. "Editorial". Defaults to the repo name for an adopted repo; a moved brain keeps its name unless this is given.'
 					),
 				// Replaces the old `brain` argument, which named the target org by naming a
 				// brain already in it. That could never reach an org holding no brains, which
@@ -472,32 +476,66 @@ export function registerBrainTools(
 					.string()
 					.optional()
 					.describe(
-						'Which organization to add it to, by name or GitHub owner. Defaults to the organization of the brain you are in.'
+						'Which organization to put it in, by name or GitHub owner. Defaults to the organization of the brain you are in.'
+					),
+				confirm: z
+					.boolean()
+					.optional()
+					.describe(
+						'Required to actually MOVE an existing brain. Without it a move only returns the preview, and nothing is written. Not needed to adopt a repo.'
 					)
 			})
 		},
-		async ({ repo, org, name: displayName }) => {
-			// ORG-scope: adopting a repo adds a brain to the organization, so it gates on
-			// the org role and resolves through orgContext. Gating on the brain role would
-			// let someone merely shared a brain as admin add repos to the whole org.
+		async ({ repo, org, name: displayName, confirm }) => {
+			// ORG-scope: putting a brain in an organization gates on the org role and
+			// resolves through orgContext. Gating on the brain role would let someone
+			// merely shared a brain as admin add to, or take from, the whole org.
 			let ctx: OrgScope;
 			try {
 				ctx = await orgContext({ requires: 'admin', org });
 			} catch (err) {
 				return fail(err instanceof Error ? err.message : String(err));
 			}
-			const orgId = ctx.org.org_id;
 
-			// Listing and adopting go through the org's connection, which only the org
-			// that administers it may do. A personal or hosted org's connection is the
-			// platform's shared account, where every other org's brains live: adopting
-			// through it would let any admin claim a repository some other org's brain
-			// left behind.
+			// An existing brain the caller can see, named EXACTLY (id, repo name, or its
+			// name). Exact rather than matchBrain's substring fallback: a substring hit
+			// would turn "adopt the repo called wiki" into "move client-wiki".
+			if (repo !== undefined) {
+				const q = repo.trim().toLowerCase();
+				const hits = (await listBrains()).filter(
+					(b) =>
+						b.id.toLowerCase() === q ||
+						b.repo_name.toLowerCase() === q ||
+						brainLabel(b).toLowerCase() === q
+				);
+				if (hits.length > 1) {
+					return fail(
+						`"${repo}" names several brains: ${hits.map(brainLabelQualified).join(', ')}. Pass its owner/repo id.`
+					);
+				}
+				if (hits.length === 1) {
+					const target = hits[0];
+					if (target.org_id === ctx.org.org_id) {
+						return fail(
+							`${brainLabel(target)} is already a brain in ${orgLabel(ctx.org)}. To rename it, use configure_brain.`
+						);
+					}
+					return await moveInto(ctx, target, { confirm: !!confirm, name: displayName });
+				}
+			}
+
+			// Everything below ADOPTS, which lists or reads repositories through the
+			// org's connection: only the org that administers it may. A personal or
+			// hosted org's connection is the platform's shared account, where every
+			// other org's brains live, so adopting through it would let any admin claim
+			// a repository some other org's brain left behind. (Moving a brain INTO a
+			// hosted org, above, reads nothing through its connection.)
 			if (!(await orgAdministersConnection(ctx.db, ctx.org))) {
 				return fail(
-					`${orgLabel(ctx.org)} stores its brains on Isomorphic's hosted storage, which has no repositories of its own to adopt. Use create_brain to start a new brain here, or create_org with github: true to connect your own GitHub organization.`
+					`${orgLabel(ctx.org)} stores its brains on Isomorphic's hosted storage, which has no repositories of its own to adopt. Use create_brain to start a new brain here, move an existing brain in by naming it, or use create_org with github: true to connect your own GitHub organization.`
 				);
 			}
+			const orgId = ctx.org.org_id;
 
 			// No repo → list the connectable candidates (repos the org's installation can
 			// reach that aren't brains yet). This is the picker for the connect flow.
@@ -534,6 +572,8 @@ export function registerBrainTools(
 				throw e;
 			}
 
+			// A brain the caller cannot see. Moving it would need admin in the org that
+			// holds it, which they evidently are not, so this stays a refusal.
 			const existing = await getBrainByRepo(ctx.db, owner, name);
 			if (existing) {
 				return fail(
@@ -605,21 +645,109 @@ export function registerBrainTools(
 		}
 	);
 
-	// ---------- configure_brain (admin+) ----------
-	// Writes a .isomorphic.json so an adopted repo's content is indexed. The fix for the
-	// "connected but no pages" case: defaults to contentRoots ["."] (whole repo), which
-	// also means new folders are picked up automatically as the repo grows.
+	// connect_brain's MOVE: an existing brain into `dest`, which the caller already
+	// holds admin in (orgContext checked it). Taking a brain out of its current org is
+	// that org's admin's call, like disconnect_brain, so it needs admin there too.
+	// Admin in the destination also means the caller keeps access afterwards, through
+	// the org-admin floor.
+	async function moveInto(
+		dest: OrgScope,
+		target: AccessibleBrain,
+		opts: { confirm: boolean; name?: string }
+	) {
+		const label = brainLabel(target);
+		if (!target.org_role || !roleAtLeast(target.org_role, 'admin')) {
+			return fail(`You need organization admin access to move ${label} out of its organization.`);
+		}
+		const newName = opts.name?.trim() || undefined;
+		const source = await getOrgById(dest.db, target.org_id);
+		if (!source) return fail('The brain’s current organization could not be found.');
+		const from = orgLabel(source);
+		const to = orgLabel(dest.org);
+
+		// The connection the brain is read through today: its binding, or for a brain
+		// written before bindings existed, its org's. That one keeps reading it.
+		const sourceConnectionId =
+			target.storage_connection_id ?? (await ensureOrgConnection(dest.db, source));
+		const conn = await getConnection(dest.db, sourceConnectionId);
+		const storageAccount =
+			conn && conn.owner_org_id === null
+				? 'Isomorphic hosted storage'
+				: `${target.storage_account} on GitHub`;
+
+		if (!opts.confirm) {
+			const changes = planBrainMove({
+				visibility: target.visibility,
+				readOnly: !!target.read_only,
+				people: await loadMovePeople(dest.db, {
+					brainId: target.brain_id,
+					fromOrgId: target.org_id,
+					toOrgId: dest.org.org_id
+				})
+			});
+			const text = describeMove({
+				brain: newName ?? label,
+				from,
+				to,
+				storageAccount,
+				changes,
+				pendingInvites: await countPendingBrainInvites(dest.db, target.brain_id)
+			});
+			return {
+				content: [{ type: 'text' as const, text }],
+				structuredContent: { moved: false, from, to, changes }
+			};
+		}
+
+		await moveBrain(dest.db, {
+			brainId: target.brain_id,
+			toOrgId: dest.org.org_id,
+			sourceConnectionId
+		});
+		if (newName) await setBrainName(dest.db, target.brain_id, newName);
+		const rows = brainRows(await listBrains(), activeBrainId());
+		return {
+			content: [
+				{
+					type: 'text' as const,
+					text: `Moved ${newName ?? label} from ${from} to ${to}. It is still stored in ${storageAccount}.`
+				}
+			],
+			structuredContent: {
+				view: 'brains',
+				brains: rows,
+				active: activeBrainId(),
+				moved: true,
+				from,
+				to
+			}
+		};
+	}
+
+	// ---------- configure_brain (brain admin) ----------
+	// A brain's own settings: its NAME, and the .isomorphic.json that says where its
+	// content lives. Both are brain-scope and gated at brain admin, which is why rename
+	// lives here rather than beside the org-scope move in connect_brain. A call with
+	// only `name` renames and never touches the repository.
+	//
+	// The config half is the fix for the "connected but no pages" case: defaults to
+	// contentRoots ["."] (whole repo), which also means new folders are picked up
+	// automatically as the repo grows.
 	server.registerTool(
 		'configure_brain',
 		{
-			title: 'Configure a brain’s content layout',
+			title: 'Configure a brain: rename it, or set its content layout',
 			description:
-				"Set up an adopted repo so its pages appear — writes a .isomorphic.json describing where its content lives. Use when a connected brain shows no pages because its markdown isn't under the default 'wiki/' layout. Defaults to indexing the whole repo. If the repo already has a .isomorphic.json, this refuses and shows the current one; pass `overwrite: true` to replace it deliberately. Admin only.",
+				"A brain's own settings. RENAME: pass `name` alone to change what the brain is called; nothing in its repository changes. CONTENT LAYOUT: set up an adopted repo so its pages appear, by writing a .isomorphic.json describing where its content lives; use when a connected brain shows no pages because its markdown isn't under the default 'wiki/' layout. Defaults to indexing the whole repo. If the repo already has a .isomorphic.json, this refuses and shows the current one; pass `overwrite: true` to replace it deliberately. Needs admin on the brain. To move a brain to another organization, use connect_brain.",
 			inputSchema: z.object({
 				brain: z
 					.string()
 					.optional()
 					.describe('Which brain to configure. Defaults to the active brain.'),
+				name: z
+					.string()
+					.optional()
+					.describe('A new display name for the brain, e.g. "Wholesale Desk".'),
 				content_roots: z
 					.array(z.string())
 					.optional()
@@ -632,8 +760,26 @@ export function registerBrainTools(
 					)
 			})
 		},
-		async ({ brain, content_roots, overwrite }) => {
+		async ({ brain, name, content_roots, overwrite }) => {
 			const ctx = await getContext({ requires: 'admin', brain });
+
+			let renamed = '';
+			if (name !== undefined) {
+				const newName = name.trim();
+				if (!newName) return fail('A brain’s name cannot be empty.');
+				const target = (await listBrains()).find((b) => b.id === ctx.brainId);
+				if (!target) return fail('That brain could not be resolved.');
+				await setBrainName(ctx.db, target.brain_id, newName);
+				renamed = `Renamed ${brainLabel(target)} to "${newName}".`;
+				// A rename alone is the whole call: the layout is only written when asked for.
+				if (content_roots === undefined && overwrite === undefined) {
+					const rows = brainRows(await listBrains(), activeBrainId());
+					return {
+						content: [{ type: 'text' as const, text: renamed }],
+						structuredContent: { view: 'brains', brains: rows, active: activeBrainId() }
+					};
+				}
+			}
 
 			// A config that exists is a decision somebody made (issue #94). Overwriting
 			// it with a whole-repo default was one call away, and that call is the one
@@ -643,7 +789,7 @@ export function registerBrainTools(
 			const current = await ctx.store.readFile(ctx.repoArgs, CONFIG_PATH);
 			if (current && !overwrite) {
 				return fail(
-					`This brain already has a ${CONFIG_PATH}, so nothing was written. Its current contents:\n\n${current.content.trim()}\n\nPass overwrite: true to replace it.`
+					`${renamed ? `${renamed} ` : ''}This brain already has a ${CONFIG_PATH}, so nothing was written. Its current contents:\n\n${current.content.trim()}\n\nPass overwrite: true to replace it.`
 				);
 			}
 
@@ -703,7 +849,7 @@ export function registerBrainTools(
 				content: [
 					{
 						type: 'text' as const,
-						text: `Configured — now indexing ${roots.join(', ')}. The brain’s pages will appear.`
+						text: `${renamed ? `${renamed} ` : ''}Configured — now indexing ${roots.join(', ')}. The brain’s pages will appear.`
 					}
 				],
 				structuredContent: { configured: true }
@@ -756,147 +902,6 @@ export function registerBrainTools(
 			return {
 				content: [{ type: 'text' as const, text: `Disconnected ${brainLabel(target)}.` }],
 				structuredContent: { view: 'brains', brains: rows, active: ctx.activeBrain.id }
-			};
-		}
-	);
-
-	// ---------- update_brain (rename: brain admin; move: org admin in BOTH orgs) ----------
-	// A brain's own properties. A move is here rather than in connect_brain because it
-	// touches no storage: the brain keeps its binding and is read through the same
-	// credential afterwards (docs/design/storage-and-tenancy.md). The description names
-	// "rename" and "move" in its own words so a tool search for either finds it.
-	server.registerTool(
-		'update_brain',
-		{
-			title: 'Rename or move a brain',
-			description:
-				'Change a brain’s own properties: rename it (`name`), or move it to another organization (`org`). A move changes which organization owns the brain, and so who reaches it through org membership; it never changes where the brain is stored, and grants, links and history come with it. A move is two calls: without `confirm: true` it changes nothing and returns a preview naming everyone whose access changes. Renaming needs admin on the brain; moving needs organization admin in both the current and the destination organization.',
-			inputSchema: z.object({
-				brain: z
-					.string()
-					.optional()
-					.describe('Which brain (name/handle or owner/repo id). Defaults to the active brain.'),
-				name: z.string().optional().describe('A new display name, e.g. "Wholesale Desk".'),
-				org: z
-					.string()
-					.optional()
-					.describe('Move the brain to this organization (by name or GitHub owner).'),
-				confirm: z
-					.boolean()
-					.optional()
-					.describe(
-						'Required to actually move. Without it a move only returns the preview, and nothing in the call is written.'
-					)
-			})
-		},
-		async ({ brain, name, org, confirm }) => {
-			if (name === undefined && org === undefined) {
-				return fail('Nothing to change: pass `name` to rename the brain or `org` to move it.');
-			}
-			let ctx: BrainContext;
-			try {
-				ctx = await getContext({ brain });
-			} catch (err) {
-				return fail(err instanceof Error ? err.message : String(err));
-			}
-			const target = (await listBrains()).find((b) => b.id === ctx.brainId);
-			if (!target) return fail('That brain could not be resolved.');
-			const label = brainLabel(target);
-
-			const newName = name?.trim();
-			if (name !== undefined) {
-				if (!newName) return fail('A brain’s name cannot be empty.');
-				if (!roleAtLeast(target.role, 'admin')) {
-					return fail(`You need admin access on ${label} to rename it.`);
-				}
-			}
-
-			if (org === undefined) {
-				await setBrainName(ctx.db, target.brain_id, newName!);
-				const rows = brainRows(await listBrains(), activeBrainId());
-				return {
-					content: [{ type: 'text' as const, text: `Renamed ${label} to "${newName}".` }],
-					structuredContent: { view: 'brains', brains: rows, active: activeBrainId() }
-				};
-			}
-
-			// A MOVE. Taking a brain out of an org is an org admin's call, like
-			// disconnect_brain; putting one in adds data to someone else's organization,
-			// so the destination needs its own admin too. Admin in the destination also
-			// means the caller keeps access afterwards, through the org-admin floor.
-			if (!target.org_role || !roleAtLeast(target.org_role, 'admin')) {
-				return fail(`You need organization admin access to move ${label} out of its organization.`);
-			}
-			let dest: OrgScope;
-			try {
-				dest = await orgContext({ requires: 'admin', org });
-			} catch (err) {
-				return fail(err instanceof Error ? err.message : String(err));
-			}
-			if (dest.org.org_id === target.org_id) {
-				return fail(`${label} is already in ${orgLabel(dest.org)}.`);
-			}
-			const source = await getOrgById(ctx.db, target.org_id);
-			if (!source) return fail('The brain’s current organization could not be found.');
-			const from = orgLabel(source);
-			const to = orgLabel(dest.org);
-
-			// The connection the brain is read through today: its binding, or for a
-			// brain written before bindings existed, its org's. That one keeps reading it.
-			const sourceConnectionId =
-				target.storage_connection_id ?? (await ensureOrgConnection(ctx.db, source));
-			const conn = await getConnection(ctx.db, sourceConnectionId);
-			const storageAccount =
-				conn && conn.owner_org_id === null
-					? 'Isomorphic hosted storage'
-					: `${target.storage_account} on GitHub`;
-
-			if (!confirm) {
-				const changes = planBrainMove({
-					visibility: target.visibility,
-					readOnly: !!target.read_only,
-					people: await loadMovePeople(ctx.db, {
-						brainId: target.brain_id,
-						fromOrgId: target.org_id,
-						toOrgId: dest.org.org_id
-					})
-				});
-				const text = describeMove({
-					brain: newName ?? label,
-					from,
-					to,
-					storageAccount,
-					changes,
-					pendingInvites: await countPendingBrainInvites(ctx.db, target.brain_id)
-				});
-				return {
-					content: [{ type: 'text' as const, text }],
-					structuredContent: { moved: false, from, to, changes }
-				};
-			}
-
-			await moveBrain(ctx.db, {
-				brainId: target.brain_id,
-				toOrgId: dest.org.org_id,
-				sourceConnectionId
-			});
-			if (newName) await setBrainName(ctx.db, target.brain_id, newName);
-			const rows = brainRows(await listBrains(), activeBrainId());
-			return {
-				content: [
-					{
-						type: 'text' as const,
-						text: `Moved ${newName ?? label} from ${from} to ${to}. It is still stored in ${storageAccount}.`
-					}
-				],
-				structuredContent: {
-					view: 'brains',
-					brains: rows,
-					active: activeBrainId(),
-					moved: true,
-					from,
-					to
-				}
 			};
 		}
 	);

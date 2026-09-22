@@ -132,8 +132,8 @@ named org whose brains live on the platform's installation, with them as its own
 
 ```
 create_org(name: "Acme Corp")
-update_brain(brain: "Client Wiki", org: "Acme Corp")                 # preview
-update_brain(brain: "Client Wiki", org: "Acme Corp", confirm: true)  # move
+connect_brain(repo: "Client Wiki", org: "Acme Corp")                 # preview
+connect_brain(repo: "Client Wiki", org: "Acme Corp", confirm: true)  # move
 ```
 
 A moved brain keeps its storage: a brain moved out of a customer org stays in that
