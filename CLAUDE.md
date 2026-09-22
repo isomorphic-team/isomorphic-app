@@ -52,6 +52,7 @@ pnpm test:preamble      # the /mcp preamble: which requests need a brain, and wh
 pnpm test:dedupe        # write-attempt ledger: an identical retry is answered, not applied twice
 pnpm test:appmeta       # the ui:// app resource's host contract (prefersBorder, tool→app link)
 pnpm test:feedback      # submit_feedback composition golden test (redaction, nothing identifying published)
+pnpm test:email         # the magic-link sign-in email: content, escaping, the Resend request
 pnpm test:usage         # usage-analytics golden test (tool-classification coverage, the summary fold)
 pnpm test:wiring        # every test:* script is in BOTH package.json's `test` and ci.yml
                         # (+ ci.yml's Playwright container tag matches the resolved dep)
