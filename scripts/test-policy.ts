@@ -26,6 +26,15 @@ import { parsePaths } from '../src/lib/brain-config.ts';
 import { pathPolicyOf, isContentPath, isHiddenName } from '../src/lib/brain-policy.ts';
 import { browseSummary, treeFitsInline, MAX_INLINE_TREE_CHARS } from '../src/lib/browse.ts';
 import {
+	normPagePath,
+	normFolderPath,
+	writeRefusal,
+	folderWriteRefusal,
+	nonPageKind,
+	resolveMoveTarget,
+	type MoveTarget
+} from '../src/lib/write-target.ts';
+import {
 	applyPolicy,
 	resetPolicy,
 	isEditablePath,
@@ -524,6 +533,163 @@ console.log('\nmenu placement');
 	check(
 		'…and a trigger above the top edge does too',
 		panelPlacement({ top: -80, bottom: -60 }, 500).maxH >= 0
+	);
+}
+
+// ---------------------------------------------------------------------------
+console.log('\nWhere a write lands, and whether it may (src/lib/write-target.ts)');
+// ---------------------------------------------------------------------------
+// The write tools' path rules, which each tool used to carry its own copy of. The
+// copies had drifted: move_page skipped the editable-content check on its source,
+// renamed a repo-root page to "a.m/slug.md", and neither move nor delete normalized
+// a page path the way write_page did.
+{
+	check(
+		'normPagePath: trims and strips leading slashes',
+		normPagePath('  /wiki/a.md ') === 'wiki/a.md'
+	);
+	check(
+		'normPagePath: keeps a trailing slash (a file path is used as typed)',
+		normPagePath('wiki/a/') === 'wiki/a/'
+	);
+	check(
+		'normFolderPath: strips both ends',
+		normFolderPath(' /wiki/Projects/ ') === 'wiki/Projects'
+	);
+	check('normFolderPath: a bare slash is unspecified', normFolderPath('/') === '');
+
+	// wikiStyle: wiki/ is content, raw/ is source, wiki/log.md is the changelog.
+	check(
+		'writeRefusal: source material, with the verb the caller passed',
+		writeRefusal('raw/notes.md', wikiStyle, 'written') ===
+			'"raw/notes.md" is source material, so it can\'t be written.'
+	);
+	check(
+		'writeRefusal: the changelog is maintained automatically',
+		writeRefusal('wiki/log.md', wikiStyle, 'deleted') ===
+			'"wiki/log.md" is maintained automatically.'
+	);
+	check(
+		'writeRefusal: outside editable content',
+		writeRefusal('README.md', wikiStyle, 'moved') ===
+			'"README.md" is outside this brain\'s editable content.'
+	);
+	check(
+		'writeRefusal: content is admitted',
+		writeRefusal('wiki/a.md', wikiStyle, 'moved') === null
+	);
+	check(
+		'writeRefusal: content:false defers only the content question',
+		writeRefusal('README.md', wikiStyle, 'written', { content: false }) === null &&
+			writeRefusal('raw/x.md', wikiStyle, 'written', { content: false }) !== null
+	);
+	check(
+		'writeRefusal: a whole-repo brain admits a root page',
+		writeRefusal('README.md', wholeRepo, 'written') === null
+	);
+
+	check(
+		'folderWriteRefusal: a clean folder',
+		folderWriteRefusal(
+			'wiki/p',
+			[{ path: 'wiki/p/a.md' }, { path: 'wiki/p/b.md' }],
+			wikiStyle,
+			'moved'
+		) === null
+	);
+	check(
+		'folderWriteRefusal: a tool-maintained file inside refuses the FOLDER by name',
+		folderWriteRefusal(
+			'wiki',
+			[{ path: 'wiki/a.md' }, { path: 'wiki/log.md' }],
+			wikiStyle,
+			'deleted'
+		) === '"wiki" contains a tool-maintained file, so it can\'t be deleted.'
+	);
+	check(
+		'folderWriteRefusal: source material inside',
+		folderWriteRefusal('x', [{ path: 'raw/a.md' }], wikiStyle, 'moved') ===
+			'"x" contains source material, so it can\'t be moved.'
+	);
+
+	const tree = [{ path: 'wiki/a.md' }, { path: 'wiki/img/logo.png' }, { path: 'wiki/notes/b.md' }];
+	check('nonPageKind: a file', nonPageKind('wiki/img/logo.png', tree) === 'file');
+	check('nonPageKind: a folder', nonPageKind('wiki/notes', tree) === 'folder');
+	check(
+		'nonPageKind: a prefix of a folder name is not that folder',
+		nonPageKind('wiki/note', tree) === null
+	);
+	check('nonPageKind: nothing there', nonPageKind('nope', tree) === null);
+
+	const t = (r: MoveTarget) => (r.ok ? r.target : `ERR:${r.error}`);
+	check('move: neither argument is refused', !resolveMoveTarget('wiki/a.md', {}, 'page').ok);
+	check(
+		'move: whitespace-only arguments count as absent',
+		!resolveMoveTarget('wiki/a.md', { new_path: ' ', new_name: ' ' }, 'page').ok
+	);
+	check(
+		'page rename: slugified, under the same parent',
+		t(resolveMoveTarget('wiki/notes/a.md', { new_name: 'Weekly Sync' }, 'page')) ===
+			'wiki/notes/weekly-sync.md'
+	);
+	check(
+		'page rename at the repo root stays at the root',
+		t(resolveMoveTarget('a.md', { new_name: 'Weekly Sync' }, 'page')) === 'weekly-sync.md',
+		'used to compute "a.m/weekly-sync.md" from lastIndexOf("/") being -1'
+	);
+	check(
+		'page new_path: taken as given, normalized',
+		t(resolveMoveTarget('wiki/a.md', { new_path: ' /wiki/b.md' }, 'page')) === 'wiki/b.md'
+	);
+	check(
+		'page new_path must end in .md',
+		t(resolveMoveTarget('wiki/a.md', { new_path: 'wiki/b' }, 'page')) ===
+			'ERR:Target must end in .md.'
+	);
+	check(
+		'new_path wins over new_name',
+		t(resolveMoveTarget('wiki/a.md', { new_path: 'wiki/b.md', new_name: 'C' }, 'page')) ===
+			'wiki/b.md'
+	);
+	check(
+		'file rename: the name as typed, no slug',
+		t(resolveMoveTarget('wiki/img/logo.png', { new_name: 'Logo 2.png' }, 'file')) ===
+			'wiki/img/Logo 2.png'
+	);
+	check(
+		'file rename at the root',
+		t(resolveMoveTarget('logo.png', { new_name: 'x.png' }, 'file')) === 'x.png'
+	);
+	check(
+		'file new_path: normalized',
+		t(resolveMoveTarget('a.png', { new_path: '/b/c.png' }, 'file')) === 'b/c.png'
+	);
+	check(
+		'file new_path that normalizes to nothing',
+		t(resolveMoveTarget('a.png', { new_path: '/' }, 'file')) === 'ERR:The new path is empty.'
+	);
+	check(
+		'folder rename: under the same parent',
+		t(resolveMoveTarget('wiki/Projects', { new_name: 'Archive' }, 'folder')) === 'wiki/Archive'
+	);
+	check(
+		'folder new_path: surrounding slashes dropped',
+		t(resolveMoveTarget('wiki/Projects', { new_path: '/wiki/Old/' }, 'folder')) === 'wiki/Old'
+	);
+	check(
+		'folder into itself is refused',
+		t(resolveMoveTarget('wiki/Projects', { new_path: 'wiki/Projects/Sub' }, 'folder')) ===
+			'ERR:Can\'t move "wiki/Projects" into itself.'
+	);
+	check(
+		'folder onto itself passes (the caller answers "already there")',
+		t(resolveMoveTarget('wiki/Projects', { new_path: 'wiki/Projects' }, 'folder')) ===
+			'wiki/Projects'
+	);
+	check(
+		'folder new_path that normalizes to nothing',
+		t(resolveMoveTarget('wiki/Projects', { new_path: '/' }, 'folder')) ===
+			'ERR:The new folder path is empty.'
 	);
 }
 
