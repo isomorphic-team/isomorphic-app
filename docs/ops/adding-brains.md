@@ -110,7 +110,7 @@ its org. The content index (`ensureFresh`) self-builds on the first read — no 
 ## Hosted and personal orgs cannot adopt
 
 `connect_brain` refuses in an org whose connection is the platform's shared
-installation (a personal org, or a `hosted` one from `pnpm onboard-org --hosted`).
+installation (a personal org, or a `hosted` one made by `create_org`).
 Adopting through it would let any org claim a repository another org's brain left
 behind in the platform account. Those orgs create brains with `create_brain`, or
 receive them with `update_brain`.

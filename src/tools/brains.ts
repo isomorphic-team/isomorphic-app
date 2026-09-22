@@ -495,7 +495,7 @@ export function registerBrainTools(
 			// left behind.
 			if (!(await orgAdministersConnection(ctx.db, ctx.org))) {
 				return fail(
-					`${orgLabel(ctx.org)} stores its brains on Isomorphic's hosted storage, which has no repositories of its own to adopt. Use create_brain to start a new brain here, or connect_github_org to connect your own GitHub organization.`
+					`${orgLabel(ctx.org)} stores its brains on Isomorphic's hosted storage, which has no repositories of its own to adopt. Use create_brain to start a new brain here, or create_org with github: true to connect your own GitHub organization.`
 				);
 			}
 

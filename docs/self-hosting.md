@@ -345,8 +345,9 @@ Apply it to both the local and remote database.
 ### 3d. Bringing on another organization
 
 Two paths, both documented in [`docs/ops/onboarding-a-customer-org.md`](ops/onboarding-a-customer-org.md):
-`connect_github_org` (self-serve, the org installs the App on their own GitHub org and
-their brains stay under their ownership) and `pnpm onboard-org` (operator-driven, scripted).
+`create_org` (self-serve: a hosted org on the spot, or with `github: true` the org installs
+the App on their own GitHub org and their brains stay under their ownership) and
+`pnpm onboard-org` (operator-driven, scripted, for a customer's own GitHub org).
 [`docs/ops/adding-brains.md`](ops/adding-brains.md) covers adopting an existing repository as
 a brain.
 

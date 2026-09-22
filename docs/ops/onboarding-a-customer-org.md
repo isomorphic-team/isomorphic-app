@@ -8,10 +8,10 @@ brains live under the platform org.
 There are two ways in. Both end in the same place: a `customer`-model `orgs` row,
 an `owner` membership, and at least one adopted brain.
 
-|                                          | Who drives it               | When to use                                                         |
-| ---------------------------------------- | --------------------------- | ------------------------------------------------------------------- |
-| **Self-serve** (`connect_github_org`)    | the customer, inside Claude | the normal path — no operator SQL                                   |
-| **Operator script** (`pnpm onboard-org`) | you, from the CLI           | white-glove setup, or pre-provisioning before the customer signs in |
+|                                               | Who drives it               | When to use                                                         |
+| --------------------------------------------- | --------------------------- | ------------------------------------------------------------------- |
+| **Self-serve** (`create_org`, `github: true`) | the customer, inside Claude | the normal path — no operator SQL                                   |
+| **Operator script** (`pnpm onboard-org`)      | you, from the CLI           | white-glove setup, or pre-provisioning before the customer signs in |
 
 ---
 
@@ -29,13 +29,14 @@ customer's org (see [`adding-brains.md`](adding-brains.md)).
 
 ---
 
-## Path A — self-serve (`connect_github_org`)
+## Path A: self-serve (`create_org` with `github: true`)
 
 The customer does this themselves, entirely inside Claude. No operator SQL.
 
 1. **Sign in.** The customer connects to your Worker's URL (`PUBLIC_BASE_URL`) from Claude and
    signs in (magic-link / SSO). First sign-in gives them a personal Model-A org.
-2. **Run `connect_github_org`.** ("Connect our GitHub org.") The tool returns a
+2. **Run `create_org` with `github: true`.** ("Create an org for Acme, on our GitHub.")
+   The tool returns a
    GitHub App install link carrying a one-time `state` (stashed in `OAUTH_KV`
    under `pending_org_connect:<state>`, 1h TTL).
 3. **Install the App.** They open the link, install Isomorphic on their GitHub
@@ -123,21 +124,14 @@ signing in. (Writing the brain here keeps them from landing in a brainless org.)
 
 ---
 
-## A team without GitHub: a hosted org (`--hosted`)
+## A team without GitHub: a hosted org
 
-For a team that does not use GitHub at all, create a **hosted** org instead: a named
-org whose brains live on the platform's installation. Nobody installs anything.
-
-```sh
-pnpm onboard-org --hosted --org-name "Acme Corp" [--owner-email admin@acme.com] --apply both
-```
-
-It writes an `orgs` row with `model='hosted'`, the platform connection, and a
-membership for the operator (owner, or admin when `--owner-email` names someone
-else, who is then invited as `--role`). Being a member is what lets the operator
-move an existing brain in:
+For a team that does not use GitHub at all, no onboarding step is needed. Anyone signed
+in can run `create_org` (when the deployment has `AUTO_PROVISION=true`), which creates a
+named org whose brains live on the platform's installation, with them as its owner:
 
 ```
+create_org(name: "Acme Corp")
 update_brain(brain: "Client Wiki", org: "Acme Corp")                 # preview
 update_brain(brain: "Client Wiki", org: "Acme Corp", confirm: true)  # move
 ```

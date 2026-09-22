@@ -171,8 +171,10 @@ One tool added, `update_brain`, which fills two gaps (rename and move). A move i
 change to a brain's own properties, so it sits beside rename rather than inside
 `connect_brain`, which is about adopting storage.
 
-Later steps change names without adding tools: `connect_github_org` becomes
-`connect_storage` with a provider argument, and `create_brain` / `connect_brain` gain an
+`create_org` replaced `connect_github_org` in step 2, so creating an org and choosing
+where its storage lives are one verb: hosted by default, `github: true` for the
+customer's own GitHub organization. A later backend is another option on the same tool,
+not a new tool. `create_brain` / `connect_brain` later gain an
 optional connection argument defaulting to the org's.
 
 ## 7. Migration path
@@ -185,7 +187,8 @@ its deploy window, because a rollback reverts code and never schema.
    back to the org. `create_brain` and `connect_brain` write it. No behavior change for
    an existing brain.
 2. **Move and rename (built).** `update_brain`, the `hosted` org model, and
-   `pnpm onboard-org --hosted` to create a named org on platform storage.
+   `create_org`, which replaces `connect_github_org` and creates a hosted org in
+   product (gated on `AUTO_PROVISION`) or starts the GitHub install.
 3. **Key derived state by `brain_id`.** The content index, write-attempt ledger and
    active-brain pointer stop using `owner/repo`. A lazy rebuild, the same shape as an
    `INDEX_SCHEMA_VERSION` bump.

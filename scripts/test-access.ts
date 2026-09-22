@@ -234,6 +234,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { readdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { planBrainMove, loadMovePeople, describeMove, moveBrain } from '../src/lib/brain-move.ts';
+import { connectCustomerOrg } from '../src/lib/org-connect.ts';
 import {
 	listAccessibleBrains,
 	listAccessibleOrgs,
@@ -1221,6 +1222,58 @@ console.log('\nStorage bindings: which credential reads a brain');
 	check(
 		"the old org's admin no longer reaches it",
 		(await brainFor('li', 'b-bound')) === undefined
+	);
+}
+
+console.log('\nCreating orgs: a customer org from a GitHub install (connectCustomerOrg)');
+{
+	const { db, sqlite } = localD1();
+	sqlite.exec(`INSERT INTO app_users (user_id, email) VALUES ('ann', 'ann@example.com');`);
+	const first = await connectCustomerOrg(db, {
+		userId: 'ann',
+		installationId: 55,
+		orgLogin: 'acme-gh',
+		name: 'Acme Corp'
+	});
+	const org = sqlite
+		.prepare('SELECT name, model, brain_owner FROM orgs WHERE org_id = ?')
+		.get(first.orgId) as { name: string; model: string; brain_owner: string };
+	check(
+		'takes the name chosen in create_org, and the GitHub login as its storage account',
+		first.created &&
+			org.name === 'Acme Corp' &&
+			org.model === 'customer' &&
+			org.brain_owner === 'acme-gh'
+	);
+	const conn = sqlite
+		.prepare('SELECT owner_org_id, account FROM storage_connections WHERE connection_id = ?')
+		.get('github-app:55') as { owner_org_id: string; account: string } | undefined;
+	check(
+		'owns the connection its installation makes, so it may list and adopt through it',
+		conn?.owner_org_id === first.orgId && conn?.account === 'acme-gh'
+	);
+	const again = await connectCustomerOrg(db, {
+		userId: 'ann',
+		installationId: 55,
+		orgLogin: 'acme-gh',
+		name: 'Something Else'
+	});
+	check(
+		're-installing adopts the same org and does not rename it',
+		!again.created &&
+			again.orgId === first.orgId &&
+			(sqlite.prepare('SELECT COUNT(*) AS n FROM orgs').get() as { n: number }).n === 1 &&
+			(sqlite.prepare('SELECT name FROM orgs').get() as { name: string }).name === 'Acme Corp'
+	);
+	const bare = await connectCustomerOrg(db, {
+		userId: 'ann',
+		installationId: 56,
+		orgLogin: 'beta-gh'
+	});
+	check(
+		'with no chosen name (an install not started from create_org), it is named after the login',
+		(sqlite.prepare('SELECT name FROM orgs WHERE org_id = ?').get(bare.orgId) as { name: string })
+			.name === 'beta-gh'
 	);
 }
 

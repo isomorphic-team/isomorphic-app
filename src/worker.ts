@@ -122,7 +122,7 @@ interface Env {
 	// self-hosting cheap. Ignored in oauth mode, which mints a token per tenant.
 	GITHUB_TOKEN?: string;
 	// The App's URL slug (e.g. "isomorphic-mind"), from bootstrap. Used to build
-	// the install URL for the self-serve connect_github_org flow. Not a secret.
+	// the install URL for create_org's GitHub path (`github: true`). Not a secret.
 	GITHUB_APP_SLUG?: string;
 
 	// Platform provisioning (oauth mode). The admin installs the platform App
@@ -956,12 +956,21 @@ class McpSession {
 		if (hasOrgModel)
 			registerConnectedAccountTools(server, (opts) => this.tenantContext(opts), this.env);
 
-		// ---------- org onboarding (self-serve Model-B connect) ----------
-		// connect_github_org returns a GitHub App install URL carrying a KV-stashed
-		// state; /github/install-callback resolves the install and writes the customer
-		// org + owner membership. The runtime analog of `pnpm onboard-org`. See
-		// src/tools/org-onboarding.ts and src/lib/org-connect.ts.
-		if (hasOrgModel) registerOrgOnboardingTools(server, (opts) => this.orgContext(opts), this.env);
+		// ---------- creating an org ----------
+		// create_org makes a hosted org on the spot, or (github: true) returns a GitHub
+		// App install URL carrying a KV-stashed state, which /github/install-callback
+		// turns into a customer org. See src/tools/org-onboarding.ts and
+		// src/lib/org-connect.ts.
+		if (hasOrgModel)
+			registerOrgOnboardingTools(
+				server,
+				(opts) => this.orgContext(opts),
+				async () =>
+					this.props?.user_id
+						? listAccessibleOrgs(this.env.PLATFORM_DB, await this.personUserIds(this.props.user_id))
+						: [],
+				this.env
+			);
 
 		// ---------- usage analytics ----------
 		// The org's Analytics tab, reading the per-day counters the wrapper at the
@@ -1290,7 +1299,7 @@ async function handleOrgConnectCallback(
 ): Promise<Response> {
 	const raw = await env.OAUTH_KV.get(`pending_org_connect:${state}`);
 	if (!raw) return installedPage(url);
-	let pending: { user_id: string; email: string | null };
+	let pending: { user_id: string; email: string | null; name?: string | null };
 	try {
 		pending = JSON.parse(raw);
 	} catch {
@@ -1302,7 +1311,8 @@ async function handleOrgConnectCallback(
 			userId: pending.user_id,
 			installationId,
 			orgLogin: org.orgLogin,
-			accountType: org.accountType
+			accountType: org.accountType,
+			name: pending.name
 		});
 		await env.OAUTH_KV.delete(`pending_org_connect:${state}`);
 		return connectedOrgPage(result);
@@ -1312,7 +1322,7 @@ async function handleOrgConnectCallback(
 			'Couldn’t finish connecting',
 			`<p>The app installed, but we couldn’t link it to your account: ${escapeHtml(
 				err instanceof Error ? err.message : String(err)
-			)}.</p><p>Try <code>connect_github_org</code> again from Claude.</p>`
+			)}.</p><p>Try <code>create_org</code> with <code>github: true</code> again from Claude.</p>`
 		);
 	}
 }
@@ -1333,7 +1343,7 @@ export default {
 		// prod. Serve a friendly confirmation instead; onboarding itself is
 		// admin-driven (seed), so this page just confirms + surfaces the id.
 		if (url.pathname === '/github/install-callback') {
-			// Self-serve connect_github_org completion carries a `state` we stashed in
+			// Self-serve create_org (github: true) completion carries a `state` we stashed in
 			// KV; without it (e.g. a direct Marketplace install) fall back to the
 			// generic confirmation page.
 			const state = url.searchParams.get('state');
