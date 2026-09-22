@@ -104,6 +104,14 @@ import { dedupeWrite, writeFingerprint, secondsSince } from '../lib/write-dedupe
 import { d1WriteLedger } from '../lib/write-dedupe-store.ts';
 import { brainLabel, type TenantOpts, type Role, type AccessibleBrain } from '../lib/orgs.ts';
 import { brainArg, fail, ok } from './shared.ts';
+import {
+	normPagePath,
+	normFolderPath,
+	writeRefusal,
+	folderWriteRefusal,
+	nonPageKind,
+	resolveMoveTarget
+} from '../lib/write-target.ts';
 
 // Shared optional `brain` arg — every tool takes it so the model can one-shot a
 // different brain than the connection's active one (see tenantContext in worker.ts).
@@ -175,12 +183,6 @@ export interface BrainContext {
 	// Which brain this call resolved to (id + display label), so app tools can echo the
 	// active brain to the nav switcher.
 	activeBrain: { id: string; label: string };
-}
-
-// Normalize a folder path for the folder tools: strip surrounding slashes so
-// prefix checks (`${folder}/`) are unambiguous. "" means "unspecified".
-function normFolderPath(p: string): string {
-	return p.trim().replace(/^\/+/, '').replace(/\/+$/, '');
 }
 
 // Shape a write response to match how the change actually landed:
@@ -732,19 +734,12 @@ async function moveFolderWrite(
 	pre?: { head: Head; tree: TreeEntry[] }
 ) {
 	const { store, repoArgs, config, author } = ctx;
-	const { new_path, new_name } = args;
 	const folder = normFolderPath(args.path);
 	if (!folder) return fail('Give a folder path, e.g. "wiki/Projects".');
-	if (!new_path && !new_name?.trim())
-		return fail('Give a new_path (move/rename) or a new_title (rename in place).');
-
-	const parent = folder.includes('/') ? folder.slice(0, folder.lastIndexOf('/')) : '';
-	const newFolder = normFolderPath(
-		new_path ?? (parent ? `${parent}/${new_name!.trim()}` : new_name!.trim())
-	);
-	if (!newFolder) return fail('The new folder path is empty.');
+	const resolved = resolveMoveTarget(folder, args, 'folder');
+	if (!resolved.ok) return fail(resolved.error);
+	const newFolder = resolved.target;
 	if (newFolder === folder) return ok(`"${folder}" is already there — nothing to move.`);
-	if (newFolder.startsWith(`${folder}/`)) return fail(`Can't move "${folder}" into itself.`);
 	if (!isContentPath(`${newFolder}/.gitkeep`, config))
 		return fail(`Can't move to "${newFolder}" — it's outside this brain's editable content.`);
 
@@ -752,12 +747,8 @@ async function moveFolderWrite(
 	const tree = pre?.tree ?? (await store.listTree(repoArgs, head, { extension: '*' }));
 	const moved = tree.filter((e) => e.path.startsWith(`${folder}/`));
 	if (moved.length === 0) return fail(`No folder "${folder}" found (it has no files).`);
-	for (const e of moved) {
-		if (isSourcePath(e.path, config))
-			return fail(`"${folder}" contains source material — it can't be moved.`);
-		if (isToolMaintained(e.path, config))
-			return fail(`"${folder}" contains a tool-maintained file — it can't be moved.`);
-	}
+	const refusal = folderWriteRefusal(folder, moved, config, 'moved');
+	if (refusal) return fail(refusal);
 	const rename = (p: string) => `${newFolder}${p.slice(folder.length)}`;
 	const existing = new Set(tree.map((e) => e.path));
 	const { blocking, scaffolding } = folderMoveCollisions(
@@ -901,20 +892,12 @@ async function moveFileWrite(
 	args: { path: string; new_path?: string; new_name?: string }
 ) {
 	const { store, repoArgs, config, author } = ctx;
-	const path = args.path.trim().replace(/^\/+/, '');
-	const { new_path, new_name } = args;
-	if (!new_path && !new_name?.trim())
-		return fail('Give a new_path (move/rename) or a new_title (rename in place).');
-	if (isSourcePath(path, config)) return fail(`"${path}" is source material — it can't be moved.`);
-	if (isToolMaintained(path, config)) return fail(`"${path}" is maintained automatically.`);
-	if (!isContentPath(path, config))
-		return fail(`"${path}" is outside this brain's editable content.`);
-
-	const parent = path.includes('/') ? path.slice(0, path.lastIndexOf('/')) : '';
-	const newPath = (
-		new_path ? new_path.trim() : parent ? `${parent}/${new_name!.trim()}` : new_name!.trim()
-	).replace(/^\/+/, '');
-	if (!newPath) return fail('The new path is empty.');
+	const path = normPagePath(args.path);
+	const refusal = writeRefusal(path, config, 'moved');
+	if (refusal) return fail(refusal);
+	const resolved = resolveMoveTarget(path, args, 'file');
+	if (!resolved.ok) return fail(resolved.error);
+	const newPath = resolved.target;
 	if (newPath === path) return ok(`"${path}" is already there — nothing to move.`);
 	if (!isContentPath(newPath, config))
 		return fail(`Can't move to "${newPath}" — it's outside this brain's editable content.`);
@@ -1000,12 +983,9 @@ async function moveFileWrite(
 // counts as a page that would lose something.
 async function deleteFileWrite(ctx: BrainContext, head: Head, args: { path: string }) {
 	const { store, repoArgs, config, author } = ctx;
-	const path = args.path.trim().replace(/^\/+/, '');
-	if (isSourcePath(path, config))
-		return fail(`"${path}" is source material — it can't be deleted.`);
-	if (isToolMaintained(path, config)) return fail(`"${path}" is maintained automatically.`);
-	if (!isContentPath(path, config))
-		return fail(`"${path}" is outside this brain's editable content.`);
+	const path = normPagePath(args.path);
+	const refusal = writeRefusal(path, config, 'deleted');
+	if (refusal) return fail(refusal);
 
 	// The reference count and the changelog are independent reads — run them together.
 	const [refsRes, log] = await Promise.all([
@@ -1066,12 +1046,8 @@ async function deleteFolderWrite(
 	const tree = pre?.tree ?? (await store.listTree(repoArgs, head, { extension: '*' }));
 	const doomed = tree.filter((e) => e.path.startsWith(`${folder}/`));
 	if (doomed.length === 0) return fail(`No folder "${folder}" found.`);
-	for (const e of doomed) {
-		if (isSourcePath(e.path, config))
-			return fail(`"${folder}" contains source material — it can't be deleted.`);
-		if (isToolMaintained(e.path, config))
-			return fail(`"${folder}" contains a tool-maintained file — it can't be deleted.`);
-	}
+	const refusal = folderWriteRefusal(folder, doomed, config, 'deleted');
+	if (refusal) return fail(refusal);
 	const doomedMd = new Set(doomed.filter((e) => e.path.endsWith('.md')).map((e) => e.path));
 
 	// References from OUTSIDE the folder into any deleted page, from the content index
@@ -1260,7 +1236,7 @@ export function registerLibrarianTools(
 			const ctx = await getContext({ requires: 'editor', brain });
 			return guardedWrite(ctx, 'write_page', args, async () => {
 				const { store, repoArgs, config } = ctx;
-				const target = path.trim().replace(/^\/+/, '');
+				const target = normPagePath(path);
 				if (!target.endsWith('.md')) {
 					return fail('Pages must end in .md, e.g. "wiki/research/notes.md".');
 				}
@@ -1272,9 +1248,10 @@ export function registerLibrarianTools(
 						'Pass either content (which replaces the whole body) or append/edits (which change part of it), not both.'
 					);
 				}
-				if (isSourcePath(target, config)) return fail(`"${target}" is immutable source material.`);
-				if (isToolMaintained(target, config))
-					return fail(`"${target}" is maintained automatically.`);
+				// Whether the path is inside editable content is asked only of a NEW page,
+				// below: an existing page outside it is still readable and updatable.
+				const refusal = writeRefusal(target, config, 'written', { content: false });
+				if (refusal) return fail(refusal);
 				// Key names and managed keys are context-free, so reject a bad patch before
 				// touching the repo rather than after reading the blob.
 				if (fields) {
@@ -1301,9 +1278,8 @@ export function registerLibrarianTools(
 							`"${target}" does not exist. Use mode "create" or "upsert" (the default) to create it.`
 						);
 					}
-					if (!isContentPath(target, config)) {
-						return fail(`"${target}" is outside this brain's editable content area.`);
-					}
+					const outside = writeRefusal(target, config, 'written');
+					if (outside) return fail(outside);
 					return createPageWrite(ctx, head, {
 						target,
 						content,
@@ -1400,7 +1376,8 @@ export function registerLibrarianTools(
 			})
 		},
 		async (args) => {
-			const { path, new_path, new_title, brain } = args;
+			const { new_path, new_title, brain } = args;
+			const path = normPagePath(args.path);
 			const ctx = await getContext({ requires: 'editor', brain });
 			return guardedWrite(ctx, 'move_page', args, async () => {
 				// A path without a .md extension is a folder OR a non-page file, and the
@@ -1412,22 +1389,27 @@ export function registerLibrarianTools(
 				// This supersedes an attachment-specific branch that routed on isAssetPath:
 				// the tree answers the same question for EVERY non-page file, so an
 				// attachment needs no case of its own.
-				if (!path.trim().replace(/^\/+/, '').endsWith('.md')) {
-					const cleaned = path.trim().replace(/^\/+/, '').replace(/\/+$/, '');
+				if (!path.endsWith('.md')) {
+					const cleaned = normFolderPath(path);
 					const head = await ctx.store.getHead(ctx.repoArgs, ctx.config.defaultBranch);
 					const tree = await ctx.store.listTree(ctx.repoArgs, head, { extension: '*' });
-					if (tree.some((e) => e.path === cleaned))
+					const kind = nonPageKind(cleaned, tree);
+					if (kind === 'file')
 						return moveFileWrite(ctx, head, tree, { path: cleaned, new_path, new_name: new_title });
-					if (tree.some((e) => e.path.startsWith(`${cleaned}/`)))
-						return moveFolderWrite(ctx, { path, new_path, new_name: new_title }, { head, tree });
+					if (kind === 'folder')
+						return moveFolderWrite(
+							ctx,
+							{ path: cleaned, new_path, new_name: new_title },
+							{ head, tree }
+						);
 					return fail(`No file or folder "${cleaned}" found.`);
 				}
 				const { store, repoArgs, config, author } = ctx;
-				if (!new_path && !new_title)
-					return fail('Give a new_path (move/rename) or a new_title (rename in place).');
-				if (isSourcePath(path, config))
-					return fail(`"${path}" is source material — it can't be moved.`);
-				if (isToolMaintained(path, config)) return fail(`"${path}" is maintained automatically.`);
+				const refusal = writeRefusal(path, config, 'moved');
+				if (refusal) return fail(refusal);
+				const resolved = resolveMoveTarget(path, { new_path, new_name: new_title }, 'page');
+				if (!resolved.ok) return fail(resolved.error);
+				const newPath = resolved.target;
 
 				const head = await store.getHead(repoArgs, config.defaultBranch);
 				const existing = await store.readFile(repoArgs, path, head.commitSha);
@@ -1438,10 +1420,6 @@ export function registerLibrarianTools(
 				// second copy here would repoint links to a name the rest of the system
 				// doesn't call this page.
 				const oldTitle = pageTitle(path, existing.content);
-				const newPath = new_path
-					? new_path.trim().replace(/^\/+/, '')
-					: `${path.slice(0, path.lastIndexOf('/'))}/${slugify(new_title!)}.md`;
-				if (!newPath.endsWith('.md')) return fail('Target must end in .md.');
 				if (!isContentPath(newPath, config))
 					return fail(`Can't move to ${newPath} — it's outside this brain's editable content.`);
 				const newTitle = new_title ?? oldTitle;
@@ -1550,29 +1528,26 @@ export function registerLibrarianTools(
 			})
 		},
 		async (args) => {
-			const { path, brain } = args;
+			const { brain } = args;
+			const path = normPagePath(args.path);
 			const ctx = await getContext({ requires: 'editor', brain });
 			return guardedWrite(ctx, 'delete_page', args, async () => {
 				// A path without a .md extension is a folder OR a non-page file; the tree
 				// says which, for the same reason it does in move_page. Guessing "folder"
 				// answered "No folder found" about files that were plainly there. This
 				// supersedes an attachment-specific branch, exactly as in move_page.
-				if (!path.trim().replace(/^\/+/, '').endsWith('.md')) {
-					const cleaned = path.trim().replace(/^\/+/, '').replace(/\/+$/, '');
+				if (!path.endsWith('.md')) {
+					const cleaned = normFolderPath(path);
 					const head = await ctx.store.getHead(ctx.repoArgs, ctx.config.defaultBranch);
 					const tree = await ctx.store.listTree(ctx.repoArgs, head, { extension: '*' });
-					if (tree.some((e) => e.path === cleaned))
-						return deleteFileWrite(ctx, head, { path: cleaned });
-					if (tree.some((e) => e.path.startsWith(`${cleaned}/`)))
-						return deleteFolderWrite(ctx, { path }, { head, tree });
+					const kind = nonPageKind(cleaned, tree);
+					if (kind === 'file') return deleteFileWrite(ctx, head, { path: cleaned });
+					if (kind === 'folder') return deleteFolderWrite(ctx, { path: cleaned }, { head, tree });
 					return fail(`No file or folder "${cleaned}" found.`);
 				}
 				const { store, repoArgs, config, author } = ctx;
-				if (isSourcePath(path, config))
-					return fail(`"${path}" is source material — it can't be deleted.`);
-				if (isToolMaintained(path, config)) return fail(`"${path}" is maintained automatically.`);
-				if (!isContentPath(path, config))
-					return fail(`"${path}" is outside this brain's editable content.`);
+				const refusal = writeRefusal(path, config, 'deleted');
+				if (refusal) return fail(refusal);
 
 				const head = await store.getHead(repoArgs, config.defaultBranch);
 				const existing = await store.readFile(repoArgs, path, head.commitSha);
