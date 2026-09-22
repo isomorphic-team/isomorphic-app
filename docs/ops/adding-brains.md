@@ -96,13 +96,27 @@ See `src/lib/brain-policy.ts` for the full schema and defaults.
 Ask Claude "what brains do I have?" (or open the switcher). The new brain appears under
 its org. The content index (`ensureFresh`) self-builds on the first read — no backfill.
 
-## Removing / renaming a brain
+## Removing, renaming, or moving a brain
 
-- **Remove:** `DELETE FROM brains WHERE brain_id = '<brain_id>';` (local + remote). The
-  repo and its content are untouched — you're only detaching it from the org.
-- **Rename the label:** labels are derived (`brainLabel` in `src/lib/orgs.ts`) from the
-  org name + repo; there's no stored label yet. To change what the switcher shows,
-  rename the repo or (future) add a `brains.label` column.
+- **Remove:** `disconnect_brain`, or `DELETE FROM brains WHERE brain_id = '<brain_id>';`
+  (local + remote). The repo and its content are untouched: you're only detaching it
+  from the org.
+- **Rename:** `configure_brain` with `name` (brain admin).
+- **Move to another org:** `connect_brain` with the brain's name or id as `repo` and the
+  destination `org`, then again with `confirm: true` (org admin in both orgs). The first call previews whose access changes. The brain
+  keeps its storage binding, so it stays in the same GitHub account and is read
+  through the same installation. See `docs/design/storage-and-tenancy.md`.
+
+## Hosted and personal orgs cannot adopt
+
+`connect_brain` refuses in an org whose connection is the platform's shared
+installation (a personal org, or a `hosted` one made by `create_org`).
+Adopting through it would let any org claim a repository another org's brain left
+behind in the platform account. Those orgs create brains with `create_brain`, or
+receive them by a move (`connect_brain` naming an existing brain).
+
+A `brains` row written by hand (step 3 above) needs no `storage_connection_id`: a NULL
+binding resolves through the org's installation, exactly as before migration 0010.
 
 ## Notes
 

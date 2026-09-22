@@ -35,6 +35,7 @@ import { registerMediaTools } from '../src/tools/media.ts';
 import { DEFAULT_BRAIN_CONFIG } from '../src/lib/brain-policy.ts';
 import { registerBrainTools } from '../src/tools/brains.ts';
 import { registerAnalyticsTools } from '../src/tools/analytics.ts';
+import { registerOrgOnboardingTools, type OrgOnboardingEnv } from '../src/tools/org-onboarding.ts';
 import { registerLibrarianTools, type BrainContext } from '../src/tools/librarian.ts';
 
 import { checker } from './check.ts';
@@ -59,8 +60,10 @@ const { check, done } = checker('scope checks');
 const { db, sqlite } = localD1();
 
 sqlite.exec(`
-  INSERT INTO orgs (org_id, name, model, installation_id, brain_owner, created_by)
-    VALUES ('org1', 'Northwind', 'customer', 1, 'northwind', 'u-boss');
+  INSERT INTO orgs (org_id, name, model, installation_id, brain_owner, created_by) VALUES
+    ('org1', 'Northwind',     'customer', 1, 'northwind',    'u-boss'),
+    ('org2', 'Contoso Group', 'customer', 2, 'contoso-io',   'u-boss'),
+    ('org3', 'Hosted Co',     'hosted',   9, 'platform-org', 'u-boss');
   INSERT INTO app_users (user_id, email, name) VALUES
     ('u-boss',    'boss@example.com',    'Boss'),
     ('u-shared',  'shared@example.com',  'Shared'),
@@ -109,6 +112,9 @@ interface Persona {
 	// "not a member" has to be a different answer from "a member with few powers".
 	orgRole: Role | null;
 	role: Role;
+	// A different role in a NAMED org, for the one tool that acts in two orgs at once
+	// (connect_brain's move). Absent: the persona holds `orgRole` wherever they look.
+	orgRoleIn?: Record<string, Role>;
 }
 const sharedAdmin: Persona = {
 	label: 'org viewer holding brain ADMIN (a brain was shared with them)',
@@ -220,6 +226,62 @@ const moves: string[] = [];
 // Each tool's registration config, for the checks that read `_meta` rather than call.
 const configs = new Map<string, Record<string, unknown>>();
 
+// What orgContext resolves a named `org` to. Every persona is placed at their one
+// org role in whichever org they name, which is what the gate tests need: whether a
+// tool ASKS for the right role, not how membership is looked up (test:access).
+// `Hosted Co` stores its brains on the platform's shared installation.
+const ORG_ROWS: Record<
+	string,
+	{
+		org_id: string;
+		name: string;
+		model: string;
+		installation_id: number;
+		brain_owner: string;
+		github_org_login: string | null;
+	}
+> = {
+	Northwind: {
+		org_id: 'org1',
+		name: 'Northwind',
+		model: 'customer',
+		installation_id: 1,
+		brain_owner: 'northwind',
+		github_org_login: 'northwind'
+	},
+	'Contoso Group': {
+		org_id: 'org2',
+		name: 'Contoso Group',
+		model: 'customer',
+		installation_id: 2,
+		brain_owner: 'contoso-io',
+		github_org_login: 'contoso-io'
+	},
+	'Hosted Co': {
+		org_id: 'org3',
+		name: 'Hosted Co',
+		model: 'hosted',
+		installation_id: 9,
+		brain_owner: 'platform-org',
+		github_org_login: null
+	}
+};
+
+// What create_org sees of the Worker's env. Mutable so a test can turn
+// AUTO_PROVISION off; `kvPuts` records what the GitHub path stashed.
+const kvPuts: { key: string; value: string }[] = [];
+const onboardingEnv: OrgOnboardingEnv = {
+	OAUTH_KV: {
+		put: async (key: string, value: string) => {
+			kvPuts.push({ key, value });
+		}
+	} as OrgOnboardingEnv['OAUTH_KV'],
+	GITHUB_APP_SLUG: 'isomorphic-test',
+	AUTO_PROVISION: 'true',
+	PLATFORM_ORG: 'platform-org',
+	PLATFORM_INSTALLATION_ID: '9'
+};
+
 function toolsFor(
 	p: Persona,
 	deployment: { webBaseUrl?: string } = { webBaseUrl: 'https://brain.example' }
@@ -237,32 +299,53 @@ function toolsFor(
 	registerMediaTools(server, getContext);
 	registerAnalyticsTools(server, getContext);
 	registerLibrarianTools(server, getContext);
+	const orgContext = async (opts?: { requires?: Role; org?: string }) => {
+		orgAsks.push(opts);
+		const orgRole = (opts?.org && p.orgRoleIn?.[opts.org]) || p.orgRole;
+		assertRole(orgRole, opts?.requires);
+		// assertRole threw for a null above when a role was required; an org-scope
+		// call with no requirement from a non-member is not a shape any tool makes.
+		if (!orgRole) throw new Error('not a member of any organization');
+		return {
+			octokit,
+			org: {
+				created_by: 'u-boss',
+				created_at: '2026-01-01',
+				suspended_at: null,
+				...(ORG_ROWS[opts?.org ?? ''] ?? ORG_ROWS.Northwind)
+			},
+			role: orgRole,
+			db,
+			actorUserId: p.userId
+		};
+	};
+	// Two orgs, one of which holds no brain at all: the case the brains payload has
+	// to carry, since the widget cannot derive it from a list of brains.
+	// A non-member belongs to no organization, so the list is empty rather than a
+	// list carrying a null role.
+	const listOrgs = async () =>
+		(p.orgRole
+			? [
+					{ org_id: 'org1', name: 'Northwind', brain_owner: 'northwind' },
+					{ org_id: 'org2', name: 'Contoso Group', brain_owner: 'contoso-io' }
+				]
+			: []
+		).map((o) => ({
+			role: p.orgRole as Role,
+			org: {
+				...o,
+				model: 'customer',
+				installation_id: 1,
+				github_org_login: o.brain_owner,
+				created_by: 'u-boss',
+				created_at: '2026-01-01',
+				suspended_at: null
+			}
+		}));
+	registerOrgOnboardingTools(server, orgContext, listOrgs, onboardingEnv);
 	registerBrainTools(server, {
 		getContext,
-		orgContext: async (opts?: { requires?: Role; org?: string }) => {
-			orgAsks.push(opts);
-			assertRole(p.orgRole, opts?.requires);
-			// assertRole threw for a null above when a role was required; an org-scope
-			// call with no requirement from a non-member is not a shape any tool makes.
-			if (!p.orgRole) throw new Error('not a member of any organization');
-			return {
-				octokit,
-				org: {
-					org_id: 'org1',
-					name: 'Northwind',
-					model: 'customer',
-					installation_id: 1,
-					brain_owner: 'northwind',
-					github_org_login: 'northwind',
-					created_by: 'u-boss',
-					created_at: '2026-01-01',
-					suspended_at: null
-				},
-				role: p.orgRole,
-				db,
-				actorUserId: p.userId
-			};
-		},
+		orgContext,
 		listBrains: async (): Promise<AccessibleBrain[]> =>
 			[
 				{ id: 'northwind/main', brain_id: 'b-main', repo_name: 'main', name: 'Main' },
@@ -273,33 +356,14 @@ function toolsFor(
 				org_name: 'Northwind',
 				org_model: 'customer',
 				installation_id: 1,
+				storage_account: 'northwind',
+				storage_connection_id: null,
+				visibility: b.brain_id === 'b-main' ? 'private' : 'org',
 				repo_owner: 'northwind',
 				role: p.role,
 				org_role: p.orgRole
 			})) as AccessibleBrain[],
-		// Two orgs, one of which holds no brain at all: the case the brains payload has
-		// to carry, since the widget cannot derive it from a list of brains.
-		// A non-member belongs to no organization, so the list is empty rather than a
-		// list carrying a null role.
-		listOrgs: async () =>
-			(p.orgRole
-				? [
-						{ org_id: 'org1', name: 'Northwind', brain_owner: 'northwind' },
-						{ org_id: 'org2', name: 'Contoso Group', brain_owner: 'contoso-io' }
-					]
-				: []
-			).map((o) => ({
-				role: p.orgRole as Role,
-				org: {
-					...o,
-					model: 'customer',
-					installation_id: 1,
-					github_org_login: o.brain_owner,
-					created_by: 'u-boss',
-					created_at: '2026-01-01',
-					suspended_at: null
-				}
-			})),
+		listOrgs,
 		activeBrainId: () => 'northwind/main',
 		setActiveBrain: async (id) => {
 			moves.push(id);
@@ -949,6 +1013,213 @@ console.log('\nbrains is data, not a widget');
 		!meta || !Object.keys(meta).some((k) => k.startsWith('ui/')),
 		JSON.stringify(meta)
 	);
+}
+
+// ===========================================================================
+console.log('\nconfigure_brain renames at BRAIN scope; connect_brain moves at ORG scope in both');
+// ===========================================================================
+// Last in the file because the admit cases really write: they rename and move
+// b-main, and restore it afterwards so the file stays order-independent.
+{
+	const brainRow = () =>
+		sqlite
+			.prepare('SELECT org_id, name, storage_connection_id FROM brains WHERE brain_id = ?')
+			.get('b-main') as { org_id: string; name: string; storage_connection_id: string | null };
+	const restore = () =>
+		sqlite.exec(
+			`UPDATE brains SET org_id = 'org1', name = 'Main', storage_connection_id = NULL
+			  WHERE brain_id = 'b-main';`
+		);
+
+	const rename = { name: 'Renamed' };
+	check('a brain viewer cannot rename', await denies(lurker, 'configure_brain', rename));
+	check(
+		'an org OWNER holding only brain viewer cannot rename either: the name is the brain’s',
+		await denies(orgBoss, 'configure_brain', rename)
+	);
+	const renamed = await attempt(sharedAdmin, 'configure_brain', rename);
+	check(
+		'a brain admin with no org power can rename, without touching the repository',
+		renamed.outcome === 'allowed' && brainRow().name === 'Renamed',
+		renamed.detail
+	);
+	restore();
+
+	const move = { repo: 'northwind/main', org: 'Contoso Group' };
+	check(
+		'a brain admin who is only an org viewer cannot move it out of the org',
+		await denies(sharedAdmin, 'connect_brain', move)
+	);
+	check('nor can an outsider holding a grant', await denies(outsider, 'connect_brain', move));
+	check('nor an org editor', await denies(writer, 'connect_brain', move));
+	const destOnly: Persona = {
+		...writer,
+		label: 'org editor here, org ADMIN in the destination',
+		orgRoleIn: { 'Contoso Group': 'admin' }
+	};
+	check(
+		'admin in the destination alone is not enough: taking it out needs admin here too',
+		await denies(destOnly, 'connect_brain', move)
+	);
+
+	orgAsks.length = 0;
+	const preview = await attempt(orgBoss, 'connect_brain', move);
+	const ask = orgAsks.at(-1);
+	check(
+		'the destination is resolved at org ADMIN, by the name the caller gave',
+		ask?.requires === 'admin' && ask?.org === 'Contoso Group',
+		JSON.stringify(ask)
+	);
+	check(
+		'without confirm, a move answers with a preview and writes nothing',
+		preview.outcome === 'allowed' &&
+			preview.text.includes('Nothing has changed yet') &&
+			brainRow().org_id === 'org1' &&
+			brainRow().storage_connection_id === null,
+		preview.detail
+	);
+	const named = await attempt(orgBoss, 'connect_brain', { ...move, name: 'Elsewhere' });
+	check(
+		'...and a name given with the move is not applied either',
+		named.outcome === 'allowed' && brainRow().name === 'Main',
+		named.detail
+	);
+	check(
+		'a brain is found by its name as well as its id',
+		(await attempt(orgBoss, 'connect_brain', { repo: 'Main', org: 'Contoso Group' })).text.includes(
+			'Move "Main" from Northwind to Contoso Group?'
+		)
+	);
+	const partial = await attempt(orgBoss, 'connect_brain', { repo: 'mai', org: 'Contoso Group' });
+	check(
+		'a PARTIAL name is not a move: it is read as a repository to adopt',
+		!partial.text.includes('Move') &&
+			partial.detail.includes('octokit') &&
+			brainRow().org_id === 'org1',
+		partial.detail
+	);
+	check(
+		'moving INTO a hosted org is allowed: the hosted refusal is about adopting',
+		(await attempt(orgBoss, 'connect_brain', { ...move, org: 'Hosted Co' })).text.includes(
+			'Nothing has changed yet'
+		)
+	);
+	check(
+		'moving into the org it is already in is refused',
+		await denies(orgBoss, 'connect_brain', {
+			repo: 'northwind/main',
+			org: 'Northwind',
+			confirm: true
+		})
+	);
+
+	const done_ = await attempt(orgBoss, 'connect_brain', { ...move, confirm: true });
+	check(
+		'with confirm, it moves, pinned to the connection it was read through',
+		done_.outcome === 'allowed' &&
+			brainRow().org_id === 'org2' &&
+			brainRow().storage_connection_id === 'github-app:1',
+		`${done_.detail} ${JSON.stringify(brainRow())}`
+	);
+	check(
+		'the reply says where it is still stored',
+		done_.text.includes('still stored in northwind on GitHub'),
+		done_.text
+	);
+	restore();
+
+	check('update_brain is gone', !toolsFor(orgBoss).has('update_brain'));
+
+	console.log('\nconnect_brain: no adopting through hosted storage');
+	const hosted = await attempt(orgBoss, 'connect_brain', { org: 'Hosted Co' });
+	check(
+		'an admin of a hosted org cannot list the shared platform account’s repos',
+		hosted.outcome === 'denied' && hosted.detail.includes('hosted storage'),
+		hosted.detail
+	);
+	check(
+		'...refused before any GitHub call is made',
+		!hosted.detail.includes('octokit'),
+		hosted.detail
+	);
+	const adopt = await attempt(orgBoss, 'connect_brain', { org: 'Hosted Co', repo: 'someone-else' });
+	check(
+		'...nor adopt one by name',
+		adopt.outcome === 'denied' && adopt.detail.includes('hosted storage')
+	);
+	const own = await attempt(orgBoss, 'connect_brain', { org: 'Contoso Group' });
+	check(
+		'an org on its own installation still reaches the listing (and so the GitHub call)',
+		own.detail.includes('octokit'),
+		own.detail
+	);
+}
+
+// ===========================================================================
+console.log('\ncreate_org: a hosted org on the spot, or a GitHub install link');
+// ===========================================================================
+{
+	const orgNamed = (name: string) =>
+		sqlite.prepare('SELECT org_id, model, installation_id FROM orgs WHERE name = ?').get(name) as
+			{ org_id: string; model: string; installation_id: number } | undefined;
+
+	const made = await attempt(lurker, 'create_org', { name: 'Gordon & Co' });
+	const row = orgNamed('Gordon & Co');
+	check(
+		'any signed-in member can create a hosted org: it is theirs, not their current org’s',
+		made.outcome === 'allowed' && row?.model === 'hosted' && row?.installation_id === 9,
+		made.detail
+	);
+	const owner = row
+		? (sqlite.prepare('SELECT user_id, role FROM memberships WHERE org_id = ?').all(row.org_id) as {
+				user_id: string;
+				role: string;
+			}[])
+		: [];
+	check(
+		'...with the creator as its one owner',
+		JSON.stringify(owner) === JSON.stringify([{ user_id: 'u-lurker', role: 'owner' }])
+	);
+	const conn = sqlite
+		.prepare('SELECT owner_org_id FROM storage_connections WHERE connection_id = ?')
+		.get('github-app:9') as { owner_org_id: string | null } | undefined;
+	check(
+		'...on the platform connection, which no org owns (so it cannot adopt through it)',
+		!!conn && conn.owner_org_id === null
+	);
+
+	check(
+		'a name the caller already belongs to is refused, since `org` arguments resolve by name',
+		await denies(orgBoss, 'create_org', { name: 'northwind' })
+	);
+	check('an empty name is refused', await denies(orgBoss, 'create_org', { name: '   ' }));
+
+	onboardingEnv.AUTO_PROVISION = 'false';
+	const closed = await attempt(orgBoss, 'create_org', { name: 'Invite Only Co' });
+	check(
+		'with AUTO_PROVISION off, a hosted org is refused and nothing is written',
+		closed.outcome === 'denied' && !orgNamed('Invite Only Co'),
+		closed.detail
+	);
+
+	kvPuts.length = 0;
+	const gh = await attempt(orgBoss, 'create_org', { name: 'Acme Corp', github: true });
+	const stashed = kvPuts[0] ? JSON.parse(kvPuts[0].value) : {};
+	check(
+		'the GitHub path still works with AUTO_PROVISION off: the install proves ownership',
+		gh.outcome === 'allowed' &&
+			gh.text.includes('https://github.com/apps/isomorphic-test/installations/new?state='),
+		gh.detail
+	);
+	check('...it creates no org itself', !orgNamed('Acme Corp'));
+	check(
+		'...and carries the chosen name through the install, with the caller',
+		kvPuts[0]?.key.startsWith('pending_org_connect:') &&
+			stashed.name === 'Acme Corp' &&
+			stashed.user_id === 'u-boss',
+		JSON.stringify(stashed)
+	);
+	onboardingEnv.AUTO_PROVISION = 'true';
 }
 
 // ---------------------------------------------------------------------------
