@@ -23,7 +23,6 @@ import { z } from 'zod';
 import type { Octokit } from 'octokit';
 import {
 	type Frontmatter,
-	slugify,
 	todayIso,
 	parseFrontmatter,
 	pageTitle,
@@ -52,7 +51,6 @@ import {
 	isAssetPath,
 	isContentPath,
 	isHiddenName,
-	isSourcePath,
 	isToolMaintained,
 	logPathOf
 } from '../lib/brain-config.ts';
