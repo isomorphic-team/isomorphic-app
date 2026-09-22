@@ -7,51 +7,32 @@
 // unchanged. (view-registry.ts stays dependency-free, so this re-export is not a cycle.)
 export type { View } from './view-registry.ts';
 
-// The signed-in user, as reported by the whoami tool. All optional — static-bearer
-// mode has no identity, and org role/name resolve only on the product-native path.
-export interface Identity {
-	email?: string;
-	login?: string;
-	role?: string;
-	org?: string;
-	activeBrainLabel?: string;
-}
-
-export interface Hit {
-	path: string;
-	line: number;
-	text: string;
-	// Set when the search spanned brains (scope: 'all'). Not decoration: opening a hit
-	// from another brain has to switch first, because navigateTo resolves its path
-	// against the ACTIVE brain and would otherwise look it up in the wrong one.
-	brain?: string;
-	brainLabel?: string;
-}
-
-// The file-tree payload (one list_pages call). Cached in the store so reopening the
-// tree — or the folder-note lookup behind a breadcrumb folder click — is a lookup
-// rather than a round-trip. Invalidated whenever the brain changes.
-export interface BrowseData {
-	paths: string[];
-	titleByPath: Record<string, string>;
-	// Attachments (images, PDFs). Listed apart from `hidden` because they are
-	// content someone deliberately added, not repo plumbing — see listNonPagePaths.
-	assets: string[];
-	hidden: string[];
-	needsConfig: boolean;
-}
-
-// One change in the activity/audit feed (see view_activity in src/tools/apps.ts).
-export interface ActivityEntry {
-	sha: string;
-	shortSha: string;
-	message: string;
-	path?: string;
-	authorName: string;
-	authorLogin?: string;
-	date: string;
-	url: string;
-}
+// The tool payload shapes (rows in a roster, a brain in the switcher, a search hit)
+// are the wire contract with the Worker and live beside their parsers in
+// src/lib/tool-payloads.ts. Re-exported so the app imports one vocabulary.
+import type { GraphNode } from '../../src/lib/tool-payloads.ts';
+export type {
+	Identity,
+	Hit,
+	BrowseData,
+	ActivityEntry,
+	GraphNode,
+	GraphLink,
+	MemberRole,
+	Member,
+	Invite,
+	MemberSelf,
+	UsageWindow,
+	UsageTotals,
+	UsagePoint,
+	UsagePerson,
+	UsageBrain,
+	BrainRow,
+	OrgTarget,
+	BrainAccessEntry,
+	BrainAccessSelf,
+	ConnectedAccount
+} from '../../src/lib/tool-payloads.ts';
 
 // A backlink surfaced by find_inbound_links (see src/tools/librarian.ts).
 export interface Backref {
@@ -61,153 +42,12 @@ export interface Backref {
 	wikiCount: number;
 }
 
-// Graph view payload (see view_graph in src/tools/apps.ts). Nodes are pages;
-// links are page↔page references, deduped undirected.
-export interface GraphNode {
-	id: string;
-	title: string;
-	group: string;
-	degree: number;
-}
-export interface GraphLink {
-	source: string;
-	target: string;
-}
-
-// Org roster payload (see src/tools/members.ts). Roles are the DB tokens; the UI
-// renders them via roleLabel. `me` carries the caller's identity + role so the view
-// can gate admin controls and forbid self-edits without another round-trip.
-export type MemberRole = 'viewer' | 'editor' | 'admin' | 'owner';
-export interface Member {
-	user_id: string;
-	email: string;
-	name: string | null;
-	github_login: string | null;
-	role: MemberRole;
-	added_at: string;
-}
-export interface Invite {
-	invite_id: string;
-	email: string;
-	role: MemberRole;
-	invited_at: string;
-	expires_at: string;
-}
-export interface MemberSelf {
-	user_id: string;
-	role: MemberRole;
-}
-
-// ---------- usage analytics (the org Analytics tab) ----------
-// Mirrors the payload of the `analytics` tool; the shapes are produced by
-// summarize() in src/lib/usage.ts, which is where their meaning is documented.
-
-export interface UsageWindow {
-	from: string;
-	to: string;
-	days: number;
-}
-export interface UsageTotals {
-	activeUsers: number;
-	members: number;
-	reads: number;
-	writes: number;
-	admin: number;
-	calls: number;
-	errors: number;
-}
-export interface UsagePoint {
-	day: string;
-	reads: number;
-	writes: number;
-}
-export interface UsagePerson {
-	user_id: string;
-	name: string | null;
-	email: string | null;
-	role: string | null;
-	reads: number;
-	writes: number;
-	admin: number;
-	lastActive: string | null;
-	/** Activity from someone no longer on the roster. */
-	former: boolean;
-}
-export interface UsageBrain {
-	brain_id: string;
-	label: string;
-	reads: number;
-	writes: number;
-	people: number;
-	lastActive: string | null;
-}
-
-// A brain the user can reach (see src/tools/brains.ts). Drives the nav switcher.
-export interface BrainRow {
-	id: string;
-	label: string;
-	role: string;
-	active: boolean;
-	canManage?: boolean; // caller is admin+ in this brain's ORG (can disconnect it)
-	canShare?: boolean; // caller is admin+ ON THIS BRAIN (can change who reaches it)
-	visibility?: string; // 'org' | 'private': drives the Private badge
-	orgId?: string; // so the UI can target adds per-org, independent of the active brain
-	orgLabel?: string;
-	needsConfig?: boolean; // adopted repo with no content under its roots — offer "Set up"
-	configPrUrl?: string; // a configure PR is pending (protected repo) — show "Review PR"
-	// Readable, never writable, by anyone including the org's admins. The role the row
-	// carries is already capped to viewer; this is the flag the cap came from.
-	readOnly?: boolean;
-}
-
-// An org the caller can add a brain to. Identified by its own id rather than by a
-// brain inside it: the org waiting for its FIRST repo holds no brain to name it with.
-export interface OrgTarget {
-	orgId: string;
-	orgLabel: string;
-}
-
 // A repo the org's installation can see that isn't a brain yet (connect_brain's
 // picker, returned when the call omits `repo`).
 export interface ConnectableRepo {
 	id: string;
 	owner: string;
 	repo: string;
-}
-
-// Per-brain access payload (see src/tools/brain-access.ts). The brain-scope
-// sibling of the org roster above: `role` here is the caller's role ON THIS BRAIN,
-// and `via` says how they got it: an explicit share, the brain being visible to
-// the whole org, or the org-admin floor. The UI uses `via` to label the row and to
-// hide a Remove button that would do nothing (you cannot un-share someone who
-// reaches the brain because it is org-visible).
-export interface BrainAccessEntry {
-	user_id: string;
-	email: string;
-	name: string | null;
-	role: MemberRole;
-	// 'guest' is a grant held by someone outside the organization.
-	via: 'grant' | 'org' | 'org-admin' | 'guest';
-	granted_at?: string;
-}
-// The caller, in both scopes at once: the panel gates sharing controls on the
-// BRAIN role and shows org context from the org role, which is null for a guest.
-export interface BrainAccessSelf {
-	user_id: string;
-	role: MemberRole;
-	orgRole: MemberRole | null;
-}
-
-// One entry in the "Connected accounts" roster (see src/tools/connected-accounts.ts):
-// either a linked email identity or a linked GitHub account.
-export interface ConnectedAccount {
-	kind: 'email' | 'github';
-	is_self: boolean;
-	user_id?: string;
-	email?: string;
-	name?: string | null;
-	github_user_id?: number;
-	github_login?: string | null;
 }
 
 // Brain content-shape policy, delivered by the server in each app-tool's
