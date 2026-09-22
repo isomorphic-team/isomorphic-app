@@ -72,7 +72,7 @@ export const TOOL_KINDS: Record<string, UsageKind> = {
 	invite_member: 'admin',
 	set_member_role: 'admin',
 	remove_member: 'admin',
-	connect_github_org: 'admin',
+	create_org: 'admin',
 	link_identity: 'admin',
 	unlink_identity: 'admin',
 	submit_feedback: 'admin'

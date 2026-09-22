@@ -7,7 +7,8 @@
 //
 // Resolution shape used by `tenantContext()`:
 //   app_users.user_id (Auth.js id) → membership → org (+ role) → default brain
-//     → { repo_owner, repo_name } + org.installation_id
+//     → { repo_owner, repo_name } + the brain's storage connection (or, for a brain
+//       with no binding, org.installation_id)
 //
 // Worker-safe (no node:* imports) — reachable from worker.ts. See
 // docs/design/org-roles-permissions.md and src/db/auth-schema.sql.
@@ -138,6 +139,19 @@ export function effectiveBrainRole(input: {
 	return role;
 }
 
+// Which of effectiveBrainRole's sources admits someone, for the surfaces that tell a
+// human WHY a person reaches a brain (the sharing panel, a move's preview). Only
+// meaningful when effectiveBrainRole returned a role for the same input.
+export function accessVia(input: {
+	visibility: string;
+	orgRole: Role | null;
+	grant?: Role | null;
+}): 'grant' | 'org' | 'org-admin' | 'guest' {
+	if (!input.orgRole) return 'guest';
+	if (input.grant) return 'grant';
+	return input.visibility !== 'private' ? 'org' : 'org-admin';
+}
+
 // The roles assignable through the brain-sharing surface. 'owner' is excluded on
 // purpose (see the note on brain_memberships): ownership is an org concept.
 export const ASSIGNABLE_BRAIN_ROLES: Role[] = ['viewer', 'editor', 'admin'];
@@ -187,7 +201,9 @@ export function assertRole(actual: Role | null, required?: Role): void {
 export interface Org {
 	org_id: string;
 	name: string;
-	model: string; // 'platform' (Model A) | 'customer' (Model B)
+	// 'platform' (Model A, a personal org) | 'customer' (Model B, the customer's own
+	// installation) | 'hosted' (a named team org on the platform's installation).
+	model: string;
 	installation_id: number;
 	brain_owner: string;
 	github_org_login: string | null;
@@ -218,6 +234,9 @@ export interface Brain {
 	created_at: string;
 	archived_at?: string | null;
 	read_only?: number | null;
+	// The connection its storage is read through. NULL on rows written before
+	// migration 0010 or by code that predates it: resolution falls back to the org's.
+	storage_connection_id?: string | null;
 }
 
 export interface MembershipWithOrg {
@@ -572,12 +591,14 @@ export async function createBrain(
 		name?: string | null;
 		created_by?: string | null;
 		visibility?: string;
+		storage_connection_id?: string | null;
 	}
 ): Promise<void> {
 	await db
 		.prepare(
-			`INSERT INTO brains (brain_id, org_id, repo_owner, repo_name, name, created_by, visibility)
-       VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+			`INSERT INTO brains (brain_id, org_id, repo_owner, repo_name, name, created_by, visibility,
+			                     storage_connection_id)
+       VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
        ON CONFLICT(repo_owner, repo_name) DO NOTHING`
 		)
 		.bind(
@@ -587,7 +608,8 @@ export async function createBrain(
 			b.repo_name,
 			b.name ?? null,
 			b.created_by ?? null,
-			b.visibility ?? 'org'
+			b.visibility ?? 'org',
+			b.storage_connection_id ?? null
 		)
 		.run();
 }
@@ -908,13 +930,7 @@ export async function listBrainAccess(
 		const grant = r.grant_role as Role | null;
 		const role = effectiveBrainRole({ visibility, orgRole, grant });
 		if (!role) continue;
-		const via: BrainAccessEntry['via'] = !orgRole
-			? 'guest'
-			: grant
-				? 'grant'
-				: visibility !== 'private'
-					? 'org'
-					: 'org-admin';
+		const via = accessVia({ visibility, orgRole, grant });
 		out.push({
 			user_id: r.user_id,
 			email: r.email,
@@ -974,6 +990,15 @@ export async function removeBrainGrant(
 // Flip a brain between 'private' (grants + org admins only) and 'org' (every
 // member of the owning org). Existing grants are LEFT IN PLACE: going org-visible
 // and back must not silently drop who you had shared it with.
+// A brain's display name. NULL clears it, so the label falls back to the repo.
+export async function setBrainName(
+	db: D1Database,
+	brainId: string,
+	name: string | null
+): Promise<void> {
+	await db.prepare(`UPDATE brains SET name = ?2 WHERE brain_id = ?1`).bind(brainId, name).run();
+}
+
 export async function setBrainVisibility(
 	db: D1Database,
 	brainId: string,
@@ -1024,8 +1049,16 @@ export interface AccessibleBrain {
 	brain_id: string; // brains PK
 	org_id: string;
 	org_name: string;
-	org_model: string; // 'platform' | 'customer'
+	org_model: string; // 'platform' | 'customer' | 'hosted'
+	// The installation that reads and writes THIS brain: its storage binding's, or,
+	// for a brain with no binding yet, its org's. A brain moved between orgs keeps
+	// the credential its storage is reachable by, so this is not the org's.
 	installation_id: number;
+	// The provider account holding the brain (its connection's), for saying where a
+	// brain is stored without implying that the org it belongs to holds it.
+	storage_account: string;
+	// Its storage binding; null for a brain written before bindings existed.
+	storage_connection_id: string | null;
 	repo_owner: string;
 	repo_name: string;
 	name?: string | null; // user-given display name (brains.name); NULL = derive from repo
@@ -1128,7 +1161,9 @@ export async function listAccessibleBrains(
 	const columns = `b.brain_id AS brain_id, b.repo_owner AS repo_owner, b.repo_name AS repo_name,
 			        b.name AS name, b.visibility AS visibility, b.org_id AS org_id,
 			        o.name AS org_name, o.model AS org_model,
-			        o.installation_id AS installation_id, m.role AS org_role,
+			        COALESCE(CAST(c.external_id AS INTEGER), o.installation_id) AS installation_id,
+			        c.account AS storage_account, b.storage_connection_id AS storage_connection_id,
+			        m.role AS org_role,
 			        bm.role AS grant_role, b.created_at AS created_at,
 			        b.read_only AS read_only`;
 	const { results } = await db
@@ -1137,6 +1172,7 @@ export async function listAccessibleBrains(
 			   FROM memberships m
 			   JOIN orgs o   ON o.org_id = m.org_id
 			   JOIN brains b ON b.org_id = o.org_id
+			   LEFT JOIN storage_connections c ON c.connection_id = b.storage_connection_id
 			   LEFT JOIN brain_memberships bm
 			          ON bm.brain_id = b.brain_id AND bm.user_id = m.user_id
 			  WHERE m.user_id IN (${placeholders})
@@ -1147,6 +1183,7 @@ export async function listAccessibleBrains(
 			   FROM brain_memberships bm
 			   JOIN brains b ON b.brain_id = bm.brain_id
 			   JOIN orgs o   ON o.org_id = b.org_id
+			   LEFT JOIN storage_connections c ON c.connection_id = b.storage_connection_id
 			   LEFT JOIN memberships m
 			          ON m.org_id = b.org_id AND m.user_id IN (${placeholders})
 			  WHERE bm.user_id IN (${placeholders})
@@ -1165,6 +1202,8 @@ export async function listAccessibleBrains(
 			org_name: string;
 			org_model: string;
 			installation_id: number;
+			storage_account: string | null;
+			storage_connection_id: string | null;
 			org_role: string | null;
 			grant_role: string | null;
 			read_only: number | null;
@@ -1197,6 +1236,8 @@ export async function listAccessibleBrains(
 			org_name: r.org_name,
 			org_model: r.org_model,
 			installation_id: r.installation_id,
+			storage_account: r.storage_account ?? r.repo_owner,
+			storage_connection_id: r.storage_connection_id,
 			repo_owner: r.repo_owner,
 			repo_name: r.repo_name,
 			name: r.name,

@@ -122,7 +122,7 @@ interface Env {
 	// self-hosting cheap. Ignored in oauth mode, which mints a token per tenant.
 	GITHUB_TOKEN?: string;
 	// The App's URL slug (e.g. "isomorphic-mind"), from bootstrap. Used to build
-	// the install URL for the self-serve connect_github_org flow. Not a secret.
+	// the install URL for create_org's GitHub path (`github: true`). Not a secret.
 	GITHUB_APP_SLUG?: string;
 
 	// Platform provisioning (oauth mode). The admin installs the platform App
@@ -620,24 +620,15 @@ class McpSession {
 				throw new Error(`Org ${p.org.org_id} is suspended. Contact your admin.`);
 			}
 			if (!p.brain) throw new NoBrainError();
-			// provisionOrgForUser only ever hands back a brain this user can reach
-			// (getDefaultBrainForUser applies the same rule), so the effective brain
-			// role here is their org role: there is no grant on a brain they just
-			// arrived at, and an unreachable one would have come back null.
-			target = {
-				id: `${p.brain.repo_owner}/${p.brain.repo_name}`,
-				brain_id: p.brain.brain_id,
-				org_id: p.org.org_id,
-				org_name: p.org.name,
-				org_model: p.org.model,
-				installation_id: p.org.installation_id,
-				repo_owner: p.brain.repo_owner,
-				repo_name: p.brain.repo_name,
-				name: p.brain.name,
-				role: p.role,
-				org_role: p.role,
-				visibility: p.brain.visibility
-			};
+			// provisionOrgForUser only ever hands back a brain this user can reach, and
+			// it just wrote the membership that makes it reachable, so the same query
+			// that found nothing a moment ago now finds it. Re-listing rather than
+			// assembling the row from `p` keeps ONE source for the brain's role and,
+			// above all, its credential: the storage binding, not the org's install.
+			const now = await listAccessibleBrains(env.PLATFORM_DB, await this.personUserIds(userId));
+			const found = now.find((b) => b.brain_id === p.brain!.brain_id);
+			if (!found) throw new NoBrainError();
+			target = found;
 		} else {
 			// Named brain, else the one the caller is working in, else the oldest.
 			target = chooseBrain(brains, { brain: brainArg, activeBrainId: this.activeBrainId });
@@ -965,12 +956,21 @@ class McpSession {
 		if (hasOrgModel)
 			registerConnectedAccountTools(server, (opts) => this.tenantContext(opts), this.env);
 
-		// ---------- org onboarding (self-serve Model-B connect) ----------
-		// connect_github_org returns a GitHub App install URL carrying a KV-stashed
-		// state; /github/install-callback resolves the install and writes the customer
-		// org + owner membership. The runtime analog of `pnpm onboard-org`. See
-		// src/tools/org-onboarding.ts and src/lib/org-connect.ts.
-		if (hasOrgModel) registerOrgOnboardingTools(server, (opts) => this.orgContext(opts), this.env);
+		// ---------- creating an org ----------
+		// create_org makes a hosted org on the spot, or (github: true) returns a GitHub
+		// App install URL carrying a KV-stashed state, which /github/install-callback
+		// turns into a customer org. See src/tools/org-onboarding.ts and
+		// src/lib/org-connect.ts.
+		if (hasOrgModel)
+			registerOrgOnboardingTools(
+				server,
+				(opts) => this.orgContext(opts),
+				async () =>
+					this.props?.user_id
+						? listAccessibleOrgs(this.env.PLATFORM_DB, await this.personUserIds(this.props.user_id))
+						: [],
+				this.env
+			);
 
 		// ---------- usage analytics ----------
 		// The org's Analytics tab, reading the per-day counters the wrapper at the
@@ -1299,7 +1299,7 @@ async function handleOrgConnectCallback(
 ): Promise<Response> {
 	const raw = await env.OAUTH_KV.get(`pending_org_connect:${state}`);
 	if (!raw) return installedPage(url);
-	let pending: { user_id: string; email: string | null };
+	let pending: { user_id: string; email: string | null; name?: string | null };
 	try {
 		pending = JSON.parse(raw);
 	} catch {
@@ -1311,7 +1311,8 @@ async function handleOrgConnectCallback(
 			userId: pending.user_id,
 			installationId,
 			orgLogin: org.orgLogin,
-			accountType: org.accountType
+			accountType: org.accountType,
+			name: pending.name
 		});
 		await env.OAUTH_KV.delete(`pending_org_connect:${state}`);
 		return connectedOrgPage(result);
@@ -1321,7 +1322,7 @@ async function handleOrgConnectCallback(
 			'Couldn’t finish connecting',
 			`<p>The app installed, but we couldn’t link it to your account: ${escapeHtml(
 				err instanceof Error ? err.message : String(err)
-			)}.</p><p>Try <code>connect_github_org</code> again from Claude.</p>`
+			)}.</p><p>Try <code>create_org</code> with <code>github: true</code> again from Claude.</p>`
 		);
 	}
 }
@@ -1342,7 +1343,7 @@ export default {
 		// prod. Serve a friendly confirmation instead; onboarding itself is
 		// admin-driven (seed), so this page just confirms + surfaces the id.
 		if (url.pathname === '/github/install-callback') {
-			// Self-serve connect_github_org completion carries a `state` we stashed in
+			// Self-serve create_org (github: true) completion carries a `state` we stashed in
 			// KV; without it (e.g. a direct Marketplace install) fall back to the
 			// generic confirmation page.
 			const state = url.searchParams.get('state');

@@ -226,8 +226,9 @@ would make every diff unreadable.
   email invitations (no GitHub account needed), and org roles.
 - **`brain_access`** / **`share_brain`**: who can open a brain and at what level; grant,
   change, revoke, and flip a brain between private and org-visible.
-- **`connect_github_org`**: install the GitHub App on a customer's own org so their brains live
-  in repositories they own.
+- **`create_org`**: start a new organization. Its brains are stored on the deployment by
+  default; `github: true` installs the GitHub App on a customer's own org instead, so their
+  brains live in repositories they own.
 - **`connected_accounts`**, **`link_identity`**, **`unlink_identity`**: one person, several
   email addresses, one set of brains.
 - **`analytics`**: is the organization using its brains, and who is not. Per-day counters in

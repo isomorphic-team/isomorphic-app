@@ -85,7 +85,7 @@ const SETTINGS = [
 		// variable whose name starts with `GITHUB_` ("Variable names must not start
 		// with GITHUB_", HTTP 422), so a variable by that name can never exist and
 		// `vars.GITHUB_APP_SLUG` would silently evaluate to empty forever — taking
-		// the self-serve connect_github_org flow down with it, with no error anywhere.
+		// create_org's GitHub path (github: true) down with it, with no error anywhere.
 		// The canonical name stays GITHUB_APP_SLUG in `.dev.vars` (that is what
 		// `pnpm bootstrap` writes) and in the Worker's own env; only the CI-facing
 		// name differs, via fallbackKeys below.
