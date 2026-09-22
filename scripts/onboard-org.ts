@@ -29,6 +29,11 @@
 //     --repo handbook [--org-name "Acme"] [--role owner|admin] \
 //     [--operator-email you@example.com] [--apply local|remote|both]
 //
+// --hosted creates a named org on the PLATFORM's storage instead, for a team with
+// no GitHub (docs/design/storage-and-tenancy.md). It takes --org-name, no
+// --github-org or --repo; the operator joins it, and --owner-email is optional:
+//   pnpm onboard-org --hosted --org-name "Acme" [--owner-email admin@acme.com]
+//
 // Default is a DRY RUN: it resolves + verifies against GitHub, prints the SQL,
 // and writes it to ops/seeds-real/ (gitignored). Nothing touches D1 until you
 // pass --apply. Idempotent (INSERT OR IGNORE), so re-running is safe.
@@ -42,8 +47,11 @@ import { loadDevVarsIntoEnv } from '../src/persist.ts';
 // ---------- arg parsing ----------
 
 interface Args {
-	githubOrg: string;
-	ownerEmail: string;
+	// Absent with --hosted: a hosted org has no GitHub of its own.
+	githubOrg?: string;
+	// Optional with --hosted, where the operator can be the org's owner.
+	ownerEmail?: string;
+	hosted: boolean;
 	repo?: string;
 	orgName?: string;
 	orgId?: string;
@@ -71,7 +79,16 @@ function parseArgs(argv: string[]): Args {
 
 	const githubOrg = flags['github-org'];
 	const ownerEmail = flags['owner-email'];
-	if (!githubOrg || !ownerEmail) {
+	const hosted = flags['hosted'] === 'true';
+	if (hosted) {
+		if (githubOrg || flags['repo']) {
+			fail(
+				'--hosted takes no --github-org or --repo: a hosted org stores its brains on the platform.\n' +
+					'Move existing brains in with update_brain, or create new ones with create_brain.'
+			);
+		}
+		if (!flags['org-name']) fail('--hosted needs --org-name, e.g. --org-name "Acme Corp".');
+	} else if (!githubOrg || !ownerEmail) {
 		fail(
 			'Required: --github-org <login> and --owner-email <email>.\n' +
 				'Example: pnpm onboard-org --github-org acme-co --owner-email admin@acme.com --repo handbook'
@@ -90,6 +107,7 @@ function parseArgs(argv: string[]): Args {
 	return {
 		githubOrg,
 		ownerEmail,
+		hosted,
 		repo: flags['repo'],
 		orgName: flags['org-name'],
 		orgId: flags['org-id'],
@@ -132,6 +150,9 @@ async function main() {
 	const args = parseArgs(process.argv.slice(2));
 
 	await loadDevVarsIntoEnv();
+	if (args.hosted) return hosted(args);
+	const githubOrg = args.githubOrg!;
+	const ownerEmail = args.ownerEmail!;
 	const appId = process.env.GITHUB_APP_ID;
 	const privateKeyBase64 = process.env.GITHUB_APP_PRIVATE_KEY_BASE64;
 	const appSlug = process.env.GITHUB_APP_SLUG ?? 'the Isomorphic App';
@@ -147,7 +168,7 @@ async function main() {
 				'This is the founding-operator account whose id fills created_by / invited_by — NOT the customer.'
 		);
 	}
-	if (operatorEmail.toLowerCase() === args.ownerEmail.toLowerCase()) {
+	if (operatorEmail.toLowerCase() === ownerEmail.toLowerCase()) {
 		fail(
 			`--operator-email and --owner-email are the same (${operatorEmail}). The operator is YOU (the platform ` +
 				`admin); the owner is the CUSTOMER who signs in. They must differ.`
@@ -157,17 +178,17 @@ async function main() {
 	const creds: AppCreds = { appId: Number(appId), privateKeyBase64 };
 
 	// 1. Resolve the customer's installation from GitHub (App JWT).
-	console.log(`→ Resolving the App installation on GitHub org "${args.githubOrg}"…`);
+	console.log(`→ Resolving the App installation on GitHub org "${githubOrg}"…`);
 	let installationId: number;
 	try {
 		const app = appOctokit(creds);
-		const { data } = await app.rest.apps.getOrgInstallation({ org: args.githubOrg });
+		const { data } = await app.rest.apps.getOrgInstallation({ org: githubOrg });
 		installationId = data.id;
 		console.log(`  installation_id = ${installationId}`);
 	} catch (err) {
 		if (httpStatus(err) === 404) {
 			fail(
-				`The Isomorphic App isn't installed on "${args.githubOrg}".\n` +
+				`The Isomorphic App isn't installed on "${githubOrg}".\n` +
 					`Have the customer install it first:\n` +
 					`  https://github.com/apps/${appSlug}/installations/new\n` +
 					`then re-run this command.`
@@ -178,16 +199,16 @@ async function main() {
 
 	// 2. If adopting a repo, verify the installation can actually reach it.
 	if (args.repo) {
-		console.log(`→ Verifying the installation can access ${args.githubOrg}/${args.repo}…`);
+		console.log(`→ Verifying the installation can access ${githubOrg}/${args.repo}…`);
 		try {
 			const io = await installationOctokit(creds, installationId);
-			await io.rest.repos.get({ owner: args.githubOrg, repo: args.repo });
+			await io.rest.repos.get({ owner: githubOrg, repo: args.repo });
 			console.log('  reachable ✓');
 		} catch (err) {
 			const status = httpStatus(err);
 			if (status === 404 || status === 403) {
 				fail(
-					`The installation can't access ${args.githubOrg}/${args.repo}.\n` +
+					`The installation can't access ${githubOrg}/${args.repo}.\n` +
 						`Add the repo to the installation (org Settings → GitHub Apps → Isomorphic → Configure,\n` +
 						`or switch it to "All repositories"), then re-run.`
 				);
@@ -201,9 +222,9 @@ async function main() {
 	}
 
 	// 3. Build the SQL.
-	const orgSlug = slug(args.githubOrg);
+	const orgSlug = slug(githubOrg);
 	const orgId = args.orgId ?? `org-${orgSlug}`;
-	const orgName = args.orgName ?? args.githubOrg;
+	const orgName = args.orgName ?? githubOrg;
 	const brainId = args.brainId ?? (args.repo ? `brain-${slug(args.repo)}` : undefined);
 	const inviteId = `inv-${orgSlug}-owner`;
 
@@ -217,15 +238,19 @@ async function main() {
 			`INSERT OR IGNORE INTO orgs\n` +
 			`  (org_id, name, model, installation_id, brain_owner, github_org_login, created_by)\n` +
 			`  SELECT ${sqlStr(orgId)}, ${sqlStr(orgName)}, 'customer', ${installationId},\n` +
-			`         ${sqlStr(args.githubOrg)}, ${sqlStr(args.githubOrg)}, user_id\n` +
+			`         ${sqlStr(githubOrg)}, ${sqlStr(githubOrg)}, user_id\n` +
 			`    FROM app_users WHERE email = ${sqlStr(operatorEmail)};`
 	);
+
+	statements.push(connectionSql(installationId, githubOrg, orgId));
 
 	if (args.repo && brainId) {
 		statements.push(
 			`-- Adopt the existing KB repo as the org's first brain (no scaffold).\n` +
-				`INSERT OR IGNORE INTO brains (brain_id, org_id, repo_owner, repo_name, visibility)\n` +
-				`  VALUES (${sqlStr(brainId)}, ${sqlStr(orgId)}, ${sqlStr(args.githubOrg)}, ${sqlStr(args.repo)}, 'org');`
+				`INSERT OR IGNORE INTO brains\n` +
+				`  (brain_id, org_id, repo_owner, repo_name, visibility, storage_connection_id)\n` +
+				`  VALUES (${sqlStr(brainId)}, ${sqlStr(orgId)}, ${sqlStr(githubOrg)}, ${sqlStr(args.repo)}, 'org',\n` +
+				`          ${sqlStr(`github-app:${installationId}`)});`
 		);
 	}
 
@@ -236,17 +261,104 @@ async function main() {
 			`-- expiry keeps it pending until claimed.\n` +
 			`INSERT OR IGNORE INTO invitations\n` +
 			`  (invite_id, org_id, email, role, invited_by, token_hash, expires_at)\n` +
-			`  SELECT ${sqlStr(inviteId)}, ${sqlStr(orgId)}, ${sqlStr(args.ownerEmail)}, ${sqlStr(args.role)},\n` +
+			`  SELECT ${sqlStr(inviteId)}, ${sqlStr(orgId)}, ${sqlStr(ownerEmail)}, ${sqlStr(args.role)},\n` +
 			`         user_id, '', '2099-12-31 00:00:00'\n` +
 			`    FROM app_users WHERE email = ${sqlStr(operatorEmail)};`
 	);
 
 	const header =
-		`-- Generated by \`pnpm onboard-org\` — Model-B onboarding for ${args.githubOrg}.\n` +
-		`-- operator=${operatorEmail}  owner=${args.ownerEmail}  installation=${installationId}\n` +
+		`-- Generated by \`pnpm onboard-org\` — Model-B onboarding for ${githubOrg}.\n` +
+		`-- operator=${operatorEmail}  owner=${ownerEmail}  installation=${installationId}\n`;
+	await emit(args, orgSlug, header, statements, [
+		`${ownerEmail} can now sign in and will land in "${orgName}" as ${args.role}.`,
+		...(args.repo ? [] : ['No brain yet: have them run connect_brain to adopt a repo.'])
+	]);
+}
+
+// A HOSTED org: a named team org whose brains live on the platform's installation,
+// for a team that does not use GitHub. Nobody installs anything, so nothing is
+// resolved from GitHub. The operator joins as a member, since moving an existing
+// brain in with update_brain needs admin in the destination org.
+async function hosted(args: Args) {
+	const operatorEmail = args.operatorEmail ?? process.env.OPERATOR_EMAIL;
+	if (!operatorEmail) {
+		fail(
+			'No operator email. Pass --operator-email <you@example.com> or set OPERATOR_EMAIL in .dev.vars.'
+		);
+	}
+	const platformOrg = process.env.PLATFORM_ORG;
+	const installationId = Number(process.env.PLATFORM_INSTALLATION_ID);
+	if (!platformOrg || !Number.isInteger(installationId) || installationId <= 0) {
+		fail(
+			'Missing PLATFORM_ORG / PLATFORM_INSTALLATION_ID in .dev.vars. Run `pnpm bootstrap` first.'
+		);
+	}
+	const orgName = args.orgName!;
+	const orgSlug = slug(orgName);
+	const orgId = args.orgId ?? `org-${orgSlug}`;
+	const owner = args.ownerEmail && args.ownerEmail.toLowerCase() !== operatorEmail.toLowerCase();
+	const operatorRole = owner ? 'admin' : 'owner';
+
+	const statements = [
+		`-- Hosted org: named, on the platform installation, no GitHub of its own.\n` +
+			`INSERT OR IGNORE INTO orgs\n` +
+			`  (org_id, name, model, installation_id, brain_owner, github_org_login, created_by)\n` +
+			`  SELECT ${sqlStr(orgId)}, ${sqlStr(orgName)}, 'hosted', ${installationId},\n` +
+			`         ${sqlStr(platformOrg)}, NULL, user_id\n` +
+			`    FROM app_users WHERE email = ${sqlStr(operatorEmail)};`,
+		connectionSql(installationId, platformOrg, null),
+		`-- The operator, as ${operatorRole}.\n` +
+			`INSERT OR IGNORE INTO memberships (org_id, user_id, role)\n` +
+			`  SELECT ${sqlStr(orgId)}, user_id, ${sqlStr(operatorRole)}\n` +
+			`    FROM app_users WHERE email = ${sqlStr(operatorEmail)};`
+	];
+	if (owner) {
+		statements.push(
+			`-- Pre-invite the owner. Their first sign-in joins this org.\n` +
+				`INSERT OR IGNORE INTO invitations\n` +
+				`  (invite_id, org_id, email, role, invited_by, token_hash, expires_at)\n` +
+				`  SELECT ${sqlStr(`inv-${orgSlug}-owner`)}, ${sqlStr(orgId)}, ${sqlStr(args.ownerEmail!)},\n` +
+				`         ${sqlStr(args.role)}, user_id, '', '2099-12-31 00:00:00'\n` +
+				`    FROM app_users WHERE email = ${sqlStr(operatorEmail)};`
+		);
+	}
+	const header =
+		`-- Generated by \`pnpm onboard-org --hosted\` for "${orgName}".\n` +
+		`-- operator=${operatorEmail}  owner=${owner ? args.ownerEmail : operatorEmail}\n`;
+	await emit(args, orgSlug, header, statements, [
+		`"${orgName}" exists, with you as ${operatorRole}.`,
+		...(owner ? [`${args.ownerEmail} will land in it as ${args.role} on first sign-in.`] : []),
+		`Move a brain in with update_brain (brain: "...", org: "${orgName}").`
+	]);
+}
+
+// The connection row for an installation, owned by the org that administers it or,
+// for the platform installation, by none. INSERT OR IGNORE keeps an existing owner.
+function connectionSql(installationId: number, account: string, ownerOrgId: string | null): string {
+	return (
+		`-- The storage connection brains in this org are created on.\n` +
+		`INSERT OR IGNORE INTO storage_connections\n` +
+		`  (connection_id, provider, kind, external_id, account, owner_org_id)\n` +
+		`  VALUES (${sqlStr(`github-app:${installationId}`)}, 'github', 'github-app-installation',\n` +
+		`          ${sqlStr(String(installationId))}, ${sqlStr(account)}, ${ownerOrgId ? sqlStr(ownerOrgId) : 'NULL'});`
+	);
+}
+
+// Write the seed for the record, print it, and apply it if asked.
+async function emit(
+	args: Args,
+	orgSlug: string,
+	header: string,
+	statements: string[],
+	done: string[]
+): Promise<void> {
+	const sql =
+		header +
 		`-- Apply via: pnpm onboard-org … --apply remote  (uses \`d1 execute --command\`, not\n` +
-		`-- --file: --file goes through D1's /import endpoint, which 401s with an OAuth token).\n`;
-	const sql = header + '\n' + statements.join('\n\n') + '\n';
+		`-- --file: --file goes through D1's /import endpoint, which 401s with an OAuth token).\n` +
+		'\n' +
+		statements.join('\n\n') +
+		'\n';
 
 	// Comment-free form for `--command`. Two reasons we execute via --command, not
 	// --file: (1) --file uses D1's /import endpoint, which returns Authentication
@@ -259,7 +371,7 @@ async function main() {
 		.filter((line) => !/^\s*--/.test(line) && line.trim() !== '')
 		.join('\n');
 
-	// 4. Write the seed to ops/seeds-real/ (gitignored) for the record.
+	// Write the seed to ops/seeds-real/ (gitignored) for the record.
 	const outPath =
 		args.out ??
 		fileURLToPath(new URL(`../ops/seeds-real/seed-${orgSlug}-org.sql`, import.meta.url));
@@ -271,12 +383,10 @@ async function main() {
 	console.log('─'.repeat(72));
 	console.log(`\n✓ Wrote ${outPath}`);
 
-	// 5. Apply, if asked.
 	if (args.apply === 'none') {
 		console.log(
 			'\nDry run (no --apply). To write the rows:\n' +
-				`  pnpm onboard-org … --apply both     # local + remote D1\n` +
-				`Then the owner (${args.ownerEmail}) signs in and lands in "${orgName}".`
+				`  pnpm onboard-org … --apply both     # local + remote D1`
 		);
 		return;
 	}
@@ -293,10 +403,7 @@ async function main() {
 			fail(`wrangler d1 execute failed for ${target} D1 (exit ${res.status}).`);
 		}
 	}
-	console.log(
-		`\n✓ Done. ${args.ownerEmail} can now sign in and will land in "${orgName}" as ${args.role}.` +
-			(args.repo ? '' : `\n  No brain yet — have them run connect_brain to adopt a repo.`)
-	);
+	console.log(`\n✓ Done. ${done.join('\n  ')}`);
 }
 
 main().catch((err) => {

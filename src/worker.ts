@@ -620,24 +620,15 @@ class McpSession {
 				throw new Error(`Org ${p.org.org_id} is suspended. Contact your admin.`);
 			}
 			if (!p.brain) throw new NoBrainError();
-			// provisionOrgForUser only ever hands back a brain this user can reach
-			// (getDefaultBrainForUser applies the same rule), so the effective brain
-			// role here is their org role: there is no grant on a brain they just
-			// arrived at, and an unreachable one would have come back null.
-			target = {
-				id: `${p.brain.repo_owner}/${p.brain.repo_name}`,
-				brain_id: p.brain.brain_id,
-				org_id: p.org.org_id,
-				org_name: p.org.name,
-				org_model: p.org.model,
-				installation_id: p.org.installation_id,
-				repo_owner: p.brain.repo_owner,
-				repo_name: p.brain.repo_name,
-				name: p.brain.name,
-				role: p.role,
-				org_role: p.role,
-				visibility: p.brain.visibility
-			};
+			// provisionOrgForUser only ever hands back a brain this user can reach, and
+			// it just wrote the membership that makes it reachable, so the same query
+			// that found nothing a moment ago now finds it. Re-listing rather than
+			// assembling the row from `p` keeps ONE source for the brain's role and,
+			// above all, its credential: the storage binding, not the org's install.
+			const now = await listAccessibleBrains(env.PLATFORM_DB, await this.personUserIds(userId));
+			const found = now.find((b) => b.brain_id === p.brain!.brain_id);
+			if (!found) throw new NoBrainError();
+			target = found;
 		} else {
 			// Named brain, else the one the caller is working in, else the oldest.
 			target = chooseBrain(brains, { brain: brainArg, activeBrainId: this.activeBrainId });

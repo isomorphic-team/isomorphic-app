@@ -230,6 +230,10 @@ check(
 // No network: node:sqlite is a Node builtin.
 
 import { localD1 } from '../src/local/d1-sqlite.ts';
+import { DatabaseSync } from 'node:sqlite';
+import { readdirSync, readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { planBrainMove, loadMovePeople, describeMove, moveBrain } from '../src/lib/brain-move.ts';
 import {
 	listAccessibleBrains,
 	listAccessibleOrgs,
@@ -1012,5 +1016,212 @@ check(
 	(await resolveOrgForPerson(db, ['dave-home'], { activeOrgId }))?.org.org_id === 'org1' &&
 		thunkCalls === 0
 );
+
+// ---------------------------------------------------------------------------
+// Storage bindings and moving a brain between orgs
+// (docs/design/storage-and-tenancy.md). The binding decides which credential
+// reads a brain, so it is an access question in the same sense the rule is: a
+// wrong installation is a brain that stops opening, or one read through an
+// account that was never meant to reach it.
+
+console.log('\nStorage bindings: the migration backfill');
+{
+	// A database as production had it before 0010, with rows in it, then 0010
+	// applied on top. localD1 applies every migration to an EMPTY database, where a
+	// backfill has nothing to do and so proves nothing.
+	const pre = new DatabaseSync(':memory:');
+	const files = readdirSync(fileURLToPath(new URL('../migrations/', import.meta.url)))
+		.filter((f) => f.endsWith('.sql'))
+		.sort();
+	const at = (f: string) => readFileSync(new URL(`../migrations/${f}`, import.meta.url), 'utf8');
+	for (const f of files.filter((f) => f < '0010')) pre.exec(at(f));
+	pre.exec(`
+	  INSERT INTO orgs (org_id, name, model, installation_id, brain_owner, created_by, created_at) VALUES
+	    ('p1', 'a@example.com', 'platform', 100, 'platform-org', 'u', '2026-01-01'),
+	    ('p2', 'b@example.com', 'platform', 100, 'platform-org', 'u', '2026-01-02'),
+	    ('c1', 'Acme', 'customer', 200, 'acme', 'u', '2026-01-03');
+	  INSERT INTO brains (brain_id, org_id, repo_owner, repo_name) VALUES
+	    ('bp1', 'p1', 'platform-org', 'brain-a'),
+	    ('bc1', 'c1', 'acme', 'wiki');
+	`);
+	pre.exec(at(files.find((f) => f.startsWith('0010'))!));
+	const conns = pre
+		.prepare('SELECT connection_id, account, owner_org_id FROM storage_connections ORDER BY 1')
+		.all() as { connection_id: string; account: string; owner_org_id: string | null }[];
+	check(
+		'one connection per installation, however many orgs share it',
+		JSON.stringify(conns.map((c) => c.connection_id)) ===
+			JSON.stringify(['github-app:100', 'github-app:200'])
+	);
+	check(
+		'the shared platform installation is owned by no org',
+		conns.find((c) => c.connection_id === 'github-app:100')?.owner_org_id === null
+	);
+	check(
+		"a customer installation is owned by the customer's org",
+		conns.find((c) => c.connection_id === 'github-app:200')?.owner_org_id === 'c1'
+	);
+	const bound = pre
+		.prepare('SELECT brain_id, storage_connection_id FROM brains ORDER BY 1')
+		.all() as { brain_id: string; storage_connection_id: string }[];
+	check(
+		"every existing brain is bound to its org's installation",
+		JSON.stringify(bound) ===
+			JSON.stringify([
+				{ brain_id: 'bc1', storage_connection_id: 'github-app:200' },
+				{ brain_id: 'bp1', storage_connection_id: 'github-app:100' }
+			])
+	);
+}
+
+console.log('\nStorage bindings: which credential reads a brain');
+{
+	const { db, sqlite } = localD1();
+	sqlite.exec(`
+	  INSERT INTO orgs (org_id, name, model, installation_id, brain_owner, created_by, created_at) VALUES
+	    ('lab', 'The Lab', 'customer', 1, 'lab-gh', 'jo', '2026-01-01'),
+	    ('cli', 'Client Co', 'hosted', 9, 'platform-org', 'jo', '2026-01-02');
+	  INSERT INTO app_users (user_id, email) VALUES
+	    ('jo', 'jo@example.com'), ('li', 'li@example.com'), ('max', 'max@example.com'),
+	    ('cy', 'cy@example.com'), ('ed', 'ed@example.com');
+	  INSERT INTO memberships (org_id, user_id, role) VALUES
+	    ('lab', 'jo', 'owner'), ('lab', 'li', 'admin'), ('lab', 'max', 'editor'),
+	    ('cli', 'jo', 'admin'), ('cli', 'cy', 'editor');
+	  INSERT INTO storage_connections (connection_id, provider, kind, external_id, account, owner_org_id)
+	    VALUES ('github-app:1', 'github', 'github-app-installation', '1', 'lab-gh', 'lab');
+	  INSERT INTO brains (brain_id, org_id, repo_owner, repo_name, name, visibility, created_at,
+	                      storage_connection_id) VALUES
+	    ('b-bound',   'lab', 'lab-gh', 'client-wiki', 'Client Wiki', 'private', '2026-02-01', 'github-app:1'),
+	    ('b-unbound', 'lab', 'lab-gh', 'client-desk', 'Client Desk', 'org',     '2026-02-02', NULL);
+	  INSERT INTO brain_memberships (brain_id, user_id, role) VALUES
+	    ('b-bound', 'max', 'admin'), ('b-bound', 'ed', 'viewer');
+	  INSERT INTO invitations (invite_id, org_id, email, role, invited_by, token_hash, expires_at,
+	                           brain_id, accepted_at) VALUES
+	    ('i-open', 'lab', 'new@example.com', 'viewer', 'jo', '', '2099-01-01', 'b-bound', NULL),
+	    ('i-done', 'lab', 'old@example.com', 'viewer', 'jo', '', '2099-01-01', 'b-bound', '2026-03-01');
+	`);
+	const brainFor = async (user: string, brainId: string) =>
+		(await listAccessibleBrains(db, [user])).find((b) => b.brain_id === brainId);
+
+	check(
+		"a bound brain is read through its binding's installation",
+		(await brainFor('jo', 'b-bound'))?.installation_id === 1 &&
+			(await brainFor('jo', 'b-bound'))?.storage_account === 'lab-gh'
+	);
+	check(
+		"an unbound brain (written by pre-0010 code) falls back to its org's installation",
+		(await brainFor('jo', 'b-unbound'))?.installation_id === 1 &&
+			(await brainFor('jo', 'b-unbound'))?.storage_connection_id === null
+	);
+
+	console.log('\nMoving a brain: who reaches it afterwards (planBrainMove)');
+	const people = await loadMovePeople(db, { brainId: 'b-bound', fromOrgId: 'lab', toOrgId: 'cli' });
+	const plan = planBrainMove({ visibility: 'private', readOnly: false, people });
+	const of = (u: string) => plan.find((c) => c.user_id === u);
+	check(
+		'an admin of the org it leaves, with no grant and no place in the new org, loses it',
+		of('li')?.outcome === 'loses' && of('li')?.before === 'admin' && of('li')?.after === null
+	);
+	check(
+		'a grant holder who is not in the new org becomes a guest, capped at editor',
+		of('max')?.outcome === 'changed' &&
+			of('max')?.before === 'admin' &&
+			of('max')?.after === 'editor' &&
+			of('max')?.afterVia === 'guest'
+	);
+	check(
+		'the caller, admin in both orgs, keeps admin through the org-admin floor',
+		of('jo')?.after === 'admin' && of('jo')?.afterVia === 'org-admin'
+	);
+	check('a member of the new org does NOT gain a private brain', of('cy') === undefined);
+	check(
+		'a guest with a viewer grant is a guest on both sides: unchanged',
+		of('ed')?.outcome === 'unchanged' && of('ed')?.after === 'viewer'
+	);
+	check('losses sort first, so the preview leads with them', plan[0].outcome === 'loses');
+	const orgVisible = planBrainMove({
+		visibility: 'org',
+		readOnly: false,
+		people: await loadMovePeople(db, { brainId: 'b-unbound', fromOrgId: 'lab', toOrgId: 'cli' })
+	});
+	check(
+		'on an org-visible brain, a member of the new org gains it at their org role',
+		orgVisible.find((c) => c.user_id === 'cy')?.outcome === 'gains' &&
+			orgVisible.find((c) => c.user_id === 'cy')?.after === 'editor'
+	);
+	check(
+		'...and a member of the old org who is not in the new one loses it',
+		orgVisible.find((c) => c.user_id === 'max')?.outcome === 'loses'
+	);
+	check(
+		'a read-only brain stays capped at viewer on both sides',
+		planBrainMove({ visibility: 'org', readOnly: true, people }).every(
+			(c) => !c.after || c.after === 'viewer'
+		)
+	);
+
+	console.log('\nMoving a brain: the preview (describeMove)');
+	const text = describeMove({
+		brain: 'Client Wiki',
+		from: 'The Lab',
+		to: 'Client Co',
+		storageAccount: 'lab-gh on GitHub',
+		changes: plan,
+		pendingInvites: 1
+	});
+	check(
+		'says storage stays where it is, and where that is',
+		text.includes('Storage stays where it is: lab-gh on GitHub')
+	);
+	check('names the guest cap', text.includes('max@example.com: Admin → Editor (guest'));
+	check('names the loss', text.includes('li@example.com: Admin → no access'));
+	check('says the pending invitation moves', text.includes('1 pending invitation moves with it'));
+	check(
+		'ends by saying nothing has changed yet',
+		text.includes('Nothing has changed yet') && text.trimEnd().endsWith('confirm: true to move it.')
+	);
+
+	console.log('\nMoving a brain: the statements (moveBrain)');
+	await moveBrain(db, { brainId: 'b-unbound', toOrgId: 'cli', sourceConnectionId: 'github-app:1' });
+	check(
+		"an unbound brain is pinned to its source org's connection, not left to fall back",
+		(await brainFor('jo', 'b-unbound'))?.org_id === 'cli' &&
+			(await brainFor('jo', 'b-unbound'))?.installation_id === 1,
+		'unpinned, it would resolve through the destination org (installation 9), which cannot reach it'
+	);
+	await moveBrain(db, { brainId: 'b-bound', toOrgId: 'cli', sourceConnectionId: 'github-app:999' });
+	const row = sqlite
+		.prepare('SELECT org_id, storage_connection_id FROM brains WHERE brain_id = ?')
+		.get('b-bound') as { org_id: string; storage_connection_id: string };
+	check(
+		'an already-bound brain keeps its binding',
+		row.org_id === 'cli' && row.storage_connection_id === 'github-app:1'
+	);
+	check(
+		"...and is read through it, not through its new org's installation",
+		(await brainFor('jo', 'b-bound'))?.installation_id === 1 &&
+			(await brainFor('jo', 'b-bound'))?.storage_account === 'lab-gh'
+	);
+	const inv = sqlite
+		.prepare('SELECT invite_id, org_id FROM invitations WHERE brain_id = ? ORDER BY 1')
+		.all('b-bound') as { invite_id: string; org_id: string }[];
+	check(
+		'a pending brain invite moves with the brain; an accepted one is history and stays',
+		JSON.stringify(inv) ===
+			JSON.stringify([
+				{ invite_id: 'i-done', org_id: 'lab' },
+				{ invite_id: 'i-open', org_id: 'cli' }
+			])
+	);
+	check(
+		'grants survive the move: the guest still reaches it, capped',
+		(await brainFor('max', 'b-bound'))?.role === 'editor' &&
+			(await brainFor('max', 'b-bound'))?.org_role === null
+	);
+	check(
+		"the old org's admin no longer reaches it",
+		(await brainFor('li', 'b-bound')) === undefined
+	);
+}
 
 done();

@@ -123,6 +123,33 @@ signing in. (Writing the brain here keeps them from landing in a brainless org.)
 
 ---
 
+## A team without GitHub: a hosted org (`--hosted`)
+
+For a team that does not use GitHub at all, create a **hosted** org instead: a named
+org whose brains live on the platform's installation. Nobody installs anything.
+
+```sh
+pnpm onboard-org --hosted --org-name "Acme Corp" [--owner-email admin@acme.com] --apply both
+```
+
+It writes an `orgs` row with `model='hosted'`, the platform connection, and a
+membership for the operator (owner, or admin when `--owner-email` names someone
+else, who is then invited as `--role`). Being a member is what lets the operator
+move an existing brain in:
+
+```
+update_brain(brain: "Client Wiki", org: "Acme Corp")                 # preview
+update_brain(brain: "Client Wiki", org: "Acme Corp", confirm: true)  # move
+```
+
+A moved brain keeps its storage: a brain moved out of a customer org stays in that
+customer's GitHub account and is read through that org's installation. New brains
+created in the hosted org go to the platform account. A hosted org cannot adopt
+repositories (see [`adding-brains.md`](adding-brains.md)). Model:
+[`docs/design/storage-and-tenancy.md`](../design/storage-and-tenancy.md).
+
+---
+
 ## After onboarding
 
 - The owner sees their org's brains in `brains` / the switcher, at their

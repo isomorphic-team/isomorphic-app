@@ -68,6 +68,7 @@ export const TOOL_KINDS: Record<string, UsageKind> = {
 	create_brain: 'admin',
 	connect_brain: 'admin',
 	disconnect_brain: 'admin',
+	update_brain: 'admin',
 	share_brain: 'admin',
 	invite_member: 'admin',
 	set_member_role: 'admin',
