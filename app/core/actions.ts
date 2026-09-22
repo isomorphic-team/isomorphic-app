@@ -11,30 +11,31 @@ import {
 	resolveWikilink as resolveWikilinkPath
 } from '../../src/lib/wiki.ts';
 import { mediaTypeOf } from '../../src/lib/media.ts';
-import type {
-	View,
-	Hit,
-	ActivityEntry,
-	GraphNode,
-	GraphLink,
-	Member,
-	Invite,
-	MemberSelf,
-	BrainAccessEntry,
-	BrainAccessSelf,
-	MemberRole,
-	BrainRow,
-	OrgTarget,
-	ConnectedAccount,
-	Identity,
-	BrowseData,
-	UsageWindow,
-	UsageTotals,
-	UsagePoint,
-	UsagePerson,
-	UsageBrain
-} from './types.ts';
-import { openLink, callTool, firstText } from './host.ts';
+import {
+	firstText,
+	structuredOf,
+	payloadOf,
+	isNoBrain,
+	parseToolView,
+	parseListPages,
+	answersFor,
+	parseReadPage,
+	parseEdit,
+	parseAsset,
+	parseSearchHits,
+	parseActivity,
+	parseGraph,
+	parseMembers,
+	parseBrainAccess,
+	parseAnalytics,
+	parseAccounts,
+	parseIdentity,
+	parseBrains,
+	derivedOrgTargets,
+	type Payload
+} from '../../src/lib/tool-payloads.ts';
+import type { View, Hit, BrainRow, OrgTarget, BrowseData } from './types.ts';
+import { openLink, callTool } from './host.ts';
 import { analyticsDays, type WebTarget } from './host-web.ts';
 import { isFolderNoteName, refreshOutcome } from './util.ts';
 import {
@@ -114,7 +115,7 @@ function handleToolResult(result: CallToolResult) {
 		});
 		return;
 	}
-	const sc = (result.structuredContent ?? {}) as Record<string, unknown>;
+	const sc = structuredOf(result);
 	// Brain FIRST: adopting a different brain drops what was cached for the old one,
 	// including its path policy, so applying this result's policy before that would
 	// hand the new brain the wiki/ default (see setActiveBrain in the store).
@@ -122,85 +123,42 @@ function handleToolResult(result: CallToolResult) {
 	applyPolicy(sc);
 	// Learn the brain list once, lazily, so the switcher knows whether to appear.
 	void ensureBrainList();
-	const view = typeof sc.view === 'string' ? sc.view : 'page';
-	if (view === 'browse') {
-		// browse_brain → file tree. Prefer paths delivered in the result; otherwise
-		// fetch them via list_pages (openBrowse). Text fallback still carries the index.
-		const paths = Array.isArray(sc.paths) ? (sc.paths as string[]) : null;
-		if (paths) {
-			// Seed the cache from the delivered payload — it's the same list_pages shape,
-			// so later folder lookups and tree opens need no round-trip of their own.
-			const data: BrowseData = {
-				paths,
-				titleByPath: pagesToTitleMap(sc.pages),
-				assets: Array.isArray(sc.assets) ? (sc.assets as string[]) : [],
-				hidden: Array.isArray(sc.hidden) ? (sc.hidden as string[]) : [],
-				needsConfig: !!sc.needsConfig
-			};
-			setBrowseCache(data);
-			browseFetchedAt = Date.now();
-			show({ kind: 'browse', ...data }, { push: false });
-		} else openBrowse();
-	} else if (view === 'edit')
-		show(
-			{
-				kind: 'edit',
-				path: String(sc.path ?? ''),
-				markdown: String(sc.markdown ?? ''),
-				sha: String(sc.sha ?? ''),
-				fetchedAt: Date.now()
-			},
-			{ push: false }
-		);
-	else if (view === 'activity')
-		show(
-			{
-				kind: 'activity',
-				entries: Array.isArray(sc.entries) ? (sc.entries as ActivityEntry[]) : [],
-				scopePath: (sc.scope as { path?: string } | undefined)?.path
-			},
-			{ push: false }
-		);
-	else if (view === 'graph')
-		show(
-			{
-				kind: 'graph',
-				nodes: Array.isArray(sc.nodes) ? (sc.nodes as GraphNode[]) : [],
-				links: Array.isArray(sc.edges) ? (sc.edges as GraphLink[]) : [],
-				focus: typeof sc.focus === 'string' ? sc.focus : undefined,
-				truncated: !!sc.truncated
-			},
-			{ push: false }
-		);
-	else if (view === 'members') show(membersViewFromSc(sc), { push: false });
-	else if (view === 'analytics') show(analyticsViewFromSc(sc), { push: false });
-	else if (view === 'brain-access') show(brainAccessViewFromSc(sc), { push: false });
-	else if (view === 'brains') {
-		const bv = brainsViewFromSc(sc);
-		// Zero brains (the Manage brains screen on a fresh account) → the create-your-first-brain
-		// state instead of an empty list.
-		if (bv.kind === 'brains' && bv.brains.length === 0)
-			show({ kind: 'add-brain', orgs: [], first: true }, { push: false });
-		else show(bv, { push: false });
+	// Which screen a payload opens is decided in the lib (parseToolView); this is only
+	// the wiring from that answer into the store.
+	const v = parseToolView(sc);
+	switch (v.kind) {
+		case 'browse':
+			// browse_brain carries the tree while it is small; otherwise the app fetches
+			// it with list_pages (openBrowse). Seeding the cache from a delivered tree
+			// means later folder lookups and tree opens need no round-trip of their own.
+			if (v.tree) {
+				setBrowseCache(v.tree);
+				browseFetchedAt = Date.now();
+				show({ kind: 'browse', ...v.tree }, { push: false });
+			} else openBrowse();
+			return;
+		case 'edit': {
+			const { kind, ...edit } = v;
+			show({ kind, ...edit, fetchedAt: Date.now() }, { push: false });
+			return;
+		}
+		case 'brains': {
+			const bv = brainsViewFromSc(sc);
+			// Zero brains (the Manage brains screen on a fresh account) opens the
+			// create-your-first-brain state instead of an empty list.
+			if (bv.kind === 'brains' && bv.brains.length === 0)
+				show({ kind: 'add-brain', orgs: [], first: true }, { push: false });
+			else show(bv, { push: false });
+			return;
+		}
+		case 'page': {
+			const { kind, ...page } = v;
+			show({ kind, ...page, fetchedAt: Date.now() }, { push: false });
+			return;
+		}
+		default:
+			show(v, { push: false });
 	}
-	// Settings and the connected-accounts widget resolve to the SAME page — the
-	// identity card with connected accounts folded in beneath it.
-	else if (view === 'settings' || view === 'connected_accounts')
-		show(
-			{ kind: 'settings', identity: parseIdentity(sc), accounts: parseAccounts(sc) },
-			{ push: false }
-		);
-	else
-		show(
-			{
-				kind: 'page',
-				path: String(sc.path ?? ''),
-				markdown: String(sc.markdown ?? ''),
-				sha: typeof sc.sha === 'string' ? sc.sha : undefined,
-				fetchedAt: Date.now()
-			},
-			{ push: false }
-		);
 }
 
 // Build a brains View from a tool result (brains / switch_brain / create_brain /
@@ -213,18 +171,18 @@ function handleToolResult(result: CallToolResult) {
 // pickShownBrain. Two ways to know: the caller asked for the switch itself, or the
 // result says `switched` (switch_brain / create_brain), which is the only signal
 // available when the MODEL made the call and the widget is just rendering it.
-function brainsViewFromSc(sc: Record<string, unknown>, switched = false): View {
-	const brains = Array.isArray(sc.brains) ? (sc.brains as BrainRow[]) : [];
-	const deliberate = switched || !!sc.switched;
-	orgsFromSc(sc);
-	if (brains.length) {
-		setBrainList(brains);
-		const picked = pickShownBrain(brains, sc.active ? String(sc.active) : undefined, deliberate);
+function brainsViewFromSc(sc: Payload, switched = false): View {
+	const p = parseBrains(sc);
+	const deliberate = switched || p.switched;
+	if (p.orgs) setOrgList(p.orgs);
+	if (p.brains.length) {
+		setBrainList(p.brains);
+		const picked = pickShownBrain(p.brains, p.active, deliberate);
 		if (picked) setActiveBrain(picked);
 	}
 	// The list highlights the brain the widget is IN, so the checkmark and the crumb
 	// above it can never name two different brains.
-	return { kind: 'brains', brains, active: activeBrain?.id ?? String(sc.active ?? '') };
+	return { kind: 'brains', brains: p.brains, active: activeBrain?.id ?? p.active ?? '' };
 }
 
 // Fetch the caller's brain list once (idempotent). The switcher only appears when
@@ -241,26 +199,22 @@ function ensureBrainList(): Promise<void> {
 	brainListPromise = (async () => {
 		try {
 			const res = await callTool('brains', {});
-			// A failed tool call comes back as a RESULT carrying isError — it does NOT throw.
-			// Without this check the empty payload silently read as a successful "zero brains".
-			if (res.isError) throw new Error(firstText(res));
-			const sc = (res.structuredContent ?? {}) as {
-				brains?: BrainRow[];
-				active?: string;
-				features?: { analytics?: boolean; webBase?: string };
-			};
+			// A failed call is a RESULT carrying isError; payloadOf refuses it. Without
+			// that the empty payload read as a successful "zero brains".
+			const sc = payloadOf(res);
 			if (!Array.isArray(sc.brains)) throw new Error('brains: no list in the result');
-			setBrainList(sc.brains);
+			const p = parseBrains(sc);
+			setBrainList(p.brains);
 			// Which orgs a brain can be added to, and which optional server surfaces
 			// exist (today: the org Analytics tab). Both ride this call because it is
 			// the one the app always makes on open.
-			orgsFromSc(sc);
-			setFeatures(sc.features);
+			if (p.orgs) setOrgList(p.orgs);
+			setFeatures(p.features);
 			// NOT a brain change: this call asks what brains exist, and it runs on every
-			// open — including the open that a `brain:`-targeted view_page or
+			// open, including the open that a `brain:`-targeted view_page or
 			// browse_brain just aimed at a specific brain. Adopting its `active` here is
 			// what pointed the whole widget back at the previously active brain.
-			const picked = pickShownBrain(sc.brains, sc.active, false);
+			const picked = pickShownBrain(p.brains, p.active, false);
 			if (picked) setActiveBrain(picked);
 			bump();
 		} catch {
@@ -281,8 +235,7 @@ function ensureBrainList(): Promise<void> {
 // (setActiveBrain in the store) and no path into a brain may skip that seam.
 async function adoptBrain(id: string): Promise<void> {
 	const res = await callTool('switch_brain', { brain: id });
-	if (res.isError) throw new Error(firstText(res));
-	brainsViewFromSc((res.structuredContent ?? {}) as Record<string, unknown>, true);
+	brainsViewFromSc(payloadOf(res), true);
 }
 
 async function switchBrain(id: string) {
@@ -309,41 +262,11 @@ async function switchBrain(id: string) {
 	}
 }
 
-// Does an error message signal the "no brain yet" state? Brain-scope tools throw a
-// NoBrainError server-side (worker.ts) when the caller has an org but no brain — we
-// route those to the create-a-brain flow instead of showing a raw error.
-function isNoBrain(s: string): boolean {
-	return /don.?t have a brain yet/i.test(s);
-}
-
-// The orgs a caller can add a brain to. The `brains` payload carries them, because an
-// org holding NO brain yet cannot be derived from a list of brains, and that is
-// precisely the org someone is trying to connect a first repo into.
-//
-// The derivation survives as the fallback for a server that predates the `orgs` field
-// (an older Worker against a newer bundle), where dropping the picker entirely would
-// be worse than offering the orgs that can still be named.
+// The orgs a caller can add a brain to: the list the `brains` payload carried, else
+// the derivation from the brains they can manage, which is the fallback for a server
+// that predates the `orgs` field (an older Worker against a newer bundle).
 function manageableOrgs(brains: BrainRow[]): OrgTarget[] {
-	if (orgList) return orgList;
-	const out: OrgTarget[] = [];
-	const seen = new Set<string>();
-	for (const b of brains) {
-		if (!b.canManage || !b.orgId || seen.has(b.orgId)) continue;
-		seen.add(b.orgId);
-		out.push({ orgId: b.orgId, orgLabel: b.orgLabel ?? b.label });
-	}
-	return out;
-}
-
-// The orgs field off a `brains` result. Absent (old Worker) leaves the store alone so
-// the derived fallback stays in play; present-but-empty is a real answer and is kept.
-function orgsFromSc(sc: Record<string, unknown>): void {
-	if (!Array.isArray(sc.orgs)) return;
-	setOrgList(
-		(sc.orgs as Record<string, unknown>[])
-			.filter((o) => o && typeof o.orgId === 'string')
-			.map((o) => ({ orgId: String(o.orgId), orgLabel: String(o.orgLabel ?? o.orgId) }))
-	);
+	return orgList ?? derivedOrgTargets(brains);
 }
 
 // ---------- flows ----------
@@ -389,7 +312,7 @@ function openConnectAccount() {
 // that would offer to connect the repo a second time. So the stale brains list that
 // opened the flow is dropped and replaced by the refreshed one from this result,
 // which switchBrain then pushes on its way out.
-function finishAddBrain(sc: Record<string, unknown>, connectedId: string) {
+function finishAddBrain(sc: Payload, connectedId: string) {
 	const fresh = brainsViewFromSc(sc);
 	dropStale('brains');
 	show(fresh, { push: false });
@@ -400,7 +323,7 @@ function finishAddBrain(sc: Record<string, unknown>, connectedId: string) {
 // mutation returns the fresh roster). Same stack discipline as finishAddBrain: a
 // completed flow must not sit in history, or Back re-opens a form for something the
 // user has already done.
-function finishInvite(sc: Record<string, unknown>) {
+function finishInvite(sc: Payload) {
 	const fresh = membersViewFromSc(sc);
 	dropStale('members');
 	show(fresh, { push: false });
@@ -432,8 +355,7 @@ async function submitCreateBrain(name: string) {
 	);
 	try {
 		const res = await callTool('create_brain', { name: trimmed });
-		if (res.isError) throw new Error(firstText(res));
-		const fresh = brainsViewFromSc((res.structuredContent ?? {}) as Record<string, unknown>, true);
+		const fresh = brainsViewFromSc(payloadOf(res), true);
 		refreshStale('brains', fresh); // ...and if that screen was the brains list, it is now stale
 		openBrowse(); // the new brain's (empty) tree — the switch already dropped the old one's
 	} catch (e) {
@@ -451,8 +373,7 @@ async function openBrains() {
 	show({ kind: 'loading', label: 'Loading brains…', task: 'brains' });
 	try {
 		const res = await callTool('brains', {});
-		if (res.isError) throw new Error(firstText(res));
-		show(brainsViewFromSc((res.structuredContent ?? {}) as Record<string, unknown>));
+		show(brainsViewFromSc(payloadOf(res)));
 	} catch (e) {
 		show({
 			kind: 'error',
@@ -463,41 +384,14 @@ async function openBrains() {
 	}
 }
 
-// Build a members View from a tool result's structuredContent (view_members /
-// list_members / any mutation, which all return the fresh roster).
-function membersViewFromSc(sc: Record<string, unknown>): View {
-	const me = (sc.me ?? {}) as Partial<MemberSelf>;
-	return {
-		kind: 'members',
-		members: Array.isArray(sc.members) ? (sc.members as Member[]) : [],
-		invites: Array.isArray(sc.invites) ? (sc.invites as Invite[]) : [],
-		me: { user_id: String(me.user_id ?? ''), role: (me.role as MemberRole) ?? 'viewer' }
-	};
+// The roster as a View (members, and every mutation, which all return the fresh roster).
+function membersViewFromSc(sc: Payload): View {
+	return { kind: 'members', ...parseMembers(sc) };
 }
 
-// Build a brain-access View from a tool result's structuredContent (brain_access
-// and every share_brain mutation return the fresh access list).
-function brainAccessViewFromSc(sc: Record<string, unknown>): View {
-	const me = (sc.me ?? {}) as Partial<BrainAccessSelf>;
-	const active = (sc.activeBrain ?? {}) as { id?: string; label?: string };
-	return {
-		kind: 'brain-access',
-		access: Array.isArray(sc.access) ? (sc.access as BrainAccessEntry[]) : [],
-		invites: Array.isArray(sc.invites) ? (sc.invites as Invite[]) : [],
-		visibility: typeof sc.visibility === 'string' ? sc.visibility : 'org',
-		// Carried so the panel and its share flow keep acting on the brain the user
-		// opened, not on whatever happens to be active: the Share control in the
-		// brains list can target a brain that is not the current one, and `brain` has
-		// to ride on every subsequent call for it to stay there.
-		brainId: String(active.id ?? ''),
-		brainLabel: String(active.label ?? 'this brain'),
-		me: {
-			user_id: String(me.user_id ?? ''),
-			role: (me.role as MemberSelf['role']) ?? 'viewer',
-			// Null for a guest: the server sends it as null, and 'viewer' would be a lie.
-			orgRole: me.orgRole ? (me.orgRole as MemberSelf['role']) : null
-		}
-	};
+// The sharing panel as a View (brain_access, and every share_brain mutation).
+function brainAccessViewFromSc(sc: Payload): View {
+	return { kind: 'brain-access', ...parseBrainAccess(sc) };
 }
 
 // Open the sharing panel for a brain: who can reach it, and at what level.
@@ -507,8 +401,7 @@ async function openBrainAccess(brain?: string) {
 	show({ kind: 'loading', label: 'Loading sharing…', task: 'sharing' });
 	try {
 		const result = await callTool('brain_access', brain ? { brain } : {});
-		if (result.isError) throw new Error(firstText(result));
-		show(brainAccessViewFromSc((result.structuredContent ?? {}) as Record<string, unknown>));
+		show(brainAccessViewFromSc(payloadOf(result)));
 	} catch (e) {
 		show({
 			kind: 'error',
@@ -521,7 +414,7 @@ async function openBrainAccess(brain?: string) {
 
 // Re-render the sharing panel in place from a mutation's structuredContent, without
 // pushing a history entry (mirrors refreshMembers).
-function refreshBrainAccess(sc: Record<string, unknown>) {
+function refreshBrainAccess(sc: Payload) {
 	show(brainAccessViewFromSc(sc), { push: false });
 }
 
@@ -536,7 +429,7 @@ function openShareBrain(brainId: string, brainLabel: string) {
 // Leave the share flow for the refreshed panel, the new person already on it. Same
 // stack discipline as finishInvite: a completed flow must not sit in history, or
 // Back re-opens a form for something already done.
-function finishShareBrain(sc: Record<string, unknown>) {
+function finishShareBrain(sc: Payload) {
 	const fresh = brainAccessViewFromSc(sc);
 	dropStale('brain-access');
 	show(fresh, { push: false });
@@ -547,10 +440,7 @@ function finishShareBrain(sc: Record<string, unknown>) {
 // the app could ask before: a render carried its text and no notion of which version
 // the text was.
 async function fetchPage(path: string): Promise<{ markdown: string; sha: string }> {
-	const result = await callTool('read_page', { path, ...brainArgs() });
-	if (result.isError) throw new Error(firstText(result));
-	const sc = (result.structuredContent ?? {}) as { sha?: string };
-	return { markdown: firstText(result), sha: typeof sc.sha === 'string' ? sc.sha : '' };
+	return parseReadPage(await callTool('read_page', { path, ...brainArgs() }));
 }
 
 // Build a page view from freshly fetched content. Every page render is stamped with
@@ -558,10 +448,6 @@ async function fetchPage(path: string): Promise<{ markdown: string; sha: string 
 // presenting a snapshot as though it were live.
 function pageView(path: string, page: { markdown: string; sha: string }): View {
 	return { kind: 'page', path, markdown: page.markdown, sha: page.sha, fetchedAt: Date.now() };
-}
-
-async function fetchPageList(): Promise<string[]> {
-	return (browseCache ?? (await fetchPaths())).paths;
 }
 
 async function fetchPageIndex(): Promise<{ path: string; title: string }[]> {
@@ -686,19 +572,7 @@ async function openAsset(path: string) {
 		// include_data: the asset view IS the bytes. See app/core/media.ts on why the
 		// default is off.
 		const res = await callTool('read_media', { path, include_data: true, ...brainArgs() });
-		if (res.isError) throw new Error(firstText(res));
-		const sc = (res.structuredContent ?? {}) as {
-			mimeType?: string;
-			size?: number;
-			dataUri?: string;
-		};
-		show({
-			kind: 'asset',
-			path,
-			mimeType: sc.mimeType ?? '',
-			size: typeof sc.size === 'number' ? sc.size : 0,
-			dataUri: sc.dataUri ?? ''
-		});
+		show({ kind: 'asset', path, ...parseAsset(payloadOf(res)) });
 	} catch (e) {
 		if (isNoBrain(String(e))) return openAddBrain();
 		show({
@@ -710,19 +584,6 @@ async function openAsset(path: string) {
 	}
 }
 
-// Build a path→title lookup from a tool's structuredContent.pages (see list_pages /
-// browse_brain, which serve titles from the content index). Tolerant of a missing or
-// malformed field so the tree still renders (falling back to filenames).
-function pagesToTitleMap(pages: unknown): Record<string, string> {
-	const map: Record<string, string> = {};
-	if (Array.isArray(pages)) {
-		for (const p of pages) {
-			if (p && typeof p.path === 'string' && typeof p.title === 'string') map[p.path] = p.title;
-		}
-	}
-	return map;
-}
-
 // How long a cached tree is trusted without a background re-check. Only external
 // writes (an agent editing the brain while the widget is open) can age it — our own
 // CRUD refreshes it directly — so this is about freshness, not correctness.
@@ -732,24 +593,12 @@ let browseFetchedAt = 0;
 // One list_pages call → the whole tree payload, memoized in the store. Every tree
 // open after the first is instant; the caller decides whether to revalidate.
 async function fetchPaths(): Promise<BrowseData> {
-	const result = await callTool('list_pages', { ...brainArgs() }); // no prefix → the whole brain (index-backed, carries titles)
-	const sc = (result.structuredContent ?? {}) as Record<string, unknown> & {
-		pages?: unknown;
-		hidden?: unknown;
-		needsConfig?: boolean;
-	};
-	const paths = firstText(result)
-		.split('\n')
-		.map((l) => l.trim())
-		.filter((l) => l.endsWith('.md'));
-	const data: BrowseData = {
-		paths,
-		titleByPath: pagesToTitleMap(sc.pages),
-		assets: Array.isArray(sc.assets) ? (sc.assets as string[]) : [],
-		hidden: Array.isArray(sc.hidden) ? (sc.hidden as string[]) : [],
-		needsConfig: !!sc.needsConfig
-	};
-	// This is a WIDGET-initiated call, so it never passes through handleToolResult —
+	// No prefix: the whole brain, index-backed, carrying titles. parseListPages refuses
+	// an error result; before it did, a failed call was cached as an empty tree.
+	const result = await callTool('list_pages', { ...brainArgs() });
+	const data = parseListPages(result);
+	const sc = structuredOf(result);
+	// This is a WIDGET-initiated call, so it never passes through handleToolResult:
 	// name the brain and apply the path policy here or the tree keeps whatever the last
 	// host-initiated result left behind (a different brain's, or the wiki/ default).
 	// Naming the brain also keeps the trail's root crumb honest: this call can be the
@@ -758,14 +607,9 @@ async function fetchPaths(): Promise<BrowseData> {
 	// belongs to and the crumb would name a view instead of a brain. Brain before
 	// policy, for the reason in handleToolResult.
 	//
-	// ONLY IF IT IS STILL AN ANSWER TO THE QUESTION WE ASKED. A self-boot fetch goes out
-	// with no brain named, so it answers about the CONNECTION's brain — and an opening
-	// result can land while it is in flight, naming a different one (a `brain:`-targeted
-	// view_page). Adopting the stale answer then would rename the crumb, reset the path
-	// policy, and cache another brain's page list behind the page on screen, which is
-	// issue #26's shape reached through the back door.
-	const answered = (sc.activeBrain as { id?: string } | undefined)?.id;
-	if (!activeBrain || !answered || answered === activeBrain.id) {
+	// Only if it is still an answer to the question we asked (answersFor): a stale
+	// self-boot answer adopted here is issue #26's shape reached through the back door.
+	if (answersFor(sc, activeBrain?.id)) {
 		applyBrainContext(sc);
 		applyPolicy(sc);
 		setBrowseCache(data);
@@ -853,12 +697,7 @@ async function openActivity(path?: string) {
 	});
 	try {
 		const result = await callTool('view_activity', { ...(path ? { path } : {}), ...brainArgs() });
-		if (result.isError) throw new Error(firstText(result));
-		const sc = (result.structuredContent ?? {}) as {
-			entries?: ActivityEntry[];
-			scope?: { path?: string };
-		};
-		show({ kind: 'activity', entries: sc.entries ?? [], scopePath: sc.scope?.path });
+		show({ kind: 'activity', ...parseActivity(payloadOf(result)) });
 	} catch (e) {
 		show({
 			kind: 'error',
@@ -876,8 +715,7 @@ async function openMembers() {
 	show({ kind: 'loading', label: 'Loading members…', task: 'members' });
 	try {
 		const result = await callTool('members', {});
-		if (result.isError) throw new Error(firstText(result));
-		show(membersViewFromSc((result.structuredContent ?? {}) as Record<string, unknown>));
+		show(membersViewFromSc(payloadOf(result)));
 	} catch (e) {
 		show({
 			kind: 'error',
@@ -895,8 +733,7 @@ async function openAnalytics(days?: number) {
 	show({ kind: 'loading', label: 'Loading analytics…', task: 'analytics' });
 	try {
 		const result = await callTool('analytics', { ...(days ? { days } : {}) });
-		if (result.isError) throw new Error(firstText(result));
-		show(analyticsViewFromSc((result.structuredContent ?? {}) as Record<string, unknown>));
+		show({ kind: 'analytics', ...parseAnalytics(payloadOf(result)) });
 	} catch (e) {
 		show({
 			kind: 'error',
@@ -907,47 +744,10 @@ async function openAnalytics(days?: number) {
 	}
 }
 
-// The analytics payload as a view. `people` arrives empty for non-admins (the server
-// withholds it rather than trusting the widget to hide it), and `canSeePeople` is what
-// tells the view whether an empty list means "withheld" or "nobody here".
-function analyticsViewFromSc(sc: Record<string, unknown>): View {
-	return {
-		kind: 'analytics',
-		orgName: typeof sc.orgName === 'string' ? sc.orgName : 'your organization',
-		window: sc.window as UsageWindow,
-		totals: sc.totals as UsageTotals,
-		series: Array.isArray(sc.series) ? (sc.series as UsagePoint[]) : [],
-		people: Array.isArray(sc.people) ? (sc.people as UsagePerson[]) : [],
-		brains: Array.isArray(sc.brains) ? (sc.brains as UsageBrain[]) : [],
-		canSeePeople: !!sc.canSeePeople,
-		truncated: !!sc.truncated,
-		footnote: typeof sc.footnote === 'string' ? sc.footnote : ''
-	};
-}
-
 // Re-render the roster in place from a mutation's returned structuredContent (every
 // member mutation returns the fresh roster), without pushing a history entry.
-function refreshMembers(sc: Record<string, unknown>) {
+function refreshMembers(sc: Payload) {
 	show(membersViewFromSc(sc), { push: false });
-}
-
-// Pull the connected-accounts roster out of a tool result (`connected_accounts` /
-// unlink_identity both carry the fresh `accounts` array).
-function parseAccounts(sc: Record<string, unknown>): ConnectedAccount[] {
-	return Array.isArray(sc.accounts) ? (sc.accounts as ConnectedAccount[]) : [];
-}
-
-// Read the whoami payload into the app's Identity shape (shared by the live openSettings
-// path and the dev harness, which routes a view:'settings' result through onToolResult).
-function parseIdentity(sc: Record<string, unknown>): Identity {
-	const ab = sc.activeBrain as { label?: string } | undefined;
-	return {
-		email: typeof sc.email === 'string' ? sc.email : undefined,
-		login: typeof sc.login === 'string' ? sc.login : undefined,
-		role: typeof sc.role === 'string' ? sc.role : undefined,
-		org: typeof sc.org === 'string' ? sc.org : undefined,
-		activeBrainLabel: typeof ab?.label === 'string' ? ab.label : undefined
-	};
 }
 
 // The user's own settings: the signed-in identity card (via whoami) with the person's
@@ -961,12 +761,8 @@ async function openSettings() {
 			callTool('whoami', {}),
 			callTool('connected_accounts', {}).catch(() => null)
 		]);
-		if (who.isError) throw new Error(firstText(who));
-		const identity = parseIdentity((who.structuredContent ?? {}) as Record<string, unknown>);
-		const accounts =
-			conn && !conn.isError
-				? parseAccounts((conn.structuredContent ?? {}) as Record<string, unknown>)
-				: [];
+		const identity = parseIdentity(payloadOf(who));
+		const accounts = conn && !conn.isError ? parseAccounts(structuredOf(conn)) : [];
 		show({ kind: 'settings', identity, accounts });
 	} catch (e) {
 		show({
@@ -992,20 +788,7 @@ async function openGraph(focus?: string) {
 			...(focus ? { path: focus } : {}),
 			...brainArgs()
 		});
-		if (result.isError) throw new Error(firstText(result));
-		const sc = (result.structuredContent ?? {}) as {
-			nodes?: GraphNode[];
-			edges?: GraphLink[];
-			focus?: string;
-			truncated?: boolean;
-		};
-		show({
-			kind: 'graph',
-			nodes: sc.nodes ?? [],
-			links: sc.edges ?? [],
-			focus: sc.focus,
-			truncated: !!sc.truncated
-		});
+		show({ kind: 'graph', ...parseGraph(payloadOf(result)) });
 	} catch (e) {
 		show({
 			kind: 'error',
@@ -1062,12 +845,9 @@ async function runSearch(query: string, scope?: 'all') {
 			...(scope ? { scope } : {}),
 			...brainArgs()
 		});
-		// A failed tool call comes back as a RESULT carrying isError, it does not throw.
-		// Without this an error rendered as "No matches", which is a different and much
-		// more misleading answer than "search failed".
-		if (result.isError) throw new Error(firstText(result));
-		const sc = (result.structuredContent ?? {}) as { hits?: Hit[] };
-		show({ kind: 'search', query, scope, hits: sc.hits ?? [] });
+		// payloadOf refuses an error result. Before it did, an error rendered as "No
+		// matches", a different and more misleading answer than "search failed".
+		show({ kind: 'search', query, scope, hits: parseSearchHits(payloadOf(result)) });
 	} catch (e) {
 		show({
 			kind: 'error',
@@ -1113,14 +893,7 @@ async function openEditor(path: string) {
 			await navigateTo(path);
 			return;
 		}
-		const sc = (result.structuredContent ?? {}) as Record<string, unknown>;
-		show({
-			kind: 'edit',
-			path: String(sc.path ?? path),
-			markdown: String(sc.markdown ?? ''),
-			sha: String(sc.sha ?? ''),
-			fetchedAt: Date.now()
-		});
+		show({ kind: 'edit', ...parseEdit(structuredOf(result), path), fetchedAt: Date.now() });
 	} catch (e) {
 		toast(`Couldn't open editor: ${e}`, true);
 	}
@@ -1206,10 +979,8 @@ export {
 	fetchPage,
 	pageView,
 	refreshPage,
-	fetchPageList,
 	navigateTo,
 	openAsset,
-	pagesToTitleMap,
 	fetchPaths,
 	openBrowse,
 	openFolder,
@@ -1217,8 +988,6 @@ export {
 	openMembers,
 	openAnalytics,
 	refreshMembers,
-	parseAccounts,
-	parseIdentity,
 	openSettings,
 	openGraph,
 	refreshBrowse,

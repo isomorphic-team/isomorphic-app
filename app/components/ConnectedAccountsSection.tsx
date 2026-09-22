@@ -3,7 +3,7 @@
 import { useState } from 'preact/hooks';
 import type { ConnectedAccount } from '../core/types.ts';
 import { callTool, firstText } from '../core/host.ts';
-import { parseAccounts } from '../core/actions.ts';
+import { parseAccounts, structuredOf } from '../../src/lib/tool-payloads.ts';
 import { toast, askConfirm } from '../core/toast.tsx';
 import { InitialsAvatar, CloseIcon, GithubIcon } from '../core/icons.tsx';
 import { Button, List, ListRow } from '../ui/index.ts';
@@ -35,7 +35,7 @@ function ConnectedAccountsSection({ initial }: { initial: ConnectedAccount[] }) 
 		setBusy(false);
 		if (res.isError) return toast(firstText(res), true);
 		toast(firstText(res));
-		setAccounts(parseAccounts((res.structuredContent ?? {}) as Record<string, unknown>));
+		setAccounts(parseAccounts(structuredOf(res)));
 	}
 
 	// The signed-in identity is already shown as the card above, so omit it here.

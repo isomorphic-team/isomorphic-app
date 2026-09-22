@@ -22,6 +22,9 @@ import type { DisplayMode } from './types.ts';
 import { bump } from './store.ts';
 import { toast } from './toast.tsx';
 import { isWebHost, webCallTool } from './host-web.ts';
+// The text block of a result. Lives with the payload parsers; re-exported from this
+// seam because every view that toasts a tool's reply already imports it from here.
+import { firstText } from '../../src/lib/tool-payloads.ts';
 
 const app = new App({ name: 'Isomorphic Brain', version: '0.2.0' });
 
@@ -150,11 +153,6 @@ async function connectHost(): Promise<void> {
 	await app.connect();
 	const ctx = app.getHostContext();
 	if (ctx) applyHostContext(ctx);
-}
-
-function firstText(result: CallToolResult): string {
-	const block = (result.content ?? []).find((b) => b.type === 'text');
-	return block && 'text' in block ? String(block.text) : '';
 }
 
 export {
