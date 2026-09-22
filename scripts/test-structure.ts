@@ -11,8 +11,10 @@ import {
 	inlinedConceptSuggestions,
 	typeFieldSuggestions,
 	ambiguousTitleSuggestions,
-	wikilinkPortabilityNote
+	wikilinkPortabilityNote,
+	folderNoteSuggestions
 } from '../src/lib/advisories.ts';
+import { findingKey } from '../src/lib/findings.ts';
 import {
 	parseFrontmatter,
 	withFrontmatter,
@@ -503,6 +505,88 @@ Body text.
 	check(
 		'collisions: nothing in the way means nothing reported',
 		clean.blocking.length === 0 && clean.scaffolding.length === 0
+	);
+}
+
+// ---------------------------------------------------------------------------
+console.log('\nfolder-note advisory: a note-less folder holding its own overview');
+// ---------------------------------------------------------------------------
+// Flags only the unambiguous case. "This folder has no note" on its own is not a
+// defect, so a folder whose pages are all ordinary concepts says nothing.
+{
+	const page = (path: string, title?: string) => ({
+		path,
+		title: title ?? path.slice(path.lastIndexOf('/') + 1).replace(/\.md$/, '')
+	});
+	const one = folderNoteSuggestions([
+		page('wiki/vendors/overview.md'),
+		page('wiki/vendors/acme.md')
+	]);
+	check('an overview page beside its siblings is flagged', one.length === 1);
+	check(
+		'the finding names the page and the move that fixes it',
+		one[0]?.headline.includes('wiki/vendors/overview.md') &&
+			one[0]?.headline.includes('wiki/vendors/index.md'),
+		one[0]?.headline
+	);
+	check(
+		'keyed on the FOLDER, so a renamed candidate keeps the same finding',
+		one[0]?.key === findingKey('folder-note', 'wiki/vendors')
+	);
+	check('advisory weight', one[0]?.weight === 2.5);
+	check(
+		'a folder that already has index.md is not flagged',
+		folderNoteSuggestions([
+			page('wiki/vendors/index.md'),
+			page('wiki/vendors/overview.md'),
+			page('wiki/vendors/acme.md')
+		]).length === 0
+	);
+	check(
+		'README.md counts as the folder note too',
+		folderNoteSuggestions([
+			page('wiki/vendors/README.md'),
+			page('wiki/vendors/overview.md'),
+			page('wiki/vendors/acme.md')
+		]).length === 0
+	);
+	check(
+		'a lone page is not a folder wanting a note',
+		folderNoteSuggestions([page('wiki/vendors/overview.md')]).length === 0
+	);
+	check(
+		'repo-root pages have no folder',
+		folderNoteSuggestions([page('overview.md'), page('acme.md')]).length === 0
+	);
+	check(
+		'no overview-shaped page: silence, since "no note" is not a defect',
+		folderNoteSuggestions([page('wiki/vendors/acme.md'), page('wiki/vendors/globex.md')]).length ===
+			0
+	);
+	check(
+		'a filename matching the folder name is an overview',
+		folderNoteSuggestions([page('wiki/vendors/vendors.md'), page('wiki/vendors/acme.md')])
+			.length === 1
+	);
+	check(
+		'a TITLE matching the folder name is an overview',
+		folderNoteSuggestions([page('wiki/vendors/x.md', 'Vendors'), page('wiki/vendors/acme.md')])
+			.length === 1
+	);
+	check(
+		'the overview basenames are matched case-insensitively',
+		folderNoteSuggestions([page('wiki/Docs/Start-Here.md'), page('wiki/Docs/a.md')]).length === 1
+	);
+	const two = folderNoteSuggestions([
+		page('wiki/z/about.md'),
+		page('wiki/z/a.md'),
+		page('wiki/a/home.md'),
+		page('wiki/a/b.md')
+	]);
+	check(
+		'findings are sorted by key, so validate is stable between reads',
+		two.map((f) => f.key).join('|') ===
+			`${findingKey('folder-note', 'wiki/a')}|${findingKey('folder-note', 'wiki/z')}`
 	);
 }
 
