@@ -130,6 +130,7 @@ console.log('\nneedsBrainPreamble');
 	const needs = (body: string) => needsBrainPreamble(peekJsonRpc(body));
 
 	check('initialize skips it', !needs(req('initialize')));
+	check('server/discover (the 2026-07-28 handshake) skips it', !needs(req('server/discover')));
 	check('ping skips it', !needs(req('ping')));
 	check('notifications/initialized skips it', !needs(note('notifications/initialized')));
 	check(

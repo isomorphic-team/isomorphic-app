@@ -31,12 +31,9 @@
 //   - PLATFORM_DB (D1) holds tenant rows mapping `gh_user_id` → installation
 //     and brain repo. Schema in `src/db/schema.sql`.
 
-import {
-	McpServer,
-	WebStandardStreamableHTTPServerTransport,
-	type RegisteredTool
-} from '@modelcontextprotocol/server';
+import { McpServer, type RegisteredTool } from '@modelcontextprotocol/server';
 import { registeredTools, wrapToolHandler } from './lib/registered-tools.ts';
+import { serveMcp, serverOptions } from './lib/mcp-serve.ts';
 import { z } from 'zod';
 import { OAuthProvider, type OAuthHelpers } from '@cloudflare/workers-oauth-provider';
 import { installationOctokit, tokenOctokit, staticAuth, type AppCreds } from './lib/github.ts';
@@ -805,7 +802,7 @@ class McpSession {
 		const env = this.env;
 		const server = new McpServer(
 			{ name: 'isomorphic-mind', title: 'Isomorphic', version: '0.1.0' },
-			{ instructions: SERVER_INSTRUCTIONS }
+			serverOptions(SERVER_INSTRUCTIONS)
 		);
 
 		// ---------- whoami ----------
@@ -1059,8 +1056,8 @@ class McpSession {
 
 // The stateless MCP api handler. The OAuth provider (and the static-bearer
 // fallback) call this with the authenticated token props on `ctx.props`. It
-// builds a fresh McpServer + stateless Streamable-HTTP transport per request and
-// answers on the same POST (enableJsonResponse, no SSE, no session id).
+// builds a fresh McpServer per request and answers on the same POST with JSON,
+// no SSE and no session id, in either protocol era (`serveMcp`).
 const mcpApiHandler = {
 	async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
 		// Stateless transport: only POST carries JSON-RPC requests. Clients also open
@@ -1096,28 +1093,16 @@ const mcpApiHandler = {
 				await session.loadCustomTools();
 			}
 			const server = session.buildServer();
-			const transport = new WebStandardStreamableHTTPServerTransport({
-				sessionIdGenerator: undefined,
-				enableJsonResponse: true
-			});
-			// The transport answers a message it cannot parse with 400 and, without
-			// this, says nothing about why. Its schema is `.strict()`, so a client one
-			// protocol version ahead (Claude speaks 2026-07-28; SDK 1.30 knows up to
-			// 2025-11-25) is refused for a field the SDK has never heard of, and the
-			// log has to name the shape or the next person is guessing. Key names only.
-			let transportError: string | undefined;
-			transport.onerror = (e) => {
-				transportError = e instanceof Error ? e.message : String(e);
-			};
-			await server.connect(transport);
 			const started = Date.now();
-			const res = await transport.handleRequest(forwarded);
+			// Either protocol era; see src/lib/mcp-serve.ts.
+			const { response: res, era, error } = await serveMcp(forwarded, server);
 			const ms = Date.now() - started;
 			// Refusals and slow calls, which are the two things that reach a user as a
 			// bare gateway error from Anthropic's edge: a call the Worker answers in 17s
 			// is one the edge gave up on at ~15s, and only this line says which it was.
+			// A refusal names the message shape (key names only) and the SDK's reason.
 			if (res.status >= 400 || ms > SLOW_REQUEST_MS) {
-				console.warn(describeRequest(peek, { status: res.status, ms, error: transportError }));
+				console.warn(describeRequest(peek, { status: res.status, ms, era, error }));
 			}
 			return res;
 		} catch (err) {

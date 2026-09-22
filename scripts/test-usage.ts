@@ -396,7 +396,7 @@ console.log('\nSDK internals: the shape worker.ts reaches into');
 	check(
 		'a real dispatch reaches the WRAPPED handler',
 		counted.length === 1,
-		`fired ${counted.length}x — if 0, the SDK no longer dispatches what wrapToolHandler replaces`
+		`fired ${counted.length}x; if 0, the SDK no longer dispatches what wrapToolHandler replaces`
 	);
 	check('...and counts it as a success', counted[0] === 'ok');
 	check(

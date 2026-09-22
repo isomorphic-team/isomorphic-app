@@ -34,10 +34,11 @@ export interface JsonRpcPeek {
 const UNPARSED: JsonRpcPeek = { methods: [], id: null, parsed: false, shapes: [] };
 
 // Methods answered entirely from the static tool surface, needing no brain.
-// `ping` and `initialize` are the whole set on purpose: `tools/list` DOES need
-// the brain, because a brain's own `tools/` pages are part of the list it
-// returns, and every `tools/call` obviously does.
-const BRAIN_FREE_METHODS = new Set(['initialize', 'ping']);
+// `server/discover` is the 2026-07-28 revision's `initialize`. These are the
+// whole set on purpose: `tools/list` DOES need the brain, because a brain's own
+// `tools/` pages are part of the list it returns, and every `tools/call`
+// obviously does.
+const BRAIN_FREE_METHODS = new Set(['initialize', 'server/discover', 'ping']);
 
 // Notifications carry no id and expect no reply; none of ours reads a brain.
 function isNotification(method: string): boolean {
@@ -81,7 +82,7 @@ export function peekJsonRpc(body: string): JsonRpcPeek {
  */
 export function describeRequest(
 	peek: JsonRpcPeek,
-	outcome: { status: number; ms: number; error?: string }
+	outcome: { status: number; ms: number; era?: string; error?: string }
 ): string {
 	const shape = peek.shapes.map((keys) => keys.join('+')).join(' ');
 	const method = peek.methods.length
@@ -89,9 +90,9 @@ export function describeRequest(
 		: peek.parsed
 			? '(no method)'
 			: '(unparsed)';
-	return `mcp ${outcome.status} ${Math.round(outcome.ms)}ms ${method} [${shape}]${
-		outcome.error ? ` ${outcome.error}` : ''
-	}`;
+	return `mcp ${outcome.status} ${Math.round(outcome.ms)}ms${
+		outcome.era ? ` ${outcome.era}` : ''
+	} ${method} [${shape}]${outcome.error ? ` ${outcome.error}` : ''}`;
 }
 
 /**
