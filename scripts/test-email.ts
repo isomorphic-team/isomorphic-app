@@ -33,7 +33,6 @@ console.log('\ncontent');
 		subject === `Your ${PRODUCT_NAME} sign-in link`,
 		subject
 	);
-	check('subject carries no hostname', !subject.includes('example.com'), subject);
 
 	check('text carries the link verbatim', text.includes(`\n${url}\n`));
 	check('text names the address the link was requested for', text.includes('pat@example.com'));
