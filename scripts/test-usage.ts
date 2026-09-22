@@ -25,9 +25,9 @@
 
 import { readFileSync, readdirSync } from 'node:fs';
 import { localD1 } from '../src/local/d1-sqlite.ts';
-import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { Client } from '@modelcontextprotocol/sdk/client/index.js';
-import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
+import { Client } from '@modelcontextprotocol/client';
+import { McpServer, InMemoryTransport } from '@modelcontextprotocol/server';
+import { z } from 'zod';
 import { fileURLToPath } from 'node:url';
 import {
 	TOOL_KINDS,
@@ -42,6 +42,7 @@ import {
 	type UsageRow
 } from '../src/lib/usage.ts';
 import { recordUsage, readUsage } from '../src/lib/usage-store.ts';
+import { registeredTools, wrapToolHandler } from '../src/lib/registered-tools.ts';
 
 import { checker } from './check.ts';
 
@@ -368,66 +369,52 @@ console.log('\ncountedCall: the tool-handler wrapper');
 
 console.log('\nSDK internals: the shape worker.ts reaches into');
 {
-	// worker.ts wraps `server._registeredTools[name].callback` to count calls, and
-	// the claude.ai compatibility shim blanks `.execution` on the same objects. Both
-	// reach into SDK privates, so an SDK upgrade that renames either field would
-	// silently stop counting AND silently un-fix the claude.ai bug, with nothing
-	// failing. This pins the shape against the installed SDK.
-	const probe = new McpServer({ name: 'probe', version: '0' });
-	probe.registerTool('sample', { title: 'Sample', inputSchema: {} }, async () => ({
-		content: [{ type: 'text' as const, text: 'hi' }]
-	}));
-	const reg = (probe as unknown as { _registeredTools?: Record<string, Record<string, unknown>> })
-		._registeredTools;
-	check(
-		'_registeredTools still exists',
-		!!reg,
-		'SDK internal renamed — worker.ts wrapping is dead'
-	);
-	check('the registered tool is keyed by name', !!reg?.sample);
-	// The field worker.ts wraps. It is `handler`; wrapping `callback` (which does not
-	// exist) threw on every request the first time the flag was switched on.
-	check('the handler field is still called `handler`', typeof reg?.sample?.handler === 'function');
-	check(
-		'and is still NOT called `callback`',
-		reg?.sample?.callback === undefined,
-		'if the SDK adds one, re-check which field it actually dispatches'
-	);
-	check(
-		'it still carries execution (the claude.ai shim target)',
-		'execution' in (reg?.sample ?? {})
-	);
-
-	// THE WRAP HAS TO SURVIVE A REAL DISPATCH. Pinning the field name proves the
-	// property exists; it does not prove the SDK still READS it when a call arrives.
-	// If registerTool closed over the original function, replacing .handler would be
-	// a silent no-op: every counter would sit at zero with nothing failing anywhere.
-	// So this drives an actual tools/call over a real linked client/server pair.
+	// worker.ts counts calls through `registeredTools` and `wrapToolHandler`. The
+	// first reads an SDK private, and the second depends on which field the SDK
+	// actually dispatches, so an SDK upgrade can break either with nothing failing:
+	// SDK 2 made a plain `tool.handler = …` assignment a no-op. These checks run the
+	// same two functions over a real linked client/server pair.
 	const server = new McpServer({ name: 'dispatch', version: '0' });
-	server.registerTool('echo', { title: 'Echo', inputSchema: {} }, async () => ({
-		content: [{ type: 'text' as const, text: 'real' }]
-	}));
+	server.registerTool(
+		'echo',
+		{ title: 'Echo', inputSchema: z.object({ word: z.string() }) },
+		async ({ word }) => ({ content: [{ type: 'text' as const, text: `real ${word}` }] })
+	);
+	const reg = registeredTools(server);
+	check('registeredTools finds the registration by name', !!reg?.echo, 'SDK internal renamed');
 	const counted: string[] = [];
-	const treg = (server as unknown as { _registeredTools: Record<string, Record<string, unknown>> })
-		._registeredTools;
-	const inner = treg.echo.handler as (...a: never[]) => unknown;
-	treg.echo.handler = countedCall(inner.bind(treg.echo), {
-		after: (ok) => counted.push(ok ? 'ok' : 'err')
-	});
+	wrapToolHandler(reg.echo, (handler) =>
+		countedCall(handler, { after: (ok) => counted.push(ok ? 'ok' : 'err') })
+	);
 
 	const client = new Client({ name: 'probe-client', version: '0' });
 	const [ct, st] = InMemoryTransport.createLinkedPair();
 	await Promise.all([client.connect(ct), server.connect(st)]);
-	const out = (await client.callTool({ name: 'echo', arguments: {} })) as {
+	const out = (await client.callTool({ name: 'echo', arguments: { word: 'hi' } })) as {
 		content?: { text: string }[];
 	};
 	check(
 		'a real dispatch reaches the WRAPPED handler',
 		counted.length === 1,
-		`fired ${counted.length}x — if 0, replacing .handler is a silent no-op`
+		`fired ${counted.length}x; if 0, the SDK no longer dispatches what wrapToolHandler replaces`
 	);
 	check('...and counts it as a success', counted[0] === 'ok');
-	check('...and the caller still gets the real result', out.content?.[0]?.text === 'real');
+	check(
+		'...and the caller still gets the real result, arguments included',
+		out.content?.[0]?.text === 'real hi',
+		JSON.stringify(out.content)
+	);
+
+	// claude.ai web rejected the whole connector when tools/list carried
+	// `execution: { taskSupport: 'forbidden' }`, which SDK 1.x stamped on every tool
+	// and the server stripped. SDK 2 registers no `execution`, so the strip is gone;
+	// this fails if the field comes back.
+	const listed = await client.listTools();
+	check(
+		'tools/list carries no `execution` field',
+		listed.tools.every((t) => !('execution' in t) || t.execution === undefined),
+		JSON.stringify(listed.tools.map((t) => t.execution))
+	);
 	await client.close();
 }
 

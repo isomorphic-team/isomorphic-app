@@ -8,7 +8,7 @@
 // that already runs. The web app is structurally incapable of doing something
 // the connector cannot, which is the property worth protecting.
 
-import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
+import type { CallToolResult } from '@modelcontextprotocol/client';
 
 // The Worker stamps this onto the page it serves at `/b/...`. A flag rather
 // than "wait for an AppBridge handshake and see if it times out": the host is a

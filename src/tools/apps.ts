@@ -18,7 +18,8 @@
 // write_page, passing the blob sha from edit_page for optimistic concurrency.
 
 import { webUrlFor } from '../lib/web-app.ts';
-import { ResourceTemplate, type McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { ResourceTemplate } from '@modelcontextprotocol/server';
+import type { McpServer } from '@modelcontextprotocol/server';
 import {
 	registerAppResource,
 	registerAppTool,

@@ -118,6 +118,7 @@ jobs:
       - run: pnpm test:search
       - run: pnpm test:policy
       - run: pnpm test:preamble
+      - run: pnpm test:protocol
       - run: pnpm test:dedupe
       - run: pnpm test:appmeta
       - run: pnpm test:loading

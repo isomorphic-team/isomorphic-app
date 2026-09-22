@@ -13,8 +13,9 @@
 //   OAuth props       -> one local user, named from git config
 //   octokit           -> the fs + git BrainStore       (src/local/brain-store-fs.ts)
 //
-// The transport needs no substitute: WebStandardStreamableHTTPServerTransport speaks
-// web-standard Request/Response and @hono/node-server bridges it to node's http server.
+// The transport needs no substitute: `serveMcp` (src/lib/mcp-serve.ts, shared with the
+// Worker) speaks web-standard Request/Response in both protocol eras, and
+// @hono/node-server bridges it to node's http server.
 //
 // No org model, so no members, invitations, brain sharing, connected accounts or org
 // onboarding: with one person those tools can only reject, and the Worker applies the
@@ -34,8 +35,9 @@
 
 import { serve } from '@hono/node-server';
 import { Hono } from 'hono';
-import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js';
+import { McpServer } from '@modelcontextprotocol/server';
+import { serveMcp, serverOptions } from './lib/mcp-serve.ts';
+import { registeredTools } from './lib/registered-tools.ts';
 import { execFileSync } from 'node:child_process';
 import { basename, resolve } from 'node:path';
 import { mkdirSync } from 'node:fs';
@@ -166,7 +168,7 @@ const custom = await loadCustomToolDefs(await getContext()).catch(() => ({ defs:
 function buildServer(): McpServer {
 	const server = new McpServer(
 		{ name: 'isomorphic-local', title: `Isomorphic (${basename(dir)})`, version: '0.1.0' },
-		{ instructions: SERVER_INSTRUCTIONS }
+		serverOptions(SERVER_INSTRUCTIONS)
 	);
 
 	registerCoreTools(server, getContext);
@@ -176,13 +178,6 @@ function buildServer(): McpServer {
 	// This process IS the web host, so results carry links into it.
 	registerBrainApp(server, getContext, { webBaseUrl: `http://127.0.0.1:${port}` });
 	registerCustomTools(server, getContext, custom.defs);
-
-	// The claude.ai compatibility shim, as in worker.ts: SDK 1.29 stamps `execution` on
-	// every registration and claude.ai's client-side validation rejects the field.
-	const registered = (
-		server as unknown as { _registeredTools: Record<string, { execution?: unknown }> }
-	)._registeredTools;
-	for (const tool of Object.values(registered)) tool.execution = undefined;
 	return server;
 }
 
@@ -205,12 +200,7 @@ app.post('/mcp', async (c) => {
 		hasAuthorization: false
 	});
 	if (!verdict.ok) return c.text(verdict.message, verdict.status as 403);
-	const transport = new WebStandardStreamableHTTPServerTransport({
-		sessionIdGenerator: undefined,
-		enableJsonResponse: true
-	});
-	await buildServer().connect(transport);
-	return transport.handleRequest(c.req.raw);
+	return (await serveMcp(c.req.raw, buildServer())).response;
 });
 // Same 405 as the Worker: the stateless transport offers no server-to-client stream,
 // and answering GET makes compliant clients retry forever.
@@ -240,9 +230,7 @@ app.get(WEB_ROUTE_PREFIX.slice(0, -1), async (c) =>
 app.get('/', (c) => c.redirect(webPathFor(defaultBrainId, '')));
 
 serve({ fetch: app.fetch, port, hostname: '127.0.0.1' }, () => {
-	const toolCount = Object.keys(
-		(buildServer() as unknown as { _registeredTools: Record<string, unknown> })._registeredTools
-	).length;
+	const toolCount = Object.keys(registeredTools(buildServer())).length;
 	console.log(`\nIsomorphic local: ${basename(dir)}`);
 	for (const b of brains.values()) {
 		console.log(

@@ -17,7 +17,7 @@
 // (auth-handler.ts) merges that verified identity into the actor's person. Email
 // ownership is proven by the sign-in — the same trust chain as invitations.
 
-import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import type { McpServer } from '@modelcontextprotocol/server';
 import { registerAppTool } from '@modelcontextprotocol/ext-apps/server';
 import { z } from 'zod';
 import type { BrainContext } from './librarian.ts';
@@ -117,14 +117,14 @@ export function registerConnectedAccountTools(
 			title: 'Link another account to yours',
 			description:
 				'Start linking another of YOUR sign-in identities (a different email) to this account, so all your brains are reachable from either. Returns a verification link the user opens and signs in with the OTHER email — ownership is proven by that sign-in. Does not link anything until they complete it.',
-			inputSchema: {
+			inputSchema: z.object({
 				email: z
 					.string()
 					.optional()
 					.describe(
 						'The other email you want to link (optional — for guidance only; the link works for whichever address you verify).'
 					)
-			}
+			})
 		},
 		async ({ email }) => {
 			const ctx = await getContext();
@@ -162,13 +162,13 @@ export function registerConnectedAccountTools(
 			title: 'Unlink a connected account',
 			description:
 				'Detach one of your linked accounts. Pass `email` to unlink an email login, or `github` (the @login) to unlink a GitHub account. That connection stops sharing your brains; nothing else changes.',
-			inputSchema: {
+			inputSchema: z.object({
 				email: z.string().optional().describe('Email login to unlink.'),
 				github: z
 					.string()
 					.optional()
 					.describe('GitHub account to unlink (its @login or numeric id).')
-			}
+			})
 		},
 		async ({ email, github }) => {
 			const ctx = await getContext();

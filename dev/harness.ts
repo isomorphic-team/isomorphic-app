@@ -15,7 +15,7 @@
 // live tool responses.
 
 import { AppBridge, PostMessageTransport } from '@modelcontextprotocol/ext-apps/app-bridge';
-import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
+import type { CallToolResult } from '@modelcontextprotocol/client';
 import { BRAIN_APP_HTML } from '../src/lib/app-bundle.generated.ts';
 import { slugify, resolveRelative, parseFrontmatter, withFrontmatter } from '../src/lib/wiki.ts';
 import { DEFAULT_BRAIN_CONFIG, isContentPath } from '../src/lib/brain-policy.ts';

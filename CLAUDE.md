@@ -49,6 +49,7 @@ pnpm test:scope         # org-vs-brain scope: which role each tool gates on
 pnpm test:loading       # loading-line engine: slot eligibility + per-task wiring
 pnpm test:preamble      # the /mcp preamble: which requests need a brain, and what a
                         # failure in front of the SDK answers with
+pnpm test:protocol      # both MCP protocol eras (2025, 2026-07-28) through the real serveMcp
 pnpm test:dedupe        # write-attempt ledger: an identical retry is answered, not applied twice
 pnpm test:appmeta       # the ui:// app resource's host contract (prefersBorder, tool→app link)
 pnpm test:feedback      # submit_feedback composition golden test (redaction, nothing identifying published)
@@ -100,6 +101,11 @@ the first brain fills a global cap and every later one silently reports nothing)
 `pnpm test:policy` (the path-policy wire contract between Worker and app),
 `pnpm test:preamble` (the /mcp request preamble: which methods need a brain resolved,
 in both directions, and the JSON-RPC error a failure in front of the SDK answers with),
+`pnpm test:protocol` (serving both protocol eras through `serveMcp`, the one path the
+Worker and the local runtime share: real SDK clients pinned to 2026-07-28, auto-negotiating,
+and on 2025 reach the same tools and the ui:// resource, every reply is JSON with no
+session, `listChanged` is advertised false, and a malformed modern request is refused by
+the modern leg rather than served by the old one),
 `pnpm test:dedupe` (the write-attempt ledger: the argument fingerprint, the two windows,
 the claim being given back on a refusal or a throw, plus the real statements over the
 real migration on `node:sqlite`),
@@ -178,7 +184,7 @@ Narrative walkthrough for newcomers: [`docs/architecture.md`](docs/architecture.
 This repo ships **three distinct programs** sharing one `src/`:
 
 1. **Bootstrap server** (`src/bootstrap.ts`) — Node, Hono, run via `tsx`. One-shot setup flow that registers a GitHub App via the manifest flow, exchanges the code for credentials, and scaffolds the brain repo in one atomic Git Data API commit.
-2. **MCP Worker** (`src/worker.ts`) — Cloudflare Worker exposing MCP tools over **stateless** Streamable HTTP. Each request builds a fresh `McpServer` + `WebStandardStreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true })` behind the OAuth provider (`mcpApiHandler`), answering on the same POST (no SSE, no session). The per-request `McpSession` class holds tenant/brain resolution and all tool registration (`buildServer()`). Non-POST `/mcp` returns 405 (the stateless transport offers no server→client stream, and handing GET to the SDK transport on Workers hangs the request). The legacy `IsomorphicMindMcp` `McpAgent` **Durable Object** (`MCP_OBJECT` binding) is retained only as an **unused stub** to keep the binding valid — nothing routes to it. (History: this was a stateful McpAgent DO with long-lived SSE streams until 2026-07-17; the Claude host tore those streams down before async results arrived, so widgets intermittently failed. The stateless move fixed it.)
+2. **MCP Worker** (`src/worker.ts`) — Cloudflare Worker exposing MCP tools over **stateless** Streamable HTTP. Each request builds a fresh `McpServer` behind the OAuth provider (`mcpApiHandler`) and answers on the same POST with JSON (no SSE, no session), in EITHER protocol era: `serveMcp` (`src/lib/mcp-serve.ts`, `pnpm test:protocol`) sends a request carrying the 2026-07-28 envelope to the SDK's `createMcpHandler` and everything else to `WebStandardStreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true })`, as before. The split is ours rather than `createMcpHandler`'s built-in 2025 fallback because that fallback omits `enableJsonResponse`, which would have moved every existing client onto SSE replies. Both eras advertise `listChanged: false`: a 2026 client seeing `true` holds a `subscriptions/listen` stream open, and a per-request server can never send on it. (MCP SDK v2 since 2026-09-22; the 2026-07-28 facts are in `docs/references.md`.) The per-request `McpSession` class holds tenant/brain resolution and all tool registration (`buildServer()`). Non-POST `/mcp` returns 405 (the stateless transport offers no server→client stream, and handing GET to the SDK transport on Workers hangs the request). The legacy `IsomorphicMindMcp` `McpAgent` **Durable Object** (`MCP_OBJECT` binding) is retained only as an **unused stub** to keep the binding valid — nothing routes to it. (History: this was a stateful McpAgent DO with long-lived SSE streams until 2026-07-17; the Claude host tore those streams down before async results arrived, so widgets intermittently failed. The stateless move fixed it.)
 
 3. **Local runtime** (`src/local.ts`): Node, run via `tsx` as `pnpm try <folder>`. Serves the same content tools over a **git repository on disk** through the fs `BrainStore` (`src/local/brain-store-fs.ts`), with D1 shimmed over `node:sqlite` (`src/local/d1-sqlite.ts`). No auth (loopback only) and **no org model**, so members/sharing/invites/brain-switching are not registered. Builds a fresh `McpServer` per request for the same reason the Worker does: an `McpServer` binds to one transport. Added 2026-08-04 so a contributor reaches the real tools with no accounts, and so the write-path e2e batteries run offline in CI. `src/local/**` is Node-only and sits outside `src/lib/`. Reads come from the working tree, so its `getHead` reports a digest of that tree while `listCommits` reports git shas.
 
@@ -1095,7 +1101,7 @@ Built 2026-07-24 (branch `feat/user-defined-tools`).
   are deliberately NOT in the op whitelist (v1).
 - **Registration** is one `registerCustomTools(server, getContext, defs)` in `buildServer`,
   AFTER all first-party tools (a `tool_` name can't shadow a built-in) and before the
-  claude.ai `execution`-strip loop (so custom tools get that fix too). `loadCustomTools()`
+  usage-counting loop (so custom tools are counted too). `loadCustomTools()`
   runs in the async window before `buildServer` (alongside `loadActiveBrain`), fail-open on
   no-brain/static mode. On-by-default, **editor**-authored (writing `tools/` is a normal page
   write — no opt-in flag, no admin gate).
@@ -1200,9 +1206,9 @@ UI is `app/views/AnalyticsView.tsx`, an ORG-scope destination beside Members.
   so a config that does not mention the key at all (hand-written, or predating this)
   records nothing: the only way to start collecting is a config that says so.
 - **Recording rides the loop that already rewrites every registration.**
-  `McpSession.instrument()` (worker.ts) wraps each `_registeredTools` callback in
-  the same pass as the claude.ai `execution` shim, so it is the one place that
-  sees every tool by name and the one place a new tool cannot forget to opt into.
+  `McpSession.instrument()` (worker.ts) wraps every registered tool in one pass
+  after registration, so it is the one place that sees every tool by name and the
+  one place a new tool cannot forget to opt into.
   It writes through `ctx.waitUntil` after the result has gone back, swallows its
   own failures (a counter must never turn into a failed `read_page`), counts an
   `isError` result as an error rather than a success, and clears `_resolvedScope`
@@ -1210,9 +1216,11 @@ UI is `app/views/AnalyticsView.tsx`, an ORG-scope destination beside Members.
   previous call's. Under-counting is fine; blocking a read is not. The wrapping
   logic itself is `countedCall` in the pure lib, extracted so it is testable: it is
   the riskiest code here, since it replaces the function the SDK invokes and a
-  mistake breaks every tool rather than skewing a chart. **The SDK field is
-  `handler`, not `callback`** — see `docs/references.md`; getting that wrong threw
-  on every request and typechecking could not see it through the required cast.
+  mistake breaks every tool rather than skewing a chart. **The replacement goes
+  through `wrapToolHandler` (`src/lib/registered-tools.ts`)**, because SDK 2
+  dispatches through a prebuilt `executor` and a plain `tool.handler = …` is a
+  silent no-op there (see `docs/references.md`). `pnpm test:usage` drives a real
+  `tools/call` through that helper, which is what catches an SDK bump breaking it.
 - **TWO SCOPES AGAIN, and the gate is split.** Org totals and the per-brain table
   are viewer+ like the roster; the PEOPLE table is admin+, and is **withheld from
   the payload** rather than hidden by the widget. Per-person read counts are a
@@ -1381,12 +1389,12 @@ Auth.js specifics that bite: config MUST be built per-request with `env.PLATFORM
 - **The Worker logs what the transport refuses and what runs slow** (`describeRequest`
   in `mcp-preamble.ts`, `pnpm test:preamble`): any `/mcp` answer at 4xx or over 5s gets
   one `console.warn` naming the methods, the message SHAPES (top-level key names only,
-  never a value), the status, the duration and the transport's own error. Two reasons.
-  The SDK's request schema is `.strict()` and Claude's client speaks a protocol version
-  (`2026-07-28`) newer than any published SDK knows (`2025-11-25` in 1.30), so a field
-  the SDK has never seen is answered 400 "Invalid JSON-RPC message" and, before this,
-  nothing said which field. And a slow call reaches the user as the edge's 502, not as
-  ours, so only our own log can say which tool it was. Read them in the dashboard's
+  never a value), the protocol era, the status, the duration and the 2025 transport's
+  own error. Two reasons. A refusal names the shape the client sent: under SDK 1.30,
+  whose schema was `.strict()` and stopped at `2025-11-25`, Claude's `2026-07-28` fields
+  were answered 400 with nothing saying which field (SDK 2 serves that revision; its
+  refusals carry the reason in the JSON-RPC body). And a slow call reaches the user as
+  the edge's 502, not as ours, so only our own log can say which tool it was. Read them in the dashboard's
   Workers Logs, or `wrangler tail --status error`; note macOS has no `timeout`, so
   bound a tail with a backgrounded process and `kill`.
 - **`browse_brain` returns a SUMMARY, and the tree only while it is small** (`src/lib/browse.ts`, same issue). It used to send every path twice — as text and again in `structuredContent` with a title per page — which on a 556-page brain was 83,708 characters, over the host's tool-result limit and spilled to a file. The text block is now the brain's shape (page count, per-folder tallies below the shared root, where to get the rest); the tree rides along only under `MAX_INLINE_TREE_CHARS`, measured on the serialized payload rather than a page count. Above it the app fetches the tree with `list_pages`, which is a widget-initiated call the conversation never pays for — the `else openBrowse()` branch of `handleToolResult`, which predates this. `list_pages` itself is unchanged: the widget parses its text block for the path list.

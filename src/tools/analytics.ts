@@ -25,7 +25,7 @@
 // there is nothing to show, and a tab that renders a permanent wall of zeroes is
 // worse than no tab.
 
-import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import type { McpServer } from '@modelcontextprotocol/server';
 import { registerAppTool } from '@modelcontextprotocol/ext-apps/server';
 import { z } from 'zod';
 import type { BrainContext } from './librarian.ts';

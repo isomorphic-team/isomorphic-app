@@ -23,7 +23,7 @@
 // github/static single-tenant paths have no org row, so these tools reject there
 // with a clear "organization accounts only" message.
 
-import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import type { McpServer } from '@modelcontextprotocol/server';
 import { registerAppTool } from '@modelcontextprotocol/ext-apps/server';
 import { z } from 'zod';
 import type { BrainContext } from './librarian.ts';
@@ -155,14 +155,14 @@ export function registerMemberTools(
 			title: 'Invite a person to the organization',
 			description:
 				"Invite someone to the organization by email at a given role (Viewer, Editor, or Admin — default Editor). If they've already signed in, they're added immediately; otherwise they join automatically at their first sign-in. Admin only.",
-			inputSchema: {
+			inputSchema: z.object({
 				email: z.string().describe("The invitee's email address."),
 				role: z
 					.enum(['viewer', 'editor', 'admin'])
 					.optional()
 					.describe('Role to grant (viewer | editor | admin). Defaults to editor.'),
 				brain: brainArg
-			}
+			})
 		},
 		async ({ email, role, brain }) => {
 			const ctx = await getContext({ requiresOrg: 'admin', brain });
@@ -227,11 +227,11 @@ export function registerMemberTools(
 			title: "Change a member's role",
 			description:
 				"Change an existing member's role to Viewer, Editor, or Admin. Admin only. You can't change your own role or the owner's.",
-			inputSchema: {
+			inputSchema: z.object({
 				email: z.string().describe('Email of the member to change.'),
 				role: z.enum(['viewer', 'editor', 'admin']).describe('New role: viewer | editor | admin.'),
 				brain: brainArg
-			}
+			})
 		},
 		async ({ email, role, brain }) => {
 			const ctx = await getContext({ requiresOrg: 'admin', brain });
@@ -270,10 +270,10 @@ export function registerMemberTools(
 			title: 'Remove a person from the organization',
 			description:
 				"Remove someone from the organization by email — revokes their access, or cancels a pending invitation if they haven't joined yet. Admin only. You can't remove yourself or the owner.",
-			inputSchema: {
+			inputSchema: z.object({
 				email: z.string().describe('Email of the member or pending invite to remove.'),
 				brain: brainArg
-			}
+			})
 		},
 		async ({ email, brain }) => {
 			const ctx = await getContext({ requiresOrg: 'admin', brain });

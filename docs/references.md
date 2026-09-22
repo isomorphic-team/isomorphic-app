@@ -35,7 +35,19 @@ We use `@modelcontextprotocol/ext-apps`: `/server` (registerAppTool / registerAp
 ## MCP core + TypeScript SDK
 
 - **MCP spec / docs:** https://modelcontextprotocol.io
-- **TypeScript SDK (`@modelcontextprotocol/sdk`):** https://github.com/modelcontextprotocol/typescript-sdk
+- **TypeScript SDK (v2: `@modelcontextprotocol/server`, `/client`, `/core`):** https://github.com/modelcontextprotocol/typescript-sdk
+  (v1 was the single `@modelcontextprotocol/sdk` package, dropped here 2026-09-22)
+- **v1 to v2 upgrade guide:** https://github.com/modelcontextprotocol/typescript-sdk/blob/main/docs/migration/upgrade-to-v2.md
+- **Serving the 2026-07-28 revision (`createMcpHandler`, `isLegacyRequest`, `subscriptions/listen`):**
+  https://github.com/modelcontextprotocol/typescript-sdk/blob/main/docs/migration/support-2026-07-28.md
+- **2026-07-28 facts this repo depends on** (verified 2026-09-22 against 2.0.0): the
+  revision has no `initialize` (a client probes with `server/discover`) and no `ping`;
+  every request carries a `_meta` envelope plus `MCP-Protocol-Version`, `Mcp-Method` and
+  `Mcp-Name` headers, and a request with the envelope but not the headers is refused
+  `400`; change notifications only travel on a `subscriptions/listen` SSE stream the
+  client opens when a capability says `listChanged: true`. `InMemoryTransport` links
+  2025-era instances only, so a 2026 test drives `createMcpHandler` through a `fetch`
+  function (`scripts/test-protocol.ts`).
 
 ## Editor stack (Phase D WYSIWYG)
 
@@ -103,21 +115,25 @@ Non-obvious things confirmed against the sources above (with the "why it bit us"
   **Adding a Durable Object binding takes this away silently**, so anything depending on it
   should branch on `has_preview` rather than assume.
 
-- **`server._registeredTools[name]` stores the function as `handler`, NOT `callback`**
-  (SDK 1.29, verified against the installed package). Two things in `src/worker.ts`
-  reach into this private map: the claude.ai compatibility shim (which blanks
-  `.execution`) and usage instrumentation (which wraps the function). The first
-  version of the wrapper used `.callback`, which is `undefined` there, so it threw on
-  `.bind()` and would have failed every request the moment `USAGE_ANALYTICS` was
-  switched on. Nothing caught it: reaching into privates requires an
-  `as unknown as` cast, which turns typechecking off exactly where it was needed, and
-  the flag was off locally. `pnpm test:usage` now pins the field name AND drives a
-  real `tools/call` over an in-memory client/server pair, because the field existing
-  does not prove the SDK still dispatches through it (if `registerTool` closed over
-  the original function, replacing the property would be a silent no-op and every
-  counter would read zero forever). Re-run that test after any SDK bump.
+- **SDK 2 dispatches a tool through `executor`, not `handler`** (verified 2026-09-22
+  against `@modelcontextprotocol/server` 2.0.0). `registerTool` builds the executor
+  from the handler once, so assigning `tool.handler` afterwards is a silent no-op:
+  under SDK 1.x that assignment was how usage counting wrapped every tool, and on
+  the upgrade every counter would have read zero with nothing failing. The public
+  `RegisteredTool.update({ callback })` rebuilds the executor, and it sends
+  `list_changed` only on a connected server. `src/lib/registered-tools.ts` is the one
+  place that does either (enumerating still needs the private `_registeredTools`),
+  and `pnpm test:usage` drives a real `tools/call` through it. Re-run that test
+  after any SDK bump. (SDK 1.x stored the function as `handler` too; an earlier
+  wrapper used `callback`, which does not exist, and threw on every request.)
+- **SDK 2 no longer stamps `execution` on tools.** SDK 1.29 emitted
+  `execution: { taskSupport: 'forbidden' }` in every `tools/list` entry, and
+  claude.ai web rejected the whole connector over it, so the server used to strip it.
+  SDK 2 registers none; `pnpm test:usage` asserts the field stays absent.
 
 - **A stateless `/mcp` POST needs NO `initialize`, and DOES need both accept types.**
+  (This is the 2025 leg of `serveMcp`, which a request without the 2026-07-28 envelope
+  takes; still true on SDK 2, and the web app's `fetch` client relies on it.)
   Verified 2026-08-31 against `pnpm try` (the same handlers the Worker serves). A bare
   `{"method":"tools/call"}` POST returns `200` with the real result: because the transport
   is stateless (`sessionIdGenerator: undefined`) every request builds a fresh

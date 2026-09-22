@@ -21,7 +21,7 @@
 // CLAUDE.md), and those two already do the right thing for an attachment now that the
 // index records asset links.
 
-import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import type { McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
 import type { BrainContext } from './librarian.ts';
 import { landed } from './librarian.ts';
@@ -70,7 +70,7 @@ export function registerMediaTools(
 				// looking for this tool needs to learn from the description alone which
 				// half of it it can actually call, rather than trying and failing.
 				'attach_media stores a file (an image, a PDF) in the brain and optionally adds it to a page. There are two ways to supply the file and only one of them is yours. Pass `url` and the server downloads the file itself: that is how YOU attach something, and it works for anything reachable at a public https address (a diagram, a photo, a PDF), including pages your own sandbox cannot reach. `data` takes raw base64 and is supplied by the Isomorphic app when someone drops a file into the panel, NOT by you: you cannot produce it from an image in the conversation, because you can see that image but do not have its bytes. So if the file is one the user attached to the chat, or one you produced yourself with no public URL, tell them to drop it into the Isomorphic panel instead.',
-			inputSchema: {
+			inputSchema: z.object({
 				url: z
 					.string()
 					.optional()
@@ -112,7 +112,7 @@ export function registerMediaTools(
 					.optional()
 					.describe('Alt text for the inserted image link. Defaults to the filename.'),
 				brain: brainArg
-			}
+			})
 		},
 		async ({ url, data, filename, mime_type, page, path, alt, brain }) => {
 			const ctx = await getContext({ requires: 'editor', brain });
@@ -261,7 +261,7 @@ export function registerMediaTools(
 			annotations: { readOnlyHint: true },
 			description:
 				'read_media fetches a file stored in the brain (an image, a PDF) by its path. For an image type Claude can see (PNG, JPEG, GIF, WebP) it returns the picture itself, so you can look at it and describe or reason about it. The app also calls this to render images inside a page. Use it when a page references an image and the question depends on what the image actually shows.',
-			inputSchema: {
+			inputSchema: z.object({
 				path: z.string().describe('Path of the stored file, e.g. "wiki/vendors/assets/logo.png".'),
 				include_data: z
 					.boolean()
@@ -270,7 +270,7 @@ export function registerMediaTools(
 						'Include the raw bytes as a data URI in the structured result. Set by the Isomorphic app, which needs them to render the image. Leave it off: you are handed the picture itself.'
 					),
 				brain: brainArg
-			}
+			})
 		},
 		async ({ path, include_data, brain }) => {
 			const { store, repoArgs, config } = await getContext({ brain });

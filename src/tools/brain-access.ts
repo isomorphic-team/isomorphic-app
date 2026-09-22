@@ -24,7 +24,7 @@
 // org-wide visibility flip. Revoke and re-share are the same verb from the user's
 // side, and a separate unshare_brain would be a third name for it.
 
-import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import type { McpServer } from '@modelcontextprotocol/server';
 import { registerAppTool } from '@modelcontextprotocol/ext-apps/server';
 import { z } from 'zod';
 import type { BrainContext } from './librarian.ts';
@@ -187,7 +187,7 @@ export function registerBrainAccessTools(
 			title: 'Share a brain / change who can access it',
 			description:
 				"Change who can access a brain. Either share it with ONE person by email at a given level (`email` + `access`: viewer | editor | admin, or `none` to revoke), or change the brain's overall `visibility` ('private' = only people it's shared with, 'org' = everyone in the organization). Use when the user wants to share / unshare a brain, give someone access, change what someone can do in a brain, or make a brain private or organization-wide. Requires admin on that brain. The person does NOT need to be in the organization: someone outside it becomes a GUEST of this one brain (viewer or editor, never admin) and reaches nothing else, and an address with no account yet is invited and joins as a guest when they first sign in. To make someone a member of the whole organization instead, use invite_member; to change someone's ORGANIZATION role, use set_member_role.",
-			inputSchema: {
+			inputSchema: z.object({
 				email: z
 					.string()
 					.optional()
@@ -207,7 +207,7 @@ export function registerBrainAccessTools(
 						"'private' = only people the brain is shared with (plus organization admins); 'org' = every member of the organization."
 					),
 				brain: brainArg
-			}
+			})
 		},
 		async ({ email, access, visibility, brain }) => {
 			// BRAIN-scope admin: sharing changes who reaches this brain's content.

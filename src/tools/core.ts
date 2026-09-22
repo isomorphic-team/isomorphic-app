@@ -4,7 +4,7 @@
 // Both take the same getContext every other suite takes, so they work against a
 // GitHub-backed brain or a git repo on disk.
 
-import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import type { McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
 import type { BrainContext } from './librarian.ts';
 import type { TenantOpts } from '../lib/orgs.ts';
@@ -24,7 +24,7 @@ export function registerCoreTools(
 			annotations: { readOnlyHint: true },
 			description:
 				"List markdown pages in the brain. With no prefix, returns the brain's editable content (per its .isomorphic.json roots); pass a prefix to filter to a subtree. Paths are relative to the repo root.",
-			inputSchema: {
+			inputSchema: z.object({
 				prefix: z
 					.string()
 					.optional()
@@ -33,7 +33,7 @@ export function registerCoreTools(
 					.string()
 					.optional()
 					.describe('Which brain to target (name/handle). Defaults to the active brain.')
-			}
+			})
 		},
 		async ({ prefix, brain }) => {
 			const { store, repoArgs, config, db, brainId, activeBrain } = await getContext({ brain });
@@ -123,13 +123,13 @@ export function registerCoreTools(
 			// read-before-you-replace rule lives here too, at the point of need.
 			description:
 				"Read a page: read_page returns the page's raw markdown source (frontmatter and body) as text, fetched from the brain repo. Use it whenever you need a page's contents to reason over, quote, or edit. Read a page before any write_page call that passes `content`, since that replaces the whole body and would destroy text you have not seen (to change only part of a page, prefer write_page's non-destructive `append` / `edits` arguments, which need no prior read). This returns text to you and does not show anything to the user: use view_page when the goal is for the USER to see the page.",
-			inputSchema: {
+			inputSchema: z.object({
 				path: z.string().describe('Path relative to the repo root, e.g. "AGENTS.md"'),
 				brain: z
 					.string()
 					.optional()
 					.describe('Which brain to target (name/handle). Defaults to the active brain.')
-			}
+			})
 		},
 		async ({ path, brain }) => {
 			const { store, repoArgs, db, brainId, config } = await getContext({ brain });

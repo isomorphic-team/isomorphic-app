@@ -17,7 +17,7 @@ import {
 	applyHostStyleVariables,
 	type McpUiHostContext
 } from '@modelcontextprotocol/ext-apps';
-import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
+import type { CallToolResult } from '@modelcontextprotocol/client';
 import type { DisplayMode } from './types.ts';
 import { bump } from './store.ts';
 import { toast } from './toast.tsx';

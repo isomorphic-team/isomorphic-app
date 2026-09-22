@@ -12,7 +12,8 @@
 // Kept in its own module (not brains.ts) so it composes with, but doesn't tangle
 // into, the multi-brain tool surface.
 
-import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import type { McpServer } from '@modelcontextprotocol/server';
+import { z } from 'zod';
 import type { OrgScope, Role } from '../lib/orgs.ts';
 import { fail } from './shared.ts';
 
@@ -37,7 +38,7 @@ export function registerOrgOnboardingTools(
 			title: 'Connect your GitHub organization',
 			description:
 				'Start connecting the user\'s own GitHub organization to Isomorphic, so its repos can become brains their team reads inside Claude. Use when the user wants to bring their company / team GitHub org onto the platform, or asks to "connect our GitHub org". Returns a link they open to install the Isomorphic app on their org (choosing which repos to expose); installing makes them the org\'s owner here. After that, they run connect_brain to adopt a repo as the first brain. Product (email/SSO) sign-ins only.',
-			inputSchema: {}
+			inputSchema: z.object({})
 		},
 		async () => {
 			// orgContext() itself rejects non-product (single-tenant) connections

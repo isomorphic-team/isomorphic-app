@@ -27,7 +27,7 @@
 //      issue carries only an opaque report id. See src/lib/feedback.ts for the
 //      full reasoning.
 
-import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import type { McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
 import {
 	FEEDBACK_KINDS,
@@ -149,7 +149,7 @@ export function registerFeedbackTools(
 			// CLAUDE.md for what happens when a description only describes its sibling.
 			description:
 				"submit_feedback sends the user's feedback about Isomorphic itself (a bug, a rough edge, a feature idea) to the maintainers as an issue on the project's public issue tracker. Use it whenever the user reports that something in the brain, the viewer/editor, or these tools is broken, confusing, or missing, and whenever they say to tell the maintainers, file a bug, send feedback, or request a feature. The user needs no GitHub account. The issue is PUBLIC and nothing about their account, email, organization, or brain is attached to it. Calling this WITHOUT `confirm` posts nothing: it returns the exact title and body, which you must show the user before calling again with `confirm: true`. This is for feedback about the Isomorphic product, not for writing notes into the user's own brain, which is write_page.",
-			inputSchema: {
+			inputSchema: z.object({
 				kind: z
 					.enum(FEEDBACK_KINDS as unknown as [FeedbackKind, ...FeedbackKind[]])
 					.describe(
@@ -173,7 +173,7 @@ export function registerFeedbackTools(
 					.describe(
 						'Omit on the first call to get the exact issue text back without posting. Pass true only after the user has seen that text and agreed to publish it.'
 					)
-			}
+			})
 		},
 		async ({ kind, summary, details, confirm }) => {
 			if (!/^[\w.-]+\/[\w.-]+$/.test(repo)) {
