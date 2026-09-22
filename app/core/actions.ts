@@ -3,7 +3,7 @@
 // and drives the store; nothing here renders (no components), so the view layer can
 // import freely without a cycle.
 
-import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
+import type { CallToolResult } from '@modelcontextprotocol/client';
 import { renderMarkdown } from '../../src/lib/render.ts';
 import {
 	resolveRelative,
@@ -254,7 +254,7 @@ function ensureBrainList(): Promise<void> {
 			// Which orgs a brain can be added to, and which optional server surfaces
 			// exist (today: the org Analytics tab). Both ride this call because it is
 			// the one the app always makes on open.
-			orgsFromSc(res.structuredContent ?? {});
+			orgsFromSc(sc);
 			setFeatures(sc.features);
 			// NOT a brain change: this call asks what brains exist, and it runs on every
 			// open — including the open that a `brain:`-targeted view_page or

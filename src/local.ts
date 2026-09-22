@@ -34,8 +34,8 @@
 
 import { serve } from '@hono/node-server';
 import { Hono } from 'hono';
-import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js';
+import { McpServer, WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/server';
+import { registeredTools } from './lib/registered-tools.ts';
 import { execFileSync } from 'node:child_process';
 import { basename, resolve } from 'node:path';
 import { mkdirSync } from 'node:fs';
@@ -176,13 +176,6 @@ function buildServer(): McpServer {
 	// This process IS the web host, so results carry links into it.
 	registerBrainApp(server, getContext, { webBaseUrl: `http://127.0.0.1:${port}` });
 	registerCustomTools(server, getContext, custom.defs);
-
-	// The claude.ai compatibility shim, as in worker.ts: SDK 1.29 stamps `execution` on
-	// every registration and claude.ai's client-side validation rejects the field.
-	const registered = (
-		server as unknown as { _registeredTools: Record<string, { execution?: unknown }> }
-	)._registeredTools;
-	for (const tool of Object.values(registered)) tool.execution = undefined;
 	return server;
 }
 
@@ -241,7 +234,7 @@ app.get('/', (c) => c.redirect(webPathFor(defaultBrainId, '')));
 
 serve({ fetch: app.fetch, port, hostname: '127.0.0.1' }, () => {
 	const toolCount = Object.keys(
-		(buildServer() as unknown as { _registeredTools: Record<string, unknown> })._registeredTools
+		registeredTools(buildServer())
 	).length;
 	console.log(`\nIsomorphic local: ${basename(dir)}`);
 	for (const b of brains.values()) {

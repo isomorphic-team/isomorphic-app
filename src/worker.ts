@@ -31,8 +31,13 @@
 //   - PLATFORM_DB (D1) holds tenant rows mapping `gh_user_id` → installation
 //     and brain repo. Schema in `src/db/schema.sql`.
 
-import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js';
+import {
+	McpServer,
+	WebStandardStreamableHTTPServerTransport,
+	type RegisteredTool
+} from '@modelcontextprotocol/server';
+import { registeredTools, wrapToolHandler } from './lib/registered-tools.ts';
+import { z } from 'zod';
 import { OAuthProvider, type OAuthHelpers } from '@cloudflare/workers-oauth-provider';
 import { installationOctokit, tokenOctokit, staticAuth, type AppCreds } from './lib/github.ts';
 import {
@@ -777,21 +782,20 @@ class McpSession {
 	//     never resolves an org records nothing rather than borrowing the org that
 	//     the previous call in the same request resolved.
 	//
-	// THE FIELD IS `handler`, NOT `callback`. SDK 1.29's RegisteredTool stores the
-	// function as `handler`; this wrapped `callback` first, which is undefined there,
-	// so it threw on the .bind() and would have taken down every request the moment
-	// USAGE_ANALYTICS was switched on. Nothing caught it: the cast below defeats
-	// typechecking, and with the flag off the line never ran. `pnpm test:usage` now
-	// pins this field name against the installed SDK.
-	private instrument(name: string, tool: { handler: (...args: never[]) => unknown }): void {
-		tool.handler = countedCall(tool.handler.bind(tool), {
-			// Per-call, so a handler that never resolves an org records nothing rather
-			// than inheriting the org the previous call in this request resolved.
-			before: () => {
-				this._resolvedScope = undefined;
-			},
-			after: (ok) => this.recordCall(name, ok)
-		}) as typeof tool.handler;
+	// The replacement goes through `wrapToolHandler`, because SDK 2 ignores an
+	// assignment to `tool.handler`. `pnpm test:usage` drives a real dispatch through
+	// that helper.
+	private instrument(name: string, tool: RegisteredTool): void {
+		wrapToolHandler(tool, (handler) =>
+			countedCall(handler, {
+				// Per-call, so a handler that never resolves an org records nothing rather
+				// than inheriting the org the previous call in this request resolved.
+				before: () => {
+					this._resolvedScope = undefined;
+				},
+				after: (ok) => this.recordCall(name, ok)
+			})
+		);
 	}
 
 	// Build the MCP server for this request: instantiate McpServer and register
@@ -816,7 +820,7 @@ class McpSession {
 				annotations: { readOnlyHint: true },
 				description:
 					'Return the GitHub identity of the authenticated user (OAuth mode). In static-bearer mode, returns a placeholder.',
-				inputSchema: {}
+				inputSchema: z.object({})
 			},
 			async () => {
 				// Product-native identity (authjs): report the email + resolved org role.
@@ -1041,25 +1045,12 @@ class McpSession {
 		// src/tools/custom.ts and src/lib/custom-tools.ts.
 		registerCustomTools(server, (opts) => this.tenantContext(opts), this._customTools.defs);
 
-		// ---------- claude.ai compatibility shim ----------
-		// SDK 1.29 stamps `execution: { taskSupport: 'forbidden' }` (MCP tasks
-		// spec, 2025-11-25) on every registered tool and emits it in tools/list.
-		// claude.ai web's client-side validation rejects the unfamiliar field and
-		// marks the whole connector "unable to reach" — new sessions then never
-		// even hit the server (observed 2026-07-06: refresh returned 200s, no
-		// traffic afterwards). Strip it from every registration; we don't use
-		// tasks. Remove once claude.ai tolerates the field.
-		const registered = (
-			server as unknown as {
-				_registeredTools: Record<
-					string,
-					{ execution?: unknown; handler: (...args: never[]) => unknown }
-				>;
+		// ---------- usage counting ----------
+		// Every registration, first-party and brain-authored, is wrapped here.
+		if (this.usageEnabled()) {
+			for (const [name, tool] of Object.entries(registeredTools(server))) {
+				this.instrument(name, tool);
 			}
-		)._registeredTools;
-		for (const [name, tool] of Object.entries(registered)) {
-			tool.execution = undefined;
-			if (this.usageEnabled()) this.instrument(name, tool);
 		}
 
 		return server;

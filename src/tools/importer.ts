@@ -11,7 +11,7 @@
 // deletion PROPOSALS (never deletes). Typical run: N chunk calls, the last one
 // carrying the manifest. Every call is independently safe and idempotent.
 
-import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import type { McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
 import {
 	plan,
@@ -57,7 +57,7 @@ export function registerImportTools(
 			title: 'Sync records from an external source',
 			description:
 				'Non-destructively upsert a batch of keyed records from an external source (spreadsheet, CRM…) into the brain. Creates new pages, updates ONLY the declared source-owned frontmatter on existing pages (found by source_key, wherever they moved), and never touches human-written prose, human-added fields, or pages. Deletions are only ever PROPOSED (pass the full key manifest to detect them). Send large imports in batches; include `manifest` on the final call. Re-running with unchanged data is a no-op.',
-			inputSchema: {
+			inputSchema: z.object({
 				brain: brainArg,
 				source: z
 					.string()
@@ -98,7 +98,7 @@ export function registerImportTools(
 						'Bind records to EXISTING unclaimed pages at their paths (merge source-owned fields, add the key, keep the body) instead of erroring. For adopting a brain that predates import keys. Default false.'
 					),
 				dry_run: z.boolean().optional().describe('Plan and report only — no write. Default false.')
-			}
+			})
 		},
 		async ({ source, records, source_owned, manifest, adopt_existing, dry_run, brain }) => {
 			const ctx = await getContext({ requires: 'editor', brain });
@@ -303,7 +303,7 @@ export function registerImportTools(
 			title: 'Record a decision about a finding',
 			description:
 				'`resolve` answers the findings `validate` reports, durably, so they stop being re-raised. Every finding validate prints carries a `[key]`; pass that key here with what you decided. For a CONSOLIDATION or STRUCTURE finding (a page nothing links to, a mixed folder-note convention, wikilink portability, a missing `type:`): "dismiss" records that the shape is deliberate and validate stops reporting it, and "undismiss" reverses that. For an IMPORT finding (a key a sync_records run could not decide alone): "delete" removes the page a proposed deletion pointed at, "alias" binds the key onto a surviving page (how a consolidation claims a duplicate\'s identity), "suppress" never imports the key again, and "recreate" forgets it so the next sync makes its page fresh. Dismissing is not a fix and never edits a page — it records that a human looked and chose this. Broken links have no key and cannot be resolved; fix them instead.',
-			inputSchema: {
+			inputSchema: z.object({
 				brain: brainArg,
 				decisions: z
 					.array(
@@ -326,7 +326,7 @@ export function registerImportTools(
 					)
 					.min(1)
 					.max(100)
-			}
+			})
 		},
 		async ({ decisions: allDecisions, brain }) => {
 			const ctx = await getContext({ requires: 'editor', brain });

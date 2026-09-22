@@ -14,7 +14,7 @@
 //   - view    : render ONE okf-view directive (optionally opened in the widget)
 // Arguments are interpolated as data ({{name}}), never evaluated.
 
-import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import type { McpServer } from '@modelcontextprotocol/server';
 import type { TenantOpts } from '../lib/orgs.ts';
 import type { BrainContext } from './librarian.ts';
 import {

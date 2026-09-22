@@ -14,7 +14,7 @@
 // caller's ACTIVE brain; any tool may also take a `brain` arg to one-shot a different
 // one. Only switch_brain / create_brain / disconnect_brain move the active brain.
 
-import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import type { McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
 import type { Octokit } from 'octokit';
 import type { D1Database } from '@cloudflare/workers-types';
@@ -226,9 +226,9 @@ export function registerBrainTools(
 			title: 'Switch the active brain',
 			description:
 				"Make a brain the active one, so subsequent tool calls act on it by default. Accepts a name/handle (fuzzy-matched against your brains, e.g. 'acme', 'team wiki', or an owner/repo id). Use when the user wants to work in a different brain for a while; for a one-off, pass `brain` to a single tool instead.",
-			inputSchema: {
+			inputSchema: z.object({
 				brain: z.string().describe('Which brain to activate — a name/label or owner/repo id.')
-			}
+			})
 		},
 		async ({ brain }) => {
 			await getContext(); // ensure the caller is resolved/authorized
@@ -275,7 +275,7 @@ export function registerBrainTools(
 			title: 'Your brains',
 			description:
 				"The knowledge bases (brains) this user can access — personal, team, and client — with the user's role in each and the active one marked. Returns the list as text; opens nothing in the chat. Use to answer 'what brains do I have?' or when YOU need the list before targeting one. Most tools act on the active brain; pass `brain` to any tool to target another, or switch_brain to change the active one. To let the user pick visually, open a brain with browse_brain: the app's nav has the switcher.",
-			inputSchema: {},
+			inputSchema: z.object({}),
 			annotations: { readOnlyHint: true }
 		},
 		async () => {
@@ -325,7 +325,7 @@ export function registerBrainTools(
 			title: 'Create a new brain',
 			description:
 				'Create a NEW, empty knowledge base ("brain") with a name the user chooses, and switch to it. Use whenever the user wants to START a new brain / knowledge base / wiki, including their very first one. This SCAFFOLDS a fresh repo; it is different from connect_brain (which adopts an existing GitHub repo). Any editor can create a brain. The new brain is PRIVATE to its creator: use share_brain afterwards to give teammates access, or to make it visible to the whole organization.',
-			inputSchema: {
+			inputSchema: z.object({
 				name: z
 					.string()
 					.describe('A name for the new brain, e.g. "Personal", "Project Atlas", "Team Wiki".'),
@@ -338,7 +338,7 @@ export function registerBrainTools(
 					.describe(
 						'Which organization to create it in, by name or GitHub owner. Defaults to the organization of the brain you are in.'
 					)
-			}
+			})
 		},
 		async ({ name, org }) => {
 			// Org-scope + role gate. Rejects the legacy github/static single-tenant paths
@@ -433,7 +433,7 @@ export function registerBrainTools(
 			title: 'Connect a repo as a brain',
 			description:
 				"Adopt an existing GitHub repository as a brain in an organization you admin, so it appears in the switcher (the brains tool). The repo must be under the org's GitHub owner and covered by the org's Isomorphic App installation. Call with no `repo` to list the repos that can become brains (candidates the installation can reach that aren't brains yet). Adds to the organization you are working in by default; pass `org` to add to a different one, including one that holds no brains yet. Admin only. The adopted brain is PRIVATE to whoever connected it, exactly like create_brain: use share_brain afterwards to give teammates access, or to make it visible to the whole organization.",
-			inputSchema: {
+			inputSchema: z.object({
 				repo: z
 					.string()
 					.optional()
@@ -459,7 +459,7 @@ export function registerBrainTools(
 					.describe(
 						'Which organization to add it to, by name or GitHub owner. Defaults to the organization of the brain you are in.'
 					)
-			}
+			})
 		},
 		async ({ repo, org, name: displayName }) => {
 			// ORG-scope: adopting a repo adds a brain to the organization, so it gates on
@@ -588,7 +588,7 @@ export function registerBrainTools(
 			title: 'Configure a brain’s content layout',
 			description:
 				"Set up an adopted repo so its pages appear — writes a .isomorphic.json describing where its content lives. Use when a connected brain shows no pages because its markdown isn't under the default 'wiki/' layout. Defaults to indexing the whole repo. If the repo already has a .isomorphic.json, this refuses and shows the current one; pass `overwrite: true` to replace it deliberately. Admin only.",
-			inputSchema: {
+			inputSchema: z.object({
 				brain: z
 					.string()
 					.optional()
@@ -603,7 +603,7 @@ export function registerBrainTools(
 					.describe(
 						'Replace an existing .isomorphic.json. Without this, a repo that already has one is left alone and its current config is shown.'
 					)
-			}
+			})
 		},
 		async ({ brain, content_roots, overwrite }) => {
 			const ctx = await getContext({ requires: 'admin', brain });
@@ -691,9 +691,9 @@ export function registerBrainTools(
 			title: 'Disconnect a brain',
 			description:
 				'Remove a brain from its organization — it stops appearing in the switcher. The GitHub repo and its content are untouched. Admin only; you can’t remove an org’s only brain.',
-			inputSchema: {
+			inputSchema: z.object({
 				brain: z.string().describe('Which brain to disconnect (name/handle or owner/repo id).')
-			}
+			})
 		},
 		async ({ brain }) => {
 			const ctx = await getContext();
