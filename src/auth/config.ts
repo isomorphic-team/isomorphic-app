@@ -16,6 +16,8 @@ import { Auth } from '@auth/core';
 import Resend from '@auth/core/providers/resend';
 import { D1Adapter } from '@auth/d1-adapter';
 
+import { sendSignInEmail } from '../lib/signin-email.ts';
+
 export interface AuthEnv {
 	// Shared with the Worker's D1 binding — Auth.js user/session/account/
 	// verification_token tables live here (auto-migrated by @auth/d1-adapter).
@@ -64,7 +66,17 @@ export function buildAuthConfig(env: AuthEnv): AuthConfig {
 				// rather than "you did not set AUTH_EMAIL_FROM". The empty string
 				// surfaces as a configuration error from Resend instead. Set it via
 				// `pnpm setup:config` (AUTH_EMAIL_FROM) on a domain you have verified.
-				from: env.AUTH_EMAIL_FROM ?? ''
+				from: env.AUTH_EMAIL_FROM ?? '',
+				// Our own template instead of Auth.js's stock one, which Gmail
+				// classifies as spam. See src/lib/signin-email.ts.
+				sendVerificationRequest: ({ identifier, url, provider }) =>
+					sendSignInEmail({
+						url,
+						email: identifier,
+						maxAgeSeconds: provider.maxAge ?? 24 * 60 * 60,
+						apiKey: provider.apiKey ?? '',
+						from: provider.from ?? ''
+					})
 			})
 		]
 	};
