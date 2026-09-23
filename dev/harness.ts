@@ -77,9 +77,9 @@ const PERSONAL_PAGES = personalPages();
 // the right policy here.
 const isContentPage = (p: string) => p.endsWith('.md') && isContentPath(p, DEFAULT_BRAIN_CONFIG);
 const brainContent: Record<string, Record<string, string>> = {
-	'your-org/personal-wiki': PERSONAL_PAGES,
-	'acme-co/acme-wiki': ACME_PAGES,
-	'northwind/northwind-wiki': NORTHWIND_PAGES
+	'personal-wiki-0a1b2c': PERSONAL_PAGES,
+	'acme-wiki-1b2c3d': ACME_PAGES,
+	'northwind-wiki-3d4e5f': NORTHWIND_PAGES
 };
 // The content map for a brain (auto-vivify so a freshly connect_brain'd brain works).
 function pagesFor(id: string): Record<string, string> {
@@ -99,10 +99,10 @@ const brainAssets: Record<string, Record<string, { data: string; mimeType: strin
 	// Referenced by the seeded links above. The default brain gets one so the preview
 	// shows an image immediately; Acme gets one so switching brains proves attachments
 	// are per-brain rather than global.
-	'your-org/personal-wiki': {
+	'personal-wiki-0a1b2c': {
 		[PERSONAL_ASSET_PATH]: { data: SAMPLE_PNG, mimeType: 'image/png' }
 	},
-	'acme-co/acme-wiki': {
+	'acme-wiki-1b2c3d': {
 		'wiki/programs/assets/onboarding-flow.png': { data: SAMPLE_PNG, mimeType: 'image/png' }
 	}
 };
@@ -328,7 +328,7 @@ function connectedSettingsResult(msg: string): CallToolResult {
 // instead of prepending "Acme — " to every row. With one brain each, nothing shows.
 let brainsFixture = [
 	{
-		id: 'your-org/personal-wiki',
+		id: 'personal-wiki-0a1b2c',
 		label: 'Personal',
 		role: 'Owner',
 		orgId: 'org-personal',
@@ -337,7 +337,7 @@ let brainsFixture = [
 		visibility: 'private'
 	},
 	{
-		id: 'acme-co/acme-wiki',
+		id: 'acme-wiki-1b2c3d',
 		label: 'Acme wiki',
 		role: 'Admin',
 		orgId: 'org-acme',
@@ -346,7 +346,7 @@ let brainsFixture = [
 		visibility: 'org'
 	},
 	{
-		id: 'acme-co/acme-handbook',
+		id: 'acme-handbook-2c3d4e',
 		label: 'Acme handbook',
 		role: 'Editor',
 		orgId: 'org-acme',
@@ -359,7 +359,7 @@ let brainsFixture = [
 		visibility: 'org'
 	},
 	{
-		id: 'northwind/northwind-wiki',
+		id: 'northwind-wiki-3d4e5f',
 		label: 'Northwind',
 		role: 'Viewer',
 		orgId: 'org-northwind',
@@ -378,9 +378,9 @@ let brainsFixture = [
 //              disappears, because sharing needs admin ON THE BRAIN and my org
 //              role there is only viewer.
 let brainGrants: Record<string, Record<string, PreviewRole>> = {
-	'your-org/personal-wiki': { 'u-me': 'admin', 'u-mira': 'viewer', 'u-tomas': 'editor' },
-	'acme-co/acme-wiki': {},
-	'northwind/northwind-wiki': { 'u-me': 'viewer' }
+	'personal-wiki-0a1b2c': { 'u-me': 'admin', 'u-mira': 'viewer', 'u-tomas': 'editor' },
+	'acme-wiki-1b2c3d': {},
+	'northwind-wiki-3d4e5f': { 'u-me': 'viewer' }
 };
 // Accounts that belong to NO org here. A grant to one of them is a GUEST of that
 // brain (docs/design/guest-access.md): Tomás is a client's person shown my wiki.
@@ -457,7 +457,7 @@ function brainRows() {
 			canShare: role === 'admin' || role === 'owner',
 			// One row, not the whole Acme group — this previews the not-configured state,
 			// and every row wearing it would read as an org-level problem.
-			needsConfig: b.id === 'acme-co/acme-wiki',
+			needsConfig: b.id === 'acme-wiki-1b2c3d',
 			configPrUrl: pendingConfigPr.get(b.id)
 		};
 	});
@@ -1508,7 +1508,7 @@ const loadingMode = hashMode === 'loading';
 const SLOW_RESULT_MS = 1800;
 const SLOW_LIST_MS = 1600;
 // A brain that is NOT the active one, with content of its own to tell them apart.
-const OTHER_BRAIN = 'northwind/northwind-wiki';
+const OTHER_BRAIN = 'northwind-wiki-3d4e5f';
 // One of its pages, so `#slow-result`'s opening result is unmistakably about the brain
 // the model named rather than the one the connection's pointer still holds.
 const OTHER_BRAIN_PAGE = 'wiki/facilities/headquarters.md';

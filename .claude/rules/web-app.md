@@ -1,6 +1,6 @@
 ---
 paths:
-  - "src/lib/{web-app,web-shell}.ts"
+  - "src/lib/{web-app,web-shell,brain-slug}.ts"
   - "src/local.ts"
   - "app/main.tsx"
   - "app/core/{host,host-web,store}.ts"
@@ -10,7 +10,7 @@ paths:
 
 # The web app (the same bundle, in a browser tab)
 
-Design: `docs/design/link-sharing-and-the-web-app.md`. `/b/<owner>/<repo>/<path>` serves the
+Design: `docs/design/link-sharing-and-the-web-app.md`. `/b/<brain>/<path>` serves the
 SAME generated bundle as the `ui://` resource, authenticated by the Auth.js session cookie.
 Rules live in `src/lib/web-app.ts` (pure, `pnpm test:web`); routes in the Worker's `fetch`,
 ahead of the OAuth provider.
@@ -48,7 +48,21 @@ explicit `why` it is not. **Every new widget tool needs a decision here.**
 - **The token is an alias, not the tool name**, so a tool rename or merge does not break links
   already sent.
 - **Path space is only ever pages.** Destinations ride the query string (`?view=<token>` plus
-  at most one argument); `/b/o/r/graph` is a page called `graph`.
+  at most one argument); `/b/<brain>/graph` is a page called `graph`.
+
+## Brain slugs and old links
+
+- **The brain segment is ONE path segment: `<name>-<handle>`** (`src/lib/brain-slug.ts`), the
+  `id` every brain payload carries (`listAccessibleBrains`). `brains.handle` is six random hex
+  characters (migration 0012; a row without one is given one when first listed). The handle
+  identifies the brain; the name part is for people and goes stale on rename.
+- **A URL is a contract.** `canonicalWebPath` (pure, `pnpm test:web`) decides the Worker's
+  `301` for a stale name (followed by handle) and for `/b/<owner>/<repo>/...` (every link made
+  before slugs). It runs AFTER sign-in, over the caller's own brains only, so a redirect says
+  nothing about a brain the caller cannot reach. Tools accept the same aliases through
+  `matchBrain`.
+- **Never build a URL or a `brain` argument from `owner/repo`.** It is where a brain is
+  stored, which a relocation changes; use the brain's `id`.
 - **Three questions, all must pass:** would you send it, can the URL alone rebuild it, is
   arriving cold harmless. `edit_page` fails the last two.
 - **Org-scope screens (`members`, `analytics`) are addressed through a brain**, deliberately;
@@ -58,7 +72,7 @@ explicit `why` it is not. **Every new widget tool needs a decision here.**
 ## Local and window behavior
 
 - **The local runtime IS the web host locally.** `src/local.ts` serves the shell at
-  `/b/local/<folder>` with the same `webShell` / `WEB_APP_HEADERS` (`web-shell.ts`) and
+  `/b/<folder>` with the same `webShell` / `WEB_APP_HEADERS` (`web-shell.ts`) and
   `checkWebMcpRequest`; `pnpm web:dev` is "seed, then `pnpm try`". Browser tests are Playwright's
   `web` project. Do not build a second server or proxy; `pnpm app:dev` cannot stand in for it
   (it mounts the bundle over AppBridge, so `host-web.ts` is unreachable). Both hosts seed from

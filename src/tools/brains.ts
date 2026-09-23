@@ -439,9 +439,11 @@ export function registerBrainTools(
 					});
 				}
 
-				const id = `${created.owner}/${created.name}`;
 				await setActiveBrain(newBrainId); // land the caller in the new brain
-				const rows = brainRows(await listBrains(), id);
+				const listed = await listBrains();
+				const id =
+					listed.find((b) => b.brain_id === newBrainId)?.id ?? `${created.owner}/${created.name}`;
+				const rows = brainRows(listed, id);
 				return {
 					content: [
 						{
@@ -526,6 +528,7 @@ export function registerBrainTools(
 					const hits = (await listBrains()).filter(
 						(b) =>
 							b.id.toLowerCase() === q ||
+							`${b.repo_owner}/${b.repo_name}`.toLowerCase() === q ||
 							b.repo_name.toLowerCase() === q ||
 							brainLabel(b).toLowerCase() === q
 					);
@@ -562,7 +565,7 @@ export function registerBrainTools(
 				// reach that aren't brains yet). This is the picker for the connect flow.
 				if (repo === undefined) {
 					const brains = await listBrains();
-					const taken = new Set(brains.map((b) => b.id.toLowerCase()));
+					const taken = new Set(brains.map((b) => `${b.repo_owner}/${b.repo_name}`.toLowerCase()));
 					const res = await githubClient(ctx).rest.apps.listReposAccessibleToInstallation({
 						per_page: 100
 					});
@@ -634,7 +637,7 @@ export function registerBrainTools(
 				// connect but show no pages. Detect it now so the app can offer to configure.
 				// The store is built from the org's installation client rather than taken off
 				// the context: org scope resolves no brain, so it carries no store of its own.
-				const connectedId = `${owner}/${name}`;
+				const repoPath = `${owner}/${name}`;
 				const needsConfig = await detectNeedsConfig(
 					githubStore(githubClient(ctx)),
 					{ owner, repo: name },
@@ -643,14 +646,16 @@ export function registerBrainTools(
 
 				const listed = await listBrains();
 				const rows = brainRows(listed, activeHandle(listed));
+				// The new brain's handle, which the app switches to.
+				const connectedId = listed.find((b) => b.brain_id === newBrainId)?.id ?? repoPath;
 				// Visibility is said in the sentence, not left as one field in the brains
 				// array: that field is the one a reader skims past, and the consequence of
 				// missing it is who can read the repo.
 				const visibilityNote =
 					'It is private to you: share it with share_brain, or make it visible to your whole organization.';
 				const text = needsConfig
-					? `Connected ${connectedId}, but its content isn't under the default layout, so no pages show yet. Open it and choose Auto-configure (or run configure_brain) to index it. ${visibilityNote}`
-					: `Connected ${connectedId} as a brain. ${visibilityNote}`;
+					? `Connected ${repoPath}, but its content isn't under the default layout, so no pages show yet. Open it and choose Auto-configure (or run configure_brain) to index it. ${visibilityNote}`
+					: `Connected ${repoPath} as a brain. ${visibilityNote}`;
 				return {
 					content: [{ type: 'text' as const, text }],
 					structuredContent: {

@@ -201,7 +201,7 @@ function contextFor(p: Persona) {
 			config: DEFAULT_BRAIN_CONFIG,
 			db,
 			brainId: 'b-main',
-			activeBrain: { id: 'northwind/main', label: 'Main' }
+			activeBrain: { id: 'main-0a1b2c', label: 'Main' }
 		} as BrainContext;
 	};
 }
@@ -759,7 +759,7 @@ check(
 	/https?:\/\/\S+/.exec(
 		(await attempt(sharedAdmin, 'share_brain', { email: 'nobody3@example.com', access: 'viewer' }))
 			.text
-	)?.[0] === 'https://brain.example/b/northwind/main'
+	)?.[0] === 'https://brain.example/b/main-0a1b2c'
 );
 check(
 	'revoking an invited address cancels the invite',

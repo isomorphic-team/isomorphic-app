@@ -58,16 +58,13 @@ const brainArg = brainArgFor(
 );
 
 // The brain a tool call resolved to, as the access tools need it: the PK to write
-// grants against plus its current visibility. tenantContext resolves a brain by
-// repo, so look the row up by the canonical owner/repo id.
+// grants against plus its current visibility.
 async function resolveBrainRow(
 	ctx: BrainContext
 ): Promise<{ brain_id: string; visibility: string; org_id: string } | null> {
 	return await ctx.db
-		.prepare(
-			`SELECT brain_id, visibility, org_id FROM brains WHERE repo_owner = ?1 AND repo_name = ?2`
-		)
-		.bind(ctx.repoArgs.owner, ctx.repoArgs.repo)
+		.prepare(`SELECT brain_id, visibility, org_id FROM brains WHERE brain_id = ?1`)
+		.bind(ctx.brainId)
 		.first<{ brain_id: string; visibility: string; org_id: string }>();
 }
 

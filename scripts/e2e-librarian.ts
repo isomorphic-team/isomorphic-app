@@ -190,7 +190,7 @@ const getContext = async () => ({
 	author: undefined,
 	db,
 	brainId,
-	activeBrain: { id: brainId, label: name }
+	activeBrain: { id: name, label: name }
 });
 registerLibrarianTools(server, getContext);
 registerImportTools(server, getContext);
@@ -1212,7 +1212,7 @@ try {
 		// structuredContent hands the model that and drops the text, so a link only
 		// in the text block is a link no model sees (which is how the first version
 		// shipped). Whole-string equality, not a substring search.
-		const expectedUrl = `${WEB_BASE}/b/${brainId}/${path}`;
+		const expectedUrl = `${WEB_BASE}/b/${name}/${path}`;
 		check(
 			'view_page carries the page URL in structuredContent',
 			viewed.sc.webUrl === expectedUrl,
@@ -1227,7 +1227,7 @@ try {
 		const browsed = await callSc('browse_brain', {});
 		check(
 			'browse_brain carries the brain URL',
-			browsed.sc.webUrl === `${WEB_BASE}/b/${brainId}`,
+			browsed.sc.webUrl === `${WEB_BASE}/b/${name}`,
 			String(browsed.sc.webUrl)
 		);
 

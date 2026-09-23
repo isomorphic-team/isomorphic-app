@@ -40,7 +40,7 @@ export const WEB_TEST_PORT = Number(process.env.WEB_TEST_PORT) || 8789;
 export const WEB_TEST_BRAIN_DIR = join(tmpdir(), 'isomorphic-web-tests');
 // The brain ids the specs address are derived from the folder names, so they follow
 // from this one constant rather than being spelled again in the specs.
-export const WEB_TEST_BRAIN = `local/${basename(WEB_TEST_BRAIN_DIR)}`;
+export const WEB_TEST_BRAIN = basename(WEB_TEST_BRAIN_DIR);
 
 export default defineConfig({
 	testDir: './tests/ui',
@@ -125,7 +125,7 @@ export default defineConfig({
 			env: { PORT: String(WEB_TEST_PORT), BRAIN_DIR: WEB_TEST_BRAIN_DIR },
 			// The runtime answers the shell and `/mcp` from the same listener, so a 200
 			// here means the tools are up too.
-			url: `http://localhost:${WEB_TEST_PORT}/b/local/${basename(WEB_TEST_BRAIN_DIR)}`,
+			url: `http://localhost:${WEB_TEST_PORT}/b/${basename(WEB_TEST_BRAIN_DIR)}`,
 			reuseExistingServer: !process.env.CI,
 			timeout: 180_000,
 			stdout: 'pipe',

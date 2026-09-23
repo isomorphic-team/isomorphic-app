@@ -69,7 +69,7 @@ MCP host at it:
 claude mcp add --transport http isomorphic-local http://127.0.0.1:8788/mcp
 ```
 
-Or skip the MCP host and open `http://127.0.0.1:8788/b/local/notes` in a browser: the same
+Or skip the MCP host and open `http://127.0.0.1:8788/b/notes` in a browser: the same
 viewer and editor the connector renders inside Claude, served as an ordinary web page, over the
 same tools.
 

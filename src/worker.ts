@@ -60,7 +60,13 @@ import type { CommitAuthor } from './lib/brain-repo.ts';
 import { authHandler } from './oauth/auth-handler.ts';
 import { getAuthSession } from './auth/config.ts';
 import { BRAIN_APP_HTML } from './lib/app-bundle.generated.ts';
-import { WEB_ROUTE_PREFIX, checkWebMcpRequest, claimsWebMcp, webBaseUrl } from './lib/web-app.ts';
+import {
+	WEB_ROUTE_PREFIX,
+	canonicalWebPath,
+	checkWebMcpRequest,
+	claimsWebMcp,
+	webBaseUrl
+} from './lib/web-app.ts';
 import { WEB_APP_HEADERS, signInRedirect, webShell } from './lib/web-shell.ts';
 import { registerLibrarianTools } from './tools/librarian.ts';
 import { registerImportTools } from './tools/importer.ts';
@@ -1264,6 +1270,20 @@ export default {
 						new URL(signInRedirect(url.pathname, url.search), url.origin).toString(),
 						302
 					);
+				}
+				// An old link (`/b/<owner>/<repo>/...`) or a renamed brain's: redirect to
+				// the brain's current URL. Only after sign-in and only among the caller's
+				// own brains, so a redirect reveals nothing to anyone else.
+				const canonical = canonicalWebPath(
+					url.pathname,
+					url.search,
+					await listAccessibleBrains(
+						env.PLATFORM_DB,
+						await linkedUserIds(env.PLATFORM_DB, session.user.id)
+					).catch(() => [])
+				);
+				if (canonical) {
+					return Response.redirect(new URL(canonical, url.origin).toString(), 301);
 				}
 				return new Response(webShell(BRAIN_APP_HTML), { headers: { ...WEB_APP_HEADERS } });
 			}

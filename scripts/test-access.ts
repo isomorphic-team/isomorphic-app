@@ -230,6 +230,7 @@ check(
 // No network: node:sqlite is a Node builtin.
 
 import { localD1 } from '../src/local/d1-sqlite.ts';
+import { brainSlug } from '../src/lib/brain-slug.ts';
 import { DatabaseSync } from 'node:sqlite';
 import { readdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -248,6 +249,9 @@ import {
 	chooseBrain,
 	isActiveBrain,
 	brainRefs,
+	matchBrain,
+	brainLabel,
+	assignBrainHandle,
 	activeAfterDisconnect,
 	getDefaultBrainForUser,
 	listBrainAccess,
@@ -289,10 +293,12 @@ sqlite.exec(`
     ('b-bob',   'bob',   'admin');
 `);
 
+// Which repo a listed brain is: the access fixtures name brains by repo.
+const repoOf = (b: { repo_owner: string; repo_name: string }) => `${b.repo_owner}/${b.repo_name}`;
 const ids = async (user: string) =>
-	(await listAccessibleBrains(db, [user])).map((b) => b.id).sort();
+	(await listAccessibleBrains(db, [user])).map((b) => repoOf(b)).sort();
 const roleOn = async (user: string, id: string) =>
-	(await listAccessibleBrains(db, [user])).find((b) => b.id === id)?.role;
+	(await listAccessibleBrains(db, [user])).find((b) => repoOf(b) === id)?.role;
 
 console.log('\nlistAccessibleBrains: the real query');
 check(
@@ -331,25 +337,25 @@ sqlite.exec(`
 	const gus = await listAccessibleBrains(db, ['gus']);
 	check(
 		'the shared brain is listed',
-		JSON.stringify(gus.map((b) => b.id)) === JSON.stringify(['northwind/alicep']),
-		JSON.stringify(gus.map((b) => b.id))
+		JSON.stringify(gus.map((b) => repoOf(b))) === JSON.stringify(['northwind/alicep']),
+		JSON.stringify(gus.map((b) => repoOf(b)))
 	);
 	check('with a null org role, since they are not a member', gus[0]?.org_role === null);
 	check('and capped at editor whatever the row says', gus[0]?.role === 'editor');
 	check(
 		'the org-visible brain is NOT among them: visibility is for members',
-		!gus.some((b) => b.id === 'northwind/legacy')
+		!gus.some((b) => repoOf(b) === 'northwind/legacy')
 	);
 	// A member with a grant reached by both legs folds to one row that keeps the
 	// membership: the union must not turn a member into a guest.
 	const bob = await listAccessibleBrains(db, ['bob']);
 	check(
 		"a member's own brain is listed once",
-		bob.filter((b) => b.id === 'northwind/bobp').length === 1
+		bob.filter((b) => repoOf(b) === 'northwind/bobp').length === 1
 	);
 	check(
 		'...still carrying their org role',
-		bob.find((b) => b.id === 'northwind/bobp')?.org_role === 'editor'
+		bob.find((b) => repoOf(b) === 'northwind/bobp')?.org_role === 'editor'
 	);
 }
 sqlite.exec(`DELETE FROM brain_memberships WHERE user_id = 'gus'`);
@@ -391,7 +397,7 @@ check(
 );
 check(
 	'the flag rides on the row so the app can say so',
-	(await listAccessibleBrains(db, ['alice'])).find((b) => b.id === 'northwind/frozen')
+	(await listAccessibleBrains(db, ['alice'])).find((b) => repoOf(b) === 'northwind/frozen')
 		?.read_only === true
 );
 check(
@@ -1126,6 +1132,54 @@ console.log('\nStorage bindings: the migration backfill');
 	);
 }
 
+console.log('\nBrain handles: how a brain is named to tools and URLs');
+{
+	const aliceBrains = await listAccessibleBrains(db, ['alice']);
+	const b = aliceBrains.find((x) => x.repo_name === 'alicep')!;
+	check(
+		'a listed brain is addressed as <name>-<handle>',
+		/^[0-9a-f]{6}$/.test(b.handle) && b.id === brainSlug(brainLabel(b), b.handle),
+		b.id
+	);
+	check('its full slug names it', matchBrain(aliceBrains, b.id).brain?.brain_id === b.brain_id);
+	check(
+		'so does the old owner/repo handle, which every earlier link and pointer used',
+		matchBrain(aliceBrains, `${b.repo_owner}/${b.repo_name}`).brain?.brain_id === b.brain_id
+	);
+	check(
+		'a slug with a stale name still finds it by its handle',
+		matchBrain(aliceBrains, `renamed-since-${b.handle}`).brain?.brain_id === b.brain_id
+	);
+	check(
+		"a handle no brain of the caller's has matches nothing",
+		!matchBrain(aliceBrains, 'nothing-9e9e9e').brain
+	);
+
+	// A brain written without a handle (an insert path that sets none, or code older
+	// than 0012 during a deploy) is given one the first time it is listed, and keeps it.
+	sqlite.exec(`UPDATE brains SET handle = NULL WHERE brain_id = '${b.brain_id}'`);
+	const again = (await listAccessibleBrains(db, ['alice'])).find((x) => x.brain_id === b.brain_id)!;
+	const stored = sqlite.prepare('SELECT handle FROM brains WHERE brain_id = ?').get(b.brain_id) as {
+		handle: string | null;
+	};
+	check(
+		'a brain with no handle gets one when listed',
+		/^[0-9a-f]{6}$/.test(again.handle) && stored.handle === again.handle,
+		JSON.stringify({ again: again.id, stored })
+	);
+	const third = (await listAccessibleBrains(db, ['alice'])).find((x) => x.brain_id === b.brain_id)!;
+	check('...and keeps it', third.handle === again.handle);
+	await assignBrainHandle(db, b.brain_id);
+	check(
+		'assigning again never replaces a handle a URL may already carry',
+		(
+			sqlite.prepare('SELECT handle FROM brains WHERE brain_id = ?').get(b.brain_id) as {
+				handle: string;
+			}
+		).handle === again.handle
+	);
+}
+
 console.log('\nDerived state keyed by brain_id: the 0011 re-key');
 {
 	// Production's shape before 0011: index, ledger and usage rows under "owner/repo".
@@ -1403,7 +1457,7 @@ console.log('\nA single-user (static) deployment runs the org model (ensureStati
 	check(
 		'the operator reaches exactly the configured brain, as owner',
 		(await reach()).length === 1 &&
-			b?.id === 'solo/notes' &&
+			(b && repoOf(b)) === 'solo/notes' &&
 			b.role === 'owner' &&
 			b.org_role === 'owner'
 	);
@@ -1433,8 +1487,8 @@ console.log('\nA single-user (static) deployment runs the org model (ensureStati
 	const after = await reach();
 	check(
 		'config is the truth: a new repo REPLACES the old brain rather than sitting beside it',
-		after.length === 1 && after[0].id === 'solo/journal',
-		after.map((x) => x.id).join()
+		after.length === 1 && repoOf(after[0]) === 'solo/journal',
+		after.map((x) => repoOf(x)).join()
 	);
 	const cred = credentialFor(after[0]);
 	check(
