@@ -1217,12 +1217,7 @@ console.log('\nDerived state keyed by brain_id: the 0011 re-key');
 				brain_id: string;
 			}[]
 		).map((r) => r.brain_id);
-	for (const table of [
-		'brain_pages',
-		'brain_links',
-		'brain_page_fields',
-		'write_attempts'
-	]) {
+	for (const table of ['brain_pages', 'brain_links', 'brain_page_fields', 'write_attempts']) {
 		check(
 			`${table} is re-keyed to the brain's primary key`,
 			JSON.stringify(keys(table)) === JSON.stringify(['brain-acme-wiki']),
