@@ -30,6 +30,7 @@
 import { McpServer, type RegisteredTool } from '@modelcontextprotocol/server';
 import { registeredTools, wrapToolHandler } from './lib/registered-tools.ts';
 import { serveMcp, serverOptions } from './lib/mcp-serve.ts';
+import type { IdentityWire } from './lib/tool-payloads.ts';
 import { z } from 'zod';
 import { OAuthProvider, type OAuthHelpers } from '@cloudflare/workers-oauth-provider';
 import { installationOctokit, tokenOctokit, staticAuth, type AppCreds } from './lib/github.ts';
@@ -697,7 +698,7 @@ class McpSession {
 				if (this.props?.user_id) {
 					const email = this.props?.email ?? 'unknown';
 					let roleNote = '';
-					const identity: Record<string, unknown> = { email };
+					const identity: IdentityWire = { email };
 					try {
 						const { role, repoArgs, activeBrain } = await this.tenantContext();
 						roleNote = ` — ${role} of ${repoArgs.owner}/${repoArgs.repo}`;
@@ -729,7 +730,7 @@ class McpSession {
 										text: `Single-user deployment with no sign-in: you are its operator, ${b.role} of ${activeBrain.label}.`
 									}
 								],
-								structuredContent: { role: b.role, activeBrain }
+								structuredContent: { role: b.role, activeBrain } satisfies IdentityWire
 							};
 						}
 					} catch (err) {

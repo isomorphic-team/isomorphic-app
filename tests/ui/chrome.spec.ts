@@ -34,8 +34,7 @@ const railNames = (app: App) =>
 // The door from the card to the web app. What matters is the URL the app hands the
 // HOST: the same page, same brain, at the base the server sent. The harness records
 // every openLink request (dev/harness.ts) because no tab opens under test, and which
-// browser it would open in is the host's decision, not the app's. The request crosses
-// to the host by postMessage, so every read of the record is polled.
+// browser it would open in is the host's decision, not the app's.
 test.describe('open in browser', () => {
 	const opened = (page: Page) =>
 		page.evaluate(() => (window as unknown as { __openedLinks: string[] }).__openedLinks);
@@ -44,8 +43,9 @@ test.describe('open in browser', () => {
 		const app = await openApp(page, '');
 		await expectView(app, 'page');
 		await app.getByRole('button', { name: 'Open in browser' }).click();
-		// Polled: the request crosses to the host by postMessage, so it lands after the
-		// click resolves, and reading it at once raced the message.
+		// Polled, not read once: openLink reaches the host as a message across the
+		// iframe, so the click can return before the host has recorded it. Read once,
+		// this failed about 1 run in 100 with an empty list.
 		await expect
 			.poll(() => opened(page))
 			.toEqual(['https://brain.example/b/your-org/personal-wiki/wiki/concepts/vision.md']);

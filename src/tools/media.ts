@@ -39,6 +39,7 @@ import {
 	validateAttachment
 } from '../lib/media.ts';
 import { brainArg, fail } from './shared.ts';
+import type { ReadMediaWire } from '../lib/tool-payloads.ts';
 
 // Strip a `data:` URL wrapper if a caller sends one. The app reads files with
 // FileReader, whose readAsDataURL output is the most likely thing to arrive by
@@ -305,7 +306,7 @@ export function registerMediaTools(
 				mimeType,
 				size: file.size,
 				...(include_data ? { dataUri: `data:${mimeType};base64,${file.contentBase64}` } : {})
-			};
+			} satisfies ReadMediaWire;
 
 			if (!isModelViewable(mimeType)) {
 				// Stored and displayable, but not something to hand the model. Whether this
