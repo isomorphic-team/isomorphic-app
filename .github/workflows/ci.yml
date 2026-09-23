@@ -1,10 +1,10 @@
 name: CI
 
 # Validate every PR the same way the deploy validates main: regenerate the codegen'd
-# artifacts, verify the committed bundle is in sync with source, typecheck all three
+# artifacts, verify the committed bundle is in sync with source, typecheck all four
 # tsconfigs, and run the golden tests. This runs `on: pull_request`, so the results
-# appear as CHECKS on the PR — previously the only workflow was deploy.yml (push to
-# main), which runs after merge and so can't gate a PR.
+# appear as CHECKS on the PR; deploy.yml runs on push to main, after merge, and so
+# cannot gate one.
 #
 # FORK-SAFE BY DESIGN: every step here is offline and needs NO secrets, so a pull
 # request from a contributor's fork gets the same green-or-red signal a maintainer's
@@ -12,11 +12,9 @@ name: CI
 #
 # TWO JOBS, AND THE SPLIT IS THE POINT. `check` is pure Node: it needs no browser and
 # reports in about two minutes. `ui` needs Chromium and everything that comes with it.
-# They used to be one job, so a prettier failure or a bad migration was only reported
-# after the browser install had finished, which on a bad mirror day was ten minutes
-# after the push: the cheapest signal to produce was the slowest to arrive. Splitting
-# also means a browser-infra flake fails a job that is visibly about browsers rather
-# than failing everything.
+# As one job, a prettier failure or a bad migration would wait on the browser install
+# before being reported, and a browser-infra flake would fail everything rather than a
+# job that is visibly about browsers.
 
 on:
   pull_request:
@@ -52,6 +50,15 @@ jobs:
           cache: pnpm
 
       - run: pnpm install --frozen-lockfile
+
+      # Which .claude/rules/ files describe the code this pull request touches, as a
+      # notice and in the job summary. Reports only; never fails. Diffing the merge
+      # commit against the base needs only the base commit, not the history.
+      - name: Rules files covering this change
+        if: github.event_name == 'pull_request'
+        run: |
+          git fetch --no-tags --depth=1 origin ${{ github.event.pull_request.base.sha }}
+          git diff --name-only ${{ github.event.pull_request.base.sha }} HEAD | pnpm exec tsx scripts/rules-for-change.ts
 
       # wrangler.jsonc is generated and gitignored (it holds one deployment's
       # identity). The default profile writes placeholder Cloudflare resource ids,
@@ -92,14 +99,12 @@ jobs:
             exit 1
           fi
 
-      # Gate on a clean typecheck across all three tsconfigs (node/worker/app).
+      # Gate on a clean typecheck across all four tsconfigs (node/worker/app/tests).
       - run: pnpm typecheck
 
-      # Every pure golden test (no network, no secrets — safe on fork PRs).
-      # These were not all wired up here; test:roundtrip was running alone while
-      # five more existed, and the content-index regression that motivated
-      # test:index would have been caught by none of them. Listed individually
-      # rather than via `pnpm test` so a failure names itself in the job log.
+      # Every pure golden test (no network, no secrets, so safe on fork PRs).
+      # Listed individually rather than via `pnpm test` so a failure names itself
+      # in the job log.
       # ADDING A TEST: add it here AND to the `test` script in package.json, or it
       # runs in exactly one of the two places and nobody notices which. Either job
       # counts; `pnpm test:wiring` reads the whole file.
@@ -131,6 +136,9 @@ jobs:
       - run: pnpm test:email
       - run: pnpm test:usage
       - run: pnpm test:media
+      # What CLAUDE.md, the rules files and the reference docs name must exist: paths,
+      # symbols, tools, quoted constants, rules globs, design-doc status lines.
+      - run: pnpm test:docs
       # The assertions the deploy runs against a live origin before it decides whether
       # to keep a merge in production. Offline here: driven against stub responses.
       - run: pnpm test:smoke
@@ -138,11 +146,10 @@ jobs:
       # comment stops depending on anyone reading the comment. It also pins the
       # Playwright container tag in the `ui` job to the resolved dependency version.
       - run: pnpm test:wiring
-      # The write-path end-to-end batteries. They used to need real GitHub App
-      # credentials and so could not gate a pull request; they now run against the
-      # fs + git BrainStore in a temp directory, offline and secret-free, which keeps
-      # this workflow fork-safe. `--github` still runs the identical assertions
-      # against a real scratch repo, by hand, to cover the GitHub adapter itself.
+      # The write-path end-to-end batteries, against the fs + git BrainStore in a
+      # temp directory: offline and secret-free, so fork-safe. `--github` runs the
+      # identical assertions against a real scratch repo, by hand, to cover the
+      # GitHub adapter itself.
       - run: pnpm test:e2e-librarian
       - run: pnpm test:e2e-import
 
@@ -178,17 +185,13 @@ jobs:
     # local host harness (dev/harness.ts) with its fixtures. Offline and secret-free
     # like everything else here: the only extra requirement is the browser.
     runs-on: ubuntu-latest
-    # PLAYWRIGHT'S OWN IMAGE, so `apt-get` never runs here. The browser binary was
-    # cacheable and the system libraries it needs were not, because the runner is fresh
-    # every time — so `playwright install-deps` shelled out to Ubuntu's mirrors on
-    # every run and was the slowest and only genuinely flaky step in this workflow:
-    # 15s against a healthy mirror, 124s and 395s against degraded ones, and one
-    # 12-minute stall that failed the run outright (issue #44). The image bakes in both
-    # halves, which trades a variable apt for a deterministic pull and removes the
-    # failure class instead of retrying through it. It also sets
+    # PLAYWRIGHT'S OWN IMAGE, so `apt-get` never runs here. On a fresh runner the
+    # browser's system libraries come from Ubuntu's mirrors every run
+    # (`playwright install-deps`), which was the one genuinely flaky step in this
+    # workflow (issue #44). The image bakes in the libraries and the browser, trading a
+    # variable apt for a deterministic pull, and sets
     # PLAYWRIGHT_BROWSERS_PATH=/ms-playwright, so nothing here installs or caches a
-    # browser at all — the download step and the version-keyed cache that used to guard
-    # it are both gone.
+    # browser.
     #
     # BUMP THIS TAG WITH THE @playwright/test DEPENDENCY. The image ships exactly the
     # browser build its own version expects, so a mismatch means the browser our

@@ -1,16 +1,14 @@
-// Manual end-to-end battery for the librarian write tools — covers the write_page
-// create/update/publish surface, its non-destructive append/edits modes (partial
-// edits that never send the rest of the page), and the index-driven page discovery the write path
-// relies on (delete_page "still referenced" notes via backlinksTo; move_page link
-// repointing via fetchInboundLinkersForPaths, for both a single page and a folder
-// subtree — move_page/delete_page take a folder path with no .md).
+// End-to-end battery for the librarian write tools: write_page create/update, its
+// non-destructive append/edits/fields modes, and the index-driven page discovery the
+// write path relies on (delete_page "still referenced" notes via backlinksTo;
+// move_page link repointing via fetchInboundLinkersForPaths, for a single page, a
+// folder subtree, and an attachment).
 //
 // It also covers the ORG-scope tools that decide where a brain LANDS (`brains`,
 // `connect_brain`), which resolve through orgContext / resolveOrgForPerson rather
-// than tenantContext and were uncovered until 2026-08-10. The org rows are real, in
-// the same D1 as the content index, and one of them deliberately holds NO brain:
-// listAccessibleBrains cannot see such an org, which is what once made adopting a
-// FIRST repo into a newly connected org impossible.
+// than tenantContext. The org rows are real, in the same D1 as the content index, and
+// one of them deliberately holds NO brain: listAccessibleBrains cannot see such an
+// org, so it is the case a first adoption has to get right.
 //
 // TWO BACKENDS, ONE BATTERY. By default it runs against the fs + git BrainStore in a
 // temporary directory: no network, no credentials, no scratch repo, so it runs in CI
@@ -18,10 +16,9 @@
 // assertions against a real scratch repo on the platform org, which is the only way
 // to prove the GitHub adapter itself.
 //
-//   pnpm test:e2e                              (local, offline, in CI)
-//   pnpm exec tsx scripts/e2e-librarian.ts --github   (real GitHub, by hand)
+//   pnpm test:e2e-librarian                            (local, offline, in CI)
+//   pnpm exec tsx scripts/e2e-librarian.ts --github    (real GitHub, by hand)
 //
-import { registerImportTools } from '../src/tools/importer.ts';
 // The --github mode requires `.dev.vars` (repo root, or DEV_VARS_PATH) with the
 // platform App creds + PLATFORM_ORG / PLATFORM_INSTALLATION_ID, creates a scratch
 // brain repo `brain-librarian-e2e-*`, and deletes it afterwards (success or failure).
@@ -35,6 +32,7 @@ import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
 import { Client } from '@modelcontextprotocol/client';
 import { McpServer, InMemoryTransport } from '@modelcontextprotocol/server';
+import { registerImportTools } from '../src/tools/importer.ts';
 import { registerLibrarianTools } from '../src/tools/librarian.ts';
 import { registerBrainTools } from '../src/tools/brains.ts';
 import {
@@ -1351,9 +1349,9 @@ try {
 			links.text
 		);
 
-		// Moving an attachment has to repoint what displays it. This is the payoff of
-		// the assetEdges change: without it backlinksTo returns nothing here and the
-		// link on the page silently rots.
+		// Moving an attachment has to repoint what displays it. That rests on the index
+		// resolving file links (`fileEdges` in brain-index.ts): without them backlinksTo
+		// returns nothing here and the link on the page silently rots.
 		const moved = await call('move_page', {
 			path: assetPath,
 			new_path: 'wiki/vendors/assets/logo.png'

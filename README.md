@@ -159,11 +159,14 @@ which means Claude authoring Claude's own future tools. Capped at 25 per brain.
 
 ### Several brains
 
-- **`brains`** / **`switch_brain`**: the switcher, and the brain every later call targets. Every
-  tool also takes an explicit `brain` argument.
+- **`brains`** / **`switch_brain`**: the list of brains you can reach (as data; the switcher
+  lives in the app), and the brain every later call targets. Every tool also takes an explicit
+  `brain` argument.
 - **`create_brain`**: scaffold a fresh repository under the org and switch to it.
 - **`connect_brain`** / **`disconnect_brain`**: adopt an existing repository of markdown, or
-  drop it from the org (the repository itself is untouched).
+  drop it from the org (the repository itself is untouched). `connect_brain` also moves a brain
+  from one org to another: the first call previews whose access changes, and nothing moves
+  until a second call confirms it.
 
 ### The app
 
@@ -188,8 +191,8 @@ What is in it:
 - **Link graph**, nodes sized by degree and colored by folder, focusable on one page.
 - **Activity feed**: who changed what and when, for the brain or for one page.
 - **Brain switcher**, when you can reach more than one.
-- **Sharing panel, member roster, analytics** for the org-scope tools, with their controls
-  shown only at the role that can use them.
+- **Sharing panel** for the brain in view, and the **member roster** and **analytics** for the
+  organization, with their controls shown only at the role that can use them.
 - **Three display modes** (inline card, fullscreen, picture-in-picture), light and dark
   themes following the host, and reduced-motion support.
 
@@ -225,7 +228,8 @@ would make every diff unreadable.
 - **`members`**, **`invite_member`**, **`set_member_role`**, **`remove_member`**: the roster,
   email invitations (no GitHub account needed), and org roles.
 - **`brain_access`** / **`share_brain`**: who can open a brain and at what level; grant,
-  change, revoke, and flip a brain between private and org-visible.
+  change, revoke, and flip a brain between private and org-visible. A brain can be shared with
+  someone outside its org, who becomes a guest of that one brain.
 - **`create_org`**: start a new organization. Its brains are stored on the deployment by
   default; `github: true` installs the GitHub App on a customer's own org instead, so their
   brains live in repositories they own.
@@ -249,24 +253,29 @@ different questions:
   exist.
 - **Brain role** is what you can do inside one brain. It is the highest of three sources: your
   org role if the brain is org-visible, an explicit share, and an admin floor (an org admin or
-  owner is at least admin on every brain in the org, since they control the GitHub org that
-  physically holds it). A share can only raise access, never lower it.
+  owner is at least admin on every brain in the org, since deciding who reaches the org's brains
+  is already theirs, and so a brain never ends up with nobody able to manage it). A share can
+  only raise access, never lower it.
 
-| Action                                                                | Needs            |
-| --------------------------------------------------------------------- | ---------------- |
-| Read, search, browse, graph, activity, validate, brain-authored tools | brain **viewer** |
-| Write, move, delete pages; attach media; import; resolve findings     | brain **editor** |
-| Configure the brain; share it; make it private or org-visible         | brain **admin**  |
-| Create a brain                                                        | org **editor**   |
-| Connect or disconnect a repository; connect the GitHub org            | org **admin**    |
-| Invite, change roles, remove members                                  | org **admin**    |
-| Analytics totals and the per-brain table                              | org **viewer**   |
-| Analytics per-person table                                            | org **admin**    |
+| Action                                                                | Needs                 |
+| --------------------------------------------------------------------- | --------------------- |
+| Read, search, browse, graph, activity, validate, brain-authored tools | brain **viewer**      |
+| Write, move, delete pages; attach media; import; resolve findings     | brain **editor**      |
+| Configure the brain; share it; make it private or org-visible         | brain **admin**       |
+| Create a brain                                                        | org **editor**        |
+| Connect or disconnect a repository; move a brain to another org       | org **admin**         |
+| Create an organization                                                | any signed-in account |
+| Invite, change roles, remove members                                  | org **admin**         |
+| Analytics totals and the per-brain table                              | org **viewer**        |
+| Analytics per-person table                                            | org **admin**         |
 
 A brain is **private** to whoever created or adopted it by default, whether it came from
 `create_brain` or `connect_brain`; widening it to the org is one `share_brain` call, and the
-response says which it is. Sharing stays inside the brain's org, never grants above your own brain
-role, and never lets you revoke yourself. `owner` is the org's anti-lockout anchor: it is never
+response says which it is. Sharing never grants above your own brain role and never lets you
+revoke yourself. It can reach outside the brain's org: a guest holds a share on that one brain
+and nothing else, and is capped at editor, since deciding who reaches a brain stays with the
+org's own people. An address with no account yet gets an invitation that becomes the share at
+their first sign-in. `owner` is the org's anti-lockout anchor: it is never
 assignable, demotable, or removable, and nobody can edit their own membership. A brain whose
 default branch is protected gets pull requests instead of commits, whatever the caller's role.
 
@@ -356,7 +365,7 @@ pnpm bootstrap          # one-shot GitHub App registration + brain scaffold
 pnpm app:dev            # app UI dev server, no credentials needed
 pnpm worker:dev         # the MCP Worker at http://localhost:8787/mcp
 pnpm worker:deploy      # publish to Cloudflare
-pnpm gen:app            # regenerate the ui:// bundle (after editing app/)
+pnpm gen:app            # regenerate the ui:// bundle (after editing app/ or a src/lib/ file it imports)
 pnpm gen:templates      # regenerate the brain templates (after editing brain-template/)
 pnpm db:migrate         # apply D1 migrations locally
 pnpm test               # the full suite, offline

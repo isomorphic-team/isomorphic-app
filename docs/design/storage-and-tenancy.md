@@ -1,6 +1,8 @@
 # Design: storage and tenancy
 
-- Status: Steps 1 and 2 built (branch `storage-and-tenancy`). Steps 3 to 6 not started.
+- Status: Partly built. Steps 1 and 2 built and merged to `main` (storage connections,
+  `src/lib/storage-connections.ts` and migration 0010; moving a brain between orgs with
+  `connect_brain`, `src/lib/brain-move.ts`). Steps 3 to 6 not started.
 - Author: Jon Hansing (via Claude)
 - Date: 2026-09-22
 - Related: `docs/design/brain-seams.md` (§6, identity is a key, never a path),

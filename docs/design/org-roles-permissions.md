@@ -1,6 +1,17 @@
 # Design — org identity, roles & permissions
 
-Status: **draft / RFC**. Branch `feature/org-identity-rbac` (worktree `.claude/worktrees/org-identity`). Not implemented.
+Status: **built.** Phases 1 to 5 and 7 to 9 below are on `main` and live; phase 6 (Google and
+other SSO providers) is not built. Written as an RFC; three things have moved since, and the
+body is kept as written:
+
+- Model A no longer auto-provisions a brain (phase 8): a first-time user gets an org with no
+  brain. There is also a third org model, `hosted` (a named team org on the platform's
+  installation), and a brain's storage credential now follows the brain rather than its org
+  ([`storage-and-tenancy.md`](./storage-and-tenancy.md)).
+- `connect_github_org` is now `create_org` (with `github: true` for the install flow), and
+  `connect_brain` also moves a brain between orgs.
+- `AUTH_MODE=static` did not die at a phase-3 cutover. It is the supported single-tenant
+  self-hosting path.
 
 ## Goal
 
@@ -186,8 +197,8 @@ Integrations and **brain** management stay out of the tool authz map for now. **
 1. **Identity swap (no roles yet).** Add Auth.js (`@auth/core`, `@auth/d1-adapter`, Resend magic-link) behind `/authorize` as `auth-handler.ts`; keep `github-handler.ts` selectable via env for the admin/legacy path. `McpProps` → product identity. Prove: a non-GitHub email user can sign in from Claude and hit read tools.
 2. **Org + membership model.** `orgs`/`users`/`memberships`/`brains` tables; `tenantContext()` resolves org + brain from product identity. Migrate the existing single tenant.
 3. **Roles + tool authz.** `requireRole` capability map over the tools; viewer/editor/admin enforced.
-4. **Admin surface.** ✅ **Built 2026-07-13** (member half). Invitations flow is wired (written by `invite_member`, claimed by `claimPendingInvites` in `src/lib/invites.ts`: at first sign-in, when the invited address is linked to an existing account, and on the invitee's next request, whatever else they already belong to), and member management ships as admin-only mutation tools (`invite_member` / `set_member_role` / `remove_member`) plus `members` (viewer+), which both opens the in-client roster UI (`MembersView`) and returns the roster as data. Roles surface as **Viewer / Editor / Admin** (the `member` token was renamed `editor`); `owner` is a non-assignable lockout anchor. Guardrails in `src/tools/members.ts`. Still open: **brain** management (add/rename/remove brains) and a standalone (non-Claude) admin web surface.
-5. **Model B onboarding.** ✅ **Built.** Two paths, both writing a `customer`-model `orgs` row + owner membership (see `docs/ops/onboarding-a-customer-org.md`). Self-serve: `connect_github_org` (`src/tools/org-onboarding.ts`) → GitHub App install → `/github/install-callback` resolves the install and calls `connectCustomerOrg` (`src/lib/org-connect.ts`); idempotent on re-install. Operator: `pnpm onboard-org` (`scripts/onboard-org.ts`) resolves the installation, verifies repo reachability, and seeds the org/brain/invite rows (dry-run by default). Repo adoption is then the already-built `connect_brain`.
+4. **Admin surface.** ✅ **Built 2026-07-13** (member half). Invitations flow is wired (written by `invite_member`, claimed by `claimPendingInvites` in `src/lib/invites.ts`: at first sign-in, when the invited address is linked to an existing account, and on the invitee's next request, whatever else they already belong to), and member management ships as admin-only mutation tools (`invite_member` / `set_member_role` / `remove_member`) plus `members` (viewer+), which both opens the in-client roster UI (`MembersView`) and returns the roster as data. Roles surface as **Viewer / Editor / Admin** (the `member` token was renamed `editor`); `owner` is a non-assignable lockout anchor. Guardrails in `src/tools/members.ts`. Brain management followed (`create_brain`, `connect_brain`, `disconnect_brain`, rename through `configure_brain`), and the app is also served as a web page (`/b/…`), which covers the admin screens outside Claude.
+5. **Model B onboarding.** ✅ **Built.** Two paths, both writing a `customer`-model `orgs` row + owner membership (see `docs/ops/onboarding-a-customer-org.md`). Self-serve: `create_org` with `github: true`, formerly `connect_github_org` (`src/tools/org-onboarding.ts`) → GitHub App install → `/github/install-callback` resolves the install and calls `connectCustomerOrg` (`src/lib/org-connect.ts`); idempotent on re-install. Operator: `pnpm onboard-org` (`scripts/onboard-org.ts`) resolves the installation, verifies repo reachability, and seeds the org/brain/invite rows (dry-run by default). Repo adoption is then the already-built `connect_brain`.
 6. **SSO.** Add Google, then OIDC/SAML via an IdP when enterprise demands it.
 7. **Multi-brain access.** One connection, many brains. **P1 ✅ Built 2026-07-14** (`src/tools/brains.ts`): a person selects among the brains their memberships grant — active brain + per-tool `brain` override, `brains`/`switch_brain`, a nav switcher, `tenantContext` resolving the chosen brain per call. Accessible-brains resolution takes a SET of user ids so P2 slots in. **P2 (identity linking)** — link a person's emails (`app_users.person_id`) so the set unions across identities (personal gmail + team + client), verified by magic-link, managed under "Connected accounts". Enterprise follow-up: a per-org "no linked-identity access" policy.
 8. **Brain creation & initialization.** Explicit, named brain creation (any editor); no

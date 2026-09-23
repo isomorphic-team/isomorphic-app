@@ -16,9 +16,8 @@
 //   Ownership is proven by the install, the same "the redirect carries verified
 //   state" trust chain as link_identity.
 //
-// This replaced `connect_github_org`, which could only do the second. Kept in its
-// own module (not brains.ts) so it composes with, but does not tangle into, the
-// multi-brain tool surface.
+// Kept in its own module (not brains.ts) so it composes with, but does not tangle
+// into, the multi-brain tool surface.
 
 import type { McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
@@ -51,14 +50,14 @@ export function registerOrgOnboardingTools(
 	listOrgs: () => Promise<AccessibleOrg[]>,
 	env: OrgOnboardingEnv
 ) {
-	// The description names "connect GitHub" in its own words: this used to be
-	// connect_github_org, and a model that learned that name will search for it.
+	// The description says "connect ... GitHub organization" in so many words, so a
+	// model searching for the old connect_github_org name still lands here.
 	server.registerTool(
 		'create_org',
 		{
 			title: 'Create an organization',
 			description:
-				"Create a new organization (a team, company or client) on Isomorphic, with the user as its owner. By default its brains are stored on Isomorphic, so nobody needs GitHub: use this for a new team or client org, then create_brain to start a brain in it, or connect_brain to move an existing brain in. Pass `github: true` to connect the user's own GitHub organization instead (formerly connect_github_org): that returns a link to install the Isomorphic app on their GitHub org, installing creates the org, and connect_brain then adopts a repo as a brain. Product (email/SSO) sign-ins only.",
+				"Create a new organization (a team, company or client) on Isomorphic, with the user as its owner. By default its brains are stored on Isomorphic, so nobody needs GitHub. Pass `github: true` to connect the user's own GitHub organization instead: create_org then returns a link to install the Isomorphic app on that GitHub org, and installing creates the org. A new organization holds no brains until one is created in it or moved into it. Product (email/SSO) sign-ins only.",
 			inputSchema: z.object({
 				name: z.string().describe('What to call the organization, e.g. "Acme Corp".'),
 				github: z

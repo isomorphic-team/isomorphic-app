@@ -1,4 +1,4 @@
-// Brain MCP App tools — the in-client UI surface (MCP Apps / SEP-1865).
+// Brain MCP App tools: the in-client UI surface (MCP Apps / SEP-1865).
 //
 // Design principle: viewers experience the brain almost entirely INSIDE the
 // MCP client. The Worker serves one self-contained ui:// HTML resource (the
@@ -6,14 +6,16 @@
 // these tools link to it via _meta.ui.resourceUri. UI-capable hosts
 // (claude.ai, Claude Desktop) render the app in a sandboxed iframe and feed
 // it the tool result; the app then navigates by calling the ordinary read
-// tools back through the host, riding the same OAuth token — no new auth, no
-// standalone web UX.
+// tools back through the host, riding the same OAuth token. The same bundle is
+// also served as a web page at /b/ (src/lib/web-app.ts), where it calls the same
+// tools with a session cookie instead.
 //
 // Non-UI hosts (Claude Code terminal, Inspector) degrade gracefully: every
 // tool also returns a plain text block, so the same call still works as chat.
 //
-// Write policy matches the librarian exactly (shared predicates): raw/ is
-// immutable, index/log are tool-maintained. These tools are read-only; the
+// Write policy matches the librarian exactly (shared predicates): source paths
+// are immutable, the changelog is tool-maintained.
+// These tools are read-only; the
 // in-client editor opens via edit_page and saves through the librarian's
 // write_page, passing the blob sha from edit_page for optimistic concurrency.
 
@@ -60,7 +62,7 @@ const editPolicy = pathPolicyOf;
 // back on its own calls, so opening another brain here never moves the active brain.
 // Use switch_brain for that.
 const brainArg = brainArgFor(
-	'Which brain to open (name/handle). Defaults to the active brain. Opening another brain here is one-shot; use switch_brain to change the default.'
+	'Which brain to open (name/handle). Defaults to the active brain. Opening another brain here is one-shot and does not change the default.'
 );
 
 // A stable content fingerprint of the app bundle (FNV-1a 32-bit → base36). Not
@@ -178,9 +180,8 @@ export function registerBrainApp(
 	//
 	// It rides BOTH the text block and structuredContent (`webUrl`), because they
 	// reach different readers: a host that receives structuredContent hands the
-	// model THAT and drops the text, which is how the first version (text only,
-	// 2026-09-02) shipped a link no model ever saw. The widget still builds its own
-	// from `features.webBase`; read_page (the model's reading channel) deliberately
+	// model THAT and drops the text. The widget builds its own from
+	// `features.webBase`; read_page (the model's reading channel) deliberately
 	// carries none, since nobody clicks there.
 	const linkFor = (tool: string, brain: string, path?: string): string | undefined =>
 		webUrlFor(opts.webBaseUrl, tool, brain, path);
@@ -235,12 +236,8 @@ export function registerBrainApp(
 		'view_page',
 		{
 			title: 'Open a brain page',
-			// Deliberately does NOT name read_page. It used to say "prefer this over
-			// read_page / use read_page only when...", which meant this description
-			// contained the string "read_page" twice while read_page's own contained
-			// it zero times: a tool search for "read_page" ranked THIS tool first and
-			// an agent concluded it had no way to read a page. The read-vs-view
-			// steering lives in the server instructions, which hosts load wholesale.
+			// Deliberately does NOT name read_page (see read_page in src/tools/core.ts).
+			// The read-vs-view steering lives in the server instructions.
 			description:
 				'Open a brain page in the interactive Isomorphic viewer: rendered markdown, clickable links, browse and search, shown inside Claude. Use this whenever the user wants to LOOK AT or explore a page, AND whenever you cite or reference a specific brain page in an answer: call it on the referenced path so the user can open that page in Isomorphic instead of only reading pasted text. This is for showing a page to the USER; to fetch a page as text for your own reasoning, read it instead.',
 			inputSchema: {
@@ -274,11 +271,9 @@ export function registerBrainApp(
 					path,
 					markdown,
 					...webUrl('view_page', activeBrain.id, path),
-					// The blob sha of what this render is OF. readFile already returns it
-					// and every write path already treats a page as versioned (write_page
-					// refuses a save against a stale sha); only the read path threw the
-					// version away, which is why the viewer could not tell a current render
-					// from one the branch had moved past. Costs nothing extra to send.
+					// The blob sha of what this render is OF, so the viewer can tell a
+					// current render from one the branch has moved past. readFile already
+					// returns it, so it costs nothing extra to send.
 					sha: file.sha,
 					config: editPolicy(config),
 					activeBrain
@@ -311,8 +306,8 @@ export function registerBrainApp(
 			// Attachments listed apart from hidden files — see listNonPagePaths.
 			const { assets, hidden } = await listNonPagePaths(store, repoArgs, config);
 			// Empty could be a fresh brain or an adopted repo whose content isn't under the
-			// configured roots — flag the latter so the app can offer to auto-configure.
-			// Only content-AREA files count as "something to show": the hidden list now
+			// configured roots; flag the latter so the app can offer to auto-configure.
+			// Only content-AREA files count as "something to show": the hidden list
 			// includes system files that exist in any repo.
 			const needsConfig =
 				paths.length === 0 &&
@@ -320,8 +315,8 @@ export function registerBrainApp(
 				(await detectNeedsConfig(store, repoArgs, config));
 			// The tree rides along only while it is small (see src/lib/browse.ts). Over
 			// budget it is left out entirely and the app fetches it with list_pages, which
-			// is a widget-initiated call and costs the conversation nothing. That fallback
-			// is the `else openBrowse()` branch of handleToolResult and predates this.
+			// is a widget-initiated call and costs the conversation nothing (the
+			// `else openBrowse()` branch of handleToolResult).
 			const tree = { paths, pages, assets, hidden };
 			const inline = treeFitsInline(tree);
 			return {
@@ -459,7 +454,7 @@ export function registerBrainApp(
 		{
 			title: 'Edit a brain page in the editor',
 			description:
-				'Open a brain page in the in-client editor so the USER can edit its body directly. Metadata stays managed automatically. For your own programmatic edits, use write_page instead.',
+				'Open a brain page in the in-client editor so the USER can edit its body directly; edit_page itself changes nothing. Metadata stays managed automatically.',
 			inputSchema: {
 				path: z.string().describe('Page path, e.g. "wiki/concepts/vision.md".'),
 				brain: brainArg

@@ -1,6 +1,10 @@
 # Media attachments: uploading, viewing, and passing images through MCP
 
-Status: design, not built. Written 2026-08-05.
+Status: built 2026-08-05 (`attach_media`, `read_media`, upload and viewing in the app,
+`src/lib/media.ts`, `pnpm test:media`). URL ingest (`attach_media` with `url`, the server
+fetching the file) followed on 2026-08-10. What is still open is tracked in
+[`docs/roadmap.md`](../roadmap.md). Written 2026-08-05; the body below is the design as
+proposed.
 
 The ask: let people upload images (and possibly other file types) into a brain, see them
 in the app, and have Claude actually look at them. The brain stays what it is: an ordinary

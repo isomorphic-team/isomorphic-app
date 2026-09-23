@@ -15,12 +15,9 @@ export const WEB_ROUTE_PREFIX = '/b/';
 
 // WHICH URL EACH WIDGET TOOL CORRESPONDS TO.
 //
-// A web URL and a widget tool call answer the same question — "show me this" — so
+// A web URL and a widget tool call answer the same question ("show me this"), so
 // this is ONE table rather than a second vocabulary invented beside the tool
-// surface. The first version of this grammar was invented that way and immediately
-// drifted: it grew `?q=` and `?view=graph` while `view_activity` and `brain_access`
-// had no URL at all, for no reason other than that nobody was looking at the tool
-// list when writing it.
+// surface, which would drift from it.
 //
 // Every widget tool must appear here, INCLUDING the ones that get no URL, and
 // `pnpm test:web` scans `registerAppTool` call sites and fails on any that is
@@ -30,9 +27,9 @@ export const WEB_ROUTE_PREFIX = '/b/';
 //
 // THE TOKEN IS AN ALIAS, NOT THE TOOL NAME, and that is deliberate. A URL is a
 // permanent contract (these functions are inverses so links do not rot), while the
-// tool surface is actively consolidated — 42 tools became 30, and `list_members` +
-// `view_members` became `members`. Coupling the two literally would make every
-// future merge a link-breaking change; with an alias, a rename is one line here.
+// tool surface is actively consolidated (`list_members` + `view_members` became
+// `members`). Coupling the two literally would make every future merge a
+// link-breaking change; with an alias, a rename is one line here.
 //
 // Three questions decide whether a tool earns a URL, and all three must pass. Would
 // you send it to someone (a destination, not a step)? Can the URL alone rebuild it
@@ -265,13 +262,11 @@ export function webBaseUrl(env: {
 // Which of the two auth paths a `/mcp` POST belongs to, decided on what the request
 // CARRIES rather than on what it lacks.
 //
-// The first version claimed every request with no Bearer token, and that broke the
-// other client. An MCP host's first contact is a POST with no credential at all: the
-// OAuth provider answers it with `401` + `WWW-Authenticate: Bearer`, which is how the
-// host discovers the authorization server (and what `scripts/smoke.ts` asserts, so a
-// deploy carrying that version would have rolled itself back). Routed to the cookie
-// branch, the same request got a bare `401 Not signed in` and the host had nothing
-// to go on.
+// Why not "every request with no Bearer token": an MCP host's first contact is a
+// POST with no credential at all, and the OAuth provider must answer it with `401` +
+// `WWW-Authenticate: Bearer` so the host can discover the authorization server
+// (`scripts/smoke.ts` asserts it). The cookie branch's bare `401 Not signed in` gives
+// the host nothing to go on.
 //
 // A cookie is what a browser sends and an MCP client never does, so its presence is
 // the discriminator. Whether the cookie holds a VALID session is the next question,

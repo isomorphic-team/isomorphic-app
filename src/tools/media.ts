@@ -1,5 +1,5 @@
 // attach_media and read_media: putting files into a brain, and getting them back
-// out — to the app as a data URI, to the model as an image it can actually look at.
+// out: to the app as a data URI, to the model as an image it can actually look at.
 //
 // Read docs/design/media-attachments.md before changing either of these. The one
 // thing that shapes the whole surface: THE MODEL CANNOT HAND US BYTES. Tool arguments
@@ -12,14 +12,11 @@
 // `url` is the way out of that for a model, and the only one: it names a location and
 // the server does the downloading, so the bytes never cross the model's output at all.
 // It does not replace the app path, which still owns every file that exists only on
-// someone's disk. Added for issue #20, where an agent could find, fetch, crop and
-// compress a floor plan and then had no way to hand over 14 KB of PNG.
+// someone's disk.
 //
-// Only two tools, and move/delete are handled by the EXISTING move_page / delete_page
-// rather than gaining media twins. That is deliberate: this repo has documented
-// pressure against growing the tool surface (42 -> 30, with two merges recorded in
-// CLAUDE.md), and those two already do the right thing for an attachment now that the
-// index records asset links.
+// Only two tools: move/delete are handled by the EXISTING move_page / delete_page
+// rather than gaining media twins, to keep the tool surface small. Those two already
+// do the right thing for an attachment, since the index records links to files.
 
 import type { McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
@@ -301,10 +298,8 @@ export function registerMediaTools(
 			//
 			// Only for the app, though, which is why it is opt-in. Hosts put
 			// structuredContent in front of the model alongside the content blocks, so
-			// sending it unconditionally spent a second, larger copy of every image as
-			// text: a 150 KB PNG became ~200 KB of base64 that read as nothing, on top of
-			// the image block the model can actually see, and long enough to truncate the
-			// response it was attached to. Reported as issue #20.
+			// sending it unconditionally would spend a second, larger copy of every image
+			// as base64 text the model cannot use, long enough to truncate the response.
 			const structuredContent = {
 				path: target,
 				mimeType,

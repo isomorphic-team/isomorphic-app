@@ -1,18 +1,19 @@
-// Brain provisioning — the platform-owned path.
+// First-touch provisioning: what a signed-in person gets on their first request
+// when nothing resolves for them yet. Two paths, one per identity mode:
 //
-// The whole point of this module: a reader/creator using the MCP never touches
-// GitHub. They sign in via OAuth and, on their first authenticated request, the
-// Worker provisions a brain for them automatically — created under a SINGLE
-// platform org via a SINGLE platform App installation. No per-user App install,
-// no org-vs-user gate, no repo picking.
+//   - authjs (`provisionOrgForUser`): claim any pending invitation, else mint a
+//     personal Model-A org (platform-owned) with an owner membership. No brain is
+//     created here; brains are created explicitly with create_brain. Touches no
+//     GitHub.
+//   - github, legacy (`provisionBrainForUser`): create a `brain-<login>` repo under
+//     the single platform org via the single platform App installation, scaffold
+//     it, and write a flat `tenants` row.
 //
-// Contrast with the legacy bootstrap flow, where each user installed the App on
-// their own org and the install-callback scaffolded one brain. Here the admin
-// installs once (on the platform org); everything else is automatic.
-//
-// `provisionBrainForUser` is idempotent and safe to call on every request that
-// finds no tenant row: an existing tenant short-circuits, and a name collision
-// (e.g. a prior partial run) adopts the existing repo instead of failing.
+// Both mint under the platform org and installation (`platformInstall`), which the
+// admin configures once, so a reader never installs anything or sees GitHub. Both
+// are idempotent and safe to call on every request that finds nothing: an existing
+// row short-circuits, and a repo-name collision (a prior partial run, or concurrent
+// first calls) adopts the existing repo instead of failing.
 
 import type { Octokit } from 'octokit';
 import type { D1Database } from '@cloudflare/workers-types';
@@ -147,14 +148,10 @@ export async function provisionBrainForUser(input: ProvisionInput): Promise<Tena
 	return tenant;
 }
 
-// The platform org and its App installation, which is what both provisioning
-// paths need and the only configuration either of them reads. The two call sites
-// in the Worker each did this inline and threw the same sentence, and the copies
-// had already drifted on the one thing that matters: the GitHub path coerced the
-// id with Number() unconditionally, so a non-numeric value arrived at
-// provisionBrainForUser as NaN and surfaced later as a GitHub auth failure rather
-// than as the config mistake it is. An id that is not a positive integer is
-// refused here, where the message can name the variable.
+// The platform org and its App installation, the only configuration either
+// provisioning path reads. An id that is not a positive integer is refused here,
+// where the message can name the variable, rather than surfacing later as a GitHub
+// auth failure.
 export interface PlatformInstall {
 	org: string;
 	installationId: number;
@@ -225,9 +222,8 @@ export function noBrainOutcome(input: {
 // First-touch resolution for a product-identity user: claim any invitation
 // addressed to them, and otherwise mint a personal Model-A org (platform-owned)
 // with an owner membership. The authjs analog of provisionBrainForUser. No brain
-// is created here: as of Phase 8 (brain-creation-and-init) brains are stood up
-// EXPLICITLY (create_brain / the Add-a-brain flow). Idempotent, so it is safe on
-// every request that finds no accessible brain.
+// is created here: brains are stood up EXPLICITLY (create_brain / the Add-a-brain
+// flow). Idempotent, so it is safe on every request that finds no accessible brain.
 export async function provisionOrgForUser(input: ProvisionOrgInput): Promise<OrgContext> {
 	const { db, user, org, installationId, autoProvision = true } = input;
 
@@ -241,7 +237,7 @@ export async function provisionOrgForUser(input: ProvisionOrgInput): Promise<Org
 	// Model-B org with its own adopted brain). Joining it is how a member with no
 	// GitHub account lands in the right org. This runs BEFORE the membership
 	// lookup and BEFORE the autoProvision gate: an invitation is not provisioning,
-	// and it applies whatever else this person already belongs to (issue #69).
+	// and it applies whatever else this person already belongs to.
 	await claimPendingInvites(db, [user.user_id]);
 
 	const existing = await getMembershipWithOrg(db, user.user_id);

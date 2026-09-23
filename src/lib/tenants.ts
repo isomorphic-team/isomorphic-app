@@ -1,8 +1,9 @@
-// Multi-tenant routing helpers backed by D1.
+// The legacy GitHub-identity routing table, backed by D1.
 //
 // One tenant row per GitHub user (keyed by `gh_user_id` surfaced via OAuth
-// `props`). The MCP server reads this per-request to figure out which brain
-// repo a tool call should target.
+// `props`), read per request on the IDENTITY_MODE=github path to find the one
+// brain repo that user targets. The authjs path uses the org model in
+// src/lib/orgs.ts instead, as does a GitHub id linked to a product identity.
 
 // `D1Database` is a global ambient type via @cloudflare/workers-types in the
 // Worker tsconfig, but not in the Node tsconfig (which also typechecks `lib/`
@@ -30,8 +31,7 @@ export async function getTenantByUserId(db: D1Database, ghUserId: number): Promi
 	return row ?? null;
 }
 
-// Insert-or-update on `gh_user_id`. Used by the install-callback handler
-// (future work) and by manual seed scripts.
+// Insert-or-update on `gh_user_id`. Used by provisionBrainForUser.
 export async function upsertTenant(
 	db: D1Database,
 	t: Pick<Tenant, 'gh_user_id' | 'installation_id' | 'brain_owner' | 'brain_repo'> & {
@@ -53,9 +53,8 @@ export async function upsertTenant(
 		.run();
 }
 
-// Thrown by `tenantContext()` when the OAuth-bound user has no brain row yet.
-// Callers (tool handlers) should catch and surface as a structured MCP error
-// pointing at the onboarding URL.
+// Thrown by `tenantContext()` when a GitHub-identity user has no tenant row and
+// AUTO_PROVISION is off. It propagates to the MCP layer, which surfaces the message.
 export class NoTenantError extends Error {
 	constructor(public readonly ghUserId: number) {
 		super(`No brain configured for gh_user_id=${ghUserId}.`);

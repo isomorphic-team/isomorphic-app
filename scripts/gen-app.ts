@@ -31,7 +31,7 @@ const VIEWS_DIR = fileURLToPath(new URL('../app/views', import.meta.url));
 const REGISTRY_OUT = fileURLToPath(new URL('../app/views/registry.generated.ts', import.meta.url));
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 
-// Preact-as-React so shadcn/Radix (and any React-shaped lib) bundle small.
+// Preact-as-React, so any React-shaped import resolves to Preact and the bundle stays small.
 const PREACT_ALIAS = {
 	react: 'preact/compat',
 	'react-dom': 'preact/compat',

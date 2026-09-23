@@ -1,10 +1,10 @@
 // Product-identity handler behind the MCP OAuth server's /authorize.
 //
-// The Worker stays an OAuth 2.1 authorization server to Claude via
-// @cloudflare/workers-oauth-provider — THAT is unchanged. This handler is the
-// `defaultHandler` for IDENTITY_MODE=authjs; it replaces the GitHub bridge
-// (github-handler.ts) with Auth.js so members sign in via email/SSO and never
-// need a GitHub account. See docs/design/org-roles-permissions.md.
+// The Worker is an OAuth 2.1 authorization server to Claude via
+// @cloudflare/workers-oauth-provider. This handler is the upstream sign-in for
+// IDENTITY_MODE=authjs (the Worker's `identityHandler` routes here); in place of
+// the GitHub bridge (github-handler.ts) it uses Auth.js, so members sign in by
+// email and never need a GitHub account. See docs/design/org-roles-permissions.md.
 //
 // Flow:
 //   /auth/*          → handed to Auth.js (signin, callback/resend, session, …)
@@ -28,9 +28,8 @@ interface AuthHandlerEnv extends AuthEnv {
 // is stashed in KV under a state nonce while the human authenticates, then
 // reloaded to complete the grant. TTL must cover the full magic-link round-trip:
 // email delivery + the human noticing + clicking, which routinely runs into
-// minutes. 600s was too tight and produced "expired" 400s at /oauth/complete for
-// slow email hops; 1h leaves generous headroom (the grant itself is single-use,
-// so a long-lived pending entry is not a meaningful exposure).
+// minutes, so it is 1h rather than github-handler's 10 minutes (the grant itself
+// is single-use, so a long-lived pending entry is not a meaningful exposure).
 const PENDING_AUTH_TTL_SECONDS = 3600;
 
 export const authHandler = {
@@ -121,7 +120,7 @@ export const authHandler = {
 			// Delete only after the grant is minted. If identity resolution or
 			// completeAuthorization throws, the pending entry survives so the user
 			// can retry the same link rather than being forced through a fresh
-			// sign-in (the old code deleted first and stranded any transient error).
+			// sign-in.
 			await env.OAUTH_KV.delete(`pending_auth:${state}`);
 			console.log(`[oauth/complete] granted for ${identity.email} (state=${state})`);
 			return Response.redirect(redirectTo, 302);
@@ -189,10 +188,7 @@ export const authHandler = {
 
 			// This sign-in just PROVED the address, which is the whole basis on which
 			// an invitation is honoured, so a pending invite for it is claimed here
-			// exactly as a first sign-in claims one. Without this the invited address
-			// gets an app_users row and no membership, and the invite sits pending
-			// until it expires with nothing surfaced to either side (issue #69).
-			// Fail-open: the accounts ARE linked at this point, and reporting the
+			// exactly as a request from that address would claim one. Fail-open: the accounts ARE linked at this point, and reporting the
 			// linking as failed would be worse than a late invite.
 			let joined = 0;
 			try {

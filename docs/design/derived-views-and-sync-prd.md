@@ -1,6 +1,6 @@
 # PRD: Derived Views & Non-Destructive Sync
 
-- Status: In implementation — §12 decisions resolved 2026-07-22; Phases 1+2 (FR-2 + all of FR-1) built 2026-07-22 and live; Phase 3 (FR-3 sync_records + resolve_import, FR-4 config) built 2026-07-23, verified by a real-GitHub E2E battery; remaining: reconciliation widget, contacts-brain ETL cutover
+- Status: Built, except the reconciliation widget and the contacts-brain ETL cutover. Phases 1 and 2 (FR-1, FR-2) shipped 2026-07-22; Phase 3 (FR-3 `sync_records`, FR-4 config) shipped 2026-07-23. `resolve_import` below has since been generalised into `resolve`, which answers import questions and dismisses any other `validate` finding.
 - Author: Jon Hansing (via Claude)
 - Date: 2026-07-21
 - Audience: the engineering session picking this up in `isomorphic-app`

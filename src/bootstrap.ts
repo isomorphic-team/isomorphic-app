@@ -2,8 +2,10 @@
 //
 // Run with `pnpm bootstrap`. Walks you through:
 //   1. Registering the GitHub App via the manifest flow (form POST to GitHub).
-//   2. Installing the App on your account.
-//   3. Creating + scaffolding the brain repo.
+//   2. Installing the App on the platform org (an organization, not a personal
+//      account: repo creation needs `administration: write`).
+//   3. Recording that org + installation as the platform install, and scaffolding
+//      a canary brain repo to prove repo creation works.
 //
 // Each step is one route. Credentials are persisted to `.dev.vars` along the
 // way so a successful run leaves the rest of the platform ready to use them.
@@ -170,10 +172,11 @@ app.get('/github/install-callback', async (c) => {
 		);
 	}
 
-	// Platform-provisioning model: this install is the ONE platform installation
-	// on the ONE platform org. We record the org login + installation id; the MCP
-	// Worker auto-creates a per-user brain under this org on each user's first
-	// authenticated request. The admin does not pre-create user brains here.
+	// This install is the ONE platform installation on the ONE platform org. We
+	// record the org login + installation id, which the Worker's first-touch
+	// provisioning mints under (src/lib/provision.ts): a personal org for an authjs
+	// user, or a per-user brain repo on the legacy github identity path. The admin
+	// does not pre-create user brains here.
 	await writeDevVars({
 		PLATFORM_ORG: ownerLogin,
 		PLATFORM_INSTALLATION_ID: installationId

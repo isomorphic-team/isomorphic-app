@@ -1,4 +1,4 @@
-// Member-management tools — the org-admin surface for the roster.
+// Member-management tools: the org-admin surface for the roster.
 //
 // One roster tool, two audiences: `members` both opens the interactive roster in
 // the Isomorphic app (MCP Apps / SEP-1865, where an admin gets inline role dropdowns
@@ -19,9 +19,9 @@
 //     recoverable super-user. An actor can't edit or remove THEMSELVES (the owner
 //     can always fix a mistake), and can't grant a role above their own.
 //
-// Scope: everything is bound to the caller's resolved org (ctx.orgId). The legacy
-// github/static single-tenant paths have no org row, so these tools reject there
-// with a clear "organization accounts only" message.
+// Scope: everything is bound to the caller's resolved org (ctx.orgId). Single-tenant
+// deployments do not register these tools (`hasOrgModel` in worker.ts); requireOrg's
+// "organization accounts only" error is the backstop if one is reached without an org.
 
 import type { McpServer } from '@modelcontextprotocol/server';
 import { registerAppTool } from '@modelcontextprotocol/ext-apps/server';
@@ -56,8 +56,7 @@ const brainArg = brainArgFor(
 );
 
 // Resolve the org scope, or throw the caller-facing "org accounts only" error. The
-// product-native (authjs) path always sets both; the legacy single-tenant paths
-// never do — member management doesn't apply to a single-tenant install.
+// product-native (authjs) path always sets both; the single-tenant paths never do.
 // The single place "this caller belongs to an organization" is established, which is
 // why the org ROLE comes back through it too. `ctx.orgRole` is null for a caller who
 // holds no membership in the org that owns the brain they reached, so none of the
@@ -124,15 +123,15 @@ export function registerMemberTools(
 	// ---------- members (roster: interactive widget + data) ----------
 	// One tool, both modes: it renders the inline roster for the user AND returns the
 	// roster as text the model can reason over (e.g. before a member mutation). The
-	// widget always renders (its _meta.ui is static), which for this low-frequency
-	// admin surface is fine — see the "tool-surface consolidation" note.
+	// widget always renders (its _meta.ui is static), which is acceptable for a
+	// low-frequency admin surface.
 	registerAppTool(
 		server,
 		'members',
 		{
 			title: 'Organization members',
 			description:
-				"The organization's members and roles (Viewer / Editor / Admin / Owner) plus pending invites — shown inline as the interactive Isomorphic roster (admins get controls to invite, change roles, and remove people) AND returned as text you can reason over. Call it whenever the user wants to see, check, or manage members / who has access / their team, and whenever YOU need the roster as data (e.g. before invite_member / set_member_role / remove_member).",
+				"The organization's members and roles (Viewer / Editor / Admin / Owner) plus pending invites, shown inline as the interactive Isomorphic roster (admins get controls to invite, change roles, and remove people) AND returned as text you can reason over. Call members whenever the user wants to see, check, or manage the organization's people or their team, and whenever YOU need the roster as data, e.g. before changing someone's membership. This is ORGANIZATION membership, not who can reach a particular brain.",
 			inputSchema: { brain: brainArg },
 			annotations: { readOnlyHint: true },
 			_meta: { ui: { resourceUri: BRAIN_APP_URI } }
@@ -154,7 +153,7 @@ export function registerMemberTools(
 		{
 			title: 'Invite a person to the organization',
 			description:
-				"Invite someone to the organization by email at a given role (Viewer, Editor, or Admin — default Editor). If they've already signed in, they're added immediately; otherwise they join automatically at their first sign-in. Admin only.",
+				"Invite someone to the organization by email at a given role (Viewer, Editor, or Admin; default Editor). If they already have an account, they're added immediately; otherwise they join automatically as soon as they sign in with that address. Admin only.",
 			inputSchema: z.object({
 				email: z.string().describe("The invitee's email address."),
 				role: z
@@ -183,9 +182,8 @@ export function registerMemberTools(
 						`${existing.email} is already a member (${roleLabel(current)}). Use set_member_role to change their role.`
 					);
 				}
-				// Already signed in but not in this org → add directly. (An unaccepted
-				// invitation would never fire for them: first-sign-in provisioning, which
-				// consumes invites, short-circuits for a user who already has an account.)
+				// Has an account but is not in this org: add directly, so the membership
+				// exists now rather than when claimPendingInvites next runs for them.
 				await addMembership(ctx.db, { org_id: orgId, user_id: existing.user_id, role: target });
 				const sc = await roster(ctx, orgId, actorUserId);
 				return {
@@ -199,7 +197,9 @@ export function registerMemberTools(
 				};
 			}
 
-			// Brand-new email → pending invitation, consumed at first sign-in.
+			// No account for this address: a pending invitation, claimed by
+			// claimPendingInvites (src/lib/invites.ts) whenever the address is proven,
+			// by signing in or by linking it to an existing account.
 			await createInvitation(ctx.db, {
 				invite_id: crypto.randomUUID(),
 				org_id: orgId,
@@ -212,7 +212,7 @@ export function registerMemberTools(
 				content: [
 					{
 						type: 'text' as const,
-						text: `Invited ${emailTrim} as ${roleLabel(target)} — they'll join automatically when they first sign in.`
+						text: `Invited ${emailTrim} as ${roleLabel(target)}: they'll join automatically when they sign in with that address.`
 					}
 				],
 				structuredContent: sc
@@ -269,7 +269,7 @@ export function registerMemberTools(
 		{
 			title: 'Remove a person from the organization',
 			description:
-				"Remove someone from the organization by email — revokes their access, or cancels a pending invitation if they haven't joined yet. Admin only. You can't remove yourself or the owner.",
+				"Remove someone from the organization by email: revokes their access, or cancels a pending invitation if they haven't joined yet. Admin only. You can't remove yourself or the owner.",
 			inputSchema: z.object({
 				email: z.string().describe('Email of the member or pending invite to remove.'),
 				brain: brainArg

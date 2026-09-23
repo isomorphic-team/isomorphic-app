@@ -5,18 +5,17 @@
 -- pages are reindexed before the read is served, so a query can never return
 -- content that is stale relative to the branch it claims to reflect.
 --
--- Why it exists: the old read path fetched + parsed every page from GitHub on each
--- call, which capped scans at ~40 pages (Worker subrequest budget) and cost
--- hundreds of ms. Querying this index is one or two local D1 statements instead —
--- unbounded by page count and an order of magnitude faster.
+-- Why it exists: fetching and parsing every page from GitHub per call is bounded by
+-- the Worker subrequest budget and costs hundreds of ms; a query here is one or two
+-- local D1 statements, unbounded by page count.
 --
--- Keyed by brain_id = "owner/repo" (universal across all identity modes — authjs
--- orgs, the github/static legacy paths — so it needs nothing from the org tables).
+-- Keyed by brain_id = "owner/repo", universal across identity modes (authjs orgs,
+-- the github tenant row, static), so it needs nothing from the org tables.
 --
--- Apply to local D1:
---   pnpm exec wrangler d1 execute platform-db --local  --file=src/db/index-schema.sql
--- Apply to prod D1 (gated — do before deploying the index-backed read tools):
---   pnpm exec wrangler d1 execute platform-db --remote --file=src/db/index-schema.sql
+-- REFERENCE ONLY: the current shape, gathered in one place for reading. The
+-- canonical schema is `migrations/` (wrangler's migrations framework): apply it
+-- locally with `pnpm db:migrate`; the deploy workflow applies it to the remote
+-- database. Never apply this file to a database.
 
 -- One row per indexed brain: the commit the index currently reflects, plus whether
 -- the last build hit the page ceiling (MAX_SCAN_PAGES) so reads can still say so.

@@ -55,9 +55,10 @@ test('the control reports the render age once it is worth reporting', async ({ p
 	await expect(refresh).toHaveText('');
 	await expect(refresh).toHaveAccessibleName('Refresh this page');
 
-	// openApp freezes the clock, so time only moves when the test moves it. Nothing
-	// re-renders the app on its own while somebody reads, which is why the view runs
-	// its own tick; advancing past that tick is what proves the tick exists.
+	// `advanceable` installs the clock at the harness's fixed instant, and runFor jumps
+	// it five minutes. Nothing re-renders the app on its own while somebody reads, which
+	// is why the view runs its own tick; advancing past that tick is what proves the
+	// tick exists.
 	await page.clock.runFor('05:00');
 
 	await expect(refresh).toHaveText('5m');

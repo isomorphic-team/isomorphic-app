@@ -1,13 +1,15 @@
 -- Auth.js (@auth/d1-adapter) tables — vendored DDL.
 --
 -- The adapter's D1Adapter() runs raw SQL against these tables but does NOT
--- create them; you must run its `up()` migration once. Rather than call up() at
--- runtime, we vendor its `upSQLStatements` here so the tables are provisioned via
--- the same `wrangler d1 execute` flow as our own schema. Keep in sync with the
--- installed @auth/d1-adapter version (currently 1.11.2) if it bumps.
+-- create them. Rather than call its `up()` at runtime, we vendor its
+-- `upSQLStatements`; migrations/0001_init.sql creates the tables. Keep in sync
+-- with the installed @auth/d1-adapter version (vendored from 1.11.2) if it bumps: a
+-- change lands as a new migration.
 --
--- Apply locally: wrangler d1 execute platform-db --local  --file src/db/authjs-schema.sql
--- Apply remote:  wrangler d1 execute platform-db --remote --file src/db/authjs-schema.sql
+-- REFERENCE ONLY: the current shape, gathered in one place for reading. The
+-- canonical schema is `migrations/` (wrangler's migrations framework): apply it
+-- locally with `pnpm db:migrate`; the deploy workflow applies it to the remote
+-- database. Never apply this file to a database.
 --
 -- NOTE: the adapter's `users` table is distinct from our app-level `app_users`
 -- (see auth-schema.sql) — deliberately named apart to avoid a collision.

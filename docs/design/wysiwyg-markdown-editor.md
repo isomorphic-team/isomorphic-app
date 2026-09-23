@@ -8,7 +8,13 @@
 > `save_page` / `update_page` here are historical; the mechanism (sha-guarded,
 > frontmatter-preserving, logged, atomic bundle commit) is unchanged.
 
-Status: **Phases A–C built 2026-07-06** (viewer-first, `feature/mcp-apps-ui`), with one
+Status: **built, including Phase D.** The editor is WYSIWYG over ProseMirror
+(`prosemirror-markdown`), guarded by `pnpm test:roundtrip`, and the MCP SDK is v2
+(`@modelcontextprotocol/server` 2.0), so the textarea, the SDK 1.29 pin and the `agents`
+package described in the next two paragraphs are gone. The rest of this document is the
+design as written.
+
+Status as of 2026-07-06: **Phases A–C built 2026-07-06** (viewer-first, `feature/mcp-apps-ui`), with one
 deliberate deviation: the editor is a **plain-markdown textarea over the page body** (zero
 round-trip risk) rather than WYSIWYG — Milkdown/ProseMirror remains the Phase D upgrade.
 Scope also widened beyond the editor per the product principle "viewers live almost entirely

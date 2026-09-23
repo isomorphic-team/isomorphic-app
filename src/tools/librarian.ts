@@ -1,4 +1,4 @@
-// Librarian tool suite — the write/maintenance surface of the brain MCP server.
+// Librarian tool suite: the write/maintenance surface of the brain MCP server.
 //
 // Two rules govern everything here:
 //
@@ -14,8 +14,8 @@
 // Write policy comes entirely from the brain's role map (.isomorphic.json, via
 // brain-config.ts): folders are arbitrary and free-form, "source" paths are
 // immutable, the "log" path is tool-maintained. There are NO fixed entity types
-// and NO auto-generated index — those were removed 2026-07. Frontmatter is
-// optional; when present it's preserved and merged.
+// and NO auto-generated index. Frontmatter is optional; when present it's
+// preserved and merged.
 
 import type { McpServer } from '@modelcontextprotocol/server';
 import type { D1Database } from '@cloudflare/workers-types';
@@ -110,9 +110,6 @@ import {
 	resolveMoveTarget
 } from '../lib/write-target.ts';
 
-// Shared optional `brain` arg — every tool takes it so the model can one-shot a
-// different brain than the connection's active one (see tenantContext in worker.ts).
-
 // Frontmatter keys are free-form and brain-owned, exactly like folders and
 // `type:` values, so this takes whatever the brain calls things rather than a
 // fixed list.
@@ -143,35 +140,35 @@ export interface BrainContext {
 	// The raw GitHub client, for operations that are GitHub as a platform rather than
 	// a brain as storage: creating a repository, listing an installation's
 	// repositories, checking a repo exists before connecting it. Optional because a
-	// non-GitHub backend has no such client; all of those operations belong to the org
-	// model, which such a deployment does not register (`hasOrgModel` in worker.ts).
-	// Anything a brain's content needs goes on `store`.
+	// non-GitHub backend (the local runtime) has no such client; all of those operations
+	// are org-scope tools, which refuse a connection without the org model. Anything a
+	// brain's content needs goes on `store`.
 	octokit?: Octokit;
 	repoArgs: RepoRef;
 	// The caller's role ON THIS BRAIN (viewer < editor < admin), resolved by
 	// effectiveBrainRole from an explicit share, the brain's org visibility, or the
 	// org-admin floor. Read tools ignore it; write/configure/share tools gate on it.
-	// The legacy github/static single-tenant paths report 'owner'.
+	// The single-tenant paths (github identity, static) report 'owner'.
 	role: Role;
 	// The caller's role in this brain's ORG (viewer < editor < admin < owner).
 	// Separate from `role` on purpose: org membership governs managing people and
 	// adding/removing brains, brain access governs the content. The
 	// member-management tools authorize roster changes on THIS one: gating them on
 	// `role` would let someone who was merely shared a brain as admin edit the org
-	// roster. Legacy single-tenant paths report 'owner'.
+	// roster. Single-tenant paths report 'owner'.
 	orgRole: Role | null;
 	// The resolved org's id + the acting user's id, present only on the product-native
 	// (authjs) path. The member-management tools need these to scope roster queries and
-	// enforce self-guards; they're undefined on the legacy single-tenant paths, which
-	// have no org table row (those tools error with a clear "org accounts only" message).
+	// enforce self-guards; they're undefined on the single-tenant paths, which have no
+	// org table row (those tools error with a clear "org accounts only" message).
 	orgId?: string;
 	actorUserId?: string;
 	// The brain's content-shape config — which paths are editable content,
 	// immutable source, or the tool-maintained changelog. Read from .isomorphic.json
 	// (or defaults). Every write-policy decision below reads from it.
 	config: BrainConfig;
-	// The acting human, for commit attribution. Undefined on the static legacy
-	// path (no signed-in user) — writes stay App-authored there.
+	// The acting human, for commit attribution. Undefined in static mode (no
+	// signed-in user): writes are attributed to the App or the token's owner.
 	author?: CommitAuthor;
 	// Platform D1 + this brain's index key ("owner/repo"), for the content index
 	// that backs the read tools (src/lib/brain-index.ts).
@@ -210,9 +207,8 @@ export function landed(ctx: BrainContext, outcome: WriteOutcome, done: string, p
 // The one write chokepoint for the librarian tools: commitOrPR plus a write-through
 // index update. A direct commit reports the revision that landed, and the bundle
 // already holds the exact content of every page it touched, so the index advances in
-// place — the read an agent makes to verify the write costs one getRef instead of an
-// incremental reindex (which is what used to make the first read after a write the
-// slow call in the session — issue #31). PR mode leaves the index alone (the branch
+// place: the read an agent makes to verify the write costs one getRef instead of an
+// incremental reindex. PR mode leaves the index alone (the branch
 // has not moved), and a write-through failure is swallowed: the commit landed
 // regardless, and the next read reconciles, as it always did.
 async function commitBundle(ctx: BrainContext, opts: CommitOrPROpts): Promise<WriteOutcome> {
@@ -233,14 +229,12 @@ async function commitBundle(ctx: BrainContext, opts: CommitOrPROpts): Promise<Wr
 
 // The dedupe wrapper the three content writes run inside.
 //
-// Issue #50: a write whose ANSWER was lost — a 502, a timeout, a dropped
-// connection — leaves the caller unable to tell whether it landed, and both ways
-// of guessing wrong are silent. A retried `append` duplicates the text; a
-// retried `mode: "create"` fails claiming the page exists, on a page the caller
-// believes it never created. Reading the page before every retry was the only
-// recourse, which is guidance rather than a mechanism. The ledger recognises the
-// retry and replays the original answer instead of applying the write twice.
-// Engine, windows, and the deliberate-repeat trade-off: src/lib/write-dedupe.ts.
+// A write whose ANSWER was lost (a 502, a timeout, a dropped connection) leaves the
+// caller unable to tell whether it landed, and both ways of guessing wrong are
+// silent: a retried `append` duplicates the text, a retried `mode: "create"` fails
+// claiming the page exists. The ledger recognises the retry and replays the
+// original answer instead of applying the write twice. Engine, windows, and the
+// deliberate-repeat trade-off: src/lib/write-dedupe.ts.
 //
 // IT WRAPS THE WHOLE HANDLER, NOT THE COMMIT. The create case never reaches a
 // commit: write_page's own "that path already exists" check fires first, and
@@ -251,7 +245,7 @@ async function commitBundle(ctx: BrainContext, opts: CommitOrPROpts): Promise<Wr
 // FAIL-OPEN. The brain is the source of truth and this table is only a cache of
 // "did this just happen", so a ledger that cannot be reached must never stop a
 // write: any failure before the handler runs falls through to running it exactly
-// as it ran before this existed.
+// as if there were no ledger.
 async function guardedWrite<R>(
 	ctx: BrainContext,
 	tool: string,
@@ -313,9 +307,8 @@ async function guardedWrite<R>(
 // Fetch only the pages that link to any of `targetPaths`, for repointing links when
 // those pages move or are renamed. Discovers the linkers via the content index
 // (backlinksTo), then reads just those pages' content at `head` (consistent with the
-// commit base). Bounded by inbound-link count rather than brain size, and uncapped:
-// the index sees every page, so a linker beyond the old MAX_SCAN_PAGES ceiling no longer
-// gets silently missed (which a whole-brain scan capped at MAX_SCAN_PAGES would).
+// commit base). Bounded by inbound-link count rather than brain size, and uncapped
+// beyond what the index itself holds.
 // `exclude` drops linkers that are themselves in the moved set (they're handled as
 // moved pages, not outside linkers).
 async function fetchInboundLinkersForPaths(
@@ -344,7 +337,7 @@ async function fetchInboundLinkersForPaths(
 	return { pages, truncated };
 }
 
-// Single-target convenience wrapper (move_page / edit_page retitle).
+// Single-target convenience wrapper (move_page, a write_page retitle, a file move).
 async function fetchInboundLinkers(
 	ctx: BrainContext,
 	head: Head,
@@ -457,7 +450,7 @@ async function updatePageWrite(
 	const writes = [{ path, content: newContent }];
 	const notes = [...composed.notes];
 
-	// Retitling breaks [[Old Title]] wikilinks — repoint them in the same save. Only the
+	// Retitling breaks [[Old Title]] wikilinks: repoint them in the same save. Only the
 	// pages that actually link to this one are fetched (via the index), so this is bounded
 	// by inbound-link count, not brain size.
 	if (composed.retitledFrom) {
@@ -512,11 +505,8 @@ async function updatePageWrite(
 //
 // A folder marker (`.gitkeep`, and any other dot-prefixed scaffolding) exists to
 // persist an otherwise-empty directory in git, so the destination's own copy already
-// does that job and the source's is redundant. Treating those as collisions made
-// MERGING a folder into an existing one impossible in the case where it is most
-// wanted: every scaffolded folder has a `.gitkeep`, so the destination always
-// already had one, and archiving into an existing archive folder was refused with a
-// message naming a file the caller never wrote.
+// does that job and the source's is redundant. Treating those as collisions would
+// refuse every merge into a scaffolded folder, since each one has a `.gitkeep`.
 //
 // Real content is a different answer: overwriting a page is not this tool's call to
 // make. Those are collected in full rather than reported one at a time, so the
@@ -680,14 +670,11 @@ async function moveFolderWrite(
 
 // The non-markdown file form of move_page: move or rename one blob that isn't a page.
 //
-// This exists because a path like "wiki/Todos/.gitkeep" used to route to the FOLDER
-// mover (anything without a .md extension did), which found no files under it and
-// answered "no folder found (it has no files)" about a file that plainly existed. So
-// a non-page file could block a folder move and could not be addressed to clear it.
+// Without it, a path like "wiki/Todos/.gitkeep" (no .md extension) would route to
+// the FOLDER mover and be answered "no folder found" about a file that exists.
 //
-// No link repointing: markdown links whose target isn't .md are deliberately outside
-// the resolved graph (loadResolvedGraph skips them), so there is nothing pointing at
-// this file for the index to know about.
+// Links to the file are repointed: the resolved graph records links to non-page
+// files as `fileEdges`, so the pages displaying an attachment follow it.
 async function moveFileWrite(
 	ctx: BrainContext,
 	head: Head,
@@ -714,13 +701,11 @@ async function moveFileWrite(
 		);
 
 	// Read as BYTES, not as text. Blobs reach readFile base64-decoded as UTF-8, so a
-	// PNG arrives already mangled and writing it back would commit a corrupted copy
-	// over the original — which is why this used to refuse a non-text file outright.
-	// readBinary plus a base64 FileWrite carries the bytes through untouched, so an
-	// attachment now moves like anything else.
+	// PNG would arrive already mangled and writing it back would commit a corrupted
+	// copy. readBinary plus a base64 FileWrite carries the bytes through untouched.
 	//
 	// The blob, the pages linking it, and the changelog are independent reads at the
-	// same head — run them together (the linker fetch reuses the router's tree).
+	// same head, so they run together (the linker fetch reuses the router's tree).
 	const [file, linkersRes, log] = await Promise.all([
 		store.readBinary(repoArgs, path),
 		fetchInboundLinkers(ctx, head, path, tree),
@@ -728,9 +713,7 @@ async function moveFileWrite(
 	]);
 	if (!file) return fail(`"${path}" does not exist.`);
 
-	// Repoint what points AT it. This was skipped on the grounds that non-`.md`
-	// targets sit outside the resolved graph. They no longer do — assetEdges records
-	// them — so a moved attachment no longer rots every page displaying it.
+	// Repoint what points AT it (fileEdges in the resolved graph).
 	const { pages, truncated } = linkersRes;
 	let repointedPages = 0;
 
@@ -764,24 +747,19 @@ async function moveFileWrite(
 	return landed(ctx, outcome, rec.done, rec.proposed);
 }
 
-// The folder-path form of delete_page: delete a whole subtree and everything under it.
-// The non-markdown file form of delete_page, and the twin of moveFileWrite: before
-// this, a path like "wiki/assets/logo.png" routed to the FOLDER deleter and came
-// back as "No folder found" about a file that existed.
+// The non-markdown file form of delete_page, and the twin of moveFileWrite: a path
+// like "wiki/assets/logo.png" must not route to the FOLDER deleter.
 //
-// Inbound references come from the SAME inboundRefs the page deleter uses. They used
-// to need a separate query, because a link to a non-page file was not an edge in the
-// resolved graph — now it is one (fileEdges), so the parallel implementation is gone.
-// That matters beyond tidiness: the two disagreed. inboundRefs also drops references
-// from tool-maintained files, so the changelog's own mention of a path no longer
-// counts as a page that would lose something.
+// Inbound references come from the SAME inboundRefs the page deleter uses (a link to
+// a non-page file is a fileEdge in the resolved graph), so the two cannot disagree,
+// and references from tool-maintained files such as the changelog do not count.
 async function deleteFileWrite(ctx: BrainContext, head: Head, args: { path: string }) {
 	const { store, repoArgs, config, author } = ctx;
 	const path = normPagePath(args.path);
 	const refusal = writeRefusal(path, config, 'deleted');
 	if (refusal) return fail(refusal);
 
-	// The reference count and the changelog are independent reads — run them together.
+	// The reference count and the changelog are independent reads, so they run together.
 	const [refsRes, log] = await Promise.all([
 		inboundRefs(ctx, [path]),
 		store.readFile(repoArgs, logPathOf(config))
@@ -804,6 +782,7 @@ async function deleteFileWrite(ctx: BrainContext, head: Head, args: { path: stri
 	return landed(ctx, outcome, rec.done, rec.proposed);
 }
 
+// The folder-path form of delete_page: delete a whole subtree and everything under it.
 async function deleteFolderWrite(
 	ctx: BrainContext,
 	args: { path: string },
@@ -1022,7 +1001,7 @@ export function registerLibrarianTools(
 		{
 			title: 'Move or rename a page or folder',
 			description:
-				"Move a page (or a whole folder and everything under it) to a different location and/or rename it. Every link pointing at the moved page(s) — from other pages and the index — is repointed in the same save, and the moved content's own links keep working. Nothing dangles. Pass a folder path (no .md extension) to move or rename an entire subtree; moving a folder ONTO an existing one merges them, and is refused only if a page would be overwritten. If this call FAILS WITHOUT A RESULT (a timeout, a 502 or any other gateway error, a dropped connection), retrying the identical call is safe: a repeat with the same arguments within a few minutes is recognised as a retry rather than applied twice. A move lands whole or not at all, so if you change the call, check whether the page is already at the destination before retrying.",
+				"Move a page (or a whole folder and everything under it) to a different location and/or rename it. Every link pointing at the moved page(s) from other pages is repointed in the same save, and the moved content's own links keep working. Nothing dangles. Pass a folder path (no .md extension) to move or rename an entire subtree; moving a folder ONTO an existing one merges them, and is refused only if a page would be overwritten. If this call FAILS WITHOUT A RESULT (a timeout, a 502 or any other gateway error, a dropped connection), retrying the identical call is safe: a repeat with the same arguments within a few minutes is recognised as a retry rather than applied twice. A move lands whole or not at all, so if you change the call, check whether the page is already at the destination before retrying.",
 			inputSchema: z.object({
 				brain: brainArg,
 				path: z
@@ -1052,12 +1031,7 @@ export function registerLibrarianTools(
 				// A path without a .md extension is a folder OR a non-page file, and the
 				// name cannot tell them apart (".gitkeep" is a file, ".obsidian" a folder).
 				// Ask the tree instead of guessing, then hand the answer to the mover that
-				// fits. Guessing "folder" is what made a dotfile unaddressable: it reported
-				// "no folder found (it has no files)" about a file that was right there.
-				//
-				// This supersedes an attachment-specific branch that routed on isAssetPath:
-				// the tree answers the same question for EVERY non-page file, so an
-				// attachment needs no case of its own.
+				// fits. The tree answers this for EVERY non-page file, attachments included.
 				if (!path.endsWith('.md')) {
 					const cleaned = normFolderPath(path);
 					const head = await ctx.store.getHead(ctx.repoArgs, ctx.config.defaultBranch);
@@ -1191,9 +1165,7 @@ export function registerLibrarianTools(
 			const ctx = await getContext({ requires: 'editor', brain });
 			return guardedWrite(ctx, 'delete_page', args, async () => {
 				// A path without a .md extension is a folder OR a non-page file; the tree
-				// says which, for the same reason it does in move_page. Guessing "folder"
-				// answered "No folder found" about files that were plainly there. This
-				// supersedes an attachment-specific branch, exactly as in move_page.
+				// says which, for the same reason it does in move_page.
 				if (!path.endsWith('.md')) {
 					const cleaned = normFolderPath(path);
 					const head = await ctx.store.getHead(ctx.repoArgs, ctx.config.defaultBranch);
@@ -1212,7 +1184,7 @@ export function registerLibrarianTools(
 				if (!existing) return fail(`"${path}" does not exist.`);
 
 				const title = pageTitle(path, existing.content);
-				// The reference count and the changelog are independent — run them together.
+				// The reference count and the changelog are independent, so they run together.
 				const [refsRes, log] = await Promise.all([
 					inboundRefs(ctx, [path]),
 					store.readFile(repoArgs, logPathOf(config))
@@ -1256,11 +1228,9 @@ export function registerLibrarianTools(
 		},
 		async ({ path, brain }) => {
 			const { store, repoArgs, config, db, brainId } = await getContext({ brain });
-			// An attachment has to take a different existence check. readFile decodes the
-			// blob as UTF-8, and on a PNG that does not fail — it returns mojibake — so
-			// the old path would sail past the `!existing` guard and then run pageTitle()
-			// over binary garbage, labelling the image with whatever fell out of it.
-			// An attachment's title is its filename; there is nothing inside to read.
+			// An attachment takes a different existence check. readFile decodes the blob as
+			// UTF-8, which on a PNG does not fail but returns mojibake, so pageTitle() would
+			// run over binary garbage. An attachment's title is its filename.
 			let title: string;
 			if (isAssetPath(path, config)) {
 				const file = await store.readBinary(repoArgs, path);
@@ -1331,8 +1301,8 @@ export function registerLibrarianTools(
 
 			// Pending import decisions: the last sync's unanswered questions, persisted
 			// per source in its ledger (.isomorphic/imports/<source>.json). Validate is
-			// the "anything need attention?" surface — deciding happens via
-			// resolve_import; a decision stays listed here until someone answers it.
+			// the "anything need attention?" surface; deciding happens via `resolve`,
+			// and a decision stays listed here until someone answers it.
 			const pendingSections: string[] = [];
 			const importFindingsList: Finding[] = [];
 			try {
@@ -1477,21 +1447,18 @@ export function registerLibrarianTools(
 	);
 
 	// ---------- search_pages ----------
-	// Names ITSELF in its own description, and says when to reach for it. A tool an
-	// agent hunts for by name mid-task must be findable by that name: `view_page` once
-	// outranked `read_page` in a host tool-search because read_page's own one-liner
-	// never said "read_page", and the agent concluded it could not read pages at all.
+	// Names ITSELF in its own description, and says when to reach for it: a tool an
+	// agent hunts for by name mid-task must be findable by that name (see read_page in
+	// src/tools/core.ts).
 	server.registerTool(
 		'search_pages',
 		{
 			title: 'Search brain pages',
 			annotations: { readOnlyHint: true },
-			// search_pages names itself, and says enough that an agent hunting for it
-			// mid-task finds it — see the read_page/view_page note in CLAUDE.md. It also
-			// states that a question works, because the previous engine's inability to
-			// answer one is the habit a model arrives with.
+			// It also states that a question works, since a model tends to arrive
+			// assuming search takes keywords only.
 			description:
-				'search_pages: full-text search across a brain\'s wiki pages, case-insensitive. Takes a phrase, a question, or a single term — the query is split into words and pages are ranked by how many of them they carry, so "who owns the referral program" works as well as "referral". Returns the best matching lines, best page first, each with its page path and line number. By default it searches the brain you are in. Pass scope: "all" to search every brain you can reach in one call, which is how to find something when you are not sure which brain holds it; every result then names the brain it came from. Results from other brains are served from the search index and can lag a very recent edit there; read_page on any hit always returns the authoritative page. Use read_page or view_page to open a page it names.',
+				'search_pages: full-text search across a brain\'s wiki pages, case-insensitive. Takes a phrase, a question, or a single term: the query is split into words and pages are ranked by how many of them they carry, so "who owns the referral program" works as well as "referral". Returns the best matching lines, best page first, each with its page path and line number. By default it searches the brain you are in. Pass scope: "all" to search every brain you can reach in one call, which is how to find something when you are not sure which brain holds it; every result then names the brain it came from. Results from other brains are served from the search index and can lag a very recent edit there; read_page on any hit always returns the authoritative page.',
 			inputSchema: z.object({
 				brain: brainArg,
 				query: z.string().min(2).describe('Text to search for.'),

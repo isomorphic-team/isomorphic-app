@@ -34,7 +34,9 @@ customer's org (see [`adding-brains.md`](adding-brains.md)).
 The customer does this themselves, entirely inside Claude. No operator SQL.
 
 1. **Sign in.** The customer connects to your Worker's URL (`PUBLIC_BASE_URL`) from Claude and
-   signs in (magic-link / SSO). First sign-in gives them a personal Model-A org.
+   signs in (magic-link / SSO). With `AUTO_PROVISION=true`, their first request gives them
+   a personal Model-A org; on an invite-only deployment they need no org of their own for
+   this path.
 2. **Run `create_org` with `github: true`.** ("Create an org for Acme, on our GitHub.")
    The tool returns a
    GitHub App install link carrying a one-time `state` (stashed in `OAUTH_KV`
@@ -54,11 +56,12 @@ The customer does this themselves, entirely inside Claude. No operator SQL.
 
 ### Prerequisites (one-time, on the deployed Worker)
 
-- **`GITHUB_APP_SLUG`** (the App's URL slug, e.g. `isomorphic-mind`) must be set
-  on the Worker. It ships inline in `wrangler.jsonc` `vars`, so it deploys with
-  the Worker on merge to `main` — no separate secret step. (Locally it comes from
-  `.dev.vars`, written by bootstrap.) Without it the tool returns a clear "not
-  configured" error.
+- **`GITHUB_APP_SLUG`** (the App's URL slug, `github.com/apps/<slug>`) must be set
+  on the Worker. It is a plain var in the generated `wrangler.jsonc`, filled by
+  `pnpm setup:config` from `.dev.vars` locally (bootstrap writes it there) and, in
+  `deploy.yml`, from the repository variable **`APP_SLUG`** (GitHub refuses variable
+  names starting with `GITHUB_`). No secret step. Without it `create_org` with
+  `github: true` returns a clear "not configured" error.
 - The App's **Setup URL** must point at `<worker-origin>/github/install-callback`
   (it already does — this is the same route that renders the post-install
   confirmation page).
@@ -91,7 +94,7 @@ What it does that raw SQL can't:
 - Writes three `INSERT OR IGNORE` rows: the `customer` org, the adopted brain
   (if `--repo` given), and a pending **invitation** for the owner. Their next
   authenticated request claims it (`claimPendingInvites`) and drops them into
-  this org instead of minting a personal brain. That holds whether or not they
+  this org instead of minting a personal org. That holds whether or not they
   already have an account, and whether or not `AUTO_PROVISION` is on.
 
 By default it's a **dry run**: it resolves + verifies against GitHub, prints the
@@ -148,8 +151,11 @@ repositories (see [`adding-brains.md`](adding-brains.md)). Model:
 
 - The owner sees their org's brains in `brains` / the switcher, at their
   org role, with no reconnect.
-- Add teammates with `invite_member` (admin+); invites are consumed at first
-  sign-in.
+- Add teammates with `invite_member` (admin+); an invite is claimed on the
+  invitee's next authenticated request, whether or not they already have an
+  account.
+- Brains are private to whoever connected them. Open one to the org, or to
+  particular people, with `share_brain`.
 - Adopt more repos with `connect_brain`; remove one with `disconnect_brain`.
 - Fix a "connected but no pages" repo with `configure_brain` (writes
   `.isomorphic.json`). See [`adding-brains.md`](adding-brains.md).

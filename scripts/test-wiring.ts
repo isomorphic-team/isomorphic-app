@@ -14,6 +14,10 @@
 //
 // `test:wiring` is itself a `test:*` script, so it checks its own wiring too.
 //
+// Before any of that, package.json itself must not repeat a key. JSON.parse keeps the
+// LAST of two identical keys without a word, so a duplicated `test:*` script silently
+// replaces the first definition and every check below reads the survivor.
+//
 // The image pin is here for the same reason: it is a fact stated in two files that
 // nothing enforced. `mcr.microsoft.com/playwright:vX.Y.Z-noble` ships exactly the
 // browser build Playwright X.Y.Z looks for, so bumping the dependency without bumping
@@ -34,6 +38,7 @@ const pkg = JSON.parse(readFileSync(new URL('package.json', root), 'utf8')) as {
 	pnpm?: { overrides?: Record<string, string> };
 };
 const ci = readFileSync(new URL('.github/workflows/ci.yml', root), 'utf8');
+const pkgText = readFileSync(new URL('package.json', root), 'utf8');
 
 // Every workflow, not just ci.yml. A pnpm script named in ANY of them can rot.
 const workflowFiles = readdirSync(new URL('.github/workflows/', root)).filter(
@@ -43,6 +48,68 @@ const workflowFiles = readdirSync(new URL('.github/workflows/', root)).filter(
 import { checker } from './check.ts';
 
 const { check, done } = checker('test-wiring checks');
+
+// ---------- package.json repeats no key ----------
+
+/**
+ * Every key that appears twice in the same JSON object, as `path.key`. A scan over the
+ * raw text rather than a parse, since parsing is exactly what hides the duplicate.
+ * Assumes well-formed JSON (JSON.parse above has already accepted it).
+ */
+function duplicateJsonKeys(text: string): string[] {
+	const dups: string[] = [];
+	// One frame per open container: its path, whether it is an object, the keys seen.
+	const stack: { path: string; isObject: boolean; keys: Set<string> }[] = [];
+	let pendingKey: string | null = null;
+	for (let i = 0; i < text.length; i++) {
+		const c = text[i];
+		if (c === '"') {
+			let j = i + 1;
+			while (text[j] !== '"') j += text[j] === '\\' ? 2 : 1;
+			const str = JSON.parse(text.slice(i, j + 1)) as string;
+			i = j;
+			let k = j + 1;
+			while (/\s/.test(text[k] ?? '')) k++;
+			const top = stack[stack.length - 1];
+			if (text[k] === ':' && top?.isObject) {
+				if (top.keys.has(str)) dups.push(top.path ? `${top.path}.${str}` : str);
+				top.keys.add(str);
+				pendingKey = str;
+			}
+		} else if (c === '{' || c === '[') {
+			const parent = stack[stack.length - 1];
+			const name = pendingKey ?? '';
+			const path = parent?.path ? `${parent.path}.${name}` : name;
+			stack.push({ path, isObject: c === '{', keys: new Set() });
+			pendingKey = null;
+		} else if (c === '}' || c === ']') {
+			stack.pop();
+		} else if (c === ',') {
+			pendingKey = null;
+		}
+	}
+	return dups;
+}
+
+console.log('\npackage.json repeats no key');
+{
+	const dups = duplicateJsonKeys(pkgText);
+	check(
+		'no key appears twice in one object (JSON.parse would keep only the last)',
+		dups.length === 0,
+		`duplicated: ${dups.join(', ')}`
+	);
+	// The scanner itself, so a broken scanner cannot pass by finding nothing anywhere.
+	check(
+		'the scan finds a duplicated script',
+		duplicateJsonKeys('{"scripts": {"test:a": "x", "test:b": "y", "test:a": "z"}}').join() ===
+			'scripts.test:a'
+	);
+	check(
+		'the scan does not confuse the same key in sibling objects',
+		duplicateJsonKeys('{"a": {"k": 1}, "b": {"k": "}\\"{"}, "c": ["k", {"k": 2}]}').length === 0
+	);
+}
 
 const batteries = Object.keys(pkg.scripts).filter((s) => s.startsWith('test:'));
 const aggregate = pkg.scripts.test ?? '';

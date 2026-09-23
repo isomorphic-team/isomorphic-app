@@ -1,5 +1,11 @@
 # Design — brain creation & initialization
 
+Status: **built.** `create_brain` and the create-first-brain state shipped as described here
+(the app's form is `AddBrainView` in `app/views/AddBrainView.tsx`). The deferred access work
+then shipped too, which changed one thing below: new brains are now **private** to their
+creator rather than `visibility='org'` (see
+[`brain-level-permissions.md`](./brain-level-permissions.md)).
+
 Extends [`org-roles-permissions.md`](./org-roles-permissions.md). A deliberately **narrow**
 slice of Phase 8: explicit, named brain creation, and decoupling a session from an
 auto-created brain. **Out of scope on purpose: org/brain membership and access.** The current
