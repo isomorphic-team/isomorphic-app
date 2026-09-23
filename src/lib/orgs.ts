@@ -1383,7 +1383,26 @@ export function chooseBrain(
 				: `No brain matching "${opts.brain}". You have access to: ${names.join(', ')}.`
 		);
 	}
-	return brains.find((b) => b.id === opts.activeBrainId) ?? brains[0];
+	return brains.find((b) => isActiveBrain(b, opts.activeBrainId)) ?? brains[0];
+}
+
+// The two names a resolved brain goes by. `brainId`, its primary key, keys derived
+// state (the content index, the write-retry ledger, usage); `activeBrain.id` is the
+// handle tools and the app pass around. Separate so that changing how a brain is
+// addressed never orphans its index.
+export function brainRefs(b: AccessibleBrain): {
+	brainId: string;
+	activeBrain: { id: string; label: string };
+} {
+	return { brainId: b.brain_id, activeBrain: { id: b.id, label: brainLabel(b) } };
+}
+
+// Whether the caller's active-brain pointer names this brain. The pointer holds a
+// `brain_id`; one written before brains were keyed by id holds "owner/repo", which
+// still matches until the caller next switches.
+export function isActiveBrain(b: AccessibleBrain, pointer: string | undefined): boolean {
+	if (!pointer) return false;
+	return pointer === b.brain_id || pointer === `${b.repo_owner}/${b.repo_name}`;
 }
 
 // The whole org-selection decision for a person, in one function a test can drive

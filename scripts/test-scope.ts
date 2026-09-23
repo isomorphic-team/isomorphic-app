@@ -200,7 +200,7 @@ function contextFor(p: Persona) {
 			// would read as a denial and quietly turn a real gate test into a no-op.
 			config: DEFAULT_BRAIN_CONFIG,
 			db,
-			brainId: 'northwind/main',
+			brainId: 'b-main',
 			activeBrain: { id: 'northwind/main', label: 'Main' }
 		} as BrainContext;
 	};
@@ -951,7 +951,7 @@ console.log('\nThe active brain moves only on an explicit act');
 		'switch_brain moves the pointer',
 		(await allows(lurker, 'switch_brain', { brain: 'other' })) &&
 			moves.length === 1 &&
-			moves[0] === 'northwind/other',
+			moves[0] === 'b-other',
 		JSON.stringify(moves)
 	);
 	moves.length = 0;

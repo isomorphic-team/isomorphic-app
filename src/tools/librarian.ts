@@ -196,7 +196,7 @@ export interface BrainContext {
 // a week later. It is one short line on an operation that is both rare and hard to
 // undo.
 export function landed(ctx: BrainContext, outcome: WriteOutcome, done: string, proposed: string) {
-	const where = `\n\nBrain: ${ctx.activeBrain?.label || ctx.brainId}.`;
+	const where = `\n\nBrain: ${ctx.activeBrain.label || ctx.activeBrain.id}.`;
 	if (!outcome.prUrl) return ok(`${done}${where}`);
 	if (outcome.merged) return ok(`${done} (via PR ${outcome.prUrl})${where}`);
 	const tail = outcome.autoMergeEnabled
@@ -844,7 +844,9 @@ export interface LibrarianDeps {
 }
 
 // Which brains a search runs over. The active brain always leads, so it wins the
-// round-robin under the global cap and reads first in the output.
+// round-robin under the global cap and reads first in the output. `key` is the
+// content-index key (`brain_id`); `handle` is what a hit reports as its brain, the
+// handle a follow-up read_page passes back.
 //
 // Exported only so `pnpm test:search` can call it. This is the function that DECIDES
 // which brains a fan-out reaches, and therefore whose content can appear in one answer;
@@ -852,13 +854,17 @@ export interface LibrarianDeps {
 export async function searchTargets(
 	ctx: BrainContext,
 	deps: LibrarianDeps | undefined
-): Promise<{ id: string; label: string }[]> {
-	const here = { id: ctx.brainId, label: ctx.activeBrain?.label || ctx.brainId };
+): Promise<{ key: string; handle: string; label: string }[]> {
+	const here = {
+		key: ctx.brainId,
+		handle: ctx.activeBrain.id,
+		label: ctx.activeBrain.label || ctx.activeBrain.id
+	};
 	if (!deps?.listBrains) return [here];
 	try {
 		const rest = (await deps.listBrains())
-			.filter((b) => b.id !== here.id)
-			.map((b) => ({ id: b.id, label: brainLabel(b) }));
+			.filter((b) => b.brain_id !== here.key)
+			.map((b) => ({ key: b.brain_id, handle: b.id, label: brainLabel(b) }));
 		return [here, ...rest];
 	} catch {
 		// A search that can still answer for the brain you are IN must not fail because
@@ -1498,7 +1504,7 @@ export function registerLibrarianTools(
 
 			const targets = await searchTargets(ctx, scope === 'all' ? deps : undefined);
 			const wide = targets.length > 1;
-			const labelOf = new Map(targets.map((t) => [t.id, t.label]));
+			const byKey = new Map(targets.map((t) => [t.key, t]));
 
 			// The per-page cap is what keeps breadth: without it one page with a common
 			// term takes the whole budget and every other page is invisible, which on a
@@ -1509,7 +1515,7 @@ export function registerLibrarianTools(
 			const perBrain = wide ? 15 : opts.max;
 			const found = await searchBrains(
 				db,
-				targets.map((t) => t.id),
+				targets.map((t) => t.key),
 				query,
 				prefix,
 				{ perBrain, total: opts.max, perPage: opts.perPage }
@@ -1523,8 +1529,8 @@ export function registerLibrarianTools(
 				path: h.path,
 				line: h.line,
 				text: h.text,
-				brain: h.brainId,
-				brainLabel: labelOf.get(h.brainId) ?? h.brainId
+				brain: byKey.get(h.brainId)?.handle ?? h.brainId,
+				brainLabel: byKey.get(h.brainId)?.label ?? h.brainId
 			}));
 
 			// Naming the terms is the difference between "the brain does not say" and

@@ -64,8 +64,8 @@ pnpm exec wrangler d1 execute platform-db --remote --command "$BRAIN_SQL"
 ```
 
 - `brain_id` is any unique string (convention: `brain-<repo>`).
-- `repo_owner`/`repo_name` are the GitHub repo coordinates; together they form the
-  canonical `brainId` (`owner/repo`) the content index and tools use.
+- `repo_owner`/`repo_name` are the GitHub repo coordinates. The content index keys on
+  `brain_id`, so it must not change once the brain is in use.
 - `visibility` is `'org'` (every member of the org, at their org role) or `'private'`
   (only org admins and people it is shared with). `connect_brain` writes `'private'` plus
   an admin grant for the caller; a hand-written `'private'` row with no grant is reachable
