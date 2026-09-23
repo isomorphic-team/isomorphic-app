@@ -938,7 +938,7 @@ try {
 	check('delete_page succeeds', !r.isError, r.text);
 	check(
 		'delete_page reports 2 referencing pages',
-		/2 page\(s\) still reference it/.test(r.text),
+		/2 page\(s\) still link to it/.test(r.text),
 		r.text
 	);
 	check('delete_page lists the md linker (jane)', r.text.includes('wiki/people/jane.md'), r.text);

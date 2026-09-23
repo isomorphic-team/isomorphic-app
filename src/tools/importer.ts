@@ -26,6 +26,7 @@ import {
 	type ImportRecord
 } from '../lib/brain-import.ts';
 import { ensureFresh, loadAllFields } from '../lib/brain-index.ts';
+import { commitOpts } from '../lib/change-record.ts';
 import { hasViews, renderViews, buildViewContext } from '../lib/views.ts';
 import { insertLogEntry, todayIso } from '../lib/wiki.ts';
 import { isContentPath, logPathOf } from '../lib/brain-config.ts';
@@ -271,11 +272,7 @@ export function registerImportTools(
 			}
 
 			const outcome = await store.commitOrPR(repoArgs, {
-				writeMode: config.writeMode,
-				defaultBranch: config.defaultBranch,
-				author,
-				autoMerge: config.autoMerge,
-				mergeMethod: config.mergeMethod,
+				...commitOpts(config, author),
 				message: `Import from ${source}: ${summary}\n\nNon-destructive sync — source-owned fields only; deletions proposed, not applied.`,
 				writes,
 				head,
@@ -385,11 +382,7 @@ export function registerImportTools(
 					.filter(Boolean)
 					.join(', ');
 				await store.commitOrPR(repoArgs, {
-					writeMode: config.writeMode,
-					defaultBranch: config.defaultBranch,
-					author,
-					autoMerge: config.autoMerge,
-					mergeMethod: config.mergeMethod,
+					...commitOpts(config, author),
 					message: `Record validate decisions: ${summary}`,
 					writes: [{ path: REVIEW_LEDGER_PATH, content: serializeReviewLedger(ledger) }],
 					head,
@@ -494,11 +487,7 @@ export function registerImportTools(
 			}
 
 			const outcome = await store.commitOrPR(repoArgs, {
-				writeMode: config.writeMode,
-				defaultBranch: config.defaultBranch,
-				author,
-				autoMerge: config.autoMerge,
-				mergeMethod: config.mergeMethod,
+				...commitOpts(config, author),
 				message: `Resolve import decisions (${source}): ${p.applied.length} applied`,
 				writes,
 				deletes: p.deletes,

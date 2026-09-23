@@ -30,7 +30,6 @@ import {
 	rewriteMdLinks,
 	rewriteWikiLinks,
 	rebaseMdLinks,
-	insertLogEntry,
 	wikilinkKey,
 	slugOf
 } from '../lib/wiki.ts';
@@ -102,6 +101,12 @@ import { dedupeWrite, writeFingerprint, secondsSince } from '../lib/write-dedupe
 import { d1WriteLedger } from '../lib/write-dedupe-store.ts';
 import { brainLabel, type TenantOpts, type Role, type AccessibleBrain } from '../lib/orgs.ts';
 import { brainArg, fail, ok } from './shared.ts';
+import {
+	commitOpts,
+	changelogWrite,
+	describeChange,
+	truncationNote
+} from '../lib/change-record.ts';
 import {
 	normPagePath,
 	normFolderPath,
@@ -208,12 +213,6 @@ export function landed(ctx: BrainContext, outcome: WriteOutcome, done: string, p
 	return ok(`${proposed} ${tail}${where}`);
 }
 
-function truncationNote(truncated: boolean): string {
-	return truncated
-		? `\n\nNote: this brain has more than ${MAX_SCAN_PAGES} pages; only the first ${MAX_SCAN_PAGES} were scanned.`
-		: '';
-}
-
 // The one write chokepoint for the librarian tools: commitOrPR plus a write-through
 // index update. A direct commit reports the revision that landed, and the bundle
 // already holds the exact content of every page it touched, so the index advances in
@@ -315,24 +314,6 @@ async function guardedWrite<R>(
 		if (entered) throw err;
 		return perform();
 	}
-}
-
-// Does this path touch the tools/ area (a file or a folder under tools/)? Files use
-// the precise isToolPagePath; folder paths (no .md) match any `tools` segment.
-function touchesToolsArea(path: string): boolean {
-	return path.endsWith('.md') ? isToolPagePath(path) : path.split('/').includes('tools');
-}
-
-// A write that adds, renames, or removes a tool page (under tools/) changes the set
-// of registered custom tools. The stateless MCP transport can't push
-// tools/list_changed, so the host only sees the new roster after it re-lists — nudge
-// the user to reconnect. (Editing an existing tool's BODY takes effect on the next
-// call with no reconnect; only add/rename/remove alters the list, i.e.
-// write_page-create / move_page / delete_page.) No-op unless a tool path is involved.
-function toolRosterNote(...paths: string[]): string {
-	return paths.some(touchesToolsArea)
-		? '\n\nHeads up: this changes your custom tools. Reconnect the Isomorphic connector in Claude (Settings → Connectors) so the new tool list is picked up.'
-		: '';
 }
 
 // Fetch only the pages that link to any of `targetPaths`, for repointing links when
@@ -485,39 +466,29 @@ async function createPageWrite(
 		finalFm = patched.frontmatter;
 	}
 	const finalStatus = typeof finalFm.status === 'string' ? finalFm.status : undefined;
-	const statusNote = finalStatus ? ` with status ${finalStatus}` : '';
 	// The snapshot refresh (which may touch the index) and the changelog read are
-	// independent — run them together rather than back to back.
+	// independent, so they run together rather than back to back.
 	const [newContent, log] = await Promise.all([
 		withFreshSnapshots(ctx, target, withFrontmatter(finalFm, provided.body)),
 		store.readFile(repoArgs, logPathOf(config))
 	]);
-	const writes = [{ path: target, content: newContent }];
-	if (log) {
-		writes.push({
-			path: logPathOf(config),
-			content: insertLogEntry(log.content, today, `Created "${finalTitle}" (\`${target}\`).`)
-		});
-	}
-	const outcome = await commitBundle(ctx, {
-		writeMode: config.writeMode,
-		defaultBranch: config.defaultBranch,
-		author,
-		autoMerge: config.autoMerge,
-		mergeMethod: config.mergeMethod,
-		message: `Add ${finalTitle} (${target})\n\nNew page${statusNote}${description ? `: ${description}` : ''}. Logged in the same change.`,
-		writes,
-		head,
-		branchPrefix: 'isomorphic/create',
-		prTitle: `Add ${finalTitle}`,
-		prBody: `Create \`${target}\`${description ? ` — ${description}` : ''}. Proposed via the Isomorphic brain tools.`
+	const rec = describeChange({
+		kind: 'create',
+		path: target,
+		title: finalTitle,
+		status: finalStatus,
+		description
 	});
-	return landed(
-		ctx,
-		outcome,
-		`Created "${finalTitle}" at ${target}${statusNote}. The change was logged.${toolRosterNote(target)}`,
-		`Proposed a new page "${finalTitle}" at ${target}${statusNote}.${toolRosterNote(target)}`
-	);
+	const writes = [{ path: target, content: newContent }];
+	const entry = changelogWrite(config, log, today, rec.bullet);
+	if (entry) writes.push(entry);
+	const outcome = await commitBundle(ctx, {
+		...commitOpts(config, author),
+		...rec.commit,
+		writes,
+		head
+	});
+	return landed(ctx, outcome, rec.done, rec.proposed);
 }
 
 // Update an existing page: preserve+merge frontmatter, bump `updated`, repoint inbound
@@ -646,34 +617,24 @@ async function updatePageWrite(
 	}
 
 	const log = await logPromise;
-	if (log) {
-		const label = newTitle ?? path;
-		const bullet =
-			status && status !== old.frontmatter?.status
-				? `Updated "${label}" (\`${path}\`) — status: ${status}.`
-				: `Updated "${label}" (\`${path}\`).`;
-		writes.push({ path: logPathOf(config), content: insertLogEntry(log.content, today, bullet) });
-	}
+	const rec = describeChange({
+		kind: 'update',
+		path,
+		label: newTitle ?? path,
+		statusChanged: status && status !== old.frontmatter?.status ? status : undefined,
+		retitledFrom: title && oldTitle && title !== oldTitle ? oldTitle : undefined,
+		notes
+	});
+	const entry = changelogWrite(config, log, today, rec.bullet);
+	if (entry) writes.push(entry);
 
 	const outcome = await commitBundle(ctx, {
-		writeMode: config.writeMode,
-		defaultBranch: config.defaultBranch,
-		author,
-		autoMerge: config.autoMerge,
-		mergeMethod: config.mergeMethod,
-		message: `Update ${newTitle ?? path} (${path})${title && oldTitle && title !== oldTitle ? `\n\nRetitled from "${oldTitle}"; inbound wikilinks repointed.` : ''}`,
+		...commitOpts(config, author),
+		...rec.commit,
 		writes,
-		head,
-		branchPrefix: 'isomorphic/update',
-		prTitle: `Update ${newTitle ?? path}`,
-		prBody: `Update \`${path}\`. Proposed via the Isomorphic brain tools.`
+		head
 	});
-	const res = landed(
-		ctx,
-		outcome,
-		`Saved "${newTitle ?? path}". ${notes.length ? notes.join('; ') + '. ' : ''}The change was logged.`,
-		`Proposed an update to "${newTitle ?? path}". ${notes.length ? notes.join('; ') + '. ' : ''}`
-	);
+	const res = landed(ctx, outcome, rec.done, rec.proposed);
 	// The in-client editor (which passes a sha) wants a fresh sha back so it can keep
 	// saving without reopening. Re-read only when the change actually landed on the
 	// branch; an unmerged PR leaves the editor's current sha valid.
@@ -837,40 +798,25 @@ async function moveFolderWrite(
 		}
 	}
 
-	if (log) {
-		writes.push({
-			path: logPathOf(config),
-			content: insertLogEntry(log.content, today, `Moved folder \`${folder}\` to \`${newFolder}\`.`)
-		});
-	}
+	const rec = describeChange({
+		kind: 'move-folder',
+		folder,
+		newFolder,
+		repointed: repointedPages,
+		truncated,
+		keptMarkers: [...supersededScaffolding]
+	});
+	const entry = changelogWrite(config, log, today, rec.bullet);
+	if (entry) writes.push(entry);
 
 	const outcome = await commitBundle(ctx, {
-		writeMode: config.writeMode,
-		defaultBranch: config.defaultBranch,
-		author,
-		autoMerge: config.autoMerge,
-		mergeMethod: config.mergeMethod,
-		message: `Move folder ${folder} -> ${newFolder}\n\nInbound links repointed across ${repointedPages} page(s).`,
+		...commitOpts(config, author),
+		...rec.commit,
 		writes,
 		deletes,
-		head,
-		branchPrefix: 'isomorphic/folder-move',
-		prTitle: `Move folder ${folder} → ${newFolder}`,
-		prBody: `Move folder \`${folder}\` to \`${newFolder}\`; inbound links repointed. Proposed via the Isomorphic brain tools.`
+		head
 	});
-	// Say when this was a MERGE rather than a move into empty space: the destination
-	// already existed, and a marker of the source's was dropped instead of copied.
-	const mergeNote = supersededScaffolding.size
-		? ` Merged into the existing "${newFolder}", which keeps its own ${[...supersededScaffolding]
-				.map((p) => p.split('/').pop())
-				.join(', ')}.`
-		: '';
-	return landed(
-		ctx,
-		outcome,
-		`Moved folder "${folder}" to ${newFolder}.${mergeNote} Links in ${repointedPages} page(s) were repointed; the change was logged.${truncationNote(truncated)}${toolRosterNote(folder, newFolder)}`,
-		`Proposed moving folder "${folder}" to ${newFolder}.${mergeNote} Links in ${repointedPages} page(s) repointed.${truncationNote(truncated)}${toolRosterNote(folder, newFolder)}`
-	);
+	return landed(ctx, outcome, rec.done, rec.proposed);
 }
 
 // The non-markdown file form of move_page: move or rename one blob that isn't a page.
@@ -939,33 +885,24 @@ async function moveFileWrite(
 			repointedPages++;
 		}
 	}
-	if (log) {
-		writes.push({
-			path: logPathOf(config),
-			content: insertLogEntry(log.content, today, `Moved \`${path}\` to \`${newPath}\`.`)
-		});
-	}
+	const rec = describeChange({
+		kind: 'move-file',
+		path,
+		newPath,
+		repointed: repointedPages,
+		truncated
+	});
+	const entry = changelogWrite(config, log, today, rec.bullet);
+	if (entry) writes.push(entry);
 
 	const outcome = await commitBundle(ctx, {
-		writeMode: config.writeMode,
-		defaultBranch: config.defaultBranch,
-		author,
-		autoMerge: config.autoMerge,
-		mergeMethod: config.mergeMethod,
-		message: `Move ${path} -> ${newPath}\n\nRepointed ${repointedPages} page(s).`,
+		...commitOpts(config, author),
+		...rec.commit,
 		writes,
 		deletes: [path],
-		head,
-		branchPrefix: 'isomorphic/move',
-		prTitle: `Move ${path} → ${newPath}`,
-		prBody: `Move \`${path}\` to \`${newPath}\`. Proposed via the Isomorphic brain tools.`
+		head
 	});
-	return landed(
-		ctx,
-		outcome,
-		`Moved "${path}" to ${newPath}. Links in ${repointedPages} page(s) were repointed; the change was logged.${truncationNote(truncated)}`,
-		`Proposed moving "${path}" to ${newPath}; links in ${repointedPages} page(s) repointed.${truncationNote(truncated)}`
-	);
+	return landed(ctx, outcome, rec.done, rec.proposed);
 }
 
 // The folder-path form of delete_page: delete a whole subtree and everything under it.
@@ -993,41 +930,19 @@ async function deleteFileWrite(ctx: BrainContext, head: Head, args: { path: stri
 	const { refs, truncated } = refsRes;
 
 	const today = todayIso();
+	const rec = describeChange({ kind: 'delete-file', path, refs, truncated });
 	const writes: { path: string; content: string }[] = [];
-	if (log) {
-		writes.push({
-			path: logPathOf(config),
-			content: insertLogEntry(log.content, today, `Deleted \`${path}\`.`)
-		});
-	}
+	const entry = changelogWrite(config, log, today, rec.bullet);
+	if (entry) writes.push(entry);
 
 	const outcome = await commitBundle(ctx, {
-		writeMode: config.writeMode,
-		defaultBranch: config.defaultBranch,
-		author,
-		autoMerge: config.autoMerge,
-		mergeMethod: config.mergeMethod,
-		message: `Delete ${path}\n\nDeletion logged.`,
+		...commitOpts(config, author),
+		...rec.commit,
 		writes,
 		deletes: [path],
-		head,
-		branchPrefix: 'isomorphic/delete',
-		prTitle: `Delete ${path}`,
-		prBody: `Delete \`${path}\`. Proposed via the Isomorphic brain tools.`
+		head
 	});
-
-	const refNote = refs.length
-		? `\n\nHeads up — ${refs.length} page(s) still link to it:\n${refs
-				.slice(0, 20)
-				.map((r) => `- ${r.path} (${r.count} link(s))`)
-				.join('\n')}${refs.length > 20 ? `\n…and ${refs.length - 20} more.` : ''}`
-		: '';
-	return landed(
-		ctx,
-		outcome,
-		`Deleted "${path}". The deletion was logged.${refNote}${truncationNote(truncated)}`,
-		`Proposed deleting "${path}".${refNote}${truncationNote(truncated)}`
-	);
+	return landed(ctx, outcome, rec.done, rec.proposed);
 }
 
 async function deleteFolderWrite(
@@ -1058,41 +973,25 @@ async function deleteFolderWrite(
 	const { refs, truncated } = refsRes;
 
 	const today = todayIso();
-	const mdCount = doomedMd.size;
-	const label = `${mdCount} page${mdCount === 1 ? '' : 's'}`;
+	const rec = describeChange({
+		kind: 'delete-folder',
+		folder,
+		pageCount: doomedMd.size,
+		refs,
+		truncated
+	});
 	const writes: { path: string; content: string }[] = [];
-	if (log) {
-		writes.push({
-			path: logPathOf(config),
-			content: insertLogEntry(log.content, today, `Deleted folder \`${folder}\` (${label}).`)
-		});
-	}
+	const entry = changelogWrite(config, log, today, rec.bullet);
+	if (entry) writes.push(entry);
 
 	const outcome = await commitBundle(ctx, {
-		writeMode: config.writeMode,
-		defaultBranch: config.defaultBranch,
-		author,
-		autoMerge: config.autoMerge,
-		mergeMethod: config.mergeMethod,
-		message: `Delete folder ${folder} (${label})\n\nDeletion logged.`,
+		...commitOpts(config, author),
+		...rec.commit,
 		writes,
 		deletes: doomed.map((e) => e.path),
-		head,
-		branchPrefix: 'isomorphic/folder-delete',
-		prTitle: `Delete folder ${folder}`,
-		prBody: `Delete folder \`${folder}\` and its ${label}. Proposed via the Isomorphic brain tools.`
+		head
 	});
-	const refNote = refs.length
-		? `\n\nHeads up — ${refs.length} page(s) elsewhere still link into it:\n${refs
-				.map((r) => `- ${r.path} (${r.count} link(s))`)
-				.join('\n')}`
-		: '';
-	return landed(
-		ctx,
-		outcome,
-		`Deleted folder "${folder}" (${label}). The change was logged.${refNote}${truncationNote(truncated)}${toolRosterNote(folder)}`,
-		`Proposed deleting folder "${folder}" (${label}).${refNote}${truncationNote(truncated)}${toolRosterNote(folder)}`
-	);
+	return landed(ctx, outcome, rec.done, rec.proposed);
 }
 
 // Optional wiring, supplied only where there is more than one brain to search.
@@ -1474,37 +1373,26 @@ export function registerLibrarianTools(
 					content: withFrontmatter(fm, rebaseMdLinks(body, path, newPath))
 				});
 
-				if (log) {
-					const bullet =
-						newTitle !== oldTitle
-							? `Moved "${oldTitle}" to \`${newPath}\` (now "${newTitle}").`
-							: `Moved "${oldTitle}" to \`${newPath}\`.`;
-					writes.push({
-						path: logPathOf(config),
-						content: insertLogEntry(log.content, today, bullet)
-					});
-				}
+				const rec = describeChange({
+					kind: 'move-page',
+					path,
+					newPath,
+					oldTitle,
+					newTitle,
+					repointed: repointedPages,
+					truncated
+				});
+				const entry = changelogWrite(config, log, today, rec.bullet);
+				if (entry) writes.push(entry);
 
 				const outcome = await commitBundle(ctx, {
-					writeMode: config.writeMode,
-					defaultBranch: config.defaultBranch,
-					author,
-					autoMerge: config.autoMerge,
-					mergeMethod: config.mergeMethod,
-					message: `Move ${path} -> ${newPath}\n\nInbound links repointed across ${repointedPages} page(s); logged.`,
+					...commitOpts(config, author),
+					...rec.commit,
 					writes,
 					deletes: [path],
-					head,
-					branchPrefix: 'isomorphic/move',
-					prTitle: `Move ${path} → ${newPath}`,
-					prBody: `Move \`${path}\` to \`${newPath}\`; inbound links repointed. Proposed via the Isomorphic brain tools.`
+					head
 				});
-				return landed(
-					ctx,
-					outcome,
-					`Moved "${oldTitle}" to ${newPath}${newTitle !== oldTitle ? ` and renamed it "${newTitle}"` : ''}. Links in ${repointedPages} page(s) were repointed; the change was logged.${truncationNote(truncated)}${toolRosterNote(path, newPath)}`,
-					`Proposed moving "${oldTitle}" to ${newPath}${newTitle !== oldTitle ? ` (renamed "${newTitle}")` : ''}; links in ${repointedPages} page(s) repointed.${truncationNote(truncated)}${toolRosterNote(path, newPath)}`
-				);
+				return landed(ctx, outcome, rec.done, rec.proposed);
 			});
 		}
 	);
@@ -1560,40 +1448,19 @@ export function registerLibrarianTools(
 				const { refs, truncated } = refsRes;
 
 				const today = todayIso();
+				const rec = describeChange({ kind: 'delete-page', path, title, refs, truncated });
 				const writes: { path: string; content: string }[] = [];
-				if (log) {
-					writes.push({
-						path: logPathOf(config),
-						content: insertLogEntry(log.content, today, `Deleted "${title}" (\`${path}\`).`)
-					});
-				}
+				const entry = changelogWrite(config, log, today, rec.bullet);
+				if (entry) writes.push(entry);
 
 				const outcome = await commitBundle(ctx, {
-					writeMode: config.writeMode,
-					defaultBranch: config.defaultBranch,
-					author,
-					autoMerge: config.autoMerge,
-					mergeMethod: config.mergeMethod,
-					message: `Delete ${title} (${path})\n\nDeletion logged.`,
+					...commitOpts(config, author),
+					...rec.commit,
 					writes,
 					deletes: [path],
-					head,
-					branchPrefix: 'isomorphic/delete',
-					prTitle: `Delete ${title}`,
-					prBody: `Delete \`${path}\`. Proposed via the Isomorphic brain tools.`
+					head
 				});
-
-				const refNote = refs.length
-					? `\n\nHeads up — ${refs.length} page(s) still reference it:\n${refs
-							.map((r) => `- ${r.path} (${r.count} link(s))`)
-							.join('\n')}\nUpdate those pages to remove or repoint the references.`
-					: '';
-				return landed(
-					ctx,
-					outcome,
-					`Deleted "${title}" (${path}). The change was logged.${refNote}${truncationNote(truncated)}${toolRosterNote(path)}`,
-					`Proposed deleting "${title}" (${path}).${refNote}${truncationNote(truncated)}${toolRosterNote(path)}`
-				);
+				return landed(ctx, outcome, rec.done, rec.proposed);
 			});
 		}
 	);

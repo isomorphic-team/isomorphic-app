@@ -28,6 +28,7 @@ import { landed } from './librarian.ts';
 import type { TenantOpts } from '../lib/orgs.ts';
 import { isContentPath, isSourcePath, isToolMaintained, logPathOf } from '../lib/brain-policy.ts';
 import { insertLogEntry, todayIso } from '../lib/wiki.ts';
+import { commitOpts } from '../lib/change-record.ts';
 import {
 	MAX_ATTACHMENT_BYTES,
 	attachmentMarkdown,
@@ -220,11 +221,7 @@ export function registerMediaTools(
 			}
 
 			const outcome = await store.commitOrPR(repoArgs, {
-				writeMode: config.writeMode,
-				defaultBranch: config.defaultBranch,
-				author,
-				autoMerge: config.autoMerge,
-				mergeMethod: config.mergeMethod,
+				...commitOpts(config, author),
 				message: `Attach ${target}${appendedTo ? ` to ${appendedTo}` : ''}\n\n${formatBytes(bytes)} ${mime}${url ? `, fetched from ${url}` : ''}. Logged in the same change.`,
 				writes,
 				head,
