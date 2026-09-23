@@ -16,9 +16,9 @@ CREATE TABLE IF NOT EXISTS orgs (
   org_id           TEXT PRIMARY KEY,          -- our uuid, NOT a GitHub id
   name             TEXT NOT NULL,
   model            TEXT NOT NULL,             -- 'platform' | 'customer' | 'hosted'
-  installation_id  INTEGER NOT NULL,          -- unread; dropped by a later migration
-  brain_owner      TEXT NOT NULL,             -- unread; dropped by a later migration
-  github_org_login TEXT,                      -- unread; dropped by a later migration
+  installation_id  INTEGER NOT NULL,          -- written, never read (see below)
+  brain_owner      TEXT NOT NULL,             -- written, never read
+  github_org_login TEXT,                      -- written, never read
   default_connection_id TEXT,                 -- storage_connections: where its brains live
   created_by       TEXT NOT NULL,             -- app_users.user_id of the owner
   created_at       TEXT NOT NULL DEFAULT (datetime('now')),
@@ -37,16 +37,6 @@ CREATE TABLE IF NOT EXISTS app_users (
 );
 
 CREATE INDEX IF NOT EXISTS app_users_person_idx ON app_users (person_id);
-
--- Unread since GitHub sign-in was removed; dropped by a later migration.
-CREATE TABLE IF NOT EXISTS github_links (
-  github_user_id INTEGER PRIMARY KEY,
-  user_id        TEXT NOT NULL REFERENCES app_users(user_id),
-  github_login   TEXT,
-  created_at     TEXT NOT NULL DEFAULT (datetime('now'))
-);
-
-CREATE INDEX IF NOT EXISTS github_links_user_idx ON github_links (user_id);
 
 -- Membership + role: which users belong to which org.
 CREATE TABLE IF NOT EXISTS memberships (

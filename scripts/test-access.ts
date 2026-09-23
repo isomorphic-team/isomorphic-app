@@ -1246,6 +1246,15 @@ console.log('\nOrgs name their storage: the 0013 backfill');
 		'the tenants table of the removed GitHub sign-in is gone',
 		!pre.prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'tenants'`).get()
 	);
+	pre.exec(at(files.find((f) => f.startsWith('0014'))!));
+	check(
+		'...and 0014 removes its identity bridge, github_links, with its index',
+		!pre
+			.prepare(
+				`SELECT name FROM sqlite_master WHERE name IN ('github_links', 'github_links_user_idx')`
+			)
+			.get()
+	);
 }
 
 console.log('\nDerived state keyed by brain_id: the 0011 re-key');
