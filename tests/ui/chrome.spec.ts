@@ -8,18 +8,14 @@
 // bar, that pressing one arrives, that the row below the trail appears only for the
 // editor, that the trail opens nothing, and that navigation survives an open editor.
 //
-// It also pins the NEGATIVES, which is most of this chrome's history. Every arrangement
-// before this one failed by letting one surface answer two questions: destinations
-// inside the breadcrumb's chevrons, then destinations sharing a run of buttons with the
-// page's own actions, then a ⋯ menu holding both places and a window control. The
-// assertions that a thing is ABSENT are the ones that catch a slide back, so they are
-// here deliberately and are not redundant with the positive ones.
+// It also pins the NEGATIVES. Each surface answers one question, and the failure mode
+// is a surface answering two: destinations inside the breadcrumb, destinations beside
+// the page's own actions, a ⋯ menu mixing places with a window control. The assertions
+// that a thing is ABSENT are what catch that, so they are not redundant with the
+// positive ones.
 //
-// ONE openApp PER TEST, still. The harness now blanks the page before every open, so a
-// second call in one test is no longer the silent trap it was — a hash-only goto is a
-// same-document navigation, and specs were asserting against whatever the previous step
-// had left on screen (see openApp in harness.ts). Splitting is kept anyway: two starting
-// states in one test is two tests' worth of failure to read from one red line.
+// ONE openApp PER TEST: two starting states in one test is two tests' worth of failure
+// to read from one red line.
 import { test, expect, type Page } from '@playwright/test';
 import { openApp, expectView, settle } from './harness.ts';
 

@@ -1,14 +1,13 @@
-// Brain selection tools — the multi-brain surface.
+// Brain selection tools: the multi-brain surface.
 //
 // One connection can reach several brains (your personal brain, team brains, a
 // client brain). `brains` returns the list as data: text the model reasons over, and
 // the `structuredContent` the app's nav switcher reads on every open. It opens no
-// widget. It carried `_meta.ui` until 2026-09-15, and the model's most common reason
-// to call it is "which brains exist?", so nearly every such lookup put a brain list
-// in the chat that nobody had asked to see. The interactive list lives inside the app
-// (the nav switcher and the Manage brains destination), reached through any view
-// tool. `switch_brain` makes one active, so the user can just tell Claude "switch to
-// my Acme brain."
+// widget, because the model's usual reason to call it is "which brains exist?" and a
+// widget would put a brain list in the chat that nobody asked to see. The
+// interactive list lives inside the app (the nav switcher and the Manage brains
+// destination), reached through any view tool. `switch_brain` makes one active, so
+// the user can just tell Claude "switch to my Acme brain."
 //
 // Targeting model (see tenantContext in worker.ts): a bare tool call acts on the
 // caller's ACTIVE brain; any tool may also take a `brain` arg to one-shot a different
@@ -71,8 +70,10 @@ import type { BrainsWire } from '../lib/tool-payloads.ts';
 // installation can reach, check a repo exists before connecting it. None touches a
 // brain's content, so none belongs on BrainStore.
 //
-// Every caller is an org-model tool, and a deployment with no GitHub client has no org
-// model and does not register them (`hasOrgModel` in worker.ts).
+// Every caller resolves through orgContext, which refuses any connection without the
+// org model (AUTH_MODE other than oauth) and otherwise always carries a client. These
+// tools are still registered on single-tenant deployments (the app's nav needs
+// `brains`), so the throw below is a backstop, not the gate.
 function githubClient(ctx: { octokit?: Octokit }): Octokit {
 	if (!ctx.octokit) {
 		throw new Error('This action needs a GitHub-backed deployment (no GitHub client configured).');
@@ -136,17 +137,13 @@ function rowsText(rows: BrainRow[]): string {
 //
 // A CONFIGURED BRAIN MUST COST NOTHING HERE. This runs for every brain the caller
 // manages, on every `brains` call, and the widget makes that call on every open.
-// The first version resolved each brain's context (an installation-token mint and a
-// config read, both GitHub) and then ran `ensureFresh` (a `getHead` per brain, plus
-// an inline reindex for any brain whose branch had moved) BEFORE asking the index
-// whether the brain had pages — so the "cheap for configured brains" it promised
-// never happened. On an account with several brains that was a 17-second call;
-// Anthropic's edge gives up at about 15 and reports a bare 502 (issues #50, #85),
-// the widget's `ensureBrainList` swallows the failure, and everything that rides on
-// the payload (the brain list, `features`, the Open-in-browser control) is missing
-// for that open. Now: one indexed row answers it, with no context, no token and no
-// network. Only a brain with an EMPTY index pays for freshness and the tree scan,
-// because that is the one case where "no pages" might mean "not indexed yet".
+// Resolving each brain's context and running `ensureFresh` first costs a token mint,
+// a config read and a `getHead` per brain; with several brains that passes the
+// host edge's ~15s limit, which reports a bare 502 and leaves the app without its
+// brain list and `features`. So one indexed row answers it, with no context, no
+// token and no network. Only a brain with an EMPTY index pays for freshness and the
+// tree scan, because that is the one case where "no pages" might mean "not indexed
+// yet".
 async function detectRowSetup(
 	db: D1Database,
 	getContext: (opts?: TenantOpts) => Promise<BrainContext>,
@@ -279,8 +276,7 @@ export function registerBrainTools(
 
 	// ---------- brains (the list, as data) ----------
 	// Text for the model and structuredContent for the app's switcher, which calls it
-	// on every open. Also resolves the org first so a freshly-invited user's brain
-	// shows on first open.
+	// on every open.
 	//
 	// Deliberately NOT a widget tool (no `_meta.ui`): see the header. The app still
 	// calls it from inside the widget, where a plain tool result is exactly what the
@@ -290,15 +286,15 @@ export function registerBrainTools(
 		{
 			title: 'Your brains',
 			description:
-				"The knowledge bases (brains) this user can access — personal, team, and client — with the user's role in each and the active one marked. Returns the list as text; opens nothing in the chat. Use to answer 'what brains do I have?' or when YOU need the list before targeting one. Most tools act on the active brain; pass `brain` to any tool to target another, or switch_brain to change the active one. To let the user pick visually, open a brain with browse_brain: the app's nav has the switcher.",
+				"The knowledge bases (brains) this user can access (personal, team, and client), with the user's role in each and the active one marked. Returns the list as text; opens nothing in the chat. Call brains to answer 'what brains do I have?' or when YOU need the list before targeting one.",
 			inputSchema: z.object({}),
 			annotations: { readOnlyHint: true }
 		},
 		async () => {
 			// Org-scope: works with zero brains (renders the empty "create your first
-			// brain" state in the app), so it never resolves a BRAIN — but it resolves the
-			// ORG first so a freshly-invited user's invite is consumed and their brain
-			// shows on the first open. Errors are swallowed for single-tenant /
+			// brain" state in the app), so it never resolves a BRAIN. It resolves the ORG
+			// first so a first-touch user is provisioned their personal org, which is what
+			// that empty state creates into. Errors are swallowed for single-tenant /
 			// non-product connections.
 			try {
 				await orgContext();
@@ -335,7 +331,7 @@ export function registerBrainTools(
 	);
 
 	// ---------- create_brain (editor+) ----------
-	// Stand up a NEW, empty brain (scaffolds a fresh repo) — distinct from connect_brain,
+	// Stand up a NEW, empty brain (scaffolds a fresh repo), distinct from connect_brain,
 	// which adopts an EXISTING repo. Org-scope: works even when the caller has no brain
 	// yet (the "create your first brain" path). Any editor+ in the org can create one.
 	server.registerTool(
@@ -343,14 +339,13 @@ export function registerBrainTools(
 		{
 			title: 'Create a new brain',
 			description:
-				'Create a NEW, empty knowledge base ("brain") with a name the user chooses, and switch to it. Use whenever the user wants to START a new brain / knowledge base / wiki, including their very first one. This SCAFFOLDS a fresh repo; it is different from connect_brain (which adopts an existing GitHub repo). Any editor can create a brain. The new brain is PRIVATE to its creator: use share_brain afterwards to give teammates access, or to make it visible to the whole organization.',
+				'Create a NEW, empty knowledge base ("brain") with a name the user chooses, and switch to it. Call create_brain whenever the user wants to START a new brain / knowledge base / wiki, including their very first one. This SCAFFOLDS a fresh repo; it does not adopt an existing one. Any editor can create a brain. The new brain is PRIVATE to its creator until it is shared.',
 			inputSchema: z.object({
 				name: z
 					.string()
 					.describe('A name for the new brain, e.g. "Personal", "Project Atlas", "Team Wiki".'),
-				// Without this the org was whatever resolution happened to pick first, and a
-				// person in two orgs had no way to say which, including no way to put a brain
-				// in an org that holds none yet, since every other handle is a brain.
+				// Needed for a person in several orgs, and the only way to name an org that
+				// holds no brain yet, since every other handle is a brain.
 				org: z
 					.string()
 					.optional()
@@ -360,8 +355,8 @@ export function registerBrainTools(
 			})
 		},
 		async ({ name, org }) => {
-			// Org-scope + role gate. Rejects the legacy github/static single-tenant paths
-			// ("product accounts only") and callers below `editor`.
+			// Org-scope + role gate. Rejects single-tenant connections ("product
+			// accounts only") and callers below `editor`.
 			let ctx: OrgScope;
 			try {
 				ctx = await orgContext({ requires: 'editor', org });
@@ -396,9 +391,9 @@ export function registerBrainTools(
 				}
 			}
 
-			// PRIVATE BY DEFAULT. A brain you just made is yours until you share it,
-			// in a shared org, defaulting to org-visible published everyone's drafts to
-			// the whole team the moment they were created. The creator gets an explicit
+			// PRIVATE BY DEFAULT. A brain you just made is yours until you share it; in a
+			// shared org, an org-visible default would publish everyone's drafts to the
+			// whole team the moment they were created. The creator gets an explicit
 			// admin grant in the same breath, because in a personal org they are the
 			// only member and would otherwise be relying on the org-admin floor alone;
 			// the explicit row is also what makes them show on the brain's Share list.
@@ -459,7 +454,7 @@ export function registerBrainTools(
 		{
 			title: 'Connect a brain to an organization: adopt a repo, or move a brain',
 			description:
-				"Put a brain in an organization you admin. Two uses. ADOPT: pass a GitHub repository that is not a brain yet (it must be under the org's GitHub owner and covered by the org's Isomorphic App installation); call with no `repo` to list the repos that can become brains. MOVE: pass an existing brain (by name or owner/repo) and the `org` to move it to; this changes which organization owns the brain, and so who reaches it through org membership, but never where it is stored, and grants, links and history come with it. A move is two calls: without `confirm: true` it changes nothing and returns a preview naming everyone whose access changes. Adding needs organization admin in the destination; moving also needs it in the brain's current organization. An adopted brain is PRIVATE to whoever connected it, exactly like create_brain: use share_brain afterwards to give teammates access. To rename a brain, use configure_brain.",
+				"Put a brain in an organization you admin. Two uses. ADOPT: pass a GitHub repository that is not a brain yet (it must be under the org's GitHub owner and covered by the org's Isomorphic App installation); call with no `repo` to list the repos that can become brains. MOVE: pass an existing brain (by name or owner/repo) and the `org` to move it to; this changes which organization owns the brain, and so who reaches it through org membership, but never where it is stored, and grants, links and history come with it. A move is two calls: without `confirm: true` it changes nothing and returns a preview naming everyone whose access changes. Adding needs organization admin in the destination; moving also needs it in the brain's current organization. An adopted brain is PRIVATE to whoever connected it until it is shared.",
 			inputSchema: z.object({
 				repo: z
 					.string()
@@ -473,10 +468,8 @@ export function registerBrainTools(
 					.describe(
 						'What to call the brain in the switcher, e.g. "Editorial". Defaults to the repo name for an adopted repo; a moved brain keeps its name unless this is given.'
 					),
-				// Replaces the old `brain` argument, which named the target org by naming a
-				// brain already in it. That could never reach an org holding no brains, which
-				// is exactly the org waiting for its first repo: the chicken-and-egg that
-				// made a freshly connected GitHub org impossible to adopt anything into.
+				// An org handle rather than a brain in it, so an org holding no brains yet
+				// (a freshly connected GitHub org waiting for its first repo) is reachable.
 				org: z
 					.string()
 					.optional()
@@ -588,15 +581,12 @@ export function registerBrainTools(
 				);
 			}
 
-			// PRIVATE BY DEFAULT, the same as create_brain (issue #93). This used to
-			// default to org-wide on the reasoning that adopting is an admin act on a
-			// repo the org already owns. In practice the two tools produce the same
-			// object with opposite defaults, and the adopted repo tends to be the
-			// substantive one: a private GitHub repo came back readable by every org
-			// member, with nothing in the response saying so. Widening on request costs
-			// a share_brain call; widening silently is a disclosure. The adopter gets
-			// the same explicit admin grant the creator does, so they show on the
-			// brain's Share list rather than relying on the org-admin floor alone.
+			// PRIVATE BY DEFAULT, the same as create_brain. Not org-wide, though adopting
+			// is an admin act on a repo the org owns: the adopted repo is often a private
+			// GitHub repo, and widening on request costs a share_brain call while widening
+			// silently is a disclosure. The adopter gets the same explicit admin grant the
+			// creator does, so they show on the brain's Share list rather than relying on
+			// the org-admin floor alone.
 			const newBrainId = brainIdFor(owner, name);
 			await createBrain(ctx.db, {
 				brain_id: newBrainId,
@@ -743,7 +733,7 @@ export function registerBrainTools(
 		{
 			title: 'Configure a brain: rename it, or set its content layout',
 			description:
-				"A brain's own settings. RENAME: pass `name` alone to change what the brain is called; nothing in its repository changes. CONTENT LAYOUT: set up an adopted repo so its pages appear, by writing a .isomorphic.json describing where its content lives; use when a connected brain shows no pages because its markdown isn't under the default 'wiki/' layout. Defaults to indexing the whole repo. If the repo already has a .isomorphic.json, this refuses and shows the current one; pass `overwrite: true` to replace it deliberately. Needs admin on the brain. To move a brain to another organization, use connect_brain.",
+				"A brain's own settings. RENAME: pass `name` alone to change what the brain is called; nothing in its repository changes. CONTENT LAYOUT: set up an adopted repo so its pages appear, by writing a .isomorphic.json describing where its content lives; use when a connected brain shows no pages because its markdown isn't under the default 'wiki/' layout. Defaults to indexing the whole repo. If the repo already has a .isomorphic.json, this refuses and shows the current one; pass `overwrite: true` to replace it deliberately. Needs admin on the brain. configure_brain never moves a brain between organizations.",
 			inputSchema: z.object({
 				brain: z
 					.string()
@@ -790,11 +780,10 @@ export function registerBrainTools(
 				}
 			}
 
-			// A config that exists is a decision somebody made (issue #94). Overwriting
-			// it with a whole-repo default was one call away, and that call is the one
-			// the "needs setup" flag recommends, so a wrong flag turned into a broader
-			// index that pulled raw source files into the content set. Show what is
-			// there and require the replacement to be asked for by name.
+			// A config that exists is a decision somebody made. This call is the one the
+			// "needs setup" flag recommends, so without the guard a wrong flag would
+			// replace it with a whole-repo index. Show what is there and require the
+			// replacement to be asked for by name.
 			const current = await ctx.store.readFile(ctx.repoArgs, CONFIG_PATH);
 			if (current && !overwrite) {
 				return fail(
@@ -872,7 +861,7 @@ export function registerBrainTools(
 		{
 			title: 'Disconnect a brain',
 			description:
-				'Remove a brain from its organization — it stops appearing in the switcher. The GitHub repo and its content are untouched. Admin only; you can’t remove an org’s only brain.',
+				'Remove a brain from its organization: it stops appearing in the switcher, and nobody reaches it through Isomorphic any more. Its repository and content are untouched. If it was the active brain, another of your brains becomes active. Organization admin only; you can’t remove an org’s only brain.',
 			inputSchema: z.object({
 				brain: z.string().describe('Which brain to disconnect (name/handle or owner/repo id).')
 			})

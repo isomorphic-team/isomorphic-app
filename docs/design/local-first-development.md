@@ -115,7 +115,7 @@ Five `.dev.vars` keys become two. Commits are attributed to the human rather tha
 which for a single user is an improvement.
 
 What it does not do: the App-shaped features have no meaning under a token, so
-`connect_github_org`, org provisioning, and the per-tenant installation path do not register.
+`connect_github_org` (now `create_org`), org provisioning, and the per-tenant installation path do not register.
 The precedent is already in the codebase: `FEEDBACK_REPO` unset means `submit_feedback` is never
 registered, rather than registered and only able to apologize. Follow that rule exactly.
 
@@ -199,7 +199,7 @@ Two structural jobs come with it:
   scripts already do to D1), or lift `buildServer` and `tenantContext` into a runtime-neutral
   module. The second is more work and the honest one.
 - **Decide what does not exist locally, explicitly.** `members`, `invite_member`, `share_brain`,
-  `brain_access`, and `connect_github_org` are multi-tenant surfaces with a single local user.
+  `brain_access`, and `connect_github_org` (now `create_org`) are multi-tenant surfaces with a single local user.
   They must not register, per the `FEEDBACK_REPO` rule. `commitOrPR` in `pull-request` mode needs
   a defined local answer rather than an accidental one.
 

@@ -21,10 +21,12 @@
 > The work items below still describe the reasoning; read W2 and W5 as history rather
 > than as a plan.
 
-Status: **partly built**. The two pure engines and their offline runners exist on
-branch `worktree-consolidate-loop` with golden tests wired into CI. Nothing is
-registered as an MCP tool, `validate` does not point at any of it, and the dismissal
-ledger is not persisted to a repo yet. This document is the spec for finishing it.
+Status: **built, on `main`**, in the shape the update above describes. The engines are
+`src/lib/consolidate.ts` and `src/lib/probe.ts` (`pnpm test:consolidate`,
+`pnpm test:probe`); findings and the dismissal ledger (`.isomorphic/review.json`) are
+`src/lib/findings.ts` and `src/lib/advisories.ts`; `validate` reports the findings,
+`resolve` records decisions, and `search_pages` takes `expect`. The rest of this document
+is the original spec, kept as the reasoning.
 
 Related: [`folder-notes-and-okf-conformance.md`](./folder-notes-and-okf-conformance.md)
 (the advisories `validate` already emits), [`brain-seams.md`](./brain-seams.md) (the
@@ -88,9 +90,8 @@ because position is alphabetical.
 
 ## What is already built
 
-**On branch `worktree-consolidate-loop`, not on `main`.** If you are reading this from
-`main`, none of the files in this table exist yet; check the branch out first. All
-pure, all offline, all covered by golden tests wired into `package.json` and `ci.yml`.
+These files are on `main`. All pure, all offline, all covered by golden tests wired into
+`package.json` and `ci.yml`.
 
 | File                            | Exports                                                                                                                              | Test                                |
 | ------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------- |

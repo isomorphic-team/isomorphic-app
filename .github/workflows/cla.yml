@@ -4,7 +4,7 @@ name: CLA
 # the signature in this repo on the `cla-signatures` branch. Once signed, a contributor is
 # never asked again.
 #
-# Setup (one time, before the repo goes public):
+# Setup (one time):
 #   1. Create a fine-grained PAT with `contents: write` on THIS repo only. A PAT is needed
 #      rather than GITHUB_TOKEN because the signature file is committed from a workflow
 #      triggered by a fork's pull request.

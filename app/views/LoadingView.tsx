@@ -8,9 +8,8 @@ import { loadingLines, type LoadingTask, type LoadingFacts } from '../../src/lib
 // which is the pure half and the tested one).
 //
 // The caller's own label goes up FIRST and unchanged, and the rotation only starts
-// after it has had its turn: a load that resolves quickly reads exactly as it did
-// before this existed, and the personality is spent only on waits long enough to feel
-// like waits.
+// after it has had its turn: a load that resolves quickly shows only its label, and
+// the personality is spent only on waits long enough to feel like waits.
 
 // How long the literal label holds before the first swap, and the cadence after it.
 // Long enough to read twice. A line that changes faster than you finish it is a

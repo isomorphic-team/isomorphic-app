@@ -84,10 +84,9 @@ export function isHostDenial(detail: string | undefined): boolean {
 }
 
 // Brains grouped by the org that owns them, in the order the server sent (oldest
-// first), for the two surfaces that list brains: the crumb's brain picker and Manage
-// brains. The org heading is what lets brainLabel drop the "Org — " prefix it used to
-// put on every row of a multi-brain org; it says the org once instead of once per row,
-// and it survives the brains being renamed.
+// first), for the brains list. The org heading says the org once instead of once per
+// row (so brainLabel carries no "Org: " prefix), and it survives the brains being
+// renamed.
 //
 // `org` is null when there is only ONE org to show, whatever its brain count: a heading
 // naming the only org there is disambiguates nothing, and the rule the nav follows is

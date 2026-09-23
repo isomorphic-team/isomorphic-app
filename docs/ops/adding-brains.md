@@ -1,7 +1,7 @@
 # Adding a brain to an org (adopting a repo)
 
 How to register an existing GitHub repo as a **brain** under an org, so it shows up
-in that org's members' `brains` list / the nav switcher.
+in the `brains` list and the app's switcher for the people who can reach it.
 
 > **Prefer the tool.** `connect_brain` (admin+, `src/tools/brains.ts`) does all of
 > this conversationally — it verifies the installation can reach the repo, rejects
@@ -16,11 +16,13 @@ Just two things:
 
 1. a **`brains` row** — `(brain_id, org_id, repo_owner, repo_name, visibility)` linking
    the org to the repo (`src/db/auth-schema.sql`), and
-2. the org's **GitHub App installation being able to read/write that repo**.
+2. a **GitHub App installation able to read/write that repo**: the brain's storage
+   connection (`brains.storage_connection_id`, `src/lib/storage-connections.ts`), or the
+   org's installation when that is NULL.
 
-Multiple brains per org are fully supported — `listAccessibleBrains` (`src/lib/orgs.ts`)
-unions every brain in the orgs a person belongs to. Add the row and it appears in the
-switcher immediately, at the member's org role, **no reconnect**.
+Multiple brains per org are fully supported. `listAccessibleBrains` (`src/lib/orgs.ts`)
+unions every brain a person can reach, and `effectiveBrainRole` decides at what role. Add
+the row and it appears for those people immediately, **no reconnect**.
 
 ## The one hard requirement: installation owner
 
@@ -64,7 +66,10 @@ pnpm exec wrangler d1 execute platform-db --remote --command "$BRAIN_SQL"
 - `brain_id` is any unique string (convention: `brain-<repo>`).
 - `repo_owner`/`repo_name` are the GitHub repo coordinates; together they form the
   canonical `brainId` (`owner/repo`) the content index and tools use.
-- `visibility` is `'org'` (all members) for now.
+- `visibility` is `'org'` (every member of the org, at their org role) or `'private'`
+  (only org admins and people it is shared with). `connect_brain` writes `'private'` plus
+  an admin grant for the caller; a hand-written `'private'` row with no grant is reachable
+  only by org admins until someone shares it (`share_brain`).
 
 ### 4. (Optional) describe the repo's shape with `.isomorphic.json`
 
@@ -82,8 +87,8 @@ auto-routing direct-commit vs PR by branch protection).
 }
 ```
 
-Roles: `content` (editable pages), `source` (append-only evidence, `ingest` writes it),
-`log` (tool-maintained changelog), `system` (out of scope; also the default for any
+Roles: `content` (editable pages), `source` (immutable evidence: read by agents, never
+written by the tools), `log` (tool-maintained changelog), `system` (out of scope; also the default for any
 unmapped path). Longest prefix wins; `"."` maps the whole repo. Optional blocks:
 `"writes": {"mode": "pull-request", "autoMerge": false}` and
 `"index": {"fields": ["type"]}`. The legacy `contentRoots`/`sourceRoots`/`logPath`/
@@ -120,7 +125,9 @@ binding resolves through the org's installation, exactly as before migration 001
 
 ## Notes
 
-- **Roles are per brain via the org.** A member sees every brain in their org at their
-  org role. Per-brain ACLs (`brains.visibility` beyond `'org'`) are a future refinement.
-- **Cross-identity brains** (a repo under a _different_ email's org) need identity
-  linking (multi-brain P2) — not covered here.
+- **Roles are per brain.** An org-visible brain is open to every member at their org
+  role; a private one only to org admins and the people it is shared with, including
+  guests from outside the org. `brain_access` shows who reaches a brain and why.
+- **Cross-identity brains** (a repo under a _different_ email's org) are reached by
+  linking the two addresses to one person (`link_identity`); resolution then unions
+  across both.

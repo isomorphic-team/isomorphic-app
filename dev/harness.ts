@@ -6,13 +6,14 @@
 //   2. Drives it with the REAL host-side bridge (AppBridge from
 //      @modelcontextprotocol/ext-apps) over the REAL PostMessageTransport — the
 //      same machinery claude.ai uses.
-//   3. Answers the app's callback tool calls (read_page / list_pages /
-//      search_pages / edit_page / save_page) with REAL brain content pulled from
-//      the live server.
+//   3. Answers the app's callback tool calls (read_page, list_pages, write_page,
+//      move_page, brains, members, ...) from in-memory fixture brains seeded by
+//      dev/seed.ts, running the real pure engines (views, the access rule, the
+//      usage fold) where the server would.
 //
 // The only thing standing in for claude.ai is this file. The app can't tell the
 // difference: it gets a spec-correct INITIALIZE handshake, a tool result, and
-// live tool responses.
+// answers to every tool call it makes.
 
 import { AppBridge, PostMessageTransport } from '@modelcontextprotocol/ext-apps/app-bridge';
 import type { CallToolResult } from '@modelcontextprotocol/client';
@@ -296,15 +297,15 @@ let connectedAccounts: {
 	{ kind: 'github', is_self: false, github_user_id: 10000001, github_login: 'octodev' },
 	{ kind: 'github', is_self: false, github_user_id: 10000002, github_login: 'octoadmin' }
 ];
-// Data-tool shape (list / unlink): just the fresh accounts array.
+// Data shape (unlink_identity): just the fresh accounts array.
 function connectedResult(msg: string): CallToolResult {
 	return {
 		content: [{ type: 'text', text: msg }],
 		structuredContent: { accounts: connectedAccounts }
 	};
 }
-// Widget shape (view_connected_accounts): the combined Your-settings payload —
-// identity card fields + the connected accounts folded in.
+// Widget shape (connected_accounts): the combined Your-settings payload, the identity
+// card fields plus the connected accounts folded in.
 function connectedSettingsResult(msg: string): CallToolResult {
 	return {
 		content: [{ type: 'text', text: msg }],
@@ -528,7 +529,7 @@ function brainsResult(msg: string, withView: boolean, switched = false): CallToo
 			.map((o) => ({ orgId: o.orgId, orgLabel: o.orgLabel })),
 		// What the server registered. On here so the harness previews the nav with
 		// the Analytics row present; a real deployment sends false unless
-		// USAGE_ANALYTICS is set.
+		// USAGE_ANALYTICS is "true" (the generated config's default).
 		// `webBase` is what a deployment serving the web app sends (webBaseUrl in
 		// src/lib/web-app.ts); it puts the "Open in browser" control in the header.
 		features: { analytics: true, webBase: 'https://brain.example' }
@@ -537,8 +538,8 @@ function brainsResult(msg: string, withView: boolean, switched = false): CallToo
 	if (switched) sc.switched = true;
 	return { content: [{ type: 'text', text: msg }], structuredContent: sc };
 }
-// {id,label} for a brain — the `activeBrain` shape every app-tool result carries so the
-// app's switcher/cache tracks the resolved brain.
+// {id,label} for a brain: the `activeBrain` shape every app-tool result carries so the
+// app's trail and caches track the resolved brain.
 function brainMeta(id: string): { id: string; label: string } {
 	const b = brainsFixture.find((x) => x.id === id);
 	return { id, label: b?.label ?? id };
@@ -586,8 +587,7 @@ function viewCtxFor(pg: Record<string, string>): ViewContext {
 	const byTitle = new Map(pth.map((p) => [titleOf(p, pg[p]).toLowerCase(), p]));
 	const edges: { source: string; target: string; kind: 'md' | 'wiki'; cnt: number }[] = [];
 	// Links to non-page FILES (attachments), kept apart from `edges` exactly as the
-	// index keeps them. The harness used to drop them: its md-link loop skipped
-	// anything not ending in .md, so an image was referenced by nobody here.
+	// index keeps them, so an image shows as referenced by the page that embeds it.
 	const fileEdges: { source: string; target: string; kind: 'md' | 'wiki'; cnt: number }[] = [];
 	for (const p of pth) {
 		const body = stripFrontmatter(pg[p]);
@@ -779,43 +779,6 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
 				}
 			};
 		}
-		case 'create_folder': {
-			const folder = String(args?.path ?? '').replace(/\/+$/, '');
-			if (!folder) return errText('Give a folder path.');
-			if (pth.some((p) => p === `${folder}/.gitkeep` || p.startsWith(`${folder}/`)))
-				return text(`Folder "${folder}" already exists.`);
-			pg[`${folder}/.gitkeep`] = '';
-			return { ...text(`Created folder "${folder}".`), structuredContent: {} };
-		}
-		case 'move_folder': {
-			const folder = String(args?.path ?? '').replace(/\/+$/, '');
-			const parent = folder.includes('/') ? folder.slice(0, folder.lastIndexOf('/')) : '';
-			const nn = String(args?.new_name ?? '').trim();
-			const dest = String(args?.new_path ?? (parent ? `${parent}/${nn}` : nn)).replace(/\/+$/, '');
-			if (!dest) return errText('Give a new folder name.');
-			let moved = 0;
-			for (const p of pth) {
-				if (p.startsWith(`${folder}/`)) {
-					pg[`${dest}${p.slice(folder.length)}`] = pg[p];
-					delete pg[p];
-					moved++;
-				}
-			}
-			if (!moved) return errText(`No folder "${folder}" found.`);
-			return text(`Moved folder "${folder}" to ${dest}.`);
-		}
-		case 'delete_folder': {
-			const folder = String(args?.path ?? '').replace(/\/+$/, '');
-			let removed = 0;
-			for (const p of pth) {
-				if (p.startsWith(`${folder}/`)) {
-					delete pg[p];
-					removed++;
-				}
-			}
-			if (!removed) return errText(`No folder "${folder}" found.`);
-			return text(`Deleted folder "${folder}" (${removed} file(s)).`);
-		}
 		case 'search_pages': {
 			const q = String(args?.query ?? '').toLowerCase();
 			// Mirrors the server: `scope: "all"` reaches every brain the caller can see and
@@ -867,8 +830,8 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
 			};
 		}
 		case 'write_page': {
-			// One create-or-update tool (save_page/create_page were merged away). Preview-only:
-			// mutates the in-memory copy so the round-trip feels real, nothing touches GitHub.
+			// Create-or-update. Preview-only: mutates the in-memory copy so the round-trip
+			// feels real; nothing touches a repo.
 			const p = String(args?.path ?? 'wiki/untitled.md');
 			const exists = pg[p] !== undefined;
 			if (exists && args?.mode === 'create') return errText(`"${p}" already exists.`);
@@ -1016,12 +979,10 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
 				const content = pg[p];
 				let mdCount = 0;
 				let wikiCount = 0;
-				// The REAL classification rule, imported rather than approximated. This
-				// scan used to be a hand-written regex that only counted `.md` targets,
-				// so the preview reported "no page shows this file" for an image that was
-				// plainly on a page — a divergence from prod that manufactured a bug
-				// rather than revealing one. classifyMdLink is what the content index
-				// itself calls; the harness only supplies the page set.
+				// The REAL classification rule, imported rather than approximated:
+				// classifyMdLink is what the content index itself calls, so a file link
+				// counts here exactly as it does in prod. The harness only supplies the
+				// page set.
 				for (const m of content.matchAll(/\]\(([^)]+)\)/g)) {
 					const c = classifyMdLink(p, m[1], DEFAULT_BRAIN_CONFIG, (q) => q in pg);
 					if ((c.kind === 'page' || c.kind === 'file') && c.target === path) mdCount++;
@@ -1245,11 +1206,6 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
 				}
 			};
 		}
-		case 'list_connectable_repos':
-			return {
-				content: [{ type: 'text', text: `${connectableRepos.length} connectable repos.` }],
-				structuredContent: { repos: connectableRepos }
-			};
 		case 'connect_brain': {
 			// Targeted by ORG, never by a brain inside it: an org with no brains has none
 			// to name, and that is exactly the org a first repo is being connected into.
@@ -1413,11 +1369,9 @@ function applyContentHeight(height?: number) {
 	// ONLY inline is content-sized. fullscreen and pip own a fixed window that
 	// presentMode already set, and presentMode clears `height` on every mode change,
 	// so there is nothing for this function to clean up.
-	//
-	// This used to clear the height here instead of returning, which undid pip's 560px
-	// on the first size-changed notification the app sent: the floating window then
-	// grew to content height from its `bottom: 20px` anchor and ran off the top of the
-	// viewport. Caught by the pip visual baseline the first time it was generated.
+	// Clearing the height here instead would undo pip's 560px on the app's first
+	// size-changed notification, and the floating window would grow off the top of the
+	// viewport (the pip visual baseline pins it).
 	if (activeMode !== 'inline') return;
 	if (height == null || !Number.isFinite(height)) return;
 	const slot = document.getElementById('frame-slot')!;
@@ -1502,6 +1456,11 @@ const activityMode = hashMode === 'activity';
 const graphMode = hashMode === 'graph';
 const membersMode = hashMode === 'members';
 const analyticsMode = hashMode === 'analytics';
+// `#brains` is a harness SHORTCUT, not a host path. No widget tool opens on the brains
+// list (`brains` carries no `_meta.ui`); the app reaches it from the trail's brain glyph,
+// which calls `brains` and renders the result. Delivering that same payload as the
+// opening result lands on the same view without the click, which is what the specs that
+// start from the list need. The glyph path itself is chrome.spec's.
 const brainsMode = hashMode === 'brains';
 const settingsMode = hashMode === 'settings';
 const connectedMode = hashMode === 'connected';
@@ -1520,10 +1479,9 @@ const noBrainsMode = hashMode === 'nobrains';
 const coldMode = hashMode === 'cold';
 // `#other-brain` is issue #26: the MODEL opened a brain by name (browse_brain /
 // view_page with `brain:`), so the opening result is about that brain while the
-// connection's active-brain pointer — which the app re-reads through `brains` on every
-// open — still answers with the previous one. The harness deliberately does NOT move
-// its own pointer here, because the real one lags for the same reason: it is written by
-// the request that opened the widget and read by the next one.
+// connection's active-brain pointer, which the app re-reads through `brains` on every
+// open, still names another one. A view never moves the pointer (only switch_brain,
+// create_brain and disconnect_brain do), so the harness leaves its own pointer alone too.
 const otherBrainMode = hashMode === 'other-brain';
 // `#slow-result` and `#pending-input` are the opposite of #cold: a result IS coming, it
 // is just slower than the app's self-boot deadline. A host announces a tool call when it

@@ -3,10 +3,9 @@
 // This is a thin wrapper and is meant to stay one. The local runtime (src/local.ts,
 // `pnpm try`) serves the web shell at `/b/` and the real tool handlers at `/mcp`
 // itself, exactly as the Worker does, so there is no web server here: this script
-// materializes the shared seed onto disk and starts `pnpm try` over it. The first
-// version of it WAS a server (a shell route, a CSRF gate and a proxy to a second
-// process on a second port), which was a second copy of what the runtime already
-// did, plus a race between the two coming up.
+// materializes the shared seed onto disk and starts `pnpm try` over it. A server of
+// its own would be a second copy of the runtime's routes plus a race between the two
+// coming up.
 //
 //   pnpm web:dev              # the three seeded brains, http://127.0.0.1:8788/b/local/demo-brain
 //   pnpm web:dev --reset      # start over from a pristine seed

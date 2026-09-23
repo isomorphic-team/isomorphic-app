@@ -82,7 +82,7 @@ Each of these has broken a deploy.
 **1. `src/lib/` runs on Cloudflare Workers. No `node:*` imports.** The repo ships three programs
 from one `src/`: a Workers MCP server, a Node local runtime, and a Node bootstrap server.
 `src/lib/` is imported by all three, and the Worker is the constraint. `pnpm typecheck` runs
-three tsconfigs to catch a leak, so run it before you push. Node-only code belongs in
+four tsconfigs (node, worker, app, tests) to catch a leak, so run it before you push. Node-only code belongs in
 `src/local/`, `src/bootstrap.ts`, or a Node-only sibling.
 
 **2. Generated files are committed and CI checks they are fresh.** After editing anything in
@@ -115,26 +115,20 @@ Two things this means in practice, both learned the hard way:
   Worker, say), move the rule rather than skipping the test. Most of the pure functions in
   `src/lib/` are there for exactly that reason.
 
-Pure golden tests, no network, all fast. `pnpm test` runs them all.
+The batteries are golden tests: no network, all fast, one `test:*` script each in
+`package.json`, each running a `scripts/test-*.ts` file whose header says what it covers.
+`pnpm test` runs every one of them. Run the one for your area while you work and the whole
+suite before you push.
 
 ```sh
-pnpm test:roundtrip     # editor markdown round-trip (ProseMirror in, identical markdown out)
-pnpm test:views         # derived-views (okf-view) engine
-pnpm test:import        # bulk-import planner
-pnpm test:tools         # brain-authored (user-defined) tool parsing
-pnpm test:patch         # write_page append/edits
-pnpm test:structure     # OKF conformance: granularity, type:, nested frontmatter
-pnpm test:index         # content-index freshness guard (bounded, resumable work per read)
-pnpm test:policy        # the path-policy wire contract between Worker and app
-pnpm test:access        # the per-brain access rule (every input to effectiveBrainRole)
-pnpm test:scope         # which role each tool gates on: brain scope vs org scope
-pnpm test:feedback      # what submit_feedback publishes, and what it redacts
-pnpm test:wiring        # every test:* script is in both package.json's `test` and ci.yml,
-                        # and ci.yml's Playwright image matches the installed Playwright
-
-pnpm typecheck          # all three tsconfigs (node, worker, app)
+pnpm test               # every battery, offline
+pnpm test:structure     # one battery, e.g. OKF conformance
+pnpm typecheck          # all four tsconfigs (node, worker, app, tests)
 pnpm format             # prettier, run before pushing
 ```
+
+`pnpm test:ui` is the one battery that needs a browser (Playwright and Chromium); it skips,
+loudly, when Chromium is absent. [`dev/README.md`](dev/README.md) covers it.
 
 Adding a test means adding it in **both** `package.json`'s `test` script and
 `.github/workflows/ci.yml`, or it runs in exactly one place. `pnpm test:wiring` enforces that.
@@ -167,6 +161,16 @@ pnpm exec tsx scripts/e2e-librarian.ts --github
 It creates a disposable `brain-*-e2e-*` scratch repo, auto-deletes it, and never touches a real
 brain. The assertions are identical in both modes.
 
+## This repository is public
+
+**No customer, client, or personal names, and no real deployment details, anywhere.** That
+means code, comments, tests, fixtures, error strings, docs, commit messages, pull request titles
+and descriptions, and branch names. Deployment details are hostnames, Worker names, App slugs,
+account logins, installation and resource ids, version ids, and the names of real brains or
+repositories. When a comment or a test needs a realistic example, including a retelling of a
+real incident, use a neutral name: `Acme`, `Northwind`, `example-org`. Real infrastructure
+belongs in generated config, environment variables, or the gitignored `/ops/` folder.
+
 ## Making a change
 
 1. **Open an issue first for anything with a design decision in it.** Bug fixes, test additions,
@@ -178,8 +182,13 @@ brain. The assertions are identical in both modes.
    two pull requests.
 4. **Match the surrounding code.** Comment density, naming, and idiom vary by file, and the
    local convention wins over any global preference. The codebase comments _why_, not _what_.
-5. **Update `CLAUDE.md` when you change an invariant.** If your change makes a sentence in there
-   wrong, fix the sentence in the same pull request.
+   Write the current fact, not the story: a comment or doc says what the code does now, plus
+   at most a line on why the obvious alternative is not used. How it got that way (the first
+   version, the incident, the issue number) goes in the commit message and the pull request.
+5. **Fix the sentences your change makes false, in the same pull request.** That includes
+   `CLAUDE.md`, the `.claude/rules/` files (CI lists the ones that describe the files you
+   touched), the docs, and comments. `pnpm test:docs` fails on paths, symbols, tools and
+   constants the prose names that no longer exist.
 6. **Run `pnpm typecheck && pnpm test && pnpm format`** before pushing.
 7. **Open the pull request.** Fill in the template. CI runs on pull requests from forks and
    needs no secrets. Sign the CLA when the bot asks.
@@ -191,8 +200,8 @@ golden-test cases, especially ones that currently fail; accessibility and keyboa
 app UI; performance work with a number attached; better error messages, particularly ones an LLM
 will read; support for an OKF construct the spec allows and we mishandle.
 
-**Discuss first:** new MCP tools. The tool surface went from 42 to 30 deliberately, and every
-tool costs context in every conversation with every user. The bar is high and the reasoning is
+**Discuss first:** new MCP tools. The tool surface was cut from 42 to 30 deliberately and
+stands at 36 today, and every tool costs context in every conversation with every user. The bar is high and the reasoning is
 in `CLAUDE.md`. Also: new dependencies, schema migrations, and anything that changes what gets
 written into a brain repo.
 

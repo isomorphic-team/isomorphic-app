@@ -1,8 +1,8 @@
 // GitHub OAuth bridge for `@cloudflare/workers-oauth-provider`.
 //
-// This is the `defaultHandler` we hand to the provider. It runs for any
-// non-API request (or API request lacking a valid token). We implement two
-// routes:
+// The upstream sign-in for IDENTITY_MODE=github (the Worker's `identityHandler`
+// routes here for any mode other than `authjs`). It runs for any non-API request
+// (or API request lacking a valid token). We implement two routes:
 //
 //   GET /authorize             — start the dance: parse the inbound OAuth
 //                                request, stash it in OAUTH_KV under a CSRF
@@ -92,7 +92,7 @@ async function finishGithubFlow(env: GithubHandlerEnv, url: URL): Promise<Respon
 		headers: {
 			Accept: 'application/json',
 			'Content-Type': 'application/x-www-form-urlencoded',
-			'User-Agent': 'isomorphic-mind-mcp'
+			'User-Agent': 'isomorphic-oauth'
 		},
 		body: new URLSearchParams({
 			client_id: env.GITHUB_APP_CLIENT_ID,
@@ -112,7 +112,7 @@ async function finishGithubFlow(env: GithubHandlerEnv, url: URL): Promise<Respon
 		headers: {
 			Authorization: `Bearer ${tokenData.access_token}`,
 			Accept: 'application/vnd.github+json',
-			'User-Agent': 'isomorphic-mind-mcp'
+			'User-Agent': 'isomorphic-oauth'
 		}
 	});
 	if (!userRes.ok) {

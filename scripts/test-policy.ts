@@ -1,23 +1,22 @@
-// Golden test for the WIRE CONTRACT between the Worker and the app — pure, no
-// network, no DOM (app/core/store.ts imports only types + brain-policy).
+// Golden test for the app's pure DECISIONS, and the wire contract they read from the
+// Worker. No network, no DOM: it imports app/core/{store,util,nav,menu-placement}.ts
+// directly, which reach only types and pure src/lib code.
 //
-// Two facts ride the same payload, and BOTH have shipped broken by being left off
-// `list_pages`. That tool is the app's own navigation channel: the widget calls it
-// directly (a brain switch re-fetches with it, and the self-boot in connectToHost
-// opens the tree with it), so its result never passes through handleToolResult and
-// is frequently the only thing the app has to go on.
-//
-//   PATH POLICY — the file tree rendering one brain under a DIFFERENT brain's
-//   policy. `brainPolicy` is app-global and was only refreshed by results from the
-//   app tools, so a tree fetched by the widget kept whatever policy was there
-//   before. On a whole-repo brain (`contentRoots: ["."]`) the wiki/ default is
-//   maximally wrong: every folder reads as "no content page could live here" and
-//   vanishes from the tree, and every root page reads as read-only and shows a lock.
-//
-//   BRAIN IDENTITY — the trail's root crumb naming a brain it cannot identify. Every
-//   app tool carries `activeBrain`; list_pages did not, so a self-booted widget drew
-//   the whole tree with `activeBrain` null and the root crumb fell back to the word
-//   "Files", rendering the trail as "Files / Files".
+//   - PATH POLICY on `list_pages`. That tool is the app's own navigation channel (a
+//     brain switch re-fetches with it, and the self-boot opens the tree with it), so
+//     its result never passes through handleToolResult and is often the only thing
+//     the app has to go on. A tree rendered under another brain's policy hides every
+//     folder of a whole-repo brain and locks every root page.
+//   - BRAIN IDENTITY on the same payload, so a self-booted tree can name its brain.
+//   - Which brain the widget SHOWS when a result and the active-brain pointer disagree
+//     (`pickShownBrain`, issue #26).
+//   - What the page viewer may say about its render: the age it reports and what a
+//     refresh may claim (issue #29).
+//   - Whether browse_brain's tree fits inline in a tool result (src/lib/browse.ts).
+//   - The nav's destinations (app/core/nav.ts): which exist for a deployment, and which
+//     view counts as standing on one.
+//   - Where a floating panel opens (app/core/menu-placement.ts).
+//   - The write tools' shared path rules (src/lib/write-target.ts).
 //
 //   pnpm test:policy
 
@@ -221,11 +220,11 @@ console.log('\nbrain identity rides the same payload');
 // ---------------------------------------------------------------------------
 // Which brain the widget is SHOWING (issue #26).
 //
-// The model can aim any view tool at a named brain (`view_page(brain: X)`), and the
-// panel rendered a different one: the crumb, the file tree and the picker's checkmark
-// all followed the CONNECTION's active-brain pointer, which the app re-read on every
-// open and which lags the request that just moved it. So the tool reported one brain
-// while the user was looking at another.
+// The model can aim any view tool at a named brain (`view_page(brain: X)`). A view
+// never moves the connection's active-brain pointer, and the app re-reads that pointer
+// through `brains` on every open, so the two disagree whenever a result names another
+// brain. The crumb, the file tree and the brains list's tick must follow the RESULT,
+// or the tool reports one brain while the user is looking at another.
 // ---------------------------------------------------------------------------
 
 const A = { id: 'acme/brain-acme', label: 'Acme' };
@@ -297,12 +296,10 @@ console.log('\nthe connection’s pointer never overrides the brain on screen');
 // ---------------------------------------------------------------------------
 // What the page viewer is allowed to say about its own render (issue #29).
 //
-// A render was a snapshot of a page that keeps moving, with no control to reload it
-// and nothing recording which version or which moment it came from. Both rules below
-// decide what the reader is TOLD, which is the part that can be wrong in a way no
-// type catches: a control that reports an age reports a false one just as readily as
-// a true one, and a refresh that claims "no change" on a page that did change is
-// worse than the silence it replaced.
+// A render is a snapshot of a page that keeps moving. Both rules below decide what
+// the reader is TOLD, which is the part that can be wrong in a way no type catches: a
+// control that reports an age reports a false one just as readily as a true one, and
+// a refresh that claims "no change" on a page that did change is worse than silence.
 // ---------------------------------------------------------------------------
 
 console.log('\nhow old a render says it is');
@@ -346,9 +343,8 @@ console.log('\nwhat a finished refresh may claim');
 // ---------------------------------------------------------------------------
 // What browse_brain carries (the same issue's second half).
 //
-// It returned every path twice — text plus structuredContent, with a title per page —
-// which on a 556-page brain came to 83,708 characters and was refused as a tool result.
-// The tree now rides along only while it is small; over budget the app fetches it with
+// The tree rides along only while it is small (a whole tree with a title per page can
+// exceed the host's tool-result limit); over budget the app fetches it with
 // list_pages, which is the `else openBrowse()` branch of handleToolResult.
 // ---------------------------------------------------------------------------
 
@@ -404,11 +400,10 @@ console.log('\nbrowse_brain fits in a tool result');
 
 // ---------- the nav's destinations ----------
 //
-// The bar's right-hand cluster and the ⋯ menu are two renderings of ONE list, which is
-// the point of app/core/nav.ts: they used to be two hand-written lists that had already
-// drifted. What is pinned here is the pair of decisions the renderings make no judgement
-// about — which destinations a given deployment actually has, and which view counts as
-// standing on one. A destination offered where its tool is not registered comes back
+// Every rendering of the destinations reads ONE list, app/core/nav.ts. What is pinned
+// here is the pair of decisions the renderings make no judgement about: which
+// destinations a given deployment actually has, and which view counts as standing on
+// one. A destination offered where its tool is not registered comes back
 // "unknown tool" on click, and one that lights up on the wrong view tells the user they
 // are somewhere they are not.
 console.log('\nnav destinations');
@@ -539,10 +534,9 @@ console.log('\nmenu placement');
 // ---------------------------------------------------------------------------
 console.log('\nWhere a write lands, and whether it may (src/lib/write-target.ts)');
 // ---------------------------------------------------------------------------
-// The write tools' path rules, which each tool used to carry its own copy of. The
-// copies had drifted: move_page skipped the editable-content check on its source,
-// renamed a repo-root page to "a.m/slug.md", and neither move nor delete normalized
-// a page path the way write_page did.
+// The write tools' path rules, shared by write_page, move_page and delete_page so the
+// three cannot disagree about normalization, the editable-content check, or where a
+// rename lands.
 {
 	check(
 		'normPagePath: trims and strips leading slashes',

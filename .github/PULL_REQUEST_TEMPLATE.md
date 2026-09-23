@@ -20,13 +20,16 @@ about. "Nothing" is a fine answer.
 
 ## Checklist
 
-- [ ] `pnpm typecheck` passes (all three tsconfigs: node, worker, app)
+- [ ] `pnpm typecheck` passes (all four tsconfigs: node, worker, app, tests)
 - [ ] `pnpm test` passes
 - [ ] `pnpm format` run
 - [ ] Ran `pnpm gen:app` if I touched `app/` or anything under `src/lib/` that it imports
 - [ ] Ran `pnpm gen:templates` if I touched `brain-template/`
 - [ ] No `node:*` import added to anything under `src/lib/` (that code runs on Workers)
-- [ ] Updated `CLAUDE.md` if this change makes a statement in it wrong
+- [ ] Fixed any sentence this change makes false: in `CLAUDE.md`, a `.claude/rules/` file (CI
+      lists the ones covering the files touched), a doc, or a comment
+- [ ] No customer, client, or personal names, and no real deployment identifiers, anywhere in
+      the diff, the commit messages, or this description (use `Acme`, `example-org`)
 - [ ] Updated a golden test's expectation, and said below why the old one was wrong, if I
       changed behavior deliberately
 

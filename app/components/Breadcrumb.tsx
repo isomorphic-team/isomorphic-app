@@ -2,37 +2,17 @@
 //
 //   🧠 Team brain / wiki / people / Ada Lovelace
 //
-// Where else you could BE — the file tree, the graph, the activity feed, the sharing
-// panel, the org and account screens — is the RAIL down the left edge (main.tsx). The
-// trail briefly carried those too, as extra rows inside its chevrons, and the two
-// questions blurred: standing on the tree it read "Brain / Files ⌄", a segment naming a
-// view rather than a place, whose picker offered three more views unrelated to the path
-// it was drawn from.
+// Where else you could BE (the file tree, the graph, the activity feed, the sharing
+// panel, the org and account screens) is the RAIL down the left edge (main.tsx). The
+// trail names places; it never names a view or offers one.
 //
-// TWO CONTROLS BECAME ONE. The bar used to open with a brain switcher AND a ⌂ home
-// crumb, which were the same destination twice: the switcher's own "select the active
-// brain" row re-opened its file tree, and ⌂ opened the file tree. Two controls, one
-// place. The brain IS the root of the trail, so it is now the root crumb, and its label
-// goes home exactly as ⌂ did.
+// The brain IS the root of the trail. Its glyph opens the Brains page (which brain) and
+// its label opens that brain's file tree (home).
 //
-// NO CRUMB IS A PICKER ANY MORE.
-//
-// Every segment used to carry one (the VS Code breadcrumb behaviour): label = go there,
-// chevron = the siblings that could have stood in this segment's place. It was a real
-// shortcut and it lost to the ceiling every popover in this bar loses to — a panel
-// hanging off the top row gets the space beneath it and no more, so on a short inline
-// card a folder of any size became a scroll box a row and a half tall. Two answers, both
-// arrived at the same way as the rail's ⋯ before them:
-//
-//   * SIBLINGS moved to the file tree, which is the first item in the rail, shows the
-//     same list with no height limit, and shows the structure around it as well.
-//   * BRAINS moved to the Brains page, which already existed as the switcher's
-//     "bi-modal counterpart" and carries add / share / disconnect besides. The BRAIN
-//     GLYPH goes there — the icon that already meant "brain", carrying the action
-//     rather than a chevron beside it announcing one.
-//
-// What is left is an icon, text, and links. The trail states a location and hands off
-// every list to a screen with room for it.
+// NO CRUMB IS A PICKER. A panel hanging off the top row gets the space beneath it and no
+// more, so on a short inline card any list of siblings or brains becomes a scroll box a
+// row and a half tall. Siblings are the file tree's job and brains are the Brains page's,
+// both of which have room. What is left is an icon, text, and links.
 import type { ComponentChildren } from 'preact';
 import type { View } from '../core/types.ts';
 import { isFolderNoteName } from '../core/util.ts';
@@ -50,7 +30,7 @@ import {
 import { BrainGlyph, ArrowLeftIcon } from '../core/icons.tsx';
 import { crumbCurrent, crumbLink, crumbMeta } from '../ui/typography.ts';
 
-// Wider than the 4px it was, so a crumb and the slash after it never read as one unit.
+// Wide enough that a crumb and the slash after it never read as one unit.
 // The rule the trail follows: tight INSIDE a crumb, loose BETWEEN crumbs (here).
 const CrumbSep = () => <span class="mx-2 shrink-0 text-muted opacity-50">/</span>;
 
@@ -64,24 +44,17 @@ const LEADING_SLOT =
 // ---------- the crumbs ----------
 
 // The root crumb: which brain you are in. Two controls, and they answer the trail's two
-// halves separately — the GLYPH changes which brain, the LABEL opens that brain's file
-// tree (the way home from every view, exactly as ⌂ was).
+// halves separately: the GLYPH changes which brain, the LABEL opens that brain's file
+// tree (the way home from every view).
 //
-// The label NAMES A BRAIN and nothing else. It used to fall back to "Files" — the old
-// ⌂ home button's word, kept when the brain crumb absorbed it — so a brain we could not
-// name rendered the trail as "Files / Files": the root crumb answering with the name of
-// a VIEW, which is the one thing the two halves of this bar exist to keep apart. Every
-// payload that draws brain content now carries `activeBrain` (list_pages included), so
-// this fallback means we genuinely do not know yet, and it says so generically rather
-// than borrowing a destination's name.
+// The label NAMES A BRAIN and nothing else, never a view's name. Every payload that
+// draws brain content carries `activeBrain` (list_pages included), so the fallback
+// means we genuinely do not know yet, and it says so generically.
 function BrainCrumb({ inert }: { inert?: boolean }) {
 	const label = activeBrain?.label ?? (brainList?.length === 0 ? 'No brain' : 'Brain');
-	// THE GLYPH IS THE SWITCHER. It was decoration with a chevron beside it doing this
-	// job, which put two marks on one crumb to say one thing; the icon was already the
-	// mark that means "brain", so it carries the action instead of announcing it twice.
-	//
-	// It also makes the leading slot honest: every trail opens with a control now, the
-	// brain on a brain screen and the back arrow on the ones beside it (LEADING_SLOT).
+	// THE GLYPH IS THE SWITCHER: the mark that means "brain" carries the action. Every
+	// trail opens with a control, the brain on a brain screen and the back arrow on the
+	// ones beside it (LEADING_SLOT).
 	const glyph = (
 		<button
 			type="button"
@@ -111,20 +84,9 @@ function BrainCrumb({ inert }: { inert?: boolean }) {
 			{label}
 		</button>
 	);
-	// SWITCHING BRAINS IS A PAGE, not a popover.
-	//
-	// It was a picker listing every brain grouped by org, each row two lines (name, then
-	// role and setup state). That list is ~300px, and a panel hanging off the top bar can
-	// only have the room beneath it: on a 170px inline card it is clamped to ~130px, so a
-	// person with four brains scrolled a box that showed one and a half of them. The
-	// clamp is not the bug — without it the panel spills past the card and makes the card
-	// itself scroll (ui/Menu.tsx). There is no height at which a floating panel holds this
-	// list, for the same reason the rail's ⋯ could not hold its menu.
-	//
-	// BrainsView is already the page version and calls itself so in its own header: every
-	// brain you can reach, roles, the active one ticked, click to switch. It also carries
-	// what the picker never had room for — add, disconnect, per-brain sharing. So this is
-	// deleting a cramped duplicate rather than building a replacement.
+	// SWITCHING BRAINS IS A PAGE, not a popover: BrainsView lists every brain you can
+	// reach with roles and the active one ticked, plus add, disconnect and sharing. A
+	// floating panel cannot hold that list on a short card (see NO CRUMB IS A PICKER).
 	return (
 		<span class="flex min-w-0 max-w-[44vw] shrink items-center">
 			{glyph}
@@ -134,16 +96,8 @@ function BrainCrumb({ inert }: { inert?: boolean }) {
 }
 
 // One path segment. `last` is the current location, so its label is inert: a crumb must
-// never be a self-link that goes nowhere.
-//
-// NO PICKER. Each of these carried one listing the segment's siblings, which was a real
-// shortcut and lost to the same ceiling everything else in this bar lost to: a panel
-// hanging off the top row gets the space beneath it and no more, so a folder of any size
-// became a scroll box a row and a half tall. A trail is also the wrong host for it — the
-// bar tells you where you are, and browsing what is next to you is the file tree's whole
-// job. Files is the first item in the rail now, shows the same siblings with no height
-// limit, and shows the structure around them as well. This costs one press on a move
-// that used to take none.
+// never be a self-link that goes nowhere. A folder crumb opens the tree revealed at
+// that folder (openFolder). Siblings are the file tree's job, not a picker's.
 function PathCrumb({ seg, path, last }: { seg: string; path: string; last: boolean }) {
 	const label = seg.replace(/\.md$/, '');
 	return (
@@ -190,11 +144,9 @@ function BackCrumb() {
 	);
 }
 
-// NO TALLIES. A crumb names a place; it does not report on it. "Members · 4 people ·
-// 1 invited" and "Manage brains · 3" were counts of what the view below was already
-// showing in full, which is the screen telling you something it is simultaneously
-// showing you. What stays after the · is only ever IDENTITY — which search, which
-// page's history — because that distinguishes one instance of a view from another.
+// NO TALLIES. A crumb names a place; it does not report on it (a count of what the view
+// below already shows in full). What goes after the · is only ever IDENTITY, such as
+// which page's history, because that distinguishes one instance of a view from another.
 //
 // A destination that has no path (Search, Recent changes, Graph, …) still hangs off the
 // brain crumb:
@@ -205,15 +157,6 @@ function BackCrumb() {
 // crumb between the brain and the destination, for a view that was PUSHED from another
 // (← Manage brains / Add a brain): a pushed flow needs a way back to the thing that
 // opened it, not just a way home, and the crumb is where a user looks for it.
-//
-// NO PICKER ON A DESTINATION CRUMB. These segments used to carry one — the chevron on
-// "Files" offered Graph, Recent changes and Sharing — and it was the wrong control in
-// the wrong place. A crumb's chevron answers "what else could this segment have been",
-// which for a path segment is its siblings on disk and for a view is nothing at all: a
-// view has no siblings, it has peers, and peers belong in the bar's own cluster where
-// one press reaches them from anywhere. The trail is location; the cluster is
-// destinations. Path crumbs keep their pickers, which is the question they can actually
-// answer.
 function DestinationCrumb({
 	parent,
 	root = 'brain',
@@ -256,11 +199,10 @@ function DestinationCrumb({
 }
 
 // The trail MIRRORS THE FILE TREE: the brain crumb is the tree's root and every folder
-// the tree shows is a crumb, content roots included. Folder segments open the folder's
-// note (<folder>/index.md) when it has one, else the tree REVEALED at that folder
-// (expanded + highlighted) — a note-less folder still lands you where you clicked. A
-// folder-note page collapses into its folder crumb (wiki/index.md shows as "🧠 / wiki")
-// so the trailing crumb is never a self-link.
+// the tree shows is a crumb, content roots included. A folder crumb opens the tree
+// REVEALED at that folder (expanded + highlighted), whether or not the folder has a
+// note. A folder-note page collapses into its folder crumb (wiki/index.md shows as
+// "🧠 / wiki") so the trailing crumb is never a self-link.
 export function Breadcrumb({ view }: { view: View }) {
 	if (view.kind === 'search')
 		return (
@@ -279,22 +221,14 @@ export function Breadcrumb({ view }: { view: View }) {
 				{view.scopePath && <span class={crumbMeta}> · {view.scopePath}</span>}
 			</DestinationCrumb>
 		);
-	// Graph used to render as a bare brain crumb with nothing after it, on the grounds
-	// that its control sat lit in the bar right beside the trail and would have said the
-	// same thing twice. That control now lives at the far right, and a labelled crumb is
-	// what makes graph a PLACE like the others — one with siblings you can pick from —
-	// rather than the one view whose trail trails off. The page/link tally still lives in
-	// the canvas's own corner.
+	// Labelled like every other destination, so the trail never trails off. The
+	// page/link tally lives in the canvas's own corner.
 	if (view.kind === 'graph')
 		return (
 			<DestinationCrumb>
 				<span class={crumbCurrent}>Graph</span>
 			</DestinationCrumb>
 		);
-	// ORG root, not brain: the roster belongs to the organization the active brain sits
-	// in, and every brain in that org shows the same one. Under a brain crumb it read as
-	// "these people belong to this brain", which is the containment main already removed
-	// from Manage brains and Your settings for exactly the same reason.
 	// More is the one screen that belongs to no single scope: it is the index of both the
 	// org and the account destinations. Any non-brain root gives it the back arrow, which
 	// is what it needs — it sits BESIDE the brain like everything it lists, and a brain
@@ -305,6 +239,8 @@ export function Breadcrumb({ view }: { view: View }) {
 				<span class={crumbCurrent}>More</span>
 			</DestinationCrumb>
 		);
+	// ORG root, not brain: every brain in the org shows the same roster, so a brain
+	// crumb would read as "these people belong to this brain".
 	if (view.kind === 'members')
 		return (
 			<DestinationCrumb root="org">
@@ -315,9 +251,7 @@ export function Breadcrumb({ view }: { view: View }) {
 	// so switching to a sibling brain shows the identical page.
 	//
 	// No window suffix here. The trail says WHERE YOU ARE, and the time range is not
-	// a place: it is the view's own control, which lives in the header's right-hand
-	// slot and shows its own state. A "· 30d" crumb was both the wrong half of the
-	// bar and a second, non-clickable copy of a control that was already there.
+	// a place: it is the view's own control, in the header's right-hand slot.
 	if (view.kind === 'analytics')
 		return (
 			<DestinationCrumb root="org">

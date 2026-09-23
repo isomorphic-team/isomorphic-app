@@ -176,11 +176,9 @@ const MAX_ATTACHMENT_VARIANTS = 50;
 
 // A path nothing occupies yet: `logo.png` -> `logo-2.png` -> `logo-3.png`.
 //
-// Storing an attachment used to overwrite whatever already sat at the path, silently.
-// Two screenshots pasted a moment apart, or two people attaching `diagram.png` to the
-// same page, meant the first file was gone — and because every page linking to it kept
-// linking to the same path, those pages quietly started showing the OTHER picture.
-// Nothing in the transcript said so.
+// Never overwrite what already sits at the path. Two people attaching `diagram.png`
+// to the same page would otherwise lose the first file, and every page linking to it
+// would quietly start showing the OTHER picture.
 //
 // The caller cannot prevent this: only the repo knows what is already there. So the
 // server picks the free name and REPORTS it back, and the app corrects the link it
@@ -206,11 +204,10 @@ export function uniqueAttachmentPath(target: string, taken: (path: string) => bo
 // syntax, relative to the referencing page: nothing here is an Isomorphic extension,
 // so the page still renders correctly on github.com and in any OKF reader.
 //
-// The href comes from wiki.ts's relativeHref rather than a local implementation, and
-// that is load-bearing rather than tidiness. move_page repoints links through
-// rewriteMdLinks, which uses relativeHref; a second function here that formatted the
-// same path differently (a leading "./", say) meant a link silently changed shape the
-// first time its image was moved. The e2e round trip caught exactly that.
+// The href comes from wiki.ts's relativeHref rather than a local implementation:
+// move_page repoints links through rewriteMdLinks, which uses relativeHref, so a
+// second formatter (a leading "./", say) would make a link change shape the first
+// time its image moved.
 export function attachmentMarkdown(pagePath: string, assetPath: string, alt: string): string {
 	const label = alt.replace(/[[\]]/g, '');
 	const href = relativeHref(pagePath, assetPath);
@@ -233,7 +230,7 @@ export function isEmbeddable(path: string): boolean {
 // The rest of this file assumes bytes originate in the app, because a model shown an
 // image holds visual tokens rather than base64. A URL is the exception: the model
 // names a location, the server does the downloading, and the bytes never pass through
-// the model's output. Issue #20 is what this answers.
+// the model's output.
 //
 // Fetching a caller-supplied URL from the server makes the Worker a fetch client for
 // anyone with `editor` on a brain, so the guards below are the security boundary, not

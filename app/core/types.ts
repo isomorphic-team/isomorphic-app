@@ -1,13 +1,13 @@
 // Shared type definitions for the brain viewer/editor app. Types only — no runtime
 // code — so every layer can import from here without pulling in behavior.
 
-// The `View` union is no longer hand-written here: it is DERIVED from the ViewProps
+// The `View` union is not hand-written here: it is DERIVED from the ViewProps
 // interface in view-registry.ts, which each routed view file augments via
 // `declare module`. Re-exported so existing importers (`import type { View }`) are
 // unchanged. (view-registry.ts stays dependency-free, so this re-export is not a cycle.)
 export type { View } from './view-registry.ts';
 
-// The tool payload shapes (rows in a roster, a brain in the switcher, a search hit)
+// The tool payload shapes (rows in a roster, a brain in the brains list, a search hit)
 // are the wire contract with the Worker and live beside their parsers in
 // src/lib/tool-payloads.ts. Re-exported so the app imports one vocabulary.
 import type { GraphNode } from '../../src/lib/tool-payloads.ts';

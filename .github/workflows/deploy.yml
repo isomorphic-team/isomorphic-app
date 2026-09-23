@@ -1,9 +1,9 @@
 name: Deploy Worker
 
 # Auto-deploy the MCP Worker to Cloudflare on every push to main. The Worker's
-# runtime secrets (GitHub App creds, Auth.js/Resend keys, MCP_BEARER_TOKEN, …) are
-# NOT touched by `wrangler deploy` — they were set once via `wrangler secret put`
-# and persist across deploys. CI only needs a CLOUDFLARE_API_TOKEN to authenticate.
+# runtime secrets (GitHub App creds, Auth.js/Resend keys, MCP_BEARER_TOKEN, ...) are
+# NOT touched by this job: they were set once via `wrangler secret put` and persist
+# across versions. CI only needs a CLOUDFLARE_API_TOKEN to authenticate.
 #
 # Setup (one time):
 #   1. Create a USER API token: Cloudflare dashboard → My Profile → API Tokens →
@@ -25,7 +25,7 @@ name: Deploy Worker
 #
 #   2. gh secret set CLOUDFLARE_API_TOKEN --env production
 #      Environment scope, not repository scope: that is what keeps the token
-#      unreachable from any workflow other than this gated job.
+#      unreachable from any workflow other than this job.
 #   3. Only if the token can reach more than one account:
 #      gh secret set CLOUDFLARE_ACCOUNT_ID --env production
 #   4. Record this deployment's identity as repository VARIABLES (not secrets — none
@@ -45,11 +45,11 @@ name: Deploy Worker
 #
 # HOW A MERGE REACHES PRODUCTION
 # ------------------------------
-# This job no longer calls `wrangler deploy`. It uploads a VERSION, checks it, and
-# only then points traffic at it, so that a bad merge can be undone by the pipeline
-# that shipped it:
+# Not `wrangler deploy`, which uploads and serves in one step and leaves nothing to
+# fall back to. This job uploads a VERSION, checks it, and only then points traffic
+# at it, so that a bad merge can be undone by the pipeline that shipped it:
 #
-#   1. apply D1 migrations (schema-first, as before)
+#   1. apply D1 migrations (schema-first)
 #   2. record the currently-live version id, which is the rollback target
 #   3. `versions upload` -> new version, serving no traffic
 #   4. smoke check its preview URL, when Cloudflare issued one, and stop here if it
@@ -73,7 +73,7 @@ name: Deploy Worker
 #
 # THE `production` ENVIRONMENT
 # --------------------------
-# The job runs in the `production` environment, which now does two things:
+# The job runs in the `production` environment, which does two things:
 #
 #   1. Secret scoping - CLOUDFLARE_API_TOKEN lives in this environment rather than at
 #      repository level, so no other workflow can reach it, including one added by a
@@ -81,42 +81,12 @@ name: Deploy Worker
 #   2. Deployment branch policy - deployments are restricted to protected branches,
 #      so a `workflow_dispatch` from a random branch cannot ship.
 #
-# It used to do a third: a required-reviewer rule that held every deploy until a
-# maintainer clicked approve. **That was removed on 2026-08-18.** Merging `main` now
-# ships, with no human step.
-#
-# Why that is safe enough, in the order the arguments actually matter:
-#
-#   - Nothing reaches `main` without a code-owner review. `.github/CODEOWNERS` makes
-#     the maintainer the owner of `*`, and `require_code_owner_reviews` is on, so every
-#     pull request from anyone on any path needs that review before it can merge. That
-#     is the control that keeps outside contributions out of production, and it is
-#     untouched by removing the deploy gate. The gate was asking for a second approval
-#     of code the same person had already approved as a reviewer.
-#   - Nothing reaches `main` on a red or stale check any more, INCLUDING from an admin.
-#     The ruleset "main: required checks are not bypassable" carries an empty
-#     bypass_actors list, so `check` and `cla` must pass and the branch must be up to
-#     date. `enforce_admins` could not do this: it is all-or-nothing and would also
-#     apply the review requirement to the sole code owner, who cannot approve their own
-#     pull request. See docs/ops/repo-protection.md.
-#   - The rollout below checks itself and undoes itself. That covers a version that
-#     fails to boot or fails its OAuth surface. It does NOT cover a merge that is
-#     simply wrong, which is what review is for.
-#
-# To put the gate back, add a required-reviewer rule to the environment:
-#
-#   gh api -X PUT repos/isomorphic-team/isomorphic-app/environments/production \
-#     --input - <<JSON
-#   { "wait_timer": 0, "prevent_self_review": false,
-#     "reviewers": [{"type":"User","id":$(gh api users/isomorphic-12 --jq .id)}],
-#     "deployment_branch_policy": {"protected_branches": true,
-#                                  "custom_branch_policies": false} }
-#   JSON
-#
-# `prevent_self_review` must stay false while there is one maintainer, or nobody can
-# approve a deploy at all. Note that omitting the `reviewers` key does NOT clear an
-# existing rule; pass an explicit empty array. Full reasoning and the rest of the
-# hardening checklist: docs/ops/repo-protection.md
+# There is no required-reviewer rule: merging `main` ships. Review happens before the
+# merge (CODEOWNERS on `*` with code-owner reviews required, and required checks no
+# one can bypass), and the rollout below undoes a version that fails to boot or fails
+# its OAuth surface. It does NOT catch a merge that is simply wrong; review is for
+# that. Protection settings, and how to add a reviewer gate back:
+# docs/ops/repo-protection.md
 
 on:
   push:
@@ -136,7 +106,7 @@ concurrency:
 permissions:
   contents: read
   # Lets the run show up under the repo's Deployments, so there is a history of
-  # what shipped and who approved it.
+  # what shipped.
   deployments: write
 
 jobs:
@@ -144,11 +114,12 @@ jobs:
     runs-on: ubuntu-latest
     # `concurrency: deploy-worker` has cancel-in-progress false, so a job that hangs holds
     # the group and every later merge queues behind it. Bounded well above a normal run,
-    # which is about a minute of work plus however long the environment gate waits.
+    # which is a few minutes of work.
     timeout-minutes: 30
-    # The gate. See the note at the top of this file. `url` makes the deployed
-    # origin a clickable link on the run and in the Deployments tab; it reads the
-    # same variable the Worker is configured with, so the two cannot drift.
+    # Secret scoping and the branch policy; see the note at the top of this file.
+    # `url` makes the deployed origin a clickable link on the run and in the
+    # Deployments tab; it reads the same variable the Worker is configured with, so
+    # the two cannot drift.
     environment:
       name: production
       url: ${{ vars.PUBLIC_BASE_URL }}
@@ -171,7 +142,7 @@ jobs:
       - run: pnpm gen:templates
       - run: pnpm gen:app
 
-      # Gate the deploy on a clean typecheck across all three tsconfigs.
+      # Gate the deploy on a clean typecheck across all four tsconfigs.
       - run: pnpm typecheck
 
       # Skip (green) rather than fail if this repo hasn't been wired up yet. Both the
@@ -187,7 +158,7 @@ jobs:
         run: |
           ready=true
           if [ -z "$CLOUDFLARE_API_TOKEN" ]; then
-            echo "::warning::CLOUDFLARE_API_TOKEN is not set — skipping deploy. Add it in Settings → Secrets and variables → Actions → Secrets."
+            echo "::warning::CLOUDFLARE_API_TOKEN is not set, skipping deploy. Add it as a secret of the production environment (Settings → Environments → production)."
             ready=false
           fi
           if [ -z "$CF_OAUTH_KV_ID" ] || [ -z "$CF_D1_DATABASE_ID" ]; then

@@ -1,7 +1,8 @@
 # Deploying, and undoing a deploy
 
 How a merge to `main` reaches production, what happens when it should not have, and the
-drill to run before the human approval gate comes off.
+drill that proves the rollback works. There is no human approval step: a merge to `main`
+ships.
 
 The workflow is [`.github/workflows/deploy.yml`](../../.github/workflows/deploy.yml); the
 checks it runs are [`scripts/smoke.ts`](../../scripts/smoke.ts), covered offline by
@@ -117,9 +118,9 @@ pnpm exec tsx scripts/smoke.ts https://<production origin>
 and the whole path ran on 2026-08-18 in 43 seconds:
 
 ```
-Rollback target: ff88abe2-84e4-4938-b8fc-91db3503cecf
-Worker Version ID: 6687bc0c-a70d-4a53-813a-88b0875ec606
-Version Preview URL: https://6687bc0c-<worker>.<subdomain>.workers.dev
+Rollback target: <previous version id>
+Worker Version ID: <new version id>
+Version Preview URL: https://<version prefix>-<worker>.<subdomain>.workers.dev
 pre-promotion smoke: All smoke checks passed
 promoted to 100%
 production smoke: All smoke checks passed
@@ -167,7 +168,7 @@ What that did and did not change, including who can still reach production, is i
 
 Every merge to `main` already carries a green `check` context on exactly the content being
 merged: branch protection requires it with `strict: true`, so a pull request must be up to
-date with `main` before it can merge. By the time the deploy runs, 15 golden batteries, both
+date with `main` before it can merge. By the time the deploy runs, 30 golden batteries, both
 end-to-end batteries, the UI suite, and a local migration apply have all passed on that tree.
 The approval click was re-reading code CI had already run.
 

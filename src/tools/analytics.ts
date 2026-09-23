@@ -63,7 +63,7 @@ export function registerAnalyticsTools(
 		{
 			title: 'Organization usage analytics',
 			description:
-				'Show how much the organization is using its brains: how many members were active, reads vs edits over time, a per-brain breakdown, and (for admins) a per-person table including members who have not used it at all. Call `analytics` when the user asks about usage, adoption, engagement, activity levels, who is or is not using the brain, or how a brain is being used over time. Counts activity in Isomorphic only; edits made directly on GitHub are not included (use view_activity for the repository history).',
+				'Show how much the organization is using its brains: how many members were active, reads vs edits over time, a per-brain breakdown, and (for admins) a per-person table including members who have not used it at all. Call `analytics` when the user asks about usage, adoption, engagement, activity levels, who is or is not using the brain, or how a brain is being used over time. Counts activity in Isomorphic only; edits made directly on GitHub are not included.',
 			inputSchema: {
 				days: z
 					.number()

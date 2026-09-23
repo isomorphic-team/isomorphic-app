@@ -145,10 +145,9 @@ export function registerFeedbackTools(
 		{
 			title: 'Send feedback to the Isomorphic maintainers',
 			// Stands alone and names itself, because a host tool-search for "submit_feedback"
-			// or "report a bug" has to land here. See the read_page/view_page note in
-			// CLAUDE.md for what happens when a description only describes its sibling.
+			// or "report a bug" has to land here (see read_page in src/tools/core.ts).
 			description:
-				"submit_feedback sends the user's feedback about Isomorphic itself (a bug, a rough edge, a feature idea) to the maintainers as an issue on the project's public issue tracker. Use it whenever the user reports that something in the brain, the viewer/editor, or these tools is broken, confusing, or missing, and whenever they say to tell the maintainers, file a bug, send feedback, or request a feature. The user needs no GitHub account. The issue is PUBLIC and nothing about their account, email, organization, or brain is attached to it. Calling this WITHOUT `confirm` posts nothing: it returns the exact title and body, which you must show the user before calling again with `confirm: true`. This is for feedback about the Isomorphic product, not for writing notes into the user's own brain, which is write_page.",
+				"submit_feedback sends the user's feedback about Isomorphic itself (a bug, a rough edge, a feature idea) to the maintainers as an issue on the project's public issue tracker. Use it whenever the user reports that something in the brain, the viewer/editor, or these tools is broken, confusing, or missing, and whenever they say to tell the maintainers, file a bug, send feedback, or request a feature. The user needs no GitHub account. The issue is PUBLIC and nothing about their account, email, organization, or brain is attached to it. Calling this WITHOUT `confirm` posts nothing: it returns the exact title and body, which you must show the user before calling again with `confirm: true`. This is for feedback about the Isomorphic product, not for writing notes into the user's own brain.",
 			inputSchema: z.object({
 				kind: z
 					.enum(FEEDBACK_KINDS as unknown as [FeedbackKind, ...FeedbackKind[]])

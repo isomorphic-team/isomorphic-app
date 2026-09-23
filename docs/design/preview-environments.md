@@ -409,10 +409,12 @@ Verified against the Preview URLs docs on 2026-08-10.
   enforces a rule that already exists, but it will produce confusing preview failures when
   someone breaks it. A database per PR was rejected: D1 creation is slow, account-limited, and
   would need a teardown job that is itself a source of failures.
-- **Repo accumulation.** `AUTO_PROVISION=true` means every tester who signs into a preview gets a
-  `brain-<login>` repo created in the throwaway org, permanently. Wants a scheduled cleanup, which
+- **Repo accumulation.** `AUTO_PROVISION=true` gives every tester who signs into a preview an
+  org, and every brain they create there is a repository in the throwaway GitHub org,
+  permanently. Wants a scheduled cleanup, which
   does not exist.
-- **The GitHub App install flow.** `connect_github_org` builds an install URL and GitHub sends the
+- **The GitHub App install flow.** `create_org` with `github: true` (formerly
+  `connect_github_org`) builds an install URL and GitHub sends the
   admin back to the App's fixed Setup URL, which can only be one origin. That flow is testable on
   the `staging` alias and not on per-PR aliases.
 - **Anything a browser test already covers.** This is not a replacement for `test:ui`, which is

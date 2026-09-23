@@ -36,9 +36,10 @@ function setBrowseCache(v: BrowseData | null): void {
 	browseCache = v;
 }
 
-// The active brain (id + label), echoed by every app-tool result so the switcher can
-// show it. The full list is fetched lazily via list_brains (in actions) the first time
-// the switcher needs it — the switcher only appears when there are 2+ brains.
+// The brain the widget is showing (id + label), echoed by every app-tool result so the
+// trail can name it. The full list is fetched once per open via `brains`
+// (ensureBrainList in actions); it backs the trail's label when no brain is known, the
+// manage/share gates, search's widen-to-all offer, and the first-brain create state.
 let activeBrain: { id: string; label: string } | null = null;
 let brainList: BrainRow[] | null = null;
 // The orgs the caller can add a brain to, as the SERVER reports them. Derived from
@@ -47,10 +48,9 @@ let brainList: BrainRow[] | null = null;
 let orgList: OrgTarget[] | null = null;
 // THE one place the widget changes which brain it is showing, and therefore the one
 // place everything scoped to a brain gets dropped: the cached file tree (which also
-// backs folder-note lookup and wikilink resolution) and the path policy. Both used to
-// be cleared by hand in switchBrain alone, so a brain reached any OTHER way — a
-// view_page / browse_brain the MODEL aimed at another brain with `brain:` — left the
-// previous brain's tree in place under the new brain's pages.
+// backs folder-note lookup and wikilink resolution) and the path policy. A brain can be
+// entered from any result, including a view_page / browse_brain the MODEL aimed at
+// another brain with `brain:`, so the drop cannot live in switchBrain alone.
 function setActiveBrain(v: { id: string; label: string } | null): void {
 	if (v && activeBrain && activeBrain.id !== v.id) {
 		browseCache = null;
@@ -65,10 +65,11 @@ function setActiveBrain(v: { id: string; label: string } | null): void {
 // Its `active` field is the USER's default (the active-brain pointer), which is a
 // different question from "which brain is this widget showing". A widget opened by
 // view_page or browse_brain with an explicit `brain:` is showing THAT brain, and the
-// pointer does not move for a view (only switch_brain / create_brain write it), so the
-// brain list the app fetches on every open (ensureBrainList) names a different brain.
-// Adopting it retargeted the crumb, the tree, and every subsequent widget call, while
-// the model reported the brain it actually opened (issue #26).
+// pointer does not move for a view (only switch_brain, create_brain and
+// disconnect_brain write it), so the brain list the app fetches on every open
+// (ensureBrainList) can name a different brain. Adopting it would retarget the crumb,
+// the tree, and every subsequent widget call away from the brain the model opened
+// (issue #26).
 //
 // So the pointer wins only when it is an answer to this question: the widget has no
 // brain of its own yet (the self-boot, where nothing else has said), or the call was a
@@ -136,11 +137,8 @@ function brainArgs(): { brain?: string } {
 // navigation (`confirmLeaveEdit` in actions.ts), which sits below the view layer and
 // cannot import from it.
 //
-// This is what lets the chrome stay live while you edit. The bar used to hide its
-// controls instead, on the reasoning that leaving mid-edit abandons the edit — which
-// was true, and which hiding them never prevented: the breadcrumb sat right beside the
-// hidden controls, still linked, still switching brains. So it cost the user their
-// navigation and protected nothing.
+// This is what lets the chrome stay live while you edit: navigation asks before it
+// abandons typed text, rather than the bar hiding its controls.
 let editDirty = false;
 function setEditDirty(v: boolean): void {
 	editDirty = v;
@@ -346,14 +344,6 @@ function backKind(): View['kind'] | null {
 function isEditablePath(path: string): boolean {
 	return isContentPath(path, brainPolicy);
 }
-
-// (There used to be an `addCtl` handle here, so a list screen could publish its
-// inline composer's open() to the header. Add-shaped actions are pushed VIEWS now —
-// see app/ui/Flow.tsx — so the header just calls the opener directly and nothing has
-// to be registered at mount time. That registration was also a failure mode: a view
-// that imported the binding hook and forgot to CALL it typechecked clean and simply
-// rendered no button. `noUnusedLocals` now catches that shape, but not needing the
-// handle at all is better.)
 
 export {
 	history,

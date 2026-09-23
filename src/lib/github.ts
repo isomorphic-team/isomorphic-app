@@ -100,8 +100,7 @@ export type StaticAuth =
 
 // AUTH_MODE=static is the documented SELF-HOSTING entry point, so these two error
 // messages are the first thing someone standing this up hits when their config is
-// incomplete. They were written inline in a private method on McpSession and had no
-// test at all, which for the errors a stranger reads is the wrong way round.
+// incomplete, which is why the choice lives here where it can be tested.
 //
 // GITHUB_TOKEN wins over the App installation when both are set: it is the simpler
 // path and naming it is the more specific act.

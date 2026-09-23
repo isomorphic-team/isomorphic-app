@@ -4,7 +4,7 @@
 //
 // TWO ERAS, ONE SERVER. A request carrying the 2026-07-28 per-request envelope is
 // answered by the SDK's `createMcpHandler`; anything else is 2025-era traffic and
-// goes to the stateless transport this Worker has always used. `isLegacyRequest`
+// goes to the stateless Streamable HTTP transport. `isLegacyRequest`
 // is the SDK's own classifier, so the split can never disagree with the entry.
 //
 // Why the 2025 leg is not the entry's built-in fallback: that fallback builds its
@@ -58,8 +58,8 @@ const serverFor = new WeakMap<Request, McpServer>();
 
 // One handler per isolate rather than per request: it holds no per-request state,
 // and constructing one in `json` mode logs a warning each time. `json` matches the
-// legacy leg: no tool here emits progress or logs mid-call, and streamed replies
-// are what the host used to tear down before results arrived.
+// legacy leg: no tool here emits progress or logs mid-call, and a host can tear
+// down a long-lived stream before an async result arrives.
 let modern: ReturnType<typeof createMcpHandler> | undefined;
 function modernHandler(): ReturnType<typeof createMcpHandler> {
 	modern ??= createMcpHandler(

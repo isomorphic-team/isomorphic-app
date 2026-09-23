@@ -1,21 +1,22 @@
 -- Product-native identity + org/role model (IDENTITY_MODE=authjs).
 --
--- Apply locally: wrangler d1 execute platform-db --local  --file src/db/auth-schema.sql
--- Apply remote:  wrangler d1 execute platform-db --remote --file src/db/auth-schema.sql
+-- REFERENCE ONLY: the current shape, gathered in one place for reading. The
+-- canonical schema is `migrations/` (wrangler's migrations framework): apply it
+-- locally with `pnpm db:migrate`; the deploy workflow applies it to the remote
+-- database. Never apply this file to a database.
 --
--- NOTE: Auth.js's OWN tables (users, accounts, sessions, verification_tokens)
--- are created/managed by @auth/d1-adapter's `up()` migration — do NOT redefine
--- them here. These are the APP-LEVEL tables layered on top. See
+-- NOTE: Auth.js's OWN tables (users, accounts, sessions, verification_tokens) are
+-- in src/db/authjs-schema.sql; these are the APP-LEVEL tables layered on top. See
 -- docs/design/org-roles-permissions.md.
---
--- Phase status: schema defined; population (orgs/memberships/brains) is Phase 2.
 
--- A customer organization, or an individual's implicit personal org.
+-- An organization: a personal org minted at first sign-in ('platform', Model A), a
+-- customer's own GitHub org ('customer', Model B), or a named team org created on
+-- the platform installation by create_org ('hosted').
 CREATE TABLE IF NOT EXISTS orgs (
   org_id           TEXT PRIMARY KEY,          -- our uuid, NOT a GitHub id
   name             TEXT NOT NULL,
-  model            TEXT NOT NULL,             -- 'platform' (Model A) | 'customer' (Model B)
-  installation_id  INTEGER NOT NULL,          -- platform install (A) or customer install (B)
+  model            TEXT NOT NULL,             -- 'platform' | 'customer' | 'hosted'
+  installation_id  INTEGER NOT NULL,          -- platform install, or the customer's own
   brain_owner      TEXT NOT NULL,             -- GitHub org/login that holds the repos
   github_org_login TEXT,                      -- customer's GitHub org (Model B only)
   created_by       TEXT NOT NULL,             -- app_users.user_id of the owner
@@ -38,7 +39,7 @@ CREATE INDEX IF NOT EXISTS app_users_person_idx ON app_users (person_id);
 
 -- Bridges a legacy GitHub identity (props.gh_user_id) to a product identity, so a
 -- GitHub-mode connection resolves into its owner's linked person. Many GitHub
--- accounts can map to one person. See src/db/migrations/2026-07-15-identity-linking.sql.
+-- accounts can map to one person.
 CREATE TABLE IF NOT EXISTS github_links (
   github_user_id INTEGER PRIMARY KEY,
   user_id        TEXT NOT NULL REFERENCES app_users(user_id),
@@ -59,6 +60,21 @@ CREATE TABLE IF NOT EXISTS memberships (
 
 CREATE INDEX IF NOT EXISTS memberships_user_idx ON memberships (user_id);
 
+-- A storage credential (migration 0010): today one GitHub App installation. A brain's
+-- token is minted from its binding, not from its org, so a brain moved between orgs
+-- keeps the credential its repo is reachable by. owner_org_id NULL = platform-owned;
+-- otherwise it decides which org may list and adopt repos through it.
+CREATE TABLE IF NOT EXISTS storage_connections (
+  connection_id TEXT PRIMARY KEY,           -- e.g. 'github-app:<installation id>'
+  provider      TEXT NOT NULL,              -- 'github'
+  kind          TEXT NOT NULL,              -- 'github-app-installation'
+  external_id   TEXT NOT NULL,              -- the provider's id (installation id)
+  account       TEXT NOT NULL,              -- the account it reaches (GitHub login)
+  owner_org_id  TEXT REFERENCES orgs(org_id),
+  created_at    TEXT NOT NULL DEFAULT (datetime('now')),
+  UNIQUE (provider, kind, external_id)
+);
+
 -- Brains owned by an org (supersedes tenants.brain_*; supports >1 brain/org).
 CREATE TABLE IF NOT EXISTS brains (
   brain_id   TEXT PRIMARY KEY,
@@ -67,10 +83,13 @@ CREATE TABLE IF NOT EXISTS brains (
   repo_name  TEXT NOT NULL,              -- immutable slug (the GitHub repo name)
   name       TEXT,                       -- human display name (user-given); NULL = derive from repo
   created_by TEXT,                       -- app_users.user_id of the creator (audit)
-  visibility TEXT NOT NULL DEFAULT 'org',     -- 'org' (every org member) | 'private' (grants only)
+  visibility TEXT NOT NULL DEFAULT 'org',     -- 'org' (every org member) | 'private' (grants only);
+                                              -- create_brain / connect_brain write 'private'
   created_at TEXT NOT NULL DEFAULT (datetime('now')),
   archived_at TEXT,                      -- set = gone from every listing (existence, not policy)
   read_only  INTEGER NOT NULL DEFAULT 0, -- caps the resolved role at viewer, for everyone
+  storage_connection_id TEXT REFERENCES storage_connections(connection_id),
+                                         -- the credential for this brain; NULL = use the org's
   UNIQUE (repo_owner, repo_name)
 );
 
@@ -91,10 +110,13 @@ CREATE TABLE IF NOT EXISTS brain_memberships (
 
 CREATE INDEX IF NOT EXISTS brain_memberships_user_idx ON brain_memberships (user_id);
 
--- Pending email invitations (accepted → membership row).
+-- Pending email invitations, claimed by claimPendingInvites (src/lib/invites.ts).
+-- brain_id NULL = an org invite (claimed as a membership); set = a brain invite
+-- (claimed as a brain_memberships grant, never a membership; org_id is the brain's org).
 CREATE TABLE IF NOT EXISTS invitations (
   invite_id   TEXT PRIMARY KEY,
   org_id      TEXT NOT NULL REFERENCES orgs(org_id),
+  brain_id    TEXT REFERENCES brains(brain_id),
   email       TEXT NOT NULL,
   role        TEXT NOT NULL,
   invited_by  TEXT NOT NULL,

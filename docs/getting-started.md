@@ -67,9 +67,13 @@ scaffolds a fresh repository, makes it your active brain, and opens it. From the
   the conversation.
 - **"What do I know about X?"** searches it.
 
-If you already have a GitHub repository of markdown you want to use, ask Claude to connect
-it instead (`connect_brain`), which adopts the existing repo rather than scaffolding a new
-one. See [`ops/adding-brains.md`](ops/adding-brains.md).
+If you already have a GitHub repository of markdown you want to use, it has to be reached
+through the GitHub organization that holds it, since your personal organization cannot adopt
+repositories. Ask Claude to create an organization connected to that GitHub organization
+(`create_org` with `github: true`, which has you install the Isomorphic GitHub App there),
+then to connect the repository (`connect_brain`), which adopts it rather than scaffolding a
+new one. See [`ops/onboarding-a-customer-org.md`](ops/onboarding-a-customer-org.md) and
+[`ops/adding-brains.md`](ops/adding-brains.md).
 
 ## Connecting to your own instance
 
@@ -138,8 +142,11 @@ Clear cookies for the origin, or use a private window.
 the protocol exchange is correct. Test the same server against another host (the MCP
 Inspector, VS Code Copilot) to tell a host problem from a server problem.
 
-**Tools fail with a permissions error.** Reads need `viewer`, writes need `editor`. Ask an
-admin of your organization to check your role with the `members` tool.
+**Tools fail with a permissions error.** Reads need `viewer`, writes need `editor`, and
+those roles are per brain: being in the organization does not by itself open a brain, since a
+new brain is private to whoever created it. Ask an admin of that brain to check your access
+with `brain_access` and change it with `share_brain`. `members` shows your role in the
+organization, which is a different question.
 
 ## Where to go next
 

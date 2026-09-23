@@ -9,10 +9,13 @@
 -- After this, from ANY of these logins, listAccessibleBrains over the person's id
 -- set returns the UNION of both identities' brains.
 --
--- Idempotent. Apply the LINK steps to local + remote; run the DESTRUCTIVE cleanup
--- (step 3) ONLY after the code is deployed and the union is verified.
---   wrangler d1 execute platform-db --local  --file src/db/seed-founder-linking.sql
---   wrangler d1 execute platform-db --remote --file src/db/seed-founder-linking.sql
+-- The `link_identity` tool does this through a verified sign-in; this template is
+-- for an operator doing it by hand.
+--
+-- These are DATA rows, not schema: the tables come from `migrations/`. Apply with
+-- `wrangler d1 execute platform-db --local|--remote --file <this file>` after
+-- filling in the placeholders.
+-- Idempotent. Run the DESTRUCTIVE cleanup (step 3) only after the union is verified.
 
 -- 1. One person over both email identities.
 UPDATE app_users SET person_id = 'person-1'
@@ -24,9 +27,9 @@ INSERT OR IGNORE INTO github_links (github_user_id, user_id, github_login) VALUE
  (<GITHUB_USER_ID_1>, '<PRIMARY_USER_ID>', '<GITHUB_LOGIN_1>'),
  (<GITHUB_USER_ID_2>, '<PRIMARY_USER_ID>', '<GITHUB_LOGIN_2>');
 
--- 3. DESTRUCTIVE — run separately, AFTER deploy + verification. Reverts an earlier
---    co-mingling shortcut where a secondary identity was given a direct OWNER
---    membership in the primary's org; that membership is now redundant because
---    linking reaches the org's brains via the primary owner membership. Safe to skip.
+-- 3. DESTRUCTIVE, run separately after verification. Removes a direct OWNER
+--    membership the secondary identity holds in the primary's org, which linking
+--    makes redundant (the person reaches the org through the primary's
+--    membership). Safe to skip.
 -- DELETE FROM memberships
 --  WHERE org_id = 'org-platform' AND user_id = '<SECONDARY_USER_ID>';
