@@ -29,18 +29,13 @@ import { elisionNote, DEFAULT_SEARCH_OPTIONS } from '../lib/search.ts';
 import { tryRenderViews } from '../lib/views.ts';
 import { BRAIN_APP_URI } from './apps.ts';
 import {
-	parseToolDef,
+	planCustomTools,
 	zodShapeFor,
 	fill,
 	isToolPagePath,
 	type CustomToolDef,
 	type OpName
 } from '../lib/custom-tools.ts';
-
-// Keep the tool list from bloating the host's context: every custom tool is
-// tokens on every turn, and too many degrade first-party tool selection. Beyond
-// this, extra tool pages are reported by `validate`, not registered.
-const MAX_CUSTOM_TOOLS = 25;
 
 const ok = (text: string) => ({ content: [{ type: 'text' as const, text }] });
 const fail = (text: string) => ({
@@ -72,34 +67,7 @@ export async function loadCustomToolDefs(ctx: BrainContext): Promise<CustomToolL
 		)
 	);
 
-	const defs: CustomToolDef[] = [];
-	const errors: { sourcePath: string; error: string }[] = [];
-	const seen = new Set<string>();
-	for (const { path, content } of blobs) {
-		if (content === null) continue; // vanished between index and fetch — skip quietly
-		const res = parseToolDef(path, content);
-		if (!res.def) {
-			errors.push({ sourcePath: path, error: res.error });
-			continue;
-		}
-		if (seen.has(res.def.name)) {
-			errors.push({
-				sourcePath: path,
-				error: `duplicate tool name "${res.def.name}" — rename this page.`
-			});
-			continue;
-		}
-		if (defs.length >= MAX_CUSTOM_TOOLS) {
-			errors.push({
-				sourcePath: path,
-				error: `custom-tool cap (${MAX_CUSTOM_TOOLS}) reached — not registered.`
-			});
-			continue;
-		}
-		seen.add(res.def.name);
-		defs.push(res.def);
-	}
-	return { defs, errors };
+	return planCustomTools(blobs);
 }
 
 export function registerCustomTools(
