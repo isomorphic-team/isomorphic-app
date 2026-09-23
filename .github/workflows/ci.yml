@@ -139,6 +139,9 @@ jobs:
       # What CLAUDE.md, the rules files and the reference docs name must exist: paths,
       # symbols, tools, quoted constants, rules globs, design-doc status lines.
       - run: pnpm test:docs
+      # The Claude Code hooks in .claude/settings.json: what each refuses, and that the
+      # settings file still wires every mode the script has.
+      - run: pnpm test:hooks
       # The assertions the deploy runs against a live origin before it decides whether
       # to keep a merge in production. Offline here: driven against stub responses.
       - run: pnpm test:smoke

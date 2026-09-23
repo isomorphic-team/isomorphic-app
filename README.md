@@ -349,9 +349,9 @@ belong to different companies who organize differently. `type:` in frontmatter i
 string, required by OKF, and used to force the "is this a concept or a record" question. A
 folder containing `index.md` **is** that page, which is how directory notes work.
 
-[**`CLAUDE.md`**](CLAUDE.md) is the architecture document. Maintainers keep it current because
-coding agents read it, and it explains why each design is what it is, including the failures
-that produced the rule. Read the relevant section before changing something.
+[**`CLAUDE.md`**](CLAUDE.md) and the subsystem files in [`.claude/rules/`](.claude/rules/) are
+the architecture documents. Maintainers keep them current because coding agents read them, and
+they explain why each design is what it is. Read the relevant one before changing something.
 [`docs/references.md`](docs/references.md) lists the authoritative external sources, which move
 faster than any model's training data.
 

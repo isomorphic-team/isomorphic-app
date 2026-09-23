@@ -23,8 +23,9 @@ about. "Nothing" is a fine answer.
 - [ ] `pnpm typecheck` passes (all four tsconfigs: node, worker, app, tests)
 - [ ] `pnpm test` passes
 - [ ] `pnpm format` run
-- [ ] Ran `pnpm gen:app` if I touched `app/` or anything under `src/lib/` that it imports
-- [ ] Ran `pnpm gen:templates` if I touched `brain-template/`
+- [ ] Ran `pnpm gen:app` if I touched `app/` or anything under `src/lib/` that it imports, and
+      `pnpm gen:templates` if I touched `brain-template/` (a Claude Code session's Stop hook
+      does both)
 - [ ] No `node:*` import added to anything under `src/lib/` (that code runs on Workers)
 - [ ] Fixed any sentence this change makes false: in `CLAUDE.md`, a `.claude/rules/` file (CI
       lists the ones covering the files touched), a doc, or a comment

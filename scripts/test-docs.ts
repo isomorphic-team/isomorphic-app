@@ -1,8 +1,8 @@
 // Golden test for what the prose says about the code. CLAUDE.md, the `.claude/rules/`
-// files, the reference docs, the brain template and every comment and string in `src/`
-// name files, symbols, tools and constants; when the code moves and the prose does not,
-// an agent reading it does the wrong thing with confidence. This checks the claims a
-// machine can check:
+// and `.claude/skills/` files, the reference docs, the brain template and every comment
+// and string in `src/` name files, symbols, tools and constants; when the code moves
+// and the prose does not, an agent reading it does the wrong thing with confidence.
+// This checks the claims a machine can check:
 //
 //   1. a repo path in backticks exists, and a relative markdown link resolves
 //   2. a camelCase / PascalCase / SCREAMING_SNAKE name in backticks is in the code
@@ -10,6 +10,8 @@
 //   4. a quoted constant (`` `NAME` (5000) ``) matches its literal in the source
 //   5. each `.claude/rules/` file has `paths:`, and every glob matches a tracked file
 //   6. each design doc opens with a `Status:` from a fixed set
+//   7. CLAUDE.md stays under its line budget, and each skill names itself and says when
+//      to use it (`name:` matching its folder, and a `description:`)
 //
 // It cannot see a sentence that became false while every name in it still exists; that
 // is what the "fix the sentence in the same change" rule in CLAUDE.md is for. Design
@@ -145,11 +147,18 @@ const git = (args: string[]) =>
 		.split('\n')
 		.filter(Boolean);
 // Tracked plus new-but-unignored, so a file added in this change counts before it is
-// committed. `.claude/rules/` is listed explicitly: a local exclude can hide it.
+// committed. The `.claude/` files are listed explicitly: a local exclude can hide them.
 const files = [
 	...new Set([
 		...git(['ls-files', '--cached', '--others', '--exclude-standard']),
-		...git(['ls-files', '--cached', '--others', '.claude/rules'])
+		...git([
+			'ls-files',
+			'--cached',
+			'--others',
+			'.claude/rules',
+			'.claude/skills',
+			'.claude/settings.json'
+		])
 	])
 ];
 const fileSet = new Set(files);
@@ -187,7 +196,7 @@ const referenceDocs = files.filter(
 		/^(CLAUDE|README|CONTRIBUTING|SECURITY|GOVERNANCE)\.md$/.test(p) ||
 		(/^docs\/[^/]+\.md$/.test(p) && p !== 'docs/roadmap.md') ||
 		/^docs\/ops\/.+\.md$/.test(p) ||
-		/^\.claude\/rules\/.+\.md$/.test(p) ||
+		/^\.claude\/(rules|skills)\/.+\.md$/.test(p) ||
 		/^brain-template\/.+\.md$/.test(p) ||
 		p === 'dev/README.md'
 );
@@ -273,6 +282,25 @@ for (const file of files.filter((p) => /^docs\/design\/.+\.md$/.test(p))) {
 		file,
 		designStatus(read(file)) !== null,
 		'open with `Status: <built | partly built | in implementation | proposed | draft | decided | superseded | abandoned>`'
+	);
+}
+
+// Loaded into every session, so every line spends context in every conversation.
+const CLAUDE_MD_MAX_LINES = 200;
+console.log('\nCLAUDE.md fits its budget, and skills describe themselves');
+const claudeLines = read('CLAUDE.md').trimEnd().split('\n').length;
+check(
+	`CLAUDE.md is at most ${CLAUDE_MD_MAX_LINES} lines`,
+	claudeLines <= CLAUDE_MD_MAX_LINES,
+	`${claudeLines} lines: move detail into a rules file or a skill`
+);
+for (const file of files.filter((p) => /^\.claude\/skills\/[^/]+\/SKILL\.md$/.test(p))) {
+	const front = /^---\n([\s\S]*?)\n---/.exec(read(file))?.[1] ?? '';
+	const name = /^name:\s*(\S+)/m.exec(front)?.[1];
+	check(
+		`${file} has a matching name and a description`,
+		name === file.split('/')[2] && /^description:\s*\S/m.test(front),
+		`name: ${name ?? 'missing'}`
 	);
 }
 

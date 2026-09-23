@@ -2,8 +2,8 @@
 
 Follows one request end to end, naming the file at each step.
 
-[`CLAUDE.md`](../CLAUDE.md) is the reference, organized by subsystem. Read this first, then the
-section covering whatever you are changing.
+[`CLAUDE.md`](../CLAUDE.md) and the subsystem files in [`.claude/rules/`](../.claude/rules/) are
+the reference. Read this first, then the rules file covering whatever you are changing.
 
 ## Three programs, one `src/`
 
@@ -99,7 +99,7 @@ every conversation. The Worker applies the same rule to single-user deployments 
 | Changing…                   | Read                                                                              |
 | --------------------------- | --------------------------------------------------------------------------------- |
 | A write tool                | `src/tools/librarian.ts`, then run `pnpm test:e2e-librarian`                      |
-| Markdown parsing or OKF     | `src/lib/wiki.ts`, `CLAUDE.md`'s Open Knowledge Format section                    |
+| Markdown parsing or OKF     | `src/lib/wiki.ts`, `.claude/rules/okf-folder-notes-and-findings.md`               |
 | `okf-view` directives       | `src/lib/views.ts` + `view-directives.ts`, `pnpm test:views`                      |
 | Search ranking              | `src/lib/search.ts`, `pnpm test:search`                                           |
 | Backlinks, the graph, index | `src/lib/brain-index.ts`, `pnpm test:index`                                       |

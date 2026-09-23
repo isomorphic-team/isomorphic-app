@@ -37,7 +37,7 @@
 		"gen:app": "tsx scripts/gen-app.ts",
 		"app:dev": "tsx scripts/app-dev.ts",
 		"web:dev": "tsx scripts/web-dev.ts",
-		"test": "pnpm test:roundtrip && pnpm test:render && pnpm test:web && pnpm test:views && pnpm test:import && pnpm test:tools && pnpm test:patch && pnpm test:structure && pnpm test:consolidate && pnpm test:probe && pnpm test:index && pnpm test:links && pnpm test:search && pnpm test:policy && pnpm test:payloads && pnpm test:record && pnpm test:preamble && pnpm test:protocol && pnpm test:dedupe && pnpm test:appmeta && pnpm test:loading && pnpm test:access && pnpm test:invites && pnpm test:scope && pnpm test:feedback && pnpm test:email && pnpm test:usage && pnpm test:media && pnpm test:docs && pnpm test:smoke && pnpm test:wiring && pnpm test:e2e-librarian && pnpm test:e2e-import && pnpm test:ui",
+		"test": "pnpm test:roundtrip && pnpm test:render && pnpm test:web && pnpm test:views && pnpm test:import && pnpm test:tools && pnpm test:patch && pnpm test:structure && pnpm test:consolidate && pnpm test:probe && pnpm test:index && pnpm test:links && pnpm test:search && pnpm test:policy && pnpm test:payloads && pnpm test:record && pnpm test:preamble && pnpm test:protocol && pnpm test:dedupe && pnpm test:appmeta && pnpm test:loading && pnpm test:access && pnpm test:invites && pnpm test:scope && pnpm test:feedback && pnpm test:email && pnpm test:usage && pnpm test:media && pnpm test:docs && pnpm test:hooks && pnpm test:smoke && pnpm test:wiring && pnpm test:e2e-librarian && pnpm test:e2e-import && pnpm test:ui",
 		"test:wiring": "tsx scripts/test-wiring.ts",
 		"test:e2e-librarian": "tsx scripts/e2e-librarian.ts",
 		"test:e2e-import": "tsx scripts/e2e-import.ts",
@@ -72,6 +72,7 @@
 		"test:email": "tsx scripts/test-email.ts",
 		"test:usage": "tsx scripts/test-usage.ts",
 		"test:docs": "tsx scripts/test-docs.ts",
+		"test:hooks": "tsx scripts/test-hooks.ts",
 		"test:smoke": "tsx scripts/test-smoke.ts",
 		"test:ui": "tsx scripts/test-ui.ts",
 		"ui:baselines": "playwright test --project=visual --update-snapshots=all"

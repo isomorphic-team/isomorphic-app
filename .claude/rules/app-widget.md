@@ -33,8 +33,11 @@ too.
   (`switch_brain`, `create_brain`). `setActiveBrain` is the single seam, and it drops the cached
   tree and path policy of the brain being left. Every widget call passes `brain` explicitly.
 - **The nav learns what exists from `features` on the `brains` payload** (`analytics`,
-  `webBase`), because a widget cannot list the host's tools. Never offer a destination whose
-  click is refused. Destination lists and scopes: `app/core/nav.ts`.
+  `webBase`, `people`), because a widget cannot list the host's tools. Never offer a destination
+  whose click is refused. Destination lists and scopes: `app/core/nav.ts`. Without
+  `features.people` (`multiUser` off) the nav hides Sharing, Members, Analytics, Manage brains,
+  Share, disconnect, Add brain and Connected accounts (`NavCaps`); `pnpm test:policy` pins
+  that, and `pnpm test:scope` pins the matching tool surface.
 - **`browse_brain` returns a SUMMARY** (`src/lib/browse.ts`): the brain's shape as text, and the
   tree inline only under `MAX_INLINE_TREE_CHARS` (measured on the serialized payload). Above it
   the widget fetches the tree with `list_pages`, which the conversation never pays for. Large

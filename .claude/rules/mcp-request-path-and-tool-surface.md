@@ -68,10 +68,12 @@ The ui:// resource's host contract (`prefersBorder: false`, every widget tool's
 ## Tool descriptions
 
 **Each tool's description stands alone and names itself; cross-tool steering lives in
-`SERVER_INSTRUCTIONS`** (hosts load it wholesale). A host's tool search ranks by description
-text, so a description that mentions another tool by name can outrank that tool: `view_page`
-once said "prefer this over read_page" and a search for `read_page` returned `view_page`, and
-the agent concluded it could not read pages. A tool an agent will hunt for mid-task gets a
+`SERVER_INSTRUCTIONS`** (hosts load it wholesale). A convention the model cannot infer is stated
+in three places, in descending reach: server instructions, the tool's own description or
+argument, and `brain-template/AGENTS.md`. A host's tool search ranks by description text, so a
+description that mentions another tool by name can outrank that tool: `view_page` once said
+"prefer this over read_page" and a search for `read_page` returned `view_page`, and the agent
+concluded it could not read pages. A tool an agent will hunt for mid-task gets a
 full description, not one terse line. The comments on those descriptions say so; do not tidy
 them back.
 
