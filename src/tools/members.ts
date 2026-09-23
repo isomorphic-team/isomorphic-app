@@ -48,6 +48,7 @@ import {
 	parseRole
 } from '../lib/orgs.ts';
 import { brainArgFor, fail } from './shared.ts';
+import type { MembersWire } from '../lib/tool-payloads.ts';
 
 // Member tools are org-scoped; the org follows the selected brain, so `brain` picks
 // which brain's org roster to act on (defaults to the active brain).
@@ -85,7 +86,7 @@ function requireOrg(ctx: BrainContext): {
 // renders identically whether it was opened (members) or refreshed after a
 // mutation. `me` lets the UI gate affordances (admin+ manages; you can't edit your
 // own row) without a second round-trip.
-async function roster(ctx: BrainContext, orgId: string, actorUserId: string) {
+async function roster(ctx: BrainContext, orgId: string, actorUserId: string): Promise<MembersWire> {
 	const { orgRole } = requireOrg(ctx);
 	const [members, invites] = await Promise.all([
 		listMembers(ctx.db, orgId),

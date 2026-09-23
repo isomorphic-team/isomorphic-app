@@ -109,6 +109,7 @@ import {
 	nonPageKind,
 	resolveMoveTarget
 } from '../lib/write-target.ts';
+import type { SearchWire } from '../lib/tool-payloads.ts';
 
 // Frontmatter keys are free-form and brain-owned, exactly like folders and
 // `type:` values, so this takes whatever the brain calls things rather than a
@@ -1556,7 +1557,7 @@ export function registerLibrarianTools(
 						pagesMatched: 0,
 						probe,
 						scope: wide ? 'all' : 'brain'
-					}
+					} satisfies SearchWire
 				};
 			}
 			const capped = found.budgetHit ? ` (the top ${opts.max})` : '';
@@ -1585,7 +1586,7 @@ export function registerLibrarianTools(
 					pagesMatched: found.pagesMatched,
 					probe,
 					scope: wide ? 'all' : 'brain'
-				}
+				} satisfies SearchWire
 			};
 		}
 	);

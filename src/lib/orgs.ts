@@ -1329,6 +1329,22 @@ export async function firstSuspendedOrg(db: D1Database, userIds: string[]): Prom
 		.first<Org>();
 }
 
+/**
+ * The active brain after one is disconnected. Removing any other brain leaves the
+ * pointer alone; removing the active one moves it to the first survivor in `before`
+ * (the caller's brains, in the order it lists them), or to nothing when none is left.
+ * disconnect_brain moved the pointer and then reported the brain it had just
+ * deleted as active, so the refreshed list marked no row at all.
+ */
+export function activeAfterDisconnect(
+	activeId: string | undefined,
+	removedId: string,
+	before: string[]
+): string | undefined {
+	if (activeId !== removedId) return activeId;
+	return before.find((id) => id !== removedId);
+}
+
 // Which org an org-scope action lands in. Pure, and split out of the Worker's
 // orgContext so the rule can be tested: it decides where a new brain gets WRITTEN, so
 // the pick must be deterministic for a person in several orgs.

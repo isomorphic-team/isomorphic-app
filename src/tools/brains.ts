@@ -37,7 +37,8 @@ import {
 	setBrainGrant,
 	setBrainName,
 	getBrainByRepo,
-	getOrgById
+	getOrgById,
+	activeAfterDisconnect
 } from '../lib/orgs.ts';
 import { createAndScaffoldBrain } from '../lib/scaffold-core.ts';
 import {
@@ -62,6 +63,7 @@ import {
 } from '../lib/brain-index.ts';
 import { CONFIG_PATH, DEFAULT_BRAIN_CONFIG } from '../lib/brain-config.ts';
 import { fail } from './shared.ts';
+import type { BrainsWire } from '../lib/tool-payloads.ts';
 
 // The GitHub client, for the three operations in this file that are GitHub as a
 // platform rather than a brain as storage: create a repository, list the repos an
@@ -267,7 +269,7 @@ export function registerBrainTools(
 					active: m.brain.id,
 					switched: true,
 					features
-				}
+				} satisfies BrainsWire
 			};
 		}
 	);
@@ -319,8 +321,11 @@ export function registerBrainTools(
 					brains: rows,
 					active,
 					features,
-					orgs: await manageableOrgs().catch(() => [])
-				}
+					// A failed lookup is left OUT, not sent as []. An empty list is a real
+					// answer ("nowhere to add a brain") and suppresses the app's fallback,
+					// which derives the orgs from the brains it can manage.
+					orgs: await manageableOrgs().catch(() => undefined)
+				} satisfies BrainsWire
 			};
 		}
 	);
@@ -428,7 +433,7 @@ export function registerBrainTools(
 					active: id,
 					switched: true,
 					createdId: id
-				}
+				} satisfies BrainsWire
 			};
 		}
 	);
@@ -630,7 +635,7 @@ export function registerBrainTools(
 					active: activeBrainId(),
 					connectedId,
 					needsConfig
-				}
+				} satisfies BrainsWire
 			};
 		}
 	);
@@ -710,7 +715,7 @@ export function registerBrainTools(
 				moved: true,
 				from,
 				to
-			}
+			} satisfies BrainsWire
 		};
 	}
 
@@ -766,7 +771,11 @@ export function registerBrainTools(
 					const rows = brainRows(await listBrains(), activeBrainId());
 					return {
 						content: [{ type: 'text' as const, text: renamed }],
-						structuredContent: { view: 'brains', brains: rows, active: activeBrainId() }
+						structuredContent: {
+							view: 'brains',
+							brains: rows,
+							active: activeBrainId()
+						} satisfies BrainsWire
 					};
 				}
 			}
@@ -882,15 +891,19 @@ export function registerBrainTools(
 			// re-attach if the same repo is adopted again later under the same id.
 			await deleteBrainGrants(ctx.db, target.brain_id);
 			await deleteBrain(ctx.db, target.brain_id);
-			// If we removed the active brain, fall the active pointer back to a survivor.
-			if (target.id === ctx.activeBrain.id) {
-				const survivor = all.find((b) => b.id !== target.id);
-				if (survivor) await setActiveBrain(survivor.id);
-			}
-			const rows = brainRows(await listBrains(), ctx.activeBrain.id);
+			// If we removed the active brain, fall the active pointer back to a survivor,
+			// and report THAT as active. Reporting ctx.activeBrain here named the brain
+			// just deleted, so the refreshed list marked no row active.
+			const active = activeAfterDisconnect(
+				ctx.activeBrain.id,
+				target.id,
+				all.map((b) => b.id)
+			);
+			if (active !== ctx.activeBrain.id && active) await setActiveBrain(active);
+			const rows = brainRows(await listBrains(), active);
 			return {
 				content: [{ type: 'text' as const, text: `Disconnected ${brainLabel(target)}.` }],
-				structuredContent: { view: 'brains', brains: rows, active: ctx.activeBrain.id }
+				structuredContent: { view: 'brains', brains: rows, active } satisfies BrainsWire
 			};
 		}
 	);

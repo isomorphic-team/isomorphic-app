@@ -31,6 +31,7 @@ import {
 	unlinkGithubLink
 } from '../lib/orgs.ts';
 import { fail } from './shared.ts';
+import type { AccountsWire, SettingsWire } from '../lib/tool-payloads.ts';
 
 // The bits of the Worker Env these tools need: KV for the pending-link challenge
 // and the public origin to build the sign-in URL (a tool handler has no request URL).
@@ -55,7 +56,7 @@ function requirePerson(ctx: BrainContext): string {
 // widget resolves to a settings-shaped payload: the identity card fields (from ctx)
 // PLUS the linked accounts. list/unlink return just `accounts` (read as data / used to
 // refresh the section in place).
-function settingsSc(ctx: BrainContext, accounts: ConnectedAccount[]) {
+function settingsSc(ctx: BrainContext, accounts: ConnectedAccount[]): SettingsWire {
 	return {
 		view: 'settings' as const,
 		email: ctx.author?.email,
@@ -185,7 +186,7 @@ export function registerConnectedAccountTools(
 				const accounts = await listConnectedAccounts(ctx.db, actorUserId);
 				return {
 					content: [{ type: 'text' as const, text: `Unlinked ${target.email}.` }],
-					structuredContent: { accounts }
+					structuredContent: { accounts } satisfies AccountsWire
 				};
 			}
 
@@ -210,7 +211,7 @@ export function registerConnectedAccountTools(
 					content: [
 						{ type: 'text' as const, text: `Unlinked @${match.github_login ?? handle} (GitHub).` }
 					],
-					structuredContent: { accounts: fresh }
+					structuredContent: { accounts: fresh } satisfies AccountsWire
 				};
 			}
 

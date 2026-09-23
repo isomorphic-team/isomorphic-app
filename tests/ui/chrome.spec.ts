@@ -43,18 +43,21 @@ test.describe('open in browser', () => {
 		const app = await openApp(page, '');
 		await expectView(app, 'page');
 		await app.getByRole('button', { name: 'Open in browser' }).click();
-		expect(await opened(page)).toEqual([
-			'https://brain.example/b/your-org/personal-wiki/wiki/concepts/vision.md'
-		]);
+		// Polled, not read once: openLink reaches the host as a message across the
+		// iframe, so the click can return before the host has recorded it. Read once,
+		// this failed about 1 run in 100 with an empty list.
+		await expect
+			.poll(() => opened(page))
+			.toEqual(['https://brain.example/b/your-org/personal-wiki/wiki/concepts/vision.md']);
 	});
 
 	test('names the destination, not just the brain, for a non-page view', async ({ page }) => {
 		const app = await openApp(page, 'graph');
 		await expectView(app, 'graph');
 		await app.getByRole('button', { name: 'Open in browser' }).click();
-		expect((await opened(page))[0]).toBe(
-			'https://brain.example/b/your-org/personal-wiki?view=graph'
-		);
+		await expect
+			.poll(async () => (await opened(page))[0])
+			.toBe('https://brain.example/b/your-org/personal-wiki?view=graph');
 	});
 
 	test('is not offered in the editor, where unsaved text would be lost', async ({ page }) => {
