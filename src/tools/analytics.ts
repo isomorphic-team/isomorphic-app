@@ -101,12 +101,8 @@ export function registerAnalyticsTools(
 					email: m.email,
 					role: m.role
 				})),
-				// usage_daily records ctx.brainId, which is "owner/repo" — not the
-				// brains-table PK. Derive the same key here or every brain row reads zero.
-				brains: orgBrains.map((b) => ({
-					brain_id: `${b.repo_owner}/${b.repo_name}`,
-					label: brainLabel(b)
-				})),
+				// usage_daily records ctx.brainId, the brains-table PK.
+				brains: orgBrains.map((b) => ({ brain_id: b.brain_id, label: brainLabel(b) })),
 				from,
 				to
 			});

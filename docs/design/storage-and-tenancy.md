@@ -1,8 +1,10 @@
 # Design: storage and tenancy
 
-- Status: Partly built. Steps 1 and 2 built and merged to `main` (storage connections,
+- Status: Partly built. Steps 1, 2, 2b and 3 built (storage connections,
   `src/lib/storage-connections.ts` and migration 0010; moving a brain between orgs with
-  `connect_brain`, `src/lib/brain-move.ts`). Steps 3 to 6 not started.
+  `connect_brain`, `src/lib/brain-move.ts`; one tenancy model,
+  `src/lib/static-tenant.ts`; derived state keyed by `brain_id`, migration 0011). Steps 4
+  to 6 not started.
 - Author: Jon Hansing (via Claude)
 - Date: 2026-09-22
 - Related: `docs/design/brain-seams.md` (§6, identity is a key, never a path),
@@ -218,10 +220,13 @@ its deploy window, because a rollback reverts code and never schema.
    under `authjs`). What differs between deployments is one capability, `multiUser`:
    whether anyone besides the operator signs in, which gates the people, sharing and
    brain-management tools and reaches the app as `features.people`. The local runtime
-   (`pnpm try`) still has no rows; it joins in step 3, as a `local-git` connection.
-3. **Key derived state by `brain_id`.** The content index, write-attempt ledger and
-   active-brain pointer stop using `owner/repo`. A lazy rebuild, the same shape as an
-   `INDEX_SCHEMA_VERSION` bump.
+   (`pnpm try`) writes no rows: it has one person, no sharing and a separate index per
+   folder, so there is nothing for the org model to decide there.
+3. **Key derived state by `brain_id` (built).** The content index, write-retry ledger,
+   usage counters and active-brain pointer are keyed by `brains.brain_id`
+   (`brainRefs`, `isActiveBrain` in `src/lib/orgs.ts`). Migration 0011 re-keys existing
+   rows in place, so nothing reindexes; a pointer still holding `owner/repo` matches
+   until the caller next switches.
 4. **URLs by brain slug.** `/b/<slug>/<path>`, with `/b/<owner>/<repo>/...` redirecting
    permanently: a URL is a contract. Tools accept `owner/repo` as an alias.
 5. **A second backend.** An Azure Repos `BrainStore`, a service-principal connection

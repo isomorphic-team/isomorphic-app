@@ -47,6 +47,8 @@ import {
 	listAccessibleOrgs,
 	resolveOrgForPerson,
 	chooseBrain,
+	isActiveBrain,
+	brainRefs,
 	brainLabel,
 	type AccessibleBrain,
 	type Org,
@@ -234,14 +236,13 @@ interface TenantContext {
 	// Who to attribute commits to (the acting human). Undefined on the static
 	// path, where there's no signed-in user: writes stay App- or token-authored.
 	author?: CommitAuthor;
-	// The platform D1 database + this brain's index key ("owner/repo"), for the
-	// content index that backs search / graph / backlinks / validate
-	// (src/lib/brain-index.ts). Set on every path — brainId is derived from the
-	// resolved repo, so it's universal across identity modes.
+	// The platform D1 database + this brain's primary key (`brains.brain_id`), which
+	// keys the content index (src/lib/brain-index.ts), the write-retry ledger and
+	// usage. Never shown to a person and never changed by a move or rename.
 	db: D1Database;
 	brainId: string;
-	// The brain this call resolved to (id + display label), for the app's nav switcher
-	// to show which brain is active. Same id as brainId; label is human-facing.
+	// The brain this call resolved to, as the handle tools and the app pass around
+	// (`id`) plus its display label.
 	activeBrain: { id: string; label: string };
 }
 
@@ -297,7 +298,9 @@ class McpSession {
 		return this._staticCaller;
 	}
 
-	// Fail-open, like loadCustomTools: a KV read that throws leaves the pointer
+	// The pointer holds a `brain_id` (a pointer written before brains were keyed by
+	// id holds "owner/repo"; isActiveBrain reads both). Fail-open, like
+	// loadCustomTools: a KV read that throws leaves the pointer
 	// unresolved, so the request falls back to the caller's default brain. This runs
 	// in the preamble outside any handler, where a throw would fail the whole request
 	// over a pointer that is only a preference.
@@ -428,7 +431,7 @@ class McpSession {
 	private async activeBrainOrgId(): Promise<string | undefined> {
 		if (!this.activeBrainId) return undefined;
 		const brains = await this.listAccessibleBrainsForCaller();
-		return brains.find((b) => b.id === this.activeBrainId)?.org_id;
+		return brains.find((b) => isActiveBrain(b, this.activeBrainId))?.org_id;
 	}
 
 	// All brains the current caller can reach. Used by the brain tools (brains /
@@ -545,7 +548,7 @@ class McpSession {
 			env.AUTH_MODE === 'static'
 				? undefined
 				: commitAuthorFor(await getAppUser(env.PLATFORM_DB, userId), email);
-		this.noteScope(target.org_id, target.id);
+		this.noteScope(target.org_id, target.brain_id);
 		return {
 			octokit,
 			store: githubStore(octokit),
@@ -557,8 +560,7 @@ class McpSession {
 			config: await this.loadConfig(githubStore(octokit), repoArgs),
 			author,
 			db: env.PLATFORM_DB,
-			brainId: target.id,
-			activeBrain: { id: target.id, label: brainLabel(target) }
+			...brainRefs(target)
 		};
 	}
 

@@ -104,7 +104,7 @@ New table `page_shares` (migration `0007`), additive per the expand-then-contrac
 | ------------------------------------------------------ | ------------------------------------------------------------------------------ |
 | `share_id`                                             | primary key, the public path segment                                           |
 | `token_hash`                                           | SHA-256 of the secret. **The secret itself is never stored**                   |
-| `brain_id`                                             | `owner/repo`, the same key the content index uses                              |
+| `brain_id`                                             | `brains.brain_id`, the same key the content index uses                         |
 | `scope_path`                                           | one page, or a folder prefix for a subtree share                               |
 | `pinned_sha`                                           | null for live, else the commit this share is frozen at                         |
 | `audience`                                             | `link` (secret in URL), `email` (recipient must sign in), `public` (no secret) |

@@ -39,7 +39,10 @@ a derived index in D1 (`src/lib/brain-index.ts`, schema in `migrations/`).
   `brain_index_meta.indexed_commit_sha` and reindexes changed pages (diffing blob shas) before
   serving. Edits made outside our tools are therefore never missed. There is deliberately no
   webhook: the read-time guard is the correctness mechanism.
-- **Keyed by `brainId = "owner/repo"`.**
+- **Keyed by `brainId`, the brain's primary key (`brains.brain_id`), never by where it is
+  stored or what it is called.** `brainRefs` (`src/lib/orgs.ts`) sets it; the handle a tool
+  or the app passes is `activeBrain.id`, a separate name. The write-retry ledger and usage
+  use the same key. The local runtime keys each folder's own index `local/<folder>`.
 - **Links are stored raw and resolved at QUERY time** (`loadResolvedGraph`). What a markdown
   link MEANS is one pure rule in `src/lib/links.ts` (page, non-page file, broken, or
   unresolved), shared by the index and the dev harness so they cannot drift. Non-page content

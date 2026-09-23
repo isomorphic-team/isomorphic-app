@@ -29,6 +29,7 @@ import {
 	orgDisplay,
 	orgLabel,
 	matchBrain,
+	isActiveBrain,
 	roleLabel,
 	roleAtLeast,
 	createBrain,
@@ -178,11 +179,12 @@ export function registerBrainTools(
 		// listBrains because that cannot represent an org with nothing in it yet.
 		listOrgs: () => Promise<AccessibleOrg[]>;
 		listBrains: () => Promise<AccessibleBrain[]>;
+		// The caller's active-brain pointer, a `brain_id` (see isActiveBrain).
 		activeBrainId: () => string | undefined;
 		// Awaited: the pointer is read back by the caller's NEXT request (the app fetches
 		// its brain list the moment a widget opens), so a write still in flight answers
 		// with the previous brain. See setActiveBrain in worker.ts.
-		setActiveBrain: (id: string) => Promise<void>;
+		setActiveBrain: (brainId: string) => Promise<void>;
 		invalidateConfig: (owner: string, repo: string) => void;
 		// Whether this deployment registered the org `analytics` tool (USAGE_ANALYTICS).
 		// Rides on this payload because the app fetches the brain list on every open
@@ -219,6 +221,11 @@ export function registerBrainTools(
 	// `people`: whether this deployment has anyone to share with, invite, or count.
 	// The nav offers Sharing, Members, Analytics and brain management only when it
 	// does, since their tools are not registered otherwise (NavCaps in app/core/nav.ts).
+	// The handle of the caller's active brain within `list`, which is what payloads
+	// report. The pointer itself holds a `brain_id`.
+	const activeHandle = (list: AccessibleBrain[]): string | undefined =>
+		list.find((b) => isActiveBrain(b, activeBrainId()))?.id;
+
 	const features = {
 		analytics: analyticsEnabled,
 		people: multiUser,
@@ -270,7 +277,7 @@ export function registerBrainTools(
 							: `No brain matching "${brain}". You have access to: ${names.join(', ')}.`
 					);
 				}
-				await setActiveBrain(m.brain.id);
+				await setActiveBrain(m.brain.brain_id);
 				const rows = brainRows(brains, m.brain.id);
 				const label = rows.find((r) => r.id === m.brain!.id)?.label ?? m.brain.id;
 				return {
@@ -316,7 +323,7 @@ export function registerBrainTools(
 				/* single-tenant path, suspended, or not-yet-provisionable — just list. */
 			}
 			const brains = await listBrains();
-			const active = activeBrainId();
+			const active = activeHandle(brains);
 			const rows = brainRows(brains, active);
 			// Flag misconfigured brains so the list can offer "Set up" without the user
 			// switching into each one. Only the ones they manage (others can't configure).
@@ -433,7 +440,7 @@ export function registerBrainTools(
 				}
 
 				const id = `${created.owner}/${created.name}`;
-				await setActiveBrain(id); // land the caller in the new brain
+				await setActiveBrain(newBrainId); // land the caller in the new brain
 				const rows = brainRows(await listBrains(), id);
 				return {
 					content: [
@@ -634,7 +641,8 @@ export function registerBrainTools(
 					DEFAULT_BRAIN_CONFIG
 				).catch(() => false);
 
-				const rows = brainRows(await listBrains(), activeBrainId());
+				const listed = await listBrains();
+				const rows = brainRows(listed, activeHandle(listed));
 				// Visibility is said in the sentence, not left as one field in the brains
 				// array: that field is the one a reader skims past, and the consequence of
 				// missing it is who can read the repo.
@@ -648,7 +656,7 @@ export function registerBrainTools(
 					structuredContent: {
 						view: 'brains',
 						brains: rows,
-						active: activeBrainId(),
+						active: activeHandle(listed),
 						connectedId,
 						needsConfig
 					} satisfies BrainsWire
@@ -716,7 +724,8 @@ export function registerBrainTools(
 			sourceConnectionId
 		});
 		if (newName) await setBrainName(dest.db, target.brain_id, newName);
-		const rows = brainRows(await listBrains(), activeBrainId());
+		const listed = await listBrains();
+		const rows = brainRows(listed, activeHandle(listed));
 		return {
 			content: [
 				{
@@ -727,7 +736,7 @@ export function registerBrainTools(
 			structuredContent: {
 				view: 'brains',
 				brains: rows,
-				active: activeBrainId(),
+				active: activeHandle(listed),
 				moved: true,
 				from,
 				to
@@ -778,19 +787,20 @@ export function registerBrainTools(
 			if (name !== undefined) {
 				const newName = name.trim();
 				if (!newName) return fail('A brain’s name cannot be empty.');
-				const target = (await listBrains()).find((b) => b.id === ctx.brainId);
+				const target = (await listBrains()).find((b) => b.brain_id === ctx.brainId);
 				if (!target) return fail('That brain could not be resolved.');
 				await setBrainName(ctx.db, target.brain_id, newName);
 				renamed = `Renamed ${brainLabel(target)} to "${newName}".`;
 				// A rename alone is the whole call: the layout is only written when asked for.
 				if (content_roots === undefined && overwrite === undefined) {
-					const rows = brainRows(await listBrains(), activeBrainId());
+					const listed = await listBrains();
+					const rows = brainRows(listed, activeHandle(listed));
 					return {
 						content: [{ type: 'text' as const, text: renamed }],
 						structuredContent: {
 							view: 'brains',
 							brains: rows,
-							active: activeBrainId()
+							active: activeHandle(listed)
 						} satisfies BrainsWire
 					};
 				}
@@ -916,7 +926,8 @@ export function registerBrainTools(
 					target.id,
 					all.map((b) => b.id)
 				);
-				if (active !== ctx.activeBrain.id && active) await setActiveBrain(active);
+				const survivor = all.find((b) => b.id === active);
+				if (active !== ctx.activeBrain.id && survivor) await setActiveBrain(survivor.brain_id);
 				const rows = brainRows(await listBrains(), active);
 				return {
 					content: [{ type: 'text' as const, text: `Disconnected ${brainLabel(target)}.` }],
