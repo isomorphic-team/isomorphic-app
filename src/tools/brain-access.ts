@@ -51,6 +51,7 @@ import {
 } from '../lib/orgs.ts';
 import { webPathFor } from '../lib/web-app.ts';
 import { brainArgFor, fail } from './shared.ts';
+import type { BrainAccessWire } from '../lib/tool-payloads.ts';
 
 const brainArg = brainArgFor(
 	"Which brain's sharing to act on (name/handle). Defaults to the active brain."
@@ -76,7 +77,7 @@ async function resolveBrainRow(
 async function accessPayload(
 	ctx: BrainContext,
 	row: { brain_id: string; visibility: string; org_id: string }
-) {
+): Promise<BrainAccessWire> {
 	const [entries, invites] = await Promise.all([
 		listBrainAccess(ctx.db, row.brain_id, row.org_id, row.visibility),
 		listPendingBrainInvites(ctx.db, row.brain_id)

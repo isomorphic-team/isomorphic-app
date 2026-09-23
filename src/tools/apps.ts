@@ -48,6 +48,15 @@ import {
 } from '../lib/brain-config.ts';
 import type { TenantOpts } from '../lib/orgs.ts';
 import { brainArgFor, fail } from './shared.ts';
+import type {
+	PageViewWire,
+	BrowseViewWire,
+	ActivityViewWire,
+	GraphViewWire,
+	EditViewWire,
+	GraphNode,
+	GraphLink
+} from '../lib/tool-payloads.ts';
 
 // The editability policy the in-client app needs to gate its own UI. Lives in
 // brain-policy.ts (pathPolicyOf) so the tools OUTSIDE this file that also feed
@@ -112,18 +121,10 @@ const BRAIN_APP_URI_TEMPLATE = 'ui://isomorphic-mind/brain-app.{v}.html';
 // dropping the app's own border, since the two must never both draw one.
 const APP_UI_META = { ui: { prefersBorder: false } } as const;
 
-// One node per content page; one edge per link between two pages. Sized to the
-// in-client graph view (view_graph). Both shapes mirror what app/main.tsx expects.
-interface GraphNode {
-	id: string; // repo path — also the node's stable key
-	title: string;
-	group: string; // parent folder, so the app can color by area
-	degree: number; // connection count, so the app can size hubs
-}
-interface GraphLink {
-	source: string;
-	target: string;
-}
+// One node per content page; one edge per link between two pages (GraphNode and
+// GraphLink, the wire types the app's graph view reads). A node's `id` is its repo
+// path, `group` its parent folder (the app colors by area), and `degree` its
+// connection count (the app sizes hubs by it).
 
 // Build the brain's link graph from the content index. loadResolvedGraph resolves
 // markdown links via resolveRelative and [[wikilinks]] by path/filename/title — the SAME
@@ -282,7 +283,7 @@ export function registerBrainApp(
 					sha: file.sha,
 					config: editPolicy(config),
 					activeBrain
-				}
+				} satisfies PageViewWire
 			};
 		}
 	);
@@ -338,7 +339,7 @@ export function registerBrainApp(
 					config: editPolicy(config),
 					activeBrain,
 					needsConfig
-				}
+				} satisfies BrowseViewWire
 			};
 		}
 	);
@@ -404,7 +405,7 @@ export function registerBrainApp(
 					entries,
 					config: editPolicy(config),
 					activeBrain
-				}
+				} satisfies ActivityViewWire
 			};
 		}
 	);
@@ -447,7 +448,7 @@ export function registerBrainApp(
 					truncated,
 					config: editPolicy(config),
 					activeBrain
-				}
+				} satisfies GraphViewWire
 			};
 		}
 	);
@@ -497,7 +498,7 @@ export function registerBrainApp(
 					sha: file.sha,
 					config: editPolicy(config),
 					activeBrain
-				}
+				} satisfies EditViewWire
 			};
 		}
 	);

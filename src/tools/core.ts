@@ -11,6 +11,7 @@ import type { TenantOpts } from '../lib/orgs.ts';
 import { ensureFresh, listIndexedPages, detectNeedsConfig } from '../lib/brain-index.ts';
 import { listNonPagePaths, pathPolicyOf, isContentPath } from '../lib/brain-config.ts';
 import { tryRenderViews } from '../lib/views.ts';
+import type { ListPagesWire, ReadPageWire } from '../lib/tool-payloads.ts';
 
 export function registerCoreTools(
 	server: McpServer,
@@ -86,7 +87,7 @@ export function registerCoreTools(
 						needsConfig,
 						config: pathPolicyOf(config),
 						activeBrain
-					}
+					} satisfies ListPagesWire
 				};
 			}
 
@@ -153,7 +154,7 @@ export function registerCoreTools(
 			const markdown = views?.snapshotted ?? text;
 			return {
 				content: [{ type: 'text' as const, text: markdown }],
-				structuredContent: { path, markdown, sha: file.sha }
+				structuredContent: { path, markdown, sha: file.sha } satisfies ReadPageWire
 			};
 		}
 	);

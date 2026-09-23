@@ -244,6 +244,7 @@ import {
 	matchOrg,
 	chooseOrg,
 	chooseBrain,
+	activeAfterDisconnect,
 	getDefaultBrainForUser,
 	listBrainAccess,
 	listPendingInvites,
@@ -622,6 +623,30 @@ check('by GitHub owner', matchOrg(daveOrgs, 'contoso-io').org?.org.org_id === 'o
 check('by substring', matchOrg(daveOrgs, 'ontoso').org?.org.org_id === 'org2');
 check('a miss returns neither an org nor candidates', !matchOrg(daveOrgs, 'acme').org);
 check('an empty handle never silently picks one', !matchOrg(daveOrgs, '   ').org);
+
+console.log('\nactiveAfterDisconnect: the brain a disconnect leaves you in');
+// disconnect_brain moved the pointer to a survivor and then reported the brain it
+// had just deleted as active, so the refreshed list marked no row at all.
+{
+	const before = ['o/a', 'o/b', 'o/c'];
+	check(
+		'removing another brain leaves the active one alone',
+		activeAfterDisconnect('o/a', 'o/b', before) === 'o/a'
+	);
+	check(
+		'removing the ACTIVE brain moves to the first survivor, never the removed one',
+		activeAfterDisconnect('o/a', 'o/a', before) === 'o/b'
+	);
+	check(
+		'the survivor is the first in list order, wherever the removed one sat',
+		activeAfterDisconnect('o/b', 'o/b', before) === 'o/a'
+	);
+	check('no survivor, no active brain', activeAfterDisconnect('o/a', 'o/a', ['o/a']) === undefined);
+	check(
+		'no active brain to begin with stays none',
+		activeAfterDisconnect(undefined, 'o/a', before) === undefined
+	);
+}
 
 console.log('\nchooseOrg: where a new brain actually gets written');
 const threw = (fn: () => unknown) => {

@@ -41,6 +41,7 @@ import {
 } from '../lib/orgs.ts';
 import { readUsage } from '../lib/usage-store.ts';
 import { dayKey, shiftDay, summarize, summaryText, FOOTNOTE } from '../lib/usage.ts';
+import type { AnalyticsWire } from '../lib/tool-payloads.ts';
 
 const DEFAULT_DAYS = 30;
 // 90 days is the point past which one D1 read stops being obviously cheap. The
@@ -136,7 +137,7 @@ export function registerAnalyticsTools(
 					truncated: usage.truncated,
 					footnote: FOOTNOTE,
 					activeBrain: ctx.activeBrain
-				}
+				} satisfies AnalyticsWire
 			};
 		}
 	);

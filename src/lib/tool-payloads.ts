@@ -17,6 +17,8 @@
 //     "no matches". `fetchPaths` did exactly that and cached an empty tree for a failed
 //     list_pages.
 
+import type { PathPolicy } from './brain-policy.ts';
+
 // ---------- payload element types ----------
 // Mirrors of what the tools put in structuredContent. `app/core/types.ts` re-exports
 // them, so the app imports one vocabulary.
@@ -34,8 +36,8 @@ export interface Hit {
 	path: string;
 	line: number;
 	text: string;
-	// Set when the search spanned brains (scope: 'all'). Opening a hit from another brain
-	// has to switch first, because navigateTo resolves its path against the ACTIVE brain.
+	// The brain the hit is in. Opening a hit from a brain other than the active one has
+	// to switch first, because navigateTo resolves its path against the ACTIVE brain.
 	brain?: string;
 	brainLabel?: string;
 }
@@ -60,7 +62,8 @@ export interface ActivityEntry {
 	authorName: string;
 	authorLogin?: string;
 	date: string;
-	url: string;
+	/** Absent for a brain with no web host, such as the local runtime's folder. */
+	url?: string;
 }
 
 /** Graph view payload (view_graph in src/tools/apps.ts). Nodes are pages; links are deduped undirected references. */
@@ -196,6 +199,160 @@ export interface ServerFeatures {
 	webBase?: string;
 }
 
+// ---------- the wire: what each tool sends ----------
+// One interface per payload the app reads. The server builds each
+// `structuredContent` literal `satisfies` its interface, and each parser below reads
+// through `Partial<>` of the same one, so renaming a field on either side fails
+// typecheck on the other instead of blanking a screen at runtime. Partial on the
+// read side because the parsers still tolerate a payload from an older or newer
+// Worker: the type ties the NAMES together, the parser decides what a missing field
+// becomes.
+
+/** The brain a result is about. Every app tool carries it so the widget can name the brain it is drawing. */
+export interface ActiveBrainRef {
+	id: string;
+	label: string;
+}
+
+interface InBrain {
+	config: PathPolicy;
+	activeBrain: ActiveBrainRef;
+}
+
+export interface ListPagesWire extends InBrain {
+	pages: { path: string; title: string }[];
+	assets: string[];
+	hidden: string[];
+	needsConfig: boolean;
+}
+
+export interface ReadPageWire {
+	path: string;
+	markdown: string;
+	sha: string;
+}
+
+export interface PageViewWire extends InBrain, ReadPageWire {
+	view: 'page';
+	webUrl?: string;
+}
+
+export interface EditViewWire extends InBrain, ReadPageWire {
+	view: 'edit';
+}
+
+/** The tree rides along only while it is small (MAX_INLINE_TREE_CHARS); otherwise the app fetches it with list_pages. */
+export interface BrowseViewWire extends InBrain {
+	view: 'browse';
+	webUrl?: string;
+	needsConfig: boolean;
+	paths?: string[];
+	pages?: { path: string; title: string }[];
+	assets?: string[];
+	hidden?: string[];
+}
+
+export interface ActivityViewWire extends InBrain {
+	view: 'activity';
+	webUrl?: string;
+	scope: { path?: string };
+	entries: ActivityEntry[];
+}
+
+export interface GraphViewWire extends InBrain {
+	view: 'graph';
+	webUrl?: string;
+	nodes: GraphNode[];
+	edges: GraphLink[];
+	focus?: string;
+	truncated: boolean;
+}
+
+/**
+ * brains, switch_brain, create_brain, connect_brain, configure_brain and
+ * disconnect_brain. Only `brains` carries `orgs` and `features`; an ABSENT `orgs`
+ * means "not known", so a failed lookup must be left out rather than sent as [].
+ */
+export interface BrainsWire {
+	view: 'brains';
+	brains: BrainRow[];
+	active?: string;
+	switched?: boolean;
+	features?: ServerFeatures;
+	orgs?: OrgTarget[];
+	createdId?: string;
+	connectedId?: string;
+	needsConfig?: boolean;
+	moved?: boolean;
+	from?: string;
+	to?: string;
+}
+
+export interface MembersWire {
+	view: 'members';
+	members: Member[];
+	invites: Invite[];
+	me: MemberSelf;
+	activeBrain?: ActiveBrainRef;
+}
+
+export interface BrainAccessWire {
+	view: 'brain-access';
+	access: BrainAccessEntry[];
+	invites: Invite[];
+	visibility: string;
+	activeBrain: ActiveBrainRef;
+	me: BrainAccessSelf;
+}
+
+/** whoami. Every field is optional: static-bearer mode has no identity at all. */
+export interface IdentityWire {
+	email?: string;
+	login?: string;
+	role?: string;
+	org?: string;
+	activeBrain?: ActiveBrainRef;
+}
+
+/** connected_accounts' own view, and the `{accounts}` every unlink returns. */
+export interface AccountsWire {
+	accounts: ConnectedAccount[];
+}
+
+export interface SettingsWire extends IdentityWire, AccountsWire {
+	view: 'settings';
+}
+
+export interface AnalyticsWire {
+	view: 'analytics';
+	orgName: string;
+	window: UsageWindow;
+	totals: UsageTotals;
+	series: UsagePoint[];
+	brains: UsageBrain[];
+	people: UsagePerson[];
+	canSeePeople: boolean;
+	truncated: boolean;
+	footnote: string;
+	activeBrain?: ActiveBrainRef;
+}
+
+export interface SearchWire {
+	hits: Hit[];
+	terms: string[];
+	pagesMatched: number;
+	probe: unknown;
+	scope: 'all' | 'brain';
+}
+
+export interface ReadMediaWire {
+	path: string;
+	mimeType: string;
+	size: number;
+	/** Only when the call asked for the bytes (include_data). */
+	dataUri?: string;
+}
+
 // ---------- the result envelope ----------
 
 /** The part of an MCP tool result the app reads. Structurally compatible with the SDK's CallToolResult. */
@@ -229,6 +386,18 @@ export function isNoBrain(s: string): boolean {
 	return /don.?t have a brain yet/i.test(s);
 }
 
+/**
+ * A payload narrowed to one wire type's field NAMES, with every value still
+ * `unknown`. Reading `w.edges` compiles only while GraphViewWire has an `edges`
+ * field, which is what ties a parser to the server literal that satisfies the same
+ * type; the value is still checked at runtime, because a payload from another
+ * Worker version may not match.
+ */
+type Wire<W> = { readonly [K in keyof W]?: unknown };
+function wire<W>(sc: Payload): Wire<W> {
+	return sc as Wire<W>;
+}
+
 function str(v: unknown): string | undefined {
 	return typeof v === 'string' ? v : undefined;
 }
@@ -259,19 +428,20 @@ export function pagesToTitleMap(pages: unknown): Record<string, string> {
  * else it is derived from `pages` in order.
  */
 export function parseTree(sc: Payload): BrowseData | null {
-	const pages = list<Payload>(sc.pages);
-	const paths = Array.isArray(sc.paths)
-		? list<string>(sc.paths)
-		: Array.isArray(sc.pages)
+	const w = wire<BrowseViewWire>(sc);
+	const pages = list<Payload>(w.pages);
+	const paths = Array.isArray(w.paths)
+		? list<string>(w.paths)
+		: Array.isArray(w.pages)
 			? pages.map((p) => str(p?.path)).filter((p): p is string => p !== undefined)
 			: null;
 	if (paths === null) return null;
 	return {
 		paths,
-		titleByPath: pagesToTitleMap(sc.pages),
-		assets: list<string>(sc.assets),
-		hidden: list<string>(sc.hidden),
-		needsConfig: !!sc.needsConfig
+		titleByPath: pagesToTitleMap(w.pages),
+		assets: list<string>(w.assets),
+		hidden: list<string>(w.hidden),
+		needsConfig: !!w.needsConfig
 	};
 }
 
@@ -292,7 +462,8 @@ export function parseListPages(result: ToolResultLike): BrowseData {
  * that names no brain, or a widget that has none yet, is always accepted.
  */
 export function answersFor(sc: Payload, activeBrainId: string | undefined): boolean {
-	const answered = str(obj(sc.activeBrain).id);
+	const w = wire<ListPagesWire>(sc);
+	const answered = str(obj(w.activeBrain).id);
 	return !activeBrainId || !answered || answered === activeBrainId;
 }
 
@@ -306,7 +477,8 @@ export interface PageContent {
 }
 
 export function parsePage(sc: Payload): PageContent {
-	return { path: str(sc.path) ?? '', markdown: str(sc.markdown) ?? '', sha: str(sc.sha) };
+	const w = wire<PageViewWire>(sc);
+	return { path: str(w.path) ?? '', markdown: str(w.markdown) ?? '', sha: str(w.sha) };
 }
 
 /** The editor's payload. The editor needs a sha to save against, so a missing one is '' rather than absent, and the path the caller asked for stands in when the server names none. */
@@ -317,26 +489,29 @@ export function parseEdit(sc: Payload, fallbackPath = ''): Required<PageContent>
 
 /** read_page: the page is the text block; the sha rides in structuredContent. */
 export function parseReadPage(result: ToolResultLike): { markdown: string; sha: string } {
-	const sc = payloadOf(result);
-	return { markdown: firstText(result), sha: str(sc.sha) ?? '' };
+	const w = wire<ReadPageWire>(payloadOf(result));
+	return { markdown: firstText(result), sha: str(w.sha) ?? '' };
 }
 
 export function parseAsset(sc: Payload): { mimeType: string; size: number; dataUri: string } {
+	const w = wire<ReadMediaWire>(sc);
 	return {
-		mimeType: str(sc.mimeType) ?? '',
-		size: typeof sc.size === 'number' ? sc.size : 0,
-		dataUri: str(sc.dataUri) ?? ''
+		mimeType: str(w.mimeType) ?? '',
+		size: typeof w.size === 'number' ? w.size : 0,
+		dataUri: str(w.dataUri) ?? ''
 	};
 }
 
 export function parseSearchHits(sc: Payload): Hit[] {
-	return list<Hit>(sc.hits);
+	const w = wire<SearchWire>(sc);
+	return list<Hit>(w.hits);
 }
 
 // ---------- views ----------
 
 export function parseActivity(sc: Payload): { entries: ActivityEntry[]; scopePath?: string } {
-	return { entries: list<ActivityEntry>(sc.entries), scopePath: str(obj(sc.scope).path) };
+	const w = wire<ActivityViewWire>(sc);
+	return { entries: list<ActivityEntry>(w.entries), scopePath: str(obj(w.scope).path) };
 }
 
 export function parseGraph(sc: Payload): {
@@ -345,11 +520,12 @@ export function parseGraph(sc: Payload): {
 	focus?: string;
 	truncated: boolean;
 } {
+	const w = wire<GraphViewWire>(sc);
 	return {
-		nodes: list<GraphNode>(sc.nodes),
-		links: list<GraphLink>(sc.edges),
-		focus: str(sc.focus),
-		truncated: !!sc.truncated
+		nodes: list<GraphNode>(w.nodes),
+		links: list<GraphLink>(w.edges),
+		focus: str(w.focus),
+		truncated: !!w.truncated
 	};
 }
 
@@ -358,10 +534,11 @@ export function parseMembers(sc: Payload): {
 	invites: Invite[];
 	me: MemberSelf;
 } {
-	const me = obj(sc.me);
+	const w = wire<MembersWire>(sc);
+	const me = obj(w.me);
 	return {
-		members: list<Member>(sc.members),
-		invites: list<Invite>(sc.invites),
+		members: list<Member>(w.members),
+		invites: list<Invite>(w.invites),
 		me: { user_id: str(me.user_id) ?? '', role: (str(me.role) as MemberRole) ?? 'viewer' }
 	};
 }
@@ -374,12 +551,13 @@ export function parseBrainAccess(sc: Payload): {
 	brainLabel: string;
 	me: BrainAccessSelf;
 } {
-	const me = obj(sc.me);
-	const active = obj(sc.activeBrain);
+	const w = wire<BrainAccessWire>(sc);
+	const me = obj(w.me);
+	const active = obj(w.activeBrain);
 	return {
-		access: list<BrainAccessEntry>(sc.access),
-		invites: list<Invite>(sc.invites),
-		visibility: str(sc.visibility) ?? 'org',
+		access: list<BrainAccessEntry>(w.access),
+		invites: list<Invite>(w.invites),
+		visibility: str(w.visibility) ?? 'org',
 		// Carried so the panel and its share flow keep acting on the brain the user
 		// opened, not on whatever happens to be active: the Share control in the brains
 		// list can target a brain that is not the current one.
@@ -417,30 +595,33 @@ export function parseAnalytics(sc: Payload): {
 	truncated: boolean;
 	footnote: string;
 } {
+	const w = wire<AnalyticsWire>(sc);
 	return {
-		orgName: str(sc.orgName) ?? 'your organization',
-		window: sc.window && typeof sc.window === 'object' ? (sc.window as UsageWindow) : EMPTY_WINDOW,
-		totals: sc.totals && typeof sc.totals === 'object' ? (sc.totals as UsageTotals) : EMPTY_TOTALS,
-		series: list<UsagePoint>(sc.series),
-		people: list<UsagePerson>(sc.people),
-		brains: list<UsageBrain>(sc.brains),
-		canSeePeople: !!sc.canSeePeople,
-		truncated: !!sc.truncated,
-		footnote: str(sc.footnote) ?? ''
+		orgName: str(w.orgName) ?? 'your organization',
+		window: w.window && typeof w.window === 'object' ? (w.window as UsageWindow) : EMPTY_WINDOW,
+		totals: w.totals && typeof w.totals === 'object' ? (w.totals as UsageTotals) : EMPTY_TOTALS,
+		series: list<UsagePoint>(w.series),
+		people: list<UsagePerson>(w.people),
+		brains: list<UsageBrain>(w.brains),
+		canSeePeople: !!w.canSeePeople,
+		truncated: !!w.truncated,
+		footnote: str(w.footnote) ?? ''
 	};
 }
 
 export function parseAccounts(sc: Payload): ConnectedAccount[] {
-	return list<ConnectedAccount>(sc.accounts);
+	const w = wire<AccountsWire>(sc);
+	return list<ConnectedAccount>(w.accounts);
 }
 
 export function parseIdentity(sc: Payload): Identity {
+	const w = wire<IdentityWire>(sc);
 	return {
-		email: str(sc.email),
-		login: str(sc.login),
-		role: str(sc.role),
-		org: str(sc.org),
-		activeBrainLabel: str(obj(sc.activeBrain).label)
+		email: str(w.email),
+		login: str(w.login),
+		role: str(w.role),
+		org: str(w.org),
+		activeBrainLabel: str(obj(w.activeBrain).label)
 	};
 }
 
@@ -458,19 +639,21 @@ export interface BrainsPayload {
 
 /** The `orgs` field. Absent and empty are different answers: the app falls back to a derivation only for absent. */
 export function parseOrgs(sc: Payload): OrgTarget[] | undefined {
-	if (!Array.isArray(sc.orgs)) return undefined;
-	return list<Payload>(sc.orgs)
+	const w = wire<BrainsWire>(sc);
+	if (!Array.isArray(w.orgs)) return undefined;
+	return list<Payload>(w.orgs)
 		.filter((o) => o && typeof o.orgId === 'string')
 		.map((o) => ({ orgId: String(o.orgId), orgLabel: String(o.orgLabel ?? o.orgId) }));
 }
 
 export function parseBrains(sc: Payload): BrainsPayload {
+	const w = wire<BrainsWire>(sc);
 	const features =
-		sc.features && typeof sc.features === 'object' ? (sc.features as ServerFeatures) : undefined;
+		w.features && typeof w.features === 'object' ? (w.features as ServerFeatures) : undefined;
 	return {
-		brains: list<BrainRow>(sc.brains),
-		active: sc.active ? String(sc.active) : undefined,
-		switched: !!sc.switched,
+		brains: list<BrainRow>(w.brains),
+		active: w.active ? String(w.active) : undefined,
+		switched: !!w.switched,
 		orgs: parseOrgs(sc),
 		features
 	};

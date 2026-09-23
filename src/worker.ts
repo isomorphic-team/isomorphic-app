@@ -34,6 +34,7 @@
 import { McpServer, type RegisteredTool } from '@modelcontextprotocol/server';
 import { registeredTools, wrapToolHandler } from './lib/registered-tools.ts';
 import { serveMcp, serverOptions } from './lib/mcp-serve.ts';
+import type { IdentityWire } from './lib/tool-payloads.ts';
 import { z } from 'zod';
 import { OAuthProvider, type OAuthHelpers } from '@cloudflare/workers-oauth-provider';
 import { installationOctokit, tokenOctokit, staticAuth, type AppCreds } from './lib/github.ts';
@@ -817,7 +818,7 @@ class McpSession {
 				if (this.props?.user_id) {
 					const email = this.props?.email ?? 'unknown';
 					let roleNote = '';
-					const identity: Record<string, unknown> = { email };
+					const identity: IdentityWire = { email };
 					try {
 						const { role, repoArgs, activeBrain } = await this.tenantContext();
 						roleNote = ` — ${role} of ${repoArgs.owner}/${repoArgs.repo}`;
@@ -855,7 +856,7 @@ class McpSession {
 									role,
 									org: repoArgs.owner,
 									activeBrain
-								}
+								} satisfies IdentityWire
 							};
 						}
 					} catch {
@@ -870,7 +871,9 @@ class McpSession {
 								text: `Authenticated as @${login} (gh_user_id ${userId}).`
 							}
 						],
-						structuredContent: { login, org: userId ? String(userId) : undefined }
+						// No org: nothing resolved one. This used to send the numeric GitHub user
+						// id as `org`, which the settings card then showed as the organization.
+						structuredContent: { login } satisfies IdentityWire
 					};
 				}
 				return {

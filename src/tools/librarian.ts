@@ -109,6 +109,7 @@ import {
 	nonPageKind,
 	resolveMoveTarget
 } from '../lib/write-target.ts';
+import type { SearchWire } from '../lib/tool-payloads.ts';
 
 // Shared optional `brain` arg — every tool takes it so the model can one-shot a
 // different brain than the connection's active one (see tenantContext in worker.ts).
@@ -1589,7 +1590,7 @@ export function registerLibrarianTools(
 						pagesMatched: 0,
 						probe,
 						scope: wide ? 'all' : 'brain'
-					}
+					} satisfies SearchWire
 				};
 			}
 			const capped = found.budgetHit ? ` (the top ${opts.max})` : '';
@@ -1618,7 +1619,7 @@ export function registerLibrarianTools(
 					pagesMatched: found.pagesMatched,
 					probe,
 					scope: wide ? 'all' : 'brain'
-				}
+				} satisfies SearchWire
 			};
 		}
 	);
