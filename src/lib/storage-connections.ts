@@ -13,6 +13,23 @@ import type { D1Database } from '@cloudflare/workers-types';
 import type { Org } from './orgs.ts';
 
 export const GITHUB_APP_KIND = 'github-app-installation';
+// A GitHub access token held in the environment (GITHUB_TOKEN), for a single-user
+// deployment. The row references the secret and never stores it.
+export const GITHUB_TOKEN_KIND = 'github-token';
+
+// How to reach a brain's storage, from its binding. Pure, so the choice between a
+// token and an installation is pinned by a test rather than buried in the Worker.
+// A brain with no binding (written before migration 0010) resolves through its
+// org's installation, as every brain did before bindings existed.
+export type BrainCredential = { kind: 'token' } | { kind: 'installation'; installationId: number };
+
+export function credentialFor(brain: {
+	storage_kind?: string | null;
+	installation_id: number;
+}): BrainCredential {
+	if (brain.storage_kind === GITHUB_TOKEN_KIND) return { kind: 'token' };
+	return { kind: 'installation', installationId: brain.installation_id };
+}
 
 export interface StorageConnection {
 	connection_id: string;

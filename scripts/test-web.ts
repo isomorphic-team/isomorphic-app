@@ -215,11 +215,10 @@ function check(name: string, cond: boolean, detail?: string) {
 {
 	console.log('\nthe web base URL');
 
-	const on = { authMode: 'oauth', identityMode: 'authjs', publicBaseUrl: 'https://brain.example/' };
-	check('an authjs deployment with a base URL has one', webBaseUrl(on) === 'https://brain.example');
+	const on = { authMode: 'oauth', publicBaseUrl: 'https://brain.example/' };
+	check('an oauth deployment with a base URL has one', webBaseUrl(on) === 'https://brain.example');
 	check('trailing slashes are dropped', !webBaseUrl(on)?.endsWith('/'));
 	check('static mode has none', webBaseUrl({ ...on, authMode: 'static' }) === undefined);
-	check('github identity has none', webBaseUrl({ ...on, identityMode: 'github' }) === undefined);
 	check('no base URL, no link', webBaseUrl({ ...on, publicBaseUrl: '' }) === undefined);
 	check(
 		'unset is not a link either',

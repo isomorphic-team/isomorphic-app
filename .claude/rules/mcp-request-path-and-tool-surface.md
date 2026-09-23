@@ -53,12 +53,13 @@ wrapped for usage counting. **The only way to replace a registered handler is
 `executor`, so assigning `tool.handler` is a silent no-op. `pnpm test:usage` drives a real
 `tools/call` through it.
 
-Gated registrations: `hasOrgModel` (`AUTH_MODE === 'oauth'`) gates members, connected accounts
-and `create_org`; `USAGE_ANALYTICS` + `hasOrgModel` gate `analytics`; `FEEDBACK_REPO` gates
-`submit_feedback`. Everything else registers in every mode; org-scope tools such as
-`create_brain` and `connect_brain` refuse through `orgContext` on a single-tenant connection.
-`whoami` (in `worker.ts`) reports email, role and active brain on authjs, the GitHub login on
-the legacy path, and a placeholder in static mode; the app's settings card reads its
+Gated registrations: `multiUser` (`AUTH_MODE === 'oauth'`: anyone besides the operator can
+sign in) gates members, `brain_access`/`share_brain`, connected accounts, `create_org`, and the
+brain tools that add, move, remove or switch (`switch_brain`, `create_brain`, `connect_brain`,
+`disconnect_brain`); `USAGE_ANALYTICS` + `multiUser` gate `analytics`; `FEEDBACK_REPO` gates
+`submit_feedback`. Every deployment runs the org model, so this is the only mode difference a
+tool sees. `whoami` (in `worker.ts`) reports email, role and active brain when signed in, and
+the operator's role and brain in static mode; the app's settings card reads its
 `structuredContent`.
 
 The ui:// resource's host contract (`prefersBorder: false`, every widget tool's

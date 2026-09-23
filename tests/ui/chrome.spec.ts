@@ -34,7 +34,8 @@ const railNames = (app: App) =>
 // The door from the card to the web app. What matters is the URL the app hands the
 // HOST: the same page, same brain, at the base the server sent. The harness records
 // every openLink request (dev/harness.ts) because no tab opens under test, and which
-// browser it would open in is the host's decision, not the app's.
+// browser it would open in is the host's decision, not the app's. The request crosses
+// to the host by postMessage, so every read of the record is polled.
 test.describe('open in browser', () => {
 	const opened = (page: Page) =>
 		page.evaluate(() => (window as unknown as { __openedLinks: string[] }).__openedLinks);
@@ -43,18 +44,20 @@ test.describe('open in browser', () => {
 		const app = await openApp(page, '');
 		await expectView(app, 'page');
 		await app.getByRole('button', { name: 'Open in browser' }).click();
-		expect(await opened(page)).toEqual([
-			'https://brain.example/b/your-org/personal-wiki/wiki/concepts/vision.md'
-		]);
+		// Polled: the request crosses to the host by postMessage, so it lands after the
+		// click resolves, and reading it at once raced the message.
+		await expect
+			.poll(() => opened(page))
+			.toEqual(['https://brain.example/b/your-org/personal-wiki/wiki/concepts/vision.md']);
 	});
 
 	test('names the destination, not just the brain, for a non-page view', async ({ page }) => {
 		const app = await openApp(page, 'graph');
 		await expectView(app, 'graph');
 		await app.getByRole('button', { name: 'Open in browser' }).click();
-		expect((await opened(page))[0]).toBe(
-			'https://brain.example/b/your-org/personal-wiki?view=graph'
-		);
+		await expect
+			.poll(async () => (await opened(page))[0])
+			.toBe('https://brain.example/b/your-org/personal-wiki?view=graph');
 	});
 
 	test('is not offered in the editor, where unsaved text would be lost', async ({ page }) => {

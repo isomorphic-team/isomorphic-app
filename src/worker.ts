@@ -4,30 +4,28 @@
 // transport. Tools are registered per request in `McpSession.buildServer()`.
 //
 // Auth model (`AUTH_MODE`):
-//   - `static`: single bearer token in the `Authorization` header. One person,
-//     one brain, no org model: the supported self-hosting path.
+//   - `static`: single bearer token in the `Authorization` header. One person, one
+//     brain: the supported self-hosting path. Nobody else signs in.
 //   - `oauth`: OAuth 2.1 via `@cloudflare/workers-oauth-provider`. MCP clients
 //     discover us via `/.well-known/oauth-authorization-server`, register at
 //     `/register`, hit `/authorize`, and receive tokens at `/token`. The human
-//     sign-in behind `/authorize` is chosen by `IDENTITY_MODE`: `authjs` (email
-//     magic link, no GitHub account needed) or `github` (GitHub OAuth, the
-//     admin path). Identity flows in via `props` on `ctx.props`.
+//     sign-in behind `/authorize` is Auth.js (email magic link, no GitHub account
+//     needed). Identity flows in via `props` on `ctx.props`.
 //
-// Brain routing:
-//   - `oauth` + authjs: person -> memberships / grants -> the chosen brain row,
-//     through the org model in `src/lib/orgs.ts`. See `resolveProductContext()`.
-//   - `oauth` + github: the flat `tenants` table keyed by `gh_user_id`
-//     (`src/lib/tenants.ts`), unless that GitHub id is linked to a product
-//     identity, in which case it resolves through the org model too.
-//   - `static`: the global `BRAIN_REPO_*` env vars.
+// Brain routing: ONE path for both modes. The caller is a person (the signed-in
+// user, or in static mode the operator row `src/lib/static-tenant.ts` writes from
+// config) -> memberships / grants -> the chosen brain row -> that brain's storage
+// binding. See `tenantContext()` and `resolveProductContext()`. The modes differ
+// only in whether anyone else can sign in, which decides whether the people and
+// sharing tools are registered (`multiUser` in buildServer).
 //
 // Storage model:
 //   - The MCP transport is stateless (per-request McpServer + web-standard
 //     transport). The active brain lives in OAUTH_KV per user.
 //   - OAUTH_KV stores OAuth provider state (registered clients, grants,
 //     access/refresh tokens) and pending-auth nonces for the sign-in round trip.
-//   - PLATFORM_DB (D1) holds the org model, the legacy tenants table, the content
-//     index, and usage counters. Schema is `migrations/`.
+//   - PLATFORM_DB (D1) holds the org model, the content index, and usage
+//     counters. Schema is `migrations/`.
 
 import { McpServer, type RegisteredTool } from '@modelcontextprotocol/server';
 import { registeredTools, wrapToolHandler } from './lib/registered-tools.ts';
@@ -35,21 +33,16 @@ import { serveMcp, serverOptions } from './lib/mcp-serve.ts';
 import { z } from 'zod';
 import { OAuthProvider, type OAuthHelpers } from '@cloudflare/workers-oauth-provider';
 import { installationOctokit, tokenOctokit, staticAuth, type AppCreds } from './lib/github.ts';
-import {
-	githubStore,
-	commitAuthorFor,
-	githubNoreplyAuthor,
-	type BrainStore
-} from './lib/brain-repo.ts';
-import { getTenantByUserId, NoTenantError } from './lib/tenants.ts';
-import { platformInstall, provisionBrainForUser, provisionOrgForUser } from './lib/provision.ts';
+import { githubStore, commitAuthorFor, type BrainStore } from './lib/brain-repo.ts';
+import { platformInstall, provisionOrgForUser } from './lib/provision.ts';
+import { ensureStaticTenant, STATIC_USER_ID } from './lib/static-tenant.ts';
+import { credentialFor } from './lib/storage-connections.ts';
 import { claimPendingInvites } from './lib/invites.ts';
 import {
 	getAppUser,
 	assertRole,
 	listAccessibleBrains,
 	linkedUserIds,
-	getAppUserByGithubUserId,
 	listAccessibleOrgs,
 	resolveOrgForPerson,
 	chooseBrain,
@@ -61,7 +54,6 @@ import {
 	type TenantOpts
 } from './lib/orgs.ts';
 import type { CommitAuthor } from './lib/brain-repo.ts';
-import { githubHandler } from './oauth/github-handler.ts';
 import { authHandler } from './oauth/auth-handler.ts';
 import { getAuthSession } from './auth/config.ts';
 import { BRAIN_APP_HTML } from './lib/app-bundle.generated.ts';
@@ -100,13 +92,10 @@ interface Env {
 	// AUTH_MODE=static.
 	MCP_BEARER_TOKEN?: string;
 
-	// OAuth-mode storage + GitHub OAuth creds (IDENTITY_MODE=github, and the
-	// connected-accounts GitHub link). OAUTH_PROVIDER is injected at runtime by the
+	// OAuth-mode storage. OAUTH_PROVIDER is injected at runtime by the
 	// OAuthProvider wrapper; we type it for consumer code.
 	OAUTH_KV: KVNamespace;
 	OAUTH_PROVIDER: OAuthHelpers;
-	GITHUB_APP_CLIENT_ID: string;
-	GITHUB_APP_CLIENT_SECRET: string;
 
 	// Platform GitHub App auth. App ID + PEM are required (used to mint
 	// installation tokens for any tenant). The single GITHUB_APP_INSTALLATION_ID
@@ -134,16 +123,15 @@ interface Env {
 	PLATFORM_INSTALLATION_ID: string;
 	// "true" enables first-touch provisioning and create_org's hosted orgs (which
 	// also mint under the platform installation). When off, a person nobody invited
-	// is turned away (authjs) or gets a NoTenantError (github). Pending invitations
-	// are claimed either way.
+	// is turned away. Pending invitations are claimed either way.
 	AUTO_PROVISION: string;
 
-	// Identity provider for the OAuth `/authorize` upstream (oauth mode only).
-	// `github` (default) uses GitHub OAuth (github-handler) — every user needs a
-	// GitHub account. `authjs` uses Auth.js (email magic-link / SSO, auth-handler)
-	// so members/readers never need GitHub. See docs/design/org-roles-permissions.md.
-	IDENTITY_MODE?: 'github' | 'authjs';
-	// Auth.js config, used only when IDENTITY_MODE=authjs. AUTH_SECRET signs
+	// The OAuth `/authorize` upstream is Auth.js (email magic-link, auth-handler).
+	// `authjs` is the only accepted value, and unset means it. `github` (GitHub
+	// OAuth into a per-user `tenants` row) was removed on 2026-09-23; a deployment
+	// still setting it is told so at /authorize rather than failing obscurely.
+	IDENTITY_MODE?: string;
+	// Auth.js config (oauth mode). AUTH_SECRET signs
 	// sessions; AUTH_RESEND_KEY + AUTH_EMAIL_FROM drive magic-link email via
 	// Resend (magic-link stays inert until AUTH_RESEND_KEY is set).
 	AUTH_SECRET?: string;
@@ -161,8 +149,8 @@ interface Env {
 	BRAIN_REPO_NAME?: string;
 
 	// The platform database: org model (orgs, memberships, brains, grants,
-	// invitations), the legacy gh_user_id `tenants` table, the content index, and
-	// usage counters. Schema is `migrations/`.
+	// invitations, storage connections), the content index, and usage counters.
+	// Schema is `migrations/`.
 	PLATFORM_DB: D1Database;
 
 	// Product feedback (submit_feedback). FEEDBACK_REPO is the "owner/repo" of the
@@ -187,11 +175,7 @@ interface Env {
 
 // Identity surfaced via OAuth `props` (read from `ctx.props`). Empty in static mode.
 interface McpProps extends Record<string, unknown> {
-	// GitHub identity — set on the legacy `github` IDENTITY_MODE path.
-	gh_user_id?: number;
-	gh_login?: string;
-	// Product-native identity — set on the `authjs` IDENTITY_MODE path, where
-	// the user authenticates via Auth.js and may have no GitHub account.
+	// The Auth.js identity: the user may have no GitHub account.
 	user_id?: string;
 	email?: string;
 	org_id?: string | null;
@@ -288,10 +272,28 @@ class McpSession {
 	private invitesClaimed = false;
 
 	private userKey(): string {
-		return (
-			this.props?.user_id ??
-			(this.props?.gh_user_id != null ? 'gh:' + this.props.gh_user_id : 'anon')
-		);
+		return this.props?.user_id ?? (this.env.AUTH_MODE === 'static' ? STATIC_USER_ID : 'anon');
+	}
+
+	// Who is calling, as an app_users id. The signed-in person in oauth mode. In
+	// static mode, the operator row, written from config on first use (once per
+	// request): the same org model, with one member.
+	private _staticCaller?: Promise<string>;
+	private async callerUserId(): Promise<string | undefined> {
+		if (this.env.AUTH_MODE !== 'static') return this.props?.user_id;
+		this._staticCaller ??= (async () => {
+			const auth = staticAuth(this.env);
+			const { userId } = await ensureStaticTenant(this.env.PLATFORM_DB, {
+				owner: auth.owner,
+				repo: auth.repo,
+				credential:
+					auth.kind === 'token'
+						? { kind: 'token' }
+						: { kind: 'installation', installationId: auth.installationId }
+			});
+			return userId;
+		})();
+		return this._staticCaller;
 	}
 
 	// Fail-open, like loadCustomTools: a KV read that throws leaves the pointer
@@ -428,18 +430,18 @@ class McpSession {
 		return brains.find((b) => b.id === this.activeBrainId)?.org_id;
 	}
 
-	// All brains the current caller can reach (authjs path). Used by the brain tools
-	// (brains / switch_brain) and the switcher.
+	// All brains the current caller can reach. Used by the brain tools (brains /
+	// switch_brain) and the switcher.
 	private async listAccessibleBrainsForCaller(): Promise<AccessibleBrain[]> {
-		if (!this.props?.user_id) return [];
-		return listAccessibleBrains(this.env.PLATFORM_DB, await this.personUserIds(this.props.user_id));
+		const userId = await this.callerUserId();
+		if (!userId) return [];
+		return listAccessibleBrains(this.env.PLATFORM_DB, await this.personUserIds(userId));
 	}
 
 	// Where the web app is served, or undefined on a deployment without one.
 	private webBase(): string | undefined {
 		return webBaseUrl({
 			authMode: this.env.AUTH_MODE,
-			identityMode: this.env.IDENTITY_MODE,
 			publicBaseUrl: this.env.PUBLIC_BASE_URL
 		});
 	}
@@ -467,122 +469,18 @@ class McpSession {
 		this.configCache.delete(`${owner}/${repo}`);
 	}
 
-	// Resolve the per-request tenant context. Three paths:
-	//   - authjs identity (`user_id`): the org model, via resolveProductContext.
-	//   - github identity (`gh_user_id`): the org model if the GitHub id is linked
-	//     to a person with brains, else the flat `tenants` row (auto-provisioning a
-	//     brain on the platform org when AUTO_PROVISION is on).
-	//   - AUTH_MODE=static: the global env vars (single-tenant self-hosting).
+	// Resolve the per-request tenant context. One path for every deployment: the
+	// caller (signed in, or the static operator) through the org model to the chosen
+	// brain, whose storage binding says which credential reads it.
 	private async tenantContext(opts?: TenantOpts): Promise<TenantContext> {
-		const env = this.env;
-		if (env.AUTH_MODE === 'oauth') {
-			// Product-native identity (IDENTITY_MODE=authjs): resolve org → role →
-			// brain from the app-level tables. This is the member-facing path where
-			// the user may have no GitHub account.
-			if (this.props?.user_id) {
-				const ctx = await this.resolveProductContext(
-					this.props.user_id,
-					this.props.email ?? '',
-					opts?.brain
-				);
-				assertRole(ctx.role, opts?.requires);
-				assertRole(ctx.orgRole, opts?.requiresOrg);
-				return ctx;
-			}
-			// GitHub identity (legacy/admin path): the flat, gh_user_id-keyed tenants
-			// table. GitHub-connected users are treated as owners (full access).
-			const ghUserId = this.props?.gh_user_id;
-			if (!ghUserId) {
-				throw new Error(
-					'OAuth mode but no identity in props — token carried neither user_id (authjs) nor gh_user_id (github).'
-				);
-			}
-			// Identity-linking bridge: if this GitHub id is linked to a product identity
-			// (github_links → app_user), resolve through the PERSON model so the GitHub
-			// connection reaches the full union of the person's brains (+ multi-brain
-			// selection + member/connected-accounts tools), exactly like the authjs path.
-			// Guarded on the person actually having accessible brains, so a linked-but-
-			// org-less id falls through rather than getting auto-provisioned a junk brain.
-			const linked = await getAppUserByGithubUserId(env.PLATFORM_DB, ghUserId);
-			if (linked) {
-				const brains = await listAccessibleBrains(
-					env.PLATFORM_DB,
-					await this.personUserIds(linked.user_id)
-				);
-				if (brains.length > 0) {
-					const ctx = await this.resolveProductContext(linked.user_id, linked.email, opts?.brain);
-					assertRole(ctx.role, opts?.requires);
-					assertRole(ctx.orgRole, opts?.requiresOrg);
-					return ctx;
-				}
-			}
-			let tenant = await getTenantByUserId(env.PLATFORM_DB, ghUserId);
-			if (!tenant) {
-				tenant = await this.autoProvision(ghUserId);
-			}
-			if (tenant.suspended_at) {
-				throw new Error(
-					`Tenant ${ghUserId} is suspended (App uninstalled or permissions revoked). Re-install to continue.`
-				);
-			}
-			// Single-tenant legacy identity: one human, one brain, no org model: so
-			// both scopes report 'owner'.
-			assertRole('owner', opts?.requires);
-			assertRole('owner', opts?.requiresOrg);
-			const octokit = await installationOctokit(appCreds(env), tenant.installation_id);
-			const repoArgs = { owner: tenant.brain_owner, repo: tenant.brain_repo };
-			// GitHub identity: attribute to their account via GitHub's canonical
-			// noreply address (<id>+<login>@users.noreply.github.com), which links the
-			// commit to their profile without exposing a private email.
-			const author = githubNoreplyAuthor(ghUserId, this.props?.gh_login);
-			return this.singleTenantContext(octokit, repoArgs, author);
+		const userId = await this.callerUserId();
+		if (!userId) {
+			throw new Error('No signed-in identity on this connection: sign in again and retry.');
 		}
-		// Single-tenant path: one human, one brain, no org model. Two ways to reach the
-		// repo; GITHUB_TOKEN takes precedence.
-		//
-		//   GITHUB_TOKEN         a plain access token (a fine-grained PAT with Contents +
-		//                        Pull requests write). No App, organization, manifest
-		//                        flow, or installation id. Commits are attributed to the
-		//                        token's owner.
-		//   App installation     the platform App plus GITHUB_APP_INSTALLATION_ID. Use
-		//                        for App-authored commits or an org-owned installation.
-		//
-		// Both need BRAIN_REPO_OWNER/NAME, since there is no tenant table to resolve.
-		const auth = staticAuth(env);
-		assertRole('owner', opts?.requires);
-		assertRole('owner', opts?.requiresOrg);
-		const octokit =
-			auth.kind === 'token'
-				? tokenOctokit(auth.token)
-				: await installationOctokit(appCreds(env), auth.installationId);
-		// No signed-in human on this path, so no author: commits are attributed to the
-		// App or to the token's owner.
-		return this.singleTenantContext(octokit, { owner: auth.owner, repo: auth.repo });
-	}
-
-	// The context shape shared by the two paths with NO ORG MODEL: the legacy
-	// gh_user_id tenant row and AUTH_MODE=static. Both are one human with one
-	// brain, so both scopes report 'owner', and both key the brain on the repo
-	// itself because there is no brains row to carry a name.
-	private async singleTenantContext(
-		octokit: TenantContext['octokit'],
-		repoArgs: { owner: string; repo: string },
-		author?: CommitAuthor
-	): Promise<TenantContext> {
-		const store = githubStore(octokit);
-		const brainId = `${repoArgs.owner}/${repoArgs.repo}`;
-		return {
-			octokit,
-			store,
-			repoArgs,
-			role: 'owner',
-			orgRole: 'owner',
-			config: await this.loadConfig(store, repoArgs),
-			author,
-			db: this.env.PLATFORM_DB,
-			brainId,
-			activeBrain: { id: brainId, label: repoArgs.repo }
-		};
+		const ctx = await this.resolveProductContext(userId, this.props?.email ?? '', opts?.brain);
+		assertRole(ctx.role, opts?.requires);
+		assertRole(ctx.orgRole, opts?.requiresOrg);
+		return ctx;
 	}
 
 	// Product-identity resolution: person → accessible brains → the CHOSEN brain →
@@ -601,7 +499,11 @@ class McpSession {
 		const brains = await listAccessibleBrains(env.PLATFORM_DB, await this.personUserIds(userId));
 
 		let target: AccessibleBrain;
-		if (brains.length === 0) {
+		if (brains.length === 0 && env.AUTH_MODE === 'static') {
+			// ensureStaticTenant wrote the brain this caller reaches, so an empty list
+			// is a broken row set, not a first-touch person to provision.
+			throw new NoBrainError();
+		} else if (brains.length === 0) {
 			// First touch: ensure the personal org exists (org only, no brain). If it
 			// has no brain yet, signal the "create a brain" state; an invite path that
 			// lands them in an org WITH a brain uses it.
@@ -624,13 +526,24 @@ class McpSession {
 			target = chooseBrain(brains, { brain: brainArg, activeBrainId: this.activeBrainId });
 		}
 
-		const octokit = await installationOctokit(appCreds(env), target.installation_id);
+		const credential = credentialFor(target);
+		const octokit =
+			credential.kind === 'token'
+				? tokenOctokit(requireToken(env))
+				: await installationOctokit(appCreds(env), credential.installationId);
 		const repoArgs = { owner: target.repo_owner, repo: target.repo_name };
 		// Attribute commits to the human. Prefer the app_users row (authoritative
 		// name + verified email); fall back to the token email. A member with no
 		// GitHub account still gets legible authorship — GitHub just won't link it
 		// to a profile unless the email matches a verified GitHub email.
-		const author = commitAuthorFor(await getAppUser(env.PLATFORM_DB, userId), email);
+		//
+		// Static mode has no signed-in human, only the operator row, whose address is
+		// a placeholder: no author, so commits are attributed to the token's owner or
+		// the App, as they always were there.
+		const author =
+			env.AUTH_MODE === 'static'
+				? undefined
+				: commitAuthorFor(await getAppUser(env.PLATFORM_DB, userId), email);
 		this.noteScope(target.org_id, target.id);
 		return {
 			octokit,
@@ -719,27 +632,6 @@ class McpSession {
 		};
 	}
 
-	// First-touch provisioning on the legacy github identity path: a GitHub user
-	// with no tenant row gets a brain repo created under the platform org via the
-	// platform installation. Gated by AUTO_PROVISION. (The authjs path provisions an
-	// org only; see autoProvisionOrg.)
-	private async autoProvision(ghUserId: number) {
-		const env = this.env;
-		if (env.AUTO_PROVISION !== 'true') {
-			throw new NoTenantError(ghUserId);
-		}
-		const platform = platformInstall(env);
-		const octokit = await installationOctokit(appCreds(env), platform.installationId);
-		return provisionBrainForUser({
-			octokit,
-			db: env.PLATFORM_DB,
-			ghUserId,
-			ghLogin: this.props?.gh_login ?? null,
-			org: platform.org,
-			installationId: platform.installationId
-		});
-	}
-
 	// Wrap ONE registered tool's handler so its call is counted after it finishes.
 	//
 	// Why here and not in each tool: this is the only place that sees every tool by
@@ -795,7 +687,7 @@ class McpSession {
 				title: 'Identify the current user',
 				annotations: { readOnlyHint: true },
 				description:
-					'Identify the current user: whoami reports who is signed in to this connection. Returns their email (or GitHub login) and, when a brain resolves, their role on the active brain and which brain that is. On a single-tenant connection with no signed-in identity, says so.',
+					'Identify the current user: whoami reports who is signed in to this connection. Returns their email and, when a brain resolves, their role on the active brain and which brain that is. On a single-user deployment, which has no sign-in, says so.',
 				inputSchema: z.object({})
 			},
 			async () => {
@@ -820,49 +712,41 @@ class McpSession {
 						structuredContent: identity
 					};
 				}
-				// GitHub identity (legacy/admin path).
-				const login = this.props?.gh_login;
-				const userId = this.props?.gh_user_id;
-				// If this GitHub id is linked to a product identity, report the resolved
-				// person (email/role/org/activeBrain) so the settings card shows the union.
-				if (userId) {
+				// Static mode: nobody signs in. The caller is the deployment's operator,
+				// who owns its one brain.
+				// Answered from the rows alone, not a resolved context: that reads the
+				// brain's config from GitHub, and a bad token must not turn "who am I"
+				// into "nobody".
+				if (this.env.AUTH_MODE === 'static') {
 					try {
-						const linked = await getAppUserByGithubUserId(this.env.PLATFORM_DB, userId);
-						if (linked) {
-							const { role, repoArgs, activeBrain } = await this.tenantContext();
+						const [b] = await this.listAccessibleBrainsForCaller();
+						if (b) {
+							const activeBrain = { id: b.id, label: brainLabel(b) };
 							return {
 								content: [
 									{
 										type: 'text',
-										text: `Authenticated as @${login ?? linked.email} — ${role} of ${repoArgs.owner}/${repoArgs.repo}.`
+										text: `Single-user deployment with no sign-in: you are its operator, ${b.role} of ${activeBrain.label}.`
 									}
 								],
-								structuredContent: {
-									email: linked.email,
-									login,
-									role,
-									org: repoArgs.owner,
-									activeBrain
-								}
+								structuredContent: { role: b.role, activeBrain }
 							};
 						}
-					} catch {
-						// Not linked / resolution incomplete — fall through to the plain report.
+					} catch (err) {
+						const why = err instanceof Error ? err.message : String(err);
+						return {
+							content: [
+								{
+									type: 'text',
+									text: `Single-user deployment with no sign-in, misconfigured: ${why}`
+								}
+							],
+							structuredContent: {}
+						};
 					}
 				}
-				if (login) {
-					return {
-						content: [
-							{
-								type: 'text',
-								text: `Authenticated as @${login} (gh_user_id ${userId}).`
-							}
-						],
-						structuredContent: { login, org: userId ? String(userId) : undefined }
-					};
-				}
 				return {
-					content: [{ type: 'text', text: 'No OAuth identity (static-bearer mode).' }],
+					content: [{ type: 'text', text: 'No signed-in identity on this connection.' }],
 					structuredContent: {}
 				};
 			}
@@ -912,36 +796,40 @@ class McpSession {
 			webBaseUrl: this.webBase()
 		});
 
-		// Single-tenant deployments (AUTH_MODE=static, whether reaching GitHub through a
-		// token or an App installation) have one human and one brain, and no `orgs` /
-		// `memberships` / `brain_memberships` rows to resolve against. The tools below
-		// cannot answer, so they are not registered: an advertised tool costs context in
-		// every conversation, and a refusal reads to the model as a permissions problem
-		// to work around. Same rule as FEEDBACK_REPO.
-		const hasOrgModel = env.AUTH_MODE === 'oauth';
+		// Whether anyone besides the operator can sign in. Every deployment runs the
+		// org model (a static one has one org, one member, one brain: see
+		// src/lib/static-tenant.ts), so this is the ONE capability that differs. With
+		// nobody else to invite, share with, or count, the people and sharing tools
+		// can only refuse, so they are not registered: an advertised tool costs context
+		// in every conversation, and a refusal reads to the model as a permissions
+		// problem to work around. Same rule as FEEDBACK_REPO. The app learns the same
+		// fact from `features.people` on the brains payload, so it never offers a
+		// destination whose tool is absent.
+		const multiUser = env.AUTH_MODE === 'oauth';
 
 		// ---------- member management ----------
 		// The org-admin roster surface: members (the interactive roster + data) plus
 		// invite_member / set_member_role / remove_member. Reads are open to any member;
 		// mutations require admin+, with owner as the lockout-proof anchor. See
 		// src/tools/members.ts.
-		if (hasOrgModel) registerMemberTools(server, (opts) => this.tenantContext(opts));
+		if (multiUser) registerMemberTools(server, (opts) => this.tenantContext(opts));
 
 		// ---------- brain sharing (per-brain access) ----------
 		// The brain-scope sibling of the member tools: members moves the ORG roster,
 		// these move who can reach ONE brain. See src/tools/brain-access.ts. Its result
 		// carries `activeBrain`, so the Share control in the brains list opens the panel
 		// under the named brain's crumb without moving the pointer (see registerBrainApp).
-		registerBrainAccessTools(server, (opts) => this.tenantContext(opts), {
-			webBaseUrl: this.webBase()
-		});
+		if (multiUser)
+			registerBrainAccessTools(server, (opts) => this.tenantContext(opts), {
+				webBaseUrl: this.webBase()
+			});
 
 		// ---------- connected accounts (identity linking) ----------
 		// The per-person "Your settings → Connected accounts" surface: connected_accounts
 		// (the interactive panel + data) plus link_identity / unlink_identity.
 		// Links a person's emails + GitHub logins so any of them reaches
 		// the union of their brains; verified via magic-link. See src/tools/connected-accounts.ts.
-		if (hasOrgModel)
+		if (multiUser)
 			registerConnectedAccountTools(server, (opts) => this.tenantContext(opts), this.env);
 
 		// ---------- creating an org ----------
@@ -949,7 +837,7 @@ class McpSession {
 		// App install URL carrying a KV-stashed state, which /github/install-callback
 		// turns into a customer org. See src/tools/org-onboarding.ts and
 		// src/lib/org-connect.ts.
-		if (hasOrgModel)
+		if (multiUser)
 			registerOrgOnboardingTools(
 				server,
 				(opts) => this.orgContext(opts),
@@ -967,11 +855,9 @@ class McpSession {
 		// recording off there is nothing to report, and a tool that can only answer
 		// "zero" is worse than a tool that is not there. See src/tools/analytics.ts.
 		//
-		// Also gated on hasOrgModel: the tab is an ORG-scope destination and both its
-		// authorization and its recording read the resolved org, which a single-tenant
-		// deployment has none of. `recordUsage` already returns early without one, so
-		// registering it there would advertise a tab that can only answer zero.
-		if (this.usageEnabled() && hasOrgModel) {
+		// Also gated on multiUser: the tab answers "who in the organization is using
+		// its brains", which on a single-user deployment has one possible answer.
+		if (this.usageEnabled() && multiUser) {
 			registerAnalyticsTools(server, (opts) => this.tenantContext(opts));
 		}
 
@@ -988,7 +874,6 @@ class McpSession {
 			() => ({
 				userId: this.props?.user_id,
 				email: this.props?.email,
-				ghLogin: this.props?.gh_login,
 				orgId: this.props?.org_id ?? undefined,
 				brainId: this.activeBrainId
 			}),
@@ -1000,11 +885,12 @@ class McpSession {
 		// brain; switch_brain changes it (persisted in KV, per user); any tool's `brain`
 		// arg one-shots another. See src/tools/brains.ts.
 		//
-		// Registered in single-tenant mode too, unlike the org tools above: the app's nav
-		// calls `brains` on every open and learns which destinations exist from the
-		// `features` on its payload. With no signed-in user the list is empty
-		// (listAccessibleBrainsForCaller returns [] without touching the org tables).
+		// `brains` and `configure_brain` are registered on every deployment: the app's
+		// nav calls `brains` on every open and learns which destinations exist from the
+		// `features` on its payload. The tools that add, move, remove or switch between
+		// brains need somewhere else for a brain to be, so they follow multiUser.
 		registerBrainTools(server, {
+			multiUser,
 			getContext: (opts) => this.tenantContext(opts),
 			orgContext: (opts) => this.orgContext(opts),
 			listOrgs: async () =>
@@ -1115,14 +1001,25 @@ const mcpApiHandler = {
 	}
 };
 
+// The token a `github-token` storage connection names. The row references the
+// secret and never holds it (see src/lib/static-tenant.ts), so it is read here.
+function requireToken(env: Env): string {
+	const token = env.GITHUB_TOKEN?.trim();
+	if (!token) {
+		throw new Error(
+			'This brain is stored through GITHUB_TOKEN, which is not set on this deployment.'
+		);
+	}
+	return token;
+}
+
 // ---------- Worker entry ----------
 
 // OAuthProvider wraps the entire request lifecycle:
 //   - `/.well-known/oauth-authorization-server` (RFC 8414) and
 //     `/.well-known/oauth-protected-resource` (RFC 9728) are auto-served.
 //   - `/token` and `/register` are implemented internally.
-//   - `/authorize` is delegated to `identityHandler`, which picks the Auth.js or
-//     GitHub sign-in by IDENTITY_MODE.
+//   - `/authorize` is delegated to `identityHandler`: the Auth.js sign-in.
 //   - Requests under `apiRoute` (`/mcp`) require a valid access token; on
 //     success, the request is forwarded to `mcpApiHandler` with `ctx.props`
 //     populated from the grant.
@@ -1130,16 +1027,20 @@ const mcpApiHandler = {
 // Endpoints are paths (not full URLs); the provider derives full URLs from
 // `request.url.origin` for metadata responses. Path-only matching also keeps
 // internal routing host-agnostic.
-// Chooses the upstream identity handler at request time — env isn't available at
-// module load, so we can't pick the handler when constructing OAuthProvider.
-// `authjs` routes to Auth.js (product-native identity, no GitHub for members);
-// anything else falls back to the GitHub bridge.
+// The upstream sign-in behind `/authorize`. Auth.js is the only one. A deployment
+// still configured for the removed GitHub sign-in (IDENTITY_MODE=github) is told
+// what changed, rather than dropped into an Auth.js flow it has no secrets for.
 const identityHandler = {
 	async fetch(request: Request, env: Env, _ctx: ExecutionContext): Promise<Response> {
-		if (env.IDENTITY_MODE === 'authjs') {
-			return authHandler.fetch(request, env);
+		const mode = env.IDENTITY_MODE?.trim();
+		if (mode && mode !== 'authjs') {
+			return new Response(
+				`IDENTITY_MODE=${mode} is not supported. GitHub sign-in was removed: set IDENTITY_MODE=authjs ` +
+					'(email sign-in; see docs/self-hosting.md), or AUTH_MODE=static for a single-user deployment.',
+				{ status: 501, headers: { 'content-type': 'text/plain; charset=utf-8' } }
+			);
 		}
-		return githubHandler.fetch(request, env);
+		return authHandler.fetch(request, env);
 	}
 };
 
@@ -1345,9 +1246,9 @@ export default {
 		// install callback, because the provider owns `/mcp` and would reject a
 		// cookie-authenticated call before it ever reached the handler.
 		//
-		// authjs only: the cookie session is what Auth.js issues, and the github
-		// and static identity paths have no browser session to read.
-		if (env.AUTH_MODE === 'oauth' && env.IDENTITY_MODE === 'authjs') {
+		// oauth only: the cookie session is what Auth.js issues, and a static
+		// deployment has no sign-in and so no browser session to read.
+		if (env.AUTH_MODE === 'oauth') {
 			// The shell. Serving the same bundle the MCP App resource serves, with
 			// a flag telling it which host it is running in.
 			if (

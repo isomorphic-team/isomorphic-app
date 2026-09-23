@@ -284,7 +284,9 @@ const onboardingEnv: OrgOnboardingEnv = {
 
 function toolsFor(
 	p: Persona,
-	deployment: { webBaseUrl?: string } = { webBaseUrl: 'https://brain.example' }
+	deployment: { webBaseUrl?: string; multiUser?: boolean } = {
+		webBaseUrl: 'https://brain.example'
+	}
 ): Map<string, Handler> {
 	const handlers = new Map<string, Handler>();
 	const server = {
@@ -344,6 +346,7 @@ function toolsFor(
 		}));
 	registerOrgOnboardingTools(server, orgContext, listOrgs, onboardingEnv);
 	registerBrainTools(server, {
+		multiUser: deployment.multiUser ?? true,
 		getContext,
 		orgContext,
 		listBrains: async (): Promise<AccessibleBrain[]> =>
@@ -1220,6 +1223,50 @@ console.log('\ncreate_org: a hosted org on the spot, or a GitHub install link');
 		JSON.stringify(stashed)
 	);
 	onboardingEnv.AUTO_PROVISION = 'true';
+}
+
+// ===========================================================================
+console.log('\nA single-user deployment: only the tools that can answer');
+// ===========================================================================
+// Every deployment runs the org model now, so the one difference is whether anyone
+// besides the operator can sign in. Where nobody can, the tools that add, move,
+// remove or switch brains, and the people and sharing tools, can only refuse, so
+// they are not registered, and the app is told through `features.people`.
+{
+	const solo = toolsFor(orgBoss, { multiUser: false });
+	for (const t of ['switch_brain', 'create_brain', 'connect_brain', 'disconnect_brain']) {
+		check(`${t} is not registered`, !solo.has(t));
+	}
+	check('brains and configure_brain still are', solo.has('brains') && solo.has('configure_brain'));
+
+	const feat = async (multiUser: boolean) => {
+		const res = await toolsFor(orgBoss, { multiUser }).get('brains')!({});
+		return ((res.structuredContent ?? {}) as { features?: { people?: boolean } }).features;
+	};
+	check(
+		'the brains payload says so, so the app never offers a destination whose tool is absent',
+		(await feat(false))?.people === false && (await feat(true))?.people === true
+	);
+
+	// The people and sharing tools are registered by the Worker itself, where no test
+	// can call the decision, so their gate is read from the source: each registration
+	// must sit behind `multiUser`. The same kind of scan test:usage uses for TOOL_KINDS.
+	const worker = readFileSync(new URL('../src/worker.ts', import.meta.url), 'utf8');
+	for (const fn of [
+		'registerMemberTools',
+		'registerBrainAccessTools',
+		'registerConnectedAccountTools',
+		'registerOrgOnboardingTools',
+		'registerAnalyticsTools'
+	]) {
+		const at = worker.indexOf(`${fn}(`);
+		const lead = at < 0 ? '' : worker.slice(Math.max(0, at - 80), at);
+		check(
+			`worker.ts registers ${fn} only when multiUser`,
+			at >= 0 && /multiUser\)\s*(\{\s*)?$/.test(lead),
+			lead
+		);
+	}
 }
 
 // ---------------------------------------------------------------------------

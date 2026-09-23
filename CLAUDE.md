@@ -131,8 +131,8 @@ GitHub App auth uses two tokens (`src/lib/github.ts`):
 
 Permissions are declared in `src/manifest.ts`. `administration: write` is required to create
 repos and is **only granted on Organization installs**; the install callback refuses a personal
-account install with a friendly error. The two human identity modes (`IDENTITY_MODE=github` and
-`authjs`) are in the org-model rules file.
+account install with a friendly error. Human sign-in (Auth.js, oauth mode only) is in the
+org-model rules file.
 
 ### PKCS#1 vs PKCS#8 (don't break this)
 
@@ -222,16 +222,26 @@ say-so, and a `GITHUB_TOKEN` push does not re-trigger checks anyway.
 - The DO `migrations` array (`v1` new / `v2` deleted `IsomorphicMindMcp`) is **append-only** by
   Cloudflare's rules. Neither entry may be removed.
 - **`AUTH_MODE=static`** (one shared bearer, `MCP_BEARER_TOKEN`) is the supported
-  **self-hosting** entry point: one person, one brain, no identity setup. `oauth` +
-  `IDENTITY_MODE=authjs` is what the hosted deployment runs.
-- **In static mode `GITHUB_TOKEN` can replace the GitHub App** (`tokenOctokit`): a fine-grained
-  PAT with Contents + Pull requests write on one repo, plus `BRAIN_REPO_OWNER`/`NAME`. Commits are
-  attributed to the token's owner. `oauth` still requires the App.
-- **Single-tenant mode does not register the org tools.** `hasOrgModel`
-  (`AUTH_MODE === 'oauth'`) gates members, connected accounts, `create_org` and `analytics`: an
-  advertised tool costs context in every conversation, and a refusal reads to the model as a
-  permissions problem to work around. Same rule as `FEEDBACK_REPO`. `brains`, `create_brain` and
-  `connect_brain` stay registered; the latter two refuse through `orgContext`.
+  **self-hosting** entry point: one person, one brain, no sign-in. `oauth` (Auth.js email
+  sign-in) is what the hosted deployment runs. **Both run the same org model**: a static
+  deployment writes its own org, operator and brain rows from config on first use
+  (`ensureStaticTenant`, `src/lib/static-tenant.ts`), so there is ONE resolution path.
+  `IDENTITY_MODE=github` and the `tenants` table were removed on 2026-09-23 (production held one
+  dead row); a deployment still setting it gets a 501 at `/authorize` saying so.
+- **In static mode `GITHUB_TOKEN` can replace the GitHub App**: a fine-grained PAT with
+  Contents + Pull requests write on one repo, plus `BRAIN_REPO_OWNER`/`NAME`. It is recorded as a
+  `github-token` storage connection that names the secret and never holds it; `credentialFor`
+  (`src/lib/storage-connections.ts`, pure) picks token vs installation from the binding. Commits
+  are attributed to the token's owner. `oauth` still requires the App.
+- **ONE capability flag: `multiUser`** (`AUTH_MODE === 'oauth'`, in `buildServer`), meaning
+  "anyone besides the operator can sign in". Without it: members, `brain_access`/`share_brain`,
+  connected accounts, `create_org`, `analytics`, and `switch_brain`/`create_brain`/
+  `connect_brain`/`disconnect_brain` are NOT registered (an advertised tool costs context, and a
+  refusal reads as a permissions problem to work around; same rule as `FEEDBACK_REPO`). `brains`
+  and `configure_brain` always are. The app learns it from `features.people` on the `brains`
+  payload and hides Sharing, Members, Analytics, Manage brains, Share, disconnect, Add brain and
+  Connected accounts (`NavCaps.people`). `pnpm test:scope` pins the surface (and scans
+  `worker.ts` for the gates it cannot call); `pnpm test:policy` pins the nav.
 
 ## Brain model
 

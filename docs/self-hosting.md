@@ -294,13 +294,11 @@ Do path 2 first and confirm it works, taking **option B** in 2a: multi-tenant me
 a token per organization from one App installation, which a personal access token cannot do.
 Then:
 
-### 3a. Choose an identity mode
+### 3a. Sign-in
 
-`IDENTITY_MODE=github` uses GitHub OAuth. Simplest, but every user needs a GitHub account,
-which defeats much of the point if your users are not engineers.
-
-`IDENTITY_MODE=authjs` uses Auth.js with an email magic link, so members never touch GitHub.
-This is usually what you want. Two caveats, both from running it:
+Members sign in with Auth.js and an email magic link, so they never touch GitHub. (GitHub
+sign-in, `IDENTITY_MODE=github`, was removed; a deployment still setting it is told so at
+`/authorize`.) Two caveats, both from running it:
 
 - Magic links are weaker than a redirect-based provider. Email prefetchers can consume a
   link, and cross-browser flows are fragile. A redirect-based OIDC provider (Google, your
@@ -313,7 +311,6 @@ This is usually what you want. Two caveats, both from running it:
 
 ```sh
 AUTH_MODE=oauth \
-IDENTITY_MODE=authjs \
 AUTO_PROVISION=true \
 PUBLIC_BASE_URL=https://brain.example.com \
 AUTH_EMAIL_FROM="Your Brain <login@example.com>" \

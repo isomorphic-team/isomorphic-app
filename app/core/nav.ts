@@ -82,6 +82,12 @@ export type NavCaps = {
 	analytics: boolean;
 	/** Admin+ of at least one org — brain management is theirs alone. */
 	canManageBrains: boolean;
+	/**
+	 * Anyone besides the operator can sign in (`features.people`). A single-user
+	 * deployment registers none of the people, sharing or brain-management tools, so
+	 * Sharing, Members, Analytics and Manage brains would all come back "unknown tool".
+	 */
+	people: boolean;
 };
 
 // The destinations of one scope, in order, filtered to what a click would actually
@@ -91,8 +97,9 @@ export type NavCaps = {
 export function destinationsIn(scope: Scope, caps: NavCaps): DestKey[] {
 	return (Object.keys(DEST_META) as DestKey[]).filter((k) => {
 		if (DEST_META[k].scope !== scope) return false;
-		if (k === 'analytics') return caps.analytics;
-		if (k === 'brains') return caps.canManageBrains;
+		if (k === 'sharing' || k === 'members') return caps.people;
+		if (k === 'analytics') return caps.people && caps.analytics;
+		if (k === 'brains') return caps.people && caps.canManageBrains;
 		return true;
 	});
 }

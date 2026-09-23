@@ -1,4 +1,4 @@
--- Product-native identity + org/role model (IDENTITY_MODE=authjs).
+-- Product-native identity + org/role model.
 --
 -- REFERENCE ONLY: the current shape, gathered in one place for reading. The
 -- canonical schema is `migrations/` (wrangler's migrations framework): apply it

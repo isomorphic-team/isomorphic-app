@@ -109,10 +109,16 @@ function applyBrainContext(sc: Record<string, unknown>): void {
 // ones fail on click. Unknown until the list lands, and a missing flag reads as OFF:
 // a destination that quietly does not appear is a far smaller failure than one that
 // appears and errors.
-let features: { analytics: boolean; webBase?: string } = { analytics: false };
-function setFeatures(v: Partial<{ analytics: boolean; webBase: string }> | undefined): void {
+let features: { analytics: boolean; people: boolean; webBase?: string } = {
+	analytics: false,
+	people: false
+};
+function setFeatures(
+	v: Partial<{ analytics: boolean; people: boolean; webBase: string }> | undefined
+): void {
 	if (!v) return;
 	if (typeof v.analytics === 'boolean') features = { ...features, analytics: v.analytics };
+	if (typeof v.people === 'boolean') features = { ...features, people: v.people };
 	if (typeof v.webBase === 'string' && v.webBase) features = { ...features, webBase: v.webBase };
 }
 

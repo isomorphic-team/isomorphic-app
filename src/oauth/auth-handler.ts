@@ -1,10 +1,9 @@
 // Product-identity handler behind the MCP OAuth server's /authorize.
 //
 // The Worker is an OAuth 2.1 authorization server to Claude via
-// @cloudflare/workers-oauth-provider. This handler is the upstream sign-in for
-// IDENTITY_MODE=authjs (the Worker's `identityHandler` routes here); in place of
-// the GitHub bridge (github-handler.ts) it uses Auth.js, so members sign in by
-// email and never need a GitHub account. See docs/design/org-roles-permissions.md.
+// @cloudflare/workers-oauth-provider. This handler is its upstream sign-in (the
+// Worker's `identityHandler` routes here): Auth.js, so members sign in by email and
+// never need a GitHub account. See docs/design/org-roles-permissions.md.
 //
 // Flow:
 //   /auth/*          → handed to Auth.js (signin, callback/resend, session, …)

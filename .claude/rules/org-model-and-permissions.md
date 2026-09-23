@@ -1,7 +1,7 @@
 ---
 paths:
   - "src/worker.ts"
-  - "src/lib/{orgs,storage-connections,brain-move,org-connect,invites,provision,identity,tenants,signin-email,scaffold-core}.ts"
+  - "src/lib/{orgs,storage-connections,brain-move,org-connect,invites,provision,identity,static-tenant,signin-email,scaffold-core}.ts"
   - "src/tools/{brains,brain-access,members,org-onboarding,connected-accounts}.ts"
   - "src/oauth/**"
   - "src/auth/**"
@@ -20,20 +20,22 @@ Full RFCs: `docs/design/org-roles-permissions.md`, `docs/design/brain-level-perm
 `docs/design/guest-access.md`, `docs/design/storage-and-tenancy.md`,
 `docs/design/brain-creation-and-init.md`.
 
-## Two identity modes (`IDENTITY_MODE`)
+## Sign-in and the single-user deployment
 
-The Worker is an OAuth 2.1 server to Claude via `@cloudflare/workers-oauth-provider`. What
-varies is the upstream human-auth step behind `/authorize`:
+The Worker is an OAuth 2.1 server to Claude via `@cloudflare/workers-oauth-provider`. The human
+sign-in behind `/authorize` is Auth.js (`src/oauth/auth-handler.ts` + `src/auth/config.ts`,
+`@auth/core` + `@auth/d1-adapter`) with a Resend magic link; users need no GitHub account. Token
+props `{ user_id, email }`. Google/OIDC is the recommended future primary provider (not built).
+GitHub sign-in (`IDENTITY_MODE=github`, the per-user `tenants` table, `brain-<login>`
+auto-provisioning) was removed on 2026-09-23; `/authorize` answers 501 if it is still set.
 
-- **`github`** (legacy/admin): `src/oauth/github-handler.ts`. Token props `{ gh_user_id, gh_login }`.
-  Tenant from the flat `tenants` table (`src/lib/tenants.ts`), treated as `owner`. A GitHub id
-  linked to a product identity resolves through the person model instead. This is the ONLY
-  path that auto-provisions a BRAIN (`provisionBrainForUser`, via `McpSession.autoProvision`,
-  gated on `AUTO_PROVISION`).
-- **`authjs`** (member-facing, the hosted default): `src/oauth/auth-handler.ts` +
-  `src/auth/config.ts`. Auth.js (`@auth/core` + `@auth/d1-adapter`) with a Resend magic link;
-  users need no GitHub account. Token props `{ user_id, email }`. Google/OIDC is the
-  recommended future primary provider (not built).
+**A static deployment (`AUTH_MODE=static`) runs the same org model.** `ensureStaticTenant`
+(`src/lib/static-tenant.ts`) writes one org, one operator member (`static-operator`), one
+storage connection and one brain from config on first use, in one batch, idempotent. CONFIG IS
+THE TRUTH: the brain follows `BRAIN_REPO_*` and the connection follows `GITHUB_TOKEN` /
+`GITHUB_APP_INSTALLATION_ID`, a brain from earlier config is removed, and an existing row for
+the repo is adopted rather than tripping the `(repo_owner, repo_name)` constraint. The
+operator's placeholder address never attributes a commit. `pnpm test:access` pins it.
 
 Auth.js specifics that bite: config MUST be built per request with `env.PLATFORM_DB`
 (`buildAuthConfig(env)`, never a module singleton). DB-strategy sessions omit `user.id` unless
@@ -47,7 +49,7 @@ through Resend from `src/auth/config.ts`. Auth.js's stock template (hostname sub
 button) was filed as spam. Keep the product name in the subject and From line, the requested
 address, where the link goes, the expiry, and a plain-text part with the same words.
 
-## The org model (authjs)
+## The org model
 
 **Tables** (`migrations/`; `src/db/*.sql` are reference only): `app_users` (Auth.js user
 projection, named apart from Auth.js `users`), `orgs`, `memberships` (user→org + `role`),
@@ -59,13 +61,14 @@ installation, minted at first touch), `customer` (the org's own GitHub App insta
 `hosted` (a named team org on the platform's installation, created by `create_org` without
 `github`, gated on `AUTO_PROVISION`).
 
-**Resolution** (`tenantContext()` in `worker.ts`, via `src/lib/orgs.ts`): `props.user_id` →
+**Resolution** (`tenantContext()` in `worker.ts`, via `src/lib/orgs.ts`), one path for every
+deployment: the caller (`callerUserId()`: `props.user_id`, or the static operator) →
 the person's linked user ids → accessible brains → the chosen brain → a token minted from that
 brain's STORAGE CONNECTION (see below). First-touch users with no membership get an **org
 only**, never a brain, via `provisionOrgForUser()` when `AUTO_PROVISION=true`. With no brain,
 brain-scope resolution throws `NoBrainError` and the app shows the create-first-brain state
 (`app/views/AddBrainView.tsx`). Org-scope actions resolve via `orgContext()`, which needs no
-brain and refuses outright on single-tenant connections.
+brain and refuses on a static connection, where the org-scope tools are not registered.
 
 **Brains are created explicitly.** `create_brain` (org `editor`+) scaffolds via
 `createAndScaffoldBrain`, writes a `brains` row with a user-given `name`, and switches to it.

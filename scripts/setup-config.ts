@@ -51,15 +51,8 @@ const SETTINGS = [
 		key: 'AUTH_MODE',
 		placeholder: '__AUTH_MODE__',
 		default: 'static',
-		help: '"static" (one shared bearer token, no roles) or "oauth" (multi-tenant orgs + roles).',
+		help: '"static" (one person, one shared bearer token, no sign-in) or "oauth" (email sign-in, members, sharing).',
 		oneOf: ['static', 'oauth']
-	},
-	{
-		key: 'IDENTITY_MODE',
-		placeholder: '__IDENTITY_MODE__',
-		default: 'github',
-		help: 'Upstream identity for oauth mode: "github" (users need GitHub) or "authjs" (email magic link / SSO).',
-		oneOf: ['github', 'authjs']
 	},
 	{
 		key: 'PUBLIC_BASE_URL',
@@ -166,7 +159,7 @@ Examples
     pnpm setup:config --provision
       A real single-tenant deployment on your own Cloudflare account.
 
-  AUTH_MODE=oauth IDENTITY_MODE=authjs AUTO_PROVISION=true \\
+  AUTH_MODE=oauth AUTO_PROVISION=true \\
     PUBLIC_BASE_URL=https://brain.example.com pnpm setup:config --provision
       A multi-tenant deployment with orgs, roles, and email sign-in.
 

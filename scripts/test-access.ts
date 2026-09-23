@@ -235,6 +235,8 @@ import { readdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { planBrainMove, loadMovePeople, describeMove, moveBrain } from '../src/lib/brain-move.ts';
 import { connectCustomerOrg } from '../src/lib/org-connect.ts';
+import { ensureStaticTenant, STATIC_USER_ID } from '../src/lib/static-tenant.ts';
+import { credentialFor, GITHUB_TOKEN_KIND } from '../src/lib/storage-connections.ts';
 import {
 	listAccessibleBrains,
 	listAccessibleOrgs,
@@ -1276,5 +1278,93 @@ console.log('\nCreating orgs: a customer org from a GitHub install (connectCusto
 			.name === 'beta-gh'
 	);
 }
+
+console.log('\nA single-user (static) deployment runs the org model (ensureStaticTenant)');
+{
+	const { db, sqlite } = localD1();
+	const count = (t: string) =>
+		(sqlite.prepare(`SELECT COUNT(*) AS n FROM ${t}`).get() as { n: number }).n;
+	const reach = async () => listAccessibleBrains(db, [STATIC_USER_ID]);
+
+	await ensureStaticTenant(db, { owner: 'solo', repo: 'notes', credential: { kind: 'token' } });
+	const [b] = await reach();
+	check(
+		'the operator reaches exactly the configured brain, as owner',
+		(await reach()).length === 1 &&
+			b?.id === 'solo/notes' &&
+			b.role === 'owner' &&
+			b.org_role === 'owner'
+	);
+	check(
+		'it is read through the token, not an installation',
+		credentialFor(b).kind === 'token' && b.storage_kind === GITHUB_TOKEN_KIND
+	);
+	const secretFree = sqlite
+		.prepare('SELECT external_id FROM storage_connections WHERE connection_id = ?')
+		.get('github-token:env') as { external_id: string };
+	check(
+		'the connection names where the token lives and never holds it',
+		secretFree.external_id === 'env'
+	);
+
+	await ensureStaticTenant(db, { owner: 'solo', repo: 'notes', credential: { kind: 'token' } });
+	check(
+		'writing it again changes nothing: one org, one member, one brain',
+		count('orgs') === 1 && count('memberships') === 1 && count('brains') === 1
+	);
+
+	await ensureStaticTenant(db, {
+		owner: 'solo',
+		repo: 'journal',
+		credential: { kind: 'installation', installationId: 42 }
+	});
+	const after = await reach();
+	check(
+		'config is the truth: a new repo REPLACES the old brain rather than sitting beside it',
+		after.length === 1 && after[0].id === 'solo/journal',
+		after.map((x) => x.id).join()
+	);
+	const cred = credentialFor(after[0]);
+	check(
+		'...and a new credential is picked up: now the App installation',
+		cred.kind === 'installation' && cred.installationId === 42
+	);
+
+	// A database that already had a row for the repo (an oauth deployment turned
+	// single-user, say): the unique (owner, repo) constraint must not fail the batch.
+	const { db: db2, sqlite: sqlite2 } = localD1();
+	sqlite2.exec(`
+	  INSERT INTO orgs (org_id, name, model, installation_id, brain_owner, created_by)
+	    VALUES ('old', 'Old', 'customer', 5, 'solo', 'x');
+	  INSERT INTO brains (brain_id, org_id, repo_owner, repo_name) VALUES ('b-legacy-id', 'old', 'solo', 'notes');
+	`);
+	let adopted = true;
+	try {
+		await ensureStaticTenant(db2, { owner: 'solo', repo: 'notes', credential: { kind: 'token' } });
+	} catch {
+		adopted = false;
+	}
+	const reached = await listAccessibleBrains(db2, [STATIC_USER_ID]);
+	check(
+		'an existing row for the configured repo is adopted, not a constraint failure',
+		adopted && reached.length === 1 && reached[0].brain_id === 'b-legacy-id'
+	);
+}
+
+console.log('\ncredentialFor: which credential reads a brain');
+check(
+	'no binding (written before migration 0010): the org installation, as before',
+	JSON.stringify(credentialFor({ storage_kind: null, installation_id: 7 })) ===
+		JSON.stringify({ kind: 'installation', installationId: 7 })
+);
+check(
+	'an installation binding: that installation',
+	JSON.stringify(credentialFor({ storage_kind: 'github-app-installation', installation_id: 9 })) ===
+		JSON.stringify({ kind: 'installation', installationId: 9 })
+);
+check(
+	'a token binding: the token, whatever installation id the row carries',
+	credentialFor({ storage_kind: 'github-token', installation_id: 0 }).kind === 'token'
+);
 
 done();

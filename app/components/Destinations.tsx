@@ -68,7 +68,8 @@ export type Destination = {
 export function destinations(scope: Scope): Destination[] {
 	const caps = {
 		analytics: features.analytics,
-		canManageBrains: !!brainList?.some((b) => b.canManage)
+		canManageBrains: !!brainList?.some((b) => b.canManage),
+		people: features.people
 	};
 	return destinationsIn(scope, caps).map((key) => ({
 		key,

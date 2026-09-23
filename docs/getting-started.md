@@ -39,7 +39,7 @@ Client Registration, so Claude registers itself: it fetches
 its own credentials.
 
 Claude then sends you through sign-in. On a server running the default configuration
-(`AUTH_MODE=oauth`, `IDENTITY_MODE=authjs`), that is an **email magic link**: enter your
+(`AUTH_MODE=oauth`), that is an **email magic link**: enter your
 address, open the email, click the link, and you are returned to Claude with the connector
 active.
 

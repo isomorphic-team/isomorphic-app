@@ -193,6 +193,8 @@ export interface ConnectedAccount {
 /** Which optional server surfaces exist. Rides the `brains` payload because that is the call the app always makes on open. */
 export interface ServerFeatures {
 	analytics?: boolean;
+	/** Anyone besides the operator can sign in, so the people and sharing tools exist. */
+	people?: boolean;
 	webBase?: string;
 }
 
