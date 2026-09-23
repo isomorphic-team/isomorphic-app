@@ -22,6 +22,11 @@ too.
   `isError` result is refused before any field is read (`payloadOf`), because parsing an
   error's empty payload reads as "zero brains" or "no pages". `app/core/types.ts` re-exports
   its types. Add new structured fields here, not ad hoc in a view.
+- **One wire type per payload ties the two sides together** (`ListPagesWire`, `BrainsWire`,
+  ...). The server's `structuredContent` literal `satisfies` it, and the parser reads through
+  `wire<T>(sc)`, which exposes the type's field names with every value `unknown`. A field
+  renamed on either side fails typecheck on the other. A new payload field goes in its wire
+  type first.
 - **The brain a RESULT names beats the active-brain pointer** (`pickShownBrain` in
   `app/core/store.ts`, `pnpm test:policy`, the `#other-brain` UI route). The pointer wins only
   on the self-boot (the widget has no brain yet) or when the result declares `switched`
