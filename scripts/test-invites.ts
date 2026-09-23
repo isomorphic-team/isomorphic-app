@@ -226,8 +226,9 @@ check(
 );
 check(
 	'at the invited role',
-	(await listAccessibleBrains(db, adaIds)).find((b) => b.repo_owner === 'northwind' && b.repo_name === 'brain')?.role ===
-		'editor'
+	(await listAccessibleBrains(db, adaIds)).find(
+		(b) => b.repo_owner === 'northwind' && b.repo_name === 'brain'
+	)?.role === 'editor'
 );
 check(
 	"the admin's roster no longer shows it pending",

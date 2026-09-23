@@ -262,7 +262,8 @@ export function canonicalWebPath(
 		return null;
 	}
 	const legacy = brains.find(
-		(b) => b.repo_owner.toLowerCase() === seg.toLowerCase() && b.repo_name.toLowerCase() === repoName
+		(b) =>
+			b.repo_owner.toLowerCase() === seg.toLowerCase() && b.repo_name.toLowerCase() === repoName
 	);
 	return legacy ? to(legacy, tail) : null;
 }

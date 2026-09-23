@@ -228,9 +228,7 @@ serve({ fetch: app.fetch, port, hostname: '127.0.0.1' }, () => {
 	const toolCount = Object.keys(registeredTools(buildServer())).length;
 	console.log(`\nIsomorphic local: ${basename(dir)}`);
 	for (const b of brains.values()) {
-		console.log(
-			`  brain:  ${b.label}${b.label === defaultBrainId ? ' (default)' : ''}  ${b.dir}`
-		);
+		console.log(`  brain:  ${b.label}${b.label === defaultBrainId ? ' (default)' : ''}  ${b.dir}`);
 	}
 	console.log(
 		`  tools:  ${toolCount}${custom.defs.length ? ` (${custom.defs.length} brain-authored)` : ''}`

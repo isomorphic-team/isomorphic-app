@@ -1159,9 +1159,9 @@ console.log('\nBrain handles: how a brain is named to tools and URLs');
 	// than 0012 during a deploy) is given one the first time it is listed, and keeps it.
 	sqlite.exec(`UPDATE brains SET handle = NULL WHERE brain_id = '${b.brain_id}'`);
 	const again = (await listAccessibleBrains(db, ['alice'])).find((x) => x.brain_id === b.brain_id)!;
-	const stored = sqlite
-		.prepare('SELECT handle FROM brains WHERE brain_id = ?')
-		.get(b.brain_id) as { handle: string | null };
+	const stored = sqlite.prepare('SELECT handle FROM brains WHERE brain_id = ?').get(b.brain_id) as {
+		handle: string | null;
+	};
 	check(
 		'a brain with no handle gets one when listed',
 		/^[0-9a-f]{6}$/.test(again.handle) && stored.handle === again.handle,

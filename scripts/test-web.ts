@@ -95,8 +95,14 @@ function check(name: string, cond: boolean, detail?: string) {
 
 	// A repo path never contains these, and passing one through would hand `..`
 	// to the store as though an author had written it.
-	check('a traversal segment is refused', parseWebPath('/b/acme-wiki-3fa9c2/wiki/../../etc') === null);
-	check('an encoded traversal is refused', parseWebPath('/b/acme-wiki-3fa9c2/wiki/%2e%2e/x') === null);
+	check(
+		'a traversal segment is refused',
+		parseWebPath('/b/acme-wiki-3fa9c2/wiki/../../etc') === null
+	);
+	check(
+		'an encoded traversal is refused',
+		parseWebPath('/b/acme-wiki-3fa9c2/wiki/%2e%2e/x') === null
+	);
 	check('a bare dot segment is refused', parseWebPath('/b/acme-wiki-3fa9c2/./x') === null);
 	check('a malformed escape is refused', parseWebPath('/b/acme-wiki-3fa9c2/wiki/%zz.md') === null);
 }
@@ -110,12 +116,18 @@ function check(name: string, cond: boolean, detail?: string) {
 {
 	console.log('\nslugs and redirects');
 
-	check('a slug is the name, then the handle', brainSlug('Team Wiki', '3fa9c2') === 'team-wiki-3fa9c2');
+	check(
+		'a slug is the name, then the handle',
+		brainSlug('Team Wiki', '3fa9c2') === 'team-wiki-3fa9c2'
+	);
 	check(
 		'accents and punctuation fold to dashes',
 		brainSlug('Décisions & Plans!', '3fa9c2') === 'decisions-plans-3fa9c2'
 	);
-	check('a name with nothing sluggable is just the handle', brainSlug('日本語', '3fa9c2') === '3fa9c2');
+	check(
+		'a name with nothing sluggable is just the handle',
+		brainSlug('日本語', '3fa9c2') === '3fa9c2'
+	);
 	check(
 		'a long name is cut at a word boundary',
 		brainSlug('the quite long name of a brain that keeps going and going', '3fa9c2') ===
@@ -127,7 +139,10 @@ function check(name: string, cond: boolean, detail?: string) {
 		'a name that does not end in a handle has none',
 		handleOfSlug('team-wiki') === undefined && handleOfSlug('notes-wiki22') === undefined
 	);
-	check('a slug reads as its name while the brain list loads', brainLabelFor('team-wiki-3fa9c2') === 'team wiki');
+	check(
+		'a slug reads as its name while the brain list loads',
+		brainLabelFor('team-wiki-3fa9c2') === 'team wiki'
+	);
 	check('a fresh handle is six hex characters', /^[0-9a-f]{6}$/.test(newBrainHandle()));
 
 	const mine = [
@@ -154,7 +169,7 @@ function check(name: string, cond: boolean, detail?: string) {
 	// The list is the caller's own brains, so a URL for anything else gets no answer
 	// here: a redirect for a brain they cannot reach would say that it exists.
 	check(
-		"a brain the caller cannot reach is not redirected",
+		'a brain the caller cannot reach is not redirected',
 		canonicalWebPath('/b/northwind/wiki/a.md', '', mine) === null &&
 			canonicalWebPath('/b/other-9e9e9e', '', mine) === null
 	);
@@ -209,7 +224,10 @@ function check(name: string, cond: boolean, detail?: string) {
 		'a plain page URL gains no query',
 		webPathFor('acme-wiki-3fa9c2', 'wiki/index.md') === '/b/acme-wiki-3fa9c2/wiki/index.md'
 	);
-	check('a plain tree URL gains no query', webPathFor('acme-wiki-3fa9c2', '') === '/b/acme-wiki-3fa9c2');
+	check(
+		'a plain tree URL gains no query',
+		webPathFor('acme-wiki-3fa9c2', '') === '/b/acme-wiki-3fa9c2'
+	);
 
 	// Stable output, because syncAddressBar COMPARES the built URL against the one
 	// in the bar to decide whether to write history. A URL that varied between
@@ -314,22 +332,35 @@ function check(name: string, cond: boolean, detail?: string) {
 		'view_page links the page',
 		webUrlFor(b, 'view_page', 'team-3fa9c2', 'wiki/x y.md') === `${b}/b/team-3fa9c2/wiki/x%20y.md`
 	);
-	check('browse_brain links the brain', webUrlFor(b, 'browse_brain', 'team-3fa9c2') === `${b}/b/team-3fa9c2`);
+	check(
+		'browse_brain links the brain',
+		webUrlFor(b, 'browse_brain', 'team-3fa9c2') === `${b}/b/team-3fa9c2`
+	);
 	check(
 		'...revealed at a folder',
 		webUrlFor(b, 'browse_brain', 'team-3fa9c2', 'wiki/c') === `${b}/b/team-3fa9c2?focus=wiki%2Fc`
 	);
 	check(
 		'view_graph links the graph',
-		webUrlFor(b, 'view_graph', 'team-3fa9c2', 'wiki/x.md') === `${b}/b/team-3fa9c2?view=graph&focus=wiki%2Fx.md`
+		webUrlFor(b, 'view_graph', 'team-3fa9c2', 'wiki/x.md') ===
+			`${b}/b/team-3fa9c2?view=graph&focus=wiki%2Fx.md`
 	);
 	check(
 		'view_activity links recent changes',
 		webUrlFor(b, 'view_activity', 'team-3fa9c2') === `${b}/b/team-3fa9c2?view=activity`
 	);
-	check('edit_page has no link', webUrlFor(b, 'edit_page', 'team-3fa9c2', 'wiki/x.md') === undefined);
-	check('no web app, no link', webUrlFor(undefined, 'view_page', 'team-3fa9c2', 'wiki/x.md') === undefined);
-	check('a page tool with no path has no link', webUrlFor(b, 'view_page', 'team-3fa9c2') === undefined);
+	check(
+		'edit_page has no link',
+		webUrlFor(b, 'edit_page', 'team-3fa9c2', 'wiki/x.md') === undefined
+	);
+	check(
+		'no web app, no link',
+		webUrlFor(undefined, 'view_page', 'team-3fa9c2', 'wiki/x.md') === undefined
+	);
+	check(
+		'a page tool with no path has no link',
+		webUrlFor(b, 'view_page', 'team-3fa9c2') === undefined
+	);
 	// The inverse: what the tab would show for that link is the same target.
 	const url = new URL(webUrlFor(b, 'view_graph', 'team-3fa9c2', 'wiki/x.md')!);
 	const back = parseWebPath(url.pathname, url.search);
