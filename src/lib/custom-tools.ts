@@ -68,6 +68,58 @@ export interface ToolParseError {
 export type ToolParseResult =
 	{ def: CustomToolDef; error?: undefined } | { def?: undefined; error: string };
 
+// ---------- which tool pages register ----------
+
+// How many custom tools a brain may register. Each costs host tool-list context
+// tokens on every turn, and too many degrade first-party tool selection.
+export const MAX_CUSTOM_TOOLS = 25;
+
+/**
+ * Which of a brain's tool pages become tools, and why each of the others does not.
+ * ONE rule for the two places that ask: the loader, which registers `defs`, and
+ * `validate`, which reports `errors`. They used to carry separate copies, and the
+ * validate copy had no cap, so a tool page past the cap silently never registered
+ * while validate reported nothing.
+ *
+ * Pages are taken in path order, so the first of two same-named pages is the one
+ * that registers, whatever order the caller listed them in. A page whose content is
+ * null (gone between the listing and the fetch) is skipped without an error.
+ */
+export function planCustomTools(pages: { path: string; content: string | null }[]): {
+	defs: CustomToolDef[];
+	errors: ToolParseError[];
+} {
+	const defs: CustomToolDef[] = [];
+	const errors: ToolParseError[] = [];
+	const seen = new Map<string, string>();
+	for (const { path, content } of [...pages].sort((a, b) => a.path.localeCompare(b.path))) {
+		if (content === null) continue;
+		const res = parseToolDef(path, content);
+		if (!res.def) {
+			errors.push({ sourcePath: path, error: res.error });
+			continue;
+		}
+		const first = seen.get(res.def.name);
+		if (first) {
+			errors.push({
+				sourcePath: path,
+				error: `duplicate tool name "${res.def.name}" (also ${first}), so this page is not registered. Rename one of them.`
+			});
+			continue;
+		}
+		if (defs.length >= MAX_CUSTOM_TOOLS) {
+			errors.push({
+				sourcePath: path,
+				error: `over the ${MAX_CUSTOM_TOOLS}-tool limit for one brain, so this page is not registered.`
+			});
+			continue;
+		}
+		seen.set(res.def.name, path);
+		defs.push(res.def);
+	}
+	return { defs, errors };
+}
+
 // ---------- discovery predicate ----------
 
 // A tool page is any markdown page with a `tools` path segment that isn't a

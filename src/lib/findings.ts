@@ -56,6 +56,30 @@ export function parseImportKey(key: string): { source: string; recordKey: string
 export const importKey = (source: string, recordKey: string) =>
 	`${IMPORT_PREFIX}${source}:${recordKey}`;
 
+/**
+ * A source's unanswered import questions, as findings. They carry the same
+ * namespaced key as every other finding and are answered by the same verb, and
+ * they outweigh the structure advisories: a sync is waiting on each one.
+ */
+export function importFindings(
+	source: string,
+	pending: {
+		key: string;
+		kind: 'needs-decision' | 'proposed-deletion';
+		path?: string;
+		reason: string;
+	}[]
+): Finding[] {
+	return pending.map((q) => ({
+		key: importKey(source, q.key),
+		weight: 4,
+		headline:
+			q.kind === 'proposed-deletion'
+				? `- "${q.key}" (${q.path}): ${q.reason}. Delete it, or keep it and suppress the key.`
+				: `- "${q.key}": ${q.reason}`
+	}));
+}
+
 /** `<kind>:<paths, sorted and joined>` — stable across reads and across rewording. */
 export function findingKey(kind: string, identity: string | string[]): string {
 	const parts = Array.isArray(identity) ? [...identity].sort() : [identity];
@@ -127,6 +151,11 @@ export function renderFindings(
 	const shown = ranked.slice(0, limit);
 	const hidden = ranked.length - shown.length;
 	const lines = shown.map((f) => `${f.headline}\n  [${f.key}]`);
-	const more = hidden > 0 ? `\n\n…and ${hidden} more. Raise the limit to see them.` : '';
+	// The caller cannot ask for more (validate takes no limit), so say what DOES bring
+	// the rest into view: an answered or dismissed finding drops out of the next report.
+	const more =
+		hidden > 0
+			? `\n\n…and ${hidden} more, lower priority. Fix or resolve the ones above and the next run shows the rest.`
+			: '';
 	return { text: `${lines.join('\n')}${more}`, shown: shown.length, hidden };
 }

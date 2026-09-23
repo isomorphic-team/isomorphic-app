@@ -65,14 +65,14 @@ import {
 } from '../lib/brain-index.ts';
 import { isMediaPath, mediaTypeOf } from '../lib/media.ts';
 import { tryRenderViews, type ViewDeps } from '../lib/views.ts';
-import { isToolPagePath, parseToolDef } from '../lib/custom-tools.ts';
+import { isToolPagePath, planCustomTools } from '../lib/custom-tools.ts';
 import { isFolderNoteName } from '../lib/view-directives.ts';
 import {
 	filterDismissed,
 	parseReviewLedger,
 	renderFindings,
 	REVIEW_LEDGER_PATH,
-	importKey,
+	importFindings,
 	type Finding
 } from '../lib/findings.ts';
 import {
@@ -1334,7 +1334,7 @@ export function registerLibrarianTools(
 			// the "anything need attention?" surface — deciding happens via
 			// resolve_import; a decision stays listed here until someone answers it.
 			const pendingSections: string[] = [];
-			const importFindings: Finding[] = [];
+			const importFindingsList: Finding[] = [];
 			try {
 				const head = await store.getHead(repoArgs, config.defaultBranch);
 				// listTree defaults to .md — ledgers are .json.
@@ -1356,18 +1356,7 @@ export function registerLibrarianTools(
 						continue;
 					}
 					if (!ledger.pending.length) continue;
-					// Import questions are findings like any other, so they carry the same
-					// namespaced key and are answered by the same verb.
-					for (const q of ledger.pending) {
-						importFindings.push({
-							key: importKey(source, q.key),
-							weight: 4,
-							headline:
-								q.kind === 'proposed-deletion'
-									? `- "${q.key}" (${q.path}): ${q.reason} — delete it, or keep it and suppress the key.`
-									: `- "${q.key}": ${q.reason}`
-						});
-					}
+					importFindingsList.push(...importFindings(source, ledger.pending));
 					pendingSections.push(
 						`${ledger.pending.length} import decision(s) pending for "${source}".`
 					);
@@ -1381,25 +1370,21 @@ export function registerLibrarianTools(
 			// malformed ```tool block, an unknown op, a duplicate name — so an author
 			// sees why a tool didn't show up in the list. Best-effort; the tool blobs are
 			// few (bounded by tools/ page count) and this never blocks link validation.
-			const toolNotes: string[] = [];
+			let toolNotes: string[] = [];
 			try {
 				const toolPaths = resolved.pages.filter((p) => isToolPagePath(p.path)).map((p) => p.path);
-				const namesSeen = new Map<string, string>();
-				for (const tp of toolPaths) {
-					const file = await store.readFile(repoArgs, tp);
-					if (!file) continue;
-					const res = parseToolDef(tp, file.content);
-					if (!res.def) {
-						toolNotes.push(`- ${tp}: ${res.error}`);
-						continue;
-					}
-					const prev = namesSeen.get(res.def.name);
-					if (prev)
-						toolNotes.push(`- ${tp}: duplicate tool name "${res.def.name}" (also ${prev}).`);
-					else namesSeen.set(res.def.name, tp);
-				}
+				const pages = await Promise.all(
+					toolPaths.map(async (path) => ({
+						path,
+						content: (await store.readFile(repoArgs, path))?.content ?? null
+					}))
+				);
+				// The same rule the loader registers by (planCustomTools), so every page
+				// reported here is exactly one that did not register, including those past
+				// the per-brain cap.
+				toolNotes = planCustomTools(pages).errors.map((e) => `- ${e.sourcePath}: ${e.error}`);
 			} catch {
-				// Best-effort — malformed-tool reporting never blocks link validation.
+				// Best-effort: malformed-tool reporting never blocks link validation.
 			}
 			const toolText = toolNotes.length
 				? `\n\n${toolNotes.length} custom tool page(s) won't register — fix them, then reconnect:\n${toolNotes.join('\n')}`
@@ -1439,7 +1424,7 @@ export function registerLibrarianTools(
 						: undefined;
 
 				const all: Finding[] = [
-					...importFindings,
+					...importFindingsList,
 					...inlinedConceptSuggestions(
 						[...noteContents].map(([path, content]) => ({ path, content })),
 						resolved.pages
@@ -1470,13 +1455,12 @@ export function registerLibrarianTools(
 				}
 
 				if (kept.length) {
-					const { text, hidden } = renderFindings(kept, MAX_FINDINGS_SHOWN);
+					const { text } = renderFindings(kept, MAX_FINDINGS_SHOWN);
 					const silenced = all.length - kept.length;
 					const note = silenced ? ` ${silenced} previously dismissed and not shown.` : '';
 					findingsText =
 						`\n\n${kept.length} finding(s) need a decision — advisory, nothing here is broken,` +
-						` and each can be answered or silenced with resolve.${note}\n${text}` +
-						(hidden ? '' : '');
+						` and each can be answered or silenced with resolve.${note}\n${text}`;
 				}
 			} catch {
 				// Advisory only; link validation stands alone.

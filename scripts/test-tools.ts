@@ -8,7 +8,9 @@ import {
 	toolNameFor,
 	parseToolDef,
 	zodShapeFor,
-	fill
+	fill,
+	planCustomTools,
+	MAX_CUSTOM_TOOLS
 } from '../src/lib/custom-tools.ts';
 
 import { checker } from './check.ts';
@@ -164,5 +166,59 @@ check('fill: substitutes', fill('a/{{project}}/b', { project: 'acme' }) === 'a/a
 check('fill: unknown → empty', fill('x{{nope}}y', {}) === 'xy');
 check('fill: value is data, not code', fill('{{a}}', { a: '{{b}}' }) === '{{b}}');
 check('fill: coerces non-strings', fill('n={{n}}', { n: 7 }) === 'n=7');
+
+// ---------- which pages register (planCustomTools) ----------
+// The loader registers `defs` and validate reports `errors`, from this ONE function.
+// The two used to carry separate copies, and validate's had no cap: a page past it
+// never registered and validate said nothing.
+{
+	const tool = (desc: string) => `---\ndescription: ${desc}\n---\nDo the thing.`;
+	const page = (path: string, content: string | null = tool(path)) => ({ path, content });
+
+	const clean = planCustomTools([page('wiki/tools/b.md'), page('wiki/tools/a.md')]);
+	check('plan: good pages register', clean.defs.length === 2 && clean.errors.length === 0);
+	check('plan: in path order, whatever order they were listed', clean.defs[0].name === 'tool_a');
+
+	const dup = planCustomTools([page('zeta/tools/a.md'), page('alpha/tools/a.md')]);
+	check('plan: a duplicate name registers once', dup.defs.length === 1);
+	check(
+		'plan: the FIRST by path registers, so validate names the loser the loader actually dropped',
+		dup.defs[0].sourcePath === 'alpha/tools/a.md' && dup.errors[0]?.sourcePath === 'zeta/tools/a.md'
+	);
+	check(
+		'plan: the duplicate names the page it collides with',
+		dup.errors[0]?.error.includes('alpha/tools/a.md') === true
+	);
+
+	const broken = planCustomTools([page('wiki/tools/x.md', '```tool\nop: rm_rf\n```')]);
+	check(
+		'plan: a malformed page is an error, not a tool',
+		broken.defs.length === 0 && broken.errors.length === 1
+	);
+	check(
+		'plan: a page gone between listing and fetch is skipped silently',
+		planCustomTools([page('wiki/tools/x.md', null)]).errors.length === 0
+	);
+
+	const many = Array.from({ length: MAX_CUSTOM_TOOLS + 3 }, (_, i) =>
+		page(`wiki/tools/t${String(i).padStart(2, '0')}.md`)
+	);
+	const capped = planCustomTools(many);
+	check('plan: registration stops at the cap', capped.defs.length === MAX_CUSTOM_TOOLS);
+	check(
+		'plan: every page past the cap is REPORTED, which validate did not do',
+		capped.errors.length === 3 &&
+			capped.errors.every((e) => e.error.includes(`${MAX_CUSTOM_TOOLS}-tool limit`))
+	);
+	check(
+		'plan: the ones past the cap are the last by path',
+		capped.errors[0]?.sourcePath === `wiki/tools/t${MAX_CUSTOM_TOOLS}.md`
+	);
+	check(
+		'plan: a duplicate does not use up a slot under the cap',
+		planCustomTools([...many.slice(0, MAX_CUSTOM_TOOLS), page('other/tools/t00.md')]).defs
+			.length === MAX_CUSTOM_TOOLS
+	);
+}
 
 done();

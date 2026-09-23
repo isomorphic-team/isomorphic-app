@@ -18,6 +18,7 @@ import {
 	renderFindings,
 	findingKey,
 	importKey,
+	importFindings,
 	parseImportKey,
 	isImportKey
 } from '../src/lib/findings.ts';
@@ -337,6 +338,11 @@ const of = (ts: Tension[], kind: string) => ts.filter((t) => t.kind === kind);
 	const r = renderFindings(many, 5);
 	check('render: caps at the limit', r.shown === 5 && r.hidden === 7);
 	check('render: says how many it withheld', r.text.includes('and 7 more'));
+	check(
+		'render: never asks the caller to raise a limit validate does not take',
+		!/raise the limit/i.test(r.text) && r.text.includes('resolve'),
+		r.text
+	);
 	check('render: highest weight first', r.text.indexOf('page 11') < r.text.indexOf('page 7'));
 	check('render: every finding carries its key', r.text.includes('[island:wiki/11.md]'));
 
@@ -372,6 +378,38 @@ const of = (ts: Tension[], kind: string) => ts.filter((t) => t.kind === kind);
 		weights.every((w, i) => i === 0 || weights[i - 1] >= w),
 		JSON.stringify(weights)
 	);
+}
+
+// Pending import questions become findings with the importer's namespaced key, so
+// the one resolve verb answers them, and they outrank structure notes.
+{
+	const f = importFindings('crm', [
+		{ key: 'acme', kind: 'needs-decision', reason: 'no page claims this key' },
+		{
+			key: 'globex',
+			kind: 'proposed-deletion',
+			path: 'wiki/customers/globex.md',
+			reason: 'gone from the source'
+		}
+	]);
+	check('import: one finding per pending question', f.length === 2);
+	check(
+		'import: keyed so resolve routes it to the source ledger',
+		f[0].key === importKey('crm', 'acme') && parseImportKey(f[0].key)?.source === 'crm'
+	);
+	check(
+		'import: a deletion names the page and both answers',
+		f[1].headline.includes('wiki/customers/globex.md') && f[1].headline.includes('suppress the key')
+	);
+	check(
+		'import: a decision states the reason',
+		f[0].headline === '- "acme": no page claims this key'
+	);
+	check(
+		'import: outweighs structure advisories (weight 4)',
+		f.every((x) => x.weight === 4)
+	);
+	check('import: nothing pending, nothing reported', importFindings('crm', []).length === 0);
 }
 
 done();
