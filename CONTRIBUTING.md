@@ -64,11 +64,13 @@ needed for a multi-user deployment. Full detail in
 
 ## Read this before your first non-trivial change
 
-[`CLAUDE.md`](CLAUDE.md) is the architecture document. Maintainers keep it current because
-coding agents read it. It covers the runtime split, the content index, the derived-views
-engine, OKF conformance, and the folder-note convention, and each section says _why_ the design
-is what it is. Skim the section covering your area before you change it. The most common
-failure is a change that is locally correct and violates an invariant documented there.
+[`CLAUDE.md`](CLAUDE.md) and the path-scoped files in [`.claude/rules/`](.claude/rules/) are
+the architecture documents. Maintainers keep them current because coding agents read them.
+`CLAUDE.md` covers the runtime split and the invariants that hold everywhere; each rules file
+covers one subsystem (the content index, derived views, OKF conformance, folder notes, and so
+on) and says _why_ the design is what it is. Read the one covering your area before you change
+it. The most common failure is a change that is locally correct and violates an invariant
+documented there.
 
 [`docs/references.md`](docs/references.md) lists the authoritative external sources (the MCP
 Apps spec, the MCP SDK, Claude host design guidelines, ProseMirror, Cloudflare limits) plus
