@@ -1,8 +1,8 @@
 // list_pages and read_page, the two content tools both runtimes need.
 //
-// They were inline in worker.ts's buildServer until the local runtime needed them too.
-// Both take the same getContext every other suite takes, so they work against a
-// GitHub-backed brain or a git repo on disk.
+// Registered by both the Worker and the local runtime. Both take the same getContext
+// every other suite takes, so they work against a GitHub-backed brain or a git repo
+// on disk.
 
 import type { McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
@@ -49,9 +49,9 @@ export function registerCoreTools(
 				// .gitkeep markers meant the brain stored things it would not show you.
 				const { assets, hidden } = await listNonPagePaths(store, repoArgs, config);
 				// Empty could mean a fresh brain OR an adopted repo whose content isn't under
-				// the configured roots — flag the latter so the app can offer to auto-configure.
+				// the configured roots; flag the latter so the app can offer to auto-configure.
 				// Only content-AREA files count as "something to show" here: the hidden list
-				// now includes system files that exist in any repo.
+				// includes system files that exist in any repo.
 				const needsConfig =
 					pages.length === 0 &&
 					!hidden.some((p) => isContentPath(p, config)) &&
@@ -117,12 +117,13 @@ export function registerCoreTools(
 			title: 'Read a brain page',
 			annotations: { readOnlyHint: true },
 			// Deliberately verbose and self-naming. This tool is the one an agent
-			// looks for by name mid-task ("I need read_page"), and a terse
-			// one-liner made it lose tool-search ranking to view_page, whose
-			// description talked about read_page more than this one did. The
-			// read-before-you-replace rule lives here too, at the point of need.
+			// looks for by name mid-task ("I need read_page"), and a terse one-liner
+			// lost host tool-search ranking to view_page, whose description named
+			// read_page more often than this one did; the agent concluded it could not
+			// read pages at all. So view_page's description no longer names read_page,
+			// and the read-before-you-replace rule lives here, at the point of need.
 			description:
-				"Read a page: read_page returns the page's raw markdown source (frontmatter and body) as text, fetched from the brain repo. Use it whenever you need a page's contents to reason over, quote, or edit. Read a page before any write_page call that passes `content`, since that replaces the whole body and would destroy text you have not seen (to change only part of a page, prefer write_page's non-destructive `append` / `edits` arguments, which need no prior read). This returns text to you and does not show anything to the user: use view_page when the goal is for the USER to see the page.",
+				"Read a page: read_page returns the page's raw markdown source (frontmatter and body) as text, fetched from the brain repo. Use it whenever you need a page's contents to reason over, quote, or edit. Read a page before any write_page call that passes `content`, since that replaces the whole body and would destroy text you have not seen (to change only part of a page, prefer write_page's non-destructive `append` / `edits` arguments, which need no prior read). read_page returns text to you and shows nothing to the user.",
 			inputSchema: z.object({
 				path: z.string().describe('Path relative to the repo root, e.g. "AGENTS.md"'),
 				brain: z

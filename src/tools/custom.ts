@@ -1,10 +1,11 @@
 // User-defined tools ("brain-tools"): discovery + registration + execution.
 //
-// A tool is a content page under a `tools/` folder (see isToolPagePath). At
-// connection time we discover the active brain's tool pages via the content
-// index, parse each into a CustomToolDef (src/lib/custom-tools.ts, pure), and
-// register one MCP tool per def. The tool list is therefore PER-BRAIN and rebuilt
-// every request — switching brains swaps the custom toolset. Because the stateless
+// A tool is a content page under a `tools/` folder (see isToolPagePath). Before
+// each request's server is built (once at startup in the local runtime), the active
+// brain's tool pages are discovered via the content index, parsed into
+// CustomToolDefs (src/lib/custom-tools.ts, pure), and registered one MCP tool per
+// def. The tool list is therefore PER-BRAIN and rebuilt every request: switching
+// brains swaps the custom toolset. Because the stateless
 // transport can't push tools/list_changed, a newly-authored tool only appears
 // after the host re-lists (the librarian nudges the user to reconnect on write).
 //

@@ -1,14 +1,14 @@
-// Brain repo git operations — runtime-portable (Worker-safe, no node:*).
+// Brain repo git operations: runtime-portable (Worker-safe, no node:*).
 //
 // The design rule these helpers serve: THE USER NEVER SEES GIT. Tools speak
 // in saves and pages; this module hides the version-control mechanics. The
-// core primitive is `commitFiles()` — one atomic commit for a multi-file
-// bundle (page + index + log), mirroring how real AI-maintained wikis change:
-// the unit of work is the bundle, never a single file.
+// core primitive is `commitFiles()`: one atomic commit for a multi-file bundle
+// (the page, the changelog, and any pages whose links a move repoints). The
+// unit of work is the bundle, never a single file.
 //
 // Same Git Data API pattern as scaffold-core.ts: blobs inline in tree → tree
 // → commit → ref update. If anything fails halfway, the branch ref never
-// moves — no partial state.
+// moves, so there is no partial state.
 
 import type { Octokit } from 'octokit';
 import { base64ToUtf8 } from './wiki.ts';
@@ -107,14 +107,13 @@ export function githubNoreplyAuthor(
 	return { name, email: `${ghUserId}+${name}@users.noreply.github.com` };
 }
 
-// Upper bound on a single content scan. This is NOT a subrequest limit anymore —
-// fetchPages batches blob reads through GraphQL (see below), so a scan costs
-// ceil(pages / GRAPHQL_BLOB_BATCH) subrequests, not one per page. The cap is now
-// just a sanity ceiling on memory/time for a pathologically huge brain; typical
-// brains scan whole. Truncation past it is still surfaced to the caller.
-// 5000: covers the derived-views PRD's AC-5 (~4,000-page brain — the largest we have measured is
-// ~3,900 pages, which the previous 1500 silently truncated) at ~50 GraphQL
-// subrequests for a full build; incremental reindexes only fetch changed pages.
+// Upper bound on a single content scan. Not a subrequest limit: fetchPages batches
+// blob reads through GraphQL (see below), so a scan costs
+// ceil(pages / GRAPHQL_BLOB_BATCH) subrequests. The cap is a sanity ceiling on
+// memory/time for a pathologically huge brain; typical brains scan whole, and
+// truncation past it is surfaced to the caller. 5000 covers the largest brain
+// measured (~3,900 pages) at ~50 GraphQL subrequests for a full build;
+// incremental reindexes only fetch changed pages.
 export const MAX_SCAN_PAGES = 5000;
 
 // How many blob texts to pull per GraphQL request. Each aliased `object` field is
@@ -124,7 +123,7 @@ const GRAPHQL_BLOB_BATCH = 100;
 
 // ---------- the storage seam ----------
 //
-// Everything the tools do to a brain, as ten operations. The only interface between
+// Everything the tools do to a brain, as eleven operations. The only interface between
 // the tool layer and where a brain physically lives, so a brain can be a GitHub repo
 // or a git repo on disk. Implementations: githubStore below, and the fs/git adapter
 // in src/local/brain-store-fs.ts.
@@ -311,7 +310,7 @@ async function findOpenConfigPr(octokit: Octokit, repo: RepoRef): Promise<string
 	}
 }
 
-// Full recursive tree of markdown files (plus anything else if `all`).
+// Full recursive tree of blobs ending in `opts.extension` (default ".md"; "*" for all).
 async function listTree(
 	octokit: Octokit,
 	repo: RepoRef,
@@ -336,9 +335,9 @@ export interface PageContent {
 
 // Fetch the contents of many pages by blob sha. Batched through GraphQL — one
 // request pulls up to GRAPHQL_BLOB_BATCH blob texts via aliased `object(oid:)`
-// fields — so a whole-brain scan costs ceil(pages / batch) subrequests instead of
-// one per page (the old ceiling that pinned scans to 40). Capped at MAX_SCAN_PAGES
-// as a sanity bound; `truncated` tells the caller the scan was partial.
+// fields, so a whole-brain scan costs ceil(pages / batch) subrequests instead of
+// one per page. Capped at MAX_SCAN_PAGES as a sanity bound; `truncated` tells the
+// caller the scan was partial.
 async function fetchPages(
 	octokit: Octokit,
 	repo: RepoRef,

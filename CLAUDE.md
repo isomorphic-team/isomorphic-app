@@ -2,20 +2,23 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-**Authoritative external references** (MCP Apps / SEP-1865, the MCP SDK, Claude host design
-guidelines, ProseMirror, Cloudflare limits) live in [`docs/references.md`](docs/references.md).
-Check there — and read the primary source — before answering from memory about any of that
-tech; it moves fast. It also lists hard-won verified facts (display modes, the iframe CSP,
-Worker size limits, the codegen `$&` gotcha).
+**Authoritative external references** (MCP Apps / SEP-1865, the MCP SDK and the 2026-07-28
+protocol, Claude host design guidelines, ProseMirror, Cloudflare limits) live in
+[`docs/references.md`](docs/references.md). Read it, and the primary source, before answering
+from memory about any of that tech; it moves fast. It also lists verified facts (display modes,
+the iframe CSP, Worker size limits, the codegen `$&` gotcha).
 
 **This repository is public and open source** (GNU AGPL-3.0-only; contributors sign a CLA so
-the project can also be licensed commercially). Consequences for anything you write here: no customer names, no real
-account or resource identifiers, and no "our deployment" assumptions baked into code or
-committed config. Deployment identity lives in generated config and env vars, never in the
-repo — see [Deployment config](#deployment-config-wranglerjsonc-is-generated) below and
-[`docs/design/open-source-boundary.md`](docs/design/open-source-boundary.md). Governance,
-contribution rules, and the licensing rationale: [`CONTRIBUTING.md`](CONTRIBUTING.md),
-[`GOVERNANCE.md`](GOVERNANCE.md), [`docs/licensing.md`](docs/licensing.md).
+the project can also be licensed commercially). Anything you write here carries no customer
+names, no real account or resource identifiers, and no "our deployment" assumptions in code or
+committed config. Deployment identity lives in generated config and env vars (see
+[Deployment config](#deployment-config-wranglerjsonc-is-generated) and
+[`docs/design/open-source-boundary.md`](docs/design/open-source-boundary.md)). Governance and
+licensing: [`CONTRIBUTING.md`](CONTRIBUTING.md), [`GOVERNANCE.md`](GOVERNANCE.md),
+[`docs/licensing.md`](docs/licensing.md).
+
+Subsystem detail lives in [`.claude/rules/`](.claude/rules/) and loads when you touch the
+matching files; see [Where subsystem rules live](#where-subsystem-rules-live).
 
 ## Commands
 
@@ -24,1458 +27,369 @@ pnpm install
 pnpm try <folder>       # local runtime: MCP over a git repo on disk, no accounts (127.0.0.1:8788)
 pnpm doctor             # what this checkout has, what it is missing, what to run next
 pnpm setup:config       # GENERATE wrangler.jsonc from wrangler.template.jsonc (run this first)
-pnpm bootstrap          # one-shot: registers GitHub App, scaffolds the brain repo (http://localhost:3000)
-pnpm worker:dev         # `wrangler dev` for the MCP Worker — http://localhost:8787
-pnpm worker:deploy      # publish the Worker to Cloudflare
+pnpm bootstrap          # one-shot: registers the GitHub App, scaffolds a brain (http://localhost:3000)
+pnpm onboard-org        # operator: write a customer org's rows (dry-run; --apply local|remote|both)
+pnpm worker:dev         # `wrangler dev` for the MCP Worker, http://localhost:8787
+pnpm worker:deploy      # manual `wrangler deploy`; CI deploys differently (see Deploys below)
 pnpm worker:types       # regenerate Worker types from wrangler.jsonc
-pnpm app:dev            # local dev server for the MCP App UI — http://localhost:5175 (see dev/README.md)
+pnpm app:dev            # the MCP App UI over the AppBridge harness, http://localhost:5175 (dev/README.md)
 pnpm web:dev            # seed the demo brains, then `pnpm try` them: the app as a WEB page at
                         # http://127.0.0.1:8788/b/local/demo-brain (no auth; --reset re-seeds)
 pnpm gen:app            # codegen the ui:// app bundle (after editing app/ OR any src/lib/ file it imports)
-pnpm regen:pr <n>       # regenerate that bundle on a PR branch that could not (Dependabot); --push to send it
-pnpm test:roundtrip     # editor markdown round-trip golden test
-pnpm test:render        # the shared markdown renderer: parity + sanitization
-pnpm test:web           # web-app routes + the cookie-auth CSRF gate
-pnpm test:views         # derived-views (okf-view) engine golden test
-pnpm test:import        # bulk-import planner golden test
-pnpm test:tools         # user-defined (brain-authored) tools parse-layer golden test
-pnpm test:patch         # write_page append/edits (page-patch) golden test
-pnpm test:structure     # OKF conformance golden test (granularity, type:, nested frontmatter)
-pnpm test:search        # search relevance, plus cross-brain: which brains, and the per-brain budget
-pnpm test:links         # wikilink resolution + the broken-link report golden test
-pnpm test:access        # per-brain access rule (effectiveBrainRole) golden test
-pnpm test:invites       # invitation claiming: who joins which org, and when
-pnpm test:scope         # org-vs-brain scope: which role each tool gates on
-pnpm test:loading       # loading-line engine: slot eligibility + per-task wiring
-pnpm test:preamble      # the /mcp preamble: which requests need a brain, and what a
-                        # failure in front of the SDK answers with
-pnpm test:protocol      # both MCP protocol eras (2025, 2026-07-28) through the real serveMcp
-pnpm test:dedupe        # write-attempt ledger: an identical retry is answered, not applied twice
-pnpm test:appmeta       # the ui:// app resource's host contract (prefersBorder, tool→app link)
-pnpm test:feedback      # submit_feedback composition golden test (redaction, nothing identifying published)
-pnpm test:email         # the magic-link sign-in email: content, escaping, the Resend request
-pnpm test:usage         # usage-analytics golden test (tool-classification coverage, the summary fold)
-pnpm test:wiring        # every test:* script is in BOTH package.json's `test` and ci.yml
-                        # (+ ci.yml's Playwright container tag matches the resolved dep)
-pnpm test:e2e-librarian # write tools end to end, offline against a git repo in a temp dir
-pnpm test:e2e-import    # the importer end to end, same
-pnpm test:ui            # the MCP App UI in a real browser, over the local host harness
+pnpm gen:templates      # codegen brain-template/ into src/lib/brain-template.generated.ts
+pnpm regen:pr <n>       # regenerate the bundle on a PR branch that could not (Dependabot); --push sends it
+pnpm db:migrate         # apply D1 migrations LOCALLY (also db:migrate:list, db:migrate:new <name>)
+pnpm test               # every offline battery (the same list ci.yml runs)
+pnpm test:ui            # the MCP App UI in a real browser (Playwright + Chromium)
 pnpm ui:baselines       # regenerate the visual baselines for THIS platform
-pnpm typecheck          # runs all four tsconfigs (node, worker, app, tests)
+pnpm probe:report <folder> <probes.json>   # retrieval probes through the real search, offline
+pnpm consolidate:report <folder>           # the consolidation detector over a brain on disk
+pnpm security:audit     # pnpm audit --prod --audit-level high (reporting only in CI)
+pnpm typecheck          # all four tsconfigs (node, worker, app, tests)
 pnpm format             # prettier
 ```
 
-**TESTS ARE EXPECTED FOR EVERY FEATURE AND EVERY FIX, in the same change.** Not
-deferred, not "typecheck covers it", not a manual check narrated in the summary.
-Shipping without one is a decision to argue for explicitly, not a default. Two
-rules that make the difference between coverage and its appearance:
+Each `test:*` battery is named in `package.json`; what it pins is in the header of the script it
+runs (`scripts/test-*.ts`, plus `roundtrip-check.ts` and `e2e-*.ts`).
 
-- **A green suite proves nothing unless it touches the changed code.** Before
-  reporting a change as tested, break it deliberately and confirm the test goes
-  red. A test that passes against both the old and new behavior is testing
-  neither. Say which battery covers a change, and say plainly when none does.
-- **Test the thing that DECIDES.** If the deciding logic sits somewhere no test
-  can call it (a private method on `McpSession`, a branch inside a handler),
-  move the logic instead of skipping the test. That is why so much of
-  `src/lib/` is pure: `effectiveBrainRole`, `chooseOrg`, `countedCall`, and
-  `resolveOrgForPerson` were all extracted so the rule could be pinned. The
-  pattern to copy is: pure or db-only function in `lib/`, thin wiring in the
-  Worker.
+## Testing policy
 
-**Tests.** All offline, all fork-safe, all wired into CI and into the `test` script
-(`pnpm test` runs everything): `pnpm test:roundtrip` (editor markdown round-trip),
-`pnpm test:render` (the ONE markdown renderer: that the viewer's output is unchanged,
-and that every raw-HTML and URL-scheme payload comes back inert — see [One markdown
-renderer](#one-markdown-renderer-srclibrenderts) below),
-`pnpm test:views` (okf-view engine), `pnpm test:import` (import planner),
-`pnpm test:tools` (brain-authored tool parsing), `pnpm test:patch` (write_page
-append/edits), `pnpm test:structure` (OKF conformance), `pnpm test:links`
-(wikilink resolution: every spelling a human writes by hand, plus what the
-broken-link report says about the ones that match nothing), `pnpm test:index`
-(content-index freshness guard: bounded, resumable work per read; wraps an octokit
-stub in the REAL `githubStore` so it still covers `fetchPages`'s GraphQL batching),
-`pnpm test:search` (search: the relevance engine in `src/lib/search.ts`, plus the
-cross-brain half: `searchTargets`, which decides which brains one answer may contain,
-and `mergeBrainResults`, the per-brain hit budget, whose failure mode is a fan-out where
-the first brain fills a global cap and every later one silently reports nothing),
-`pnpm test:policy` (the path-policy wire contract between Worker and app),
-`pnpm test:preamble` (the /mcp request preamble: which methods need a brain resolved,
-in both directions, and the JSON-RPC error a failure in front of the SDK answers with),
-`pnpm test:protocol` (serving both protocol eras through `serveMcp`, the one path the
-Worker and the local runtime share: real SDK clients pinned to 2026-07-28, auto-negotiating,
-and on 2025 reach the same tools and the ui:// resource, every reply is JSON with no
-session, `listChanged` is advertised false, and a malformed modern request is refused by
-the modern leg rather than served by the old one),
-`pnpm test:dedupe` (the write-attempt ledger: the argument fingerprint, the two windows,
-the claim being given back on a refusal or a throw, plus the real statements over the
-real migration on `node:sqlite`),
-`pnpm test:appmeta` (the ui:// resource's HOST contract, over a real client/server
-pair: that it declares `prefersBorder` rather than inheriting a default that differs
-per platform, that the post-deploy versioned-template read carries the same metadata,
-and that every widget tool's `resourceUri` names a resource this server actually
-serves),
-`pnpm test:loading` (the loading-line engine: that a phrase naming a fact the widget
-does not have is never eligible, and that every loading state in the app declares a
-task, which is optional in the type and so invisible to typecheck),
-`pnpm test:access` (the per-brain access rule: every input to `effectiveBrainRole`),
-`pnpm test:invites` (invitation claiming: the pure rule, the queries over the real
-schema, and `provisionOrgForUser` on an invite-only deployment),
-`pnpm test:scope` (which role each TOOL gates on: the real handlers over a stub server
-and a fake `getContext`, asserting org-scope tools read `orgRole` and brain-scope tools
-read `role`, plus the `share_brain` and lockout guardrails that live in the tool rather
-than the lib; traps BOTH `octokit` and `store` with throwing Proxies so an authz test
-that reaches storage fails loudly), `pnpm test:feedback` (what submit_feedback publishes
-and what it redacts), `pnpm test:usage` (usage analytics: that every registered tool name
-has an explicit `TOOL_KINDS` entry, scanned from the tool sources so a new tool cannot land
-unclassified, plus the summary fold, where members at zero and since-removed users both have
-to survive or the tiles stop matching the table), and `pnpm test:wiring` (every `test:*`
-script appears in both `package.json`'s `test` and `ci.yml`, in three directions, including
-itself, plus the Playwright container tag in `ci.yml` and `dev/README.md` matching the
-version pnpm actually resolves).
+**TESTS ARE EXPECTED FOR EVERY FEATURE AND EVERY FIX, in the same change.** Not deferred, not
+"typecheck covers it", not a manual check narrated in the summary. Shipping without one is a
+decision to argue for explicitly.
 
-**`pnpm test:ui` is the only battery that needs a browser** (Playwright + Chromium). It
-drives the REAL generated app bundle over the local host harness (`dev/harness.ts`), so it
-covers the app layer that every other battery is blind to: that each route MOUNTS, that the
-tree / folder notes / brain switching WIRE UP, that the editor round-trips, and how the app
-LOOKS in three display modes and two themes. It deliberately does not re-assert tool
-semantics — the view engine, page patches, the access rule and the analytics fold already
-have pure golden tests, and re-checking them through the DOM would be a slow duplicate.
-Two things keep it from being a burden on contributors: it **skips green** (loudly) when
-Chromium is absent or when this platform has no visual baselines, since both are setup gaps
-rather than regressions, and CI sets `UI_STRICT=1` so a container that stopped carrying a
-browser cannot hide behind that skip. Determinism needs **two** frozen clocks (`?now=` for
-the harness's fixtures, `page.clock.setFixedTime` for the app's own relative-time rendering); freezing
-one without the other lets every "5d ago" drift daily. Visual baselines are committed,
-per-platform, and regenerated with `pnpm ui:baselines` — NOT a bare `--update-snapshots`,
-which only fills in missing ones and silently leaves a changed one alone. Details:
-[`dev/README.md`](dev/README.md).
+- **A green suite proves nothing unless it touches the changed code.** Before reporting a
+  change as tested, break it deliberately and confirm the test goes red. Say which battery
+  covers a change, and say plainly when none does.
+- **Test the thing that DECIDES.** If the deciding logic sits where no test can call it (a
+  private method on `McpSession`, a branch inside a handler), move the logic. That is why so
+  much of `src/lib/` is pure (`effectiveBrainRole`, `chooseOrg`, `countedCall`,
+  `planPageWrite`, `resolveOrgForPerson`). Pattern: pure or db-only function in `lib/`, thin
+  wiring in the Worker.
+- **Every battery is offline and fork-safe.** Adding one means adding it to BOTH
+  `package.json`'s `test` script and `.github/workflows/ci.yml`; `pnpm test:wiring` fails the
+  build otherwise (and lints the pnpm scripts named in every workflow). `ci.yml` has two jobs:
+  pure-Node `check` and browser-only `ui`. A new battery goes in `check` unless it needs a
+  browser.
 
-**The two END-TO-END batteries now run in CI too** (changed 2026-08-04):
-`pnpm test:e2e-librarian` and `pnpm test:e2e-import` drive the real MCP tool handlers,
-through a real content index on `node:sqlite`, against a real brain. By default that is
-the fs + git `BrainStore` in a temp directory: no network, no credentials, nothing to
-clean up. They gate the write path (write_page's edits/append, move_page's link
-repointing over a folder subtree, delete_page's "still referenced" notes, the importer's
-no-resurrection ledger), which was previously maintainer-run by hand. `e2e-librarian`
-also covers the ORG-scope tools that decide where a brain LANDS (`brains`,
-`connect_brain`): real org rows in the same D1, the real `resolveOrgForPerson`, and one
-org deliberately holding NO brain, since that is the org `listAccessibleBrains` cannot
-see and the one a first adoption used to be impossible into. `--github` runs the
-identical assertions against a disposable `brain-*-e2e-*` scratch repo on the platform
-org (needs `.dev.vars` with platform App creds, auto-deleted, never a real brain). That
-mode is the only coverage of the GitHub adapter itself, so run it when `githubStore`
+**`pnpm test:ui` is the only browser battery.** It drives the REAL generated bundle over the
+local host harness (`dev/harness.ts`; projects in `playwright.config.ts`, including `web` for
+the web host), so it covers what every other battery is blind to: routes mount, the tree,
+folder notes and brain switching wire up, the editor round-trips, and how the app LOOKS in three
+display modes and two themes. It does not re-assert tool semantics. It **skips green** (loudly)
+without Chromium or without baselines for this platform; CI sets `UI_STRICT=1` so that skip
+cannot hide a broken container. Determinism needs **two** frozen clocks (`?now=` for fixtures,
+`page.clock.setFixedTime` for the app's relative times). `page.clock.install()` does NOT pause
+`setTimeout` here. Regenerate baselines with `pnpm ui:baselines`, never a bare
+`--update-snapshots` (it silently keeps changed ones). Details: [`dev/README.md`](dev/README.md).
+
+**The end-to-end batteries run in CI.** `pnpm test:e2e-librarian` and `pnpm test:e2e-import`
+drive the real MCP tool handlers through a real content index on `node:sqlite` against a real
+brain: by default the fs + git `BrainStore` in a temp directory, no network. They gate the write
+path and the org-scope tools that decide where a brain lands. `--github` runs the same
+assertions against a disposable scratch repo on the platform org (needs `.dev.vars` with platform
+App creds); that is the only coverage of the GitHub adapter, so run it when `githubStore`
 changes.
-
-Adding a test means adding it in BOTH `package.json`'s `test` script and
-`.github/workflows/ci.yml`. `pnpm test:wiring` fails the build if you forget,
-rather than the battery silently running in exactly one place. `ci.yml` has two
-jobs (the pure-Node `check` and the browser-only `ui`); a new battery goes in
-`check` unless it needs a browser, and the lint reads the whole file either way.
-
-**Iterating on the app UI:** use `pnpm app:dev` (renders the real `ui://` bytes via the
-official AppBridge host over stubbed fixtures — no Worker/auth/host, live-reload). It
-exercises the UI, not the real write path; for that use `pnpm worker:dev` + a local MCP
-host (Inspector/Desktop) at `http://localhost:8787/mcp`.
 
 ## Runtime architecture (three programs, one `src/`)
 
-Narrative walkthrough for newcomers: [`docs/architecture.md`](docs/architecture.md).
+Walkthrough: [`docs/architecture.md`](docs/architecture.md).
 
-This repo ships **three distinct programs** sharing one `src/`:
+1. **Bootstrap server** (`src/bootstrap.ts`): Node, Hono, via `tsx`. Registers a GitHub App via
+   the manifest flow, exchanges the code for credentials, and scaffolds a brain repo in one
+   atomic Git Data API commit.
+2. **MCP Worker** (`src/worker.ts`): a Cloudflare Worker serving MCP over **stateless**
+   Streamable HTTP. Each request builds a fresh `McpServer` behind the OAuth provider
+   (`mcpApiHandler`) and answers the same POST with JSON (no SSE, no session), in either
+   protocol era via `serveMcp` (`src/lib/mcp-serve.ts`). The per-request `McpSession` holds
+   tenant/brain resolution and all tool registration (`buildServer()`). The Worker also serves
+   the web app (`/b/...`), `/health`, the OAuth and Auth.js routes, and the GitHub install
+   callback. There is no Durable Object: the stateful McpAgent was removed because hosts tore
+   down its long-lived SSE streams mid-result; only its append-only DO `migrations` entries
+   remain in the template.
+3. **Local runtime** (`src/local.ts`): Node, `pnpm try <folder>`. The same content tools over a
+   **git repository on disk** through the fs `BrainStore` (`src/local/brain-store-fs.ts`), D1
+   shimmed over `node:sqlite` (`src/local/d1-sqlite.ts`). Loopback only, no auth, **no org
+   model** (members, sharing, invites, brain switching are absent). It also serves the web app
+   shell locally. Writes are local commits, never pushed.
 
-1. **Bootstrap server** (`src/bootstrap.ts`) — Node, Hono, run via `tsx`. One-shot setup flow that registers a GitHub App via the manifest flow, exchanges the code for credentials, and scaffolds the brain repo in one atomic Git Data API commit.
-2. **MCP Worker** (`src/worker.ts`) — Cloudflare Worker exposing MCP tools over **stateless** Streamable HTTP. Each request builds a fresh `McpServer` behind the OAuth provider (`mcpApiHandler`) and answers on the same POST with JSON (no SSE, no session), in EITHER protocol era: `serveMcp` (`src/lib/mcp-serve.ts`, `pnpm test:protocol`) sends a request carrying the 2026-07-28 envelope to the SDK's `createMcpHandler` and everything else to `WebStandardStreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true })`, as before. The split is ours rather than `createMcpHandler`'s built-in 2025 fallback because that fallback omits `enableJsonResponse`, which would have moved every existing client onto SSE replies. Both eras advertise `listChanged: false`: a 2026 client seeing `true` holds a `subscriptions/listen` stream open, and a per-request server can never send on it. (MCP SDK v2 since 2026-09-22; the 2026-07-28 facts are in `docs/references.md`.) The per-request `McpSession` class holds tenant/brain resolution and all tool registration (`buildServer()`). Non-POST `/mcp` returns 405 (the stateless transport offers no server→client stream, and handing GET to the SDK transport on Workers hangs the request). The legacy `IsomorphicMindMcp` `McpAgent` **Durable Object** (`MCP_OBJECT` binding) is retained only as an **unused stub** to keep the binding valid — nothing routes to it. (History: this was a stateful McpAgent DO with long-lived SSE streams until 2026-07-17; the Claude host tore those streams down before async results arrived, so widgets intermittently failed. The stateless move fixed it.)
-
-3. **Local runtime** (`src/local.ts`): Node, run via `tsx` as `pnpm try <folder>`. Serves the same content tools over a **git repository on disk** through the fs `BrainStore` (`src/local/brain-store-fs.ts`), with D1 shimmed over `node:sqlite` (`src/local/d1-sqlite.ts`). No auth (loopback only) and **no org model**, so members/sharing/invites/brain-switching are not registered. Builds a fresh `McpServer` per request for the same reason the Worker does: an `McpServer` binds to one transport. Added 2026-08-04 so a contributor reaches the real tools with no accounts, and so the write-path e2e batteries run offline in CI. `src/local/**` is Node-only and sits outside `src/lib/`. Reads come from the working tree, so its `getHead` reports a digest of that tree while `listCommits` reports git shas.
-
-The split matters for `src/lib/`. Anything imported by `worker.ts` runs on Cloudflare Workers and **cannot use `node:*` modules** (no `node:crypto`, no `node:fs`, etc.). The tsconfigs enforce this: `tsconfig.node.json` includes the bootstrap files, `src/local*`, `scripts/`, and `lib/`; `tsconfig.worker.json` includes `worker.ts` and `lib/`; `tsconfig.app.json` covers `app/`; `tsconfig.tests.json` covers `tests/` + `playwright.config.ts` (Playwright transpiles specs rather than typechecking them, so without it the UI suite is the one body of code where a rename fails in a browser instead of at `pnpm typecheck`). `pnpm typecheck` runs all four. Node-only code goes in `src/local/`, `bootstrap.ts`, or a Node-only sibling, never in `lib/`.
+**Anything imported by `worker.ts` runs on Workers and cannot use `node:*`.** The tsconfigs
+enforce it: `tsconfig.node.json` (bootstrap, `src/local*`, `scripts/`, `lib/`),
+`tsconfig.worker.json` (`worker.ts` + `lib/`), `tsconfig.app.json` (`app/`),
+`tsconfig.tests.json` (`tests/` + `playwright.config.ts`, since Playwright transpiles without
+typechecking). Node-only code goes in `src/local/`, `bootstrap.ts`, or a Node-only sibling,
+never in `lib/`.
 
 ## Auth model
 
-GitHub App auth uses two tokens — see `src/lib/github.ts`:
+GitHub App auth uses two tokens (`src/lib/github.ts`):
 
-- **App JWT** — local sign with PEM. App-level reads only (`appOctokit`).
-- **Installation token** — fetched via the JWT, scoped to one installation, 1h TTL, refreshed by `@octokit/auth-app` (`installationOctokit`). This is what touches repos.
+- **App JWT**: signed locally with the PEM; App-level reads only (`appOctokit`).
+- **Installation token**: minted via the JWT, scoped to one installation, 1h TTL
+  (`installationOctokit`). This touches repos. Which installation a brain uses comes from its
+  storage connection (see `.claude/rules/org-model-and-permissions.md`).
 
-Permissions are declared in `src/manifest.ts`. The non-obvious one is `administration: write` — required to create repos, **only granted on Organization installs**, never User installs. Bootstrap's install-callback handler explicitly checks this and renders a friendly error if the user installed on a personal account.
+Permissions are declared in `src/manifest.ts`. `administration: write` is required to create
+repos and is **only granted on Organization installs**; the install callback refuses a personal
+account install with a friendly error. The two human identity modes (`IDENTITY_MODE=github` and
+`authjs`) are in the org-model rules file.
 
 ### PKCS#1 vs PKCS#8 (don't break this)
 
-GitHub returns App private keys in **PKCS#1**. The `universal-github-app-jwt` library (used by octokit's App auth) only accepts **PKCS#8**. Bootstrap normalizes via `toPkcs8Pem()` (`src/bootstrap.ts`) using `node:crypto.createPrivateKey().export({type:'pkcs8'})` — both at write time (manifest exchange) and as a one-shot migration on every `pnpm bootstrap` run for `.dev.vars` written by older versions. **Do not move this conversion into `lib/`** — Workers don't have `node:crypto` and can't do it at runtime.
+GitHub returns App private keys in **PKCS#1**; `universal-github-app-jwt` accepts only
+**PKCS#8**. Bootstrap normalizes with `toPkcs8Pem()` (`src/bootstrap.ts`,
+`node:crypto.createPrivateKey().export({type:'pkcs8'})`), at manifest exchange and as a
+migration on every `pnpm bootstrap` run. **Do not move this conversion into `lib/`**: Workers
+have no `node:crypto`.
 
 ## Secrets / config
 
-- `.dev.vars` is the local source of truth (same name Wrangler uses, so it's reused for `worker:dev`). Bootstrap writes to it via `src/persist.ts`; `loadDevVarsIntoEnv()` lifts keys into `process.env` for the Node side.
-- Worker reads the same keys from its `Env` binding. For production, upload via `wrangler secret put`.
-- Wrangler's `.dev.vars` reload does **not** reliably re-create existing Durable Object instances — after editing `.dev.vars`, restart `wrangler dev` rather than relying on auto-reload, or the McpAgent DO will keep stale env values.
+- `.dev.vars` is the local source of truth (Wrangler's own filename, reused by `worker:dev`).
+  Bootstrap writes it via `src/persist.ts`; `loadDevVarsIntoEnv()` lifts keys into
+  `process.env` for Node.
+- The Worker reads the same keys from `Env`. Production secrets go in via `wrangler secret put`.
 
 ## Deployment config (`wrangler.jsonc` is GENERATED)
 
 `wrangler.jsonc` is **gitignored and generated** from the committed `wrangler.template.jsonc`
-by `pnpm setup:config` (`scripts/setup-config.ts`). Added 2026-07-27 when the repo went
-public. Never edit `wrangler.jsonc`; it is overwritten. Never commit it; it is one
-deployment's identity.
+by `pnpm setup:config` (`scripts/setup-config.ts`). Never edit it (it is overwritten); never
+commit it (it is one deployment's identity).
 
-- **Why.** Wrangler will not interpolate env vars into resource bindings, so a config must
-  carry literal KV/D1 ids. Committing them puts one deployment's identity (Worker name,
-  public URL, resource ids, the App slug, the magic-link From address) into a repo that many
-  people deploy: a sanitization problem for us, and a fresh clone that `wrangler deploy`s
-  straight into "namespace not found" for everyone else.
-- **How.** Every deployment-specific value is a `__DOUBLE_UNDERSCORE__` token in the template,
-  resolved from `process.env` → `.dev.vars` → a local-development default. `SETTINGS` in
-  `scripts/setup-config.ts` is the single list; adding a token to the template without adding
-  it to `SETTINGS` is a hard error rather than a silent passthrough. Substitution is
-  split/join, not `String.replace`, for the `$&` reason in `docs/references.md`.
-- **Local ids are fake on purpose.** `wrangler dev` and `d1 migrations apply --local` run
-  against Miniflare, which never resolves an id against Cloudflare's API — so the default
-  profile needs no Cloudflare account at all. Verified: both migrations apply cleanly with
-  placeholder ids. `--provision` creates the real KV namespace + D1 database and fills in the
-  ids; `--print-ci` emits the `gh variable set` commands for CI.
-- **CI.** `ci.yml` runs `pnpm setup:config` (default profile, no secrets — keeps fork PRs
-  green). `deploy.yml` regenerates from repository **variables** (not secrets; none of these
-  are secret and a visible value is a diagnosable one) and **skips with a warning** if
-  `CF_OAUTH_KV_ID`/`CF_D1_DATABASE_ID` are unset, rather than deploying template defaults.
-- **Don't hardcode our deployment anywhere else either.** `src/manifest.ts` takes the OAuth
-  callback origin as an argument (`workerBaseUrl`, from `PUBLIC_BASE_URL`) instead of baking
-  in a hostname; the Worker's install-callback page derives the host from the request URL.
-  Both used to be hardcoded, which silently registered our domain on a self-hoster's App.
+- **Why:** Wrangler will not interpolate env vars into resource bindings, so a config carries
+  literal KV/D1 ids. Committed, they leak one deployment's identity and send every fresh clone's
+  `wrangler deploy` into "namespace not found".
+- **How:** every deployment-specific value is a `__DOUBLE_UNDERSCORE__` token resolved from
+  `process.env` → `.dev.vars` → a local default. `SETTINGS` in `scripts/setup-config.ts` is the
+  single list; a template token missing from it is a hard error. Substitution is split/join,
+  not `String.replace` (the `$&` gotcha).
+- **Local ids are fake on purpose:** Miniflare never resolves them, so the default profile needs
+  no Cloudflare account. `--provision` creates the real KV namespace and D1 database;
+  `--print-ci` emits the `gh variable set` commands.
+- **CI:** `ci.yml` runs `pnpm setup:config` with no secrets (fork PRs stay green). `deploy.yml`
+  regenerates from repository **variables** and **skips with a warning** if
+  `CF_OAUTH_KV_ID`/`CF_D1_DATABASE_ID` are unset rather than deploying template defaults.
+- **Don't hardcode our deployment anywhere.** `src/manifest.ts` takes the OAuth callback origin
+  as an argument (`PUBLIC_BASE_URL`); the install-callback page derives its host from the request.
 
 ## Deploys are versioned, and roll themselves back
 
-`deploy.yml` does **not** call `wrangler deploy`. That command uploads code and points
-traffic at it in one step, which leaves nothing to fall back to. The job splits them:
-record the live version id, `versions upload` (serving no traffic), smoke check the
-version's own preview URL, `versions deploy <id>@100%`, smoke check production, and on
-failure `wrangler rollback` to the recorded id and fail the run red. Runbook and the
-drill to run before trusting it: [`docs/ops/deploy-and-rollback.md`](docs/ops/deploy-and-rollback.md).
+`deploy.yml` does **not** call `wrangler deploy` (it uploads and routes traffic in one step,
+leaving nothing to fall back to). It records the live version id, `versions upload`s (no
+traffic), smoke checks the version's preview URL, `versions deploy <id>@100%`, smoke checks
+production, and on failure `wrangler rollback`s to the recorded id and fails red. Migrations
+apply in the step before, schema first. Runbook and drill:
+[`docs/ops/deploy-and-rollback.md`](docs/ops/deploy-and-rollback.md).
 
-- **The checks live in `scripts/smoke.ts`, not in a `run:` block, and `pnpm test:smoke`
-  pins them.** This is the code that decides whether a merge stays in production, and it
-  fails expensively in both directions: too strict reverts healthy deploys until `main`
-  stops shipping, too loose never fires at all. Same rule as everywhere else in this repo:
-  test the thing that DECIDES. The four assertions are unauthenticated reads (`/health`,
-  an unauthenticated `POST /mcp` that must be `401` with a Bearer challenge, and both
-  OAuth metadata documents pointing back at the origin that served them), so they are safe
-  against an origin sharing production's bindings.
-- **A rollback reverts CODE, never SCHEMA.** Migrations applied in the step before are
-  still applied afterward. The additive / expand-then-contract rule already required for
-  the deploy window is now what keeps the previous version runnable at any moment.
-- **The pre-promotion smoke depends on a fact that could change.** Cloudflare withholds
-  preview URLs from Workers implementing a Durable Object and reports the verdict per
-  version as `metadata.has_preview`. This Worker gets them today (verified 2026-08-18:
-  true on every version since number 77, so the append-only `migrations` array naming the
-  deleted `IsomorphicMindMcp` class does not disqualify it). **Adding a Durable Object
-  binding would silently drop the pipeline onto promote-then-roll-back**, where a bad
-  version serves real traffic for the length of a smoke check. The workflow warns rather
-  than going quiet, but that is the trade being made.
-- **What none of it catches:** a wrong `PUBLIC_BASE_URL`. `@cloudflare/workers-oauth-provider`
-  builds its metadata from the request origin, not from the configured value, so every
-  assertion passes on any hostname. The value is read where there is no request to derive
-  an origin from (`src/manifest.ts`, the connected-accounts `/link/start` URL).
+- **The checks live in `scripts/smoke.ts`, pinned by `pnpm test:smoke`.** They decide whether a
+  merge stays in production, and fail expensively in both directions. Five unauthenticated
+  reads: `/health`; an unauthenticated `POST /mcp` that must be `401` with a Bearer challenge;
+  both OAuth metadata documents pointing back at the serving origin; and a signed-out `GET /b/`
+  that must redirect to sign-in on the same origin, or 404.
+- **A rollback reverts CODE, never SCHEMA.** Migrations must stay additive (renames and drops go
+  expand-then-contract) so the previous version is runnable at any moment.
+- **The pre-promotion smoke depends on preview URLs,** which Cloudflare withholds from Workers
+  implementing a Durable Object (`metadata.has_preview`). This Worker has them today. **Adding a
+  Durable Object binding would silently drop the pipeline onto promote-then-roll-back**, where a
+  bad version serves real traffic during the smoke. The workflow warns rather than failing.
+- **Nothing catches a wrong `PUBLIC_BASE_URL`:** the OAuth provider builds metadata from the
+  request origin, so every check passes on any hostname.
 
 ## Dependency and code scanning
 
-Three mechanisms, all GitHub-native and free on a public repo, added 2026-08-31. Snyk was
-evaluated and not adopted: it needs an account and a token, which a fork cannot have, so it
-would have been a check that only ever ran for us.
-
-- **Dependabot** (`.github/dependabot.yml`) opens weekly npm and monthly actions updates.
-  `package-ecosystem: npm` is correct for pnpm. Updates are GROUPED (production minor/patch,
-  development, security fixes, actions) because ungrouped they arrive as roughly two dozen
-  separate pull requests a week, which is how a team learns to ignore them. Majors stay
-  individual on purpose: those need reading.
+- **Dependabot** (`.github/dependabot.yml`): weekly npm, monthly actions, GROUPED (production
+  minor/patch, development, security, actions); majors stay individual. `package-ecosystem: npm`
+  is correct for pnpm.
 - **CodeQL** (`.github/workflows/codeql.yml` + `.github/codeql/codeql-config.yml`) runs the
-  `security-and-quality` suite, which is 201 rules, 97 of them quality rather than security.
-  **Do not enable CodeQL default setup in the repository settings**: it takes over from this
-  workflow and runs the narrower `default` suite, so clicking it in the UI silently drops
-  those 97 rules. The config also excludes `src/lib/app-bundle.generated.ts`, which is a
-  ~1 MB build artifact and would otherwise be scanned as if a human wrote it.
-- **`pnpm security:audit`** (`pnpm audit --prod --audit-level high`) runs in ci.yml as a
-  REPORTING step, `continue-on-error`. `--prod` is doing real work: it drops the
-  wrangler/miniflare subtree, which is most of the raw advisory count and none of the
-  production exposure. It does not gate because the tree has advisories that are not cleared
-  yet, and a step that reds every pull request is a step people route around. Drop
-  `continue-on-error` once it is clean.
-
-**A Dependabot pull request that bumps a BUNDLED dependency always fails CI, and this is
-not a bug in either.** `pnpm gen:app` inlines the packages the app UI imports (zod and
-markdown-it are both in the bundle), so their bytes are part of the committed
-`app-bundle.generated.ts`. Dependabot writes `package.json` and the lockfile and nothing
-else, because it does not run repository code, so the bundle is stale the moment the bump
-lands and ci.yml's "Generated artifacts in sync with source" step fires. A maintainer
-regenerates with **`pnpm regen:pr <number>`** (`scripts/regen-pr.ts`), which does the work
-in a throwaway `git worktree` and pushes only with `--push`.
-
-This is deliberately a local script rather than a workflow. Regenerating means installing
-and bundling a dependency version nobody has reviewed, and automating that would need a
-token with write access to a public repo at a bot's say-so, which is the exact supply-chain
-shape the scanning above exists to catch. It would also not work: a `GITHUB_TOKEN` push does
-not re-trigger checks, so the pull request would keep showing the failure it just fixed.
-
-`pnpm test:wiring` lints the pnpm scripts named in EVERY workflow, not just ci.yml, against
-`package.json`. deploy.yml names `gen:app`, `gen:templates`, `typecheck` and `setup:config`,
-and it is the worse file to lose a step in: a rename that reds ci.yml blocks a pull request,
-while the same rename in deploy.yml just skips the regen and ships a stale bundle.
-
-## Non-obvious wrangler bits
-
-- **No `routes` block, ever.** A custom domain is bound in the Cloudflare **dashboard**, independently of the config. A `routes` entry with `custom_domain: true` makes `wrangler dev` rewrite `request.url`'s host, which breaks the OAuth provider's host-based routing and forces a comment-out dance on every local run. The template says so too; don't re-add one.
-- The DO `migrations` array (`v1` new / `v2` deleted `IsomorphicMindMcp`) is **append-only** by Cloudflare's rules. Neither entry may be removed even though nothing routes to the class.
-- `AUTH_MODE=static` is the single-shared-bearer path (`MCP_BEARER_TOKEN`). It is no longer the default and is not an access-control model, but it is now the documented **self-hosting** entry point (one person, one brain, no Cloudflare-side identity setup), so it is supported rather than legacy. `oauth` + `IDENTITY_MODE=authjs` is what the hosted deployment runs. (History: an `alias: { "ai": … }` entry once stubbed a transitive import from the `agents` package; both the package and `src/stubs/` are gone.)
-- **In static mode, `GITHUB_TOKEN` replaces the GitHub App** (`tokenOctokit` in `src/lib/github.ts`, taken in `tenantContext`'s single-tenant branch ahead of `installationOctokit`). Every call `brain-repo.ts` makes is available to a fine-grained PAT with Contents + Pull requests write on the one repo, so `GITHUB_TOKEN` + `BRAIN_REPO_OWNER`/`NAME` is the whole GitHub side: no org, manifest flow, PKCS conversion, or installation id. The App path is unchanged and still required for `oauth`, which mints a token per tenant from one installation. Commits are attributed to the token's owner rather than to the App.
-- **Single-tenant mode does not register the org tools.** `hasOrgModel` (`AUTH_MODE === 'oauth'`) gates `registerMemberTools`, `registerConnectedAccountTools`, and `registerOrgOnboardingTools` in `buildServer`: with no `orgs`/`memberships` rows they can only reject, an advertised tool costs context in every conversation, and a refusal reads to the model as a permissions problem to work around. Same rule as `FEEDBACK_REPO`. `brains` stays registered: the app's nav calls it on every open and learns which destinations exist from its `features`, and with no signed-in user it returns an empty list.
-
-## Brain model: arbitrary structure (no entity types)
-
-**The wiki is arbitrary folder structure.** There are NO fixed entity types (the old
-`people/teams/customers/concepts/…` taxonomy was removed 2026-07) and NO auto-generated
-by-type index. This is the product model: the app is multi-tenant, managing many brains
-that are ordinary GitHub repos owned by different companies — each organized however its
-owner likes, not forced into our schema.
-
-- **Librarian tools are path-based:** `write_page` (create-or-update, `mode` guards) takes a
-  target `path` anywhere under `wiki/`; `move_page` takes `new_path` (or `new_title` to rename
-  in place) and repoints all inbound links; `delete_page` is path-based. `move_page`/`delete_page`
-  also accept a folder path (no `.md`) to move or delete a whole subtree. `validate` checks
-  broken links plus advisory OKF structure notes (see below); it has no frontmatter-shape or
-  orphan checks — those assumed types.
-- **`write_page` edits part of a page without replacing it** (`append`, `edits`; engine
-  `src/lib/page-patch.ts`, pure, `pnpm test:patch`). `content` still replaces the whole
-  body, which made every small change a read-the-whole-page-then-rewrite-it cycle and put
-  an agent that couldn't read first one call away from silent data loss (that is exactly
-  how this shipped: an agent hunting for `read_page` mid-edit failed to retrieve it and
-  reported the retrieval miss as "I have no way to read pages"). `edits` is a list of
-  exact find/replace pairs applied in order to the BODY of the authoritative blob;
-  `append` adds at the end. Two safety rules, both tested: an anchor must match **exactly
-  once** (zero or several aborts the entire call, so a batch is never half-applied), and
-  an anchor **inside an `okf-view` snapshot region is refused** because that text is
-  regenerated on the same save. Patched bodies bypass `splitProvidedContent` via
-  `composeUpdate`'s `rawBody` arg (they are already frontmatter-free, and a body
-  starting with `---` must not be re-parsed as frontmatter). A whole-body `content` write
-  now reports the size of what it replaced, so a clobber is visible in the transcript.
-  **What write_page decides is pure** (`src/lib/page-write.ts`, `pnpm test:patch`):
-  `checkPageWrite` answers the refusals that need no page, `planPageWrite` picks create,
-  update or refusal from the page as the branch holds it (the clobber guard, the editor's
-  sha guard, "nothing to update", a patch aimed at a missing page), and
-  `composeCreate` / `composeUpdate` build the new file. The tool keeps only the IO.
-- **Only `wiki/log.md` is tool-maintained** (append-only changelog). `wiki/index.md` is
-  now just a regular editable page; new brains are scaffolded with no predefined wiki
-  folders and no index.
-- Frontmatter is optional/free-form, and now WRITABLE that way too: `write_page`'s
-  `fields` sets or removes any brain-owned key without touching the body (see [Writing
-  frontmatter](#writing-frontmatter-fields-and-the-properties-panel)).
-  `isToolMaintained` (src/tools/librarian.ts) and `isEditablePath` (app/main.tsx) are
-  the write-policy guards. Schema doc for agents: `brain-template/AGENTS.md`.
-- Future: "special folders" (e.g. skills) may get meaning later, but there's no use case
-  yet — don't reintroduce a taxonomy speculatively.
-
-## `read_page` vs `view_page` (keep them separate; write the descriptions apart)
-
-Reviewed 2026-07-24 against the "don't grow the tool surface" pressure that took us from
-42 → 30 tools. The `list_members`+`view_members` → `members` merge does **not** transfer
-here, and the pair stays:
-
-- `read_page` is the **app's own navigation channel** (`app/core/actions.ts` calls it from
-  inside the widget). A merged tool would carry `_meta.ui.resourceUri` on the widget's
-  internal calls.
-- Reading a page is the highest-frequency **intermediate** operation on the surface, where
-  the roster and brain list are once-per-conversation surfaces. Widget-per-read is noise,
-  and there would be no way to read quietly.
-
-What was actually wrong was the **descriptions**, and it cost us a real failure: the string
-`read_page` appeared twice inside **`view_page`'s** description ("prefer this over
-read_page…") and zero times in `read_page`'s own one-liner, so a host tool-search for
-`read_page` ranked `view_page` first and an agent concluded it couldn't read pages at all.
-So: each tool's description must stand alone and **name itself**, cross-tool steering lives
-in `SERVER_INSTRUCTIONS` (hosts load it wholesale), and a tool an agent will hunt for by
-name mid-task should not be described in one terse line. Both descriptions carry a comment
-saying so; don't "tidy" them back.
-
-## `BrainStore`: the storage seam (where a brain physically lives)
-
-`src/lib/brain-repo.ts` exports **`BrainStore`**, the only interface between the tool
-layer and a brain's storage, plus **`githubStore(octokit)`**. `TenantContext`/`BrainContext`
-carry a `store`; every content read and write goes through it. Added 2026-08-04 so a brain
-can also be a git repo on disk (the local runtime, and the e2e batteries with no network).
-
-- **Ten operations:** `getHead`, `branchCommitSha`, `repoWritePolicy`, `listTree`,
-  `fetchPages`, `readFile`, `findOpenConfigPr`, `listCommits`, `commitFiles`, `commitOrPR`.
-  Not a general storage abstraction: it is what the tools already did, in the shape they
-  already did it.
-- **`branchCommitSha`, `repoWritePolicy`, and `listCommits` are in it because they were
-  raw `octokit.rest.*` calls in `brain-index.ts`, `brain-config.ts`, and `apps.ts`.** A raw
-  octokit call in a content path compiles and then fails at runtime on another backend. If
-  you reach for `ctx.octokit` while touching a brain's CONTENT, it belongs on the store.
-- **`octokit` is still on the context, now OPTIONAL.** It covers the three operations that
-  are GitHub as a PLATFORM rather than a brain as STORAGE: create a repository, list an
-  installation's repositories, check a repo exists before connecting it. All three are in
-  `src/tools/brains.ts` behind `githubClient(ctx)`, all three are org-model tools, and a
-  deployment with no GitHub client has no org model and does not register them
-  (`hasOrgModel` in `worker.ts`).
-- **`commitFiles` atomicity is load-bearing.** `write_page`'s "an edit batch is never
-  half-applied" rests on the branch ref not moving unless the whole bundle committed. Any
-  implementation must preserve it, which is why a local brain is a git repo, not a folder.
-- Coverage: `pnpm test:index` wraps its octokit stub in the real `githubStore` rather than
-  stubbing `BrainStore`, so it still exercises `fetchPages`'s GraphQL batching.
-  `pnpm test:scope` traps the store with a throwing Proxy, so an authorization test that
-  reaches storage fails rather than passes.
-
-## Content index (read-path backend)
-
-The read tools (`search_pages`, `find_inbound_links`, `validate`, `view_graph`) do **not**
-scan the repo live anymore — they query a **derived index in D1** (`src/lib/brain-index.ts`,
-schema `src/db/index-schema.sql`). This exists because the old live path fetched + parsed
-every page from GitHub on each call, which capped scans at ~40 pages (Worker subrequest
-budget) and cost hundreds of ms. Querying the index is one or two local D1 statements —
-unbounded and ~10× faster.
-
-- **The index is a derived cache, NEVER the source of truth** — the GitHub repo is. Every
-  read calls `ensureFresh(db, octokit, repoArgs, brainId, config)` first, which compares the
-  branch HEAD (one `getRef`) to `brain_index_meta.indexed_commit_sha`. Unchanged → serve from
-  D1. Moved → reindex the changed pages (diff blob shas), then serve. So a query can never
-  return content stale relative to the branch, even after edits made **outside our tools**
-  (github.com, another agent, a merged PR). There is deliberately **no webhook** — the
-  read-time HEAD guard is the correctness mechanism; webhooks would only be a freshness
-  optimization (see TODO).
-- **Keyed by `brainId = "owner/repo"`** — universal across identity modes, so it needs nothing
-  from the org tables. Threaded through `TenantContext`/`BrainContext` (`db` + `brainId`).
-- **Links are stored raw and resolved at QUERY time** (`loadResolvedGraph`) against the current
-  page set, so adding/removing a page fixes/breaks inbound links with no whole-brain
-  re-resolve. Markdown links resolve via `resolveRelative`; `[[wikilinks]]` go through
-  `buildWikilinkIndex` / `resolveWikilink` in `wiki.ts` (see below).
-- **Wikilink resolution has THREE LANES and both sides share one key** (`wikilinkKey`,
-  fixed 2026-08-06, issue #12). A `[[link]]` is written from memory, so it may be the
-  page's title, its filename, either in another case, hyphens where the other has spaces,
-  a folder path, or carry a `#heading`. `wikilinkKey` reduces all of that to one form and
-  the lookup table is built with the SAME function, in order of specificity: path (every
-  multi-segment suffix, so `[[Meetings/Weekly Sync]]` works without knowing the `wiki/`
-  prefix) → filename → title. Ties go to the first page in path order, so resolution is
-  stable across reads. The bug this replaces keyed the table by RAW filename and queried it
-  with SLUGIFIED link text, so any page whose filename was not already slug-shaped
-  ("2026-06-26 Weekly Sync.md") was reachable only by title — on one 149-page brain that was
-  ~100 links reported broken whose pages `list_pages` and `read_page` returned happily. The
-  app viewer calls the same two functions (`app/core/actions.ts`), because a link the viewer
-  refuses to open must be one validate reports.
-- **Link extraction skips code** (`maskCode` in `wiki.ts`): `[[Name]]` inside a fence or
-  backticks on a conventions page is a syntax example, not a link, and reporting it is noise
-  no one can ever clear. This is why `INDEX_SCHEMA_VERSION` is 4 — v1–v3 link rows hold those
-  examples, so `rebuildDerivedFromStore` now refreshes `brain_links` alongside titles and
-  fields, lazily, from stored content.
-- **The batched `fetchPages` (GraphQL) is the indexer's fetch engine** — a (re)build costs
-  `ceil(changedPages / 100)` subrequests, not one per page. `MAX_SCAN_PAGES` (1500) is now a
-  memory/time sanity bound, not a subrequest limit.
-- **Schema ships via CI now (don't apply --remote by hand):** the D1 schema is managed by the
-  **wrangler migrations framework** (`migrations/`, canonical baseline `migrations/0001_init.sql`;
-  `src/db/*.sql` are reference only). The deploy workflow runs `wrangler d1 migrations apply
-platform-db --remote` **before** the code ships (schema-first), so a merge to `main` ships
-  schema + code together — never run `--remote` manually. Migrations are the half a
-  **rollback cannot undo** (see the deploy section below), which is what makes the
-  backward-compatibility rule below load-bearing rather than tidy. Locally: `pnpm db:migrate` (apply),
-  `pnpm db:migrate:list`, `pnpm db:migrate:new <name>` (create the next `NNNN_<name>.sql`).
-  Migrations must be backward-compatible with the still-running old code for the deploy window
-  (additive; renames/drops → expand-then-contract). Existing brains self-populate the content
-  index lazily on first read (no manual backfill).
-- **The write path discovers affected pages via the index, not a whole-brain scan.** Link
-  repointing (`move_page`, `write_page` retitle, and `move_page` on a folder) and the "still
-  referenced" heads-up on delete (`delete_page`, incl. on a folder path) find the pages they touch through
-  `backlinksTo` on the content index (`fetchInboundLinkersForPaths` / `inboundRefs` in
-  `src/tools/librarian.ts`), then fetch just those blobs fresh for the read-modify-write.
-  Bounded by inbound-link count rather than brain size, and uncapped: a linker beyond the
-  old `MAX_SCAN_PAGES` ceiling is no longer silently missed. (The whole-brain `scanContent`
-  helper is gone as of this change.)
-- **Search can span brains, and freshness is what that costs** (`scope: 'all'` on
-  `search_pages`, built 2026-08-19 as phase 1 of `docs/design/brain-seams.md`). At the
-  storage layer fan-out is nearly free: one D1 holds every brain's index, so
-  `searchBrains` (`brain-index.ts`) runs the ranked `searchIndex` once per brain and
-  folds the results with `mergeBrainResults` (`src/lib/search.ts`, pure). Ranking stays
-  per brain: a score is relative to a corpus and means nothing across two of them. The
-  cost is `ensureFresh`, one `branchCommitSha` per brain plus a full reindex for any
-  whose HEAD moved, which for a rarely-opened brain is the common case. So **the
-  freshness guarantee is per brain and only the ACTIVE brain keeps it**: the others are
-  served from whatever is indexed and the result says so, and a `read_page` on any hit
-  resolves the authoritative blob anyway. Two consequences that are load-bearing rather
-  than tidy. **The hit cap is per brain, not global**: one cap taken in order is right
-  for one brain and silently starves every brain after the first, which reads as "the
-  others have no matches" rather than "we stopped looking", so each brain has its own
-  budget and the ceiling is filled round-robin (grouped by brain for reading; with one
-  brain the merge is the identity, so a plain search is byte-identical to before).
-  **Every result names its brain**,
-  because the leak here is conversational rather than mechanical: a conversation rooted
-  in one client's brain surfaces another engagement's material and a human pastes it
-  onward. Fan-out is opt-in per call and never ambient, and a WRITE never fans out (it
-  names exactly one brain, and `landed` now reports which, since a unique-but-wrong
-  fuzzy match otherwise puts a real page in a real client's repository silently).
-  `searchTargets` (`src/tools/librarian.ts`) is the pick and is exported so
-  `pnpm test:search` can pin it; `find_inbound_links` is deliberately NOT fanned out,
-  being two live GitHub reads plus a whole-graph load per brain.
-- **Writes are WRITE-THROUGH** (issue #31). A successful DIRECT commit upserts the index rows
-  for exactly the pages its bundle touched (`writeThroughIndex` in `brain-index.ts`, called from
-  the `commitBundle` chokepoint in `librarian.ts`) and advances `indexed_commit_sha`, so the
-  read an agent makes to verify a write costs one `getRef`, not an incremental reindex. The
-  replacement and freshness marker land in ONE conditional D1 transaction: every statement
-  requires the index to still be at the commit's base revision and exact row-shape version, so
-  a concurrent reconcile/write makes the whole batch a no-op rather than mixing generations.
-  Bundles over the conservative 40-statement transaction budget skip write-through and reconcile
-  normally on the next read. PR writes do too (the branch has not moved), as does the fs backend:
-  its revision is a digest of the mutable working tree, not an immutable commit this bundle alone
-  produced. Failures are swallowed because the source-of-truth commit already landed. Blob shas
-  are computed with Web Crypto SHA-1 (`gitBlobSha`). The write tools'
-  descriptions also carry the timeout-retry guidance (read before retry; a retried create fails
-  if it landed). Idempotency keys were considered and deferred — see `docs/roadmap.md`.
-- **Queryable frontmatter** (`brain_page_fields`, Phase 1 of the derived-views PRD): every
-  scalar/list-of-scalar frontmatter key is indexed per page (hard caps in `brain-index.ts`;
-  optional `indexedFields` in `.isomorphic.json` restricts). `brain_index_meta.schema_version`
-  lazily backfills brains indexed before the table existed, from stored content, no refetch.
-- **No unbounded work in one read.** Both catch-up passes are budgeted and RESUMABLE, because
-  an over-long one doesn't degrade to "slow" — it degrades to "this brain can never be read
-  again". A whole-brain derived rebuild (a `schema_version` bump) and a large incremental
-  reconcile each used to run to completion inline, writing their progress only at the end; on
-  a ~3,000-page brain that exceeded the host's 60s tool timeout, so nothing was written and
-  the next read restarted it, forever. Now `rebuildDerivedFromStore` walks
-  `REBUILD_PAGE_BUDGET` pages per request from `brain_index_meta.rebuild_cursor` and only
-  advances `schema_version` when it reaches the end, and `incrementalReindex` re-fetches at
-  most `REINDEX_PAGE_BUDGET` changed pages, leaving `indexed_commit_sha` alone when it
-  couldn't finish. Successive reads converge. **Any new whole-brain pass belongs in this
-  shape** — budget, cursor, advance-the-marker-only-when-done.
-
-## Search ranking (`search_pages`)
-
-`searchIndex` runs in TWO PHASES and the split is the point: **SQL narrows, it never
-orders.** Phase 1 asks D1 only what is cheap — per page, does it hold each query term,
-and does it hold the whole query verbatim — so the rows are path, title and a few
-booleans however large the brain. Phase 2 fetches content for the top-ranked
-`MAX_SEARCH_CANDIDATES` (25) and extracts their lines. Everything that ORDERS or DROPS a
-result is in the pure `src/lib/search.ts` (`pnpm test:search`). Full record:
-[`docs/design/search-relevance.md`](docs/design/search-relevance.md). Built 2026-08-31.
-
-- **What it replaced.** One opaque `LIKE '%<whole query>%'`, `ORDER BY path`, and a
-  global 50-hit cap with no per-page limit. Three defects at once: a question-shaped
-  query matched nothing whatever the brain contained (measured — all 6 sentence-shaped
-  probes on a real 28-page brain returned nothing, while 27 of 28 term-shaped ones
-  matched, so absence tracked query SHAPE, not content); alphabetical position stood in
-  for relevance; and one page could consume the whole budget with every other page
-  invisible and nothing in the response saying so. The first defect is invisible in
-  normal use, because a model that gets no results rephrases or gives up, and the
-  transcript then shows a model that could not find something rather than a search that
-  could not match it.
-- **Terms are ORed, not ANDed.** A page holding some of the query is a worse match, not
-  a non-match; the scorer decides how much worse. ANDing in SQL would reintroduce the
-  empty result this replaces.
-- **Coverage dominates the score** (weights and their rationale are commented at the
-  constants). Title and path matches only break ties inside a coverage band, or a
-  keyword-stuffed title outranks the page that discusses the subject; frequency
-  SATURATES, or a long rambling page buries a short authoritative one. Both failure
-  modes are test cases over a constructed corpus, so changing the trade turns a check
-  red. Ties break on path, so a query never disagrees with itself between reads.
-- **PROXIMITY HAS TWO LANES, and the whole-query one is useless alone.** `phrase` is the
-  entire query, so on "what is the day rate" it asks whether a page holds that whole
-  sentence — which no page does. That made `W_PHRASE`, the third-largest weight, dead on
-  exactly the query shape tokenization was added for, while "day rate" sat verbatim on
-  the page the query wanted. Proximity is now `1` for the whole query, else the fraction
-  of the query's BIGRAMS present: adjacent pairs from the query AS WRITTEN, where neither
-  word is a function word and at least one is a retained term. Two traps — pairs come
-  from the RAW sequence, because stopword removal destroys adjacency ("how do partners
-  get paid" retains `[partners, paid]`, and "partners paid" is on no page while "get
-  paid" is); and the function-word filter is what keeps "the day" from scoring beside
-  "day rate", which is why prepositions and light verbs are deliberately NOT in
-  `NON_COLLOCATING`. The lanes never stack, so a term-shaped query scores exactly as it
-  did before bigrams existed. `scoreLines` carries the same signal, because its tie-break
-  had the identical bug: the line that answered the question was picked no more often
-  than any other line holding the words apart.
-- **Probe against a real brain before believing a ranking change.** `pnpm probe:report`
-  is the retrieval harness, and it is what found the proximity defect after the first
-  version had a green golden suite. A constructed corpus is written by whoever already
-  knows what the code does, so it confirms intentions; probes over a brain nobody wrote
-  for the test expose them.
-- **`%` and `_` stay INSIDE the token** rather than splitting it. The escaping contract
-  requires it (they must never act as LIKE wildcards, at either layer), and it makes
-  `write_page` or `50%` one precise term. `-` does not, so a brain writing "fine
-  grained" still answers `fine-grained`. A lone `%` or `_` survives the minimum term
-  length for the same reason — the first version dropped it as noise and silently lost
-  the literal-match guarantee, which is what `isUsableTerm` exists to prevent.
-- **FTS5 was verified AVAILABLE in D1 and deliberately not used.** Adding a virtual
-  table disables `wrangler d1 export` for the ENTIRE database, and `platform-db` holds
-  the org/membership/user rows; BM25 also cannot satisfy the design's requirement that
-  ranking be reproducible from row data and pinnable by a pure test. Reasoning in
-  `docs/references.md`. Don't re-litigate it from memory — and note the seam is built
-  for it: swapping phase 1 for an FTS5 `MATCH` would touch neither the ranking nor its
-  tests.
-- **No schema change, so no `INDEX_SCHEMA_VERSION` bump and nothing a rollback cannot
-  undo.** This is the read path; that property is what bounds the blast radius.
-- **The response now says what it left out** (`elisionNote`) and which terms it actually
-  searched. A bare no-match tells a model nothing; "Searched: referral, fee" tells it
-  which half of its question missed.
-
-## Derived views (okf-view)
-
-Phases 1+2 of `docs/design/derived-views-and-sync-prd.md` (FR-1a/1b/1c/1d + FR-2) are built.
-A page declares a computed view as a fenced ` ```okf-view ` block. Grammar: `kind` is the
-SOURCE (`backlinks` = pages linking to `of`/this page; `pages` = content pages, optionally
-scoped by `under: <prefix>`; `folders` = the direct sub-folders under `under`, each
-represented by its folder note — note-less sub-folders show unlinked), `as` is the
-RENDERING (`list|table|count`), plus `filter` (frontmatter match), `group-by` (sections, or
-per-group tallies with `as: count`), `columns`, `describe`, `sort`/`order`, `label`.
-`kind: count` is shorthand for backlinks + `as: count`. A directory index (replaces
-hand-written `*/index.md`) is `kind: pages` + `under` + `group-by`; a directory-of-directories
-(one row per sub-folder, no per-page `type:` tagging) is `kind: folders` + `under` — its
-`under` defaults to the containing page's own directory. Folder-note names
-(`FOLDER_NOTE_NAMES` = `index.md` > `README.md`) live in `view-directives.ts` as the single
-source of truth (app tree re-exports). Engine: `src/lib/views.ts` (index-coupled) +
-`src/lib/view-directives.ts` (pure parse/segment/snapshot layer, safe for the app bundle).
-
-- **Three renderings from one source.** `display` (fence replaced by the live result — what
-  `view_page` serves the app), `snapshotted` (fence + cached static rendering between
-  `okf-view:snapshot` markers — what's written to the file and what `read_page` serves agents),
-  `stripSnapshots` (what `edit_page` sends the editor, so generated content never round-trips
-  ProseMirror; snapshots regenerate on save).
-- **The snapshot is cosmetic fallback only** (decided 2026-07-22): it exists so github.com /
-  raw-OKF consumers see a real table, refreshes only when its own page is written through our
-  tools, and is allowed to go stale between writes. Executing consumers always compute live
-  from the index (`ensureFresh` first), so app/MCP results can never be stale.
-- **Fail-open everywhere:** any view-computation failure falls back to raw content — a view
-  never makes a page unreadable or blocks a save. Malformed directives render a visible note.
-- `pnpm test:views` is the engine's golden test (pure, stubbed index).
-
-## The web app (the same bundle, in a browser tab)
-
-Phase 3 of [`docs/design/link-sharing-and-the-web-app.md`](docs/design/link-sharing-and-the-web-app.md).
-`/b/<owner>/<repo>/<path>` serves the SAME generated bundle the `ui://` MCP App
-resource serves, authenticated by the Auth.js session cookie that already existed.
-Rules live in `src/lib/web-app.ts` (pure, `pnpm test:web`); routes live in the
-Worker's `fetch`, ahead of the OAuth provider like `/health`.
-
-- **It is another MCP CLIENT, holding a cookie instead of a Bearer token.**
-  `McpSession` reads identity from `props`, so the whole port is one branch that
-  builds `props` from a validated session. Tenant resolution, `effectiveBrainRole`,
-  the two-scope gating and usage analytics are the code that already runs, which
-  makes the web app **structurally incapable of doing something the connector
-  cannot**. Keep it that way: anything that widens what a caller can do belongs
-  in a tool, not in this route.
-- **The cookie branch claims a `/mcp` request by what it CARRIES, never by what it
-  lacks** (`claimsWebMcp`: a cookie and no Bearer token). The first version claimed
-  every request with no Bearer, which is exactly an MCP host's first contact: the
-  OAuth provider owes that request a `401` + `WWW-Authenticate: Bearer` so the host
-  can discover the authorization server, and `scripts/smoke.ts` asserts it, so the
-  deploy would have rolled itself back. `pnpm test:smoke` runs against a stub and
-  could not see it; the rule is pure so `pnpm test:web` can.
-- **The cookie `/mcp` branch is a credential-bearing WRITE endpoint reached with an
-  ambient cookie**, which is the exact shape CSRF exploits. `checkWebMcpRequest` is
-  the gate and is pure so it can be tested in both directions: a Bearer token is
-  refused outright (the two auth paths must never be confusable, or a cookie could
-  stand in for a token that failed validation), the `Origin` must match, a
-  `cross-site` `Sec-Fetch-Site` is refused, and the content type must be JSON
-  (an HTML form can only POST three types, none of them JSON, so a form cannot
-  reach the endpoint even carrying the cookie).
-- **The host seam is `app/core/host.ts`, and nothing outside it touches `App`.**
-  It used to export the raw AppBridge object and five call sites in four files
-  reached through it, so "swap this file and the bundle runs anywhere" was not
-  true. `callTool`, `openLink`, `connectHost` and `registerHostEvents` are the
-  seam now.
-- **Which host is serving is a FLAG stamped at serve time** (`window.__ISO_WEB__`),
-  not an AppBridge handshake the app waits on and gives up. Inferring it from a
-  timeout makes every web boot pay the timeout and makes a slow MCP host look like
-  a browser. `pnpm test:web` asserts the bundle never sets the flag itself, since
-  the same bytes are served to Claude.
-- **A tab has no conversation**, so no opening tool result is coming and the
-  self-boot deadlines do not apply: the URL says what to show. `parseWebPath` and
-  `webPathFor` are inverses in ONE module, imported by both the Worker and the app,
-  because two parsers is how a link opens a different page than it names.
-- **The URL is WRITTEN as well as read** (`syncAddressBar` in `app/core/store.ts`,
-  `registerWebNavigation` in `host-web.ts`). It was only read at first: the app
-  parsed `/b/...` once at boot and then navigated underneath it, so Back left the
-  app, Forward could not return, and the URL you copied to send someone was never
-  the page you were reading — which is the entire point of the web app. `show()` is
-  the one chokepoint, so the sync rides it; `push: false` (a restore, or catching up
-  to a move the browser already made) replaces the entry instead of adding one. In
-  the MCP App the whole thing is dead code: `isWebHost()` is false and the host owns
-  navigation.
-- **`WEB_TOOL_ROUTING` is the one list of what has a URL** (`src/lib/web-app.ts`),
-  and it is keyed on the WIDGET TOOL, not on the app's view kinds. A URL and a
-  widget tool call answer the same question, so a second vocabulary beside the tool
-  surface just drifts — which it did immediately: the first grammar grew `?q=` and
-  `?view=graph` while `view_activity` and `brain_access` had no URL at all, for no
-  reason anyone had decided. `pnpm test:web` scans `registerAppTool` call sites and
-  fails on any tool that is neither addressable nor carrying an explicit `why` it is
-  not, the same guard `TOOL_KINDS` gives the analytics.
-  - **The token is an ALIAS, deliberately not the tool name.** A URL is a permanent
-    contract (the two functions are inverses so links do not rot) while the tool
-    surface is actively consolidated (42 → 30; `list_members` + `view_members` →
-    `members`). Literal coupling would make every future merge break every link
-    already sent; with an alias a rename is one line.
-  - **PATH SPACE IS ONLY EVER PAGES.** Everything after the brain is a repo path, so
-    `/b/o/r/graph` is a page called `graph`. Destinations therefore ride the query
-    string (`?view=<token>` plus at most one argument, whose param name the route
-    declares) and page links stay unambiguous.
-  - **Three questions decide whether a tool earns one**, all of which must pass:
-    would you send it to someone, can the URL alone rebuild it, is arriving cold
-    harmless. `edit_page` fails the last two (unsaved text is not in the URL, so a
-    link would open the editor on saved content and discard its own premise).
-  - **The org-scope pair is addressed THROUGH a brain**, and the wart is deliberate:
-    `members` and `analytics` answer the same for every brain in one org, so N brains
-    give N URLs for one roster. An org-keyed prefix is the canonical alternative and
-    is deferred, because `org_id` is a uuid (the only unique handle — `name` is
-    mutable and `brain_owner` is SHARED by every platform-model org), so it would buy
-    an unreadable second addressing scheme for two screens. Revisit at a third and
-    fourth org-scope destination. What this does not fix is that both tools resolve
-    their org through a brain, so an org holding none still has no reachable roster:
-    a resolution defect, written up in
-    [`docs/design/org-scope-resolution.md`](docs/design/org-scope-resolution.md).
-  - **Back/forward must parse `location.search` too.** Every non-page destination
-    lives in the query string, so a `popstate` handler reading only the pathname
-    turns Back into "open the file tree" whenever two entries differ by `?view=`
-    alone. Its test has to navigate IN-APP: two `page.goto`s and a `goBack` is a
-    document load that re-boots from the URL and passes with the bug reinstated.
-- **The local runtime IS the web host locally, and `--project=web` its tests.**
-  `src/local.ts` serves the shell at `/b/local/<folder>` and gates its `/mcp` with
-  the same `webShell` / `WEB_APP_HEADERS` (`web-shell.ts`) and `checkWebMcpRequest` (`web-app.ts`) the Worker uses, so
-  `pnpm try ~/vault` gives a browser UI over a folder with no accounts, and
-  `pnpm web:dev` is only "seed the demo brains, then `pnpm try`". It started as a
-  separate server proxying to the runtime on a second port, which was a second
-  copy of the routes plus a race between the two coming up; a browser host that
-  is not the real runtime is the harness sprawl this repo keeps having to undo.
-  `pnpm app:dev` cannot stand in for it: that mounts the bundle in a sandboxed
-  iframe over AppBridge, so `host-web.ts`, `parseWebPath` and the shell are
-  unreachable from it however complete its fixtures are. **Both hosts seed from
-  `dev/seed.ts`** so a difference between them is a difference in the APP rather
-  than in what it was handed. What the local runtime does NOT reproduce is AUTH:
-  there is no session, no cookie, and the local runtime reports `owner` for
-  everything, so it is the right tool for behaviour and the wrong one for access.
-  The address-bar bug above is what the first run of it found, which is the case
-  for keeping it: `pnpm test:web` was green throughout, because `webPathFor` had no
-  caller outside its own round-trip test.
-- **A tab owns its window.** The web host starts in `fullscreen` display mode and
-  stamps `:root.web` so the document background is the app's. Left at `inline`, the
-  same bundle drew the chat-column card inside the tab (a rounded, bordered 560px box
-  scrolling within itself on the browser's default page colour), which is what
-  "border and background" complaints about the web app were. The tab title follows
-  the view through `pageTitle`, the one title resolver, so the tab says what the
-  header says. Nothing about the MCP App changed: it still starts inline and the
-  visual baselines pin it.
-- **The door from the card to the tab is "Open in browser" in the header's window
-  group** (`WindowControls` in `app/main.tsx`, beside the display-mode menu). The
-  widget builds the URL itself from the view (`webLinkFor` in `store.ts`, the same
-  `webTargetFor` + `webPathFor` the address bar uses) and a base the server sends on
-  the `brains` payload as `features.webBase` (`webBaseUrl` in `src/lib/web-app.ts`:
-  authjs + `PUBLIC_BASE_URL`, else absent). Same vehicle and reason as
-  `features.analytics`: a widget cannot ask what the server serves, and a control
-  whose click lands on a 404 is worse than none. Never on the web host, never for
-  the editor. Where the tab opens is the host's call, through `openLink`. The URL
-  also rides every widget result (`view_page`, `browse_brain`, `view_graph`,
-  `view_activity`) as `webUrl` in `structuredContent` AND as an `Open in browser:`
-  line in the text, so Claude can link to a page in chat. Both halves are needed
-  (fixed 2026-09-14): the first version put it in the text only, and a host that
-  receives `structuredContent` hands the model that and drops the text, so the link
-  was on the wire and no model ever saw it. `test:e2e-librarian` pins both.
-  `read_page` carries none: nobody clicks in the reading channel.
-- **`script-src` still carries `'unsafe-inline'`.** The bundle is one self-contained
-  HTML file with JS and CSS inlined (the MCP App iframe CSP forbids external hosts,
-  which is why it is built that way), so there is no external script for `'self'` to
-  point at. Hashes belong in `pnpm gen:app`, the only thing that knows where the
-  script tags are; a blind replace over minified JS risks rewriting the literal
-  text `<script` inside it. The threat that made this urgent was markdown-borne
-  XSS, and that is closed at the source by `src/lib/render.ts`.
-- **Verified in a browser now** (`tests/ui/web-nav.spec.ts`, the `web` project), which
-  is what caught the address-bar defect above. **Still unverified: AUTHENTICATION.**
-  `web:dev` has no session, no cookie and no org model, so the `/b/` redirect for a
-  signed-out visitor, the return through `callbackUrl`, `props` built from a real
-  Auth.js session, and every authorization path behind it have run NOWHERE: not in
-  a test, and not in production, since none of this has been deployed. Before the
-  first deploy, upload a preview version from the branch (`wrangler versions
-upload`, the same step `deploy.yml` takes) and click through sign-in on its
-  preview URL. No amount of green here speaks to that half.
-
-## One markdown renderer (`src/lib/render.ts`)
-
-Markdown-to-HTML is in `src/lib/` rather than the app bundle, pure and Worker-safe, so
-every surface that shows a page produces the same HTML. It used to live in
-`app/core/actions.ts`, which meant a second surface rendering pages needed a second
-implementation, and those drift exactly the way `wikilinkKey` and `FOLDER_NOTE_NAMES`
-drifted before they were extracted. `pnpm test:render` is the golden test.
-
-- **It sanitizes, and that is new.** `marked` sanitizes nothing at all (see
-  `docs/references.md`), and the app rendered its output straight into
-  `dangerouslySetInnerHTML`. Inside the MCP App that was bounded by the host iframe's
-  CSP and by the author already having write access. Served from our own origin next to
-  a session cookie, the same page body is stored XSS. **Treat every change to the policy
-  constants as a security change**, and break the sanitizer deliberately to confirm the
-  battery goes red before believing it.
-- **Raw HTML is a TAG ALLOWLIST with ZERO ATTRIBUTES.** That single rule is what makes
-  the list safe to read: with no attributes there is no `on*` handler, no `style`, and no
-  `href`/`src`, so a listed tag cannot carry a payload however it is written. `a` and
-  `img` are deliberately NOT on it, because markdown's own link and image syntax goes
-  through the renderer where the scheme is checked, and a raw `<a href="javascript:…">`
-  would walk straight past that. Anything not on the list is **escaped, never dropped**,
-  so an unsupported tag becomes visible to its author instead of quietly disappearing.
-- **Scheme checks decode entities first.** `&#106;avascript:` and `javascript&colon;`
-  reach the browser as `javascript:` while a scheme test on the raw string sees no scheme
-  at all. Both were live bypasses; `isSafeUrl` is the one place that closes them.
-- **Three hooks, and returning `null` from each means "refuse".** `wikilink` (where a
-  `[[link]]` points), `href` (where a markdown link points, and the reader's horizon
-  rule: **flatten** to plain text rather than 404, because a dead link still advertises
-  the title and existence of a page the reader was not given), `image` (falls back to alt
-  text). The app relies on the defaults: the `#wikilink=` sentinel that `onProseClick`
-  parses, and an untouched repo-relative `src` that `media.ts` swaps for a data URI
-  after render. **Changing a default breaks app navigation**, which is why the exact
-  sentinel string is asserted.
-- **Overrides are a plain object, not a `Renderer` subclass.** `Marked.use` walks the
-  renderer with `for...in` and throws on any property that is not a renderer method (so
-  an instance field is a hard error), then invokes each override with ITS OWN renderer as
-  `this`. Setting `token.href` and returning `false` is marked's documented "fall back to
-  the default", which re-renders the mutated token, so this module never reproduces
-  marked's attribute formatting or escaping.
-- **Wikilinks are rewritten outside code only**, through the same `maskCode` that
-  `extractLinks` uses (now exported from `wiki.ts`). `[[Name]]` in a fence on a
-  conventions page is a syntax example; the old string pre-pass rewrote it and the code
-  block displayed `[Name](#wikilink=Name)`.
-
-## Folder notes
-
-A folder that has a direct child named `index.md` (preferred) or `README.md` **IS** that
-page — the folder note. There's no special file type or frontmatter; it's a naming
-convention. The names, in priority order, live in **`FOLDER_NOTE_NAMES` =
-`['index.md', 'README.md']`** in `src/lib/view-directives.ts` (the pure view layer) as the
-single source of truth; `app/core/util.ts` re-exports it (`isFolderNoteName`) so the browser
-tree, breadcrumb, and the view engine can never disagree on what a folder note is. Behavior:
-
-- **App navigation** (`app/`): clicking a folder **in the file tree** opens its folder note
-  instead of just expanding it, and the note's own row is hidden as a redundant sibling. A
-  note-less folder just expands. Hovering a note-less folder in the tree shows an "Add folder
-  note" action that creates `index.md`, pre-seeded with a directory view. **The BREADCRUMB
-  does not do this** (changed 2026-08-21): a folder crumb always opens the tree revealed at
-  that folder. Opening the note when one existed and the tree when one did not made a single
-  control do two different things based on a fact the trail never showed, so pressing `wiki`
-  landed on a page and pressing `concepts` landed on the tree with nothing to explain why.
-  The tree is the answer that is always available and always the same, and it does not hide
-  the note: a folder with one shows it as that folder's own row.
-- **Engine** (`kind: folders` okf-view): each direct sub-folder under `under` is represented
-  by its folder note (linked via `index.md` > `README.md`); a sub-folder with no note renders
-  as an unlinked, deslugged name. This is the directory-of-directories source — see the
-  derived-views section above.
-- **Telling the model** (added 2026-07-24, after a brain got `vendors/overview.md` instead of
-  `vendors/index.md`): the convention is a naming rule with no in-band signal, so an agent
-  can't infer it. Three places state it, in descending reach: the `instructions` field of the
-  MCP server (`SERVER_INSTRUCTIONS` in `worker.ts`, which reaches every brain including
-  adopted repos with no `AGENTS.md`), `write_page`'s `path` description (point of decision),
-  and `brain-template/AGENTS.md` (scaffolded brains). `validate` closes the loop after the
-  fact: `folderNoteSuggestions` (librarian.ts) flags a note-less folder holding an
-  overview-shaped page (`overview|about|home|summary|start-here`, or a filename/title
-  matching the folder name) and names the `move_page` to fix it. Deliberately silent on
-  folders with no overview-shaped candidate; "this folder has no note" is not a defect.
-  Note that `instructions` is only emitted in the `initialize` result (SDK
-  `server/index.js` `_oninitialize`), so it is fixed for the life of a connection: making
-  it per-brain would go stale on `switch_brain` exactly like the custom-tool roster does.
-
-Why `README.md` too: Obsidian/GitHub-convention vaults (e.g. an Obsidian vault's Projects folder) used
-`README.md` as the folder note, so it's accepted as a fallback without forcing a rename.
-`index.md` is unambiguous and what "Add folder note" writes. (History: `index.md` used to be
-a tool-maintained special file; it was demoted to an ordinary editable page when typed
-entities were removed 2026-07 — folder notes are a later, purely navigational convention.)
-
-## Open Knowledge Format (page granularity, `type:`, nested frontmatter)
-
-Brains target Google's **[Open Knowledge Format](https://github.com/GoogleCloudPlatform/knowledge-catalog/blob/main/okf/SPEC.md)**
-(OKF v0.2, Apache-2.0). Read the spec before asserting anything about it — it postdates most
-model training data, and `okf-view` in this repo is _our_ directive syntax, not part of it.
-What OKF actually constrains: every concept is its own `.md` file, `type:` is the **one
-required frontmatter field**, `index.md`/`log.md` are **reserved** names (listing and history,
-never concept documents), links are ordinary markdown (bundle-relative `/…` preferred), and
-consumers must tolerate missing optional fields, unknown `type` values, and broken links.
-None of this reintroduces a taxonomy: `type` is a free-form string, and folders stay arbitrary.
-
-- **Why this got added** (2026-07-24): a brain that correctly gave every system, vendor, and
-  person its own page then wrote **twelve event franchises as bullet sections inside one
-  `index.md`**. Two failures at once — twelve concepts with no path (unlinkable, untypeable,
-  invisible to search and to any view), inside the one filename OKF reserves as a listing. The
-  cause was not ignorance of the pattern (the sibling folders were right); it was an
-  instruction ("don't put specific event data in the brain") over-applied from _no instances_
-  to _no entities_. A concept is the recurring named thing (the series); a record is a dated
-  occurrence. `type:` is the discriminator that forces that question, and the brain wasn't
-  carrying it.
-- **Telling the model**, same descending-reach pattern as folder notes: `SERVER_INSTRUCTIONS`
-  (a ONE PAGE = ONE CONCEPT bullet plus a "match the brain you are in" bullet), `write_page`'s
-  own description and its new **`type` argument** (the point of decision — a schema slot the
-  model sees on every call beats prose it may not read), and `brain-template/AGENTS.md`.
-  `write_page` puts `type` first in generated frontmatter and falls back to a `type` the caller
-  wrote into the content's own frontmatter.
-- **`validate` closes the loop** (`pnpm test:structure`, pure): `inlinedConceptSuggestions`
-  flags a folder note holding ≥4 sibling sections that have prose, no links out, and no page of
-  their own — tuned against false positives with a structural-heading stoplist
-  (`overview|background|risks|…`), a narrative-heading guard (question marks, leading
-  verbs/`why`/`how`, >6 words), and the fenced-block strip so a rendered `okf-view`'s generated
-  headings don't count. `typeFieldSuggestions` reports **inconsistency**, not absence: a wholly
-  untyped brain gets one soft adoption note, a half-typed one gets its stragglers named. Both
-  are advisory; nothing blocks a save.
-- **Nested frontmatter is preserved verbatim** (`FrontmatterBlock` in `wiki.ts`). This fixed a
-  live data-loss bug, not just an OKF gap: the flat parser (`string | string[]`) reduced
-  `generated: {by, at}` to `''` and `sources: [{resource, title}]` to one mangled list item,
-  and `serializeFrontmatter` wrote that back — so any externally-produced OKF page (ETL,
-  github.com edit) lost its provenance on the first save through our tools. Nested runs are now
-  captured as opaque lines and replayed byte-for-byte (`|`/`>` indicators kept). They are
-  deliberately **not interpreted**: not indexed into `brain_page_fields`, so `okf-view`
-  `filter:`/`group-by:` can't see inside them, and the importer treats a block as never-equal
-  so a source-owned key still overwrites. `INDEX_SCHEMA_VERSION` went 1 → 2 because v1 rows
-  hold the old mangled values; existing brains rebuild lazily from stored content, no refetch.
-- **One title resolver, and the H1 counts** (`pageTitle` in `wiki.ts`). A page can state its
-  name three ways — `title:` frontmatter, a body `# H1`, its filename — and there were **two
-  duplicate implementations** of the fallback (`brain-index.ts` and `librarian.ts`), neither of
-  which looked at the H1. So a page could render under one name, be listed under another, and
-  be `[[linkable]]` by a third; worse, every folder note without frontmatter was titled
-  **"index"**, because that is its filename. Now one resolver: explicit `title:` > first body
-  `# H1` (fences stripped, inline markup stripped) > filename, or the **folder's** name for a
-  folder note. Wikilinks resolve by title, so widening this widens what `[[Foo]]` finds.
-  `INDEX_SCHEMA_VERSION` → 3 and `rebuildFieldsFromStore` became `rebuildDerivedFromStore`,
-  which now also refreshes `brain_pages.title` (it only rebuilt field rows, so a version bump
-  alone would have left stale titles).
-- **`backlinksTo` returns a single `count`.** Links come in two syntaxes and every consumer had
-  to remember to add `mdCount + wikiCount`; one that forgets silently under-counts. `count` is
-  the total and is what callers should use, with the split kept only for surfaces that report
-  the two syntaxes to a human (`find_inbound_links`). Two more `validate` advisories close the
-  loop on both redundancies: `ambiguousTitleSuggestions` (pages sharing a title, so a wikilink
-  can only reach one) and `wikilinkPortabilityNote` (a one-line count of links an outside OKF
-  reader cannot follow — informational, since a brain may be deliberately Obsidian-first).
-- **Known divergences from OKF, accepted deliberately:** `[[wikilinks]]` are an Isomorphic
-  extension no outside OKF reader resolves (markdown links are the portable form);
-  `README.md` as a folder-note fallback is not an OKF reserved name, so such a page is
-  technically a concept document owing a `type`.
-
-## Writing frontmatter (`fields` and the properties panel)
-
-Built 2026-08-10, from the "Related" half of issue #14. Frontmatter was read as an
-open key space and written as a closed one: the indexer stores **every** flat key
-(`brain_page_fields`), `okf-view` filters and groups by any of them, and the app
-renders any of them as a properties grid, while `write_page` exposed exactly four
-(`title`, `type`, `description`, `status`). So a brain could invent a vocabulary,
-query it, and display it, but the only way to SET one of its own keys was `content`,
-which replaces the whole body. The reported case was 44 archived todos that could
-not be marked `done:` without rewriting all 44 pages.
-
-- **`fields` on `write_page`** is JSON Merge Patch (RFC 7386): a present key sets, an
-  explicit `null` removes, an absent key is untouched. It rides the path that already
-  existed, since `composeUpdate` keeps the body verbatim when a call carries neither
-  `content` nor a patch. Engine is `applyFieldPatch` in `src/lib/page-patch.ts`, pure,
-  beside the body patcher it is the twin of (`pnpm test:patch`).
-- **Three refusals, each forced by something else in the codebase, not by taste.**
-  (1) Key names must match `parseFrontmatter`'s `FM_KEY_RE` (`[A-Za-z0-9_-]`), which
-  SKIPS lines it cannot parse: a key with a space would be written successfully and
-  vanish on the next read, so the writer must not be able to produce a file our own
-  reader loses. (2) The managed keys are refused with a pointer to their own argument;
-  `title` is why this is a rule rather than a preference, since a retitle repoints every
-  inbound wikilink in the same save and a `fields`-set title would break links silently.
-  (3) A key currently holding a nested `FrontmatterBlock` is refused for BOTH set and
-  remove, because those runs are replayed byte for byte and flattening one destroys
-  provenance the caller has not read. That is the same invariant `edits` enforces: you
-  cannot destroy what you have not seen.
-- **This is deliberately PER-PAGE, and the batch case is unbuilt.** A `set_fields`
-  tool (an explicit `paths` list, one `commitOrPR` bundle, one changelog line) was
-  written and then cut before merge. The reasoning is in
-  [`docs/roadmap.md`](docs/roadmap.md): the routing rule between it and `fields` came
-  out to "how many pages", which is the wrong axis (the real question is whether it is
-  the SAME change), and the more valuable missing capability turned out to be bulk
-  find/replace, which `set_fields` would not have covered. So the 44-page case still
-  costs 44 calls and 44 changelog bullets. Do not re-add a fields-only batch tool
-  without reading that item first.
-- **The app's properties panel is editable** (`PageProperties` in
-  `app/views/PageView.tsx`), which is the half that serves humans rather than agents.
-  Its edit policy is not a second copy of the rules: it imports `isUsableFieldKey` from
-  the write path, routes `type`/`description`/`status` through their own arguments, and
-  never offers an edit on `sources` (rendered as a count, often the nested block) or
-  `updated` (stamped every save). Editing is offered in the VIEWER only, never in
-  `EditView`, where a property write would race the unsaved body the author has open.
-- **Told to the model in the usual three places**, descending reach: `SERVER_INSTRUCTIONS`
-  ("metadata is a field write, not a rewrite"), `write_page`'s own description and the
-  `fields` argument, and `brain-template/AGENTS.md`.
-- **Indexing needed nothing.** `brain_page_fields` already indexes every flat key, so a
-  new key is filterable on the next read. `write_page` does warn past
-  `MAX_FIELD_KEYS_PER_PAGE` (24), where the indexer stops reading keys: without that,
-  the field would be set in the file and invisible to `okf-view`, surfacing later as a
-  view that mysteriously misses pages.
-- Coverage: `pnpm test:patch` (the pure engine, including byte-for-byte survival of a
-  nested block), `pnpm test:e2e-librarian` (the real write path: body untouched, one
-  commit, every refusal proving nothing was written), and `pnpm test:scope`, which now
-  registers the librarian tools and asserts all three content writes gate on the BRAIN
-  role at `editor` in both directions. **Uncovered:** the app layer, as everywhere else.
-
-## Retried writes, and what a lost answer costs (issue #50)
-
-A caller reported ~40% of MCP calls failing with Cloudflare `502
-origin_bad_gateway` inside a ten-minute window, the connect included, every one
-of them succeeding on retry. The functional half was recoverable. The
-correctness half was not: a 502 on `write_page` says nothing about whether the
-commit landed, so every retry had to be preceded by a `read_page`, and both ways
-of guessing wrong are silent — a retried `append` duplicates the text, a retried
-`mode: "create"` fails claiming the page exists.
-
-Read the error body before assuming the origin was ours. Its `zone` was
-`api.anthropic.com`, not this Worker's, so the 502 was generated in front of
-Anthropic's API by ITS origin; a slow Worker is one way to cause that and not the
-only one. The evidence in that report says our commits never landed at all (every
-retried create SUCCEEDED, which `mode: "create"` would have refused had the first
-attempt committed), and there was no deploy that day. Confirming it needs the
-Worker's own logs for the window, which is what the ray ids in the report are for.
-
-**The write-attempt ledger** (`src/lib/write-dedupe.ts` pure + the D1 half
-`src/lib/write-dedupe-store.ts`, migration 0007, `pnpm test:dedupe`) makes an
-identical retry safe rather than merely documented. `guardedWrite` in
-`librarian.ts` wraps `write_page` / `move_page` / `delete_page`.
-
-- **It is keyed on the CALL, never on the commit**, and that is the whole design.
-  An append's bundle is not stable across a retry: attempt 1 reads body B and
-  commits B+T; if that lands, attempt 2 reads B+T and commits B+T+T. Anything
-  fingerprinting content would miss exactly the case this exists for. The
-  fingerprint is SHA-256 over (actor, tool, canonicalized arguments), with the
-  `brain` routing argument excluded because the resolved `brainId` already keys
-  the row.
-- **The claim is taken BEFORE the handler and given back on any non-landing
-  exit.** Before, because the client gives up long before the Worker does and a
-  row written only on success would let the retry commit a second time. Given
-  back, because a refusal is deterministic (re-running it says the same thing) and
-  a fingerprint left reserved by a failed call blocks that write for minutes.
-- **It wraps the whole handler, not `commitBundle`.** The create case never
-  reaches a commit: `write_page`'s own "that path already exists" check fires
-  first, and what that check told a retry was the confusing half of the bug.
-- **Two windows, answering different questions.** `IN_FLIGHT_GRACE_MS` (2 min) is
-  how long an unfinished attempt speaks for itself; past it a claim is TAKEN OVER,
-  because a Worker killed mid-request leaves a row nobody will finish and a
-  permanently blocked fingerprint is worse than the duplicate it prevents.
-  `DONE_TTL_MS` (10 min) is how long a completed attempt is replayed. Rows are
-  pruned by the next claim on the same brain, so there is no prune job and the
-  table is bounded by write concurrency rather than write volume.
-- **Fail-open, twice over.** A ledger that cannot be reached runs the handler
-  exactly as it ran before this existed, and bookkeeping AFTER the write never
-  changes the answer: the commit is the fact and this table is a cache of it, the
-  same rule `writeThroughIndex` follows.
-- **The accepted trade-off:** a DELIBERATE identical write inside the done window
-  is reported as already applied rather than applied again. It is not silent (the
-  caller is told what it is repeating and when it landed), varying anything makes
-  it a different write, and the alternative is being unable to tell it apart from
-  the retry — which is the bug. **Not covered:** `sync_records`, which has its own
-  ledger-backed idempotency, and the editor's saves, which are sha-guarded.
-
-**The `/mcp` preamble** (`src/lib/mcp-preamble.ts`, `pnpm test:preamble`) is the
-other half, and it is about the request path rather than the write.
-
-- **A throw in the preamble used to leave no reply at all.** `loadActiveBrain`,
-  `buildServer` and `server.connect` run before the transport, outside any tool
-  handler, so the SDK's error mapping never sees them — and
-  `workers-oauth-provider` does not catch around its api handler either. An
-  uncaught exception reads upstream as an invalid response and reaches the user as
-  a bare gateway error. The handler answers with a JSON-RPC error carrying the
-  reason and the **CF ray id**: the report that opened this listed four ray ids
-  and there was nothing to join them against. 200 when the request id is known (a
-  JSON-RPC error object IS a completed exchange, and it is the form that reaches
-  the user as OUR message), 500 only when no valid reply can be addressed.
-- **`initialize` no longer resolves a brain.** Every POST used to pay for a KV
-  read, a tenant lookup, an installation-token mint and an index freshness check
-  before anyone read the method — all to discover the brain's own `tools/` pages.
-  `needsBrainPreamble` skips that for `initialize`, `ping` and notifications, and
-  is conservative in both unknown directions. **`tools/list` still resolves**, on
-  purpose: a brain's own tools belong in the list it returns.
-- `loadActiveBrain` is fail-open like `loadCustomTools`. That pointer is a
-  preference; a KV blip should fall back to the default brain, not fail the call.
-
-**Still open from that report:** whether the Worker itself was slow during the
-window (needs the logs), and the installation-token cache on `docs/roadmap.md`,
-which would take one more GitHub round trip off every call.
-
-## User-defined tools (brain-tools)
-
-A brain can define its **own MCP tools**: any content page under a **`tools/`** folder
-(e.g. `wiki/tools/standup-digest.md`) is registered as a tool named `tool_<filename>` in
-Claude's tool list. Engine: `src/lib/custom-tools.ts` (pure parse/schema/interpolation,
-`pnpm test:tools`) + `src/tools/custom.ts` (index discovery + registration + execution).
-Built 2026-07-24 (branch `feat/user-defined-tools`).
-
-- **A tool is a page.** `isToolPagePath` = any `.md` under a `tools/` path segment that
-  isn't a folder note. Discovery (`loadCustomToolDefs`) runs off the content index
-  (`listIndexedPages` filtered, then the few blobs fetched + parsed — "index to discover,
-  blobs for authority", same as the write path), so it's cheap when there are none and
-  **per-brain** (switching brains swaps the toolset). Capped at 25/brain to bound the
-  host's tool-list context cost; overflow/malformed/dup pages are reported by `validate`.
-- **Declared in a fenced ` ```tool ` block** (the okf-view precedent — a small line grammar,
-  NOT YAML, so it survives the flat `parseFrontmatter` and ProseMirror round-trips). Grammar:
-  `input: <name> (<type>[, default=][, optional]) <desc>` where `<type>` is
-  `string|number|boolean|enum: a|b|c`; `op:` + `arg: k = v`; `widget`; `view:` (rest of the
-  block is the directive). The page body outside the fence is the instruction payload. Name
-  comes from the filename, description from frontmatter.
-- **Three read-only kinds, none escape the brain:** `prompt` (return the interpolated body
-  to the model — a saved skill), `op` (run ONE whitelisted read: `search_pages` / `read_page`
-  / `find_inbound_links` / `list_pages`, append its result), `view` (render ONE okf-view via
-  the same `tryRenderViews` engine `view_page` uses; `widget` returns the app's page shape so
-  it opens in the viewer). Args are interpolated as DATA (`{{name}}` via `fill`), never
-  evaluated — no code execution, and reads can't exceed the caller's existing access. Writes
-  are deliberately NOT in the op whitelist (v1).
-- **Registration** is one `registerCustomTools(server, getContext, defs)` in `buildServer`,
-  AFTER all first-party tools (a `tool_` name can't shadow a built-in) and before the
-  usage-counting loop (so custom tools are counted too). `loadCustomTools()`
-  runs in the async window before `buildServer` (alongside `loadActiveBrain`), fail-open on
-  no-brain/static mode. On-by-default, **editor**-authored (writing `tools/` is a normal page
-  write — no opt-in flag, no admin gate).
-- **No `list_changed` push** (stateless transport), so create/move/delete of a `tools/` page
-  appends a **reconnect nudge** to the librarian response (`toolRosterNote`); the host only
-  sees a new/renamed/removed tool after it re-lists. Editing an existing tool's BODY takes
-  effect on its next call with no reconnect (the handler reads the def fresh each request).
-- Authors write these conversationally via `write_page` (Claude authoring Claude's own future
-  tools). Contract for agents: `brain-template/AGENTS.md`. E2e: `e2e-librarian.ts` drives
-  author → discover → reconnect → invoke against real GitHub. **Not built:** hiding `tools/`
-  pages from normal content listing/search (they currently show as ordinary pages);
-  server-side tool-to-tool chaining (compose at the model layer instead).
-
-## Bulk import (sync_records — PRD Phase 3, FR-3)
-
-Non-destructive upsert-by-key from an external source (spreadsheet/CRM), replacing
-wipe-and-regenerate ETLs. Planner: `src/lib/brain-import.ts` (pure; `pnpm test:import`);
-tool: `src/tools/importer.ts`. Invariants, in order: human edits are sacred (only declared
-`source_owned` frontmatter is written; body at create only); deletions are PROPOSED, never
-applied (requires the call to pass the full key `manifest`); NO RESURRECTION (a per-source
-repo ledger at `.isomorphic/imports/<source>.json` records ever-imported keys — a key whose
-page a human removed becomes a needsDecision, not a create); idempotent (unchanged run =
-no commit). Pages bind to keys via `source_key` frontmatter; curators alias a consolidated
-duplicate's key onto the surviving page via `source_keys` (both are ordinary frontmatter, so
-key→page discovery is one `brain_page_fields` query — but diffs run on authoritative blobs,
-never index values). Batched ≤200 records/call; lands as one `commitOrPR` bundle (pages +
-ledger + changelog). A create aimed at an existing page ERRORS (clobber guard) unless the
-call passes `adopt_existing: true`, which binds the unclaimed page instead (field merge +
-`source_key`, body untouched) — the migration path for brains that predate import keys. `resolve_import` applies the human answers durably (suppress / delete /
-alias-onto-surviving-page / recreate) so the next sync stops asking; FR-4's
-`sourceOfTruth` config is parsed ('app' default; 'source' reserved — the importer refuses
-it). **Open questions persist in the ledger's `pending` list** (merged chunk-safely: a
-call only speaks for its own record keys; only manifest calls replace absence proposals)
-and **`validate` surfaces them** — so unanswered questions are visible without a sync run
-in hand, until resolve_import clears them. `scripts/e2e-import.ts` is the manual
-real-GitHub battery (32 checks, scratch repo, D1 shimmed on node:sqlite — run by hand when
-the import path changes, never in CI). Not built yet: a reconciliation widget; the
-the contacts-brain ETL cutover.
-
-## Product feedback (submit_feedback)
-
-`submit_feedback` (`src/tools/feedback.ts` + the pure `src/lib/feedback.ts`,
-`pnpm test:feedback`) files a user's bug/idea as an issue on a GitHub tracker, so
-feedback reaches the maintainers from inside the conversation and the reporter needs
-no GitHub account. Built 2026-07-30. Four decisions that are load-bearing:
-
-- **It does NOT use the platform GitHub App.** `src/manifest.ts` declares no
-  `issues` permission and must not gain one: that would widen the scope of every
-  customer org's installation to buy those customers nothing, and a self-hoster's
-  App cannot reach this project's repo anyway. Filing runs on a separate narrowly
-  scoped credential, `FEEDBACK_TOKEN` (Issues: write on one repo).
-- **Destination is config, never identity** (`FEEDBACK_REPO`, "owner/repo"). Unset →
-  the tool is **not registered**, so a fork neither files into our tracker nor
-  advertises a tool that can only apologize. Same rule as `PUBLIC_BASE_URL` and the
-  App slug. See [Deployment config](#deployment-config-wranglerjsonc-is-generated).
-- **The tracker is public, so nothing identifying is published.** The issue carries
-  the user's words plus an opaque `ISO-XXXXXXXX` report id; who filed it, from which
-  org and brain, goes to a private D1 row (`feedback_reports`, `migrations/0005`).
-  That is how "who asked for this?" stays answerable without a customer's email
-  being permanently indexed on a public repo. `composeIssue` takes no identity
-  argument at all, and the golden test asserts its arity to keep it that way: a
-  well-meaning "include the reporter so we can follow up" edit reads as an
-  improvement in review and is a privacy regression.
-- **The confirm gate is the real backstop, not the redaction.** A call without
-  `confirm: true` posts nothing and returns the exact title and body for the user to
-  read. `redact()` only strips shapes that are never legitimately in a bug report
-  (PEM blocks, bearer headers, `gh*_`/`re_`/`sk-` tokens, JWTs, emails) and
-  deliberately leaves commit shas, paths, and error text intact, because a scrubber
-  aggressive enough to catch every secret makes reports useless and gets deleted.
-  Both halves are pinned by `pnpm test:feedback`.
-
-Identity is read straight off the token props in `worker.ts`, **not** through
-`tenantContext`, which throws `NoBrainError` for a user with no brain: the user who
-cannot resolve a brain is exactly the user with something to report, so the one tool
-that reports it must not depend on resolution succeeding. Also fail-open on the
-duplicate search and on the D1 rate-limit count. **Not built:** an in-app form
-widget (v1 is conversational only), and any write back to the reporter when an issue
-is closed.
-
-## Usage analytics (the org Analytics tab)
-
-`analytics` (`src/tools/analytics.ts` + the pure `src/lib/usage.ts` and the D1
-half `src/lib/usage-store.ts`, `pnpm test:usage`) answers "is this organization
-actually using its brains, and who isn't": active members over the window, reads
-vs edits per day, a per-brain breakdown, and a per-person table. Built 2026-08-04.
-UI is `app/views/AnalyticsView.tsx`, an ORG-scope destination beside Members.
-
-- **Per-day counters, not an event log** (`usage_daily`, `migrations/0006`). One
-  UPSERT per tool call at grain (day, org, brain, user, tool), so rows are bounded
-  by members × brains × tools × days and every query is a GROUP BY. A raw event
-  log was the alternative and was rejected on three counts: unbounded growth
-  needing a prune job on day one, a per-person action timeline sitting in D1, and
-  scans instead of aggregates. One UTC day is the finest granularity the tab has
-  any use for. `brain_id` is `''` and never NULL for org-scope calls, because
-  SQLite treats PK NULLs as DISTINCT and a nullable column would defeat the
-  upsert, appending a row per call forever.
-- **`USAGE_ANALYTICS` (and `hasOrgModel`) gate BOTH the recording and the tool registration**, so a
-  deployment that disables it records nothing and never shows a tab that can only
-  answer zero. The generated config defaults it to `"true"`; set it to `"false"` to
-  turn the feature off. Single-tenant deployments do not register it either: the tab
-  is org-scope and there is no org to resolve. The Worker compares `=== 'true'` rather than `!== 'false'`,
-  so a config that does not mention the key at all (hand-written, or predating this)
-  records nothing: the only way to start collecting is a config that says so.
-- **Recording rides the loop that already rewrites every registration.**
-  `McpSession.instrument()` (worker.ts) wraps every registered tool in one pass
-  after registration, so it is the one place that sees every tool by name and the
-  one place a new tool cannot forget to opt into.
-  It writes through `ctx.waitUntil` after the result has gone back, swallows its
-  own failures (a counter must never turn into a failed `read_page`), counts an
-  `isError` result as an error rather than a success, and clears `_resolvedScope`
-  first so a call that resolves no org records nothing instead of borrowing the
-  previous call's. Under-counting is fine; blocking a read is not. The wrapping
-  logic itself is `countedCall` in the pure lib, extracted so it is testable: it is
-  the riskiest code here, since it replaces the function the SDK invokes and a
-  mistake breaks every tool rather than skewing a chart. **The replacement goes
-  through `wrapToolHandler` (`src/lib/registered-tools.ts`)**, because SDK 2
-  dispatches through a prebuilt `executor` and a plain `tool.handler = …` is a
-  silent no-op there (see `docs/references.md`). `pnpm test:usage` drives a real
-  `tools/call` through that helper, which is what catches an SDK bump breaking it.
-- **TWO SCOPES AGAIN, and the gate is split.** Org totals and the per-brain table
-  are viewer+ like the roster; the PEOPLE table is admin+, and is **withheld from
-  the payload** rather than hidden by the widget. Per-person read counts are a
-  record of what a colleague did with their week, which is a different thing to
-  publish than the roster's names. Authorization reads `ctx.orgRole`, never
-  `ctx.role`, for the reason in `docs/design/brain-level-permissions.md`.
-- **It measures the PRODUCT, not the repository.** An edit made on github.com, by
-  a merged PR, or by another agent holding the repo token never reaches a tool
-  handler and is invisible here. `FOOTNOTE` says so and travels with every
-  rendering; `view_activity` remains the repo-history surface. Do not "fix" this by
-  folding commits in: they are a different population and mixing them silently
-  double-counts our own writes.
-- **`TOOL_KINDS` must gain an entry for every new tool.** Unknown names fall back
-  to `read`, which is correct for brain-authored `tool_*` pages (all three kinds
-  are read-only by construction) and silently wrong for a new write tool.
-  `pnpm test:usage` scans `src/tools/*.ts` **and `src/worker.ts`** for registered
-  names and fails on any that is unclassified, so the omission is a red test rather
-  than a permanently under-reported edit column.
-- **The chart is two small multiples, not one stacked bar.** Reads outnumber edits
-  by an order of magnitude, so a shared scale renders the edit series at sub-pixel
-  height: the number that answers "is anyone maintaining this?" would be the
-  invisible one. Each row is a single series in `--c-accent` scaled to its own
-  labelled max, which also means no categorical palette and no legend. (A gray/accent
-  two-series version was tried first and failed the `dataviz` validator's chroma
-  floor, with dark-mode tritan separation at ΔE 6.4.)
-- **The nav learns what exists from `features` on the `brains` payload.** A widget
-  cannot list the host's tools, and `ensureBrainList()` already runs on every open,
-  so the Analytics row appears only where the server registered it. A picker must
-  never offer a destination whose click is refused.
-- **Coverage.** `pnpm test:usage` covers the classification map (scanning the tool
-  sources so a new tool cannot land unclassified), the summary fold, `countedCall`
-  on all five paths (sync/async x return/throw, plus the `isError` result that never
-  threw), the SDK internals it depends on including a real dispatch, and the actual
-  `usage_daily` statements against the real migration over `node:sqlite`.
-  `pnpm test:scope` covers the authorization: that the per-person table gates on
-  `orgRole`, asserted on the PAYLOAD (a non-admin's rows must be absent, not merely
-  flagged) and in both directions. **Still uncovered:** the `features` flag reaching
-  the nav, tool registration actually being skipped when the flag is off, and the
-  whole app layer.
-- **Not built:** retention/pruning (rows are small, but nothing deletes them),
-  a CSV export, per-brain analytics (this is deliberately org-scope), and any
-  notion of a session or of time-on-page.
-
-## Loading states (the rotating status line)
-
-Every `{ kind: 'loading' }` in the app renders through one `LoadingView`, which shows
-the caller's own literal label first and then rotates through phrases from
-`src/lib/loading-lines.ts` (pure, `pnpm test:loading`). Built 2026-08-18.
-
-- **The label leads, always.** The rotation starts 2.4s in, so a load that resolves
-  quickly reads exactly as it did before: nothing whimsical is ever the only thing on
-  screen while someone waits for an answer, and the personality is spent only on waits
-  long enough to feel like waits.
-- **The two kinds of line ALTERNATE**, one naming this brain and the next naming the
-  library, opening on a specific one. The name-free lines were a fallback queued behind
-  the specific ones at first, which spent a normal-length wait entirely on facts and put
-  the humor past where almost anybody got to. Interleaved, a rotation reads as one voice
-  that happens to know the brain's name. `pnpm test:loading` pins the SLSLSL shape, so a
-  change back to appending fails rather than quietly draining the humor out.
-- **A slot is a REQUIREMENT.** A template naming `{brain}` / `{org}` / `{subject}` /
-  `{pages}` is ineligible when that value is unknown, rather than rendering blank. This
-  is structural rather than a pile of conditionals because the state with the fewest
-  facts (a cold self-boot: no brain list, no tree, no org) is both the most common and
-  the least likely to get tested by hand, and its failure mode is a customer reading
-  "Asking undefined…". `pnpm test:loading` walks every template's own slots to prove it.
-- **Personalization is LOCAL and free.** The facts come from what the widget already
-  holds: the brain it is showing, that brain's org label, the page/folder/query it was
-  asked for, and the size of the cached tree. Nothing calls a tool to decorate a wait,
-  since the alternative to a wait cannot be a second wait. Nothing reaches for a
-  person's name or email either: identity is fetched by one screen on request, and a
-  colleague's name is not chrome.
-- **`task` is optional on the view and so invisible to typecheck.** An omitted one is
-  not an error, it is a screen that quietly stops naming anything the user is looking
-  at. The golden test scans `actions.ts` / `main.tsx` / `store.ts` for every
-  `kind: 'loading'` and fails on any without a `task`, the same way `pnpm test:usage`
-  scans for unclassified tools.
-- **Motion is off under `prefers-reduced-motion`**, in CSS (both the fade and the
-  shimmer sweep in `app/styles.css`) and in JS (the timer never starts, so one phrase
-  holds: the label). Only the label is announced, from an element that never remounts;
-  the rotating span is `aria-hidden`, since a live region re-reading a new phrase every
-  three seconds is noise.
-- **The VIEW is covered too**, unusually for the app layer: `tests/ui/loading.spec.ts`
-  drives the real bundle over the `#loading` harness route, which opens the tree and
-  then holds the app's own fetches open forever so a wait stays on screen. It pins the
-  label leading, a swap happening, the swapped line naming the brain and the page, the
-  announcement staying put, and reduced motion holding one phrase.
-- **A rotation cannot be STEPPED, only watched**, so that spec records the line with a
-  MutationObserver INSIDE the frame and reads the result back at the end. `page.clock.install()` does not pause
-  timers here: probed directly, a `setTimeout` in the main frame AND in the app's iframe
-  both fire with no `runFor`, so an installed clock moves only what `Date.now()` reports
-  while a `setTimeout` chain keeps running on the wall clock. (`advanceable` is still
-  right for `refresh.spec.ts`, which asserts on a rendered AGE.) The first version of the
-  loading spec asserted at fixed moments and so raced the machine: it checked "still the
-  label" after a click plus three awaits, which passed locally and failed on CI, where
-  the runner had already spent the 2.4s the label holds for. The second version polled
-  `textContent({ timeout: 100 })` from the test and was worse, because it failed
-  SILENTLY: under CI load every one of those calls timed out, so it recorded nothing and
-  reported an empty sequence rather than a wrong one. Recording in the page is what
-  finally held, because runner speed then changes when the answer arrives rather than
-  what it says. Assert on ORDER, never on what is on screen at a given millisecond. Also note `test.use({ reducedMotion })`
-  at describe level does NOT reach this page; the spec calls `page.emulateMedia`.
-- **Three other kinds of wait exist and deliberately do NOT rotate.** (1) Button busy
-  labels: `Creating…` (AddBrainView), `Saving…` / `Adding image…` (EditView), `Sharing…`
-  (ShareBrainView). Those are a control reporting its own state, and a button whose text
-  cycles jokes while a save is in flight is a broken control, not a charming one. (2) The
-  two `<MenuNote>Loading…</MenuNote>` in `Breadcrumb.tsx` (folder entries, the brain
-  list): a popover the reader is currently aiming at, where text moving under the cursor
-  is hostile. (3) `.asset-loading` in `app/styles.css`, the placeholder an `<img>` sits in
-  while its bytes arrive, which is a skeleton rather than a status line and is the one
-  place the shimmer could extend to. Several paths are also deliberately SILENT and
-  should stay that way: `refreshPage`, `revalidateBrowse`, `refreshBrowse`, and entering
-  or leaving the editor, all of which keep real content on screen instead of flashing.
-- **Not built:** skeleton shells for the page/tree/graph, which are the other half of
-  this and are still on `docs/roadmap.md`.
-
-## Brain templates
-
-The brain repo's initial scaffold lives in `brain-template/` (the editable source of truth). Because the MCP Worker now scaffolds brains too (auto-provisioning, below) and Workers have no filesystem, the templates are **codegen'd** into `src/lib/brain-template.generated.ts` via `pnpm gen:templates` (run it after editing anything under `brain-template/`; the generated file is committed). Both runtimes import that module — the scaffold logic lives in `src/lib/scaffold-core.ts` (Worker-safe, octokit Git Data API, no `node:*`), used by both `bootstrap.ts` and the Worker.
-
-## Platform provisioning (who touches GitHub)
-
-The design goal: an **admin** sets the platform up once; **readers/creators never see GitHub**. Mechanism:
-
-- The admin runs `pnpm bootstrap`, registers the platform App, and installs it on **one platform org**. The install-callback records `PLATFORM_ORG` + `PLATFORM_INSTALLATION_ID` (and scaffolds a canary brain to prove repo-create works).
-- In `oauth` mode with `AUTO_PROVISION=true`, a signed-in user with no tenant row triggers `provisionBrainForUser()` (`src/lib/provision.ts`) on their first MCP request: it creates `brain-<login>` under the platform org via the **single platform installation**, scaffolds it, and writes the D1 tenant row. No per-user App install, no org-vs-user gate, no repo picking. See `McpSession.autoProvision()` in `worker.ts`.
-- Provisioning is idempotent: existing tenant short-circuits; a repo-name collision (partial prior run / concurrent first calls) adopts the existing repo instead of failing.
-
-## Two identity modes (`IDENTITY_MODE`)
-
-The Worker is an OAuth 2.1 server to Claude via `@cloudflare/workers-oauth-provider` (unchanged). What varies is the **upstream human-auth** step behind `/authorize`, selected by `IDENTITY_MODE`:
-
-- **`github`** (legacy/admin) — `src/oauth/github-handler.ts`. GitHub OAuth; token props carry `{ gh_user_id, gh_login }`. Tenant resolved from the flat `tenants` table (`src/lib/tenants.ts`), keyed by `gh_user_id`. Treated as `owner` (full access).
-- **`authjs`** (member-facing, **current prod default**) — `src/oauth/auth-handler.ts` + `src/auth/config.ts`. Auth.js (`@auth/core` + `@auth/d1-adapter`) with a **Resend magic-link** provider; users need no GitHub account. Token props carry `{ user_id, email }`. **Google/OIDC is the recommended future primary provider** (redirect-based, same-browser — immune to email prefetch and the cross-browser OAuth-bridge fragility); magic-link works but keep that in mind.
-
-Auth.js specifics that bite: config MUST be built per-request with `env.PLATFORM_DB` (bindings are request-scoped) — `buildAuthConfig(env)`, never a module singleton. DB-strategy sessions **omit `user.id`** unless a `session` callback copies it (we do — the OAuth bridge keys identity on it). The `/oauth/complete` bridge stashes the client's OAuth request in `OAUTH_KV` under `pending_auth:<state>` across the email hop; `authjs.callback-url` cookies are sticky and will silently steer a bare `/auth/signin` visit — clear cookies / use incognito when testing.
-
-## Product identity → org → brain (the authjs authorization model)
-
-`docs/design/org-roles-permissions.md` is the full RFC. Phase 2 is **built and live**. The tenant layer for authjs identities is the org model, NOT the `gh_user_id` `tenants` table:
-
-- **Tables** (`src/db/auth-schema.sql`, app-level; Auth.js's own `users`/`sessions`/etc. are separate, created by `@auth/d1-adapter`): `app_users` (Auth.js user projection — named apart from Auth.js `users` to avoid collision), `orgs` (Model A `platform` / Model B `customer`, holds `installation_id` + `brain_owner`), `memberships` (user→org + `role`), `brains` (org→repo, supersedes `tenants.brain_*`), `invitations` (email invites; written by `invite_member`, claimed by `claimPendingInvites` in `src/lib/invites.ts`).
-- **Resolution** (`tenantContext()` in `worker.ts`, via `src/lib/orgs.ts`): `props.user_id` → `app_users` → `memberships` → `orgs` (+ role) → default `brains` row → mint installation token from `org.installation_id`. First-touch users with no membership get a Model-A **org only** (no brain) via `provisionOrgForUser()` when `AUTO_PROVISION=true`; brains are then created **explicitly** (see below). When the org has no brain yet, brain-scope resolution throws `NoBrainError` and the app shows the "create your first brain" state. Org-scope actions (create_brain) resolve via `orgContext()`, which needs no brain.
-- **Brain creation & init** (Phase 8, `docs/design/brain-creation-and-init.md`): brains are stood up EXPLICITLY, not auto-provisioned. `create_brain` (any `editor`+, authjs-only) scaffolds a fresh repo via `createAndScaffoldBrain`, writes a `brains` row with a user-given `name` (repo_name is the derived slug; `brainLabel` shows `name`), and switches to it. The app has a "New brain" switcher entry + a create-first-brain empty state (`CreateBrainView` in `app/main.tsx`). **Access is unchanged in this slice** — new brains keep `visibility='org'` (per-brain membership/private-by-default is the deferred follow-up in the design doc).
-- **Roles & authz**: `viewer < editor < admin < owner` (`src/lib/orgs.ts`). `tenantContext({ requires })` gates: write tools pass `requires: 'editor'`; reads are open to `viewer`+. The github/static paths report `owner`. (The role token was renamed `member`→`editor` on 2026-07-13 — see `src/db/migrations/`. "member" the noun still means org membership; it's no longer a role name.)
-- **TWO ROLES, TWO SCOPES: don't collapse them** (brain-level permissions, built 2026-07-28, `docs/design/brain-level-permissions.md`). `TenantContext` carries `role` (the caller's role **on the resolved brain**) and `orgRole` (their role **in that brain's org**), and `TenantOpts` gates on either: `requires` for brain scope, `requiresOrg` for org scope. Org scope = manage people, connect the GitHub org, create/connect/disconnect brains. Brain scope = read, write, move/delete, configure, share. Gating an org action on `role` is the bug this split exists to prevent: `members.ts` did exactly that, so being shared one brain as admin would have conferred the whole org roster. **`src/lib/orgs.ts:effectiveBrainRole` is the single authority** on whether a caller can reach a brain and at what role: three additive sources (org visibility, an explicit `brain_memberships` grant, the org-admin floor), highest wins, never demotes, unknown `visibility` fails OPEN. It is pure; `pnpm test:access` walks its whole input space, and `pnpm test:scope` pins the other half (which of the two roles each tool actually gates on, in both directions). Every consumer (`listAccessibleBrains`, `getDefaultBrainForUser`, `listBrainAccess`) resolves rows in SQL and then admits them through that function: **do not re-express the policy in a WHERE clause**, or the two copies will eventually disagree. Two later additions to the rule (2026-09-01): **`orgRole` is nullable**, meaning "not a member of the org that owns this brain", so sources (1) and (3) are skipped and only a grant can admit them, and every org-scope gate has to read a null as "not a member" rather than as "no gate" (`assertRole`, `members.ts`'s `requireOrg`, the analytics people table, `disconnect_brain`; `pnpm test:scope` drives an outsider persona through all of them and asserts the refusal never says "your role is undefined"). And **`brains.read_only` is the rule's one CEILING**, applied last: a viewer grant cannot freeze a brain because the org-admin floor hands an admin their own role straight back. **`brains.archived_at` is deliberately NOT in the rule**: an archived brain does not exist for the product, which is not a question about who the caller is, so it is filtered in the SQL of the two queries every consumer reads from (`migrations/0008_brain_lifecycle.sql`). `create_brain` AND `connect_brain` both default to `visibility='private'` + an admin grant for the caller (`connect_brain` defaulted to `'org'` until 2026-09-14, issue #93: the two tools produced the same object with opposite defaults, and an adopted private GitHub repo came back readable by the whole org with nothing in the response saying so); brains that predate the change keep `'org'` and are unaffected. Revocation must actually revoke, so grants are torn down with what they hang off: `disconnect_brain` → `deleteBrainGrants`, `remove_member` → `deleteUserBrainGrantsInOrg`.
-- **Brain sharing** (`src/tools/brain-access.ts`): `brain_access` (any access to the brain) opens the inline sharing panel and returns the list as data; `share_brain` (brain admin+) is every mutation in one verb: grant, change level, revoke (`access: 'none'`), and the `private`/`org` visibility flip. Guardrails: never above your own brain role, never revoke yourself, never `admin` for a guest (below). UI is `app/views/BrainAccessView.tsx`. Sharing is a **brain-scope destination** (in `brainDestinations()` and the ⋯ menu's "This brain" group, beside Files/Graph/Recent changes/Members) because it passes the trail's scope test: switching brains shows a different answer. Ungated in both, since `brain_access` is read-only and open to anyone with access; only its controls are admin-gated. Its payload carries `activeBrain` like the other in-client view tools, so the **Share** control in the brains list opens it for a NAMED brain under that brain's crumb (`pickShownBrain`). Share is gated on `canShare` (brain role), which is deliberately not `canManage` (org role, gates disconnect). Adding someone is `app/views/ShareBrainView.tsx`, a pushed flow off that panel's header (the `app/ui/Flow.tsx` convention that every add-shaped action follows) and the brain-scope twin of `InviteMemberView`. Role NAMES are shared between the two scopes, descriptions are not: `ROLE_BLURB` vs `BRAIN_ROLE_BLURB` in `app/components/RoleSelect.tsx`.
-- **Guests: a brain can be shared OUTSIDE its organization** (built 2026-09-14, [`docs/design/guest-access.md`](docs/design/guest-access.md)). A guest is a person holding a `brain_memberships` grant on a brain in an org they are not a member of; that is the whole definition, and `via: 'guest'` on the panel is DERIVED (grant, no membership), never stored, so the same row reads `grant` the day they join the org. `listAccessibleBrains` is now the UNION of a memberships leg and a grants leg (it used to begin at `memberships`, so a non-member's grant produced no row and `share_brain` refused non-members for exactly that reason); `listBrainAccess` has the same second leg. A guest is **capped at editor** in `effectiveBrainRole` (`GUEST_ROLE_CAP`: admin on a brain decides who reaches it, and that stays with the org's own people) and `share_brain` refuses to write an admin grant for one, so the cap is never silent. An address with NO account gets a **brain invite** (`invitations.brain_id`, migration 0009; `org_id` stays the brain's own org) which `claimPendingInvites` plans as a grant, never a membership, under the same never-rewrite rules as an org invite; `access: 'none'` cancels a pending invite as well as deleting a grant, and the panel lists pending brain invites under "Invited" (`listPendingBrainInvites`), while the org roster's `listPendingInvites` EXCLUDES them (`brain_id IS NULL`), since a brain invite carries the brain's `org_id` and would otherwise read as a pending member. **No invitation email is sent** (none is for `invite_member` either); the reply carries the sign-in sentence to forward, with the web URL when the deployment has one. A guest at org scope is just a first-touch person (`orgContext` → auto-provision or "an admin must invite you"), by design. Covered by `test:access` (cap, both legs), `test:invites` (a brain invite grants and never joins), `test:scope` (the tool: grant for an outsider, admin refused, invite written and cancelled, editor cannot send one).
-- **Member management** (built 2026-07-13, `src/tools/members.ts`): the org-admin roster surface. `members` (viewer+) both opens the in-client roster UI (`app/views/MembersView.tsx`) and returns the roster as data; **it is an ORG-scope destination in the nav, not a brain one** (`orgDestinations()` in `app/components/Breadcrumb.tsx`, and the ⋯ menu's "Organization" group) because every brain in one org shows the same roster: it takes the back arrow rather than the brain crumb, so it never reads as "these people belong to this brain". Contrast `brain_access`, which IS brain-scope. The three nav scopes (`brain` / `org` / `account`) are the `Scope` type there, and `DESTINATIONS`/`SCOPE_LABEL` are the one place each list and its wording live; the mutations `invite_member` / `set_member_role` / `remove_member` are admin+. (The former split `list_members`/`view_members` pair was merged into `members` on 2026-07-24, tool-surface consolidation.) Lockout-proof guardrails live in `members.ts`: `owner` is never assignable/removable/demotable, you can't edit your own membership, and you can't grant above your own role. Admins can make Admins; all members can see the roster (incl. emails). Invites are claimed by `claimPendingInvites` (see [Claiming invitations](#claiming-invitations-issue-69)), not only at first sign-in. `orgId`/`actorUserId` ride on `TenantContext` (authjs path only; single-tenant paths reject with "org accounts only").
-- **Multi-brain selection** (P1, built 2026-07-14, `src/tools/brains.ts`): one connection can reach several brains (personal / team / client). `tenantContext({ requires, brain })` now resolves the CHOSEN brain — explicit `brain` arg (fuzzy-matched) → the connection's **active brain** → the default (oldest). Per-brain org token + role + commit attribution; the content index already isolates by `brainId`, so a call never crosses brains. Tools: `brains` (the list, as data) / `switch_brain`, plus an optional **`brain` arg on every tool**. (`list_brains`/`view_brains` were merged into `brains` on 2026-07-24; on 2026-09-15 the merged tool lost its `_meta.ui`, because the model's usual reason to call it is "which brains exist?" and every such lookup was rendering a brain list in the chat. The interactive list is inside the app, reached through any view tool; the app still calls `brains` from the widget, where a plain result is what the switcher reads. Not in `test:appmeta`, which only registers the app tools, so `pnpm test:scope` pins the absence.) Active brain is persisted in `OAUTH_KV` (`active_brain:<userKey>`), **per-user** (the stateless transport has no per-connection DO state); loaded once per request, and the write is **awaited** rather than fired into `waitUntil` (see below). **Only an explicit act moves it**: `switch_brain`, `create_brain`, and `disconnect_brain` falling a dangling pointer back to a survivor. Until 2026-09-15 the in-client view tools and `brain_access` were registered `sticky`, so merely opening a page in the widget rewrote the pointer; because the key is per USER, a view in one conversation retargeted every other open conversation's bare calls. The widget never depended on it (every widget call passes `brain`, and `pickShownBrain` follows the result), so `sticky` is gone from `TenantOpts` and `pnpm test:scope` pins the three writers. The app's **top-left nav becomes a brain switcher** when there are 2+ brains (`BrainSwitcher` in `app/main.tsx`; still the Files button with one brain). Key seam for P2: `personUserIds(userId)` (worker.ts) and `listAccessibleBrains(db, userIds[])` (orgs.ts) take a SET of user ids — identity-linking just widens that set. **No schema change.**
-- **Multi-brain P2 (identity linking)** is built. A person's emails share an `app_users.person_id`; `linkedUserIds` turns one signed-in id into the person's whole set, and resolution unions across it. Surface: `connected_accounts` / `link_identity` / `unlink_identity`, verified by a magic-link round trip. **Org scope was the last path still keyed on a single user id** (`orgContext` called `getMembershipWithOrg(db, userId)`), so `create_brain` and `connect_github_org` (now `create_org`) behaved as though nothing had been linked while every brain query already unioned. It reads `listAccessibleOrgs(db, personUserIds)` now. See `docs/design/org-roles-permissions.md`.
-- **The brain a RESULT names beats the active-brain pointer, in the app** (built 2026-08-11, issue #26). Both answer "which brain", and they are not the same question: the pointer is one KV key per user, while a `brain:`-targeted `view_page` / `browse_brain` opens a widget on a brain the pointer may not have caught up to. The pointer does not move for a view, and the app fetches its brain list (`ensureBrainList`) on every open, so the list came back naming the DEFAULT brain and the app adopted it: crumb, file tree, picker tick and every subsequent widget call retargeted, while the model reported the brain it had actually opened. `pickShownBrain` (`app/core/store.ts`) is the rule: the pointer wins only when the widget has no brain of its own yet (the self-boot) or when the result declares a deliberate move (`switched`, set by `switch_brain` / `create_brain`; `connect_brain` adopts a repo without moving anyone into it). `setActiveBrain` is the single seam that also drops what belonged to the brain being left — the cached file tree, which backs folder-note lookup and wikilink resolution, and the path policy — because a brain can now be entered from any result, not just `switchBrain`. The Worker's own write is awaited so the next request cannot read a write that had not started; KV stays eventually consistent across locations, which is why the app treats the result as authoritative rather than trusting the fix. Covered by `pnpm test:policy` (the store rule, pure) and `pnpm test:ui` (the `#other-brain` harness route, which is the whole scenario end to end).
-- **`brains` must cost NOTHING for a configured brain** (fixed 2026-09-01). The widget
-  calls it on every open, and it checks every manageable brain for "connected but not
-  configured". The first version resolved each brain's context (a token mint and a
-  config read, both GitHub) and ran `ensureFresh` (a `getHead` per brain plus an
-  inline reindex for any brain whose branch moved) BEFORE asking the index whether
-  the brain had pages, so on an account with several brains it was a 17-second call.
-  Anthropic's edge gives up at about 15 and reports a bare 502 `origin_bad_gateway`
-  with `zone: api.anthropic.com` (issues #50 and #85); the widget's `ensureBrainList`
-  swallows the failure, and the brain list, `features`, and anything riding on them
-  are missing for that open. Now `hasIndexedPages` (one `SELECT 1 … LIMIT 1`, no
-  context) answers a configured brain, and only an EMPTY index pays for freshness and
-  the tree scan. `pnpm test:scope` pins it: a brain with an indexed page resolves no
-  context at all. **Any per-brain work added to `brains` needs the same shape**: answer
-  from the index first, reach GitHub only when the index cannot say.
-- **The Worker logs what the transport refuses and what runs slow** (`describeRequest`
-  in `mcp-preamble.ts`, `pnpm test:preamble`): any `/mcp` answer at 4xx or over 5s gets
-  one `console.warn` naming the methods, the message SHAPES (top-level key names only,
-  never a value), the protocol era, the status, the duration and the 2025 transport's
-  own error. Two reasons. A refusal names the shape the client sent: under SDK 1.30,
-  whose schema was `.strict()` and stopped at `2025-11-25`, Claude's `2026-07-28` fields
-  were answered 400 with nothing saying which field (SDK 2 serves that revision; its
-  refusals carry the reason in the JSON-RPC body). And a slow call reaches the user as
-  the edge's 502, not as ours, so only our own log can say which tool it was. Read them in the dashboard's
-  Workers Logs, or `wrangler tail --status error`; note macOS has no `timeout`, so
-  bound a tail with a backgrounded process and `kill`.
-- **`browse_brain` returns a SUMMARY, and the tree only while it is small** (`src/lib/browse.ts`, same issue). It used to send every path twice — as text and again in `structuredContent` with a title per page — which on a 556-page brain was 83,708 characters, over the host's tool-result limit and spilled to a file. The text block is now the brain's shape (page count, per-folder tallies below the shared root, where to get the rest); the tree rides along only under `MAX_INLINE_TREE_CHARS`, measured on the serialized payload rather than a page count. Above it the app fetches the tree with `list_pages`, which is a widget-initiated call the conversation never pays for — the `else openBrowse()` branch of `handleToolResult`, which predates this. `list_pages` itself is unchanged: the widget parses its text block for the path list.
-- **`needsConfig` must SEE the config file, and `configure_brain` must not clobber one** (issue #94, 2026-09-14). `detectNeedsConfig` in `brain-index.ts` checked the tree for `.isomorphic.json`, but `listTree` defaults to `.md` files only, so the file was never in the list and the "author configured it explicitly" branch was dead. The other callers never noticed because they run it only after `ensureFresh` came back with zero pages under the REAL config; `connect_brain` runs it against `DEFAULT_BRAIN_CONFIG` on a repo it has not loaded, so a valid config with non-default roots came back `needsConfig: true`, and the remedy that flag names (`configure_brain`, whole-repo default) would have replaced the config it was wrong about. Fix: the detector lists the whole tree (GitHub's recursive tree call returns every blob anyway, so it costs no extra request), and `configure_brain` refuses when a config exists, prints it, and takes `overwrite: true` to replace it. Both pinned: `pnpm test:index` (the detector, through the real `githubStore`) and `pnpm test:e2e-librarian` (the guard, last in the run since the overwrite changes the scaffold's roots).
-- **Placing a brain uses `listAccessibleOrgs`, never `listAccessibleBrains`.** The latter inner-joins `brains`, so an org holding none produces no row: correct for choosing a brain to act on, wrong for choosing where to PUT one. That made the first brain in a freshly connected org unreachable. `connect_brain` picked its org by naming a brain already in it, and `create_brain` had no org argument at all and resolved through a `LIMIT 1` with no `ORDER BY`, so a person in two orgs got an arbitrary one. Both take an optional **`org`** now (fuzzy-matched on name / GitHub owner / org id by `matchOrg`); `connect_brain`'s `brain` argument is gone, since it only ever meant "which org". `chooseOrg` is the pure pick and throws rather than guessing: named handle > the active brain's org > oldest. The `brains` payload carries the org list, because the widget's picker could not derive a brainless org either. Covered by `pnpm test:access` (the query and the pick) and `pnpm test:scope` (that both tools forward `org`, and that the payload carries the list).
-- **Founding operator**: `src/db/seed-operator-org.sql` is a one-shot migration template that maps the founding operator's email onto a pre-existing brain (adopt, not re-provision) — fill in the placeholders and apply to local + remote D1.
-- **Model-B onboarding** (built, `docs/ops/onboarding-a-customer-org.md`): standing up a customer-owned org now has two paths. **Self-serve** — `create_org` with `github: true` (`src/tools/org-onboarding.ts`; it replaced `connect_github_org`) returns a GitHub App install URL carrying a KV-stashed `state`; installing redirects to `/github/install-callback`, which resolves the installation (App JWT) and writes the `customer` org + owner membership via `connectCustomerOrg` (`src/lib/org-connect.ts`), idempotent on re-install. The user then adopts a repo with `connect_brain`. Needs `GITHUB_APP_SLUG` on the Worker. **Operator** — `pnpm onboard-org` (`scripts/onboard-org.ts`) is the scripted replacement for hand-editing `seed-customer-org.sql`: it resolves `installation_id` from GitHub, verifies repo reachability, bakes the operator email into `created_by`/`invited_by`, and writes the org/brain/invite rows (dry-run by default; `--apply local|remote|both`). A team with no GitHub needs neither path: `create_org` without `github` creates a **hosted** org (`model='hosted'`, the platform's installation) with the caller as owner, gated on `AUTO_PROVISION` like personal orgs are. `orgNameProblem` (`src/lib/org-connect.ts`) refuses a name the caller already belongs to, since every `org` argument resolves by name.
-- **A brain's credential comes from its STORAGE BINDING, not its org** (built 2026-09-22, [`docs/design/storage-and-tenancy.md`](docs/design/storage-and-tenancy.md), migration 0010). `storage_connections` holds one row per credential (today, one per GitHub App installation, id `github-app:<installation id>`), and `brains.storage_connection_id` binds a brain to one. `listAccessibleBrains` resolves `installation_id` as the binding's, falling back to the org's for a NULL binding (rows written before 0010, or by old code in the deploy window). This is what makes MOVING a brain possible, and it lives in **`connect_brain`**: naming an existing brain EXACTLY (id, repo name or its name; a partial name stays an adoption) in another org moves it there (org admin in BOTH orgs; a preview until `confirm: true`). Renaming is `configure_brain`'s `name` (brain admin). A dedicated `update_brain` was built and folded into those two before merge; don't re-add it, and don't collapse these into a `manage_*` tool, since hosts grant approval per tool (see the design doc §6). A move is `moveBrain` in `src/lib/brain-move.ts`: one batch that sets `org_id`, re-points pending brain invites, and PINS a NULL binding to the source org's connection first, since the fallback would otherwise read the brain through the destination org's installation, which cannot reach it. The preview is `planBrainMove`, which runs `effectiveBrainRole` once per org rather than restating the rule. A connection has an `owner_org_id` (NULL = platform-owned), and only the owner may list and adopt through it: `connect_brain` refuses to ADOPT in personal and hosted orgs (moving a brain INTO one is fine), since adopting through the shared platform account would let any org claim a repository another org's brain left behind. Covered by `pnpm test:access` (the backfill on a populated pre-0010 database, binding resolution, the plan, the statements) and `pnpm test:scope` (both move gates independently, nothing written without `confirm`, the adoption refusal before any GitHub call). Steps 3 to 6 of the design (key derived state by `brain_id`, slug URLs, a second backend, dropping `orgs.installation_id`) are not built.
-- **Not yet built** (design steps 4/6): invitations/admin UI, Google/SSO providers.
-
-## Claiming invitations (issue #69)
-
-An `invitations` row becomes a `memberships` row in exactly one place:
-`claimPendingInvites` (`src/lib/invites.ts`, pure rule + D1 half, `pnpm test:invites`).
-Before 2026-08-31 that logic lived inside `provisionOrgForUser`, behind three gates
-that between them meant an invitation only ever reached a person who was brand new,
-signed in with the invited address, and on a deployment with `AUTO_PROVISION=true`.
-Anyone else stayed un-joined with nothing surfaced: the invitee saw no brain, the
-admin saw a pending invite that looked unopened, and the row expired.
-
-- **An invite names an EMAIL, and a person owns a SET of them.** Claiming is keyed
-  on the person's `app_users` rows (`linkedUserIds`), and the membership lands on
-  the `user_id` whose address was invited. That is what makes an invitation
-  survive account linking: the address is proven by the same sign-in either way.
-- **It runs wherever an address is proven, and once per request.** `/link/complete`
-  (`auth-handler.ts`) claims for the address just verified; `McpSession.personUserIds`
-  claims for the whole person before anything reads their memberships, so an invite
-  takes effect on the invitee's next call rather than at their next re-auth. Both
-  are FAIL-OPEN: an invitation that cannot be claimed leaves a working session
-  working and is retried on the next request.
-- **`AUTO_PROVISION` does not gate it.** That flag governs MINTING a personal org
-  for someone nobody invited. An invite-only deployment is precisely the one that
-  needs invitations to work, and the old ordering answered it with "an admin must
-  invite you", which is what had just happened. `provisionOrgForUser` claims first
-  and takes `autoProvision` as an argument; the invite path touches no GitHub at
-  all, so it needs neither `PLATFORM_ORG` nor an installation token.
-- **A membership is never rewritten by an invite.** The invite is what an admin
-  wanted when they sent it; the membership row is what they want now. An invite to
-  an org the person already belongs to is marked accepted and writes nothing, so a
-  stale invite cannot demote anyone and the roster stops showing it as pending.
-- **Multi-org membership is real and always was.** `memberships` is keyed
-  `(org_id, user_id)`, and every path that picks where to act unions across a
-  person's orgs (`listAccessibleBrains`, `listAccessibleOrgs`, `resolveOrgForPerson`,
-  `chooseOrg`). `getMembershipWithOrg`'s `LIMIT 1` is not one of those paths: it
-  answers "does this user id belong anywhere yet" for first-touch provisioning, and
-  is now ordered so the answer does not depend on the query plan.
-- **`noBrainOutcome`** (`provision.ts`, pure) decides what a member with no
-  reachable brain gets, keyed on the state rather than on having just been
-  invited. Anyone who can create one (editor+) still lands in the app's "create
-  your first brain" state, which is what this path did for every role. A VIEWER
-  can create nothing, so that state strands them: they are told which of the two
-  problems they have, since brains are private by default and the difference is
-  invisible from their side (none of the org's brains are shared with you, versus
-  the org holds none yet).
-- **Uncovered:** the two call sites themselves (the Worker method and the link
-  callback), as with the rest of the request wiring. The rule, the queries, and
-  `provisionOrgForUser` are covered.
+  `security-and-quality` suite. **Do not enable CodeQL default setup in the repository
+  settings**: it takes over and runs the narrower `default` suite, silently dropping the quality
+  rules. The config excludes `src/lib/app-bundle.generated.ts`.
+- **`pnpm security:audit`** runs in ci.yml as a `continue-on-error` reporting step; `--prod`
+  drops the wrangler/miniflare subtree. Drop `continue-on-error` once the tree is clean.
+- Snyk was not adopted: it needs an account and token that a fork cannot have.
+
+**A Dependabot PR that bumps a BUNDLED dependency always fails CI** ("Generated artifacts in
+sync"), because `pnpm gen:app` inlines what the app imports (`zod`, `marked`, and more) and
+Dependabot does not run repository code. A maintainer regenerates with **`pnpm regen:pr
+<number>`** (`scripts/regen-pr.ts`, a throwaway worktree, pushes only with `--push`). This is
+deliberately not a workflow: it would bundle an unreviewed version with a write token at a bot's
+say-so, and a `GITHUB_TOKEN` push does not re-trigger checks anyway.
+
+## Non-obvious wrangler and mode bits
+
+- **No `routes` block, ever.** Custom domains are bound in the Cloudflare dashboard. A `routes`
+  entry with `custom_domain: true` makes `wrangler dev` rewrite `request.url`'s host and breaks
+  the OAuth provider's host-based routing.
+- The DO `migrations` array (`v1` new / `v2` deleted `IsomorphicMindMcp`) is **append-only** by
+  Cloudflare's rules. Neither entry may be removed.
+- **`AUTH_MODE=static`** (one shared bearer, `MCP_BEARER_TOKEN`) is the supported
+  **self-hosting** entry point: one person, one brain, no identity setup. `oauth` +
+  `IDENTITY_MODE=authjs` is what the hosted deployment runs.
+- **In static mode `GITHUB_TOKEN` can replace the GitHub App** (`tokenOctokit`): a fine-grained
+  PAT with Contents + Pull requests write on one repo, plus `BRAIN_REPO_OWNER`/`NAME`. Commits are
+  attributed to the token's owner. `oauth` still requires the App.
+- **Single-tenant mode does not register the org tools.** `hasOrgModel`
+  (`AUTH_MODE === 'oauth'`) gates members, connected accounts, `create_org` and `analytics`: an
+  advertised tool costs context in every conversation, and a refusal reads to the model as a
+  permissions problem to work around. Same rule as `FEEDBACK_REPO`. `brains`, `create_brain` and
+  `connect_brain` stay registered; the latter two refuse through `orgContext`.
+
+## Brain model
+
+**A brain is an ordinary git repo with arbitrary folder structure.** There are NO fixed entity
+types and no generated by-type index; each owner organizes it however they like. **Don't
+reintroduce a taxonomy speculatively.** Brains target the Open Knowledge Format (one concept per
+page, `type:` frontmatter, `index.md` folder notes); see the OKF rules file.
+
+- **Tools are path-based** (36 today).
+  `write_page` creates or updates anything under the content roots (`content`, `edits`,
+  `append`, `fields`, `type`); `move_page` and `delete_page` take a page, a folder (a whole
+  subtree), or a non-page file, repointing or reporting inbound links. `attach_media` /
+  `read_media` handle files. `validate` reports defects and findings; `resolve` answers findings.
+- **Only `wiki/log.md` is tool-maintained** (append-only changelog). Path roles (content,
+  source, log, system) come from `.isomorphic.json` via `src/lib/brain-policy.ts`, shared by
+  Worker and app.
+- **`BrainStore` (`src/lib/brain-repo.ts`) is the only seam between tools and storage**:
+  `githubStore(octokit)` for GitHub, the fs store for the local runtime. Content reads and
+  writes never call octokit directly.
+- **The content index in D1 is a derived cache, never the source of truth**; every read checks
+  the branch head first. Details: `.claude/rules/content-index-and-store.md`.
+- Frontmatter is optional and free-form; `write_page`'s `fields` edits any brain-owned key
+  without touching the body. Agent-facing schema doc: `brain-template/AGENTS.md`.
+
+**Brain templates.** The scaffold's source of truth is `brain-template/`. Workers have no
+filesystem, so it is codegen'd into `src/lib/brain-template.generated.ts` by
+`pnpm gen:templates` (run after any edit there; the output is committed).
+`src/lib/scaffold-core.ts` (Worker-safe) scaffolds for both `bootstrap.ts` and the Worker's
+`create_brain`.
+
+**Tool descriptions and server instructions.** Each tool's description stands alone and names
+itself; cross-tool steering lives in `SERVER_INSTRUCTIONS` (`src/lib/server-instructions.ts`).
+A convention the model cannot infer is stated in three places, in descending reach: server
+instructions, the tool's own description or argument, and `brain-template/AGENTS.md`.
 
 ## State of the repo
 
-Bootstrap + MCP server are the only things built. Possible next pieces (webhook receivers, a lint/validation agent) do not exist. The old `raw/` → ingest-agent → synthesis pipeline was dropped (the `synthesize` tool and `ingest` tool were removed; bulk import is now `sync_records`). When the user references roadmap items, they're referring to a plan, not a codebase. `docs/roadmap.md` (formerly `TODO.md`) is that plan, and it is now public.
+Built: the hosted multi-tenant Worker (orgs, per-brain access, guests, identity linking,
+storage connections), the static self-host path, the local runtime, bootstrap, the MCP App UI
+and the web app, and the tools above. Not built: webhooks, Google/SSO sign-in, a second storage
+backend, invitation emails. The old `raw/` → ingest → synthesize pipeline was removed (bulk
+import is `sync_records`). [`docs/roadmap.md`](docs/roadmap.md) is the public plan: when the
+user references a roadmap item, check the code before assuming it exists or does not.
 
-## Public-repo hygiene (added 2026-07-27)
+## Public-repo hygiene
 
-The repo is public, so a few things that used to be free are not:
+- **No customer, client, or personal names, anywhere.** Code, comments, tests, fixtures, error
+  and tool strings, docs, commit messages, pull request titles and descriptions, branch names.
+  A comment that retells a real incident is the usual way one gets in: write the example with
+  a neutral name (`Acme`, `Northwind`, `example-org`, `brain: "acme"`), never the real org,
+  brain, repo, or person, even when you are quoting what happened.
+- **No real account or resource identifiers.** Cloudflare ids, installation ids, org logins, the
+  Worker name and our hostname come from generated config or env vars. `src/db/seed-*.sql` are
+  `<PLACEHOLDER>` templates; keep them that way.
+- **`/ops/` is gitignored** (root-anchored; `docs/ops/` runbooks are tracked). Anything naming
+  real infrastructure or a real customer goes there.
+- **Nothing hosted-only.** The hosted service is a deployment of `main`: no private module, no
+  paid-tier flag, no `if (isHosted)`. A change that only makes sense for our deployment goes in
+  as configuration or not at all.
+- **No telemetry.** Nothing may report anything to us or to anyone but the operator. The org
+  Analytics tab counts into the deployment's own D1 and never leaves it; a change that SENDS any
+  of it anywhere is forbidden however aggregated it looks.
 
-- **No customer, client, or personal names** in code, comments, tests, or docs. The golden-test fixtures and design docs were scrubbed of real org names on 2026-07-27; use `example-org`, `Acme`, `Northwind` and the like. A real name in a test fixture is a leak with a `git blame` attached.
-- **No real account or resource identifiers.** Cloudflare KV/D1 ids, installation ids, org logins, and our hostname come from generated config or env vars. `src/db/seed-*.sql` are `<PLACEHOLDER>` templates on purpose; keep them that way.
-- **`/ops/` is gitignored** (root-anchored, so the tracked `docs/ops/` runbooks are unaffected). Anything naming real infrastructure or a real customer goes there.
-- **Nothing hosted-only.** The hosted service is a deployment of `main`, not a fork or a superset: no private module, no paid-tier feature flag, no `if (isHosted)`. If a change only makes sense for our deployment, it goes in as configuration or it does not go in. The full reasoning, including the cases that will test the line, is [`docs/design/open-source-boundary.md`](docs/design/open-source-boundary.md).
-- **No telemetry.** No phone-home, no usage beacon, in any build. Nothing this
-  software does may report anything to us, or to anyone but the operator running it.
-  The rule is about WHERE data goes, not about whether usage is ever counted: the org
-  Analytics tab (below) records per-day counters into the deployment's own D1, which
-  never leave it and which we cannot see on someone else's install. That is why it is
-  allowed to be ON by default (`USAGE_ANALYTICS`, which a self-hoster sets to `false`
-  to disable). A change that SENDS any of it anywhere is the thing this rule forbids,
-  regardless of how aggregated or anonymous it looks, and no amount of "it's only
-  counts" makes an outbound call acceptable.
+## Keeping the docs true
+
+This file, the `.claude/rules/` files, the docs and the comments are read as current fact by
+every agent that opens this repo. When they drift, an agent acts on the drift with confidence.
+
+- **A change that makes a sentence false fixes it in the same pull request.** Wherever the
+  sentence lives: here, a rules file, a doc, a comment, a tool description, an error string.
+  On every pull request CI lists the rules files whose `paths:` cover the files changed
+  (`scripts/rules-for-change.ts`); reread those before merging.
+- **Write the fact, not the story.** A comment or doc states what the code does now, plus at
+  most one line on why the obvious alternative is not used. How it got that way (the first
+  version, the incident, the issue number, the measured numbers) goes in the commit message
+  and the pull request description, where it is dated and never mistaken for current
+  behavior. Decision records live in `docs/design/` and `docs/roadmap.md`.
+- **`pnpm test:docs` checks what a machine can** (`scripts/test-docs.ts`): repo paths and
+  relative links in the reference docs exist, backticked symbols are in the code, tool-shaped
+  names (`verb_noun`) are registered tools anywhere in the docs or `src/` (a retired name may
+  appear only on a line that says it was retired), quoted constants match their literal, each
+  rules file's globs all match files, and each design doc opens with a `Status:` from a fixed
+  set. It cannot see a sentence that became false while every name in it still exists; the
+  first rule above covers that.
+- **A new rules file needs `paths:` built from the current file layout**, and a moved or
+  renamed file needs its rules globs updated; `pnpm test:docs` fails on a glob that matches
+  nothing.
+
+## Where subsystem rules live
+
+Each file under `.claude/rules/` has `paths:` frontmatter and loads when a session reads a
+matching file. Read the relevant one before changing a subsystem from a session that has not
+loaded it.
+
+| File                                   | Covers                                                                                                                                                                                                               |
+| -------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `org-model-and-permissions.md`         | identity modes, sign-in email, orgs (platform/customer/hosted), roles and the two scopes, `effectiveBrainRole`, sharing, guests, members, invitations, multi-brain, storage connections, moving brains, `create_org` |
+| `web-app.md`                           | `/b/` web host, cookie `/mcp` + CSRF gate, `WEB_TOOL_ROUTING`, address bar, Open in browser                                                                                                                          |
+| `app-widget.md`                        | the `ui://` bundle, `tool-payloads.ts`, `pickShownBrain`, `features`, `browse_brain` summary                                                                                                                         |
+| `mcp-request-path-and-tool-surface.md` | `serveMcp` and the two protocol eras, the preamble and its logging, registration and gating, `whoami`, tool-description rules                                                                                        |
+| `content-index-and-store.md`           | `BrainStore`, the D1 index, freshness, wikilinks, write-through, budgets                                                                                                                                             |
+| `search.md`                            | ranking, proximity, FTS5 decision, probes, cross-brain search                                                                                                                                                        |
+| `write-path.md`                        | `page-write`, patches, `fields`, `write-target`, `change-record`, the retry ledger                                                                                                                                   |
+| `okf-folder-notes-and-findings.md`     | OKF, folder notes, `validate` / `resolve`, advisories, findings ledger, consolidation                                                                                                                                |
+| `derived-views.md`                     | `okf-view` grammar and the three renderings                                                                                                                                                                          |
+| `markdown-renderer.md`                 | `render.ts` sanitization and hooks                                                                                                                                                                                   |
+| `media.md`                             | attachments, URL fetch guards, `read_media`                                                                                                                                                                          |
+| `brain-authored-tools.md`              | `tools/` pages as MCP tools                                                                                                                                                                                          |
+| `bulk-import.md`                       | `sync_records` invariants and import decisions                                                                                                                                                                       |
+| `usage-analytics.md`                   | the Analytics tab, `TOOL_KINDS`, recording                                                                                                                                                                           |
+| `feedback.md`                          | `submit_feedback` privacy and credential rules                                                                                                                                                                       |
+| `loading-states.md`                    | the rotating loading line and its tests                                                                                                                                                                              |
+
+## Rules that apply everywhere
+
+Restated from the rules files so they hold even when those are not loaded.
+
+- **Never run `wrangler d1 migrations apply --remote` (or `d1 execute --remote`) by hand.**
+  `deploy.yml` applies migrations before code ships. Create migrations with
+  `pnpm db:migrate:new`; keep them additive (expand, then contract). `src/db/*.sql` are
+  reference only.
+- **Never add a Durable Object binding** without reading the deploy section: it silently loses
+  preview URLs and the pre-promotion smoke.
+- **No `routes` block** in the wrangler template. **Never edit or commit `wrangler.jsonc`.**
+- **Never add an `issues` (or any widening) permission to the platform App** in
+  `src/manifest.ts`; feedback uses its own `FEEDBACK_TOKEN`.
+- **Don't enable CodeQL default setup** in repository settings.
+- **Don't move PKCS#8 conversion (or any `node:*` use) into `src/lib/`.**
+- **Don't re-add `update_brain`, a `manage_*` tool, or a fields-only batch tool** (`set_fields`)
+  without reading `docs/design/storage-and-tenancy.md` §6 and `docs/roadmap.md`. Moves and
+  renames live in `connect_brain` and `configure_brain`.
+- **Don't grow the tool surface for a variant**: media move/delete use `move_page` /
+  `delete_page`; import decisions and finding dismissals share `resolve`.
+- **Every tool description stands alone and names itself**; cross-tool steering goes in
+  `SERVER_INSTRUCTIONS`. Keep `read_page` and `view_page` separate.
+- **Every new tool needs a `TOOL_KINDS` entry** (`src/lib/usage.ts`; `pnpm test:usage` fails
+  otherwise) and, if it is a widget tool, a `WEB_TOOL_ROUTING` decision (`src/lib/web-app.ts`;
+  `pnpm test:web` fails otherwise).
+- **Never re-express `effectiveBrainRole` in SQL.** Fetch rows, then admit them through the
+  function. Gate org actions on `orgRole` and brain actions on `role`; read a null `orgRole` as
+  "not a member".
+- **Place brains with `listAccessibleOrgs`, never `listAccessibleBrains`.**
+- **Only `switch_brain`, `create_brain` and `disconnect_brain` move the active-brain pointer.**
+  A view never does.
+- **Any whole-brain index pass is budgeted and resumable** (budget, cursor, advance the marker
+  only when done). Work added to `brains` answers from the index before touching GitHub.
+- **Content reads and writes go through `BrainStore`**, never raw octokit.
+- **Don't adopt FTS5** without reading its entry in `docs/references.md`.
+- **Treat any change to `src/lib/render.ts`'s policy constants as a security change.**
+- **Changelog, commit and reply wording comes from `src/lib/change-record.ts`**; path rules
+  from `src/lib/write-target.ts`. Don't inline copies in a tool.
+- **Run `pnpm gen:app` after editing `app/` or a `src/lib/` file it imports, and
+  `pnpm gen:templates` after editing `brain-template/`.**
+- **OKF is a contract with every brain repo.** Read the spec before asserting anything about
+  it; a format change must keep working for existing brains.
+- **`submit_feedback` publishes nothing identifying**; `composeIssue` takes no identity.
+- **No telemetry, no hosted-only code.**
+- **No customer, client, or personal names and no real deployment identifiers, anywhere**,
+  including comments, fixtures, commit messages and pull requests. Use `Acme`, `example-org`.
+- **Fix the sentences a change makes false, in the same change; write the fact, not the
+  story.** See [Keeping the docs true](#keeping-the-docs-true).

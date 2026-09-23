@@ -22,7 +22,8 @@ Please give us 90 days before public disclosure, or less if we ask for less. If 
 ## Scope
 
 **In scope:** this repository's code, including the MCP Worker, the bootstrap server, the
-in-client app bundle, the D1 schema and migrations, and the brain-repo write path. Also our
+in-client app bundle and the web app that serves it, the D1 schema and migrations, and the
+brain-repo write path. Also our
 hosted service at `mcp.isomorphic.sh`, as long as you test only against brains and accounts you
 own.
 
@@ -42,9 +43,14 @@ Parts of the system where a bug would matter most:
 
 - **Tenant and brain isolation.** Every request resolves an org, a role, and a brain
   (`tenantContext` in `src/worker.ts`, `src/lib/orgs.ts`). A path that returns content from a
-  brain the caller cannot reach, or that resolves the wrong installation token, is the most
-  serious class of bug in this codebase. The content index is keyed by `owner/repo` and is meant
+  brain the caller cannot reach, or that resolves the wrong storage credential
+  (`src/lib/storage-connections.ts`), is the most serious class of bug in this codebase. The content index is keyed by `owner/repo` and is meant
   to make crossing brains impossible; verify that.
+- **Guests across org boundaries.** A brain can be shared with someone outside its org
+  (`share_brain`, `src/tools/brain-access.ts`). A guest holds a grant on that one brain and is
+  capped at editor by `effectiveBrainRole` (`GUEST_ROLE_CAP`). A guest who reaches a second
+  brain, anything at org scope (the roster, analytics, org settings), or `admin` on the shared
+  brain is a finding.
 - **Role enforcement on write tools.** Write tools pass `requires: 'editor'`; reads are open to
   `viewer`. A write reachable by a viewer is a finding. So is a member-management guard that can
   be walked around: `src/tools/members.ts` makes `owner` unassignable and forbids editing your
@@ -55,6 +61,20 @@ Parts of the system where a bug would matter most:
   scrutiny. Email-based magic links are known to be weaker than a redirect-based provider (email
   prefetch, cross-browser flows); we say so in `CLAUDE.md` and are moving toward OIDC. A
   concrete exploit is still a finding.
+- **The web app and its cookie.** `/b/<owner>/<repo>/<path>` serves the app bundle as a web
+  page, authenticated by the Auth.js session cookie, and its `/mcp` calls carry that cookie
+  rather than a bearer token. That makes the cookie branch of `/mcp` a credential-bearing write
+  endpoint reached with an ambient cookie, which is the shape CSRF exploits.
+  `checkWebMcpRequest` in `src/lib/web-app.ts` is the gate: it refuses a request that also
+  carries a bearer token, a mismatched `Origin`, a cross-site `Sec-Fetch-Site`, and any
+  content type but JSON. A cross-site request that gets a tool call through, or a way to make
+  the cookie stand in for a bearer token, is a finding.
+- **Markdown rendering.** Page bodies are written by anyone with editor access, including
+  guests, and rendered as HTML on our own origin next to that session cookie, so a sanitizer
+  bypass is stored XSS. `src/lib/render.ts` allows a short list of raw HTML tags with no
+  attributes at all, escapes everything else, and checks link and image URL schemes after
+  decoding entities. Any page body that produces a script, an event handler, or a
+  `javascript:` URL in the rendered output is a finding.
 - **User-defined (brain-authored) tools.** A page under `tools/` in a brain becomes an MCP tool
   (`src/lib/custom-tools.ts`, `src/tools/custom.ts`). The security claim is that arguments are
   interpolated as **data** and never evaluated, the operation whitelist is read-only, and a
@@ -81,6 +101,9 @@ The things most likely to hurt you:
   token with `openssl rand -hex 32` and do not reuse it anywhere.
 - Brains are ordinary GitHub repositories. GitHub's own permissions on that repository are part
   of your security boundary. A brain that should be private should be a private repo.
+- Access inside a brain is all or nothing: anyone who can open a brain can read every page and
+  file in it, whatever folder it sits in. Material only some people should see belongs in a
+  separate brain.
 - The GitHub App's `administration: write` permission lets it create repositories in the
   installed org. Install it on an org that holds only brains, not on your main engineering org.
 

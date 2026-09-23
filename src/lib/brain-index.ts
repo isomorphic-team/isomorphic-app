@@ -60,14 +60,11 @@ export const INDEX_SCHEMA_VERSION = 4;
 
 const deslug = (path: string) => slugOf(path).replace(/-/g, ' ');
 
-// Title resolution lives in wiki.ts (pageTitle) as the single source of truth —
-// this file and librarian.ts each used to carry their own copy of the fallback.
+// Title resolution lives in wiki.ts (pageTitle) as the single source of truth.
 
 // A page's distinct links with occurrence counts (so backlink counts survive a
-// page that links the same target twice). Extracted from the WHOLE content — this
-// matches find_inbound_links (which scans full content); validate historically
-// scanned the body only, so it now also sees the rare link written in frontmatter,
-// which is strictly more correct.
+// page that links the same target twice). Extracted from the WHOLE content, so a
+// link written in frontmatter counts too.
 interface ParsedLink {
 	rawTarget: string;
 	kind: 'md' | 'wiki';
@@ -295,11 +292,11 @@ export async function ensureFresh(
 	return { truncated };
 }
 
-// How many pages one request will rebuild derived rows for. The rebuild used to
-// run whole-brain and inline, which made a large brain UNREADABLE rather than
-// slow: ~3,000 pages is ~13,000 statements, past the host's 60s tool timeout, and
-// because schema_version was only written at the end, the next read started over.
-// Bounding it converges instead — each read advances the cursor by a slice.
+// How many pages one request will rebuild derived rows for. An unbounded inline
+// rebuild makes a large brain UNREADABLE rather than slow: ~3,000 pages is ~13,000
+// statements, past the host's 60s tool timeout, and a pass that never finishes never
+// records its progress. Bounded, it converges: each read advances the cursor by a
+// slice.
 const REBUILD_PAGE_BUDGET = 300;
 
 // Rebuild the DERIVED rows — the page title, its links, and the queryable
@@ -478,8 +475,7 @@ async function gitBlobSha(content: string): Promise<string> {
 // next read to reconcile it. The caller holds the revision the write was based on,
 // the one it landed, and the exact content of every page the bundle touched, so this
 // upserts those rows and advances indexed_commit_sha. The read an agent makes to
-// verify a write then costs one getRef instead of an incremental reindex — which is
-// also what used to make the FIRST read after a write the slow one (issue #31).
+// verify a write then costs one getRef instead of an incremental reindex.
 //
 // Only when provably safe: the index must already be CURRENT at the write's base
 // revision (otherwise other pages changed under us and the next read reconciles as
@@ -637,8 +633,8 @@ export async function writeThroughIndex(
 
 	// A single D1 batch is one transaction. Never split write-through across
 	// transactions: a partial page replacement whose blob sha already advanced can
-	// look unchanged to incremental reconciliation. Oversized bundles simply retain
-	// the old behavior and reconcile on the next read.
+	// look unchanged to incremental reconciliation. Oversized bundles skip
+	// write-through and reconcile on the next read.
 	if (stmts.length > BATCH_CHUNK) return false;
 	const results = await db.batch(stmts);
 	const final = results[results.length - 1] as { meta?: { changes?: number } } | undefined;
@@ -664,13 +660,10 @@ export async function resetIndex(db: D1Database, brainId: string): Promise<void>
 // the (default) content roots — the "connected but shows no pages" trap. Fetches the
 // tree, so callers gate it on "the page list came back empty" to avoid the cost.
 //
-// The tree is listed WITHOUT the `.md` filter (issue #94). `listTree` defaults to
-// markdown only, so `.isomorphic.json` was never in the list it returned and the
-// "author configured it explicitly" branch below could not fire: a repo with a valid
-// config whose roots were not the defaults came back `needsConfig: true` from
-// connect_brain, whose recommended remedy (configure_brain) would have overwritten
-// that config with a whole-repo default. GitHub's recursive tree call returns every
-// blob regardless, so listing everything costs no extra request.
+// The tree is listed WITHOUT the `.md` filter, or `.isomorphic.json` is never in it
+// and a repo with a valid non-default config reads as `needsConfig: true`, whose
+// remedy (configure_brain) would replace that config. GitHub's recursive tree call
+// returns every blob regardless, so listing everything costs no extra request.
 export async function detectNeedsConfig(
 	store: BrainStore,
 	repo: RepoRef,
@@ -711,8 +704,8 @@ export interface ResolvedGraph {
 }
 
 // Pull the brain's pages + raw links and resolve every link against the current
-// page set — markdown links via resolveRelative, [[wikilinks]] by path/filename/title,
-// exactly as the live scan did. Two D1 queries, then in-memory resolution; no
+// page set: markdown links via classifyMdLink, [[wikilinks]] by path/filename/title.
+// Two D1 queries, then in-memory resolution; no
 // GitHub content fetch. This is the shared primitive behind graph / backlinks /
 // validate.
 export async function loadResolvedGraph(
@@ -740,15 +733,12 @@ export async function loadResolvedGraph(
 		const kind = l.kind === 'wiki' ? 'wiki' : 'md';
 		if (kind === 'md') {
 			// The rule itself lives in links.ts, pure, so the dev harness resolves links
-			// exactly the way this does. It used to be inlined here, which meant nothing
-			// outside D1 could reuse it and the harness carried a divergent copy.
+			// exactly the way this does.
 			const c = classifyMdLink(l.source, l.raw_target, config, (p) => pathSet.has(p));
 			const target = c.target!;
 			if (c.kind === 'page') edges.push({ source: l.source, target, kind, cnt: l.cnt });
-			// Non-page files are recorded but kept out of `edges`: MD_LINK_RE always
-			// captured `![](…)`, so these were in brain_links all along and were simply
-			// dropped, which is why backlinksTo used to report an image as referenced by
-			// nobody. move_page repoints them and delete_page warns about them.
+			// Non-page files are kept out of `edges` (see ResolvedGraph). move_page
+			// repoints them and delete_page warns about them.
 			else if (c.kind === 'file') fileEdges.push({ source: l.source, target, kind, cnt: l.cnt });
 			else if (c.kind === 'broken')
 				broken.push({ source: l.source, rawTarget: l.raw_target, kind, target });
@@ -764,9 +754,6 @@ export async function loadResolvedGraph(
 	return { pages, edges, fileEdges, broken };
 }
 
-// The brain's content pages with display titles, straight from the index (no link
-// resolution). Backs list_pages / browse_brain so the file tree can show titles.
-// Call ensureFresh first so the list reflects the current repo.
 /**
  * Whether the index holds ANY page for this brain. One indexed row, no fetch, no
  * freshness check: the question is "has this brain ever had content", which a
@@ -781,6 +768,9 @@ export async function hasIndexedPages(db: D1Database, brainId: string): Promise<
 	return row !== null;
 }
 
+// The brain's content pages with display titles, straight from the index (no link
+// resolution). Backs list_pages / browse_brain so the file tree can show titles.
+// Call ensureFresh first so the list reflects the current repo.
 export async function listIndexedPages(
 	db: D1Database,
 	brainId: string
@@ -792,9 +782,8 @@ export async function listIndexedPages(
 	return res.results.map((r) => ({ path: r.path, title: r.title ?? deslug(r.path) }));
 }
 
-// Backlinks to one page: which pages link in, and how (md vs wiki counts). Mirrors
-// findReferences() in the old live path.
-// `count` is the total, and is what callers should use — the md/wiki split is kept
+// Backlinks to one page or file: which pages link in, and how (md vs wiki counts).
+// `count` is the total, and is what callers should use; the md/wiki split is kept
 // only for surfaces that report the two syntaxes separately to a human. Two link
 // syntaxes are an authoring convenience; downstream, a link is a link, and making
 // every consumer remember to add both is how one of them ends up under-counting.

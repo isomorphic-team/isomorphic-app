@@ -419,9 +419,9 @@ body {
 }
 /* One TILE, in px, repeating. A percentage-sized no-repeat gradient leaves part of a
    long line unpainted at the ends of the sweep, and unpainted means INVISIBLE here:
-   the glyph fill is transparent and the background is the only thing drawing the text.
-   The first version of this did exactly that and swallowed the last few characters of
-   every phrase as the highlight passed. Repeating a fixed tile covers any width, and
+   the glyph fill is transparent and the background is the only thing drawing the text,
+   so the last few characters of a phrase would vanish as the highlight passed.
+   Repeating a fixed tile covers any width, and
    travelling exactly one tile makes the loop seamless. */
 @keyframes iso-loading-shimmer {
 	from {

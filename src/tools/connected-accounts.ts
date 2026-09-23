@@ -1,4 +1,4 @@
-// Connected-accounts tools — the per-PERSON identity-linking surface.
+// Connected-accounts tools: the per-PERSON identity-linking surface.
 //
 // One panel tool, two audiences (like members.ts): `connected_accounts` both opens
 // the interactive panel in the Isomorphic app (where the user adds/removes linked
@@ -6,10 +6,10 @@
 // are linked to me?" and the model can reason over it. `link_identity` /
 // `unlink_identity` are the conversational mutations.
 //
-// Unlike member tools, this is NOT org-scoped — a person can link identities even
-// with a single personal brain — so it gates on `ctx.actorUserId` (present on the
-// authjs path and the bridged-github path) rather than requireOrg. The legacy
-// static/tenants single-tenant path has no product identity and is rejected.
+// Unlike member tools, this is NOT org-scoped (a person can link identities even
+// with a single personal brain), so it gates on `ctx.actorUserId` (present on the
+// authjs path and the bridged-github path) rather than requireOrg. The static
+// single-tenant path has no product identity and is rejected.
 //
 // Verification: `link_identity` does NOT link anything by itself. It stashes the
 // caller (the actor) under pending_link:<state> and returns a URL; the user opens
@@ -41,7 +41,7 @@ interface ConnectedAccountsEnv {
 
 // Narrow to the signed-in person, or throw the caller-facing "not available" error.
 // actorUserId is set on the authjs path and the bridged-github path; never on the
-// legacy static/tenants single-tenant path.
+// static single-tenant path.
 function requirePerson(ctx: BrainContext): string {
 	if (!ctx.actorUserId) {
 		throw new Error(

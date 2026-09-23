@@ -1,35 +1,33 @@
 // MCP server for the brain.
 //
-// Cloudflare Worker exposing read + write tools over the Streamable
-// HTTP MCP transport. Backed by the same GitHub App credentials the bootstrap
-// persisted to .dev.vars / Worker secrets. Tool list is registered in
-// `IsomorphicMindMcp.init()` below.
+// Cloudflare Worker exposing read + write tools over the Streamable HTTP MCP
+// transport. Tools are registered per request in `McpSession.buildServer()`.
 //
-// Auth model:
-//   - Selected by `AUTH_MODE` env var.
-//   - `static` (legacy): single bearer token in the `Authorization` header.
-//   - `oauth`: OAuth 2.1 via `@cloudflare/workers-oauth-provider`, with GitHub
-//     OAuth as the upstream identity. MCP clients discover us via
-//     `/.well-known/oauth-authorization-server`, register dynamically at
-//     `/register`, hit `/authorize`, and receive tokens at `/token`. Per-user
-//     identity flows in via `props` and is read from `ctx.props` in the
-//     stateless MCP handler (`mcpApiHandler` -> `McpSession`).
+// Auth model (`AUTH_MODE`):
+//   - `static`: single bearer token in the `Authorization` header. One person,
+//     one brain, no org model: the supported self-hosting path.
+//   - `oauth`: OAuth 2.1 via `@cloudflare/workers-oauth-provider`. MCP clients
+//     discover us via `/.well-known/oauth-authorization-server`, register at
+//     `/register`, hit `/authorize`, and receive tokens at `/token`. The human
+//     sign-in behind `/authorize` is chosen by `IDENTITY_MODE`: `authjs` (email
+//     magic link, no GitHub account needed) or `github` (GitHub OAuth, the
+//     admin path). Identity flows in via `props` on `ctx.props`.
 //
-// Multi-tenant brain routing:
-//   - In `oauth` mode, each request resolves the brain repo + installation
-//     per-tenant from `PLATFORM_DB.tenants`, keyed by the OAuth-bound
-//     `gh_user_id`. See `src/lib/tenants.ts` and `tenantContext()`.
-//   - In `static` mode (legacy), falls back to global `BRAIN_REPO_*` env vars.
-//     Dies in phase 3 cutover.
+// Brain routing:
+//   - `oauth` + authjs: person -> memberships / grants -> the chosen brain row,
+//     through the org model in `src/lib/orgs.ts`. See `resolveProductContext()`.
+//   - `oauth` + github: the flat `tenants` table keyed by `gh_user_id`
+//     (`src/lib/tenants.ts`), unless that GitHub id is linked to a product
+//     identity, in which case it resolves through the org model too.
+//   - `static`: the global `BRAIN_REPO_*` env vars.
 //
 // Storage model:
 //   - The MCP transport is stateless (per-request McpServer + web-standard
-//     transport); no Durable Object. Active brain lives in OAUTH_KV per user.
+//     transport). The active brain lives in OAUTH_KV per user.
 //   - OAUTH_KV stores OAuth provider state (registered clients, grants,
-//     access/refresh tokens) and our pending-auth nonces during the GitHub
-//     round-trip.
-//   - PLATFORM_DB (D1) holds tenant rows mapping `gh_user_id` → installation
-//     and brain repo. Schema in `src/db/schema.sql`.
+//     access/refresh tokens) and pending-auth nonces for the sign-in round trip.
+//   - PLATFORM_DB (D1) holds the org model, the legacy tenants table, the content
+//     index, and usage counters. Schema is `migrations/`.
 
 import { McpServer, type RegisteredTool } from '@modelcontextprotocol/server';
 import { registeredTools, wrapToolHandler } from './lib/registered-tools.ts';
@@ -98,12 +96,13 @@ interface Env {
 	// Auth mode selector
 	AUTH_MODE: 'static' | 'oauth';
 
-	// Static-mode bearer (legacy single-tenant). Optional — read only when
-	// AUTH_MODE=static, which dies in phase 3 cutover.
+	// Static-mode bearer (single-tenant self-hosting). Read only when
+	// AUTH_MODE=static.
 	MCP_BEARER_TOKEN?: string;
 
-	// OAuth-mode storage + GitHub upstream creds. OAUTH_PROVIDER is injected at
-	// runtime by the OAuthProvider wrapper; we type it for consumer code.
+	// OAuth-mode storage + GitHub OAuth creds (IDENTITY_MODE=github, and the
+	// connected-accounts GitHub link). OAUTH_PROVIDER is injected at runtime by the
+	// OAuthProvider wrapper; we type it for consumer code.
 	OAUTH_KV: KVNamespace;
 	OAUTH_PROVIDER: OAuthHelpers;
 	GITHUB_APP_CLIENT_ID: string;
@@ -111,8 +110,8 @@ interface Env {
 
 	// Platform GitHub App auth. App ID + PEM are required (used to mint
 	// installation tokens for any tenant). The single GITHUB_APP_INSTALLATION_ID
-	// env var is static-mode-only — OAuth mode reads installation_id per-tenant
-	// from PLATFORM_DB.
+	// env var is static-mode-only: OAuth mode reads installation_id per brain
+	// (or per legacy tenant row) from PLATFORM_DB.
 	GITHUB_APP_ID: string;
 	GITHUB_APP_PRIVATE_KEY_BASE64: string;
 	GITHUB_APP_INSTALLATION_ID?: string;
@@ -121,19 +120,22 @@ interface Env {
 	// are not read at all, which is what makes local development and one-person
 	// self-hosting cheap. Ignored in oauth mode, which mints a token per tenant.
 	GITHUB_TOKEN?: string;
-	// The App's URL slug (e.g. "isomorphic-mind"), from bootstrap. Used to build
+	// The App's URL slug (e.g. "my-brain-app"), from bootstrap. Used to build
 	// the install URL for create_org's GitHub path (`github: true`). Not a secret.
 	GITHUB_APP_SLUG?: string;
 
 	// Platform provisioning (oauth mode). The admin installs the platform App
 	// ONCE on a single org; bootstrap records the org login and that
-	// installation's id here. On a user's first authenticated request the Worker
-	// auto-creates their brain under this org via this installation — so readers
-	// and creators never install anything or see GitHub. Captured at admin setup.
+	// installation's id here. A first-touch authjs user gets a personal org backed
+	// by this installation (org only: brains are created explicitly with
+	// create_brain). On the legacy github identity path, a first-touch user gets a
+	// brain repo created under this org. Captured at admin setup.
 	PLATFORM_ORG: string;
 	PLATFORM_INSTALLATION_ID: string;
-	// "true" enables auto-provisioning on first use. When off, an unknown user
-	// gets a NoTenantError instead of a freshly minted brain.
+	// "true" enables first-touch provisioning and create_org's hosted orgs (which
+	// also mint under the platform installation). When off, a person nobody invited
+	// is turned away (authjs) or gets a NoTenantError (github). Pending invitations
+	// are claimed either way.
 	AUTO_PROVISION: string;
 
 	// Identity provider for the OAuth `/authorize` upstream (oauth mode only).
@@ -153,13 +155,14 @@ interface Env {
 	// handler has no request URL to derive it from.
 	PUBLIC_BASE_URL?: string;
 
-	// Static-mode legacy single-tenant brain target. OAuth resolves per-request
-	// from PLATFORM_DB keyed by gh_user_id.
+	// Static-mode brain target (the one repo). OAuth mode resolves the brain per
+	// request from PLATFORM_DB.
 	BRAIN_REPO_OWNER?: string;
 	BRAIN_REPO_NAME?: string;
 
-	// Multi-tenant routing table (gh_user_id → installation_id, brain_owner,
-	// brain_repo). Schema in `src/db/schema.sql`.
+	// The platform database: org model (orgs, memberships, brains, grants,
+	// invitations), the legacy gh_user_id `tenants` table, the content index, and
+	// usage counters. Schema is `migrations/`.
 	PLATFORM_DB: D1Database;
 
 	// Product feedback (submit_feedback). FEEDBACK_REPO is the "owner/repo" of the
@@ -176,9 +179,8 @@ interface Env {
 	// `analytics` tool is registered; disabled, neither happens and the table is
 	// never written.
 	//
-	// Compared with `=== 'true'` rather than `!== 'false'` on purpose: a config that
-	// does not mention the key at all (hand-written, or predating this) records
-	// nothing, so the only way to start collecting is a config that says so.
+	// Compared with `=== 'true'` rather than `!== 'false'`: a config that does not
+	// mention the key records nothing, so collecting starts only when a config says so.
 	// See src/lib/usage.ts and src/tools/analytics.ts.
 	USAGE_ANALYTICS?: string;
 }
@@ -204,9 +206,9 @@ function appCreds(env: Env): AppCreds {
 }
 
 // Thrown by brain-scope resolution when the caller has an org but no brain yet
-// (Phase 8: brains are created explicitly, not auto-provisioned). Brain-scope tools
-// let it propagate — the MCP layer surfaces the message — so the user is told to
-// create one; org-scope tools (create_brain, brains list) never hit this path.
+// (brains are created explicitly, never auto-provisioned on this path). Brain-scope
+// tools let it propagate, so the MCP layer surfaces the message and the user is told
+// to create one; org-scope tools (create_brain, brains list) never hit this path.
 class NoBrainError extends Error {
 	constructor() {
 		super(
@@ -225,8 +227,8 @@ interface TenantContext {
 	repoArgs: { owner: string; repo: string };
 	// The caller's role ON THE RESOLVED BRAIN (effectiveBrainRole: an explicit
 	// grant, org visibility, or the org-admin floor: whichever is highest). Read
-	// tools ignore it; write/configure/share tools gate on it. The GitHub/static
-	// legacy paths report 'owner' (full access).
+	// tools ignore it; write/configure/share tools gate on it. The single-tenant
+	// paths (github tenant row, static) report 'owner' (full access).
 	role: Role;
 	// The caller's role in the resolved brain's ORG. Distinct from `role`: org
 	// membership governs managing people and adding/removing brains, brain access
@@ -235,17 +237,17 @@ interface TenantContext {
 	// Null when the caller holds no membership in the org that owns the resolved brain.
 	// Every gate reading this treats null as "not a member", never as "no gate".
 	orgRole: Role | null;
-	// The resolved org's id + the acting user's id — set only on the product-native
-	// (authjs) path, where an org table row exists. The member-management tools need
-	// them to scope the roster and enforce self-guards; undefined on the legacy
-	// github/static single-tenant paths (those tools reject with "org accounts only").
+	// The resolved org's id + the acting user's id, set only when resolution went
+	// through the org model (authjs, or a linked GitHub id). The member-management
+	// tools need them to scope the roster and enforce self-guards; undefined on the
+	// single-tenant paths (github tenant row, static) (those tools reject with "org accounts only").
 	orgId?: string;
 	actorUserId?: string;
 	// The brain's content-shape config (.isomorphic.json, or defaults when absent).
 	// Tells the tools which paths are editable content / immutable source / the log.
 	config: BrainConfig;
 	// Who to attribute commits to (the acting human). Undefined on the static
-	// legacy path, where there's no signed-in user — writes stay App-authored.
+	// path, where there's no signed-in user: writes stay App- or token-authored.
 	author?: CommitAuthor;
 	// The platform D1 database + this brain's index key ("owner/repo"), for the
 	// content index that backs search / graph / backlinks / validate
@@ -258,22 +260,13 @@ interface TenantContext {
 	activeBrain: { id: string; label: string };
 }
 
-// Durable-Object state (persisted to the agent's SQLite, survives hibernation).
-// Server-level guidance sent to the host at initialize and read by the model as
-// "how to use this connector." This is the main lever for getting the brain — and
-// especially the in-client viewer — invoked at the right moments, since it applies
-// across the whole connector rather than one tool at a time. Keep it short and
-// behavioral; per-tool nuance lives in each tool's own description.
-// SERVER_INSTRUCTIONS lives in src/lib/server-instructions.ts, shared with the local
-// Node runtime so the two cannot drift.
-
-// Per-request MCP session. The transport is now STATELESS (a fresh server +
-// transport per POST, response on the same request), so this replaces the old
-// long-lived McpAgent Durable Object. It carries the request env, the decrypted
-// OAuth token props (identity), and the ExecutionContext, and holds all the
-// tenant/brain resolution and tool registration that used to live on the DO.
-// Nothing here is persisted between requests except the active brain, which now
-// lives in KV keyed by user (see loadActiveBrain / setActiveBrain).
+// Per-request MCP session. The transport is stateless (a fresh server + transport
+// per POST, response on the same request). This carries the request env, the
+// decrypted OAuth token props (identity), and the ExecutionContext, and holds all
+// the tenant/brain resolution and tool registration. Nothing here persists between
+// requests except the active brain, which lives in KV keyed by user (see
+// loadActiveBrain / setActiveBrain). Server-level guidance (SERVER_INSTRUCTIONS)
+// lives in src/lib/server-instructions.ts, shared with the local runtime.
 class McpSession {
 	readonly env: Env;
 	readonly props: McpProps | undefined;
@@ -285,11 +278,10 @@ class McpSession {
 		this.ctx = ctx;
 	}
 
-	// The connection's active brain. Preloaded once per request from KV
-	// (loadActiveBrain) so the many synchronous readers below keep working, and
-	// written back on change (awaited — see setActiveBrain). This used to be per-connection DO
-	// state; it is now per-USER (KV key) preference, which is the intended
-	// semantic change of the stateless move.
+	// The caller's active brain. Preloaded once per request from KV
+	// (loadActiveBrain) so the synchronous readers below work, and written back on
+	// change (awaited, see setActiveBrain). It is a per-USER preference, not
+	// per-conversation.
 	private _activeBrainId?: string;
 
 	// One invite claim per request, however many times a person is resolved.
@@ -303,10 +295,9 @@ class McpSession {
 	}
 
 	// Fail-open, like loadCustomTools: a KV read that throws leaves the pointer
-	// unresolved, so the request falls back to the caller's default brain. It used
-	// to reject, and this runs in the preamble OUTSIDE any handler, so the throw
-	// left the Worker with no reply at all — a storage blip on a pointer that is a
-	// preference became an unexplained gateway error (issue #50).
+	// unresolved, so the request falls back to the caller's default brain. This runs
+	// in the preamble outside any handler, where a throw would fail the whole request
+	// over a pointer that is only a preference.
 	async loadActiveBrain(): Promise<void> {
 		try {
 			this._activeBrainId =
@@ -338,9 +329,9 @@ class McpSession {
 	}
 
 	// AWAITED, not waitUntil. The pointer's next reader is usually the very next
-	// request — the widget fetches its brain list the moment it opens, and the model's
-	// next bare call resolves through this key — and a fire-and-forget write may not
-	// have STARTED by then, so the read came back with the PREVIOUS brain. Failure is
+	// request (the widget fetches its brain list the moment it opens, and the model's
+	// next bare call resolves through this key), and a fire-and-forget write may not
+	// have started by then, so the read would return the previous brain. Failure is
 	// swallowed: a KV blip must not turn a successful read into an error; the pointer
 	// just doesn't move. (KV is still eventually consistent across locations, so the
 	// app treats the brain a RESULT names as authoritative over this pointer — see
@@ -357,7 +348,7 @@ class McpSession {
 	// one-shots a different one, so neither the token props nor the active-brain
 	// pointer is authoritative. The recording wrapper in buildServer reads this
 	// after the handler returns. Undefined means the call resolved no org (the
-	// legacy single-tenant paths, or a failure before resolution), and nothing is
+	// single-tenant paths, or a failure before resolution), and nothing is
 	// recorded for it.
 	private _resolvedScope?: { orgId: string; brainId: string };
 
@@ -376,7 +367,7 @@ class McpSession {
 	// D1 hiccup must never turn into a failed read_page. Under-counting is fine.
 	//
 	// Records nothing without BOTH a product identity and a resolved org, so the
-	// legacy single-tenant paths and calls that failed before resolution write no
+	// single-tenant paths and calls that failed before resolution write no
 	// rows rather than writing anonymous ones.
 	private recordCall(tool: string, ok: boolean): void {
 		if (!this.usageEnabled()) return;
@@ -406,12 +397,11 @@ class McpSession {
 		return ids;
 	}
 
-	// Join any org this person has been invited to, once per request, before
-	// anything reads their memberships. It lives here rather than in provisioning
-	// because provisioning is only reached by a person with no brain anywhere: an
-	// invitation to a SECOND org would otherwise stay pending until it expired,
-	// with nothing surfaced to either side (issue #69). Claiming is a no-op SELECT
-	// when there is nothing pending, which is almost always.
+	// Join any org (or brain) this person has been invited to, once per request,
+	// before anything reads their memberships. It lives here rather than in
+	// provisioning because provisioning is only reached by a person with no brain
+	// anywhere, so an invitation to a SECOND org would never be claimed. Claiming is
+	// a no-op SELECT when there is nothing pending, which is almost always.
 	//
 	// Fail-open: an invite that cannot be claimed must not break a session that
 	// was working without it. The invitation stays pending and the next request
@@ -445,9 +435,6 @@ class McpSession {
 		return listAccessibleBrains(this.env.PLATFORM_DB, await this.personUserIds(this.props.user_id));
 	}
 
-	// Per-repo brain config, cached for this Durable Object's lifetime — config
-	// changes rarely and the DO recycles, so a request-time read on first touch
-	// (then memoized) avoids a GitHub round-trip on every tool call.
 	// Where the web app is served, or undefined on a deployment without one.
 	private webBase(): string | undefined {
 		return webBaseUrl({
@@ -457,6 +444,8 @@ class McpSession {
 		});
 	}
 
+	// Per-repo brain config, memoized for this request so several resolutions in
+	// one call (a tool plus custom-tool discovery) read .isomorphic.json once.
 	private configCache = new Map<string, BrainConfig>();
 
 	private async loadConfig(
@@ -472,17 +461,18 @@ class McpSession {
 	}
 
 	// Drop a repo's memoized config so the next tenantContext re-reads .isomorphic.json.
-	// Called after configure_brain writes/changes it, or the DO would keep serving the
-	// stale (default) config for this connection's lifetime.
+	// Called after configure_brain writes/changes it, or the rest of this request
+	// would keep serving the stale (default) config.
 	private invalidateConfig(owner: string, repo: string): void {
 		this.configCache.delete(`${owner}/${repo}`);
 	}
 
-	// Resolve the per-request tenant context. In OAuth mode, the brain repo
-	// and installation are looked up from PLATFORM_DB keyed by the OAuth-bound
-	// gh_user_id; an unknown user is auto-provisioned a brain on the platform
-	// org (when AUTO_PROVISION is on). In static mode, falls back to the global
-	// env vars (single-tenant legacy path; dies in phase 3 cutover).
+	// Resolve the per-request tenant context. Three paths:
+	//   - authjs identity (`user_id`): the org model, via resolveProductContext.
+	//   - github identity (`gh_user_id`): the org model if the GitHub id is linked
+	//     to a person with brains, else the flat `tenants` row (auto-provisioning a
+	//     brain on the platform org when AUTO_PROVISION is on).
+	//   - AUTH_MODE=static: the global env vars (single-tenant self-hosting).
 	private async tenantContext(opts?: TenantOpts): Promise<TenantContext> {
 		const env = this.env;
 		if (env.AUTH_MODE === 'oauth') {
@@ -565,16 +555,15 @@ class McpSession {
 			auth.kind === 'token'
 				? tokenOctokit(auth.token)
 				: await installationOctokit(appCreds(env), auth.installationId);
-		// No signed-in human on this path, so no author: writes stay App-authored.
+		// No signed-in human on this path, so no author: commits are attributed to the
+		// App or to the token's owner.
 		return this.singleTenantContext(octokit, { owner: auth.owner, repo: auth.repo });
 	}
 
 	// The context shape shared by the two paths with NO ORG MODEL: the legacy
 	// gh_user_id tenant row and AUTH_MODE=static. Both are one human with one
 	// brain, so both scopes report 'owner', and both key the brain on the repo
-	// itself because there is no brains row to carry a name. The two copies of
-	// this differed only in where the octokit came from and whether an author was
-	// known, and each built githubStore twice over the same client.
+	// itself because there is no brains row to carry a name.
 	private async singleTenantContext(
 		octokit: TenantContext['octokit'],
 		repoArgs: { owner: string; repo: string },
@@ -597,11 +586,12 @@ class McpSession {
 	}
 
 	// Product-identity resolution: person → accessible brains → the CHOSEN brain →
-	// { octokit (that brain's org install), role in that brain, attribution }. The brain
-	// is picked by (1) the explicit `brainArg` handle, else (2) the connection's active
-	// brain, else (3) the default (oldest). Auto-provisions a personal brain on first
-	// touch (when AUTO_PROVISION is on) so a signed-in member with no brain still lands
-	// somewhere working.
+	// { octokit (that brain's storage credential), role in that brain, attribution }.
+	// The brain is picked by (1) the explicit `brainArg` handle, else (2) the caller's
+	// active brain, else (3) the default (oldest). A person with no reachable brain
+	// goes through first-touch org provisioning (claiming invitations, and minting a
+	// personal org when AUTO_PROVISION is on); no brain is created here, so they get
+	// NoBrainError unless an invitation landed them somewhere with one.
 	private async resolveProductContext(
 		userId: string,
 		email: string,
@@ -612,9 +602,9 @@ class McpSession {
 
 		let target: AccessibleBrain;
 		if (brains.length === 0) {
-			// First touch: ensure the personal org exists (org-only — no brain is
-			// auto-created anymore). If it has no brain yet, signal the "create a brain"
-			// state; an invite path that lands them in an org WITH a brain uses it.
+			// First touch: ensure the personal org exists (org only, no brain). If it
+			// has no brain yet, signal the "create a brain" state; an invite path that
+			// lands them in an org WITH a brain uses it.
 			const p = await this.autoProvisionOrg(userId, email);
 			if (p.org.suspended_at) {
 				throw new Error(`Org ${p.org.org_id} is suspended. Contact your admin.`);
@@ -680,7 +670,7 @@ class McpSession {
 	}
 
 	// Org-scope resolution (no brain): the caller's org + role + an installation token,
-	// for actions that must work BEFORE the user has a brain — chiefly create_brain and
+	// for actions that must work BEFORE the user has a brain, chiefly create_brain and
 	// the "you have no brains yet" state. Authjs-only; the legacy github/static paths
 	// have no org row and are rejected (mirrors the member tools' "org accounts only").
 	// Ensures the personal org exists on first touch (org-only provision).
@@ -693,13 +683,11 @@ class McpSession {
 		}
 		const userId = this.props.user_id;
 		const email = this.props.email ?? '';
-		// The PERSON's orgs, not the signed-in id's. Org scope was the last resolution
-		// path still keyed on a single user_id, so a membership held under a linked email
-		// was unreachable here while every brain query already unioned across them. That is
-		// the account-linking asymmetry that made create_brain behave as if nothing was linked.
-		// The PERSON's orgs, and the whole selection decision, live in orgs.ts so a test
-		// can drive them against a real database (see resolveOrgForPerson). Null here
-		// means no membership anywhere, which is the one case that provisions.
+		// The PERSON's orgs, not the signed-in id's, so a membership held under a linked
+		// email is reachable here exactly as it is for every brain query. The selection
+		// lives in orgs.ts so a test can drive it against a real database (see
+		// resolveOrgForPerson). Null means no membership anywhere, the one case that
+		// provisions.
 		const personIds = await this.personUserIds(userId);
 		const picked = await resolveOrgForPerson(env.PLATFORM_DB, personIds, {
 			org: opts?.org,
@@ -731,11 +719,10 @@ class McpSession {
 		};
 	}
 
-	// First-touch provisioning: an authenticated user with no tenant row gets a
-	// brain created under the platform org via the platform installation. This is
-	// what lets readers/creators skip GitHub entirely — they signed in, and the
-	// brain materializes. Gated by AUTO_PROVISION so the platform can be locked
-	// to invite-only by flipping it off.
+	// First-touch provisioning on the legacy github identity path: a GitHub user
+	// with no tenant row gets a brain repo created under the platform org via the
+	// platform installation. Gated by AUTO_PROVISION. (The authjs path provisions an
+	// org only; see autoProvisionOrg.)
 	private async autoProvision(ghUserId: number) {
 		const env = this.env;
 		if (env.AUTO_PROVISION !== 'true') {
@@ -757,8 +744,7 @@ class McpSession {
 	//
 	// Why here and not in each tool: this is the only place that sees every tool by
 	// name at once, first-party and brain-authored alike, and the only place a new
-	// tool cannot forget to opt in. It rides the loop that already rewrites every
-	// registration for the claude.ai `execution` shim.
+	// tool cannot forget to opt in.
 	//
 	// Three properties this has to keep:
 	//   • The result is untouched. The wrapper returns exactly what the handler
@@ -787,8 +773,7 @@ class McpSession {
 	}
 
 	// Build the MCP server for this request: instantiate McpServer and register
-	// every tool exactly as the old McpAgent.init() did. Called once per request
-	// by mcpApiHandler, then connected to a fresh stateless transport.
+	// every tool. Called once per request by mcpApiHandler, then served statelessly.
 	buildServer(): McpServer {
 		const env = this.env;
 		const server = new McpServer(
@@ -797,21 +782,24 @@ class McpSession {
 		);
 
 		// ---------- whoami ----------
-		// Phase 1 OAuth canary. Returns the GitHub identity carried in `props`
-		// (populated by the OAuth flow's `completeAuthorization`). In static
-		// mode there are no props, so this returns a placeholder — useful as a
-		// quick signal of which auth path served the request.
+		// The signed-in identity, read from the token `props`, plus the caller's role on
+		// the resolved brain when resolution succeeds. Per identity path:
+		//   authjs            email, role, the brain's repo owner, activeBrain
+		//   github, linked    the same, plus the GitHub login
+		//   github, unlinked  the GitHub login and numeric id
+		//   static            no identity; says so
+		// The app's "Your settings" identity card renders the structuredContent.
 		server.registerTool(
 			'whoami',
 			{
 				title: 'Identify the current user',
 				annotations: { readOnlyHint: true },
 				description:
-					'Return the GitHub identity of the authenticated user (OAuth mode). In static-bearer mode, returns a placeholder.',
+					'Identify the current user: whoami reports who is signed in to this connection. Returns their email (or GitHub login) and, when a brain resolves, their role on the active brain and which brain that is. On a single-tenant connection with no signed-in identity, says so.',
 				inputSchema: z.object({})
 			},
 			async () => {
-				// Product-native identity (authjs): report the email + resolved org role.
+				// Product-native identity (authjs): report the email + role on the resolved brain.
 				// structuredContent mirrors the text so the app's "Your settings" identity
 				// card can render without a second round-trip (see SettingsView in app/).
 				if (this.props?.user_id) {
@@ -918,8 +906,8 @@ class McpSession {
 		// initiated call names its brain explicitly (brainArgs in app/core/store.ts) and
 		// the crumb follows the brain the RESULT names (pickShownBrain), so a one-shot
 		// `brain:` view is self-contained. The pointer is per-USER, not per-conversation,
-		// so moving it from a view retargeted every other open conversation's bare calls
-		// as a side effect of looking at something (removed 2026-09-15).
+		// so moving it from a view would retarget every other open conversation's bare
+		// calls as a side effect of looking at something.
 		registerBrainApp(server, (opts) => this.tenantContext(opts), {
 			webBaseUrl: this.webBase()
 		});
@@ -993,10 +981,8 @@ class McpSession {
 		// only when FEEDBACK_REPO is configured.
 		//
 		// Identity is read straight off the token props and the active brain, NOT via
-		// tenantContext: it must not throw. A user who cannot resolve a brain (no
-		// brain yet, a broken install, static mode with no signed-in user) is
-		// precisely the user with something to report, so the one tool that reports it
-		// cannot be the one tool that depends on resolution succeeding.
+		// tenantContext, which can throw: a user who cannot resolve a brain is the
+		// user most likely to have something to report.
 		registerFeedbackTools(
 			server,
 			() => ({
@@ -1087,7 +1073,7 @@ const mcpApiHandler = {
 			// surface, so they skip the KV read, the tenant resolution, the
 			// installation-token mint and the index freshness check that discovering a
 			// brain's own `tools/` pages costs. The handshake is the request a user
-			// cannot retry past, and it was paying for all four (issue #50).
+			// cannot retry past.
 			if (needsBrainPreamble(peek)) {
 				await session.loadActiveBrain();
 				await session.loadCustomTools();
@@ -1108,9 +1094,8 @@ const mcpApiHandler = {
 		} catch (err) {
 			// Nothing above this point was inside a tool handler, so the SDK's own
 			// error mapping never saw it and `workers-oauth-provider` does not catch
-			// either: the throw used to leave the Worker with no response, which
-			// upstream reads as an invalid one and reports as a bare gateway error
-			// with nothing to diagnose. Answer with the reason and the ray id instead.
+			// either: an uncaught throw leaves no response, which upstream reports as a
+			// bare gateway error. Answer with the reason and the ray id instead.
 			const ray = request.headers.get('cf-ray');
 			const message = err instanceof Error ? err.message : String(err);
 			const body = jsonRpcError(
@@ -1119,7 +1104,7 @@ const mcpApiHandler = {
 				ray
 			);
 			// A JSON-RPC error object IS a successful transport exchange, so 200 is the
-			// honest status when we know which request to attribute it to — and it is
+			// honest status when we know which request to attribute it to, and it is
 			// the one that reaches the user as our message rather than as the host's
 			// generic transport failure. With no id there is no valid reply to make.
 			return new Response(body, {
@@ -1136,7 +1121,8 @@ const mcpApiHandler = {
 //   - `/.well-known/oauth-authorization-server` (RFC 8414) and
 //     `/.well-known/oauth-protected-resource` (RFC 9728) are auto-served.
 //   - `/token` and `/register` are implemented internally.
-//   - `/authorize` is delegated to `githubHandler` (our OAuth UI / GitHub bridge).
+//   - `/authorize` is delegated to `identityHandler`, which picks the Auth.js or
+//     GitHub sign-in by IDENTITY_MODE.
 //   - Requests under `apiRoute` (`/mcp`) require a valid access token; on
 //     success, the request is forwarded to `mcpApiHandler` with `ctx.props`
 //     populated from the grant.
@@ -1337,15 +1323,14 @@ export default {
 		}
 
 		// GitHub App post-install redirect (the App's Setup URL). GitHub sends the
-		// admin here after they install/update the App on an org, with
-		// ?installation_id=…&setup_action=…. The old manifest pointed this at the
-		// local bootstrap server (localhost:3000) → a 404 for anyone installing in
-		// prod. Serve a friendly confirmation instead; onboarding itself is
-		// admin-driven (seed), so this page just confirms + surfaces the id.
+		// installer here with ?installation_id=…&setup_action=…. (The manifest
+		// registers the local bootstrap server's route for first setup; a deployed
+		// App's Setup URL points here.)
 		if (url.pathname === '/github/install-callback') {
-			// Self-serve create_org (github: true) completion carries a `state` we stashed in
-			// KV; without it (e.g. a direct Marketplace install) fall back to the
-			// generic confirmation page.
+			// Self-serve create_org (github: true) carries a `state` we stashed in KV,
+			// and completes into a customer org + owner membership. Without one (a
+			// direct install, or an operator onboarding via `pnpm onboard-org`) the
+			// page just confirms and surfaces the installation id.
 			const state = url.searchParams.get('state');
 			const installationId = Number(url.searchParams.get('installation_id') ?? '');
 			if (state && installationId) {
@@ -1427,10 +1412,9 @@ export default {
 			return oauthProvider.fetch(request, env, ctx);
 		}
 
-		// Static-bearer fallback. Single token; the legacy single-tenant path.
-		// MCP_BEARER_TOKEN was removed from `.dev.vars` when OAuth mode became
-		// the active path — return a clear 503 instead of silently letting
-		// `Bearer undefined` through if static mode is selected without it.
+		// Static bearer: single token, the single-tenant self-hosting path. Refuse
+		// with a clear 503 when the token is unset rather than letting
+		// `Bearer undefined` through.
 		if (!env.MCP_BEARER_TOKEN) {
 			return new Response(
 				'AUTH_MODE=static requires MCP_BEARER_TOKEN. Switch AUTH_MODE=oauth or set the secret.',

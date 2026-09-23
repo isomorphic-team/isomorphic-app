@@ -1,11 +1,10 @@
 // Making a retried write safe when the FIRST attempt's answer never arrived.
 //
-// Issue #50: a `write_page` that fails with a 502 (or a timeout, or a dropped
-// connection) tells the caller nothing about whether the commit landed. The
-// caller's only recourse is to read the page before every retry, and the two
-// ways of getting it wrong are both silent — a retried `append` duplicates the
-// text, and a retried `mode: "create"` fails claiming the page exists, on a page
-// the caller believes it never created.
+// A `write_page` that fails with a 502 (or a timeout, or a dropped connection)
+// tells the caller nothing about whether the commit landed, and the two ways of
+// guessing wrong are both silent: a retried `append` duplicates the text, and a
+// retried `mode: "create"` fails claiming the page exists, on a page the caller
+// believes it never created.
 //
 // The fix is a short-lived ledger of write attempts, keyed by what the CALL
 // asked for rather than by what the commit would contain. That distinction is

@@ -1,17 +1,26 @@
-// Golden test for the web app's two decisions (src/lib/web-app.ts). Pure: no
-// D1, no network, no browser.
+// Golden test for the web app's rules (src/lib/web-app.ts, src/lib/web-shell.ts).
+// Pure: no D1, no network, no browser.
 //
 //   pnpm test:web
 //
-// 1. WHAT A `/b/...` URL MEANS. The Worker builds these and the app parses
-//    them, from the same two functions, so a link that opens a different page
-//    than it names fails here rather than in someone's browser.
+// 1. WHAT A `/b/...` URL MEANS. The Worker builds these and the app parses them, from
+//    the same two functions, so a link that opens a different page than it names
+//    fails here rather than in someone's browser. That includes the non-page
+//    destinations (`?view=`), and a scan that every widget tool is either addressable
+//    in WEB_TOOL_ROUTING or says why it is not.
 //
-// 2. WHETHER A COOKIE-AUTHENTICATED `/mcp` POST IS ALLOWED. This is the one
-//    that matters. The endpoint performs WRITES and is reached with an ambient
-//    cookie rather than a token the caller had to hold, which is the shape CSRF
-//    exploits. Every rule is asserted in BOTH directions: a test that only
+// 2. THE LINKS A DEPLOYMENT HANDS OUT: whether it has a web app at all (`webBaseUrl`),
+//    and the `webUrl` a widget result carries.
+//
+// 3. WHETHER A COOKIE-AUTHENTICATED `/mcp` POST IS ALLOWED. Which requests the cookie
+//    branch claims (by what they carry, so an MCP host's first Bearer-less contact
+//    still gets the OAuth challenge), and the CSRF gate on the ones it does. The
+//    endpoint performs WRITES and is reached with an ambient cookie, which is the
+//    shape CSRF exploits. Every rule is asserted in BOTH directions: a test that only
 //    proves good requests pass would stay green with the whole gate removed.
+//
+// 4. THE SHELL: the web-host flag stamped at serve time and never in the bundle, the
+//    served headers and CSP, and the sign-in redirect's return path.
 
 import { readdirSync, readFileSync } from 'node:fs';
 import {

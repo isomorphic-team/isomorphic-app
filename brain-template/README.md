@@ -1,4 +1,4 @@
-# isomorphic-mind
+# Brain
 
 LLM-maintained knowledge base. Content only; the platform that compiles and queries this lives in [`isomorphic-app`](https://github.com/isomorphic-team/isomorphic-app).
 
@@ -6,7 +6,7 @@ LLM-maintained knowledge base. Content only; the platform that compiles and quer
 
 - Write pages under `wiki/`, organized however suits this brain. Folders are arbitrary and there are no fixed entity types.
 - Keep immutable source material (transcripts, emails, docs) under `source/`; the platform treats it as read-only, and pages can cite it.
-- Read and edit via Claude.ai (MCP / the Isomorphic app), the static site, or Obsidian.
+- Read and edit it through Claude (the Isomorphic MCP server and app), on GitHub, or in any markdown editor such as Obsidian.
 
 See [`AGENTS.md`](./AGENTS.md) for the schema.
 

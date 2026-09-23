@@ -1,8 +1,9 @@
 // Auth.js configuration for product-native (non-GitHub) identity.
 //
 // This is the identity layer that lets members/readers sign in WITHOUT a GitHub
-// account (email magic-link / SSO). GitHub stays as storage only, reached via
-// the org's App installation token. See docs/design/org-roles-permissions.md.
+// account (email magic link). GitHub stays as storage only, reached via each
+// brain's storage connection (an App installation token). See
+// docs/design/org-roles-permissions.md.
 //
 // @auth/core is runtime-agnostic (Web Request/Response), so it runs on workerd.
 // Two Workers-specific constraints, both handled here:
@@ -19,13 +20,14 @@ import { D1Adapter } from '@auth/d1-adapter';
 import { sendSignInEmail } from '../lib/signin-email.ts';
 
 export interface AuthEnv {
-	// Shared with the Worker's D1 binding — Auth.js user/session/account/
-	// verification_token tables live here (auto-migrated by @auth/d1-adapter).
+	// Shared with the Worker's D1 binding: Auth.js user/session/account/
+	// verification_token tables live here, created by migrations/0001_init.sql
+	// (vendored DDL, see src/db/authjs-schema.sql; the adapter does not create them).
 	PLATFORM_DB: D1Database;
 	// Signs sessions. Required in authjs mode; unset in github mode.
 	AUTH_SECRET?: string;
-	// Resend API key + From address for magic-link email. Magic-link is inert
-	// until AUTH_RESEND_KEY is set (stand it up when live testing needs it).
+	// Resend API key + From address for magic-link email. Without AUTH_RESEND_KEY
+	// no sign-in link can be sent, so authjs mode needs it.
 	AUTH_RESEND_KEY?: string;
 	AUTH_EMAIL_FROM?: string;
 }
@@ -90,10 +92,9 @@ export interface AuthSessionUser {
 
 // Read the current Auth.js session for an incoming request by replaying its
 // cookies against Auth.js's own /auth/session endpoint. Returns null when the
-// caller is signed out.
-//
-// TODO(live-test): verify cookie domain/SameSite carry across the magic-link
-// hop end-to-end once a Resend key is wired and we can run the full flow.
+// caller is signed out. Every magic-link sign-in goes through this
+// (/oauth/complete reads the session it just created), as does the web app's
+// cookie path; no automated test drives it against a real Auth.js session.
 export async function getAuthSession(
 	request: Request,
 	env: AuthEnv

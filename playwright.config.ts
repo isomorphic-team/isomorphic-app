@@ -124,8 +124,7 @@ export default defineConfig({
 			command: 'pnpm exec tsx scripts/web-dev.ts --reset',
 			env: { PORT: String(WEB_TEST_PORT), BRAIN_DIR: WEB_TEST_BRAIN_DIR },
 			// The runtime answers the shell and `/mcp` from the same listener, so a 200
-			// here means the tools are up too. (With a proxy in front, the shell served
-			// before the process behind it was listening.)
+			// here means the tools are up too.
 			url: `http://localhost:${WEB_TEST_PORT}/b/local/${basename(WEB_TEST_BRAIN_DIR)}`,
 			reuseExistingServer: !process.env.CI,
 			timeout: 180_000,

@@ -6,12 +6,13 @@
 // GitHub-keyed `tenants` table (src/lib/tenants.ts) for the authjs identity path.
 //
 // Resolution shape used by `tenantContext()`:
-//   app_users.user_id (Auth.js id) → membership → org (+ role) → default brain
+//   app_users.user_id (Auth.js id) + linked ids → memberships and brain grants
+//     → accessible brains (each admitted by effectiveBrainRole) → the chosen brain
 //     → { repo_owner, repo_name } + the brain's storage connection (or, for a brain
 //       with no binding, org.installation_id)
 //
-// Worker-safe (no node:* imports) — reachable from worker.ts. See
-// docs/design/org-roles-permissions.md and src/db/auth-schema.sql.
+// Worker-safe (no node:* imports), reachable from worker.ts. See
+// docs/design/org-roles-permissions.md; the schema is migrations/.
 
 import type { D1Database } from '@cloudflare/workers-types';
 import type { Octokit } from 'octokit';
@@ -95,9 +96,8 @@ function minRole(a: Role, b: Role): Role {
 // `orgRole` is NULLABLE, and a null means "not a member of the organization holding
 // this brain". Sources (1) and (3) are both about membership, so for a non-member they
 // are skipped and only an explicit grant can admit them. That is the shape any access
-// from outside an organization takes, and making it a designed input rather than an
-// accident of `undefined` is what lets the gates downstream tell "not a member" from
-// "a member with few powers".
+// from outside an organization takes, and it lets the gates downstream tell "not a
+// member" from "a member with few powers".
 //
 // `readOnly` is the one thing that lowers the result rather than raising it. It is a
 // CEILING on the whole computation, applied last, because a read-only brain has to be
@@ -170,9 +170,8 @@ export interface TenantOpts {
 	// (member management, connect/disconnect a brain). Kept separate from
 	// `requires` because the two scopes genuinely diverge: an org Admin may hold
 	// only viewer on a brain shared with them, and an org Editor may hold admin on
-	// a brain they created. Gating org actions on the brain role (which is what
-	// happened before per-brain access existed, when they were the same number)
-	// would let a brain admin manage the whole org roster.
+	// a brain they created. Gating org actions on the brain role would let a brain
+	// admin manage the whole org roster.
 	requiresOrg?: Role;
 	brain?: string;
 }
@@ -180,10 +179,8 @@ export interface TenantOpts {
 // Throw a caller-facing authorization error when `actual` ranks below `required`.
 //
 // `actual` is nullable because a caller can reach a brain without holding any role in
-// the organization that owns it. That has to read as "you are not a member", not as
-// the literal string "undefined": with the old signature ROLE_RANK[undefined] is
-// undefined and every comparison against it is false, so it failed closed by accident
-// rather than by design, and rendered the accident to the user.
+// the organization that owns it. A null has to read as "you are not a member", never
+// as "your role is undefined" or as "no gate".
 export function assertRole(actual: Role | null, required?: Role): void {
 	if (!required) return;
 	if (!actual) {
@@ -246,7 +243,7 @@ export interface MembershipWithOrg {
 
 // Org-scope context: the installation token + org + role, resolved WITHOUT a brain.
 // Backs create_brain and any org-level action that must work before the user has a
-// brain (Phase 8). Distinct from BrainContext, which always carries a resolved brain.
+// brain. Distinct from BrainContext, which always carries a resolved brain.
 export interface OrgScope {
 	octokit: Octokit;
 	org: Org;
@@ -257,8 +254,8 @@ export interface OrgScope {
 }
 
 // The fully resolved product-identity context: which org, which brain, what role.
-// `brain` is null when the user has an org but no brain yet (post-Phase-8: brains are
-// created explicitly, not auto-provisioned) — callers surface a "create a brain" state.
+// `brain` is null when the user has an org but no brain yet (brains are created
+// explicitly, not auto-provisioned): callers surface a "create a brain" state.
 export interface OrgContext {
 	org: Org;
 	brain: Brain | null;
@@ -347,7 +344,7 @@ export interface ConnectedAccount {
 }
 
 // The full roster for a person: every linked email identity (is_self flags the
-// signed-in one) plus every linked GitHub account. Drives view/list_connected_accounts.
+// signed-in one) plus every linked GitHub account. Drives connected_accounts.
 export async function listConnectedAccounts(
 	db: D1Database,
 	userId: string
@@ -637,14 +634,16 @@ export async function deleteBrain(db: D1Database, brainId: string): Promise<void
 //
 // An `invitations` row is how an admin puts someone in an org without touching
 // GitHub: it is the only way a member with no GitHub account joins a SPECIFIC
-// org (a first sign-in otherwise mints them a personal Model-A one). Matching is
+// org (a first sign-in otherwise mints them a personal Model-A one). A row with
+// `brain_id` set is a brain invite instead: it becomes a grant on that one brain,
+// never a membership (see lib/invites.ts). Matching is
 // by email, because magic-link/SSO already proves the person owns the address,
 // so no separate invite token is required for this path (the token_hash column
 // stays for a future link-based flow).
 //
 // Claiming lives in lib/invites.ts, and is not restricted to a first sign-in:
 // an existing account can be invited to a second org, and an address linked to
-// an existing account carries its invitation with it (issue #69).
+// an existing account carries its invitation with it.
 
 export async function acceptInvite(db: D1Database, inviteId: string): Promise<void> {
 	await db
@@ -1036,13 +1035,13 @@ export async function deleteUserBrainGrantsInOrg(
 
 // ---------- accessible brains (multi-brain selection) ----------
 //
-// The set of brains one PERSON can reach. Deliberately takes a SET of user_ids so
-// that when identity-linking lands (P2), passing all of a person's linked ids yields
-// the union of their brains across every email — no re-architecting. In P1 the set is
-// just [current user]. Each brain carries the caller's role IN THAT brain's org (you
-// can be owner of one and viewer of another) and the org's installation, so the caller
-// can mint a per-brain token. `id` is the canonical "owner/repo" key — the same id the
-// content index uses (brainId) and what the tools/app pass as the `brain` handle.
+// The set of brains one PERSON can reach. Takes a SET of user_ids (a person's linked
+// identities, from linkedUserIds), so the result is the union of their brains across
+// every email. Each brain carries the caller's role on it and in its org (you can be
+// owner of one and viewer of another) and the installation that reaches its storage,
+// so the caller can mint a per-brain token. `id` is the canonical "owner/repo" key:
+// the same id the content index uses (brainId) and what the tools/app pass as the
+// `brain` handle.
 
 export interface AccessibleBrain {
 	id: string; // "owner/repo" — canonical brainId, tool/app-facing handle
@@ -1080,26 +1079,17 @@ export interface AccessibleBrain {
 	read_only?: boolean;
 }
 
-// A human label for a brain — what the switcher shows and what fuzzy `brain` matches
-// against. Personal (platform-model) orgs are auto-named with the owner's email, which
-// reads badly, so those fall back to "Personal"; when an org holds more than one brain
-// the repo name is appended to disambiguate.
+// A human label for a brain: what the switcher shows and what fuzzy `brain` matches
+// against. ONE RULE: a brain is called what it is named (brains.name), and an unnamed
+// one is called after its repo (minus a `brain-` prefix). No org prefix and no
+// org-derived name: a label that depended on a brain's siblings would silently rename
+// the first brain when a second was added. Surfaces that show brains side by side
+// group them under an org heading (app/core/util groupBrainsByOrg), which is where the
+// org belongs.
 // Structurally typed rather than taking AccessibleBrain, so the plain `brains` row
-// (Brain) gets the same label as the resolved one. The rule below is the single
-// place a brain's display name is decided; a second copy for the analytics rows
-// would drift the moment either changed.
+// (Brain) gets the same label as the resolved one; this is the single place a brain's
+// display name is decided.
 export function brainLabel(b: { name?: string | null; repo_name: string }): string {
-	// ONE RULE: a brain is called what it is named, and an unnamed one is called after
-	// its repo. Nothing else — no org prefix when an org holds several, no borrowing the
-	// org's name when it holds one, no "Personal" for a platform org.
-	//
-	// Those three special cases all compensated for the same missing capability rather
-	// than for anything about brains: three of the four ways a brain is created cannot
-	// set a name at all (connect_brain, the operator seed, scripts/onboard-org), so the
-	// label had to invent one. Inventing it here made the name depend on how many
-	// siblings a brain had, which meant adopting a second brain silently RENAMED the
-	// first. Surfaces that show brains side by side group them under an org heading
-	// (app/core/util groupBrainsByOrg), which is where org belongs.
 	const named = b.name?.trim();
 	if (named) return named;
 	return (
@@ -1147,8 +1137,7 @@ export function brainLabelQualified(b: AccessibleBrain): string {
 // Two legs, one per way in. The first walks memberships (every brain in every org
 // you belong to, with whatever grant you hold under that same identity). The
 // second walks GRANTS, which is how a guest reaches a brain in an organization they
-// are not a member of: it used to be unreachable, since the query began at
-// memberships and a non-member produced no row at all. Each leg is driven by its
+// are not a member of (a memberships-only walk produces no row for them). Each leg is driven by its
 // own user index; the dedupe below folds a brain reached by both, or by two linked
 // identities, to the highest of each role. A guest's org_role is null, and the rule
 // caps them.
@@ -1254,8 +1243,8 @@ export async function listAccessibleBrains(
 // brain yet. listAccessibleBrains inner-joins `brains`, so an org whose first repo has
 // not been adopted yet produces no row there and is invisible to brain-scope
 // resolution. That is right for choosing a brain to act on and wrong for choosing a
-// place to PUT one, which is the question create_brain and connect_brain ask: without
-// this, the first brain in a newly connected org was unreachable from either tool.
+// place to PUT one, which is the question create_brain and connect_brain ask: the
+// first brain in a newly connected org has to be placeable.
 //
 // Takes the person's whole id set for the same reason every brain query does: a
 // membership that hangs off one linked email has to be reachable from the others.
@@ -1341,9 +1330,8 @@ export async function firstSuspendedOrg(db: D1Database, userIds: string[]): Prom
 }
 
 // Which org an org-scope action lands in. Pure, and split out of the Worker's
-// orgContext so the rule can be tested: it decides where a new brain gets WRITTEN, and
-// what it replaced was a `SELECT ... LIMIT 1` with no ORDER BY, so a person in two orgs
-// got an arbitrary one that could differ between two calls in the same session.
+// orgContext so the rule can be tested: it decides where a new brain gets WRITTEN, so
+// the pick must be deterministic for a person in several orgs.
 //
 // A named handle wins; failing that the org the caller is already working in; failing
 // that the oldest. Throws rather than guessing when a handle matches nothing or several
@@ -1366,18 +1354,14 @@ export function chooseOrg(
 	return orgs.find((o) => o.org.org_id === opts.activeOrgId) ?? orgs[0];
 }
 
-// Which brain a brain-scope call acts on. The exact twin of chooseOrg above, and it
-// was the half that never got extracted: the same ladder (named handle, then the
-// brain the caller is working in, then the oldest) sat inline in a private method on
-// McpSession, where no test could reach it. That is the decision routing every read
-// and every write, so the two halves of one rule should not have different standards
-// of proof.
+// Which brain a brain-scope call acts on. The twin of chooseOrg above, with the same
+// ladder (named handle, then the brain the caller is working in, then the oldest),
+// pure so the decision routing every read and write is testable.
 //
 // Throws rather than guessing for the same reason chooseOrg does: a handle matching
 // several brains that silently picked one would act on a brain the caller did not
-// name. A BLANK handle throws too — a caller who passed `brain` asked for a specific
-// one, and quietly falling back to a different brain is the same failure wearing a
-// friendlier face. Callers resolve the empty-list case before reaching here (it means
+// name. A BLANK handle throws too: a caller who passed `brain` asked for a specific
+// one, and falling back to a different brain is the same failure. Callers resolve the empty-list case before reaching here (it means
 // provision, not fail), but throwing is still the right answer if one does not.
 export function chooseBrain(
 	brains: AccessibleBrain[],
@@ -1437,12 +1421,9 @@ export function matchBrain(
 	if (exact) return { brain: exact };
 	const subs = brains.filter((b) => {
 		const label = brainLabel(b).toLowerCase();
-		// org_name is matched EXPLICITLY rather than incidentally. It used to ride along
-		// inside the label of any brain in a multi-brain org ("Beckers Healthcare — ed
-		// brain"), so `brain: "beckers"` resolved by accident of formatting; dropping the
-		// prefix would have silently broken every org-qualified handle an agent had
-		// learned. How a brain is DISPLAYED and what a human can call it are two
-		// questions, and only the first one changed.
+		// org_name is matched EXPLICITLY, so an org-qualified handle (`brain: "acme"`
+		// for a brain in the Acme org) resolves even though the label carries no org.
+		// How a brain is DISPLAYED and what a human can call it are separate questions.
 		return (
 			b.id.toLowerCase().includes(q) ||
 			b.repo_name.toLowerCase().includes(q) ||

@@ -73,9 +73,9 @@ interface JsonRpcEnvelope {
 	error?: { code?: number; message?: string };
 }
 
-// Read one JSON-RPC response. Normally a plain JSON body, but the transport is
-// allowed to answer as SSE, so a `text/event-stream` reply is unwrapped rather
-// than handed to `JSON.parse` as-is.
+// Read one JSON-RPC response. The Worker and the local runtime answer with a plain
+// JSON body (`pnpm test:protocol` pins it); a `text/event-stream` reply, which the
+// MCP transport spec permits, is unwrapped rather than failing in `JSON.parse`.
 async function readEnvelope(res: Response): Promise<JsonRpcEnvelope> {
 	const type = res.headers.get('content-type') ?? '';
 	const body = await res.text();

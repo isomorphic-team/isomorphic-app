@@ -1,14 +1,12 @@
 // The host seam: everything the app needs from whatever is hosting it.
 //
-// TWO hosts now. In Claude the app is an MCP App in a sandboxed iframe talking
+// TWO hosts. In Claude the app is an MCP App in a sandboxed iframe talking
 // over AppBridge; on the web it is the same bundle in a tab talking to `/mcp`
 // over fetch with a session cookie. Every difference between them lives in this
 // file, so a view never asks which one it is running in.
 //
-// Nothing outside this module touches the `App` instance. It used to be
-// exported raw and five call sites in four files reached through it for
-// `openLink` and `getHostContext`, which meant "swap this file and the bundle
-// runs anywhere" was not actually true.
+// Nothing outside this module touches the `App` instance, which is what makes
+// "swap this file and the bundle runs anywhere" true.
 
 import {
 	App,
@@ -36,10 +34,9 @@ export function isWeb(): boolean {
 
 // A TAB OWNS ITS WINDOW, so the web host starts in fullscreen semantics: fill the
 // viewport, no height cap, no card border, the wide column. Left at 'inline' the
-// same bundle rendered as the chat-column card inside a browser tab: a 560px
-// rounded box scrolling within itself, sitting on the browser's default page
-// background, with dead space below. The MCP host still starts inline and moves
-// through host-context events exactly as before.
+// same bundle would render as the chat-column card inside a browser tab: a 560px
+// rounded box scrolling within itself on the browser's default page background.
+// The MCP host starts inline and moves through host-context events.
 let displayMode: DisplayMode = web ? 'fullscreen' : 'inline';
 let availableModes: DisplayMode[] = [];
 
@@ -52,10 +49,9 @@ function applyHostContext(ctx: McpUiHostContext) {
 		displayMode = ctx.displayMode as DisplayMode;
 	}
 	bump();
-	// Default to INLINE — the app opens as a bounded card in the chat column, not a
-	// full-page takeover. Users can go fullscreen via the display-mode menu when they
-	// want the room (e.g. long editing sessions). (We used to auto-request fullscreen
-	// here; that made every open a full-page view, which buried the conversation.)
+	// No display-mode request here: the app opens INLINE, a bounded card in the chat
+	// column, and the user goes fullscreen through the display-mode menu. Requesting
+	// fullscreen on open would bury the conversation.
 }
 
 // On the web there is no host context to inherit, so the app follows the
@@ -91,9 +87,10 @@ async function setDisplayMode(mode: DisplayMode) {
 	}
 }
 
-// Cycle the header button through whichever modes the host actually advertises,
-// in a stable order. A host may expose only a subset (e.g. inline + fullscreen).
-// On the web that list is empty, so the control does not render at all.
+// The modes the header's display-mode menu (DisplayMenu in main.tsx) offers: whichever
+// the host actually advertises, in a stable order. A host may expose only a subset
+// (e.g. inline + fullscreen). On the web that list is empty, so the menu does not
+// render at all.
 const MODE_ORDER: DisplayMode[] = ['inline', 'fullscreen', 'pip'];
 const MODE_ICON: Record<DisplayMode, string> = { inline: '▭', fullscreen: '⤢', pip: '❐' };
 const MODE_LABEL: Record<DisplayMode, string> = {
