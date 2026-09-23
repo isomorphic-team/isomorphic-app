@@ -16,7 +16,7 @@ day, per brain, per person. UI: `app/views/AnalyticsView.tsx`, an ORG-scope dest
 - **Per-day counters, not an event log** (`usage_daily`). One UPSERT per tool call at grain
   (day, org, brain, user, tool). **`brain_id` is `''`, never NULL**, for org-scope calls:
   SQLite treats PK NULLs as distinct and the upsert would append forever.
-- **`USAGE_ANALYTICS === 'true'` (and `hasOrgModel`) gates BOTH recording and registration.**
+- **`USAGE_ANALYTICS === 'true'` (and `multiUser`) gates BOTH recording and registration.**
   Absent means off; the generated config defaults it on.
 - **Recording is `McpSession.instrument()`**, which wraps every registration after
   `buildServer` via `wrapToolHandler`. It writes through `ctx.waitUntil` after the result,

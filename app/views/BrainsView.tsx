@@ -2,7 +2,7 @@ import { Fragment } from 'preact';
 import { useState } from 'preact/hooks';
 import type { BrainRow } from '../core/types.ts';
 import { openLink, callTool, firstText } from '../core/host.ts';
-import { show } from '../core/store.ts';
+import { show, features } from '../core/store.ts';
 import {
 	switchBrain,
 	brainsViewFromSc,
@@ -122,7 +122,7 @@ function BrainsView({ brains, active }: { brains: BrainRow[]; active: string }) 
 												Set up
 											</Button>
 										))}
-									{b.canShare && !b.needsConfig && (
+									{features.people && b.canShare && !b.needsConfig && (
 										<Button
 											variant="ghost"
 											size="sm"
@@ -134,7 +134,7 @@ function BrainsView({ brains, active }: { brains: BrainRow[]; active: string }) 
 											Share
 										</Button>
 									)}
-									{b.canManage && (
+									{features.people && b.canManage && (
 										<Button
 											variant="ghost"
 											size="icon"
@@ -173,15 +173,20 @@ declare module '../core/view-registry.ts' {
 }
 
 export default defineView('brains', (v) => <BrainsView brains={v.brains} active={v.active} />, {
-	// Unconditional: creating a brain is always available to everyone, and connecting
-	// is the OTHER source inside the same flow rather than a separate action to gate. The flow drops its source chooser
-	// by itself when there is no org to connect to.
-	actions: (v) => [
-		{
-			key: 'add-brain',
-			label: 'Add brain',
-			title: 'Create a new brain, or connect an existing repo',
-			onClick: () => openAddBrain({ orgs: manageableOrgs(v.brains), first: false })
-		}
-	]
+	// Offered wherever brains can be added, which is every deployment where anyone
+	// signs in (`features.people`): a single-user deployment has one brain, from config,
+	// and registers neither create_brain nor connect_brain. Connecting is the OTHER
+	// source inside the same flow rather than a separate action to gate; the flow drops
+	// its source chooser by itself when there is no org to connect to.
+	actions: (v) =>
+		features.people
+			? [
+					{
+						key: 'add-brain',
+						label: 'Add brain',
+						title: 'Create a new brain, or connect an existing repo',
+						onClick: () => openAddBrain({ orgs: manageableOrgs(v.brains), first: false })
+					}
+				]
+			: []
 });

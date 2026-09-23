@@ -408,16 +408,25 @@ console.log('\nbrowse_brain fits in a tool result');
 // are somewhere they are not.
 console.log('\nnav destinations');
 {
-	const full = { analytics: true, canManageBrains: true };
-	const bare = { analytics: false, canManageBrains: false };
+	const full = { analytics: true, canManageBrains: true, people: true };
+	const bare = { analytics: false, canManageBrains: false, people: true };
+	// A single-user deployment: nobody else signs in, so none of the people, sharing
+	// or brain-management tools exist, whatever the caller's role.
+	const solo = { analytics: true, canManageBrains: true, people: false };
 
 	check(
 		'the rail is the five views OF a brain, in rail order',
 		destinationsIn('brain', full).join() === 'files,graph,search,activity,sharing'
 	);
 	check(
-		'…and none of them is gated — every one is open to anyone who can reach the brain',
+		'…and none of them is gated by ROLE: every one is open to anyone who can reach the brain',
 		destinationsIn('brain', bare).join() === 'files,graph,search,activity,sharing'
+	);
+	check(
+		'a single-user deployment offers no Sharing, Members, Analytics or Manage brains',
+		destinationsIn('brain', solo).join() === 'files,graph,search,activity' &&
+			destinationsIn('org', solo).join() === '' &&
+			destinationsIn('account', solo).join() === 'settings'
 	);
 	check(
 		'a deployment with USAGE_ANALYTICS off never offers Analytics',

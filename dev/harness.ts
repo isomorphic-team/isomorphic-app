@@ -532,7 +532,7 @@ function brainsResult(msg: string, withView: boolean, switched = false): CallToo
 		// USAGE_ANALYTICS is "true" (the generated config's default).
 		// `webBase` is what a deployment serving the web app sends (webBaseUrl in
 		// src/lib/web-app.ts); it puts the "Open in browser" control in the header.
-		features: { analytics: true, webBase: 'https://brain.example' }
+		features: { analytics: true, people: true, webBase: 'https://brain.example' }
 	};
 	if (withView) sc.view = 'brains';
 	if (switched) sc.switched = true;

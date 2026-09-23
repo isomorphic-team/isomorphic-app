@@ -117,8 +117,9 @@ deployment never touch GitHub already; this is about the operator.
 # TODO: productionize the MCP server
 
 The Worker is live at `https://mcp.isomorphic.sh` (with a `workers.dev` fallback), on
-`AUTH_MODE=oauth` + `IDENTITY_MODE=authjs`. `AUTH_MODE=static` with `MCP_BEARER_TOKEN` stays,
-as the documented single-tenant self-hosting path, and `GITHUB_TOKEN` mode is built on it.
+`AUTH_MODE=oauth` (Auth.js email sign-in). `AUTH_MODE=static` with `MCP_BEARER_TOKEN` stays,
+as the documented single-user self-hosting path, and `GITHUB_TOKEN` mode is built on it; both
+run the same org model.
 
 Decided, keep: **no `routes` block.** The custom domain is bound in the Cloudflare dashboard,
 independently of the config. A `routes` entry makes `wrangler dev` rewrite `request.url` and

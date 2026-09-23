@@ -91,8 +91,8 @@ repositories, check a repo exists before connecting it.
 
 No org model, so no members, invitations, sharing, connected accounts, or brain switching. With
 one brain and one person those tools can only reject, and an advertised tool costs context in
-every conversation. The Worker applies the same rule to single-tenant deployments via
-`hasOrgModel`; `FEEDBACK_REPO` is the precedent.
+every conversation. The Worker applies the same rule to single-user deployments via
+`multiUser`; `FEEDBACK_REPO` is the precedent.
 
 ## Where to look next
 

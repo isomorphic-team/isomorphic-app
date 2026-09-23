@@ -1571,6 +1571,7 @@ try {
 
 	const brainServer = new McpServer({ name: 'librarian-e2e-brains', version: '0.0.0' });
 	registerBrainTools(brainServer, {
+		multiUser: true,
 		getContext,
 		orgContext,
 		listOrgs: () => listAccessibleOrgs(db, [USER]),

@@ -209,6 +209,16 @@ its deploy window, because a rollback reverts code and never schema.
    the `hosted` org model, and
    `create_org`, which replaces `connect_github_org` and creates a hosted org in
    product (gated on `AUTO_PROVISION`) or starts the GitHub install.
+   2b. **One tenancy model (built).** Every deployment runs the org model. A static
+   (single-user) deployment writes its org, operator member, storage connection and brain
+   from config on first use (`ensureStaticTenant`), recording `GITHUB_TOKEN` as a
+   `github-token` connection that names the secret without holding it; `credentialFor`
+   picks token or installation from the binding. GitHub sign-in (`IDENTITY_MODE=github`)
+   and the per-user `tenants` table were removed (production held one row, unreachable
+   under `authjs`). What differs between deployments is one capability, `multiUser`:
+   whether anyone besides the operator signs in, which gates the people, sharing and
+   brain-management tools and reaches the app as `features.people`. The local runtime
+   (`pnpm try`) still has no rows; it joins in step 3, as a `local-git` connection.
 3. **Key derived state by `brain_id`.** The content index, write-attempt ledger and
    active-brain pointer stop using `owner/repo`. A lazy rebuild, the same shape as an
    `INDEX_SCHEMA_VERSION` bump.

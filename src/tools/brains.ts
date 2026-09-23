@@ -167,6 +167,11 @@ async function detectRowSetup(
 export function registerBrainTools(
 	server: McpServer,
 	deps: {
+		// Whether anyone besides the operator can sign in (worker.ts buildServer). The
+		// tools that add, move, remove or switch between brains are registered only
+		// when it is true: a single-user deployment has one brain and nowhere else for
+		// one to be. `brains` and `configure_brain` are registered either way.
+		multiUser: boolean;
 		getContext: (opts?: TenantOpts) => Promise<BrainContext>;
 		orgContext: (opts?: { requires?: Role; org?: string }) => Promise<OrgScope>;
 		// Every org the caller belongs to, brainless ones included. Separate from
@@ -199,6 +204,7 @@ export function registerBrainTools(
 	}
 ) {
 	const {
+		multiUser,
 		getContext,
 		orgContext,
 		listBrains,
@@ -210,7 +216,14 @@ export function registerBrainTools(
 		db,
 		webBaseUrl
 	} = deps;
-	const features = { analytics: analyticsEnabled, ...(webBaseUrl ? { webBase: webBaseUrl } : {}) };
+	// `people`: whether this deployment has anyone to share with, invite, or count.
+	// The nav offers Sharing, Members, Analytics and brain management only when it
+	// does, since their tools are not registered otherwise (NavCaps in app/core/nav.ts).
+	const features = {
+		analytics: analyticsEnabled,
+		people: multiUser,
+		...(webBaseUrl ? { webBase: webBaseUrl } : {})
+	};
 
 	// The orgs the app's "add a brain" flow may target: the ones the caller can
 	// actually adopt into (connect_brain is admin+). Sent with the brains list because
@@ -233,46 +246,47 @@ export function registerBrainTools(
 			.replace(/^-+|-+$/g, '');
 
 	// ---------- switch_brain (action) ----------
-	server.registerTool(
-		'switch_brain',
-		{
-			title: 'Switch the active brain',
-			description:
-				"Make a brain the active one, so subsequent tool calls act on it by default. Accepts a name/handle (fuzzy-matched against your brains, e.g. 'acme', 'team wiki', or an owner/repo id). Use when the user wants to work in a different brain for a while; for a one-off, pass `brain` to a single tool instead.",
-			inputSchema: z.object({
-				brain: z.string().describe('Which brain to activate — a name/label or owner/repo id.')
-			})
-		},
-		async ({ brain }) => {
-			await getContext(); // ensure the caller is resolved/authorized
-			const brains = await listBrains();
-			if (brains.length === 0) return fail('You have no brains to switch between.');
-			const m = matchBrain(brains, brain);
-			if (!m.brain) {
-				const names = (m.candidates ?? brains).map(brainLabelQualified);
-				return fail(
-					m.candidates
-						? `"${brain}" matches multiple brains: ${names.join(', ')}. Be more specific.`
-						: `No brain matching "${brain}". You have access to: ${names.join(', ')}.`
-				);
+	if (multiUser)
+		server.registerTool(
+			'switch_brain',
+			{
+				title: 'Switch the active brain',
+				description:
+					"Make a brain the active one, so subsequent tool calls act on it by default. Accepts a name/handle (fuzzy-matched against your brains, e.g. 'acme', 'team wiki', or an owner/repo id). Use when the user wants to work in a different brain for a while; for a one-off, pass `brain` to a single tool instead.",
+				inputSchema: z.object({
+					brain: z.string().describe('Which brain to activate — a name/label or owner/repo id.')
+				})
+			},
+			async ({ brain }) => {
+				await getContext(); // ensure the caller is resolved/authorized
+				const brains = await listBrains();
+				if (brains.length === 0) return fail('You have no brains to switch between.');
+				const m = matchBrain(brains, brain);
+				if (!m.brain) {
+					const names = (m.candidates ?? brains).map(brainLabelQualified);
+					return fail(
+						m.candidates
+							? `"${brain}" matches multiple brains: ${names.join(', ')}. Be more specific.`
+							: `No brain matching "${brain}". You have access to: ${names.join(', ')}.`
+					);
+				}
+				await setActiveBrain(m.brain.id);
+				const rows = brainRows(brains, m.brain.id);
+				const label = rows.find((r) => r.id === m.brain!.id)?.label ?? m.brain.id;
+				return {
+					content: [
+						{ type: 'text' as const, text: `Switched to ${label}. Tools now act on it by default.` }
+					],
+					structuredContent: {
+						view: 'brains',
+						brains: rows,
+						active: m.brain.id,
+						switched: true,
+						features
+					} satisfies BrainsWire
+				};
 			}
-			await setActiveBrain(m.brain.id);
-			const rows = brainRows(brains, m.brain.id);
-			const label = rows.find((r) => r.id === m.brain!.id)?.label ?? m.brain.id;
-			return {
-				content: [
-					{ type: 'text' as const, text: `Switched to ${label}. Tools now act on it by default.` }
-				],
-				structuredContent: {
-					view: 'brains',
-					brains: rows,
-					active: m.brain.id,
-					switched: true,
-					features
-				} satisfies BrainsWire
-			};
-		}
-	);
+		);
 
 	// ---------- brains (the list, as data) ----------
 	// Text for the model and structuredContent for the app's switcher, which calls it
@@ -334,109 +348,110 @@ export function registerBrainTools(
 	// Stand up a NEW, empty brain (scaffolds a fresh repo), distinct from connect_brain,
 	// which adopts an EXISTING repo. Org-scope: works even when the caller has no brain
 	// yet (the "create your first brain" path). Any editor+ in the org can create one.
-	server.registerTool(
-		'create_brain',
-		{
-			title: 'Create a new brain',
-			description:
-				'Create a NEW, empty knowledge base ("brain") with a name the user chooses, and switch to it. Call create_brain whenever the user wants to START a new brain / knowledge base / wiki, including their very first one. This SCAFFOLDS a fresh repo; it does not adopt an existing one. Any editor can create a brain. The new brain is PRIVATE to its creator until it is shared.',
-			inputSchema: z.object({
-				name: z
-					.string()
-					.describe('A name for the new brain, e.g. "Personal", "Project Atlas", "Team Wiki".'),
-				// Needed for a person in several orgs, and the only way to name an org that
-				// holds no brain yet, since every other handle is a brain.
-				org: z
-					.string()
-					.optional()
-					.describe(
-						'Which organization to create it in, by name or GitHub owner. Defaults to the organization of the brain you are in.'
-					)
-			})
-		},
-		async ({ name, org }) => {
-			// Org-scope + role gate. Rejects single-tenant connections ("product
-			// accounts only") and callers below `editor`.
-			let ctx: OrgScope;
-			try {
-				ctx = await orgContext({ requires: 'editor', org });
-			} catch (err) {
-				return fail(err instanceof Error ? err.message : String(err));
-			}
-			const display = name.trim();
-			if (!display) return fail('Please give the brain a name.');
-
-			const owner = ctx.org.brain_owner;
-			const base = slugName(display) || 'brain';
-			// Scaffold a fresh repo; on a name collision (repo already exists, brain or not)
-			// try the next `base-N` slug. repo_name is the immutable slug; `display` is the name.
-			let repo = base;
-			let created: Awaited<ReturnType<typeof createAndScaffoldBrain>>;
-			for (let attempt = 1; ; attempt++) {
+	if (multiUser)
+		server.registerTool(
+			'create_brain',
+			{
+				title: 'Create a new brain',
+				description:
+					'Create a NEW, empty knowledge base ("brain") with a name the user chooses, and switch to it. Call create_brain whenever the user wants to START a new brain / knowledge base / wiki, including their very first one. This SCAFFOLDS a fresh repo; it does not adopt an existing one. Any editor can create a brain. The new brain is PRIVATE to its creator until it is shared.',
+				inputSchema: z.object({
+					name: z
+						.string()
+						.describe('A name for the new brain, e.g. "Personal", "Project Atlas", "Team Wiki".'),
+					// Needed for a person in several orgs, and the only way to name an org that
+					// holds no brain yet, since every other handle is a brain.
+					org: z
+						.string()
+						.optional()
+						.describe(
+							'Which organization to create it in, by name or GitHub owner. Defaults to the organization of the brain you are in.'
+						)
+				})
+			},
+			async ({ name, org }) => {
+				// Org-scope + role gate. Rejects single-tenant connections ("product
+				// accounts only") and callers below `editor`.
+				let ctx: OrgScope;
 				try {
-					created = await createAndScaffoldBrain(githubClient(ctx), {
-						org: owner,
-						name: repo,
-						description: `${display} — Isomorphic brain`
-					});
-					break;
+					ctx = await orgContext({ requires: 'editor', org });
 				} catch (err) {
-					if (isAlreadyExists(err) && attempt < 25) {
-						repo = `${base}-${attempt + 1}`;
-						continue;
-					}
-					return fail(
-						`Couldn't create the brain repo under ${owner}: ${err instanceof Error ? err.message : String(err)}`
-					);
+					return fail(err instanceof Error ? err.message : String(err));
 				}
-			}
+				const display = name.trim();
+				if (!display) return fail('Please give the brain a name.');
 
-			// PRIVATE BY DEFAULT. A brain you just made is yours until you share it; in a
-			// shared org, an org-visible default would publish everyone's drafts to the
-			// whole team the moment they were created. The creator gets an explicit
-			// admin grant in the same breath, because in a personal org they are the
-			// only member and would otherwise be relying on the org-admin floor alone;
-			// the explicit row is also what makes them show on the brain's Share list.
-			const newBrainId = brainIdFor(created.owner, created.name);
-			await createBrain(ctx.db, {
-				brain_id: newBrainId,
-				org_id: ctx.org.org_id,
-				repo_owner: created.owner,
-				repo_name: created.name,
-				name: display,
-				created_by: ctx.actorUserId,
-				visibility: 'private',
-				storage_connection_id: await ensureOrgConnection(ctx.db, ctx.org)
-			});
-			if (ctx.actorUserId) {
-				await setBrainGrant(ctx.db, {
-					brain_id: newBrainId,
-					user_id: ctx.actorUserId,
-					role: 'admin',
-					granted_by: ctx.actorUserId
-				});
-			}
-
-			const id = `${created.owner}/${created.name}`;
-			await setActiveBrain(id); // land the caller in the new brain
-			const rows = brainRows(await listBrains(), id);
-			return {
-				content: [
-					{
-						type: 'text' as const,
-						text: `Created "${display}" and switched to it. It's private to you: share it with share_brain, or make it visible to your whole organization.`
+				const owner = ctx.org.brain_owner;
+				const base = slugName(display) || 'brain';
+				// Scaffold a fresh repo; on a name collision (repo already exists, brain or not)
+				// try the next `base-N` slug. repo_name is the immutable slug; `display` is the name.
+				let repo = base;
+				let created: Awaited<ReturnType<typeof createAndScaffoldBrain>>;
+				for (let attempt = 1; ; attempt++) {
+					try {
+						created = await createAndScaffoldBrain(githubClient(ctx), {
+							org: owner,
+							name: repo,
+							description: `${display} — Isomorphic brain`
+						});
+						break;
+					} catch (err) {
+						if (isAlreadyExists(err) && attempt < 25) {
+							repo = `${base}-${attempt + 1}`;
+							continue;
+						}
+						return fail(
+							`Couldn't create the brain repo under ${owner}: ${err instanceof Error ? err.message : String(err)}`
+						);
 					}
-				],
-				structuredContent: {
-					view: 'brains',
-					brains: rows,
-					active: id,
-					switched: true,
-					createdId: id
-				} satisfies BrainsWire
-			};
-		}
-	);
+				}
+
+				// PRIVATE BY DEFAULT. A brain you just made is yours until you share it; in a
+				// shared org, an org-visible default would publish everyone's drafts to the
+				// whole team the moment they were created. The creator gets an explicit
+				// admin grant in the same breath, because in a personal org they are the
+				// only member and would otherwise be relying on the org-admin floor alone;
+				// the explicit row is also what makes them show on the brain's Share list.
+				const newBrainId = brainIdFor(created.owner, created.name);
+				await createBrain(ctx.db, {
+					brain_id: newBrainId,
+					org_id: ctx.org.org_id,
+					repo_owner: created.owner,
+					repo_name: created.name,
+					name: display,
+					created_by: ctx.actorUserId,
+					visibility: 'private',
+					storage_connection_id: await ensureOrgConnection(ctx.db, ctx.org)
+				});
+				if (ctx.actorUserId) {
+					await setBrainGrant(ctx.db, {
+						brain_id: newBrainId,
+						user_id: ctx.actorUserId,
+						role: 'admin',
+						granted_by: ctx.actorUserId
+					});
+				}
+
+				const id = `${created.owner}/${created.name}`;
+				await setActiveBrain(id); // land the caller in the new brain
+				const rows = brainRows(await listBrains(), id);
+				return {
+					content: [
+						{
+							type: 'text' as const,
+							text: `Created "${display}" and switched to it. It's private to you: share it with share_brain, or make it visible to your whole organization.`
+						}
+					],
+					structuredContent: {
+						view: 'brains',
+						brains: rows,
+						active: id,
+						switched: true,
+						createdId: id
+					} satisfies BrainsWire
+				};
+			}
+		);
 
 	// ---------- connect_brain (org admin) ----------
 	// Put a brain in an organization. Three shapes, one question ("which brain goes in
@@ -449,196 +464,197 @@ export function registerBrainTools(
 	//     so it previews until `confirm: true`.
 	// The description says "move" in its own words, so a model hunting for a way to
 	// move a brain finds this tool.
-	server.registerTool(
-		'connect_brain',
-		{
-			title: 'Connect a brain to an organization: adopt a repo, or move a brain',
-			description:
-				"Put a brain in an organization you admin. Two uses. ADOPT: pass a GitHub repository that is not a brain yet (it must be under the org's GitHub owner and covered by the org's Isomorphic App installation); call with no `repo` to list the repos that can become brains. MOVE: pass an existing brain (by name or owner/repo) and the `org` to move it to; this changes which organization owns the brain, and so who reaches it through org membership, but never where it is stored, and grants, links and history come with it. A move is two calls: without `confirm: true` it changes nothing and returns a preview naming everyone whose access changes. Adding needs organization admin in the destination; moving also needs it in the brain's current organization. An adopted brain is PRIVATE to whoever connected it until it is shared.",
-			inputSchema: z.object({
-				repo: z
-					.string()
-					.optional()
-					.describe(
-						'The repo to adopt ("owner/name", or just "name" under the org’s GitHub owner), or an existing brain to move (its name or owner/repo). Omit to list the repos that can become brains.'
-					),
-				name: z
-					.string()
-					.optional()
-					.describe(
-						'What to call the brain in the switcher, e.g. "Editorial". Defaults to the repo name for an adopted repo; a moved brain keeps its name unless this is given.'
-					),
-				// An org handle rather than a brain in it, so an org holding no brains yet
-				// (a freshly connected GitHub org waiting for its first repo) is reachable.
-				org: z
-					.string()
-					.optional()
-					.describe(
-						'Which organization to put it in, by name or GitHub owner. Defaults to the organization of the brain you are in.'
-					),
-				confirm: z
-					.boolean()
-					.optional()
-					.describe(
-						'Required to actually MOVE an existing brain. Without it a move only returns the preview, and nothing is written. Not needed to adopt a repo.'
-					)
-			})
-		},
-		async ({ repo, org, name: displayName, confirm }) => {
-			// ORG-scope: putting a brain in an organization gates on the org role and
-			// resolves through orgContext. Gating on the brain role would let someone
-			// merely shared a brain as admin add to, or take from, the whole org.
-			let ctx: OrgScope;
-			try {
-				ctx = await orgContext({ requires: 'admin', org });
-			} catch (err) {
-				return fail(err instanceof Error ? err.message : String(err));
-			}
-
-			// An existing brain the caller can see, named EXACTLY (id, repo name, or its
-			// name). Exact rather than matchBrain's substring fallback: a substring hit
-			// would turn "adopt the repo called wiki" into "move client-wiki".
-			if (repo !== undefined) {
-				const q = repo.trim().toLowerCase();
-				const hits = (await listBrains()).filter(
-					(b) =>
-						b.id.toLowerCase() === q ||
-						b.repo_name.toLowerCase() === q ||
-						brainLabel(b).toLowerCase() === q
-				);
-				if (hits.length > 1) {
-					return fail(
-						`"${repo}" names several brains: ${hits.map(brainLabelQualified).join(', ')}. Pass its owner/repo id.`
-					);
+	if (multiUser)
+		server.registerTool(
+			'connect_brain',
+			{
+				title: 'Connect a brain to an organization: adopt a repo, or move a brain',
+				description:
+					"Put a brain in an organization you admin. Two uses. ADOPT: pass a GitHub repository that is not a brain yet (it must be under the org's GitHub owner and covered by the org's Isomorphic App installation); call with no `repo` to list the repos that can become brains. MOVE: pass an existing brain (by name or owner/repo) and the `org` to move it to; this changes which organization owns the brain, and so who reaches it through org membership, but never where it is stored, and grants, links and history come with it. A move is two calls: without `confirm: true` it changes nothing and returns a preview naming everyone whose access changes. Adding needs organization admin in the destination; moving also needs it in the brain's current organization. An adopted brain is PRIVATE to whoever connected it until it is shared.",
+				inputSchema: z.object({
+					repo: z
+						.string()
+						.optional()
+						.describe(
+							'The repo to adopt ("owner/name", or just "name" under the org’s GitHub owner), or an existing brain to move (its name or owner/repo). Omit to list the repos that can become brains.'
+						),
+					name: z
+						.string()
+						.optional()
+						.describe(
+							'What to call the brain in the switcher, e.g. "Editorial". Defaults to the repo name for an adopted repo; a moved brain keeps its name unless this is given.'
+						),
+					// An org handle rather than a brain in it, so an org holding no brains yet
+					// (a freshly connected GitHub org waiting for its first repo) is reachable.
+					org: z
+						.string()
+						.optional()
+						.describe(
+							'Which organization to put it in, by name or GitHub owner. Defaults to the organization of the brain you are in.'
+						),
+					confirm: z
+						.boolean()
+						.optional()
+						.describe(
+							'Required to actually MOVE an existing brain. Without it a move only returns the preview, and nothing is written. Not needed to adopt a repo.'
+						)
+				})
+			},
+			async ({ repo, org, name: displayName, confirm }) => {
+				// ORG-scope: putting a brain in an organization gates on the org role and
+				// resolves through orgContext. Gating on the brain role would let someone
+				// merely shared a brain as admin add to, or take from, the whole org.
+				let ctx: OrgScope;
+				try {
+					ctx = await orgContext({ requires: 'admin', org });
+				} catch (err) {
+					return fail(err instanceof Error ? err.message : String(err));
 				}
-				if (hits.length === 1) {
-					const target = hits[0];
-					if (target.org_id === ctx.org.org_id) {
+
+				// An existing brain the caller can see, named EXACTLY (id, repo name, or its
+				// name). Exact rather than matchBrain's substring fallback: a substring hit
+				// would turn "adopt the repo called wiki" into "move client-wiki".
+				if (repo !== undefined) {
+					const q = repo.trim().toLowerCase();
+					const hits = (await listBrains()).filter(
+						(b) =>
+							b.id.toLowerCase() === q ||
+							b.repo_name.toLowerCase() === q ||
+							brainLabel(b).toLowerCase() === q
+					);
+					if (hits.length > 1) {
 						return fail(
-							`${brainLabel(target)} is already a brain in ${orgLabel(ctx.org)}. To rename it, use configure_brain.`
+							`"${repo}" names several brains: ${hits.map(brainLabelQualified).join(', ')}. Pass its owner/repo id.`
 						);
 					}
-					return await moveInto(ctx, target, { confirm: !!confirm, name: displayName });
+					if (hits.length === 1) {
+						const target = hits[0];
+						if (target.org_id === ctx.org.org_id) {
+							return fail(
+								`${brainLabel(target)} is already a brain in ${orgLabel(ctx.org)}. To rename it, use configure_brain.`
+							);
+						}
+						return await moveInto(ctx, target, { confirm: !!confirm, name: displayName });
+					}
 				}
-			}
 
-			// Everything below ADOPTS, which lists or reads repositories through the
-			// org's connection: only the org that administers it may. A personal or
-			// hosted org's connection is the platform's shared account, where every
-			// other org's brains live, so adopting through it would let any admin claim
-			// a repository some other org's brain left behind. (Moving a brain INTO a
-			// hosted org, above, reads nothing through its connection.)
-			if (!(await orgAdministersConnection(ctx.db, ctx.org))) {
-				return fail(
-					`${orgLabel(ctx.org)} stores its brains on Isomorphic's hosted storage, which has no repositories of its own to adopt. Use create_brain to start a new brain here, move an existing brain in by naming it, or use create_org with github: true to connect your own GitHub organization.`
-				);
-			}
-			const orgId = ctx.org.org_id;
-
-			// No repo → list the connectable candidates (repos the org's installation can
-			// reach that aren't brains yet). This is the picker for the connect flow.
-			if (repo === undefined) {
-				const brains = await listBrains();
-				const taken = new Set(brains.map((b) => b.id.toLowerCase()));
-				const res = await githubClient(ctx).rest.apps.listReposAccessibleToInstallation({
-					per_page: 100
-				});
-				const repos = (res.data.repositories ?? [])
-					.map((r) => ({ owner: r.owner.login, repo: r.name, id: `${r.owner.login}/${r.name}` }))
-					.filter((r) => !taken.has(r.id.toLowerCase()));
-				const text = repos.length
-					? `Connectable repos:\n${repos.map((r) => `- ${r.id}`).join('\n')}`
-					: 'No unconnected repos in this org’s installation.';
-				return { content: [{ type: 'text' as const, text }], structuredContent: { repos } };
-			}
-
-			const parts = repo.includes('/') ? repo.split('/') : [ctx.org.brain_owner, repo];
-			const owner = parts[0].trim();
-			const name = (parts[1] ?? '').trim();
-			if (!owner || !name) return fail(`"${repo}" is not a valid repository.`);
-
-			// The org's installation must actually reach the repo, or we'd write a dead row.
-			try {
-				await githubClient(ctx).rest.repos.get({ owner, repo: name });
-			} catch (e) {
-				const status = (e as { status?: number })?.status;
-				if (status === 404 || status === 403) {
+				// Everything below ADOPTS, which lists or reads repositories through the
+				// org's connection: only the org that administers it may. A personal or
+				// hosted org's connection is the platform's shared account, where every
+				// other org's brains live, so adopting through it would let any admin claim
+				// a repository some other org's brain left behind. (Moving a brain INTO a
+				// hosted org, above, reads nothing through its connection.)
+				if (!(await orgAdministersConnection(ctx.db, ctx.org))) {
 					return fail(
-						`The organization's Isomorphic App installation can't access ${owner}/${name}. Add the repo to the installation on GitHub (org Settings → GitHub Apps → Isomorphic → Configure), then try again.`
+						`${orgLabel(ctx.org)} stores its brains on Isomorphic's hosted storage, which has no repositories of its own to adopt. Use create_brain to start a new brain here, move an existing brain in by naming it, or use create_org with github: true to connect your own GitHub organization.`
 					);
 				}
-				throw e;
-			}
+				const orgId = ctx.org.org_id;
 
-			// A brain the caller cannot see. Moving it would need admin in the org that
-			// holds it, which they evidently are not, so this stays a refusal.
-			const existing = await getBrainByRepo(ctx.db, owner, name);
-			if (existing) {
-				return fail(
-					existing.org_id === orgId
-						? `${owner}/${name} is already a brain here.`
-						: `${owner}/${name} is already connected to another organization.`
-				);
-			}
+				// No repo → list the connectable candidates (repos the org's installation can
+				// reach that aren't brains yet). This is the picker for the connect flow.
+				if (repo === undefined) {
+					const brains = await listBrains();
+					const taken = new Set(brains.map((b) => b.id.toLowerCase()));
+					const res = await githubClient(ctx).rest.apps.listReposAccessibleToInstallation({
+						per_page: 100
+					});
+					const repos = (res.data.repositories ?? [])
+						.map((r) => ({ owner: r.owner.login, repo: r.name, id: `${r.owner.login}/${r.name}` }))
+						.filter((r) => !taken.has(r.id.toLowerCase()));
+					const text = repos.length
+						? `Connectable repos:\n${repos.map((r) => `- ${r.id}`).join('\n')}`
+						: 'No unconnected repos in this org’s installation.';
+					return { content: [{ type: 'text' as const, text }], structuredContent: { repos } };
+				}
 
-			// PRIVATE BY DEFAULT, the same as create_brain. Not org-wide, though adopting
-			// is an admin act on a repo the org owns: the adopted repo is often a private
-			// GitHub repo, and widening on request costs a share_brain call while widening
-			// silently is a disclosure. The adopter gets the same explicit admin grant the
-			// creator does, so they show on the brain's Share list rather than relying on
-			// the org-admin floor alone.
-			const newBrainId = brainIdFor(owner, name);
-			await createBrain(ctx.db, {
-				brain_id: newBrainId,
-				org_id: orgId,
-				repo_owner: owner,
-				repo_name: name,
-				name: displayName?.trim() || null,
-				created_by: ctx.actorUserId,
-				visibility: 'private',
-				storage_connection_id: await ensureOrgConnection(ctx.db, ctx.org)
-			});
-			if (ctx.actorUserId) {
-				await setBrainGrant(ctx.db, {
+				const parts = repo.includes('/') ? repo.split('/') : [ctx.org.brain_owner, repo];
+				const owner = parts[0].trim();
+				const name = (parts[1] ?? '').trim();
+				if (!owner || !name) return fail(`"${repo}" is not a valid repository.`);
+
+				// The org's installation must actually reach the repo, or we'd write a dead row.
+				try {
+					await githubClient(ctx).rest.repos.get({ owner, repo: name });
+				} catch (e) {
+					const status = (e as { status?: number })?.status;
+					if (status === 404 || status === 403) {
+						return fail(
+							`The organization's Isomorphic App installation can't access ${owner}/${name}. Add the repo to the installation on GitHub (org Settings → GitHub Apps → Isomorphic → Configure), then try again.`
+						);
+					}
+					throw e;
+				}
+
+				// A brain the caller cannot see. Moving it would need admin in the org that
+				// holds it, which they evidently are not, so this stays a refusal.
+				const existing = await getBrainByRepo(ctx.db, owner, name);
+				if (existing) {
+					return fail(
+						existing.org_id === orgId
+							? `${owner}/${name} is already a brain here.`
+							: `${owner}/${name} is already connected to another organization.`
+					);
+				}
+
+				// PRIVATE BY DEFAULT, the same as create_brain. Not org-wide, though adopting
+				// is an admin act on a repo the org owns: the adopted repo is often a private
+				// GitHub repo, and widening on request costs a share_brain call while widening
+				// silently is a disclosure. The adopter gets the same explicit admin grant the
+				// creator does, so they show on the brain's Share list rather than relying on
+				// the org-admin floor alone.
+				const newBrainId = brainIdFor(owner, name);
+				await createBrain(ctx.db, {
 					brain_id: newBrainId,
-					user_id: ctx.actorUserId,
-					role: 'admin',
-					granted_by: ctx.actorUserId
+					org_id: orgId,
+					repo_owner: owner,
+					repo_name: name,
+					name: displayName?.trim() || null,
+					created_by: ctx.actorUserId,
+					visibility: 'private',
+					storage_connection_id: await ensureOrgConnection(ctx.db, ctx.org)
 				});
+				if (ctx.actorUserId) {
+					await setBrainGrant(ctx.db, {
+						brain_id: newBrainId,
+						user_id: ctx.actorUserId,
+						role: 'admin',
+						granted_by: ctx.actorUserId
+					});
+				}
+
+				// Guard: an adopted repo whose content isn't under the default layout would
+				// connect but show no pages. Detect it now so the app can offer to configure.
+				// The store is built from the org's installation client rather than taken off
+				// the context: org scope resolves no brain, so it carries no store of its own.
+				const connectedId = `${owner}/${name}`;
+				const needsConfig = await detectNeedsConfig(
+					githubStore(githubClient(ctx)),
+					{ owner, repo: name },
+					DEFAULT_BRAIN_CONFIG
+				).catch(() => false);
+
+				const rows = brainRows(await listBrains(), activeBrainId());
+				// Visibility is said in the sentence, not left as one field in the brains
+				// array: that field is the one a reader skims past, and the consequence of
+				// missing it is who can read the repo.
+				const visibilityNote =
+					'It is private to you: share it with share_brain, or make it visible to your whole organization.';
+				const text = needsConfig
+					? `Connected ${connectedId}, but its content isn't under the default layout, so no pages show yet. Open it and choose Auto-configure (or run configure_brain) to index it. ${visibilityNote}`
+					: `Connected ${connectedId} as a brain. ${visibilityNote}`;
+				return {
+					content: [{ type: 'text' as const, text }],
+					structuredContent: {
+						view: 'brains',
+						brains: rows,
+						active: activeBrainId(),
+						connectedId,
+						needsConfig
+					} satisfies BrainsWire
+				};
 			}
-
-			// Guard: an adopted repo whose content isn't under the default layout would
-			// connect but show no pages. Detect it now so the app can offer to configure.
-			// The store is built from the org's installation client rather than taken off
-			// the context: org scope resolves no brain, so it carries no store of its own.
-			const connectedId = `${owner}/${name}`;
-			const needsConfig = await detectNeedsConfig(
-				githubStore(githubClient(ctx)),
-				{ owner, repo: name },
-				DEFAULT_BRAIN_CONFIG
-			).catch(() => false);
-
-			const rows = brainRows(await listBrains(), activeBrainId());
-			// Visibility is said in the sentence, not left as one field in the brains
-			// array: that field is the one a reader skims past, and the consequence of
-			// missing it is who can read the repo.
-			const visibilityNote =
-				'It is private to you: share it with share_brain, or make it visible to your whole organization.';
-			const text = needsConfig
-				? `Connected ${connectedId}, but its content isn't under the default layout, so no pages show yet. Open it and choose Auto-configure (or run configure_brain) to index it. ${visibilityNote}`
-				: `Connected ${connectedId} as a brain. ${visibilityNote}`;
-			return {
-				content: [{ type: 'text' as const, text }],
-				structuredContent: {
-					view: 'brains',
-					brains: rows,
-					active: activeBrainId(),
-					connectedId,
-					needsConfig
-				} satisfies BrainsWire
-			};
-		}
-	);
+		);
 
 	// connect_brain's MOVE: an existing brain into `dest`, which the caller already
 	// holds admin in (orgContext checked it). Taking a brain out of its current org is
@@ -856,55 +872,56 @@ export function registerBrainTools(
 	);
 
 	// ---------- disconnect_brain (admin+) ----------
-	server.registerTool(
-		'disconnect_brain',
-		{
-			title: 'Disconnect a brain',
-			description:
-				'Remove a brain from its organization: it stops appearing in the switcher, and nobody reaches it through Isomorphic any more. Its repository and content are untouched. If it was the active brain, another of your brains becomes active. Organization admin only; you can’t remove an org’s only brain.',
-			inputSchema: z.object({
-				brain: z.string().describe('Which brain to disconnect (name/handle or owner/repo id).')
-			})
-		},
-		async ({ brain }) => {
-			const ctx = await getContext();
-			const all = await listBrains();
-			const m = matchBrain(all, brain);
-			if (!m.brain) {
-				const names = (m.candidates ?? all).map(brainLabelQualified);
-				return fail(
-					m.candidates
-						? `"${brain}" matches multiple brains: ${names.join(', ')}. Be more specific.`
-						: `No brain matching "${brain}".`
+	if (multiUser)
+		server.registerTool(
+			'disconnect_brain',
+			{
+				title: 'Disconnect a brain',
+				description:
+					'Remove a brain from its organization: it stops appearing in the switcher, and nobody reaches it through Isomorphic any more. Its repository and content are untouched. If it was the active brain, another of your brains becomes active. Organization admin only; you can’t remove an org’s only brain.',
+				inputSchema: z.object({
+					brain: z.string().describe('Which brain to disconnect (name/handle or owner/repo id).')
+				})
+			},
+			async ({ brain }) => {
+				const ctx = await getContext();
+				const all = await listBrains();
+				const m = matchBrain(all, brain);
+				if (!m.brain) {
+					const names = (m.candidates ?? all).map(brainLabelQualified);
+					return fail(
+						m.candidates
+							? `"${brain}" matches multiple brains: ${names.join(', ')}. Be more specific.`
+							: `No brain matching "${brain}".`
+					);
+				}
+				const target = m.brain;
+				// ORG-scope, like connect_brain: removing a brain from the org is an org
+				// admin's call, not something brain-admin-by-share confers.
+				if (!target.org_role || !roleAtLeast(target.org_role, 'admin')) {
+					return fail(`You need organization admin access to disconnect ${brainLabel(target)}.`);
+				}
+				if (all.filter((b) => b.org_id === target.org_id).length <= 1) {
+					return fail(`Can’t disconnect the organization’s only brain.`);
+				}
+				// Drop the access grants with the brain, or they outlive it and silently
+				// re-attach if the same repo is adopted again later under the same id.
+				await deleteBrainGrants(ctx.db, target.brain_id);
+				await deleteBrain(ctx.db, target.brain_id);
+				// If we removed the active brain, fall the active pointer back to a survivor,
+				// and report THAT as active. Reporting ctx.activeBrain here named the brain
+				// just deleted, so the refreshed list marked no row active.
+				const active = activeAfterDisconnect(
+					ctx.activeBrain.id,
+					target.id,
+					all.map((b) => b.id)
 				);
+				if (active !== ctx.activeBrain.id && active) await setActiveBrain(active);
+				const rows = brainRows(await listBrains(), active);
+				return {
+					content: [{ type: 'text' as const, text: `Disconnected ${brainLabel(target)}.` }],
+					structuredContent: { view: 'brains', brains: rows, active } satisfies BrainsWire
+				};
 			}
-			const target = m.brain;
-			// ORG-scope, like connect_brain: removing a brain from the org is an org
-			// admin's call, not something brain-admin-by-share confers.
-			if (!target.org_role || !roleAtLeast(target.org_role, 'admin')) {
-				return fail(`You need organization admin access to disconnect ${brainLabel(target)}.`);
-			}
-			if (all.filter((b) => b.org_id === target.org_id).length <= 1) {
-				return fail(`Can’t disconnect the organization’s only brain.`);
-			}
-			// Drop the access grants with the brain, or they outlive it and silently
-			// re-attach if the same repo is adopted again later under the same id.
-			await deleteBrainGrants(ctx.db, target.brain_id);
-			await deleteBrain(ctx.db, target.brain_id);
-			// If we removed the active brain, fall the active pointer back to a survivor,
-			// and report THAT as active. Reporting ctx.activeBrain here named the brain
-			// just deleted, so the refreshed list marked no row active.
-			const active = activeAfterDisconnect(
-				ctx.activeBrain.id,
-				target.id,
-				all.map((b) => b.id)
-			);
-			if (active !== ctx.activeBrain.id && active) await setActiveBrain(active);
-			const rows = brainRows(await listBrains(), active);
-			return {
-				content: [{ type: 'text' as const, text: `Disconnected ${brainLabel(target)}.` }],
-				structuredContent: { view: 'brains', brains: rows, active } satisfies BrainsWire
-			};
-		}
-	);
+		);
 }

@@ -1,24 +1,12 @@
 // First-touch provisioning: what a signed-in person gets on their first request
-// when nothing resolves for them yet. Two paths, one per identity mode:
-//
-//   - authjs (`provisionOrgForUser`): claim any pending invitation, else mint a
-//     personal Model-A org (platform-owned) with an owner membership. No brain is
-//     created here; brains are created explicitly with create_brain. Touches no
-//     GitHub.
-//   - github, legacy (`provisionBrainForUser`): create a `brain-<login>` repo under
-//     the single platform org via the single platform App installation, scaffold
-//     it, and write a flat `tenants` row.
-//
-// Both mint under the platform org and installation (`platformInstall`), which the
-// admin configures once, so a reader never installs anything or sees GitHub. Both
-// are idempotent and safe to call on every request that finds nothing: an existing
-// row short-circuits, and a repo-name collision (a prior partial run, or concurrent
-// first calls) adopts the existing repo instead of failing.
+// when nothing resolves for them yet (`provisionOrgForUser`): claim any pending
+// invitation, else mint a personal org (platform-owned) with an owner membership.
+// No brain is created here; brains are created explicitly with create_brain. Touches
+// no GitHub. The platform org and installation (`platformInstall`) are configured
+// once by the admin, so a reader never installs anything or sees GitHub. Idempotent
+// and safe to call on every request that finds nothing.
 
-import type { Octokit } from 'octokit';
 import type { D1Database } from '@cloudflare/workers-types';
-import { createAndScaffoldBrain, scaffoldExistingRepo } from './scaffold-core.ts';
-import { getTenantByUserId, upsertTenant, type Tenant } from './tenants.ts';
 import {
 	upsertAppUser,
 	getMembershipWithOrg,
@@ -32,124 +20,8 @@ import {
 } from './orgs.ts';
 import { claimPendingInvites } from './invites.ts';
 
-export interface ProvisionInput {
-	octokit: Octokit;
-	db: D1Database;
-	ghUserId: number;
-	ghLogin?: string | null;
-	// The platform org all brains are created under, and the installation of the
-	// platform App on it. Both come from Worker config (PLATFORM_ORG /
-	// PLATFORM_INSTALLATION_ID), captured once at admin setup time.
-	org: string;
-	installationId: number;
-}
-
-// Brains share one org, so names must be unique. GitHub logins are unique at a
-// point in time, so `brain-<login>` reads well and rarely collides; we key the
-// tenant row on the stable gh_user_id regardless, and fall back to the id when
-// no login is available.
-export function brainRepoName(ghUserId: number, ghLogin?: string | null): string {
-	const slug = (ghLogin ?? '')
-		.toLowerCase()
-		.replace(/[^a-z0-9-]+/g, '-')
-		.replace(/^-+|-+$/g, '');
-	return slug ? `brain-${slug}` : `brain-${ghUserId}`;
-}
-
-function isAlreadyExists(err: unknown): boolean {
-	// GitHub returns 422 when a repo with that name already exists on the org.
-	return (
-		typeof err === 'object' &&
-		err !== null &&
-		'status' in err &&
-		(err as { status: number }).status === 422
-	);
-}
-
-// Adopt a repo that already exists under the platform org (prior partial run, or
-// a concurrent provisioning request that won the create race). Ensure it's
-// scaffolded — a repo created with auto_init but not yet scaffolded would lack
-// AGENTS.md — then return its coordinates.
-async function adoptExistingRepo(
-	octokit: Octokit,
-	org: string,
-	name: string
-): Promise<{ owner: string; repo: string }> {
-	const { data: repo } = await octokit.rest.repos.get({ owner: org, repo: name });
-
-	let hasScaffold = true;
-	try {
-		await octokit.rest.repos.getContent({ owner: org, repo: name, path: 'AGENTS.md' });
-	} catch (err) {
-		if (
-			typeof err === 'object' &&
-			err !== null &&
-			'status' in err &&
-			(err as { status: number }).status === 404
-		) {
-			hasScaffold = false;
-		} else {
-			throw err;
-		}
-	}
-
-	if (!hasScaffold) {
-		await scaffoldExistingRepo(octokit, {
-			owner: repo.owner.login,
-			repo: repo.name,
-			branch: repo.default_branch
-		});
-	}
-
-	return { owner: repo.owner.login, repo: repo.name };
-}
-
-export async function provisionBrainForUser(input: ProvisionInput): Promise<Tenant> {
-	const { octokit, db, ghUserId, ghLogin, org, installationId } = input;
-
-	// Idempotent short-circuit: someone already provisioned this user.
-	const existing = await getTenantByUserId(db, ghUserId);
-	if (existing) return existing;
-
-	const name = brainRepoName(ghUserId, ghLogin);
-
-	let owner: string;
-	let repo: string;
-	try {
-		const brain = await createAndScaffoldBrain(octokit, {
-			org,
-			name,
-			description: `Brain for ${ghLogin ?? ghUserId} — LLM-maintained knowledge base`
-		});
-		owner = brain.owner;
-		repo = brain.name;
-	} catch (err) {
-		if (!isAlreadyExists(err)) throw err;
-		// Repo already there — adopt it rather than fail. Covers retries after a
-		// crash between repo-create and tenant-upsert, and concurrent first calls.
-		({ owner, repo } = await adoptExistingRepo(octokit, org, name));
-	}
-
-	await upsertTenant(db, {
-		gh_user_id: ghUserId,
-		installation_id: installationId,
-		brain_owner: owner,
-		brain_repo: repo,
-		gh_login: ghLogin ?? null
-	});
-
-	// Re-read so callers get the full row (timestamps, suspended_at, etc.) exactly
-	// as the MCP read path would resolve it.
-	const tenant = await getTenantByUserId(db, ghUserId);
-	if (!tenant) {
-		// Should be impossible — we just upserted. Surface loudly if D1 lied.
-		throw new Error(`Provisioned brain for gh_user_id=${ghUserId} but tenant row did not persist.`);
-	}
-	return tenant;
-}
-
-// The platform org and its App installation, the only configuration either
-// provisioning path reads. An id that is not a positive integer is refused here,
+// The platform org and its App installation, the only configuration provisioning
+// (and create_org's hosted orgs) reads. An id that is not a positive integer is refused here,
 // where the message can name the variable, rather than surfacing later as a GitHub
 // auth failure.
 export interface PlatformInstall {

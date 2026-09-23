@@ -247,12 +247,8 @@ export function webUrlFor(
 //
 // authjs only: the cookie session is what Auth.js issues, and the github and static
 // identity paths have no browser session to read, so `/b/` is not served there.
-export function webBaseUrl(env: {
-	authMode?: string;
-	identityMode?: string;
-	publicBaseUrl?: string;
-}): string | undefined {
-	if (env.authMode !== 'oauth' || env.identityMode !== 'authjs') return undefined;
+export function webBaseUrl(env: { authMode?: string; publicBaseUrl?: string }): string | undefined {
+	if (env.authMode !== 'oauth') return undefined;
 	const base = (env.publicBaseUrl ?? '').trim().replace(/\/+$/, '');
 	return base || undefined;
 }

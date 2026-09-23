@@ -312,23 +312,6 @@ export async function linkedUserIds(db: D1Database, userId: string): Promise<str
 	return [...ids];
 }
 
-// Resolve a legacy GitHub identity (numeric gh_user_id) to its owning app_user via
-// the github_links bridge. Returns null when the GitHub id isn't linked (the caller
-// then falls back to the flat tenants path). See src/tools/connected-accounts.ts.
-export async function getAppUserByGithubUserId(
-	db: D1Database,
-	ghUserId: number
-): Promise<AppUser | null> {
-	return await db
-		.prepare(
-			`SELECT u.* FROM github_links g
-			   JOIN app_users u ON u.user_id = g.user_id
-			  WHERE g.github_user_id = ?1`
-		)
-		.bind(ghUserId)
-		.first<AppUser>();
-}
-
 // One entry in a person's "Connected accounts" roster: either an email identity
 // (an app_users row) or a linked GitHub account (a github_links row).
 export interface ConnectedAccount {
@@ -1058,6 +1041,9 @@ export interface AccessibleBrain {
 	storage_account: string;
 	// Its storage binding; null for a brain written before bindings existed.
 	storage_connection_id: string | null;
+	// The binding's connection kind (storage-connections.ts), which decides whether a
+	// token or an installation reads it: see credentialFor. Null with no binding.
+	storage_kind?: string | null;
 	repo_owner: string;
 	repo_name: string;
 	name?: string | null; // user-given display name (brains.name); NULL = derive from repo
@@ -1152,6 +1138,7 @@ export async function listAccessibleBrains(
 			        o.name AS org_name, o.model AS org_model,
 			        COALESCE(CAST(c.external_id AS INTEGER), o.installation_id) AS installation_id,
 			        c.account AS storage_account, b.storage_connection_id AS storage_connection_id,
+			        c.kind AS storage_kind,
 			        m.role AS org_role,
 			        bm.role AS grant_role, b.created_at AS created_at,
 			        b.read_only AS read_only`;
@@ -1193,6 +1180,7 @@ export async function listAccessibleBrains(
 			installation_id: number;
 			storage_account: string | null;
 			storage_connection_id: string | null;
+			storage_kind: string | null;
 			org_role: string | null;
 			grant_role: string | null;
 			read_only: number | null;
@@ -1227,6 +1215,7 @@ export async function listAccessibleBrains(
 			installation_id: r.installation_id,
 			storage_account: r.storage_account ?? r.repo_owner,
 			storage_connection_id: r.storage_connection_id,
+			storage_kind: r.storage_kind,
 			repo_owner: r.repo_owner,
 			repo_name: r.repo_name,
 			name: r.name,
