@@ -13,7 +13,8 @@ non-technical teammate never has to open GitHub.
 [Getting started](docs/getting-started.md) · [Self-hosting](docs/self-hosting.md) ·
 [Architecture](docs/architecture.md) ·
 [Licensing](docs/licensing.md) · [Contributing](CONTRIBUTING.md) ·
-[Invariants](CLAUDE.md) · [Roadmap](docs/roadmap.md)
+[Invariants](CLAUDE.md) · [Building with Claude Code](docs/building-with-claude.md) ·
+[Roadmap](docs/roadmap.md)
 
 **Try it in two minutes, with no accounts:**
 
