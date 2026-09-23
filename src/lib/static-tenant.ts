@@ -75,8 +75,8 @@ export async function ensureStaticTenant(
 			.prepare(`INSERT OR IGNORE INTO app_users (user_id, email, name) VALUES (?1, ?2, 'Operator')`)
 			.bind(STATIC_USER_ID, STATIC_USER_EMAIL),
 		// model 'platform' is what labels an org "Personal". installation_id and
-		// brain_owner are the columns every org still carries until the contract step;
-		// nothing reads them for a static brain, whose binding is set below.
+		// brain_owner are NOT NULL until they are dropped and nothing reads them: the
+		// org's storage is its default connection, set below.
 		db
 			.prepare(
 				`INSERT INTO orgs (org_id, name, model, installation_id, brain_owner, created_by)
@@ -95,6 +95,9 @@ export async function ensureStaticTenant(
 				 ON CONFLICT(connection_id) DO UPDATE SET account = excluded.account`
 			)
 			.bind(conn.connection_id, conn.kind, conn.external_id, conn.account, STATIC_ORG_ID),
+		db
+			.prepare(`UPDATE orgs SET default_connection_id = ?2 WHERE org_id = ?1`)
+			.bind(STATIC_ORG_ID, conn.connection_id),
 		db
 			.prepare(
 				`INSERT INTO brains (brain_id, org_id, repo_owner, repo_name, name, created_by, visibility,

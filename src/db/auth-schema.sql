@@ -16,9 +16,10 @@ CREATE TABLE IF NOT EXISTS orgs (
   org_id           TEXT PRIMARY KEY,          -- our uuid, NOT a GitHub id
   name             TEXT NOT NULL,
   model            TEXT NOT NULL,             -- 'platform' | 'customer' | 'hosted'
-  installation_id  INTEGER NOT NULL,          -- platform install, or the customer's own
-  brain_owner      TEXT NOT NULL,             -- GitHub org/login that holds the repos
-  github_org_login TEXT,                      -- customer's GitHub org (Model B only)
+  installation_id  INTEGER NOT NULL,          -- unread; dropped by a later migration
+  brain_owner      TEXT NOT NULL,             -- unread; dropped by a later migration
+  github_org_login TEXT,                      -- unread; dropped by a later migration
+  default_connection_id TEXT,                 -- storage_connections: where its brains live
   created_by       TEXT NOT NULL,             -- app_users.user_id of the owner
   created_at       TEXT NOT NULL DEFAULT (datetime('now')),
   suspended_at     TEXT
@@ -37,9 +38,7 @@ CREATE TABLE IF NOT EXISTS app_users (
 
 CREATE INDEX IF NOT EXISTS app_users_person_idx ON app_users (person_id);
 
--- Bridges a legacy GitHub identity (props.gh_user_id) to a product identity, so a
--- GitHub-mode connection resolves into its owner's linked person. Many GitHub
--- accounts can map to one person.
+-- Unread since GitHub sign-in was removed; dropped by a later migration.
 CREATE TABLE IF NOT EXISTS github_links (
   github_user_id INTEGER PRIMARY KEY,
   user_id        TEXT NOT NULL REFERENCES app_users(user_id),
@@ -75,7 +74,7 @@ CREATE TABLE IF NOT EXISTS storage_connections (
   UNIQUE (provider, kind, external_id)
 );
 
--- Brains owned by an org (supersedes tenants.brain_*; supports >1 brain/org).
+-- Brains owned by an org (more than one per org).
 CREATE TABLE IF NOT EXISTS brains (
   brain_id   TEXT PRIMARY KEY,
   org_id     TEXT NOT NULL REFERENCES orgs(org_id),

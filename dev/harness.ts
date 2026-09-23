@@ -270,15 +270,13 @@ function rosterResult(msg: string): CallToolResult {
 
 // In-memory linked-identities set so `#connected` (and the Your-settings → Connected
 // accounts row) preview the linking UX without a server: two emails (gmail = this
-// sign-in) + two GitHub accounts, mirroring the founder's real person.
+// sign-in).
 let connectedAccounts: {
-	kind: 'email' | 'github';
+	kind: 'email';
 	is_self: boolean;
 	user_id?: string;
 	email?: string;
 	name?: string | null;
-	github_user_id?: number;
-	github_login?: string | null;
 }[] = [
 	{
 		kind: 'email',
@@ -293,9 +291,7 @@ let connectedAccounts: {
 		user_id: 'u-alt',
 		email: 'owner.alt@example.com',
 		name: null
-	},
-	{ kind: 'github', is_self: false, github_user_id: 10000001, github_login: 'octodev' },
-	{ kind: 'github', is_self: false, github_user_id: 10000002, github_login: 'octoadmin' }
+	}
 ];
 // Data shape (unlink_identity): just the fresh accounts array.
 function connectedResult(msg: string): CallToolResult {
@@ -1021,22 +1017,9 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
 			const email = String(args?.email ?? '')
 				.trim()
 				.toLowerCase();
-			const github = String(args?.github ?? '')
-				.trim()
-				.replace(/^@/, '')
-				.toLowerCase();
 			if (email)
 				connectedAccounts = connectedAccounts.filter(
-					(a) => !(a.kind === 'email' && (a.email ?? '').toLowerCase() === email)
-				);
-			else if (github)
-				connectedAccounts = connectedAccounts.filter(
-					(a) =>
-						!(
-							a.kind === 'github' &&
-							(String(a.github_user_id) === github ||
-								(a.github_login ?? '').toLowerCase() === github)
-						)
+					(a) => (a.email ?? '').toLowerCase() !== email
 				);
 			return connectedResult('Unlinked.');
 		}

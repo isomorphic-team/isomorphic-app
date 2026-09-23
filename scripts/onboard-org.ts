@@ -5,8 +5,9 @@
 // platform installation) and adopts an existing repo as its first brain. Three
 // D1 rows make that real:
 //
-//   1. orgs         — the customer org (model='customer', their installation_id,
-//                     brain_owner = their GitHub org).
+//   1. orgs         — the customer org (model='customer'), with its storage
+//                     connection (their installation, account = their GitHub org)
+//                     as the default.
 //   2. brains       — adopt their existing KB repo (optional; skip with no --repo
 //                     and let them run connect_brain later). Writing it here keeps
 //                     the invited owner from landing in a brainless org on first
@@ -222,11 +223,23 @@ async function main() {
 			`    FROM app_users WHERE email = ${sqlStr(operatorEmail)};`
 	);
 
+	const connectionId = sqlStr(`github-app:${installationId}`);
+	statements.push(
+		`-- Its storage connection (the installation), owned by the org, as its default.\n` +
+			`INSERT OR IGNORE INTO storage_connections\n` +
+			`  (connection_id, provider, kind, external_id, account, owner_org_id)\n` +
+			`  VALUES (${connectionId}, 'github', 'github-app-installation', ${sqlStr(String(installationId))},\n` +
+			`          ${sqlStr(args.githubOrg)}, ${sqlStr(orgId)});\n` +
+			`UPDATE orgs SET default_connection_id = ${connectionId} WHERE org_id = ${sqlStr(orgId)};`
+	);
+
 	if (args.repo && brainId) {
 		statements.push(
 			`-- Adopt the existing KB repo as the org's first brain (no scaffold).\n` +
-				`INSERT OR IGNORE INTO brains (brain_id, org_id, repo_owner, repo_name, visibility)\n` +
-				`  VALUES (${sqlStr(brainId)}, ${sqlStr(orgId)}, ${sqlStr(args.githubOrg)}, ${sqlStr(args.repo)}, 'org');`
+				`INSERT OR IGNORE INTO brains\n` +
+				`  (brain_id, org_id, repo_owner, repo_name, visibility, storage_connection_id)\n` +
+				`  VALUES (${sqlStr(brainId)}, ${sqlStr(orgId)}, ${sqlStr(args.githubOrg)}, ${sqlStr(args.repo)}, 'org',\n` +
+				`          ${connectionId});`
 		);
 	}
 

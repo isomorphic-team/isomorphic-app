@@ -443,7 +443,7 @@ check(
 		const v = parseToolView({
 			view: 'settings',
 			email: 'a@example.com',
-			accounts: [{ kind: 'github' }]
+			accounts: [{ kind: 'email', email: 'b@example.com' }]
 		});
 		return v.kind === 'settings' && v.identity.email === 'a@example.com' && v.accounts.length === 1;
 	})()

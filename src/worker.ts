@@ -37,7 +37,7 @@ import { installationOctokit, tokenOctokit, staticAuth, type AppCreds } from './
 import { githubStore, commitAuthorFor, type BrainStore } from './lib/brain-repo.ts';
 import { platformInstall, provisionOrgForUser } from './lib/provision.ts';
 import { ensureStaticTenant, STATIC_USER_ID } from './lib/static-tenant.ts';
-import { credentialFor } from './lib/storage-connections.ts';
+import { credentialFor, credentialForConnection, orgStorage } from './lib/storage-connections.ts';
 import { claimPendingInvites } from './lib/invites.ts';
 import {
 	getAppUser,
@@ -230,10 +230,8 @@ interface TenantContext {
 	// Null when the caller holds no membership in the org that owns the resolved brain.
 	// Every gate reading this treats null as "not a member", never as "no gate".
 	orgRole: Role | null;
-	// The resolved org's id + the acting user's id, set only when resolution went
-	// through the org model (authjs, or a linked GitHub id). The member-management
-	// tools need them to scope the roster and enforce self-guards; undefined on the
-	// single-tenant paths (github tenant row, static) (those tools reject with "org accounts only").
+	// The resolved org's id + the acting user's id. The member-management tools need
+	// them to scope the roster and enforce self-guards.
 	orgId?: string;
 	actorUserId?: string;
 	// The brain's content-shape config (.isomorphic.json, or defaults when absent).
@@ -627,13 +625,19 @@ class McpSession {
 			}
 		}
 		assertRole(membership.role, opts?.requires);
-		const octokit = await installationOctokit(appCreds(env), membership.org.installation_id);
+		const storage = await orgStorage(env.PLATFORM_DB, membership.org);
+		const credential = credentialForConnection(storage);
+		const octokit =
+			credential.kind === 'token'
+				? tokenOctokit(requireToken(env))
+				: await installationOctokit(appCreds(env), credential.installationId);
 		const author = commitAuthorFor(await getAppUser(env.PLATFORM_DB, userId), email);
 		// Org scope resolves no brain, so usage rows for these calls carry ''.
 		this.noteScope(membership.org.org_id);
 		return {
 			octokit,
 			org: membership.org,
+			storage,
 			role: membership.role,
 			db: env.PLATFORM_DB,
 			actorUserId: userId,
@@ -836,7 +840,7 @@ class McpSession {
 		// ---------- connected accounts (identity linking) ----------
 		// The per-person "Your settings → Connected accounts" surface: connected_accounts
 		// (the interactive panel + data) plus link_identity / unlink_identity.
-		// Links a person's emails + GitHub logins so any of them reaches
+		// Links a person's email logins so any of them reaches
 		// the union of their brains; verified via magic-link. See src/tools/connected-accounts.ts.
 		if (multiUser)
 			registerConnectedAccountTools(server, (opts) => this.tenantContext(opts), this.env);

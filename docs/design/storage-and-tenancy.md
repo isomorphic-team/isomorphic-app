@@ -4,7 +4,8 @@
   `src/lib/storage-connections.ts` and migration 0010; moving a brain between orgs with
   `connect_brain`, `src/lib/brain-move.ts`; one tenancy model,
   `src/lib/static-tenant.ts`; derived state keyed by `brain_id`, migration 0011) and step 4
-  (slug URLs, `src/lib/brain-slug.ts` and migration 0012). Steps 5 and 6 not started.
+  (slug URLs, `src/lib/brain-slug.ts` and migration 0012) and step 6 (contract,
+  migration 0013; dropping the old org columns is left). Step 5 not started.
 - Author: Jon Hansing (via Claude)
 - Date: 2026-09-22
 - Related: `docs/design/brain-seams.md` (§6, identity is a key, never a path),
@@ -93,9 +94,9 @@ column, `brains.storage_connection_id`, and the locator is the existing `repo_ow
 `repo_name`, which is what a GitHub locator is. Step 5 generalizes the locator when a
 backend needs a different shape (Azure's organization, project and repository).
 
-A brain whose binding is NULL (every brain written before step 1, and any written by
-old code during the deploy window) falls back to its org's installation, which is
-exactly how it resolved before. The fallback is removed in step 6.
+Every brain is bound (step 1's backfill, and every writer since). The fallback to the
+org's installation for an unbound brain was removed in step 6: an unbound brain is not
+listed, rather than read through a credential that may not reach it.
 
 ### Brain identity
 
@@ -236,8 +237,14 @@ its deploy window, because a rollback reverts code and never schema.
 5. **A second backend.** An Azure Repos `BrainStore`, a service-principal connection
    kind, a generalized locator, and relocation. Built when a customer needs it, with an
    e2e battery against a scratch repository (the twin of the `--github` mode).
-6. **Contract.** Drop the binding fallback, `orgs.installation_id`, `orgs.brain_owner`
-   and `orgs.model` (replaced by `personal` and a default connection).
+6. **Contract (built, one column drop left).** Checked against production first (18
+   brains, all bound; every org's installation a recorded connection; one dead `tenants`
+   row; no `github_links`). Removed: the binding fallback, the `tenants` table, and the
+   GitHub half of Connected accounts. `orgs.default_connection_id` (migration 0013) names
+   the org's storage, so nothing reads `orgs.installation_id`, `brain_owner` or
+   `github_org_login`; a later migration drops them and `github_links`, one deploy after
+   this, so a rollback never meets a missing column. `orgs.model` stays: it labels orgs
+   and gates adoption correctly, and replacing it changes nothing a person sees.
 
 Provider-specific concepts that stay provider-specific, inside the store: pull requests
 (`commitOrPR`), branch protection (`repoWritePolicy`) and commit attribution. Azure Repos

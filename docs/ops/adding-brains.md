@@ -27,7 +27,7 @@ the row and it appears for those people immediately, **no reconnect**.
 ## The one hard requirement: installation owner
 
 An installation token can only touch repos under the GitHub owner the App is installed
-on (`orgs.brain_owner` / the installation's account). So the repo you're adopting
+on (the org's storage connection's `account`). So the repo you're adopting
 **must live under that same owner**.
 
 - Repo under the org's GitHub org (e.g. `acme-co/…`) → fine.
@@ -48,7 +48,7 @@ installation token read/write to it.)
 
 ```sh
 pnpm exec wrangler d1 execute platform-db --remote \
-  --command "SELECT org_id, name, model, installation_id, brain_owner FROM orgs;"
+  --command "SELECT o.org_id, o.name, o.model, c.external_id AS installation, c.account FROM orgs o LEFT JOIN storage_connections c ON c.connection_id = o.default_connection_id;"
 ```
 
 ### 3. Register the brain row

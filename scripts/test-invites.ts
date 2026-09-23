@@ -16,6 +16,7 @@
 //   pnpm test:invites
 
 import { localD1 } from '../src/local/d1-sqlite.ts';
+import { bindFixtureStorage } from './fixture-storage.ts';
 import { checker } from './check.ts';
 import { planInviteClaims, claimPendingInvites, type MatchedInvite } from '../src/lib/invites.ts';
 import { noBrainOutcome, provisionOrgForUser } from '../src/lib/provision.ts';
@@ -190,6 +191,7 @@ sqlite.exec(`
     ('b-home',      'orgA', 'platform-org', 'brain-ada', 'Ada',       'org', '2026-01-02'),
     ('b-northwind', 'orgB', 'northwind',    'brain',     'Northwind', 'org', '2026-02-02');
 `);
+bindFixtureStorage(sqlite);
 
 const brainIds = async (userIds: string[]) =>
 	(await listAccessibleBrains(db, userIds)).map((b) => `${b.repo_owner}/${b.repo_name}`).sort();

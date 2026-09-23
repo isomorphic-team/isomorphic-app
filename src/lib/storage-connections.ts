@@ -19,8 +19,6 @@ export const GITHUB_TOKEN_KIND = 'github-token';
 
 // How to reach a brain's storage, from its binding. Pure, so the choice between a
 // token and an installation is pinned by a test rather than buried in the Worker.
-// A brain with no binding (written before migration 0010) resolves through its
-// org's installation, as every brain did before bindings existed.
 export type BrainCredential = { kind: 'token' } | { kind: 'installation'; installationId: number };
 
 export function credentialFor(brain: {
@@ -46,6 +44,15 @@ export function githubAppConnectionId(installationId: number): string {
 	return `github-app:${installationId}`;
 }
 
+// The credential for a connection itself, for org-scope work (creating or listing
+// repositories) that has no brain to read it off.
+export function credentialForConnection(conn: {
+	kind: string;
+	external_id: string;
+}): BrainCredential {
+	return credentialFor({ storage_kind: conn.kind, installation_id: Number(conn.external_id) });
+}
+
 // Who administers an org's installation. A customer org owns its own; the
 // platform installation is shared by every personal and hosted org and owned by
 // none of them.
@@ -53,28 +60,18 @@ export function connectionOwnerFor(org: Pick<Org, 'org_id' | 'model'>): string |
 	return org.model === 'customer' ? org.org_id : null;
 }
 
-// The connection new brains in this org are created on, created if missing.
-// INSERT OR IGNORE: an installation already recorded keeps its existing owner.
-export async function ensureOrgConnection(
+// The connection new brains in this org are created on: its account is where they
+// live and its credential what reads them. createOrg records it; an org without one
+// predates migration 0013's backfill and is an operator problem, not a fallback.
+export async function orgStorage(
 	db: D1Database,
-	org: Pick<Org, 'org_id' | 'model' | 'installation_id' | 'brain_owner'>
-): Promise<string> {
-	const id = githubAppConnectionId(org.installation_id);
-	await db
-		.prepare(
-			`INSERT OR IGNORE INTO storage_connections
-			   (connection_id, provider, kind, external_id, account, owner_org_id)
-			 VALUES (?1, 'github', ?2, ?3, ?4, ?5)`
-		)
-		.bind(
-			id,
-			GITHUB_APP_KIND,
-			String(org.installation_id),
-			org.brain_owner,
-			connectionOwnerFor(org)
-		)
-		.run();
-	return id;
+	org: Pick<Org, 'org_id' | 'default_connection_id'>
+): Promise<StorageConnection> {
+	const conn = org.default_connection_id
+		? await getConnection(db, org.default_connection_id)
+		: null;
+	if (!conn) throw new Error(`Org ${org.org_id} has no storage connection.`);
+	return conn;
 }
 
 export async function getConnection(
@@ -90,10 +87,9 @@ export async function getConnection(
 // Whether an org may list and adopt repositories through its own connection.
 // Hosted storage is platform-owned: adopting through it would let any org claim a
 // repository in the shared platform account that some other org's brain left behind.
-export async function orgAdministersConnection(
-	db: D1Database,
-	org: Pick<Org, 'org_id' | 'model' | 'installation_id' | 'brain_owner'>
-): Promise<boolean> {
-	const conn = await getConnection(db, await ensureOrgConnection(db, org));
-	return conn?.owner_org_id === org.org_id;
+export function orgAdministersConnection(
+	org: Pick<Org, 'org_id'>,
+	conn: Pick<StorageConnection, 'owner_org_id'>
+): boolean {
+	return conn.owner_org_id === org.org_id;
 }

@@ -42,11 +42,7 @@ import {
 	activeAfterDisconnect
 } from '../lib/orgs.ts';
 import { createAndScaffoldBrain } from '../lib/scaffold-core.ts';
-import {
-	ensureOrgConnection,
-	getConnection,
-	orgAdministersConnection
-} from '../lib/storage-connections.ts';
+import { getConnection, orgAdministersConnection } from '../lib/storage-connections.ts';
 import {
 	countPendingBrainInvites,
 	describeMove,
@@ -388,7 +384,7 @@ export function registerBrainTools(
 				const display = name.trim();
 				if (!display) return fail('Please give the brain a name.');
 
-				const owner = ctx.org.brain_owner;
+				const owner = ctx.storage.account;
 				const base = slugName(display) || 'brain';
 				// Scaffold a fresh repo; on a name collision (repo already exists, brain or not)
 				// try the next `base-N` slug. repo_name is the immutable slug; `display` is the name.
@@ -428,7 +424,7 @@ export function registerBrainTools(
 					name: display,
 					created_by: ctx.actorUserId,
 					visibility: 'private',
-					storage_connection_id: await ensureOrgConnection(ctx.db, ctx.org)
+					storage_connection_id: ctx.storage.connection_id
 				});
 				if (ctx.actorUserId) {
 					await setBrainGrant(ctx.db, {
@@ -554,7 +550,7 @@ export function registerBrainTools(
 				// other org's brains live, so adopting through it would let any admin claim
 				// a repository some other org's brain left behind. (Moving a brain INTO a
 				// hosted org, above, reads nothing through its connection.)
-				if (!(await orgAdministersConnection(ctx.db, ctx.org))) {
+				if (!orgAdministersConnection(ctx.org, ctx.storage)) {
 					return fail(
 						`${orgLabel(ctx.org)} stores its brains on Isomorphic's hosted storage, which has no repositories of its own to adopt. Use create_brain to start a new brain here, move an existing brain in by naming it, or use create_org with github: true to connect your own GitHub organization.`
 					);
@@ -578,7 +574,7 @@ export function registerBrainTools(
 					return { content: [{ type: 'text' as const, text }], structuredContent: { repos } };
 				}
 
-				const parts = repo.includes('/') ? repo.split('/') : [ctx.org.brain_owner, repo];
+				const parts = repo.includes('/') ? repo.split('/') : [ctx.storage.account, repo];
 				const owner = parts[0].trim();
 				const name = (parts[1] ?? '').trim();
 				if (!owner || !name) return fail(`"${repo}" is not a valid repository.`);
@@ -622,7 +618,7 @@ export function registerBrainTools(
 					name: displayName?.trim() || null,
 					created_by: ctx.actorUserId,
 					visibility: 'private',
-					storage_connection_id: await ensureOrgConnection(ctx.db, ctx.org)
+					storage_connection_id: ctx.storage.connection_id
 				});
 				if (ctx.actorUserId) {
 					await setBrainGrant(ctx.db, {
@@ -689,11 +685,8 @@ export function registerBrainTools(
 		const from = orgLabel(source);
 		const to = orgLabel(dest.org);
 
-		// The connection the brain is read through today: its binding, or for a brain
-		// written before bindings existed, its org's. That one keeps reading it.
-		const sourceConnectionId =
-			target.storage_connection_id ?? (await ensureOrgConnection(dest.db, source));
-		const conn = await getConnection(dest.db, sourceConnectionId);
+		// The connection the brain is read through, which a move does not change.
+		const conn = await getConnection(dest.db, target.storage_connection_id);
 		const storageAccount =
 			conn && conn.owner_org_id === null
 				? 'Isomorphic hosted storage'
@@ -723,11 +716,7 @@ export function registerBrainTools(
 			};
 		}
 
-		await moveBrain(dest.db, {
-			brainId: target.brain_id,
-			toOrgId: dest.org.org_id,
-			sourceConnectionId
-		});
+		await moveBrain(dest.db, { brainId: target.brain_id, toOrgId: dest.org.org_id });
 		if (newName) await setBrainName(dest.db, target.brain_id, newName);
 		const listed = await listBrains();
 		const rows = brainRows(listed, activeHandle(listed));
