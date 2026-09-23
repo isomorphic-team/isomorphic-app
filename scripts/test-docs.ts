@@ -172,6 +172,9 @@ const code = [...codeFiles, 'package.json', 'wrangler.template.jsonc', 'playwrig
 	.map((p) => read(p))
 	.join('\n');
 
+// Every identifier the code contains, so a symbol check is a set lookup.
+const identifiers = new Set(code.match(/[A-Za-z_$][\w$]*/g) ?? []);
+
 const tools = new Set(
 	files
 		.filter((p) => /^src\/(tools\/[^/]+|worker)\.ts$/.test(p))
@@ -211,7 +214,7 @@ for (const doc of referenceDocs) {
 			if (!ok) problems.push(`:${line} \`${span}\` does not exist`);
 		}
 		const symbol = symbolIn(span);
-		if (symbol && !new RegExp(`\\b${symbol.replace(/\$/g, '\\$')}\\b`).test(code)) {
+		if (symbol && !identifiers.has(symbol)) {
 			problems.push(`:${line} \`${symbol}\` is not in the code`);
 		}
 	}
