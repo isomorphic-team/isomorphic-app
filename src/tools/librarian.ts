@@ -87,20 +87,14 @@ import {
 } from '../lib/advisories.ts';
 import { computeTensions, tensionFindings, MAX_DUP_PAGES } from '../lib/consolidate.ts';
 import { scoreProbe } from '../lib/probe.ts';
-import {
-	applyPageEdits,
-	applyFieldPatch,
-	validateFieldPatch,
-	OKF_PAGE_STATUSES,
-	type OkfPageStatus,
-	type FieldPatch
-} from '../lib/page-patch.ts';
+import { OKF_PAGE_STATUSES } from '../lib/page-patch.ts';
 import { elisionNote } from '../lib/search.ts';
 import { parseLedger } from '../lib/brain-import.ts';
 import { dedupeWrite, writeFingerprint, secondsSince } from '../lib/write-dedupe.ts';
 import { d1WriteLedger } from '../lib/write-dedupe-store.ts';
 import { brainLabel, type TenantOpts, type Role, type AccessibleBrain } from '../lib/orgs.ts';
 import { brainArg, fail, ok } from './shared.ts';
+import { checkPageWrite, planPageWrite, composeCreate, composeUpdate } from '../lib/page-write.ts';
 import {
 	commitOpts,
 	changelogWrite,
@@ -384,13 +378,6 @@ async function inboundRefs(
 	return { refs, truncated };
 }
 
-// Merge model-supplied frontmatter (if the content began with a `---` block)
-// under our managed keys, returning the body without its old frontmatter.
-function splitProvidedContent(content: string): { fm: Frontmatter; body: string } {
-	const { frontmatter, body } = parseFrontmatter(content);
-	return { fm: frontmatter ?? {}, body: frontmatter ? body : content };
-}
-
 // Derived views: regenerate the cached snapshot rendering beneath each okf-view
 // fence before the content lands in the file (see src/lib/views.ts). No-op for
 // pages without views; falls back to the unrefreshed content on any failure.
@@ -409,75 +396,30 @@ async function withFreshSnapshots(ctx: BrainContext, path: string, content: stri
 // write_page's two internal paths. write_page validates the path and decides which to
 // run from whether the page already exists; each path builds one atomic commit bundle.
 
-// Create a brand-new page: generate fresh frontmatter and log it. The
-// caller guarantees `target` is free, ends in .md, and is inside the editable area.
+// Create a brand-new page. The caller guarantees `target` is free, ends in .md, and
+// is inside the editable area (planPageWrite).
 async function createPageWrite(
 	ctx: BrainContext,
 	head: Head,
-	args: {
-		target: string;
-		content?: string;
-		title?: string;
-		type?: string;
-		description?: string;
-		status?: OkfPageStatus;
-		fields?: FieldPatch;
-		sources?: string[];
-	}
+	target: string,
+	args: Parameters<typeof composeCreate>[1]
 ) {
 	const { store, repoArgs, config, author } = ctx;
-	const { target, content, title, type, description, status, fields, sources } = args;
-	// Fall back through the SAME chain the rest of the system resolves titles by
-	// (pageTitle): a `title:` in the caller's own content, then the body's `# H1`,
-	// then the filename — or the folder's name for a folder note. Deriving straight
-	// from the filename here would have written a title that outranks the heading the
-	// author just wrote, permanently, and would have named every folder note "index".
-	const finalTitle = title?.trim() || pageTitle(target, content ?? '');
-	const provided = splitProvidedContent(content ?? '');
-	// `type` is OKF's one required field. Prefer the explicit arg, fall back to a type
-	// the caller wrote into the content's own frontmatter, and leave it off entirely
-	// when neither is given — we record what the author chose, never invent one.
-	const finalType =
-		type?.trim() || (typeof provided.fm.type === 'string' ? provided.fm.type.trim() : '');
 	const today = todayIso();
-	// Keys this call actually sets. `type` leads, as in the OKF spec's own examples.
-	const managed: Frontmatter = {
-		...(finalType ? { type: finalType } : {}),
-		title: finalTitle,
-		...(description ? { description } : {}),
-		...(status ? { status } : {}),
-		updated: today,
-		...(sources?.length ? { sources } : {})
-	};
-	const fm: Frontmatter = {
-		...managed,
-		// Everything else the caller supplied is kept — including keys that merely
-		// SHARE a managed name while this call sets no value for them. Filtering on the
-		// managed NAME list instead dropped a caller's OKF `sources:` block whenever the
-		// `sources` argument was absent, which is exactly how provenance went missing.
-		...Object.fromEntries(Object.entries(provided.fm).filter(([k]) => !(k in managed)))
-	};
-	// A create can carry `fields` too, so a page can be born with the brain's own
-	// metadata instead of needing a second call to add it.
-	let finalFm = fm;
-	if (fields) {
-		const patched = applyFieldPatch(fm, fields);
-		if (!patched.ok) return fail(patched.error);
-		finalFm = patched.frontmatter;
-	}
-	const finalStatus = typeof finalFm.status === 'string' ? finalFm.status : undefined;
+	const composed = composeCreate(target, args, today);
+	if (!composed.ok) return fail(composed.error);
 	// The snapshot refresh (which may touch the index) and the changelog read are
 	// independent, so they run together rather than back to back.
 	const [newContent, log] = await Promise.all([
-		withFreshSnapshots(ctx, target, withFrontmatter(finalFm, provided.body)),
+		withFreshSnapshots(ctx, target, composed.content),
 		store.readFile(repoArgs, logPathOf(config))
 	]);
 	const rec = describeChange({
 		kind: 'create',
 		path: target,
-		title: finalTitle,
-		status: finalStatus,
-		description
+		title: composed.title,
+		status: composed.status,
+		description: args.description
 	});
 	const writes = [{ path: target, content: newContent }];
 	const entry = changelogWrite(config, log, today, rec.bullet);
@@ -491,122 +433,39 @@ async function createPageWrite(
 	return landed(ctx, outcome, rec.done, rec.proposed);
 }
 
-// Update an existing page: preserve+merge frontmatter, bump `updated`, repoint inbound
-// wikilinks on a retitle, and (for the in-client editor) honor an optional sha guard and
-// return a fresh sha. `existing` is the current blob; the caller has checked the sha.
+// Update an existing page: compose the new file (composeUpdate), repoint inbound
+// wikilinks on a retitle, and (for the in-client editor) return a fresh sha.
+// `existing` is the current blob; planPageWrite has already checked the sha.
 async function updatePageWrite(
 	ctx: BrainContext,
 	head: Head,
 	existing: { content: string; sha: string },
-	args: {
-		path: string;
-		content?: string;
-		rawBody?: string;
-		changeSummary?: string;
-		title?: string;
-		type?: string;
-		description?: string;
-		status?: OkfPageStatus;
-		fields?: FieldPatch;
-		sha?: string;
-	}
+	args: Parameters<typeof composeUpdate>[2] & { path: string; sha?: string }
 ) {
 	const { store, repoArgs, config, author } = ctx;
-	const { path, content, rawBody, changeSummary, title, type, description, status, fields, sha } =
-		args;
+	const { path, sha } = args;
 	// The changelog read is independent of everything below (snapshot refresh, link
-	// repointing) — start it first so it overlaps them instead of chaining on. The
-	// detached catch keeps an early return below (a field-patch refusal) from leaving
-	// an unhandled rejection; the await still rethrows a real failure.
+	// repointing), so it starts first and overlaps them. The detached catch keeps an
+	// early return below from leaving an unhandled rejection; the await still rethrows.
 	const logPromise = store.readFile(repoArgs, logPathOf(config));
 	logPromise.catch(() => {});
-	const old = parseFrontmatter(existing.content);
-	// Three ways to arrive here, in precedence order: `rawBody` is an
-	// already-patched body (append/edits — frontmatter was split off by the
-	// caller, so it must NOT be re-parsed); `content` is a caller-supplied
-	// replacement that may carry its own frontmatter; omitting both means
-	// "metadata only", so keep the existing body verbatim.
-	const provided =
-		rawBody !== undefined
-			? { fm: {} as Frontmatter, body: rawBody }
-			: content !== undefined
-				? splitProvidedContent(content)
-				: { fm: {} as Frontmatter, body: old.body };
 	const today = todayIso();
-
-	// Preserve+merge frontmatter when the page has it (or the caller sets a managed
-	// field); otherwise save the body as-is. No structure assumptions.
-	const oldTitle = typeof old.frontmatter?.title === 'string' ? old.frontmatter.title : null;
-	const newTitle = title ?? oldTitle ?? undefined;
-	const manageFm =
-		old.frontmatter !== null ||
-		title !== undefined ||
-		type !== undefined ||
-		description !== undefined ||
-		status !== undefined ||
-		fields !== undefined;
-
-	let newContent: string;
-	let fieldSummary: string | undefined;
-	let fieldCount = 0;
-	if (manageFm) {
-		let fm: Frontmatter = {
-			...(old.frontmatter ?? {}),
-			...provided.fm,
-			...(newTitle ? { title: newTitle } : {}),
-			...(type?.trim() ? { type: type.trim() } : {}),
-			...(description ? { description } : {}),
-			...(status ? { status } : {}),
-			updated: today
-		};
-		if (fields) {
-			const patched = applyFieldPatch(fm, fields);
-			if (!patched.ok) return fail(patched.error);
-			fm = patched.frontmatter;
-			fieldSummary = patched.summary;
-			fieldCount = Object.keys(fm).length;
-		}
-		newContent = withFrontmatter(fm, provided.body);
-	} else {
-		newContent = provided.body;
-	}
-	newContent = await withFreshSnapshots(ctx, path, newContent);
+	const composed = composeUpdate(path, existing.content, args, today, MAX_FIELD_KEYS_PER_PAGE);
+	if (!composed.ok) return fail(composed.error);
+	const newContent = await withFreshSnapshots(ctx, path, composed.content);
 
 	const writes = [{ path, content: newContent }];
-	const notes: string[] = [];
-
-	// Say what the write did to the body. A patch reports its own summary; a
-	// full-content write reports the SIZE of what it replaced, so a clobber of
-	// text the caller never read is visible in the transcript instead of silent.
-	if (changeSummary) {
-		notes.push(changeSummary);
-	} else if (content !== undefined && provided.body.trim() !== old.body.trim()) {
-		const count = (s: string) => (s.trim() ? s.trim().split('\n').length : 0);
-		notes.push(
-			`replaced the whole body (was ${count(old.body)} lines, now ${count(provided.body)})`
-		);
-	}
-	if (fieldSummary) {
-		notes.push(fieldSummary);
-		// Past the cap the indexer stops reading keys, so the field would be set in
-		// the file and invisible to okf-view filter:/group-by:. Say so here rather
-		// than letting it surface later as a view that misses pages.
-		if (fieldCount > MAX_FIELD_KEYS_PER_PAGE) {
-			notes.push(
-				`heads up: this page now has ${fieldCount} frontmatter keys and only the first ${MAX_FIELD_KEYS_PER_PAGE} are indexed, so the last ones cannot be filtered on`
-			);
-		}
-	}
+	const notes = [...composed.notes];
 
 	// Retitling breaks [[Old Title]] wikilinks — repoint them in the same save. Only the
 	// pages that actually link to this one are fetched (via the index), so this is bounded
 	// by inbound-link count, not brain size.
-	if (title && oldTitle && title !== oldTitle) {
+	if (composed.retitledFrom) {
 		const { pages, truncated } = await fetchInboundLinkers(ctx, head, path);
 		let repointed = 0;
 		for (const page of pages) {
 			if (page.path === path || isToolMaintained(page.path, config)) continue;
-			const rewritten = rewriteWikiLinks(page.content, oldTitle, title);
+			const rewritten = rewriteWikiLinks(page.content, composed.retitledFrom, composed.label);
 			if (rewritten.changed > 0) {
 				writes.push({ path: page.path, content: rewritten.body });
 				repointed += rewritten.changed;
@@ -620,9 +479,9 @@ async function updatePageWrite(
 	const rec = describeChange({
 		kind: 'update',
 		path,
-		label: newTitle ?? path,
-		statusChanged: status && status !== old.frontmatter?.status ? status : undefined,
-		retitledFrom: title && oldTitle && title !== oldTitle ? oldTitle : undefined,
+		label: composed.label,
+		statusChanged: composed.statusChanged,
+		retitledFrom: composed.retitledFrom,
 		notes
 	});
 	const entry = changelogWrite(config, log, today, rec.bullet);
@@ -1115,70 +974,24 @@ export function registerLibrarianTools(
 			})
 		},
 		async (args) => {
-			const {
-				path,
-				content,
-				append,
-				edits,
-				title,
-				type,
-				description,
-				status,
-				fields,
-				sources,
-				mode,
-				sha,
-				brain
-			} = args;
+			const { content, title, type, description, status, fields, sources, sha, brain } = args;
 			const ctx = await getContext({ requires: 'editor', brain });
 			return guardedWrite(ctx, 'write_page', args, async () => {
 				const { store, repoArgs, config } = ctx;
-				const target = normPagePath(path);
-				if (!target.endsWith('.md')) {
-					return fail('Pages must end in .md, e.g. "wiki/research/notes.md".');
-				}
-				// Partial edit vs whole-body replace are different intents; taking both
-				// would mean silently dropping one of them.
-				const patching = append !== undefined || (edits !== undefined && edits.length > 0);
-				if (patching && content !== undefined) {
-					return fail(
-						'Pass either content (which replaces the whole body) or append/edits (which change part of it), not both.'
-					);
-				}
-				// Whether the path is inside editable content is asked only of a NEW page,
-				// below: an existing page outside it is still readable and updatable.
-				const refusal = writeRefusal(target, config, 'written', { content: false });
-				if (refusal) return fail(refusal);
-				// Key names and managed keys are context-free, so reject a bad patch before
-				// touching the repo rather than after reading the blob.
-				if (fields) {
-					const invalid = validateFieldPatch(fields);
-					if (invalid) return fail(invalid);
-				}
+				// Refusals that need no page are answered before a round trip is spent.
+				const checked = checkPageWrite(args, config);
+				if (!checked.ok) return fail(checked.error);
+				const { target } = checked;
 
 				// Capture the commit base before reading authoritative content. If the
 				// branch moves afterwards, updateRef rejects this write instead of letting
 				// content read from an older revision overwrite the newer commit.
 				const head = await store.getHead(repoArgs, config.defaultBranch);
 				const existing = await store.readFile(repoArgs, target, head.commitSha);
-				const wantMode = mode ?? 'upsert';
-
-				// New path → create. Guard against an "update"-only intent and confirm editability.
-				if (!existing) {
-					if (patching) {
-						return fail(
-							`"${target}" does not exist yet, so there is nothing to ${append !== undefined ? 'append to' : 'edit'}. Create it first by passing content.`
-						);
-					}
-					if (wantMode === 'update') {
-						return fail(
-							`"${target}" does not exist. Use mode "create" or "upsert" (the default) to create it.`
-						);
-					}
-					const outside = writeRefusal(target, config, 'written');
-					if (outside) return fail(outside);
-					return createPageWrite(ctx, head, {
-						target,
+				const plan = planPageWrite(args, target, existing, config);
+				if (!plan.ok) return fail(plan.error);
+				if (plan.kind === 'create')
+					return createPageWrite(ctx, head, target, {
 						content,
 						title,
 						type,
@@ -1187,52 +1000,11 @@ export function registerLibrarianTools(
 						fields,
 						sources
 					});
-				}
-
-				// Existing path → update. Guard against a "create"-only intent (clobber guard).
-				if (wantMode === 'create') {
-					return fail(
-						`A page already exists at ${target}. Use mode "update" or "upsert" to change it, or pick a different path.`
-					);
-				}
-				// Concurrency guard for the in-client editor (conversational callers pass no sha).
-				if (sha !== undefined && existing.sha !== sha) {
-					return fail(
-						'This page changed since you opened it (someone else saved first). Reopen the editor to get the latest version (your unsaved text stays in the editor until you leave).'
-					);
-				}
-				if (
-					content === undefined &&
-					!patching &&
-					title === undefined &&
-					type === undefined &&
-					description === undefined &&
-					status === undefined &&
-					fields === undefined
-				) {
-					return fail(
-						'Nothing to update: pass append / edits (to change part of the page) or content (to replace the body), or a fields / title / type / description / status change.'
-					);
-				}
-
-				// append/edits run against the AUTHORITATIVE blob we just read, never the
-				// index, and against the body alone so an anchor can't match frontmatter.
-				let rawBody: string | undefined;
-				let changeSummary: string | undefined;
-				if (patching) {
-					const patched = applyPageEdits(parseFrontmatter(existing.content).body, {
-						append,
-						edits
-					});
-					if (!patched.ok) return fail(patched.error);
-					rawBody = patched.body;
-					changeSummary = patched.summary;
-				}
-				return updatePageWrite(ctx, head, existing, {
+				return updatePageWrite(ctx, head, existing!, {
 					path: target,
 					content,
-					rawBody,
-					changeSummary,
+					rawBody: plan.rawBody,
+					changeSummary: plan.changeSummary,
 					title,
 					type,
 					description,

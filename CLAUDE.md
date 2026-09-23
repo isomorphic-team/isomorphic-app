@@ -350,9 +350,14 @@ owner likes, not forced into our schema.
   once** (zero or several aborts the entire call, so a batch is never half-applied), and
   an anchor **inside an `okf-view` snapshot region is refused** because that text is
   regenerated on the same save. Patched bodies bypass `splitProvidedContent` via
-  `updatePageWrite`'s `rawBody` arg (they are already frontmatter-free, and a body
+  `composeUpdate`'s `rawBody` arg (they are already frontmatter-free, and a body
   starting with `---` must not be re-parsed as frontmatter). A whole-body `content` write
   now reports the size of what it replaced, so a clobber is visible in the transcript.
+  **What write_page decides is pure** (`src/lib/page-write.ts`, `pnpm test:patch`):
+  `checkPageWrite` answers the refusals that need no page, `planPageWrite` picks create,
+  update or refusal from the page as the branch holds it (the clobber guard, the editor's
+  sha guard, "nothing to update", a patch aimed at a missing page), and
+  `composeCreate` / `composeUpdate` build the new file. The tool keeps only the IO.
 - **Only `wiki/log.md` is tool-maintained** (append-only changelog). `wiki/index.md` is
   now just a regular editable page; new brains are scaffolded with no predefined wiki
   folders and no index.
@@ -946,7 +951,7 @@ not be marked `done:` without rewriting all 44 pages.
 
 - **`fields` on `write_page`** is JSON Merge Patch (RFC 7386): a present key sets, an
   explicit `null` removes, an absent key is untouched. It rides the path that already
-  existed, since `updatePageWrite` keeps the body verbatim when a call carries neither
+  existed, since `composeUpdate` keeps the body verbatim when a call carries neither
   `content` nor a patch. Engine is `applyFieldPatch` in `src/lib/page-patch.ts`, pure,
   beside the body patcher it is the twin of (`pnpm test:patch`).
 - **Three refusals, each forced by something else in the codebase, not by taste.**

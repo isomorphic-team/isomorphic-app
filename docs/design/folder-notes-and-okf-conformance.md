@@ -50,8 +50,8 @@ Different things wearing one filename.
   frontmatter at all: an `# H1`, a sentence, an `okf-view` fence and its snapshot. That is
   conformant. The bundle-root `index.md` carries only `okf_version`, which is the permitted
   exception. That brain was produced by an external ETL and got it right.
-- **The platform is what introduces violations.** `updatePageWrite`
-  (`src/tools/librarian.ts:744`) sets `manageFm` only when the page already has frontmatter or
+- **The platform is what introduces violations.** `composeUpdate`
+  (`src/lib/page-write.ts`) sets `manageFm` only when the page already has frontmatter or
   the caller passes `title`/`type`/`description`/`status`/`fields`; otherwise it writes the body
   as-is. That is correct. But `folderNoteSeed` (`app/views/Browse.tsx:150`) returns a `title`,
   and both call sites (`:597`, `:646`) pass it into `write_page`. **Every folder note created
