@@ -17,8 +17,8 @@ an `owner` membership, and at least one adopted brain.
 
 ## What a Model-B org is (three rows)
 
-1. **`orgs`** — `model='customer'`, `installation_id` = the customer's install,
-   `brain_owner` = `github_org_login` = their GitHub org.
+1. **`orgs`** — `model='customer'`, with `default_connection_id` naming its
+   **`storage_connections`** row: the customer's install, `account` = their GitHub org.
 2. **`memberships`** — the owner (and later, invited members).
 3. **`brains`** — one row per adopted repo. Adopting is a separate step
    (`connect_brain`), because the customer picks which repos to expose.

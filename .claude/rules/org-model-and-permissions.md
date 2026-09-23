@@ -172,16 +172,22 @@ and `configure_brain` refuses to replace an existing config without `overwrite: 
 ## Storage connections and moving brains
 
 **A brain's credential comes from its storage binding, not its org** (migration 0010).
-`storage_connections` holds one row per credential (today `github-app:<installation id>`);
-`brains.storage_connection_id` binds a brain to one. `listAccessibleBrains` uses the binding's
-installation, falling back to the org's for a NULL binding. A connection's `owner_org_id`
-(NULL = platform-owned) decides who may list and adopt through it, so `connect_brain` refuses
-to ADOPT in personal and hosted orgs.
+`storage_connections` holds one row per credential (`github-app:<installation id>`, or
+`github-token:env` on a single-user deployment); `brains.storage_connection_id` binds a brain
+to one. `listAccessibleBrains` JOINS the binding: there is no fallback to the org, and a brain
+without a binding is not listed. **An org names its storage too:** `orgs.default_connection_id`
+(migration 0013) is where its new brains are created and what org-scope work (create, list
+repos) reads through; `orgStorage` resolves it and `OrgScope.storage` carries it. `createOrg`
+writes the org and its connection together. A connection's `owner_org_id` (NULL =
+platform-owned) decides who may list and adopt through it (`orgAdministersConnection`), so
+`connect_brain` refuses to ADOPT in personal and hosted orgs. **Never read
+`orgs.installation_id`, `brain_owner` or `github_org_login`**: they are written only because
+they are NOT NULL until dropped.
 
 **`connect_brain` also MOVES brains.** Naming an existing brain exactly (id, repo name or
 name) in another org moves it (org admin in BOTH orgs; a preview until `confirm: true`).
 `moveBrain` (`src/lib/brain-move.ts`) is one batch that sets `org_id`, re-points pending brain
-invites, and first PINS a NULL binding to the source org's connection. The preview,
+invites, and leaves the binding alone. The preview,
 `planBrainMove`, runs `effectiveBrainRole` once per org rather than restating it. Renaming is
 `configure_brain`'s `name`. **Don't re-add `update_brain` and don't collapse these into a
 `manage_*` tool**: hosts grant approval per tool (design doc §6).

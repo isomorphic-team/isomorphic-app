@@ -48,9 +48,9 @@ on the same POST, never SSE. The Worker and the local runtime share it, and
 - **What may they do?** `role` is the caller's role on that brain, `orgRole` is their role in
   that brain's org. `effectiveBrainRole` in `src/lib/orgs.ts` is the authority on the first.
 - **How do we reach storage?** A `BrainStore`, below, built on the credential the brain is
-  bound to: its storage connection (`src/lib/storage-connections.ts`), falling back to its org's
-  GitHub App installation. The credential follows the brain rather than the org, so moving a
-  brain to another org leaves its storage where it was. In static mode it is `GITHUB_TOKEN`.
+  bound to: its storage connection (`src/lib/storage-connections.ts`), a GitHub App
+  installation or, in static mode, `GITHUB_TOKEN`. The credential follows the brain rather than
+  the org, so moving a brain to another org leaves its storage where it was.
 
 A tool declares what it needs (`requires: 'editor'` for brain scope, `requiresOrg: 'admin'` for
 org scope) and resolution throws if the caller falls short. The two roles are separate so that an

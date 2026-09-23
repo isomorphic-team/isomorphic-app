@@ -28,6 +28,8 @@
 
 import { readFileSync, readdirSync } from 'node:fs';
 import { localD1 } from '../src/local/d1-sqlite.ts';
+import { bindFixtureStorage } from './fixture-storage.ts';
+import { orgStorage } from '../src/lib/storage-connections.ts';
 import { assertRole, type Role, type TenantOpts, type AccessibleBrain } from '../src/lib/orgs.ts';
 import { registerMemberTools } from '../src/tools/members.ts';
 import { registerBrainAccessTools } from '../src/tools/brain-access.ts';
@@ -84,6 +86,7 @@ sqlite.exec(`
     ('b-main', 'u-shared', 'admin'),
     ('b-main', 'u-writer', 'editor');
 `);
+bindFixtureStorage(sqlite);
 // u-outside deliberately has an account but NO membership in org1: the "not a member
 // of this organization" guardrail needs a real user row to reach.
 //
@@ -232,38 +235,25 @@ const configs = new Map<string, Record<string, unknown>>();
 // `Hosted Co` stores its brains on the platform's shared installation.
 const ORG_ROWS: Record<
 	string,
-	{
-		org_id: string;
-		name: string;
-		model: string;
-		installation_id: number;
-		brain_owner: string;
-		github_org_login: string | null;
-	}
+	{ org_id: string; name: string; model: string; default_connection_id: string }
 > = {
 	Northwind: {
 		org_id: 'org1',
 		name: 'Northwind',
 		model: 'customer',
-		installation_id: 1,
-		brain_owner: 'northwind',
-		github_org_login: 'northwind'
+		default_connection_id: 'github-app:1'
 	},
 	'Contoso Group': {
 		org_id: 'org2',
 		name: 'Contoso Group',
 		model: 'customer',
-		installation_id: 2,
-		brain_owner: 'contoso-io',
-		github_org_login: 'contoso-io'
+		default_connection_id: 'github-app:2'
 	},
 	'Hosted Co': {
 		org_id: 'org3',
 		name: 'Hosted Co',
 		model: 'hosted',
-		installation_id: 9,
-		brain_owner: 'platform-org',
-		github_org_login: null
+		default_connection_id: 'github-app:9'
 	}
 };
 
@@ -308,14 +298,17 @@ function toolsFor(
 		// assertRole threw for a null above when a role was required; an org-scope
 		// call with no requirement from a non-member is not a shape any tool makes.
 		if (!orgRole) throw new Error('not a member of any organization');
+		const org = {
+			created_by: 'u-boss',
+			created_at: '2026-01-01',
+			suspended_at: null,
+			...(ORG_ROWS[opts?.org ?? ''] ?? ORG_ROWS.Northwind)
+		};
 		return {
 			octokit,
-			org: {
-				created_by: 'u-boss',
-				created_at: '2026-01-01',
-				suspended_at: null,
-				...(ORG_ROWS[opts?.org ?? ''] ?? ORG_ROWS.Northwind)
-			},
+			org,
+			// The real row, which the fixture's bindFixtureStorage wrote.
+			storage: await orgStorage(db, org),
 			role: orgRole,
 			db,
 			actorUserId: p.userId
@@ -328,17 +321,18 @@ function toolsFor(
 	const listOrgs = async () =>
 		(p.orgRole
 			? [
-					{ org_id: 'org1', name: 'Northwind', brain_owner: 'northwind' },
-					{ org_id: 'org2', name: 'Contoso Group', brain_owner: 'contoso-io' }
+					{ org_id: 'org1', name: 'Northwind', account: 'northwind', conn: 'github-app:1' },
+					{ org_id: 'org2', name: 'Contoso Group', account: 'contoso-io', conn: 'github-app:2' }
 				]
 			: []
 		).map((o) => ({
 			role: p.orgRole as Role,
+			storage_account: o.account,
 			org: {
-				...o,
+				org_id: o.org_id,
+				name: o.name,
 				model: 'customer',
-				installation_id: 1,
-				github_org_login: o.brain_owner,
+				default_connection_id: o.conn,
 				created_by: 'u-boss',
 				created_at: '2026-01-01',
 				suspended_at: null
@@ -360,7 +354,7 @@ function toolsFor(
 				org_model: 'customer',
 				installation_id: 1,
 				storage_account: 'northwind',
-				storage_connection_id: null,
+				storage_connection_id: 'github-app:1',
 				visibility: b.brain_id === 'b-main' ? 'private' : 'org',
 				repo_owner: 'northwind',
 				role: p.role,
@@ -1030,7 +1024,7 @@ console.log('\nconfigure_brain renames at BRAIN scope; connect_brain moves at OR
 			.get('b-main') as { org_id: string; name: string; storage_connection_id: string | null };
 	const restore = () =>
 		sqlite.exec(
-			`UPDATE brains SET org_id = 'org1', name = 'Main', storage_connection_id = NULL
+			`UPDATE brains SET org_id = 'org1', name = 'Main', storage_connection_id = 'github-app:1'
 			  WHERE brain_id = 'b-main';`
 		);
 
@@ -1078,7 +1072,7 @@ console.log('\nconfigure_brain renames at BRAIN scope; connect_brain moves at OR
 		preview.outcome === 'allowed' &&
 			preview.text.includes('Nothing has changed yet') &&
 			brainRow().org_id === 'org1' &&
-			brainRow().storage_connection_id === null,
+			brainRow().storage_connection_id === 'github-app:1',
 		preview.detail
 	);
 	const named = await attempt(orgBoss, 'connect_brain', { ...move, name: 'Elsewhere' });
@@ -1118,7 +1112,7 @@ console.log('\nconfigure_brain renames at BRAIN scope; connect_brain moves at OR
 
 	const done_ = await attempt(orgBoss, 'connect_brain', { ...move, confirm: true });
 	check(
-		'with confirm, it moves, pinned to the connection it was read through',
+		'with confirm, it moves, still bound to the connection it was read through',
 		done_.outcome === 'allowed' &&
 			brainRow().org_id === 'org2' &&
 			brainRow().storage_connection_id === 'github-app:1',
@@ -1163,14 +1157,18 @@ console.log('\ncreate_org: a hosted org on the spot, or a GitHub install link');
 // ===========================================================================
 {
 	const orgNamed = (name: string) =>
-		sqlite.prepare('SELECT org_id, model, installation_id FROM orgs WHERE name = ?').get(name) as
-			{ org_id: string; model: string; installation_id: number } | undefined;
+		sqlite
+			.prepare('SELECT org_id, model, default_connection_id FROM orgs WHERE name = ?')
+			.get(name) as
+			{ org_id: string; model: string; default_connection_id: string | null } | undefined;
 
-	const made = await attempt(lurker, 'create_org', { name: 'Gordon & Co' });
-	const row = orgNamed('Gordon & Co');
+	const made = await attempt(lurker, 'create_org', { name: 'Harbor & Co' });
+	const row = orgNamed('Harbor & Co');
 	check(
 		'any signed-in member can create a hosted org: it is theirs, not their current org’s',
-		made.outcome === 'allowed' && row?.model === 'hosted' && row?.installation_id === 9,
+		made.outcome === 'allowed' &&
+			row?.model === 'hosted' &&
+			row?.default_connection_id === 'github-app:9',
 		made.detail
 	);
 	const owner = row

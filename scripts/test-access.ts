@@ -230,6 +230,7 @@ check(
 // No network: node:sqlite is a Node builtin.
 
 import { localD1 } from '../src/local/d1-sqlite.ts';
+import { bindFixtureStorage } from './fixture-storage.ts';
 import { brainSlug } from '../src/lib/brain-slug.ts';
 import { DatabaseSync } from 'node:sqlite';
 import { readdirSync, readFileSync } from 'node:fs';
@@ -237,7 +238,12 @@ import { fileURLToPath } from 'node:url';
 import { planBrainMove, loadMovePeople, describeMove, moveBrain } from '../src/lib/brain-move.ts';
 import { connectCustomerOrg } from '../src/lib/org-connect.ts';
 import { ensureStaticTenant, STATIC_USER_ID } from '../src/lib/static-tenant.ts';
-import { credentialFor, GITHUB_TOKEN_KIND } from '../src/lib/storage-connections.ts';
+import {
+	credentialFor,
+	credentialForConnection,
+	orgStorage,
+	GITHUB_TOKEN_KIND
+} from '../src/lib/storage-connections.ts';
 import {
 	listAccessibleBrains,
 	listAccessibleOrgs,
@@ -252,6 +258,7 @@ import {
 	matchBrain,
 	brainLabel,
 	assignBrainHandle,
+	getOrgById,
 	activeAfterDisconnect,
 	getDefaultBrainForUser,
 	listBrainAccess,
@@ -292,6 +299,7 @@ sqlite.exec(`
     ('b-alice', 'alice', 'admin'),
     ('b-bob',   'bob',   'admin');
 `);
+bindFixtureStorage(sqlite);
 
 // Which repo a listed brain is: the access fixtures name brains by repo.
 const repoOf = (b: { repo_owner: string; repo_name: string }) => `${b.repo_owner}/${b.repo_name}`;
@@ -380,6 +388,7 @@ sqlite.exec(`
     ('b-frozen', 'org1', 'northwind', 'frozen', 'Frozen', 'org', '2026-04-01', 1, NULL),
     ('b-gone',   'org1', 'northwind', 'gone',   'Gone',   'org', '2026-05-01', 0, '2026-06-01');
 `);
+bindFixtureStorage(sqlite);
 check(
 	'an archived brain is invisible to everyone, the org owner included',
 	!(await ids('alice')).includes('northwind/gone'),
@@ -565,6 +574,7 @@ sqlite.exec(`
     ('org3', 'dave-work', 'owner'),
     ('org3', 'erin',      'owner');
 `);
+bindFixtureStorage(sqlite);
 
 const orgIds = async (users: string[]) =>
 	(await listAccessibleOrgs(db, users)).map((o) => o.org.org_id).sort();
@@ -1180,6 +1190,64 @@ console.log('\nBrain handles: how a brain is named to tools and URLs');
 	);
 }
 
+console.log('\nOrgs name their storage: the 0013 backfill');
+{
+	// Production's shape before 0013: orgs carrying their installation, 0010's
+	// connections, and a single-user org whose brain reads through a token.
+	const pre = new DatabaseSync(':memory:');
+	const files = readdirSync(fileURLToPath(new URL('../migrations/', import.meta.url)))
+		.filter((f) => f.endsWith('.sql'))
+		.sort();
+	const at = (f: string) => readFileSync(new URL(`../migrations/${f}`, import.meta.url), 'utf8');
+	for (const f of files.filter((f) => f < '0013')) pre.exec(at(f));
+	pre.exec(`
+	  INSERT INTO orgs (org_id, name, model, installation_id, brain_owner, created_by) VALUES
+	    ('p1', 'a@example.com', 'platform', 100, 'platform-org', 'u'),
+	    ('c1', 'Acme', 'customer', 200, 'acme', 'u'),
+	    ('static', 'Personal', 'platform', 0, 'solo', 'u'),
+	    ('c2', 'Beta', 'customer', 400, 'beta', 'u');
+	  INSERT INTO storage_connections (connection_id, provider, kind, external_id, account, owner_org_id) VALUES
+	    ('github-app:100', 'github', 'github-app-installation', '100', 'platform-org', NULL),
+	    ('github-app:200', 'github', 'github-app-installation', '200', 'acme', 'c1'),
+	    ('github-token:env', 'github', 'github-token', 'env', 'solo', 'static');
+	  INSERT INTO brains (brain_id, org_id, repo_owner, repo_name, storage_connection_id) VALUES
+	    ('b-solo', 'static', 'solo', 'notes', 'github-token:env');
+	  INSERT INTO tenants (gh_user_id, installation_id, brain_owner, brain_repo) VALUES
+	    (1, 100, 'platform-org', 'brain-old');
+	`);
+	pre.exec(at(files.find((f) => f.startsWith('0013'))!));
+	const defaults = pre
+		.prepare('SELECT org_id, default_connection_id AS conn FROM orgs ORDER BY org_id')
+		.all() as { org_id: string; conn: string | null }[];
+	check(
+		'every org names its storage: its installation, or for a token deployment its brain’s',
+		JSON.stringify(defaults) ===
+			JSON.stringify([
+				{ org_id: 'c1', conn: 'github-app:200' },
+				{ org_id: 'c2', conn: 'github-app:400' },
+				{ org_id: 'p1', conn: 'github-app:100' },
+				{ org_id: 'static', conn: 'github-token:env' }
+			]),
+		JSON.stringify(defaults)
+	);
+	const late = pre
+		.prepare('SELECT owner_org_id, account FROM storage_connections WHERE connection_id = ?')
+		.get('github-app:400') as { owner_org_id: string; account: string } | undefined;
+	check(
+		'an org created after 0010 with no brain yet gets its connection recorded, owned as 0010 would',
+		late?.owner_org_id === 'c2' && late?.account === 'beta',
+		JSON.stringify(late)
+	);
+	check(
+		'a token deployment gets no installation-0 connection',
+		!pre.prepare('SELECT 1 FROM storage_connections WHERE connection_id = ?').get('github-app:0')
+	);
+	check(
+		'the tenants table of the removed GitHub sign-in is gone',
+		!pre.prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'tenants'`).get()
+	);
+}
+
 console.log('\nDerived state keyed by brain_id: the 0011 re-key');
 {
 	// Production's shape before 0011: index, ledger and usage rows under "owner/repo".
@@ -1277,10 +1345,11 @@ console.log('\nStorage bindings: which credential reads a brain');
 		(await brainFor('jo', 'b-bound'))?.installation_id === 1 &&
 			(await brainFor('jo', 'b-bound'))?.storage_account === 'lab-gh'
 	);
+	// No fallback to the org's installation: a brain is read through its binding or
+	// not at all, so a moved brain can never silently switch credentials.
 	check(
-		"an unbound brain (written by pre-0010 code) falls back to its org's installation",
-		(await brainFor('jo', 'b-unbound'))?.installation_id === 1 &&
-			(await brainFor('jo', 'b-unbound'))?.storage_connection_id === null
+		'a brain with no binding is not listed, rather than read through its org',
+		!(await brainFor('jo', 'b-unbound'))
 	);
 
 	console.log('\nMoving a brain: who reaches it afterwards (planBrainMove)');
@@ -1351,14 +1420,13 @@ console.log('\nStorage bindings: which credential reads a brain');
 	);
 
 	console.log('\nMoving a brain: the statements (moveBrain)');
-	await moveBrain(db, { brainId: 'b-unbound', toOrgId: 'cli', sourceConnectionId: 'github-app:1' });
+	await moveBrain(db, { brainId: 'b-unbound', toOrgId: 'cli' });
 	check(
-		"an unbound brain is pinned to its source org's connection, not left to fall back",
-		(await brainFor('jo', 'b-unbound'))?.org_id === 'cli' &&
-			(await brainFor('jo', 'b-unbound'))?.installation_id === 1,
-		'unpinned, it would resolve through the destination org (installation 9), which cannot reach it'
+		"a brain with no binding is not read through its new org's installation: it is not listed",
+		!(await brainFor('jo', 'b-unbound')),
+		'with a fallback, it would resolve through the destination org (installation 9), which cannot reach it'
 	);
-	await moveBrain(db, { brainId: 'b-bound', toOrgId: 'cli', sourceConnectionId: 'github-app:999' });
+	await moveBrain(db, { brainId: 'b-bound', toOrgId: 'cli' });
 	const row = sqlite
 		.prepare('SELECT org_id, storage_connection_id FROM brains WHERE brain_id = ?')
 		.get('b-bound') as { org_id: string; storage_connection_id: string };
@@ -1403,15 +1471,17 @@ console.log('\nCreating orgs: a customer org from a GitHub install (connectCusto
 		orgLogin: 'acme-gh',
 		name: 'Acme Corp'
 	});
-	const org = sqlite
-		.prepare('SELECT name, model, brain_owner FROM orgs WHERE org_id = ?')
-		.get(first.orgId) as { name: string; model: string; brain_owner: string };
+	const org = (await getOrgById(db, first.orgId))!;
 	check(
 		'takes the name chosen in create_org, and the GitHub login as its storage account',
 		first.created &&
 			org.name === 'Acme Corp' &&
 			org.model === 'customer' &&
-			org.brain_owner === 'acme-gh'
+			(await orgStorage(db, org)).account === 'acme-gh'
+	);
+	check(
+		'its default connection is its installation',
+		org.default_connection_id === 'github-app:55'
 	);
 	const conn = sqlite
 		.prepare('SELECT owner_org_id, account FROM storage_connections WHERE connection_id = ?')
@@ -1472,6 +1542,12 @@ console.log('\nA single-user (static) deployment runs the org model (ensureStati
 		'the connection names where the token lives and never holds it',
 		secretFree.external_id === 'env'
 	);
+	const staticOrg = () => getOrgById(db, 'static');
+	check(
+		"the org's own storage is that connection too, so org-scope work reads through the token",
+		(await staticOrg())?.default_connection_id === 'github-token:env' &&
+			credentialForConnection(await orgStorage(db, (await staticOrg())!)).kind === 'token'
+	);
 
 	await ensureStaticTenant(db, { owner: 'solo', repo: 'notes', credential: { kind: 'token' } });
 	check(
@@ -1491,6 +1567,10 @@ console.log('\nA single-user (static) deployment runs the org model (ensureStati
 		after.map((x) => repoOf(x)).join()
 	);
 	const cred = credentialFor(after[0]);
+	check(
+		"...and the org's default connection follows it",
+		(await staticOrg())?.default_connection_id === 'github-app:42'
+	);
 	check(
 		'...and a new credential is picked up: now the App installation',
 		cred.kind === 'installation' && cred.installationId === 42
@@ -1532,5 +1612,25 @@ check(
 	'a token binding: the token, whatever installation id the row carries',
 	credentialFor({ storage_kind: 'github-token', installation_id: 0 }).kind === 'token'
 );
+check(
+	"an org's connection: its installation, read off the connection's external id",
+	JSON.stringify(
+		credentialForConnection({ kind: 'github-app-installation', external_id: '77' })
+	) === JSON.stringify({ kind: 'installation', installationId: 77 })
+);
+{
+	const { db } = localD1();
+	let message = '';
+	try {
+		await orgStorage(db, { org_id: 'o-bare', default_connection_id: null });
+	} catch (err) {
+		message = err instanceof Error ? err.message : String(err);
+	}
+	check(
+		'an org with no default connection is an error, never a guess at an installation',
+		message.includes('no storage connection'),
+		message
+	);
+}
 
 done();

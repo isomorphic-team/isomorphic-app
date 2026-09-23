@@ -18,6 +18,12 @@ import type { D1Database } from '@cloudflare/workers-types';
 import type { Octokit } from 'octokit';
 import type { CommitAuthor } from './brain-repo.ts';
 import { brainSlug, handleOfSlug, newBrainHandle } from './brain-slug.ts';
+import {
+	GITHUB_APP_KIND,
+	connectionOwnerFor,
+	githubAppConnectionId,
+	type StorageConnection
+} from './storage-connections.ts';
 
 // Four roles, ordered least → most privileged. Writes require `editor`+;
 // `viewer` is read-only. `admin`/`owner` add member-management powers. `owner`
@@ -202,9 +208,10 @@ export interface Org {
 	// 'platform' (Model A, a personal org) | 'customer' (Model B, the customer's own
 	// installation) | 'hosted' (a named team org on the platform's installation).
 	model: string;
-	installation_id: number;
-	brain_owner: string;
-	github_org_login: string | null;
+	// The storage connection new brains in this org are created on
+	// (storage_connections). Its account is where they live, its credential what
+	// reads them. NULL only for an org written by code older than migration 0013.
+	default_connection_id: string | null;
 	created_by: string;
 	created_at: string;
 	suspended_at: string | null;
@@ -248,6 +255,9 @@ export interface MembershipWithOrg {
 export interface OrgScope {
 	octokit: Octokit;
 	org: Org;
+	// The org's default connection: where its new brains are stored, and the
+	// credential `octokit` holds.
+	storage: StorageConnection;
 	role: Role;
 	db: D1Database;
 	actorUserId: string;
@@ -313,38 +323,28 @@ export async function linkedUserIds(db: D1Database, userId: string): Promise<str
 	return [...ids];
 }
 
-// One entry in a person's "Connected accounts" roster: either an email identity
-// (an app_users row) or a linked GitHub account (a github_links row).
+// One entry in a person's "Connected accounts" roster: an email identity (an
+// app_users row).
 export interface ConnectedAccount {
-	kind: 'email' | 'github';
+	kind: 'email';
 	is_self: boolean;
-	// email identities
 	user_id?: string;
 	email?: string;
 	name?: string | null;
-	// github identities
-	github_user_id?: number;
-	github_login?: string | null;
 }
 
 // The full roster for a person: every linked email identity (is_self flags the
-// signed-in one) plus every linked GitHub account. Drives connected_accounts.
+// signed-in one). Drives connected_accounts.
 export async function listConnectedAccounts(
 	db: D1Database,
 	userId: string
 ): Promise<ConnectedAccount[]> {
 	const ids = await linkedUserIds(db, userId);
 	const ph = ids.map((_, i) => `?${i + 1}`).join(', ');
-	const [emails, githubs] = await Promise.all([
-		db
-			.prepare(`SELECT user_id, email, name FROM app_users WHERE user_id IN (${ph})`)
-			.bind(...ids)
-			.all<{ user_id: string; email: string; name: string | null }>(),
-		db
-			.prepare(`SELECT github_user_id, github_login FROM github_links WHERE user_id IN (${ph})`)
-			.bind(...ids)
-			.all<{ github_user_id: number; github_login: string | null }>()
-	]);
+	const emails = await db
+		.prepare(`SELECT user_id, email, name FROM app_users WHERE user_id IN (${ph})`)
+		.bind(...ids)
+		.all<{ user_id: string; email: string; name: string | null }>();
 	const out: ConnectedAccount[] = [];
 	for (const e of emails.results ?? [])
 		out.push({
@@ -353,13 +353,6 @@ export async function listConnectedAccounts(
 			user_id: e.user_id,
 			email: e.email,
 			name: e.name
-		});
-	for (const g of githubs.results ?? [])
-		out.push({
-			kind: 'github',
-			is_self: false,
-			github_user_id: g.github_user_id,
-			github_login: g.github_login
 		});
 	return out;
 }
@@ -403,24 +396,6 @@ export async function unlinkIdentity(
 		.prepare(`UPDATE app_users SET person_id = NULL WHERE user_id = ?1`)
 		.bind(targetUserId)
 		.run();
-}
-
-// Detach a linked GitHub account from the caller's person. Guards that the link
-// belongs to one of the caller's linked identities before deleting.
-export async function unlinkGithubLink(
-	db: D1Database,
-	actorUserId: string,
-	githubUserId: number
-): Promise<void> {
-	const ids = await linkedUserIds(db, actorUserId);
-	const link = await db
-		.prepare(`SELECT user_id FROM github_links WHERE github_user_id = ?1`)
-		.bind(githubUserId)
-		.first<{ user_id: string }>();
-	if (!link || !ids.includes(link.user_id)) {
-		throw new Error('That GitHub account is not linked to yours.');
-	}
-	await db.prepare(`DELETE FROM github_links WHERE github_user_id = ?1`).bind(githubUserId).run();
 }
 
 // One membership of this user id, oldest first, plus its org.
@@ -520,6 +495,12 @@ export async function getDefaultBrainForUser(
 	return null;
 }
 
+// An org and the storage connection it creates brains on, in one batch. The
+// connection is the installation (`github-app:<id>`), recorded once however many
+// orgs share it: a customer org owns its own; the platform installation, shared by
+// every personal and hosted org, is owned by none. `installation_id`,
+// `brain_owner` and `github_org_login` are written only because the columns are
+// NOT NULL until they are dropped; nothing reads them.
 export async function createOrg(
 	db: D1Database,
 	o: {
@@ -532,21 +513,40 @@ export async function createOrg(
 		created_by: string;
 	}
 ): Promise<void> {
-	await db
-		.prepare(
-			`INSERT INTO orgs (org_id, name, model, installation_id, brain_owner, github_org_login, created_by)
-       VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)`
-		)
-		.bind(
-			o.org_id,
-			o.name,
-			o.model,
-			o.installation_id,
-			o.brain_owner,
-			o.github_org_login ?? null,
-			o.created_by
-		)
-		.run();
+	const connectionId = githubAppConnectionId(o.installation_id);
+	await db.batch([
+		db
+			.prepare(
+				`INSERT INTO orgs (org_id, name, model, installation_id, brain_owner, github_org_login,
+				                   created_by)
+				 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)`
+			)
+			.bind(
+				o.org_id,
+				o.name,
+				o.model,
+				o.installation_id,
+				o.brain_owner,
+				o.github_org_login ?? null,
+				o.created_by
+			),
+		db
+			.prepare(
+				`INSERT OR IGNORE INTO storage_connections
+				   (connection_id, provider, kind, external_id, account, owner_org_id)
+				 VALUES (?1, 'github', ?2, ?3, ?4, ?5)`
+			)
+			.bind(
+				connectionId,
+				GITHUB_APP_KIND,
+				String(o.installation_id),
+				o.brain_owner,
+				connectionOwnerFor(o)
+			),
+		db
+			.prepare(`UPDATE orgs SET default_connection_id = ?2 WHERE org_id = ?1`)
+			.bind(o.org_id, connectionId)
+	]);
 }
 
 export async function addMembership(
@@ -1044,10 +1044,10 @@ export interface AccessibleBrain {
 	// The provider account holding the brain (its connection's), for saying where a
 	// brain is stored without implying that the org it belongs to holds it.
 	storage_account: string;
-	// Its storage binding; null for a brain written before bindings existed.
-	storage_connection_id: string | null;
+	// Its storage binding. A brain without one is not listed (the join requires it).
+	storage_connection_id: string;
 	// The binding's connection kind (storage-connections.ts), which decides whether a
-	// token or an installation reads it: see credentialFor. Null with no binding.
+	// token or an installation reads it: see credentialFor.
 	storage_kind?: string | null;
 	repo_owner: string;
 	repo_name: string;
@@ -1103,7 +1103,7 @@ export function orgDisplay(b: AccessibleBrain): string {
 // "which of these did you mean" list, chiefly, where a brainless org is the whole point.
 export function orgLabel(org: Org): string {
 	if (org.model === 'platform') return 'Personal';
-	return org.name?.trim() || org.brain_owner;
+	return org.name?.trim() || 'Organization';
 }
 
 // A label with its org named. For the one place brains are listed side by side with no
@@ -1172,7 +1172,7 @@ async function queryAccessibleBrains(
 			        b.repo_owner AS repo_owner, b.repo_name AS repo_name,
 			        b.name AS name, b.visibility AS visibility, b.org_id AS org_id,
 			        o.name AS org_name, o.model AS org_model,
-			        COALESCE(CAST(c.external_id AS INTEGER), o.installation_id) AS installation_id,
+			        CAST(c.external_id AS INTEGER) AS installation_id,
 			        c.account AS storage_account, b.storage_connection_id AS storage_connection_id,
 			        c.kind AS storage_kind,
 			        m.role AS org_role,
@@ -1184,7 +1184,7 @@ async function queryAccessibleBrains(
 			   FROM memberships m
 			   JOIN orgs o   ON o.org_id = m.org_id
 			   JOIN brains b ON b.org_id = o.org_id
-			   LEFT JOIN storage_connections c ON c.connection_id = b.storage_connection_id
+			   JOIN storage_connections c ON c.connection_id = b.storage_connection_id
 			   LEFT JOIN brain_memberships bm
 			          ON bm.brain_id = b.brain_id AND bm.user_id = m.user_id
 			  WHERE m.user_id IN (${placeholders})
@@ -1195,7 +1195,7 @@ async function queryAccessibleBrains(
 			   FROM brain_memberships bm
 			   JOIN brains b ON b.brain_id = bm.brain_id
 			   JOIN orgs o   ON o.org_id = b.org_id
-			   LEFT JOIN storage_connections c ON c.connection_id = b.storage_connection_id
+			   JOIN storage_connections c ON c.connection_id = b.storage_connection_id
 			   LEFT JOIN memberships m
 			          ON m.org_id = b.org_id AND m.user_id IN (${placeholders})
 			  WHERE bm.user_id IN (${placeholders})
@@ -1216,7 +1216,7 @@ async function queryAccessibleBrains(
 			org_model: string;
 			installation_id: number;
 			storage_account: string | null;
-			storage_connection_id: string | null;
+			storage_connection_id: string;
 			storage_kind: string | null;
 			org_role: string | null;
 			grant_role: string | null;
@@ -1281,6 +1281,9 @@ async function queryAccessibleBrains(
 export interface AccessibleOrg {
 	org: Org;
 	role: Role;
+	// The provider account the org's default connection reaches (a GitHub login), a
+	// name people also call the org by.
+	storage_account?: string | null;
 }
 
 export async function listAccessibleOrgs(
@@ -1291,9 +1294,10 @@ export async function listAccessibleOrgs(
 	const placeholders = userIds.map((_, i) => `?${i + 1}`).join(', ');
 	const { results } = await db
 		.prepare(
-			`SELECT m.role AS role, o.*
+			`SELECT m.role AS role, c.account AS storage_account, o.*
 			   FROM memberships m
 			   JOIN orgs o ON o.org_id = m.org_id
+			   LEFT JOIN storage_connections c ON c.connection_id = o.default_connection_id
 			  WHERE m.user_id IN (${placeholders})
 			    AND o.suspended_at IS NULL
 			  ORDER BY o.created_at ASC, o.org_id ASC`
@@ -1302,10 +1306,15 @@ export async function listAccessibleOrgs(
 		.all<Record<string, unknown>>();
 	const byId = new Map<string, AccessibleOrg>();
 	for (const row of results ?? []) {
-		const { role, ...rest } = row;
+		const { role, storage_account, ...rest } = row;
 		const org = rest as unknown as Org;
 		const seen = byId.get(org.org_id);
-		if (!seen) byId.set(org.org_id, { org, role: role as Role });
+		if (!seen)
+			byId.set(org.org_id, {
+				org,
+				role: role as Role,
+				storage_account: (storage_account as string | null) ?? null
+			});
 		else if (roleAtLeast(role as Role, seen.role)) seen.role = role as Role;
 	}
 	return [...byId.values()];
@@ -1323,9 +1332,7 @@ export function matchOrg(
 	const q = query.trim().toLowerCase();
 	if (!q) return {};
 	const handles = (o: AccessibleOrg) =>
-		[o.org.org_id, o.org.name, o.org.github_org_login ?? '', o.org.brain_owner]
-			.filter(Boolean)
-			.map((s) => s.toLowerCase());
+		[o.org.org_id, o.org.name, o.storage_account ?? ''].filter(Boolean).map((s) => s.toLowerCase());
 	const exact = orgs.find((o) => handles(o).includes(q));
 	if (exact) return { org: exact };
 	const subs = orgs.filter((o) => handles(o).some((h) => h.includes(q)));

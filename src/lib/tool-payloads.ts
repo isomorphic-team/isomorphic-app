@@ -184,13 +184,11 @@ export interface BrainAccessSelf {
 
 /** One entry in the "Connected accounts" roster (src/tools/connected-accounts.ts). */
 export interface ConnectedAccount {
-	kind: 'email' | 'github';
+	kind: 'email';
 	is_self: boolean;
 	user_id?: string;
 	email?: string;
 	name?: string | null;
-	github_user_id?: number;
-	github_login?: string | null;
 }
 
 /** Which optional server surfaces exist. Rides the `brains` payload because that is the call the app always makes on open. */

@@ -5,7 +5,7 @@ import type { ConnectedAccount } from '../core/types.ts';
 import { callTool, firstText } from '../core/host.ts';
 import { parseAccounts, structuredOf } from '../../src/lib/tool-payloads.ts';
 import { toast, askConfirm } from '../core/toast.tsx';
-import { InitialsAvatar, CloseIcon, GithubIcon } from '../core/icons.tsx';
+import { InitialsAvatar, CloseIcon } from '../core/icons.tsx';
 import { Button, List, ListRow } from '../ui/index.ts';
 
 // The person's linked identities, rendered inline in Your settings: email logins +
@@ -40,7 +40,6 @@ function ConnectedAccountsSection({ initial }: { initial: ConnectedAccount[] }) 
 
 	// The signed-in identity is already shown as the card above, so omit it here.
 	const emails = accounts.filter((a) => a.kind === 'email' && !a.is_self);
-	const githubs = accounts.filter((a) => a.kind === 'github');
 
 	return (
 		<div>
@@ -69,35 +68,6 @@ function ConnectedAccountsSection({ initial }: { initial: ConnectedAccount[] }) 
 								<CloseIcon />
 							</Button>
 						)}
-					</ListRow>
-				))}
-				{githubs.map((a) => (
-					<ListRow key={`gh-${a.github_user_id}`}>
-						<span
-							class="flex h-[18px] w-[18px] shrink-0 items-center justify-center rounded-full bg-chip text-muted"
-							aria-hidden="true"
-						>
-							<GithubIcon />
-						</span>
-						<div class="min-w-0 flex-1">
-							<div class="truncate font-medium text-fg">@{a.github_login ?? a.github_user_id}</div>
-							<div class="text-xs text-muted">GitHub</div>
-						</div>
-						<Button
-							variant="ghost"
-							size="icon"
-							disabled={busy}
-							title={`Unlink @${a.github_login ?? a.github_user_id}`}
-							aria-label={`Unlink @${a.github_login ?? a.github_user_id}`}
-							onClick={() =>
-								unlink(
-									{ github: String(a.github_login ?? a.github_user_id) },
-									`@${a.github_login ?? a.github_user_id}`
-								)
-							}
-						>
-							<CloseIcon />
-						</Button>
 					</ListRow>
 				))}
 			</List>

@@ -228,6 +228,8 @@ async function eventually<T>(
 }
 
 import { checker } from './check.ts';
+import { BIND_FIXTURE_STORAGE } from './fixture-storage.ts';
+import { orgStorage } from '../src/lib/storage-connections.ts';
 
 const { check, done } = checker('librarian E2E checks');
 async function call(tool: string, args: Record<string, unknown>) {
@@ -1507,12 +1509,13 @@ try {
 	);
 	await run(
 		`INSERT INTO orgs (org_id, name, model, installation_id, brain_owner, created_by, created_at)
-		 VALUES (?1, ?2, 'customer', 1, ?3, ?4, '2026-02-01')`,
+		 VALUES (?1, ?2, 'customer', 2, ?3, ?4, '2026-02-01')`,
 		ORG_EMPTY,
 		'Contoso Group',
 		repoArgs.owner,
 		USER
 	);
+	// Each customer org owns its own installation (connection), as in production.
 	// A third org whose GitHub owner DIFFERS from the other two. Those two share one
 	// deliberately, so connect_brain's candidate list can reach the adopt target, which
 	// also means the owner cannot reveal which org was resolved. This one can:
@@ -1520,7 +1523,7 @@ try {
 	const ORG_OTHER = 'org-e2e-other';
 	await run(
 		`INSERT INTO orgs (org_id, name, model, installation_id, brain_owner, created_by, created_at)
-		 VALUES (?1, ?2, 'customer', 1, ?3, ?4, '2026-03-01')`,
+		 VALUES (?1, ?2, 'customer', 3, ?3, ?4, '2026-03-01')`,
 		ORG_OTHER,
 		'Third Party',
 		'other-owner-org',
@@ -1551,6 +1554,8 @@ try {
 		'Main'
 	);
 
+	for (const sql of BIND_FIXTURE_STORAGE) await db.prepare(sql).run();
+
 	let activeId = brainId;
 	// Mirrors the Worker's orgContext minus the two things a test cannot own: minting
 	// an installation token, and first-touch provisioning. The DECISION is the real
@@ -1562,6 +1567,7 @@ try {
 		return {
 			octokit: platformOctokit,
 			org: picked.org,
+			storage: await orgStorage(db, picked.org),
 			role: picked.role,
 			db,
 			actorUserId: USER,
