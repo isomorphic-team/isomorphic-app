@@ -241,7 +241,7 @@ Design questions to settle before building:
 
 # TODO: sharing a page by link with someone who has no access
 
-The web app half of this shipped: every page has a URL (`/b/<owner>/<repo>/<path>`), the same
+The web app half of this shipped: every page has a URL (`/b/<brain>/<path>`, where `<brain>` is `<name>-<handle>`), the same
 MCP App bundle served in a browser tab over the Auth.js session, and markdown rendering moved
 to `src/lib/render.ts` with sanitization on the way. A colleague who already has access to the
 brain can be sent a link today.

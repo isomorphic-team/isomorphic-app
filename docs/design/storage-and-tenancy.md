@@ -3,8 +3,8 @@
 - Status: Partly built. Steps 1, 2, 2b and 3 built (storage connections,
   `src/lib/storage-connections.ts` and migration 0010; moving a brain between orgs with
   `connect_brain`, `src/lib/brain-move.ts`; one tenancy model,
-  `src/lib/static-tenant.ts`; derived state keyed by `brain_id`, migration 0011). Steps 4
-  to 6 not started.
+  `src/lib/static-tenant.ts`; derived state keyed by `brain_id`, migration 0011) and step 4
+  (slug URLs, `src/lib/brain-slug.ts` and migration 0012). Steps 5 and 6 not started.
 - Author: Jon Hansing (via Claude)
 - Date: 2026-09-22
 - Related: `docs/design/brain-seams.md` (§6, identity is a key, never a path),
@@ -99,10 +99,10 @@ exactly how it resolved before. The fallback is removed in step 6.
 
 ### Brain identity
 
-A brain's identity must not be derived from where it is stored. Today `owner/repo` is
-the content index key, the `brain` handle tools accept, the active-brain pointer and the
-web URL. `brains.brain_id` is already a stored string rather than recomputed, so the
-primary key is stable; the rest is step 3 and 4.
+A brain's identity is not derived from where it is stored. `brains.brain_id` keys
+derived state and the active-brain pointer (step 3); the `brain` handle tools accept and
+the web URL are `<name>-<handle>`, with `brains.handle` a random six-character id (step 4).
+`owner/repo` is only the storage locator, still accepted as an alias.
 
 ### Org
 
@@ -227,8 +227,12 @@ its deploy window, because a rollback reverts code and never schema.
    (`brainRefs`, `isActiveBrain` in `src/lib/orgs.ts`). Migration 0011 re-keys existing
    rows in place, so nothing reindexes; a pointer still holding `owner/repo` matches
    until the caller next switches.
-4. **URLs by brain slug.** `/b/<slug>/<path>`, with `/b/<owner>/<repo>/...` redirecting
-   permanently: a URL is a contract. Tools accept `owner/repo` as an alias.
+4. **URLs by brain slug (built).** `/b/<name>-<handle>/<path>`. The handle identifies the
+   brain, so a rename changes the name part and the old URL still resolves. `/b/<owner>/<repo>/...`
+   and stale names `301` to the current URL after sign-in, among the caller's own brains
+   (`canonicalWebPath`); tools accept `owner/repo` and stale slugs through `matchBrain`. No
+   alias table: the handle never changes, and the repo columns answer old links until a
+   relocation (step 5) changes them, which is when step 5 needs one.
 5. **A second backend.** An Azure Repos `BrainStore`, a service-principal connection
    kind, a generalized locator, and relocation. Built when a customer needs it, with an
    e2e battery against a scratch repository (the twin of the `--github` mode).

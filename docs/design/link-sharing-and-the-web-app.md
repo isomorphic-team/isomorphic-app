@@ -1,7 +1,7 @@
 # Design: sharing a page by link (and the web app behind it)
 
 - Status: Partly built. Phase 0 (the shared, sanitizing renderer, `src/lib/render.ts`, `pnpm test:render`)
-  and Phase 3 (the web app at `/b/<owner>/<repo>/<path>`, `pnpm test:web`) are BUILT and
+  and Phase 3 (the web app at `/b/<brain>/<path>`, `pnpm test:web`) are BUILT and
   deployed. Phases 1, 2 and 4 (share links for people without access, and a public site) are
   not built. §3 and §4.6 describe the code before Phase 0 and are kept as history.
 - Author: Jon Hansing (via Claude)

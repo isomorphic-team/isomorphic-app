@@ -48,7 +48,7 @@ test.describe('open in browser', () => {
 		// this failed about 1 run in 100 with an empty list.
 		await expect
 			.poll(() => opened(page))
-			.toEqual(['https://brain.example/b/your-org/personal-wiki/wiki/concepts/vision.md']);
+			.toEqual(['https://brain.example/b/personal-wiki-0a1b2c/wiki/concepts/vision.md']);
 	});
 
 	test('names the destination, not just the brain, for a non-page view', async ({ page }) => {
@@ -57,7 +57,7 @@ test.describe('open in browser', () => {
 		await app.getByRole('button', { name: 'Open in browser' }).click();
 		await expect
 			.poll(async () => (await opened(page))[0])
-			.toBe('https://brain.example/b/your-org/personal-wiki?view=graph');
+			.toBe('https://brain.example/b/personal-wiki-0a1b2c?view=graph');
 	});
 
 	test('is not offered in the editor, where unsaved text would be lost', async ({ page }) => {

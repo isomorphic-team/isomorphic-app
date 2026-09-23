@@ -27,13 +27,13 @@ transport (`app/core/host-web.ts`), the URL round-trip (`parseWebPath`) and the
 served shell are all unreachable from here no matter how good the fixtures are.
 
 The web host is **the local runtime itself**: `pnpm try <folder>` serves the shell at
-`/b/local/<folder>` and the real tool handlers at `/mcp`, from one process, exactly
+`/b/<folder>` and the real tool handlers at `/mcp`, from one process, exactly
 as the Worker does. `pnpm web:dev` only seeds the demo brains and starts it:
 
 ```sh
-pnpm web:dev              # → http://127.0.0.1:8788/b/local/demo-brain
+pnpm web:dev              # → http://127.0.0.1:8788/b/demo-brain
 pnpm web:dev --reset      # start over from a pristine seed
-pnpm try ~/some/vault     # any folder, no seeding: http://127.0.0.1:8788/b/local/vault
+pnpm try ~/some/vault     # any folder, no seeding: http://127.0.0.1:8788/b/vault
 ```
 
 The shell and its headers (`src/lib/web-shell.ts`) and the CSRF gate (`src/lib/web-app.ts`) are the shared ones,

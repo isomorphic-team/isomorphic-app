@@ -192,7 +192,7 @@ sqlite.exec(`
 `);
 
 const brainIds = async (userIds: string[]) =>
-	(await listAccessibleBrains(db, userIds)).map((b) => b.id).sort();
+	(await listAccessibleBrains(db, userIds)).map((b) => `${b.repo_owner}/${b.repo_name}`).sort();
 
 // ---------------------------------------------------------------------------
 console.log('\nDefect 1: linking an invited address consumes its invitation');
@@ -226,7 +226,7 @@ check(
 );
 check(
 	'at the invited role',
-	(await listAccessibleBrains(db, adaIds)).find((b) => b.id === 'northwind/brain')?.role ===
+	(await listAccessibleBrains(db, adaIds)).find((b) => b.repo_owner === 'northwind' && b.repo_name === 'brain')?.role ===
 		'editor'
 );
 check(

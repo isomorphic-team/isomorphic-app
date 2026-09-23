@@ -17,6 +17,7 @@
 import type { D1Database } from '@cloudflare/workers-types';
 import type { Octokit } from 'octokit';
 import type { CommitAuthor } from './brain-repo.ts';
+import { brainSlug, handleOfSlug, newBrainHandle } from './brain-slug.ts';
 
 // Four roles, ordered least → most privileged. Writes require `editor`+;
 // `viewer` is read-only. `admin`/`owner` add member-management powers. `owner`
@@ -1027,8 +1028,12 @@ export async function deleteUserBrainGrantsInOrg(
 // `brain` handle.
 
 export interface AccessibleBrain {
-	id: string; // "owner/repo" — canonical brainId, tool/app-facing handle
-	brain_id: string; // brains PK
+	// The handle tools and the app pass, and the web URL's brain segment:
+	// `<name>-<handle>` (src/lib/brain-slug.ts). Changes when the brain is renamed;
+	// the handle part does not.
+	id: string;
+	brain_id: string; // brains PK: keys derived state (brainRefs)
+	handle: string; // brains.handle, the part of `id` that identifies the brain
 	org_id: string;
 	org_name: string;
 	org_model: string; // 'platform' | 'customer' | 'hosted'
@@ -1131,9 +1136,40 @@ export async function listAccessibleBrains(
 	db: D1Database,
 	userIds: string[]
 ): Promise<AccessibleBrain[]> {
+	const first = await queryAccessibleBrains(db, userIds);
+	const unnamed = first.filter((b) => !b.handle);
+	if (unnamed.length === 0) return first;
+	// A brain written without a handle (by an insert path that sets none, or by code
+	// older than migration 0012) gets one the first time it is listed.
+	for (const b of unnamed) await assignBrainHandle(db, b.brain_id);
+	return queryAccessibleBrains(db, userIds);
+}
+
+// Give a brain a handle if it has none. Conditional, so two requests racing on the
+// same brain agree on the first one written; retried on the rare collision with
+// another brain's handle (the unique index refuses it).
+export async function assignBrainHandle(db: D1Database, brainId: string): Promise<void> {
+	for (let attempt = 0; attempt < 3; attempt++) {
+		try {
+			await db
+				.prepare(`UPDATE brains SET handle = ?2 WHERE brain_id = ?1 AND handle IS NULL`)
+				.bind(brainId, newBrainHandle())
+				.run();
+			return;
+		} catch (err) {
+			if (attempt === 2) throw err;
+		}
+	}
+}
+
+async function queryAccessibleBrains(
+	db: D1Database,
+	userIds: string[]
+): Promise<AccessibleBrain[]> {
 	if (userIds.length === 0) return [];
 	const placeholders = userIds.map((_, i) => `?${i + 1}`).join(', ');
-	const columns = `b.brain_id AS brain_id, b.repo_owner AS repo_owner, b.repo_name AS repo_name,
+	const columns = `b.brain_id AS brain_id, b.handle AS handle,
+			        b.repo_owner AS repo_owner, b.repo_name AS repo_name,
 			        b.name AS name, b.visibility AS visibility, b.org_id AS org_id,
 			        o.name AS org_name, o.model AS org_model,
 			        COALESCE(CAST(c.external_id AS INTEGER), o.installation_id) AS installation_id,
@@ -1170,6 +1206,7 @@ export async function listAccessibleBrains(
 		.bind(...userIds)
 		.all<{
 			brain_id: string;
+			handle: string | null;
 			repo_owner: string;
 			repo_name: string;
 			name: string | null;
@@ -1188,7 +1225,6 @@ export async function listAccessibleBrains(
 
 	const byId = new Map<string, AccessibleBrain>();
 	for (const r of results ?? []) {
-		const id = `${r.repo_owner}/${r.repo_name}`;
 		const orgRole = r.org_role as Role | null;
 		const role = effectiveBrainRole({
 			visibility: r.visibility,
@@ -1197,7 +1233,7 @@ export async function listAccessibleBrains(
 			readOnly: !!r.read_only
 		});
 		if (!role) continue; // private brain, no grant, not an org admin: invisible.
-		const existing = byId.get(id);
+		const existing = byId.get(r.brain_id);
 		if (existing) {
 			// Same brain reached via two legs or two linked identities: keep the higher
 			// of each. A null org role never overwrites a membership found by the other.
@@ -1206,9 +1242,12 @@ export async function listAccessibleBrains(
 				existing.org_role = orgRole;
 			continue;
 		}
-		byId.set(id, {
-			id,
+		// Without a handle the id falls back to the primary key; listAccessibleBrains
+		// assigns one and lists again, so a caller never sees that.
+		byId.set(r.brain_id, {
+			id: r.handle ? brainSlug(brainLabel(r), r.handle) : r.brain_id,
 			brain_id: r.brain_id,
+			handle: r.handle ?? '',
 			org_id: r.org_id,
 			org_name: r.org_name,
 			org_model: r.org_model,
@@ -1441,8 +1480,19 @@ export function matchBrain(
 ): { brain?: AccessibleBrain; candidates?: AccessibleBrain[] } {
 	const q = query.trim().toLowerCase();
 	if (!q) return {};
-	const exact = brains.find((b) => b.id.toLowerCase() === q || b.repo_name.toLowerCase() === q);
+	// Exact names first, in the order that cannot mislead: the full slug, the primary
+	// key, the storage locator ("owner/repo", which every earlier handle was), the repo
+	// name. Then a slug whose name part is stale (the brain was renamed since the link
+	// was made), by its handle.
+	const exact =
+		brains.find((b) => b.id.toLowerCase() === q) ??
+		brains.find((b) => b.brain_id.toLowerCase() === q) ??
+		brains.find((b) => `${b.repo_owner}/${b.repo_name}`.toLowerCase() === q) ??
+		brains.find((b) => b.repo_name.toLowerCase() === q);
 	if (exact) return { brain: exact };
+	const handle = handleOfSlug(q);
+	const byHandle = handle ? brains.find((b) => b.handle === handle) : undefined;
+	if (byHandle) return { brain: byHandle };
 	const subs = brains.filter((b) => {
 		const label = brainLabel(b).toLowerCase();
 		// org_name is matched EXPLICITLY, so an org-qualified handle (`brain: "acme"`
@@ -1450,6 +1500,7 @@ export function matchBrain(
 		// How a brain is DISPLAYED and what a human can call it are separate questions.
 		return (
 			b.id.toLowerCase().includes(q) ||
+			`${b.repo_owner}/${b.repo_name}`.toLowerCase().includes(q) ||
 			b.repo_name.toLowerCase().includes(q) ||
 			(b.org_name ?? '').toLowerCase().includes(q) ||
 			label.includes(q)

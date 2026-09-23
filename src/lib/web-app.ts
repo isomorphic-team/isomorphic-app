@@ -9,6 +9,8 @@
 // the two-scope gating and usage analytics are all the code that already runs.
 // Nothing here may widen what a caller can do; it only changes how they arrive.
 
+import { handleOfSlug, labelOfSlug } from './brain-slug.ts';
+
 export const WEB_ROUTE_PREFIX = '/b/';
 
 // ---------- what a web URL means ----------
@@ -36,9 +38,9 @@ export const WEB_ROUTE_PREFIX = '/b/';
 // (no hidden state)? Is arriving cold harmless (no unsaved work, no half-finished
 // mutation)?
 export type WebRouting =
-	// The page path IS the URL: `/b/<owner>/<repo>/<path>`.
+	// The page path IS the URL: `/b/<brain>/<path>`.
 	| { kind: 'path' }
-	// The bare brain URL, `/b/<owner>/<repo>`, optionally with `?focus=`.
+	// The bare brain URL, `/b/<brain>`, optionally with `?focus=`.
 	| { kind: 'root' }
 	// `?view=<token>`, plus at most one argument under `param`.
 	| { kind: 'view'; token: string; param?: string }
@@ -97,7 +99,8 @@ const VIEW_ROUTES = Object.values(WEB_TOOL_ROUTING).filter(
 );
 
 export interface WebTarget {
-	// "owner/repo", the same key the content index uses.
+	// The brain's handle, one path segment: `<name>-<handle>` (src/lib/brain-slug.ts),
+	// or a folder name on the local runtime. Tools accept it as their `brain`.
 	brain: string;
 	// Repo-relative page path, or '' for a non-page destination.
 	path: string;
@@ -110,16 +113,10 @@ export interface WebTarget {
 }
 
 // A provisional display name for a brain the URL named, before the brain list has
-// arrived to supply the real one.
-//
-// The repo half of "owner/repo", which is what the crumb would show anyway for a
-// brain whose `name` was never set. Deliberately provisional: `ensureBrainList`
-// replaces it with the brain's actual label a moment later, and showing the repo
-// name in the meantime is better than showing "owner/repo" or nothing while the
-// page loads.
+// arrived to supply the real one: the slug's name part. `ensureBrainList` replaces
+// it with the brain's actual label a moment later.
 export function brainLabelFor(brain: string): string {
-	const repo = brain.split('/')[1];
-	return repo && repo.trim() ? repo : brain;
+	return labelOfSlug(brain);
 }
 
 // `?days=` off an analytics URL, or undefined to let the tool pick its default.
@@ -137,7 +134,7 @@ export function analyticsDays(arg: string | undefined): number | undefined {
 	return Number.isInteger(n) && n > 0 ? n : undefined;
 }
 
-// `/b/<owner>/<repo>/<path...>` (+ query) -> what to show.
+// `/b/<brain>/<path...>` (+ query) -> what to show.
 //
 // Built by `webPathFor` and read by both the Worker and the app, so a link that
 // opens the wrong page is a single test failure rather than a mismatch between
@@ -148,10 +145,15 @@ export function analyticsDays(arg: string | undefined): number | undefined {
 // `graph` or `search`. That is why the non-page destinations ride the query string
 // instead: it keeps page links unambiguous and leaves the path grammar closed.
 export function parseWebPath(pathname: string, search = ''): WebTarget | null {
-	const m = /^\/b\/([^/]+)\/([^/]+)(?:\/(.*))?$/.exec(pathname);
+	const m = /^\/b\/([^/]+)(?:\/(.*))?$/.exec(pathname);
 	if (!m) return null;
-	const brain = `${m[1]}/${m[2]}`;
-	const raw = (m[3] ?? '').replace(/\/+$/, '');
+	let brain: string;
+	try {
+		brain = decodeURIComponent(m[1]);
+	} catch {
+		return null;
+	}
+	const raw = (m[2] ?? '').replace(/\/+$/, '');
 
 	let params: URLSearchParams;
 	try {
@@ -215,7 +217,54 @@ export function webPathFor(
 	const param = route ? route.param : 'focus';
 	if (param && extras.arg) params.set(param, extras.arg);
 	const qs = params.toString();
-	return `${WEB_ROUTE_PREFIX}${brain}${encoded}${qs ? `?${qs}` : ''}`;
+	return `${WEB_ROUTE_PREFIX}${encodeURIComponent(brain)}${encoded}${qs ? `?${qs}` : ''}`;
+}
+
+// Where a `/b/...` URL should REDIRECT, or null to serve it as it is.
+//
+// A URL is a contract, so two kinds of old link keep working:
+//   - a slug whose name part is stale (the brain was renamed): the handle still
+//     identifies it, and the redirect updates the name;
+//   - `/b/<owner>/<repo>/...`, every link made before brains had slugs.
+// `brains` is the SIGNED-IN caller's accessible set, so a redirect never says
+// anything about a brain the caller cannot reach: an unknown URL is served as is
+// and the app reports it the same way whether or not the brain exists.
+// Path and query are carried over byte for byte.
+export function canonicalWebPath(
+	pathname: string,
+	search: string,
+	brains: { id: string; handle: string; repo_owner: string; repo_name: string }[]
+): string | null {
+	const m = /^\/b\/([^/]+)(?:\/(.*))?$/.exec(pathname);
+	if (!m) return null;
+	let seg: string;
+	try {
+		seg = decodeURIComponent(m[1]);
+	} catch {
+		return null;
+	}
+	const rest = m[2] ?? '';
+	const to = (b: { id: string }, tail: string) =>
+		`${WEB_ROUTE_PREFIX}${encodeURIComponent(b.id)}${tail ? `/${tail}` : ''}${search}`;
+
+	if (brains.some((b) => b.id === seg)) return null;
+	const handle = handleOfSlug(seg);
+	const renamed = handle ? brains.find((b) => b.handle === handle) : undefined;
+	if (renamed) return to(renamed, rest);
+
+	const slash = rest.indexOf('/');
+	const repo = slash === -1 ? rest : rest.slice(0, slash);
+	const tail = slash === -1 ? '' : rest.slice(slash + 1);
+	let repoName: string;
+	try {
+		repoName = decodeURIComponent(repo).toLowerCase();
+	} catch {
+		return null;
+	}
+	const legacy = brains.find(
+		(b) => b.repo_owner.toLowerCase() === seg.toLowerCase() && b.repo_name.toLowerCase() === repoName
+	);
+	return legacy ? to(legacy, tail) : null;
 }
 
 // The web URL a widget tool's RESULT should carry, from the same table the app's
@@ -245,8 +294,8 @@ export function webUrlFor(
 // a base URL for a route that does not exist. Trailing slashes dropped so a path can
 // be appended without producing `//b/`.
 //
-// authjs only: the cookie session is what Auth.js issues, and the github and static
-// identity paths have no browser session to read, so `/b/` is not served there.
+// oauth only: the cookie session is what Auth.js issues, and a static deployment has
+// no sign-in and so no browser session to read, so `/b/` is not served there.
 export function webBaseUrl(env: { authMode?: string; publicBaseUrl?: string }): string | undefined {
 	if (env.authMode !== 'oauth') return undefined;
 	const base = (env.publicBaseUrl ?? '').trim().replace(/\/+$/, '');
