@@ -80,6 +80,13 @@ Results:
 
 - **Across all three brains, a 0.8 gate on the minimum of the four answers auto-applied 14 fixes, all graded good.** The LLM's self-reported confidence on the harmful proposals was 0.84 to 0.98, so it is not a gate.
 - **Relaxing the gate for annotations is not safe.** Annotations score low on questions 2 and 3 by design, so gating them on 1 and 4 alone is tempting. It added good fixes in one brain and bad ones in another.
+- **The verify questions are specific to the proposal's shape.** They held on proposals that state the correct fact and why it wins. On claim-by-claim proposals, which carry quotes instead, the same four questions scored good edits lower than bad ones. Of those edits, 88% were graded good, as good as the one-issue-per-pair proposer's 85%. Retargeted questions separated them on the graded sample:
+  - Is the replaced text misleading?
+  - Does the new text keep every still-true fact?
+  - Is every new fact on the pages?
+
+  That gate was chosen on the sample it was scored on, so it still needs a held-out check.
+- **Claim-by-claim annotations were poor** (3 of 8 graded good).
 - **Mechanical failures seen:**
   - Edits that name text not occurring exactly once on the page (a quarter of edits in brain A, near zero in B and C).
   - Annotations inserted between the rows of a markdown table. Instructing the model not to do this removed it in the second prompt.
@@ -137,10 +144,10 @@ It uses two cheap models: a decision model for every yes/no judgment, and a smal
    - The decision model then scores each claim: would a reader of the current pages be misled? Claims below 0.4 are dropped.
 4. **Cluster.** Claims about the same fact are grouped across pairs, so a fact stale on five pages is one finding with five pages, not five findings. A cluster is the unit of review.
 5. **Verify.**
-   - The decision model answers the four questions above for each proposed patch.
+   - The decision model answers verify questions written for the proposal's shape. For claim-by-claim patches, that means the three retargeted questions (misleading, keeps facts, supported), not the four above.
    - Mechanical checks confirm that each patch applies exactly once, and that the result still parses as the same markdown structure (no table split, no broken list or fence).
 6. **Tier.**
-   - **Auto:** patch actions whose four verify answers are all at least 0.8 and that pass the mechanical checks.
+   - **Auto:** patch actions whose verify answers all clear the auto gate and that pass the mechanical checks. The gate is set per proposal shape, from graded samples.
    - **Review:** everything else with a concrete proposal, including every annotation, merge and archive.
    - **Person:** claims the pages cannot settle.
    - **Dropped:** claims triage or the claim filter rejected.
@@ -176,7 +183,9 @@ It uses two cheap models: a decision model for every yes/no judgment, and a smal
   - The platform still generates nothing. Model calls happen only in the operator-run checker, on the operator's key.
   - Findings and dismissals live in the brain repo.
   - Nothing is reported outward.
-- **New:** an auto-tier change requires a passing verify on the proposal itself, not a confident detection or the proposing model's own confidence.
+- **New:**
+  - An auto-tier change requires a passing verify on the proposal itself, not a confident detection or the proposing model's own confidence.
+  - Changing the proposal format means re-grading the verify gate.
 
 ## Not in scope
 
@@ -201,7 +210,7 @@ W1 and W2 stand alone and ship first; W1 matters on any templated brain, and W2 
 ## Open questions
 
 - **The gates** (0.2 to detect, 0.4 per claim, 0.8 to auto-apply) come from three brains graded by a model whose own first pass misses real issues. They need a person-labelled sample before any default is trusted.
-- **Proposal quality from claim-by-claim triage is not yet graded.** Its detection is measured; its patches are not. Until they are, the auto tier could be limited to the one-issue-per-pair proposer, which is graded.
+- **The auto gate for claim-by-claim patches is a hypothesis.** The three retargeted questions at 0.5 passed 22 of 52 graded edits, all good. The gate was chosen on those same edits, so it needs a held-out sample before the checker enables auto-apply for them. Until then, claim-by-claim patches go to review.
 - **How should claims be clustered?** Options: by the decision model on claim pairs, by a normalized subject key the LLM emits, or both. Clusters change as pages change. Is the finding key the sorted union of the cluster's paths, or one key per page pair, grouped only for display?
 - **Do contradictions inside one page need their own single-page pass,** or is the pairwise pass enough in practice?
 - Should auto-tier changes default to a pull request for every brain, whatever its write mode?
