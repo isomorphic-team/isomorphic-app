@@ -295,8 +295,9 @@ Do not reverse these without reading the reasoning above.
   copy-paste drift only. On the measured brain the highest pair scored 0.09, well under
   the 0.2 floor, and zero was the correct answer there. The conceptual case needs
   probe's competition signal (W5) or a model, not a better threshold.
-  [`consistency-checks.md`](./consistency-checks.md) proposes both halves: an
-  identifier-based duplicate check, and a model-based checker that runs outside the platform.
+  [`consistency-checks.md`](./consistency-checks.md) proposes a template-aware
+  `near-duplicate`, an identifier-based duplicate check, and a model-based contradiction
+  checker that runs outside the platform.
 - **Thresholds are calibrated on synthetic pairs plus one real brain**, not a corpus:
   `MIN_FOLDER_PAGES_FOR_NOTE = 3`, `DUP_THRESHOLD = 0.2`, `CONTESTED_AT = 3`. Revisit
   once several brains have been measured.
