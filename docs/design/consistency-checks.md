@@ -6,7 +6,7 @@ Status: **proposed** (2026-09-24). Nothing below is built.
 - **Part 2** adds a checker that runs outside the platform.
 - **Part 3** adds the platform surfaces that read the checker's output.
 
-Related: [`consolidation-loop.md`](./consolidation-loop.md) (tensions, `validate`, `resolve`, and the invariants this design keeps), [`brain-seams.md`](./brain-seams.md).
+Related: [`consolidation-loop.md`](./consolidation-loop.md) (tensions, `validate`, `resolve`, and the invariants this design keeps), [`brain-seams.md`](./brain-seams.md), and the companion [`privacy-checks.md`](./privacy-checks.md), which constrains what the checker may send to a model provider and write into findings.
 
 ## The problem
 
@@ -130,7 +130,7 @@ Contradictions need a model. The platform does not run inference (consolidation-
 
 It uses two cheap models: a decision model for every yes/no judgment, and a small LLM wherever text must be written. Providers are configuration: an OpenAI-compatible chat endpoint and a decisions endpoint, each with a model name. Nothing assumes a vendor. A deployment that configures no decision model runs its questions on the LLM, at higher cost. The pipeline never calls a frontier model.
 
-1. **Candidates.** A full pass on request, otherwise pages changed since the last run:
+1. **Candidates.** A full pass on request, otherwise pages changed since the last run. Pages that [`privacy-checks.md`](./privacy-checks.md) marks sensitive are skipped unless the operator opts in for the provider:
    - Each page paired with its top five search hits.
    - The Part 1 tensions.
 2. **Detect.** Both models judge each pair. A pair continues if either says so: the decision model's conflict probability is at least 0.2, or the LLM flags a conflict. This is tuned for recall, and precision is triage's job.
