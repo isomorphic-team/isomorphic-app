@@ -37,7 +37,13 @@ const ONCE = process.argv.includes('--once');
 
 function genApp(): Promise<void> {
 	return new Promise((resolve) => {
-		spawn('pnpm', ['gen:app'], { cwd: abs('.'), stdio: 'inherit' }).on('close', () => resolve());
+		// tsx's own entry point under THIS node, rather than `pnpm gen:app`: on Windows
+		// `pnpm` is a .cmd shim that spawn cannot launch without a shell, and a shell
+		// splits paths at spaces (and Node deprecates passing it args, DEP0190).
+		spawn(process.execPath, [abs('node_modules/tsx/dist/cli.mjs'), abs('scripts/gen-app.ts')], {
+			cwd: abs('.'),
+			stdio: 'inherit'
+		}).on('close', () => resolve());
 	});
 }
 
