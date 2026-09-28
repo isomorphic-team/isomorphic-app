@@ -146,7 +146,14 @@ async function buildJs(): Promise<string> {
 async function buildCss(): Promise<string> {
 	// @tailwindcss/cli ships the `tailwindcss` bin. Run it from the repo root so
 	// its @source globs resolve, and minify for the inlined payload.
-	await execFileP('pnpm', ['exec', 'tailwindcss', '-i', STYLES, '-o', CSS_OUT, '--minify'], {
+	//
+	// The bin's own entry point, under THIS node, rather than `pnpm exec`: on Windows
+	// `pnpm` is a .cmd/.ps1 shim that execFile cannot launch without a shell (ENOENT),
+	// and a shell would split the input and output paths at any space in them.
+	const cli = fileURLToPath(
+		new URL('../node_modules/@tailwindcss/cli/dist/index.mjs', import.meta.url)
+	);
+	await execFileP(process.execPath, [cli, '-i', STYLES, '-o', CSS_OUT, '--minify'], {
 		cwd: ROOT
 	});
 	return readFile(CSS_OUT, 'utf8');
