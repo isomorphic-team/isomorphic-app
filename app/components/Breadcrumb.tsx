@@ -16,7 +16,14 @@
 import type { ComponentChildren } from 'preact';
 import type { View } from '../core/types.ts';
 import { isFolderNoteName } from '../core/util.ts';
-import { brainList, activeBrain, goBack, backKind } from '../core/store.ts';
+import {
+	brainList,
+	activeBrain,
+	goBack,
+	backKind,
+	canGoBack,
+	stepBack
+} from '../core/store.ts';
 import type { Scope } from '../core/nav.ts';
 import {
 	openBrowse,
@@ -34,12 +41,15 @@ import { crumbCurrent, crumbLink, crumbMeta } from '../ui/typography.ts';
 // The rule the trail follows: tight INSIDE a crumb, loose BETWEEN crumbs (here).
 const CrumbSep = () => <span class="mx-2 shrink-0 text-muted opacity-50">/</span>;
 
-// The leading slot's geometry, worn by BOTH controls that can open the trail: the brain
-// glyph on a brain screen, the back arrow everywhere else. Identical insets in both,
-// including the padding a glyph has no other use for, because unequal ones moved every
-// label in the bar by 2px when you crossed between an account screen and a brain one.
-const LEADING_SLOT =
-	'mr-1.5 shrink-0 rounded p-0.5 text-muted outline-none transition-colors hover:bg-chip hover:text-fg focus-visible:ring-2 focus-visible:ring-accent';
+// The leading slot's geometry, worn by the brain glyph that opens a brain screen's
+// trail and, without the margin, by the back button ahead of every trail. Identical
+// insets in both, including the padding a glyph has no other use for, because unequal
+// ones moved every label in the bar by 2px when the two sat in the same place.
+// The back button wears the same box without the margin: it sits outside the trail, and
+// the header's own gap spaces it.
+const SLOT_BOX =
+	'shrink-0 rounded p-0.5 text-muted outline-none transition-colors hover:bg-chip hover:text-fg focus-visible:ring-2 focus-visible:ring-accent';
+const LEADING_SLOT = `mr-1.5 ${SLOT_BOX}`;
 
 // ---------- the crumbs ----------
 
@@ -52,9 +62,7 @@ const LEADING_SLOT =
 // means we genuinely do not know yet, and it says so generically.
 function BrainCrumb({ inert }: { inert?: boolean }) {
 	const label = activeBrain?.label ?? (brainList?.length === 0 ? 'No brain' : 'Brain');
-	// THE GLYPH IS THE SWITCHER: the mark that means "brain" carries the action. Every
-	// trail opens with a control, the brain on a brain screen and the back arrow on the
-	// ones beside it (LEADING_SLOT).
+	// THE GLYPH IS THE SWITCHER: the mark that means "brain" carries the action.
 	const glyph = (
 		<button
 			type="button"
@@ -120,24 +128,29 @@ function PathCrumb({ seg, path, last }: { seg: string; path: string; last: boole
 	);
 }
 
-// A screen outside the brain gets a way back rather than a parent crumb, because it has
-// no parent to name: Members, Analytics, Manage brains and Your settings sit BESIDE the
-// brain, not inside it (THE SCOPE TEST, app/core/nav.ts). A way back is history rather
-// than location, so it is an ARROW and not a crumb. Anything that looks like a crumb has
-// to behave like one — name a place, offer what else is at that level — and a back arrow
-// promises neither, so it can honestly go wherever you came from.
-function BackCrumb() {
-	// Nothing behind you and no brain to fall back into — the very first run, sitting on
-	// "Create your first brain". A back arrow there would land on the tree, fail for want
-	// of a brain, and bounce you to this same screen.
-	if (!backKind() && !activeBrain) return null;
+// THE BACK BUTTON, ahead of the whole trail on every screen. A way back is history
+// rather than location, so it is an ARROW and not a crumb: anything that looks like a
+// crumb has to behave like one (name a place, offer what else is at that level), and a
+// back arrow promises neither, so it can honestly go wherever you came from.
+//
+// It used to exist only on screens outside the brain (Members, Analytics, Manage
+// brains, Your settings), which have no parent crumb to name. Inside the brain the
+// trail answered "where am I" and nothing answered "where was I", so following a link
+// from one page to another left no way back but finding the first page again.
+//
+// Where it lands, and when there is nowhere, is `stepBack` / `canGoBack` in the store.
+// With nowhere it is DISABLED rather than absent, so the trail never shifts sideways
+// the moment a first step is taken.
+export function BackButton() {
+	const enabled = canGoBack();
 	return (
 		<button
 			type="button"
 			title="Back"
 			aria-label="Back"
-			onClick={guardNav(() => goBack(() => openBrowse()))}
-			class={LEADING_SLOT}
+			disabled={!enabled}
+			onClick={guardNav(stepBack)}
+			class={`${SLOT_BOX} disabled:cursor-default disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-muted`}
 		>
 			<ArrowLeftIcon />
 		</button>
@@ -165,17 +178,15 @@ function DestinationCrumb({
 	parent?: { key: string; label: string; onClick: () => void };
 	/**
 	 * See THE SCOPE TEST in app/core/nav.ts. Only `brain` screens sit INSIDE the brain
-	 * and get the brain crumb; `org` and `account` ones sit beside it and get a back
-	 * arrow instead.
+	 * and get the brain crumb; `org` and `account` ones sit beside it, so their trail is
+	 * just the destination, after the back button every screen has.
 	 */
 	root?: Scope;
 	children: ComponentChildren;
 }) {
 	return (
 		<nav class="flex min-w-0 items-center">
-			{root !== 'brain' ? (
-				<BackCrumb />
-			) : (
+			{root === 'brain' && (
 				<>
 					<BrainCrumb />
 					<CrumbSep />
@@ -230,9 +241,9 @@ export function Breadcrumb({ view }: { view: View }) {
 			</DestinationCrumb>
 		);
 	// More is the one screen that belongs to no single scope: it is the index of both the
-	// org and the account destinations. Any non-brain root gives it the back arrow, which
-	// is what it needs — it sits BESIDE the brain like everything it lists, and a brain
-	// crumb would claim the organization is inside the brain.
+	// org and the account destinations. Any non-brain root leaves it the back button
+	// alone, which is what it needs — it sits BESIDE the brain like everything it lists,
+	// and a brain crumb would claim the organization is inside the brain.
 	if (view.kind === 'more')
 		return (
 			<DestinationCrumb root="account">

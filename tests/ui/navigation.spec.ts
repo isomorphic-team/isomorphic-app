@@ -138,3 +138,42 @@ test('the graph view renders the force-directed canvas', async ({ page }) => {
 	expect(box?.width ?? 0).toBeGreaterThan(0);
 	expect(box?.height ?? 0).toBeGreaterThan(0);
 });
+
+// The header's back button, in the MCP App, where the widget's own stack is the only
+// history there is. Present on EVERY screen (it used to exist only on the org and
+// account screens), and disabled rather than hidden when there is nowhere to go, so
+// the trail does not shift sideways the moment you take a first step.
+test('the back button returns to the screen you came from, and waits until there is one', async ({
+	page
+}) => {
+	const app = await openApp(page, 'browse');
+	const back = app.getByRole('button', { name: 'Back', exact: true });
+	await expect(back).toBeVisible();
+	await expect(back).toBeDisabled();
+
+	await app.getByRole('button', { name: 'wiki', exact: true }).click();
+	await expectView(app, 'page');
+	await expect(back).toBeEnabled();
+
+	await back.click();
+	await expectView(app, 'browse');
+	await expect(back).toBeDisabled();
+});
+
+// "Skip the editor": saving REPLACES the editor with the page, which used to leave the
+// page as it stood before the edit on top of the stack, so Back from a page you had
+// just saved showed you that same page again, stale. Back goes where you were before
+// the page (`recordStep` in app/core/store.ts; `pnpm test:policy` pins the rule).
+test('Back after saving an edit skips the editor and the pre-edit page', async ({ page }) => {
+	const app = await openApp(page, 'browse');
+	await app.getByRole('button', { name: 'wiki', exact: true }).click();
+	await expectView(app, 'page');
+
+	await app.getByRole('banner').getByRole('button', { name: 'Edit', exact: true }).click();
+	await expectView(app, 'edit');
+	await app.getByRole('banner').getByRole('button', { name: 'Save', exact: true }).click();
+	await expectView(app, 'page');
+
+	await app.getByRole('button', { name: 'Back', exact: true }).click();
+	await expectView(app, 'browse');
+});
