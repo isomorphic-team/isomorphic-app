@@ -50,7 +50,7 @@ import {
 import { toast, Toast, ConfirmDialog } from './core/toast.tsx';
 import { MoreIcon } from './core/icons.tsx';
 import { Button, Menu, MenuRow } from './ui/index.ts';
-import { Breadcrumb } from './components/Breadcrumb.tsx';
+import { BackButton, Breadcrumb } from './components/Breadcrumb.tsx';
 // The Body dispatch table is codegenned from app/views/*.tsx (see scripts/gen-app.ts).
 import { renderView, viewActions } from './views/registry.generated.ts';
 // Chrome still binds the editor's save/cancel + toolbar directly.
@@ -375,9 +375,11 @@ function Header({ view }: { view: View }) {
 			{/* Fixed row height (not padding-driven) so toggling the search icon ↔ input —
 			    which have slightly different intrinsic heights — can't nudge the header up/down. */}
 			<div class="flex h-9 items-center gap-1.5 px-2.5 text-sm">
-				{/* The trail owns the left edge, whole, starting at the BRAIN (see
-				    components/Breadcrumb). Nothing may sit between the brain and the rest of
-				    the path, or the trail stops reading as one. */}
+				{/* Back first, then the trail, whole, starting at the BRAIN (see
+				    components/Breadcrumb). Back sits OUTSIDE the trail rather than in it: it is
+				    where you were, not where you are. Nothing may sit between the brain and the
+				    rest of the path, or the trail stops reading as one. */}
+				<BackButton />
 				<Breadcrumb view={view} />
 				<span class="ml-auto flex shrink-0 items-center gap-0.5">
 					{/* "What you can do HERE": supplied by the current view (viewActions),

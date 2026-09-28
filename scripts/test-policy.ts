@@ -17,6 +17,8 @@
 //     view counts as standing on one.
 //   - Where a floating panel opens (app/core/menu-placement.ts).
 //   - The write tools' shared path rules (src/lib/write-target.ts).
+//   - Where the back button lands (`recordStep`): what enters the stack, and that the
+//     editor never does.
 //
 //   pnpm test:policy
 
@@ -42,8 +44,11 @@ import {
 	browseCache,
 	setBrowseCache,
 	setActiveBrain,
-	pickShownBrain
+	pickShownBrain,
+	recordStep,
+	HISTORY_LIMIT
 } from '../app/core/store.ts';
+import type { View } from '../app/core/types.ts';
 import { renderAge, refreshOutcome } from '../app/core/util.ts';
 import { DEST_META, destinationsIn, activeDestination, isMorePlace } from '../app/core/nav.ts';
 import { panelPlacement, GAP, COMFORTABLE } from '../app/core/menu-placement.ts';
@@ -693,6 +698,63 @@ console.log('\nWhere a write lands, and whether it may (src/lib/write-target.ts)
 		'folder new_path that normalizes to nothing',
 		t(resolveMoveTarget('wiki/Projects', { new_path: '/' }, 'folder')) ===
 			'ERR:The new folder path is empty.'
+	);
+}
+
+// ---------- the back stack (recordStep) ----------
+//
+// What the header's back button returns to. `show` runs this on every navigation; it is
+// pure so the rule can be pinned without a DOM.
+{
+	const page = (path: string, markdown = 'x'): View => ({ kind: 'page', path, markdown });
+	const edit = (path: string): View => ({ kind: 'edit', path, markdown: 'x', sha: 's' });
+	const browse = { kind: 'browse', paths: [] } as unknown as View;
+	const loading = { kind: 'loading', label: 'Loading…', task: 'page' } as unknown as View;
+	const kinds = (s: View[]) => s.map((v) => ('path' in v ? `${v.kind}:${v.path}` : v.kind));
+
+	let stack: View[] = [];
+	recordStep(stack, page('a.md'), page('b.md'), true);
+	check('a push records the screen being left', kinds(stack).join() === 'page:a.md');
+
+	stack = [];
+	recordStep(stack, page('a.md'), page('a.md', 'fresh'), false);
+	check('a replace (refresh in place) records nothing', stack.length === 0);
+
+	stack = [];
+	recordStep(stack, loading, page('a.md'), true);
+	check('a loading screen is never a place to go back to', stack.length === 0);
+
+	stack = [];
+	recordStep(stack, edit('a.md'), page('c.md'), true);
+	check('the editor is never recorded, even when left by a push', stack.length === 0);
+
+	// The whole scenario: open a page, edit it, save, press Back.
+	stack = [];
+	let at: View = browse;
+	const go = (to: View, push: boolean) => {
+		recordStep(stack, at, to, push);
+		at = to;
+	};
+	go(page('a.md'), true); // open a page from the tree
+	go(edit('a.md'), true); // open the editor
+	go(page('a.md', 'saved'), false); // Save replaces the editor with the page
+	check(
+		'after a save, Back skips the editor AND the stale pre-edit page',
+		kinds(stack).join() === 'browse'
+	);
+
+	stack = [browse, page('a.md')];
+	recordStep(stack, edit('a.md'), page('b.md'), true);
+	check(
+		'leaving the editor for a DIFFERENT page keeps the page it was editing',
+		kinds(stack).join() === 'browse,page:a.md'
+	);
+
+	stack = Array.from({ length: HISTORY_LIMIT }, (_, i) => page(`p${i}.md`));
+	recordStep(stack, page('last.md'), page('next.md'), true);
+	check(
+		'the stack is bounded, dropping the oldest entry',
+		stack.length === HISTORY_LIMIT && kinds(stack)[0] === 'page:p1.md'
 	);
 }
 
