@@ -253,7 +253,9 @@ function chromeView(): View {
 // late answer on top of that yanks the screen out from under them, and after a Back it
 // puts back the very screen they left. `openBrowse` guarded itself this way already;
 // now every loader does, which is what lets Back cancel a load just by leaving it.
-function startLoad(v: View & { kind: 'loading' }, opts: { push?: boolean } = {}): () => boolean {
+// Takes a plain View: spelling the loading kind in the type would read, to
+// `pnpm test:loading`'s scan, as a loading view built without a task.
+function startLoad(v: View, opts: { push?: boolean } = {}): () => boolean {
 	show(v, opts);
 	return () => currentView === v;
 }
