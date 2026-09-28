@@ -203,6 +203,37 @@ const ShareIcon = () => (
 		/>
 	</svg>
 );
+// The scope marks that lead an org or account screen's trail, in the slot the brain
+// glyph holds on a brain screen (see ScopeMark in components/Breadcrumb).
+const BuildingIcon = () => (
+	<svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true">
+		<path
+			fill="none"
+			stroke="currentColor"
+			stroke-width="1.4"
+			stroke-linejoin="round"
+			d="M3 13.5V3.2h6.5v10.3M9.5 6.5H13v7M1.8 13.5h12.4"
+		/>
+		<path
+			stroke="currentColor"
+			stroke-width="1.4"
+			stroke-linecap="round"
+			d="M5.3 5.6h1.9M5.3 8.2h1.9M5.3 10.8h1.9"
+		/>
+	</svg>
+);
+const PersonIcon = () => (
+	<svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true">
+		<circle cx="8" cy="5.2" r="2.6" fill="none" stroke="currentColor" stroke-width="1.4" />
+		<path
+			fill="none"
+			stroke="currentColor"
+			stroke-width="1.4"
+			stroke-linecap="round"
+			d="M3 13.6c0-2.6 2.2-4.1 5-4.1s5 1.5 5 4.1"
+		/>
+	</svg>
+);
 const MoreIcon = () => (
 	<svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true">
 		<circle cx="3" cy="8" r="1.4" fill="currentColor" />
@@ -430,6 +461,8 @@ export {
 	PeopleIcon,
 	ShareIcon,
 	MoreIcon,
+	BuildingIcon,
+	PersonIcon,
 	GearIcon,
 	BrainGlyph,
 	ChevronDownIcon,

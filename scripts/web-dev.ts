@@ -81,16 +81,23 @@ if (seeded) {
 	}
 }
 
-function run(cmd: string, cmdArgs: string[]) {
-	return spawn(cmd, cmdArgs, { cwd: abs('.'), stdio: 'inherit', env: process.env });
+// A tsx script under THIS node, the same thing `pnpm gen:app` and `pnpm try` run,
+// without going through `pnpm`: on Windows that is a .cmd shim spawn cannot launch
+// without a shell (ENOENT), and a shell would split the brain paths at any space.
+function tsx(script: string, cmdArgs: string[] = []) {
+	return spawn(process.execPath, [abs('node_modules/tsx/dist/cli.mjs'), abs(script), ...cmdArgs], {
+		cwd: abs('.'),
+		stdio: 'inherit',
+		env: process.env
+	});
 }
 
 // Regenerate the bundle first, exactly as app:dev does: the point is to serve the
 // bytes the Worker would. The runtime re-reads it on change after that.
-await new Promise<void>((r) => run('pnpm', ['gen:app']).on('close', () => r()));
+await new Promise<void>((r) => tsx('scripts/gen-app.ts').on('close', () => r()));
 
 const dirs = seeded ? SEEDS.map((s) => dirFor(s.name)) : [root];
-const runtime = run('pnpm', ['try', ...dirs]);
+const runtime = tsx('src/local.ts', dirs);
 runtime.on('close', (code) => process.exit(code ?? 0));
 for (const sig of ['SIGINT', 'SIGTERM'] as const) {
 	process.on(sig, () => runtime.kill(sig));

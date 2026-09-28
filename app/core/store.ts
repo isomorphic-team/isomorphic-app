@@ -191,16 +191,73 @@ function bump() {
 
 // Transient views are never recorded: you can't go "back to Loading…", and an error
 // view's own Retry is its way out. Everything else is a real place the user was.
+//
+// THE EDITOR IS NOT A PLACE either, for Back's purposes. Its unsaved text is in no
+// view object, so returning to a recorded editor reopens it on whatever was saved when
+// you left, which is the editor discarding its own premise (the same reason it has no
+// URL). And leaving it by Save or Cancel REPLACES it with the page (`push: false`),
+// which left the page as it stood BEFORE the edit on top of the stack: one press of
+// Back from a page you had just saved showed you the same page, stale. So the pre-edit
+// copy is dropped when the editor hands over to the page it was editing, and Back from
+// there goes wherever you were before you opened the page.
 const HISTORY_LIMIT = 50;
+const UNRECORDED: ReadonlySet<View['kind']> = new Set<View['kind']>(['loading', 'error', 'edit']);
+
+// Pure, and exported so `pnpm test:policy` can pin it: this is what decides where the
+// back button lands, and `show` is too entangled with the DOM to call from a test.
+function recordStep(stack: View[], from: View, to: View, push: boolean): void {
+	if (push && !UNRECORDED.has(from.kind)) {
+		stack.push(from);
+		if (stack.length > HISTORY_LIMIT) stack.shift();
+	}
+	if (from.kind === 'edit' && to.kind === 'page') {
+		const top = stack.at(-1);
+		if (top?.kind === 'page' && top.path === to.path) stack.pop();
+	}
+}
 
 function show(v: View, { push = true } = {}) {
-	if (push && currentView.kind !== 'loading' && currentView.kind !== 'error') {
-		history.push(currentView);
-		if (history.length > HISTORY_LIMIT) history.shift();
-	}
+	recordStep(history, currentView, v, push);
+	display(v, push);
+}
+
+// Put a view on screen without touching the stack: `goBack` has already popped the
+// entry it is restoring, so running `recordStep` again could drop a second one.
+function display(v: View, push: boolean) {
 	currentView = v;
+	if (v.kind !== 'loading') settledView = v;
 	syncAddressBar(v, push);
 	bump();
+}
+
+// THE CHROME DOES NOT FOLLOW A LOAD. The header and the rail draw the last screen that
+// finished, not the loading view in front of it.
+//
+// The loading view has no place of its own, so the trail used to fall through to its
+// default for it: the brain glyph and the brain's name. Every navigation drew that
+// for as long as the load took, so More → Members read "More", then "🧠 Personal",
+// then "Members", the title stepping 25px right and back, and the header's actions
+// dropped to one and came back. The wait is the body's to show (LoadingView); the bar
+// holds still until there is somewhere new to name. Before anything has finished
+// (the first connect) there is nothing to hold, and the loading view is drawn as is.
+let settledView: View | null = null;
+function chromeView(): View {
+	return currentView.kind === 'loading' && settledView ? settledView : currentView;
+}
+
+// Show a loading view, and hand back the question every loader has to ask once its
+// await returns: am I still what is on screen?
+//
+// An await is long enough for anything to happen. The reader presses Back, clicks
+// something else, or the host delivers the result it was waiting for. Showing the
+// late answer on top of that yanks the screen out from under them, and after a Back it
+// puts back the very screen they left. `openBrowse` guarded itself this way already;
+// now every loader does, which is what lets Back cancel a load just by leaving it.
+// Takes a plain View: spelling the loading kind in the type would read, to
+// `pnpm test:loading`'s scan, as a loading view built without a task.
+function startLoad(v: View, opts: { push?: boolean } = {}): () => boolean {
+	show(v, opts);
+	return () => currentView === v;
 }
 
 // Keep the browser's address bar naming what is on screen (web host only).
@@ -315,8 +372,18 @@ function syncAddressBar(v: View, push: boolean): void {
 	// the popstate handler reacting to a move the browser already made. Pushing there
 	// would leave an entry pointing at where the user just was, so Back would have to
 	// be pressed twice to go anywhere.
-	if (push) globalThis.history.pushState(null, '', url);
-	else globalThis.history.replaceState(null, '', url);
+	//
+	// Each entry records how many app entries sit beneath it, so the back button can
+	// tell a Back that stays in the app from one that would leave it (the browser only
+	// reports its whole stack's length, which counts the pages before ours). A replace
+	// keeps the depth of the entry it replaces.
+	if (push) globalThis.history.pushState({ isoDepth: webDepth() + 1 }, '', url);
+	else globalThis.history.replaceState(globalThis.history.state, '', url);
+}
+
+function webDepth(): number {
+	const depth = (globalThis.history.state as { isoDepth?: unknown } | null)?.isoDepth;
+	return typeof depth === 'number' ? depth : 0;
 }
 
 // Return to whatever pushed the current view.
@@ -333,8 +400,43 @@ function syncAddressBar(v: View, push: boolean): void {
 // the lowest runtime layer and must not import actions.
 function goBack(fallback?: () => void): void {
 	const prev = history.pop();
-	if (prev) show(prev, { push: false });
+	if (prev) display(prev, false);
 	else fallback?.();
+}
+
+// The header's back button. Two hosts, two stacks:
+//
+//   - In the MCP App the widget's own stack is the only history there is.
+//   - In a browser tab the BROWSER's stack is the truth, and the button is its Back.
+//     Popping our stack there would `replaceState` over the current entry, leaving
+//     the browser's stack pointing at pages the app had already left, so its Forward
+//     would stop working. `history.back()` fires the popstate handler that the
+//     browser's own button does, so the two cannot disagree.
+//
+// Nothing to go back to disables the button rather than hiding it, so the trail
+// never shifts sideways when it appears. On the web that includes a tab that
+// arrived from another site: Back would leave the app, which is the browser's
+// button's job and not ours.
+//
+// Two screens use our stack even on the web, because neither has a browser entry of
+// its own. The EDITOR has no URL, so the entry is still the page's and the browser's
+// Back would skip past the page. A LOAD has not written its URL yet, so the entry is
+// still the screen the load started from, and Back from a load means "never mind":
+// pop to that screen, and the loader's own `live()` check drops its late result.
+// That is also why a load does not grey the button. It used to, which blinked it
+// off and on again on every navigation.
+function browserOwnsBack(): boolean {
+	return isWebHost() && currentView.kind !== 'edit' && currentView.kind !== 'loading';
+}
+
+function canGoBack(): boolean {
+	return browserOwnsBack() ? webDepth() > 0 : history.length > 0;
+}
+
+function stepBack(): void {
+	if (!canGoBack()) return;
+	if (browserOwnsBack()) globalThis.history.back();
+	else goBack();
 }
 
 // Where Back would actually land, for chrome that NAMES the destination. A crumb
@@ -382,5 +484,11 @@ export {
 	show,
 	goBack,
 	backKind,
+	canGoBack,
+	stepBack,
+	chromeView,
+	startLoad,
+	recordStep,
+	HISTORY_LIMIT,
 	isEditablePath
 };

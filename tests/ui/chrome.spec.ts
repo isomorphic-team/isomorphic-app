@@ -202,6 +202,8 @@ test.describe('the trail', () => {
 			.locator('button')
 			.evaluateAll((els) => els.map((e) => e.getAttribute('aria-label') ?? e.textContent?.trim()));
 		expect(labels).toEqual([
+			// Ahead of the trail rather than in it: where you were, not where you are.
+			'Back',
 			'Switch brain',
 			'Personal',
 			'wiki',
