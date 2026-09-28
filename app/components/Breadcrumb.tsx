@@ -16,14 +16,7 @@
 import type { ComponentChildren, VNode } from 'preact';
 import type { View } from '../core/types.ts';
 import { isFolderNoteName } from '../core/util.ts';
-import {
-	brainList,
-	activeBrain,
-	goBack,
-	backKind,
-	canGoBack,
-	stepBack
-} from '../core/store.ts';
+import { brainList, activeBrain, goBack, backKind, canGoBack, stepBack } from '../core/store.ts';
 import type { Scope } from '../core/nav.ts';
 import {
 	openBrowse,
@@ -34,13 +27,7 @@ import {
 	openBrainAccess,
 	guardNav
 } from '../core/actions.ts';
-import {
-	BrainGlyph,
-	ArrowLeftIcon,
-	BuildingIcon,
-	PersonIcon,
-	MoreIcon
-} from '../core/icons.tsx';
+import { BrainGlyph, ArrowLeftIcon, BuildingIcon, PersonIcon, MoreIcon } from '../core/icons.tsx';
 import { crumbCurrent, crumbLink, crumbMeta } from '../ui/typography.ts';
 
 // Wide enough that a crumb and the slash after it never read as one unit.

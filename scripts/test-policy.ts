@@ -776,10 +776,7 @@ console.log('\nWhere a write lands, and whether it may (src/lib/write-target.ts)
 	show(tree);
 	const live = startLoad(loadingPage);
 	check('a load is live while it is on screen', live());
-	check(
-		'the chrome shows the screen the load started from, not the load',
-		chromeView() === tree
-	);
+	check('the chrome shows the screen the load started from, not the load', chromeView() === tree);
 
 	goBack();
 	check('Back from a load returns to where it started', chromeView() === tree);

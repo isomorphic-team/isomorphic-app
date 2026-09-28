@@ -56,9 +56,7 @@ test('the title starts at the same place on every screen', async ({ page }) => {
 	expect(xs.size, `title x by screen: ${JSON.stringify(seen)}`).toBe(1);
 });
 
-test('while a page loads, the bar still shows where you are, actions and all', async ({
-	page
-}) => {
+test('while a page loads, the bar still shows where you are, actions and all', async ({ page }) => {
 	const app = await openApp(page, 'loading');
 	const back = app.getByRole('button', { name: 'Back', exact: true });
 	const before = await title(app);
@@ -87,7 +85,11 @@ test('while a page loads, the bar still shows where you are, actions and all', a
 // drew, so the case above cannot tell them apart. A search's trail can.
 test('a search in flight keeps the trail it started from', async ({ page }) => {
 	const app = await openApp(page, 'loading');
-	await app.locator('aside').getByRole('button', { name: /Search/ }).first().click();
+	await app
+		.locator('aside')
+		.getByRole('button', { name: /Search/ })
+		.first()
+		.click();
 	await expectView(app, 'search');
 	const trail = () => app.locator('header nav').innerText();
 	const before = await trail();
@@ -111,7 +113,11 @@ test('leaving an account screen for an org one never draws the brain in between'
 	expect(more.text).toBe('More');
 
 	// members never answers here.
-	await app.locator('main').getByRole('button', { name: /Members/ }).first().click();
+	await app
+		.locator('main')
+		.getByRole('button', { name: /Members/ })
+		.first()
+		.click();
 	await expectView(app, 'loading');
 	// Before the fix: "Personal", 25px to the right, until the roster arrived.
 	expect(await title(app)).toEqual(more);
