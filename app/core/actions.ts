@@ -40,6 +40,7 @@ import { analyticsDays, type WebTarget } from './host-web.ts';
 import { isFolderNoteName, refreshOutcome } from './util.ts';
 import {
 	show,
+	startLoad,
 	history,
 	currentView,
 	brainArgs,
@@ -240,7 +241,7 @@ async function switchBrain(id: string) {
 		openBrowse();
 		return;
 	}
-	show({
+	const live = startLoad({
 		kind: 'loading',
 		label: 'Switching brain…',
 		task: 'switch',
@@ -248,8 +249,10 @@ async function switchBrain(id: string) {
 	});
 	try {
 		await adoptBrain(id);
+		if (!live()) return;
 		openBrowse();
 	} catch (e) {
+		if (!live()) return;
 		show({
 			kind: 'error',
 			headline: "Couldn't switch brain.",
@@ -344,7 +347,7 @@ async function submitCreateBrain(name: string) {
 	// push:false — a completed flow must not enter the back stack, so the screen that
 	// opened it stays on top and Back from the new brain lands there, not on a form
 	// offering to create the brain that now exists.
-	show(
+	const live = startLoad(
 		{ kind: 'loading', label: 'Creating brain…', task: 'create', subject: trimmed },
 		{ push: false }
 	);
@@ -352,8 +355,11 @@ async function submitCreateBrain(name: string) {
 		const res = await callTool('create_brain', { name: trimmed });
 		const fresh = brainsViewFromSc(payloadOf(res), true);
 		refreshStale('brains', fresh); // ...and if that screen was the brains list, it is now stale
+		// The brain exists whatever the reader did meanwhile; only the landing is skipped.
+		if (!live()) return;
 		openBrowse(); // the new brain's (empty) tree — the switch already dropped the old one's
 	} catch (e) {
+		if (!live()) return;
 		show({
 			kind: 'error',
 			headline: "Couldn't create the brain.",
@@ -365,11 +371,13 @@ async function submitCreateBrain(name: string) {
 
 // Open the brains view (the trail's brain glyph lands here).
 async function openBrains() {
-	show({ kind: 'loading', label: 'Loading brains…', task: 'brains' });
+	const live = startLoad({ kind: 'loading', label: 'Loading brains…', task: 'brains' });
 	try {
 		const res = await callTool('brains', {});
+		if (!live()) return;
 		show(brainsViewFromSc(payloadOf(res)));
 	} catch (e) {
+		if (!live()) return;
 		show({
 			kind: 'error',
 			headline: "Couldn't load brains.",
@@ -393,11 +401,13 @@ function brainAccessViewFromSc(sc: Payload): View {
 // `brain` targets a specific one (the Share control in the brains list); omitted,
 // it acts on the active brain.
 async function openBrainAccess(brain?: string) {
-	show({ kind: 'loading', label: 'Loading sharing…', task: 'sharing' });
+	const live = startLoad({ kind: 'loading', label: 'Loading sharing…', task: 'sharing' });
 	try {
 		const result = await callTool('brain_access', brain ? { brain } : {});
+		if (!live()) return;
 		show(brainAccessViewFromSc(payloadOf(result)));
 	} catch (e) {
+		if (!live()) return;
 		show({
 			kind: 'error',
 			headline: "Couldn't load sharing.",
@@ -506,10 +516,18 @@ function openWebTarget(t: WebTarget): void {
 // moved and we are catching up to it (the popstate handler), where pushing would
 // re-add the entry the user just left.
 async function navigateTo(path: string, { push = true } = {}) {
-	show({ kind: 'loading', label: `Loading ${path}…`, task: 'page', subject: pageLabel(path) });
+	const live = startLoad({
+		kind: 'loading',
+		label: `Loading ${path}…`,
+		task: 'page',
+		subject: pageLabel(path)
+	});
 	try {
-		show(pageView(path, await fetchPage(path)), { push });
+		const page = await fetchPage(path);
+		if (!live()) return;
+		show(pageView(path, page), { push });
 	} catch (e) {
+		if (!live()) return;
 		if (isNoBrain(String(e))) return openAddBrain();
 		show({
 			kind: 'error',
@@ -562,13 +580,20 @@ async function refreshPage() {
 // worse than one that was never listed, so making them visible obliged us to give
 // them somewhere to go.
 async function openAsset(path: string) {
-	show({ kind: 'loading', label: `Loading ${path}…`, task: 'asset', subject: baseName(path) });
+	const live = startLoad({
+		kind: 'loading',
+		label: `Loading ${path}…`,
+		task: 'asset',
+		subject: baseName(path)
+	});
 	try {
 		// include_data: the asset view IS the bytes. See app/core/media.ts on why the
 		// default is off.
 		const res = await callTool('read_media', { path, include_data: true, ...brainArgs() });
+		if (!live()) return;
 		show({ kind: 'asset', path, ...parseAsset(payloadOf(res)) });
 	} catch (e) {
+		if (!live()) return;
 		if (isNoBrain(String(e))) return openAddBrain();
 		show({
 			kind: 'error',
@@ -626,20 +651,19 @@ async function openBrowse(focus?: string) {
 		void revalidateBrowse();
 		return;
 	}
-	show({ kind: 'loading', label: 'Loading files…', task: 'files' });
-	// The view this call is standing on. A cold tree fetch is the app's slowest open,
+	const live = startLoad({ kind: 'loading', label: 'Loading files…', task: 'files' });
+	// Whether this call is still what is on screen (startLoad). A cold tree fetch is the app's slowest open,
 	// and the one it makes UNATTENDED (the self-boot in connectToHost), so it is the one
 	// most likely to be overtaken: the host can deliver the opening tool result at any
 	// point while list_pages is in flight. Whatever landed meanwhile is a real answer to
 	// a real request — showing the tree on top of it is what made a slow view_page flash
 	// its page and then fall back to the file tree. Same guard revalidateBrowse uses.
-	const opened = currentView;
 	try {
 		const data = await fetchPaths();
-		if (currentView !== opened) return;
+		if (!live()) return;
 		show({ kind: 'browse', ...data, focus });
 	} catch (e) {
-		if (currentView !== opened) return;
+		if (!live()) return;
 		if (isNoBrain(String(e))) return openAddBrain();
 		show({
 			kind: 'error',
@@ -680,7 +704,7 @@ function openFolder(prefix: string) {
 // Open the activity/audit feed — whole brain, or one page's history when `path`
 // is given. Drives the same view the view_activity tool opens.
 async function openActivity(path?: string) {
-	show({
+	const live = startLoad({
 		kind: 'loading',
 		label: 'Loading recent changes…',
 		task: 'activity',
@@ -688,8 +712,10 @@ async function openActivity(path?: string) {
 	});
 	try {
 		const result = await callTool('view_activity', { ...(path ? { path } : {}), ...brainArgs() });
+		if (!live()) return;
 		show({ kind: 'activity', ...parseActivity(payloadOf(result)) });
 	} catch (e) {
+		if (!live()) return;
 		show({
 			kind: 'error',
 			headline: "Couldn't load recent changes.",
@@ -703,11 +729,13 @@ async function openActivity(path?: string) {
 // `members` tool opens; mutations (invite / role / remove) refresh through
 // refreshMembers below.
 async function openMembers() {
-	show({ kind: 'loading', label: 'Loading members…', task: 'members' });
+	const live = startLoad({ kind: 'loading', label: 'Loading members…', task: 'members' });
 	try {
 		const result = await callTool('members', {});
+		if (!live()) return;
 		show(membersViewFromSc(payloadOf(result)));
 	} catch (e) {
+		if (!live()) return;
 		show({
 			kind: 'error',
 			headline: "Couldn't load members.",
@@ -721,11 +749,13 @@ async function openMembers() {
 // from whichever brain you happen to be in, so this deliberately does NOT pass
 // brainArgs() and lets the server resolve the org off the active brain.
 async function openAnalytics(days?: number) {
-	show({ kind: 'loading', label: 'Loading analytics…', task: 'analytics' });
+	const live = startLoad({ kind: 'loading', label: 'Loading analytics…', task: 'analytics' });
 	try {
 		const result = await callTool('analytics', { ...(days ? { days } : {}) });
+		if (!live()) return;
 		show({ kind: 'analytics', ...parseAnalytics(payloadOf(result)) });
 	} catch (e) {
+		if (!live()) return;
 		show({
 			kind: 'error',
 			headline: "Couldn't load analytics.",
@@ -746,16 +776,18 @@ function refreshMembers(sc: Payload) {
 // Connected accounts is a per-person concern that may reject on a single-tenant
 // connection, so its failure is tolerated (the card still shows).
 async function openSettings() {
-	show({ kind: 'loading', label: 'Loading…', task: 'settings' });
+	const live = startLoad({ kind: 'loading', label: 'Loading…', task: 'settings' });
 	try {
 		const [who, conn] = await Promise.all([
 			callTool('whoami', {}),
 			callTool('connected_accounts', {}).catch(() => null)
 		]);
+		if (!live()) return;
 		const identity = parseIdentity(payloadOf(who));
 		const accounts = conn && !conn.isError ? parseAccounts(structuredOf(conn)) : [];
 		show({ kind: 'settings', identity, accounts });
 	} catch (e) {
+		if (!live()) return;
 		show({
 			kind: 'error',
 			headline: "Couldn't load settings.",
@@ -768,7 +800,7 @@ async function openSettings() {
 // Open the link graph — the whole brain as nodes + edges. `focus` centers and
 // highlights one page. Drives the same view the view_graph tool opens.
 async function openGraph(focus?: string) {
-	show({
+	const live = startLoad({
 		kind: 'loading',
 		label: 'Building the graph…',
 		task: 'graph',
@@ -779,8 +811,10 @@ async function openGraph(focus?: string) {
 			...(focus ? { path: focus } : {}),
 			...brainArgs()
 		});
+		if (!live()) return;
 		show({ kind: 'graph', ...parseGraph(payloadOf(result)) });
 	} catch (e) {
+		if (!live()) return;
 		show({
 			kind: 'error',
 			headline: "Couldn't build the graph.",
@@ -829,17 +863,24 @@ function openMore() {
 // conversational — one client's material surfacing in another client's window.
 async function runSearch(query: string, scope?: 'all') {
 	if (!query.trim()) return;
-	show({ kind: 'loading', label: `Searching for “${query}”…`, task: 'search', subject: query });
+	const live = startLoad({
+		kind: 'loading',
+		label: `Searching for “${query}”…`,
+		task: 'search',
+		subject: query
+	});
 	try {
 		const result = await callTool('search_pages', {
 			query,
 			...(scope ? { scope } : {}),
 			...brainArgs()
 		});
+		if (!live()) return;
 		// payloadOf refuses an error result. Before it did, an error rendered as "No
 		// matches", a different and more misleading answer than "search failed".
 		show({ kind: 'search', query, scope, hits: parseSearchHits(payloadOf(result)) });
 	} catch (e) {
+		if (!live()) return;
 		show({
 			kind: 'error',
 			headline: 'Search failed.',
@@ -853,7 +894,7 @@ async function runSearch(query: string, scope?: 'all') {
 // so the switch has to land BEFORE the fetch.
 async function openHit(hit: Hit) {
 	if (!hit.brain || hit.brain === activeBrain?.id) return navigateTo(hit.path);
-	show({
+	const live = startLoad({
 		kind: 'loading',
 		label: `Loading ${hit.path}…`,
 		task: 'page',
@@ -862,6 +903,7 @@ async function openHit(hit: Hit) {
 	try {
 		await adoptBrain(hit.brain);
 	} catch (e) {
+		if (!live()) return;
 		show({
 			kind: 'error',
 			headline: "Couldn't open that brain.",
@@ -870,6 +912,7 @@ async function openHit(hit: Hit) {
 		});
 		return;
 	}
+	if (!live()) return;
 	await navigateTo(hit.path);
 }
 

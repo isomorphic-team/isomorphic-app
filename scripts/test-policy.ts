@@ -46,7 +46,11 @@ import {
 	setActiveBrain,
 	pickShownBrain,
 	recordStep,
-	HISTORY_LIMIT
+	HISTORY_LIMIT,
+	show,
+	startLoad,
+	chromeView,
+	goBack
 } from '../app/core/store.ts';
 import type { View } from '../app/core/types.ts';
 import { renderAge, refreshOutcome } from '../app/core/util.ts';
@@ -756,6 +760,35 @@ console.log('\nWhere a write lands, and whether it may (src/lib/write-target.ts)
 		'the stack is bounded, dropping the oldest entry',
 		stack.length === HISTORY_LIMIT && kinds(stack)[0] === 'page:p1.md'
 	);
+}
+
+// ---------- a load, and what may land after it (startLoad / chromeView) ----------
+//
+// The UI battery holds loads open forever (`#loading`), so it can show the header
+// holding still and Back leaving a load, but never a late result arriving. This is
+// that half: the rule every loader asks after its await.
+{
+	const tree = { kind: 'browse', paths: [] } as unknown as View;
+	const loadingPage = { kind: 'loading', label: 'Loading a.md…', task: 'page' } as View & {
+		kind: 'loading';
+	};
+
+	show(tree);
+	const live = startLoad(loadingPage);
+	check('a load is live while it is on screen', live());
+	check(
+		'the chrome shows the screen the load started from, not the load',
+		chromeView() === tree
+	);
+
+	goBack();
+	check('Back from a load returns to where it started', chromeView() === tree);
+	check('and the load is no longer live, so its late result is dropped', !live());
+
+	const again = startLoad({ ...loadingPage });
+	show({ kind: 'more' } as View);
+	check('a load overtaken by another navigation is not live either', !again());
+	check('and the chrome follows the screen that replaced it', chromeView().kind === 'more');
 }
 
 done();

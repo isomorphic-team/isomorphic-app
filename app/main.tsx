@@ -20,6 +20,7 @@ import {
 	subscribeStore,
 	version,
 	currentView,
+	chromeView,
 	show,
 	setActiveBrain,
 	webLinkFor
@@ -364,8 +365,20 @@ function Rail({ view }: { view: View }) {
 // A SECOND ROW IS A MODE, NOT A FIXTURE. It appears when you enter the editor, carrying
 // the formatting toolbar, and that is the whole of its job — the appearing is the
 // signal: a row that is always there cannot tell you anything by being there.
+// The actions the header last drew for a finished screen. While a load is on screen
+// the header still shows that screen (chromeView), but some of its actions exist only
+// while their view is MOUNTED (the tree's, behind `treeCtl.bound`), and the body is the
+// loading view now. So the last set is held and drawn disabled: the same shapes in the
+// same places, none of them able to reach into a view that is no longer there. Without
+// it the tree's seven controls fell to two for the length of every load and came back.
+let heldActions: ViewAction[] = [];
+
 function Header({ view }: { view: View }) {
 	const editing = view.kind === 'edit';
+	const loading = currentView.kind === 'loading';
+	const actions = loading
+		? heldActions.map((a) => ({ ...a, disabled: true }))
+		: (heldActions = viewActions(view));
 	// The toolbar waits for the editor to actually be bound, so the row drops in WITH
 	// the buttons already in it — no blank-toolbar frame, and no opacity fade, which was
 	// the visible flash.
@@ -385,7 +398,7 @@ function Header({ view }: { view: View }) {
 					{/* "What you can do HERE": supplied by the current view (viewActions),
 					    not switched on here. Destinations are the rail's, so this end of the
 					    bar belongs to the view. */}
-					{viewActions(view).map((a) => (
+					{actions.map((a) => (
 						<HeaderAction key={a.key} action={a} />
 					))}
 					{/* Then the window itself, after a rule. Not one of the view's actions, and
@@ -420,6 +433,9 @@ function Body({ view }: { view: View }) {
 function Root() {
 	useSyncExternalStore(subscribeStore, () => version);
 	const view = currentView;
+	// The rail and header draw the last FINISHED screen while one loads (chromeView in
+	// the store), so a load changes the body and nothing else.
+	const chrome = chromeView();
 	// Fullscreen gives the app the whole conversation area — use the extra room.
 	const wide = displayMode === 'fullscreen';
 	const inline = displayMode === 'inline';
@@ -451,12 +467,12 @@ function Root() {
 					: 'min-h-screen'
 			}`}
 		>
-			<Rail view={view} />
+			<Rail view={chrome} />
 			{/* min-w-0 so the trail's truncation still works: without it the flex child
 			    takes its content's intrinsic width and a long path pushes the card wider
 			    than the chat column instead of ellipsing. */}
 			<div class="flex min-w-0 flex-1 flex-col">
-				<Header view={view} />
+				<Header view={chrome} />
 				{/* One padding source for every view (page / browse / search / edit / activity
 				    / graph / members) so they read identically. Kept tight — the app usually
 				    renders inline in the chat column, where big margins waste width. */}

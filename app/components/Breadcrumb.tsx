@@ -13,7 +13,7 @@
 // more, so on a short inline card any list of siblings or brains becomes a scroll box a
 // row and a half tall. Siblings are the file tree's job and brains are the Brains page's,
 // both of which have room. What is left is an icon, text, and links.
-import type { ComponentChildren } from 'preact';
+import type { ComponentChildren, VNode } from 'preact';
 import type { View } from '../core/types.ts';
 import { isFolderNoteName } from '../core/util.ts';
 import {
@@ -34,7 +34,13 @@ import {
 	openBrainAccess,
 	guardNav
 } from '../core/actions.ts';
-import { BrainGlyph, ArrowLeftIcon } from '../core/icons.tsx';
+import {
+	BrainGlyph,
+	ArrowLeftIcon,
+	BuildingIcon,
+	PersonIcon,
+	MoreIcon
+} from '../core/icons.tsx';
 import { crumbCurrent, crumbLink, crumbMeta } from '../ui/typography.ts';
 
 // Wide enough that a crumb and the slash after it never read as one unit.
@@ -96,7 +102,9 @@ function BrainCrumb({ inert }: { inert?: boolean }) {
 	// reach with roles and the active one ticked, plus add, disconnect and sharing. A
 	// floating panel cannot hold that list on a short card (see NO CRUMB IS A PICKER).
 	return (
-		<span class="flex min-w-0 max-w-[44vw] shrink items-center">
+		// CAPPED, so a long brain name cannot push the rest of the trail across the bar:
+		// the crumbs after it move with its length, and a cap bounds how far.
+		<span class="flex min-w-0 max-w-[min(44vw,14rem)] shrink items-center">
 			{glyph}
 			{name}
 		</span>
@@ -157,6 +165,27 @@ export function BackButton() {
 	);
 }
 
+// THE SCOPE MARK: what an org or account screen puts where a brain screen has its
+// glyph. Without one the trail started 25px further left on those screens, so every
+// crossing between a brain and Members, Analytics, Brains or Your settings slid the
+// title sideways and back. Same box as the glyph (LEADING_SLOT, minus the hover it has
+// no action for), so the title starts at one x on every screen, and the mark says which
+// scope you are in rather than leaving a gap to say nothing.
+//
+// Decorative: the crumb after it already names the place, so it is hidden from the
+// accessibility tree rather than announced twice.
+const SCOPE_ICON: Record<Exclude<Scope, 'brain'>, () => VNode> = {
+	org: BuildingIcon,
+	account: PersonIcon
+};
+function ScopeMark({ icon }: { icon: VNode }) {
+	return (
+		<span data-scope-mark class="mr-1.5 flex shrink-0 p-0.5 text-muted" aria-hidden="true">
+			{icon}
+		</span>
+	);
+}
+
 // NO TALLIES. A crumb names a place; it does not report on it (a count of what the view
 // below already shows in full). What goes after the · is only ever IDENTITY, such as
 // which page's history, because that distinguishes one instance of a view from another.
@@ -173,9 +202,12 @@ export function BackButton() {
 function DestinationCrumb({
 	parent,
 	root = 'brain',
+	mark,
 	children
 }: {
 	parent?: { key: string; label: string; onClick: () => void };
+	/** The scope mark's icon, when the scope's own would say less (see ScopeMark). */
+	mark?: VNode;
 	/**
 	 * See THE SCOPE TEST in app/core/nav.ts. Only `brain` screens sit INSIDE the brain
 	 * and get the brain crumb; `org` and `account` ones sit beside it, so their trail is
@@ -186,11 +218,13 @@ function DestinationCrumb({
 }) {
 	return (
 		<nav class="flex min-w-0 items-center">
-			{root === 'brain' && (
+			{root === 'brain' ? (
 				<>
 					<BrainCrumb />
 					<CrumbSep />
 				</>
+			) : (
+				<ScopeMark icon={mark ?? SCOPE_ICON[root]()} />
 			)}
 			{parent && (
 				<>
@@ -246,7 +280,7 @@ export function Breadcrumb({ view }: { view: View }) {
 	// and a brain crumb would claim the organization is inside the brain.
 	if (view.kind === 'more')
 		return (
-			<DestinationCrumb root="account">
+			<DestinationCrumb root="account" mark={<MoreIcon />}>
 				<span class={crumbCurrent}>More</span>
 			</DestinationCrumb>
 		);
@@ -271,7 +305,7 @@ export function Breadcrumb({ view }: { view: View }) {
 		);
 	if (view.kind === 'brains')
 		return (
-			<DestinationCrumb root="account">
+			<DestinationCrumb root="account" mark={<BrainGlyph />}>
 				<span class={crumbCurrent}>Brains</span>
 			</DestinationCrumb>
 		);
@@ -293,6 +327,7 @@ export function Breadcrumb({ view }: { view: View }) {
 		return (
 			<DestinationCrumb
 				root="account"
+				mark={<BrainGlyph />}
 				parent={
 					backKind() === 'brains'
 						? { key: 'brains', label: 'Brains', onClick: () => goBack(openBrains) }

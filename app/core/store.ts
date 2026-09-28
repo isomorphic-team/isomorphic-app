@@ -225,8 +225,37 @@ function show(v: View, { push = true } = {}) {
 // entry it is restoring, so running `recordStep` again could drop a second one.
 function display(v: View, push: boolean) {
 	currentView = v;
+	if (v.kind !== 'loading') settledView = v;
 	syncAddressBar(v, push);
 	bump();
+}
+
+// THE CHROME DOES NOT FOLLOW A LOAD. The header and the rail draw the last screen that
+// finished, not the loading view in front of it.
+//
+// The loading view has no place of its own, so the trail used to fall through to its
+// default for it: the brain glyph and the brain's name. Every navigation drew that
+// for as long as the load took, so More → Members read "More", then "🧠 Personal",
+// then "Members", the title stepping 25px right and back, and the header's actions
+// dropped to one and came back. The wait is the body's to show (LoadingView); the bar
+// holds still until there is somewhere new to name. Before anything has finished
+// (the first connect) there is nothing to hold, and the loading view is drawn as is.
+let settledView: View | null = null;
+function chromeView(): View {
+	return currentView.kind === 'loading' && settledView ? settledView : currentView;
+}
+
+// Show a loading view, and hand back the question every loader has to ask once its
+// await returns: am I still what is on screen?
+//
+// An await is long enough for anything to happen. The reader presses Back, clicks
+// something else, or the host delivers the result it was waiting for. Showing the
+// late answer on top of that yanks the screen out from under them, and after a Back it
+// puts back the very screen they left. `openBrowse` guarded itself this way already;
+// now every loader does, which is what lets Back cancel a load just by leaving it.
+function startLoad(v: View & { kind: 'loading' }, opts: { push?: boolean } = {}): () => boolean {
+	show(v, opts);
+	return () => currentView === v;
 }
 
 // Keep the browser's address bar naming what is on screen (web host only).
@@ -385,18 +414,20 @@ function goBack(fallback?: () => void): void {
 // Nothing to go back to disables the button rather than hiding it, so the trail
 // never shifts sideways when it appears. On the web that includes a tab that
 // arrived from another site: Back would leave the app, which is the browser's
-// button's job and not ours. A load in flight disables it too, since the result
-// would land after the pop and overwrite where Back took you.
+// button's job and not ours.
 //
-// The EDITOR is the one web screen that uses our stack: it has no URL of its own, so
-// the browser's entry is still the page's, and its Back would skip past the page to
-// whatever came before it. Back from the editor lands on the page in both hosts.
+// Two screens use our stack even on the web, because neither has a browser entry of
+// its own. The EDITOR has no URL, so the entry is still the page's and the browser's
+// Back would skip past the page. A LOAD has not written its URL yet, so the entry is
+// still the screen the load started from, and Back from a load means "never mind":
+// pop to that screen, and the loader's own `live()` check drops its late result.
+// That is also why a load does not grey the button. It used to, which blinked it
+// off and on again on every navigation.
 function browserOwnsBack(): boolean {
-	return isWebHost() && currentView.kind !== 'edit';
+	return isWebHost() && currentView.kind !== 'edit' && currentView.kind !== 'loading';
 }
 
 function canGoBack(): boolean {
-	if (currentView.kind === 'loading') return false;
 	return browserOwnsBack() ? webDepth() > 0 : history.length > 0;
 }
 
@@ -453,6 +484,8 @@ export {
 	backKind,
 	canGoBack,
 	stepBack,
+	chromeView,
+	startLoad,
 	recordStep,
 	HISTORY_LIMIT,
 	isEditablePath
