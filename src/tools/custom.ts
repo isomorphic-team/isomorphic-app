@@ -28,6 +28,7 @@ import {
 import { elisionNote, DEFAULT_SEARCH_OPTIONS } from '../lib/search.ts';
 import { tryRenderViews } from '../lib/views.ts';
 import { BRAIN_APP_URI } from './apps.ts';
+import { toolAnnotations } from '../lib/tool-annotations.ts';
 import {
 	planCustomTools,
 	zodShapeFor,
@@ -77,10 +78,10 @@ export function registerCustomTools(
 ) {
 	for (const def of defs) {
 		const config: Record<string, unknown> = {
-			title: def.displayTitle,
+			// Read-only by construction: prompt, a whitelisted read op, or a view.
+			...toolAnnotations(def.displayTitle, 'read'),
 			description: def.description,
-			inputSchema: zodShapeFor(def.params),
-			annotations: { readOnlyHint: true }
+			inputSchema: zodShapeFor(def.params)
 		};
 		// Widget tools open their result in the in-client viewer, like view_page.
 		if (def.widget) config._meta = { ui: { resourceUri: BRAIN_APP_URI } };

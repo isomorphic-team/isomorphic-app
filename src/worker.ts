@@ -92,6 +92,7 @@ import {
 	jsonRpcError,
 	describeRequest
 } from './lib/mcp-preamble.ts';
+import { toolAnnotations } from './lib/tool-annotations.ts';
 
 interface Env {
 	// Auth mode selector
@@ -697,8 +698,7 @@ class McpSession {
 		server.registerTool(
 			'whoami',
 			{
-				title: 'Identify the current user',
-				annotations: { readOnlyHint: true },
+				...toolAnnotations('Identify the current user', 'read'),
 				description:
 					'Identify the current user: whoami reports who is signed in to this connection. Returns their email and, when a brain resolves, their role on the active brain and which brain that is. On a single-user deployment, which has no sign-in, says so.',
 				inputSchema: z.object({})

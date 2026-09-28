@@ -2,9 +2,9 @@
 paths:
   - "src/worker.ts"
   - "src/local.ts"
-  - "src/lib/{mcp-serve,mcp-preamble,registered-tools,server-instructions}.ts"
-  - "src/tools/{core,apps,shared}.ts"
-  - "scripts/{test-protocol,test-preamble,test-app-resource}.ts"
+  - "src/lib/{mcp-serve,mcp-preamble,registered-tools,server-instructions,tool-annotations}.ts"
+  - "src/tools/*.ts"
+  - "scripts/{test-protocol,test-preamble,test-app-resource,test-annotations}.ts"
 ---
 
 # The `/mcp` request path and the tool surface
@@ -64,6 +64,20 @@ the operator's role and brain in static mode; the app's settings card reads its
 
 The ui:// resource's host contract (`prefersBorder: false`, every widget tool's
 `resourceUri` naming a served resource) is pinned by `pnpm test:appmeta`.
+
+## Annotations (`src/lib/tool-annotations.ts`, `pnpm test:annotations`)
+
+Anthropic's connector directory rejects a tool without `annotations.title` and the hint that
+applies to it: `readOnlyHint: true` for a read, `destructiveHint` for a write
+([checklist](https://claude.com/docs/connectors/building/review-criteria)). Claude reads the
+same hints to decide what runs without asking. **Every registration spreads
+`...toolAnnotations(title, effect)` in place of a bare `title:`**, so the top-level title and
+`annotations.title` are one string. `effect` is `read`, `additive` (creates, or moves a
+pointer; overwrites nothing that exists) or `destructive` (can overwrite, move, revoke or
+delete); when unsure, `destructive`. `pnpm test:annotations` lists every tool through a real
+client and scans every registration site, so a tool that skips the helper fails CI. This is
+not the `TOOL_KINDS` axis: `edit_page` is read-only here (it opens the editor; the save is
+`write_page`) and counted as a write there.
 
 ## Tool descriptions
 

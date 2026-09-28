@@ -61,6 +61,7 @@ import {
 import { CONFIG_PATH, DEFAULT_BRAIN_CONFIG } from '../lib/brain-config.ts';
 import { fail } from './shared.ts';
 import type { BrainsWire } from '../lib/tool-payloads.ts';
+import { toolAnnotations } from '../lib/tool-annotations.ts';
 
 // The GitHub client, for the three operations in this file that are GitHub as a
 // platform rather than a brain as storage: create a repository, list the repos an
@@ -253,7 +254,7 @@ export function registerBrainTools(
 		server.registerTool(
 			'switch_brain',
 			{
-				title: 'Switch the active brain',
+				...toolAnnotations('Switch the active brain', 'additive'),
 				description:
 					"Make a brain the active one, so subsequent tool calls act on it by default. Accepts a name/handle (fuzzy-matched against your brains, e.g. 'acme', 'team wiki', or an owner/repo id). Use when the user wants to work in a different brain for a while; for a one-off, pass `brain` to a single tool instead.",
 				inputSchema: z.object({
@@ -301,11 +302,10 @@ export function registerBrainTools(
 	server.registerTool(
 		'brains',
 		{
-			title: 'Your brains',
+			...toolAnnotations('Your brains', 'read'),
 			description:
 				"The knowledge bases (brains) this user can access (personal, team, and client), with the user's role in each and the active one marked. Returns the list as text; opens nothing in the chat. Call brains to answer 'what brains do I have?' or when YOU need the list before targeting one.",
-			inputSchema: z.object({}),
-			annotations: { readOnlyHint: true }
+			inputSchema: z.object({})
 		},
 		async () => {
 			// Org-scope: works with zero brains (renders the empty "create your first
@@ -355,7 +355,7 @@ export function registerBrainTools(
 		server.registerTool(
 			'create_brain',
 			{
-				title: 'Create a new brain',
+				...toolAnnotations('Create a new brain', 'additive'),
 				description:
 					'Create a NEW, empty knowledge base ("brain") with a name the user chooses, and switch to it. Call create_brain whenever the user wants to START a new brain / knowledge base / wiki, including their very first one. This SCAFFOLDS a fresh repo; it does not adopt an existing one. Any editor can create a brain. The new brain is PRIVATE to its creator until it is shared.',
 				inputSchema: z.object({
@@ -473,7 +473,10 @@ export function registerBrainTools(
 		server.registerTool(
 			'connect_brain',
 			{
-				title: 'Connect a brain to an organization: adopt a repo, or move a brain',
+				...toolAnnotations(
+					'Connect a brain to an organization: adopt a repo, or move a brain',
+					'destructive'
+				),
 				description:
 					"Put a brain in an organization you admin. Two uses. ADOPT: pass a GitHub repository that is not a brain yet (it must be under the org's GitHub owner and covered by the org's Isomorphic App installation); call with no `repo` to list the repos that can become brains. MOVE: pass an existing brain (by name or owner/repo) and the `org` to move it to; this changes which organization owns the brain, and so who reaches it through org membership, but never where it is stored, and grants, links and history come with it. A move is two calls: without `confirm: true` it changes nothing and returns a preview naming everyone whose access changes. Adding needs organization admin in the destination; moving also needs it in the brain's current organization. An adopted brain is PRIVATE to whoever connected it until it is shared.",
 				inputSchema: z.object({
@@ -750,7 +753,7 @@ export function registerBrainTools(
 	server.registerTool(
 		'configure_brain',
 		{
-			title: 'Configure a brain: rename it, or set its content layout',
+			...toolAnnotations('Configure a brain: rename it, or set its content layout', 'destructive'),
 			description:
 				"A brain's own settings. RENAME: pass `name` alone to change what the brain is called; nothing in its repository changes. CONTENT LAYOUT: set up an adopted repo so its pages appear, by writing a .isomorphic.json describing where its content lives; use when a connected brain shows no pages because its markdown isn't under the default 'wiki/' layout. Defaults to indexing the whole repo. If the repo already has a .isomorphic.json, this refuses and shows the current one; pass `overwrite: true` to replace it deliberately. Needs admin on the brain. configure_brain never moves a brain between organizations.",
 			inputSchema: z.object({
@@ -880,7 +883,7 @@ export function registerBrainTools(
 		server.registerTool(
 			'disconnect_brain',
 			{
-				title: 'Disconnect a brain',
+				...toolAnnotations('Disconnect a brain', 'destructive'),
 				description:
 					'Remove a brain from its organization: it stops appearing in the switcher, and nobody reaches it through Isomorphic any more. Its repository and content are untouched. If it was the active brain, another of your brains becomes active. Organization admin only; you can’t remove an org’s only brain.',
 				inputSchema: z.object({
