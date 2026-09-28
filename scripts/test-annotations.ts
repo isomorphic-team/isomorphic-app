@@ -1,24 +1,24 @@
-// Golden test for tool ANNOTATIONS: what a host and the connector directory read
-// off each tool before anything runs.
+// pnpm test:annotations
 //
-// Anthropic's directory rejects a tool that lacks `annotations.title`, or that
-// lacks the hint that applies to it (`readOnlyHint: true` for a read,
-// `destructiveHint` for a write). Claude uses the same hints to decide what may
-// run without asking. Both are metadata, so nothing about a missing one fails at
-// typecheck or at runtime: the tool works, and the listing is refused.
+// Tool ANNOTATIONS: what a host and the connector directory read off each tool
+// before anything runs. Anthropic's directory rejects a tool without
+// `annotations.title` or without the hint that applies to it, and Claude uses the
+// same hints to decide what runs without asking. Both are metadata, so a missing
+// one fails nowhere else: the tool works, and the listing is refused.
 //
-// Two halves:
-//   • Every tool the suites register is listed through a real client over an
-//     in-memory transport, so the assertion is on what actually reaches the wire
-//     (the spread in `toolAnnotations` surviving `registerAppTool` and the SDK's
-//     own shaping), not on the source.
-//   • A scan of every registration site, so a tool registered somewhere this test
-//     does not call still has to go through `toolAnnotations`. Three suites are
-//     scan-only: whoami is inline in worker.ts, and connected-accounts.ts and
-//     feedback.ts type their env with Workers ambients (KVNamespace, D1Database)
-//     that the Node test tsconfig deliberately does not load.
-//
-//   pnpm test:annotations
+// This battery exists to catch:
+//   1. A tool listed without `annotations.title`, with one that differs from its
+//      `title`, or a write with no explicit `destructiveHint`. Checked on what a
+//      real client receives over an in-memory transport, so the spread in
+//      `toolAnnotations` has to survive `registerAppTool` and the SDK's shaping.
+//   2. A registration site that sets a bare `title:` instead of spreading
+//      `toolAnnotations`, including sites this script cannot call. Five tools are
+//      scan-only: whoami is inline in worker.ts, and connected-accounts.ts and
+//      feedback.ts type their env with Workers ambients (KVNamespace, D1Database)
+//      that the Node test tsconfig does not load.
+//   3. A new suite joining the scan-only set silently instead of being registered
+//      here.
+//   4. A change to the hint on the tools where it was a judgement call.
 
 import { readFileSync, readdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -92,6 +92,7 @@ const listed = new Set<string>();
 	registerBrainAccessTools(server, nope, { webBaseUrl: 'https://brain.example' });
 	registerOrgOnboardingTools(server, nope, nope, {} as never);
 	registerBrainTools(server, {
+		multiUser: true,
 		getContext: nope,
 		orgContext: nope,
 		listOrgs: nope,

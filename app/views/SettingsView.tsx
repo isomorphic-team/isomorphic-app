@@ -3,6 +3,7 @@ import { InitialsAvatar, LinkIcon } from '../core/icons.tsx';
 import { ConnectedAccountsSection } from '../components/ConnectedAccountsSection.tsx';
 import { defineView } from '../core/view-registry.ts';
 import { openConnectAccount } from '../core/actions.ts';
+import { features } from '../core/store.ts';
 import { eyebrow } from '../ui/typography.ts';
 
 // The user's own settings. Today it's the signed-in identity card; it's the extensible
@@ -33,13 +34,17 @@ function SettingsView({
 					{parts.length > 0 && <div class="truncate text-xs text-muted">{parts.join(' · ')}</div>}
 				</div>
 			</div>
-			<div class="mt-5">
-				<div class={`mb-1 flex items-center gap-1.5 ${eyebrow}`}>
-					<LinkIcon />
-					Connected accounts
+			{/* Linking identities is a sign-in feature; a single-user deployment has no
+			    sign-in, and does not register the tools behind this section. */}
+			{features.people && (
+				<div class="mt-5">
+					<div class={`mb-1 flex items-center gap-1.5 ${eyebrow}`}>
+						<LinkIcon />
+						Connected accounts
+					</div>
+					<ConnectedAccountsSection initial={accounts} />
 				</div>
-				<ConnectedAccountsSection initial={accounts} />
-			</div>
+			)}
 		</div>
 	);
 }
@@ -63,14 +68,18 @@ export default defineView(
 	(v) => <SettingsView identity={v.identity} accounts={v.accounts} />,
 	{
 		// Linking one of your OWN accounts needs no admin gate — see ConnectedAccountsSection.
-		// Unconditional: this screen is always yours, so the action is always available.
-		actions: () => [
-			{
-				key: 'connect',
-				label: 'Connect',
-				title: 'Connect another account',
-				onClick: openConnectAccount
-			}
-		]
+		// Offered wherever anyone signs in: this screen is always yours, but a single-user
+		// deployment has no sign-in to link another address to.
+		actions: () =>
+			features.people
+				? [
+						{
+							key: 'connect',
+							label: 'Connect',
+							title: 'Connect another account',
+							onClick: openConnectAccount
+						}
+					]
+				: []
 	}
 );

@@ -117,25 +117,17 @@ export async function countPendingBrainInvites(db: D1Database, brainId: string):
 	return row?.n ?? 0;
 }
 
-// The move itself, in one batch so it lands whole or not at all.
-//
-// `sourceConnectionId` pins a brain that has no binding yet to the connection it
-// has been read through all along, its source org's. Without the pin, resolution
-// would fall back to the DESTINATION org's installation, which cannot reach the
-// repository: the move would succeed and the brain would stop opening.
+// The move itself, in one batch so it lands whole or not at all. The brain's
+// storage binding is untouched: it is read through the same connection after the
+// move as before.
 export async function moveBrain(
 	db: D1Database,
-	input: { brainId: string; toOrgId: string; sourceConnectionId: string }
+	input: { brainId: string; toOrgId: string }
 ): Promise<void> {
 	await db.batch([
 		db
-			.prepare(
-				`UPDATE brains
-				    SET org_id = ?2,
-				        storage_connection_id = COALESCE(storage_connection_id, ?3)
-				  WHERE brain_id = ?1`
-			)
-			.bind(input.brainId, input.toOrgId, input.sourceConnectionId),
+			.prepare(`UPDATE brains SET org_id = ?2 WHERE brain_id = ?1`)
+			.bind(input.brainId, input.toOrgId),
 		// A pending brain invite carries the brain's org, so a claim after the move
 		// has to name the org the brain is now in.
 		db

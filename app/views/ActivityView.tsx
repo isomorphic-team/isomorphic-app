@@ -56,14 +56,22 @@ function ActivityView({ entries, scopePath }: { entries: ActivityEntry[]; scopeP
 										{e.authorName}
 									</span>
 									<span aria-hidden="true">·</span>
-									<button
-										type="button"
-										onClick={() => openLink(e.url)}
-										title={`View commit ${e.sha}`}
-										class="shrink-0 border-none bg-transparent p-0 text-muted hover:text-fg hover:underline"
-									>
-										{e.shortSha}
-									</button>
+									{/* A brain with no web host (the local runtime's folder) has no
+									    commit page to open, so its sha is shown, not linked. */}
+									{e.url ? (
+										<button
+											type="button"
+											onClick={() => openLink(e.url!)}
+											title={`View commit ${e.sha}`}
+											class="shrink-0 border-none bg-transparent p-0 text-muted hover:text-fg hover:underline"
+										>
+											{e.shortSha}
+										</button>
+									) : (
+										<span class="shrink-0" title={e.sha}>
+											{e.shortSha}
+										</span>
+									)}
 								</div>
 							</div>
 						</ListRow>

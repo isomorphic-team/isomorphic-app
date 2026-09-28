@@ -11,9 +11,8 @@ import { Button, Input, Flow, submitOnEnter } from '../ui/index.ts';
 
 // Invite someone to the org. Opened from the Members screen's header action.
 //
-// This is a one-commit form that would fit an inline row, and it used to be one. It
-// is a pushed view because every add-shaped action in the app is (see app/ui/Flow.tsx)
-// — three screens agreeing on where an add happens is worth more than each being
+// A one-commit form that would fit an inline row. It is a pushed view because every
+// add-shaped action in the app is (see app/ui/Flow.tsx): three screens agreeing on where an add happens is worth more than each being
 // individually optimal. It also buys room for a labelled field and a line saying what
 // the chosen role can actually do, neither of which fits on a single list row.
 function InviteMemberView() {

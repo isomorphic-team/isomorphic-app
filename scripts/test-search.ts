@@ -778,18 +778,30 @@ function result(paths: string[], budgetHit = false): SearchResult {
 }
 
 // searchTargets: which brains a fan-out is allowed to reach.
+// The index key (`brain_id`) and the handle differ on purpose, so a target built from
+// the wrong one is visible.
+const keyOf = (id: string) => `brain-${id.replace('/', '-')}`;
 function ctxFor(id: string, label: string): BrainContext {
-	return { brainId: id, activeBrain: { id, label } } as BrainContext;
+	return { brainId: keyOf(id), activeBrain: { id, label } } as BrainContext;
 }
 function brain(id: string, name: string): AccessibleBrain {
 	const [repo_owner, repo_name] = id.split('/');
-	return { id, repo_owner, repo_name, name } as AccessibleBrain;
+	return { id, brain_id: keyOf(id), repo_owner, repo_name, name } as AccessibleBrain;
 }
 
 {
 	const t = await searchTargets(ctxFor('acme/wiki', 'Acme'), undefined);
 	check('with no wiring, a search reaches exactly the brain you are in', t.length === 1);
-	check('and it is labelled', t[0].id === 'acme/wiki' && t[0].label === 'Acme', JSON.stringify(t));
+	check(
+		'and it is labelled',
+		t[0].handle === 'acme/wiki' && t[0].label === 'Acme',
+		JSON.stringify(t)
+	);
+	check(
+		'it searches the index under the brain_id, not the handle',
+		t[0].key === 'brain-acme-wiki',
+		JSON.stringify(t)
+	);
 }
 
 {
@@ -804,19 +816,26 @@ function brain(id: string, name: string): AccessibleBrain {
 	check(
 		'fanning out reaches every accessible brain',
 		t.length === 3,
-		JSON.stringify(t.map((x) => x.id))
+		JSON.stringify(t.map((x) => x.handle))
 	);
 	// Leading matters twice over: the active brain wins the round-robin under the global
 	// cap, and it reads first in the output.
-	check('the active brain leads', t[0].id === 'acme/wiki', JSON.stringify(t.map((x) => x.id)));
 	check(
-		'and is not listed twice',
-		t.filter((x) => x.id === 'acme/wiki').length === 1,
-		JSON.stringify(t.map((x) => x.id))
+		'the active brain leads',
+		t[0].handle === 'acme/wiki',
+		JSON.stringify(t.map((x) => x.handle))
 	);
 	check(
-		'the others carry their display names',
-		t.some((x) => x.id === 'northwind/wiki' && x.label === 'Northwind'),
+		'and is not listed twice',
+		t.filter((x) => x.handle === 'acme/wiki').length === 1,
+		JSON.stringify(t.map((x) => x.handle))
+	);
+	check(
+		'the others carry their index key, handle and display name',
+		t.some(
+			(x) =>
+				x.key === 'brain-northwind-wiki' && x.handle === 'northwind/wiki' && x.label === 'Northwind'
+		),
 		JSON.stringify(t)
 	);
 }
@@ -831,7 +850,7 @@ function brain(id: string, name: string): AccessibleBrain {
 	// wider set could not be resolved.
 	check(
 		'a broken brain list falls back to the active brain',
-		t.length === 1 && t[0].id === 'acme/wiki'
+		t.length === 1 && t[0].handle === 'acme/wiki'
 	);
 }
 

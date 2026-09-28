@@ -1,11 +1,8 @@
 // Search is a PAGE, and it owns its own field.
 //
-// It used to be a control in the chrome that swapped the trail for an input — the one
-// item in the rail that opened a widget rather than going somewhere, which a rail of
-// peers makes obvious. Everything else there is a place you arrive at; this now is too.
-// The field being ON the page is what makes that true, and it buys three things the
-// chrome version could not have: room to read a long query, the query still visible
-// while you read the results, and somewhere to put the empty state.
+// Everything in the rail is a place you arrive at, and the field being ON the page is
+// what makes search one too. It also buys room to read a long query, the query still
+// visible while you read the results, and somewhere to put the empty state.
 import { useEffect, useRef } from 'preact/hooks';
 import type { Hit } from '../core/types.ts';
 import { openHit, runSearch } from '../core/actions.ts';

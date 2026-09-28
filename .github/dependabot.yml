@@ -37,7 +37,7 @@ updates:
     labels:
       - dependencies
 
-  # The workflows pin actions by major tag (actions/checkout@v4). Nothing else
+  # The workflows pin actions by major tag (e.g. actions/checkout@v7). Nothing else
   # updates those, so a deprecated runner action is otherwise found by it breaking.
   - package-ecosystem: github-actions
     directory: /

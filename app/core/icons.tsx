@@ -394,12 +394,10 @@ function RefreshIcon() {
 function InitialsAvatar({ name }: { name: string }) {
 	const initial = (name.trim()[0] ?? '?').toUpperCase();
 	// Sits at the left edge of every list row, exactly where the file tree puts a
-	// 15px muted outline glyph — so it has to carry comparable weight. It used to be
-	// a 24px disc filled at hsl(name 45% 45%) with white semibold text, which made it
-	// the most saturated element in an app that otherwise spends colour only on the
-	// single accent. Now it matches the tree's glyphs: tree-sized, chip-filled, muted.
+	// 15px muted outline glyph, so it matches the tree's glyphs: tree-sized,
+	// chip-filled, muted. The app spends colour only on the single accent.
 	//
-	// The name-derived hue is gone rather than dimmed: any fixed lightness that reads
+	// No name-derived hue: any fixed lightness that reads
 	// on the light chip (#f0f0f4) is too close in tone on the dark one (#2a2a30), and
 	// the row already spells out the name next to the letter, so the colour was
 	// carrying almost no information. To bring it back, tint `color` from a hash here.

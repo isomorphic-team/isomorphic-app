@@ -41,6 +41,7 @@ import {
 } from '../lib/orgs.ts';
 import { readUsage } from '../lib/usage-store.ts';
 import { dayKey, shiftDay, summarize, summaryText, FOOTNOTE } from '../lib/usage.ts';
+import type { AnalyticsWire } from '../lib/tool-payloads.ts';
 import { toolAnnotations } from '../lib/tool-annotations.ts';
 
 const DEFAULT_DAYS = 30;
@@ -63,7 +64,7 @@ export function registerAnalyticsTools(
 		{
 			...toolAnnotations('Organization usage analytics', 'read'),
 			description:
-				'Show how much the organization is using its brains: how many members were active, reads vs edits over time, a per-brain breakdown, and (for admins) a per-person table including members who have not used it at all. Call `analytics` when the user asks about usage, adoption, engagement, activity levels, who is or is not using the brain, or how a brain is being used over time. Counts activity in Isomorphic only; edits made directly on GitHub are not included (use view_activity for the repository history).',
+				'Show how much the organization is using its brains: how many members were active, reads vs edits over time, a per-brain breakdown, and (for admins) a per-person table including members who have not used it at all. Call `analytics` when the user asks about usage, adoption, engagement, activity levels, who is or is not using the brain, or how a brain is being used over time. Counts activity in Isomorphic only; edits made directly on GitHub are not included.',
 			inputSchema: {
 				days: z
 					.number()
@@ -100,12 +101,8 @@ export function registerAnalyticsTools(
 					email: m.email,
 					role: m.role
 				})),
-				// usage_daily records ctx.brainId, which is "owner/repo" — not the
-				// brains-table PK. Derive the same key here or every brain row reads zero.
-				brains: orgBrains.map((b) => ({
-					brain_id: `${b.repo_owner}/${b.repo_name}`,
-					label: brainLabel(b)
-				})),
+				// usage_daily records ctx.brainId, the brains-table PK.
+				brains: orgBrains.map((b) => ({ brain_id: b.brain_id, label: brainLabel(b) })),
 				from,
 				to
 			});
@@ -136,7 +133,7 @@ export function registerAnalyticsTools(
 					truncated: usage.truncated,
 					footnote: FOOTNOTE,
 					activeBrain: ctx.activeBrain
-				}
+				} satisfies AnalyticsWire
 			};
 		}
 	);

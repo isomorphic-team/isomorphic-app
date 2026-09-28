@@ -22,7 +22,7 @@
 import type { D1Database } from '@cloudflare/workers-types';
 import { appOctokit, type AppCreds } from './github.ts';
 import { type AccessibleOrg, type Org, createOrg, addMembership, getOrgById } from './orgs.ts';
-import { ensureOrgConnection } from './storage-connections.ts';
+import { githubAppConnectionId } from './storage-connections.ts';
 
 export const MAX_ORG_NAME = 80;
 
@@ -56,9 +56,7 @@ export async function createHostedOrg(
 		created_by: input.userId
 	});
 	await addMembership(db, { org_id: orgId, user_id: input.userId, role: 'owner' });
-	const org = (await getOrgById(db, orgId))!;
-	await ensureOrgConnection(db, org);
-	return org;
+	return (await getOrgById(db, orgId))!;
 }
 
 export interface InstallationOrg {
@@ -117,18 +115,23 @@ export async function connectCustomerOrg(
 ): Promise<ConnectResult> {
 	const installOnUser = input.accountType === 'User';
 
+	// The customer org that owns this installation's connection, if one does.
 	const existing = await db
 		.prepare(
-			`SELECT org_id, github_org_login FROM orgs WHERE installation_id = ?1 AND model = 'customer' LIMIT 1`
+			`SELECT o.org_id AS org_id, c.account AS account
+			   FROM storage_connections c
+			   JOIN orgs o ON o.org_id = c.owner_org_id
+			  WHERE c.connection_id = ?1 AND o.model = 'customer'
+			  LIMIT 1`
 		)
-		.bind(input.installationId)
-		.first<{ org_id: string; github_org_login: string | null }>();
+		.bind(githubAppConnectionId(input.installationId))
+		.first<{ org_id: string; account: string }>();
 
 	if (existing) {
 		await addMembership(db, { org_id: existing.org_id, user_id: input.userId, role: 'owner' });
 		return {
 			orgId: existing.org_id,
-			orgLogin: existing.github_org_login ?? input.orgLogin,
+			orgLogin: existing.account,
 			created: false,
 			installOnUser
 		};
@@ -145,7 +148,5 @@ export async function connectCustomerOrg(
 		created_by: input.userId
 	});
 	await addMembership(db, { org_id: orgId, user_id: input.userId, role: 'owner' });
-	const org = await getOrgById(db, orgId);
-	if (org) await ensureOrgConnection(db, org);
 	return { orgId, orgLogin: input.orgLogin, created: true, installOnUser };
 }

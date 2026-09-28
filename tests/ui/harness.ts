@@ -98,15 +98,16 @@ export async function openApp(
 	// and every relative label changes daily. Verified: it reads "12h ago" pinned and
 	// "5d ago" when only the harness clock is frozen.
 	//
-	// setFixedTime, not install(): install() also freezes TIMERS, and the app's cold
-	// self-boot is a 1200ms setTimeout that would then never fire.
+	// setFixedTime by default: it pins Date.now() and leaves timers running, which is
+	// what "hold still" means for a screenshot.
 	//
 	// `advanceable` opts into install() for the one kind of test that has to make time
 	// PASS rather than merely hold still: anything asserting how the app reports the
 	// age of what it is showing. runFor() needs an installed clock, and a fixed one
 	// leaves Date.now() answering the same value forever, so every age reads as zero.
-	// Only for routes whose view arrives from a tool result — a route that self-boots
-	// on a timer will not start under a frozen one.
+	// install() does NOT pause timers here (probed; see loading.spec.ts): setTimeout
+	// keeps firing on the wall clock in the page and in the app's iframe, so it moves
+	// only what Date.now() reports.
 	if (opts.advanceable) await page.clock.install({ time: new Date(now) });
 	else await page.clock.setFixedTime(new Date(now));
 

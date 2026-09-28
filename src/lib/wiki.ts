@@ -13,12 +13,11 @@
 // But we are not the only writer. A brain is an ordinary GitHub repo, and pages
 // arrive from external producers — OKF bundles, ETL scripts, humans editing on
 // github.com. OKF v0.2's trust family is NESTED (`sources:` as a list of
-// resource/title mappings, `generated: {by, at}`), so treating "not in our subset"
-// as "not real" meant silently destroying those keys on the next save: the flat
-// parser reduced them to '' or to a mangled list item, and serialize wrote that
-// back. Nested values are therefore captured VERBATIM as an opaque block and
-// re-emitted byte-for-byte. We still don't interpret them — they can't be filtered
-// on, indexed, or merged — but we no longer eat them.
+// resource/title mappings, `generated: {by, at}`), which a flat parser would reduce
+// to '' or a mangled list item and write back, destroying them on the next save.
+// Nested values are therefore captured VERBATIM as an opaque block and re-emitted
+// byte-for-byte. They are not interpreted: they can't be filtered on, indexed, or
+// merged.
 
 import { isFolderNoteName } from './view-directives.ts';
 
@@ -305,9 +304,8 @@ export function extractLinks(body: string): PageLink[] {
 // the page: its title, its filename, either one in a different case, hyphens where
 // the other has spaces, sometimes a folder path or a #heading. One key covers all
 // of those, and BOTH SIDES of every comparison go through it. That symmetry is the
-// point: the bug this replaces built its lookup table from raw filenames and then
-// queried it with slugified link text, so a page whose filename was not already
-// slug-shaped ("2026-06-26 Weekly Sync.md") could never be found by name.
+// point: a table keyed by raw filenames and queried with slugified link text never
+// finds a page whose filename is not slug-shaped ("2026-06-26 Weekly Sync.md").
 
 // The comparable form of one link target or page name. Empty when there is nothing
 // left to match on (an anchor-only link, punctuation).

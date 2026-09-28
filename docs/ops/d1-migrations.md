@@ -11,9 +11,10 @@ Prod schema changes ship **through CI**, the same way code does — no one runs
 - Wrangler tracks applied migrations in a `d1_migrations` table on the DB, so each runs
   **once**. Applying is idempotent.
 - **Deploy pipeline** (`.github/workflows/deploy.yml`, on push to `main`): `wrangler d1
-migrations apply platform-db --remote` runs **before** `wrangler deploy` — schema first, then
-  the code that depends on it. If the migration fails, the deploy is skipped and `main` stays on
-  the old code.
+migrations apply platform-db --remote` runs **before** the new version is uploaded and
+  promoted: schema first, then the code that depends on it. If the migration fails, nothing
+  else runs and production stays on the old code. A later rollback reverts code only, never
+  schema (see [`deploy-and-rollback.md`](deploy-and-rollback.md)).
 - **PR CI** (`.github/workflows/ci.yml`): applies migrations against a fresh **local** DB
   (offline, no token, never touches prod) to catch malformed SQL before merge.
 - `src/db/*.sql` remain as human-readable reference; `migrations/0001_init.sql` is canonical.
@@ -33,8 +34,8 @@ Then open a PR. On merge to `main`, CI applies it to prod and deploys. **Do not 
 ## Rules
 
 - **Backward-compatible only.** Migration applies just before the deploy, so the _still-running
-  old code_ must tolerate the new schema during the deploy window. Additive columns/tables are
-  safe. Renames/drops need **expand → (deploy) → contract** across two migrations.
+  old code_ must tolerate the new schema during the deploy window, and after a rollback to it.
+  Additive columns/tables are safe. Renames/drops need **expand → (deploy) → contract** across two migrations.
 - **No auto-rollback.** D1 doesn't roll back a failed migration — keep them small.
 - Never edit an already-applied migration; add a new one.
 
@@ -42,8 +43,8 @@ Then open a PR. On merge to `main`, CI applies it to prod and deploys. **Do not 
 
 The CI `CLOUDFLARE_API_TOKEN` (repo secret) needs **D1 edit** permission in addition to Workers.
 In the Cloudflare dashboard → My Profile → API Tokens, edit the token used for
-`isomorphic-mind-mcp` to include **D1 → Edit** (or recreate it from a template that covers
-Workers + D1), then update the `CLOUDFLARE_API_TOKEN` repo secret if it changed. Until then, the
+your Worker (`<worker-name>`) to include **D1 → Edit** (or recreate it from a template that
+covers Workers + D1), then update the `CLOUDFLARE_API_TOKEN` repo secret if it changed. Until then, the
 migrate step is gated by the same token guard as the deploy — it skips (green) with a warning if
 the token is absent, but will **fail** if the token exists without D1 permission. The baseline
 itself needs no manual "mark applied" step: `0001_init` is all `IF NOT EXISTS`, so its first

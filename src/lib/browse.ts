@@ -1,11 +1,10 @@
 // What browse_brain says about a brain, and how much of the brain it carries.
 //
-// browse_brain exists to OPEN THE VIEWER. It used to return every page path twice
-// over — once as text, once in structuredContent alongside a title per page — and on
-// a 556-page brain that came to 83,708 characters, which the host refused as a tool
-// result and spilled to a file. The full list is not what the call is for: the widget
-// can fetch it itself with list_pages (a widget-initiated call the model never pays
-// for), and the model gets more out of a shape summary than out of 556 paths.
+// browse_brain exists to OPEN THE VIEWER. The full path list is not what the call
+// is for: on a large brain it passes the host's tool-result limit (a 556-page brain
+// is ~84k characters), the widget can fetch it itself with list_pages (a
+// widget-initiated call the model never pays for), and the model gets more out of a
+// shape summary than out of hundreds of paths.
 //
 // So the text block is always a summary, and the tree rides along only while it is
 // small enough to be cheap. Both halves are pure and live here so `pnpm test:policy`

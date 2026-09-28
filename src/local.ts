@@ -25,7 +25,7 @@
 // either; it binds to loopback.
 //
 // TWO HOSTS reach it, as they reach the Worker. An MCP host connects to `/mcp`, and a
-// browser opens `/b/local/<folder>`: the same app bundle the Worker serves as the
+// browser opens `/b/<folder>`: the same app bundle the Worker serves as the
 // `ui://` resource and at `/b/`, over the same `/mcp`. The web pieces are the shared
 // ones (src/lib/web-shell.ts for the shell and its headers, src/lib/web-app.ts for
 // the CSRF gate), so what a browser exercises here is production code with the brain
@@ -56,7 +56,7 @@ import { WEB_APP_HEADERS, webShell } from './lib/web-shell.ts';
 import { statSync } from 'node:fs';
 
 const args = process.argv.slice(2).filter((a) => !a.startsWith('-'));
-// Every positional argument is a brain. One is the old behaviour exactly.
+// Every positional argument is a brain.
 const dirs = (args.length ? args : [process.cwd()]).map((a) => resolve(a));
 const dir = dirs[0];
 const port = Number(process.env.PORT ?? 8788);
@@ -81,14 +81,10 @@ const author = gitIdentity();
 // MORE THAN ONE BRAIN, because a single-brain runtime cannot exercise the question
 // "did that call reach the brain it named".
 //
-// Every folder on the command line is a brain, keyed `local/<folder>` exactly as one
-// folder always was, so `pnpm try <folder>` is unchanged and `pnpm try a b c` is the
-// new shape. The first is the default, standing in for the connection's active-brain
-// pointer, which this runtime has no equivalent of.
-//
-// This is what made the web app's brain-targeting defect invisible: `getContext` took
-// no arguments at all and closed over one store, so a call naming any brain got the
-// only one there was, and a URL pointing at another brain looked like it worked.
+// Every folder on the command line is a brain. Its handle (what tools and the URL
+// name it by) is the folder name; its index key is `local/<folder>`. The first is
+// the default, standing in for the Worker's active-brain pointer, which this runtime
+// has no equivalent of.
 interface LocalBrain {
 	dir: string;
 	store: ReturnType<typeof fsBrainStore>;
@@ -106,7 +102,7 @@ for (const d of dirs) {
 	const stateDir = resolve(d, '.isomorphic');
 	mkdirSync(stateDir, { recursive: true });
 	const label = basename(d);
-	brains.set(`local/${label}`, {
+	brains.set(label, {
 		dir: d,
 		store: fsBrainStore({ dir: d, author }),
 		repoArgs: { owner: 'local', repo: label },
@@ -117,14 +113,14 @@ for (const d of dirs) {
 }
 const defaultBrainId = [...brains.keys()][0];
 
-// Resolve the caller's `brain` handle the way the Worker's `matchBrain` does in
-// spirit: the canonical id, else the repo name, else a unique case-insensitive
-// substring. Deliberately THROWS on a miss rather than falling back to the default —
-// silently serving another brain is the whole bug this multi-brain support exists to
-// catch, and a runtime that hides it would be worse than one brain.
+// Resolve the caller's `brain` handle the way `matchBrain` (src/lib/orgs.ts) does in
+// spirit: the folder name, else the index key, else a unique case-insensitive
+// substring. Deliberately THROWS on a miss rather than falling back to the default:
+// silently serving another brain is exactly the bug multi-brain support exists to
+// catch.
 function resolveBrain(handle?: string): LocalBrain {
 	if (!handle) return brains.get(defaultBrainId)!;
-	const exact = brains.get(handle) ?? [...brains.values()].find((b) => b.label === handle);
+	const exact = brains.get(handle) ?? [...brains.values()].find((b) => b.brainId === handle);
 	if (exact) return exact;
 	const hits = [...brains.values()].filter((b) =>
 		b.brainId.toLowerCase().includes(handle.toLowerCase())
@@ -133,14 +129,13 @@ function resolveBrain(handle?: string): LocalBrain {
 	const known = [...brains.keys()].join(', ');
 	throw new Error(
 		hits.length > 1
-			? `"${handle}" matches several brains: ${hits.map((b) => b.brainId).join(', ')}.`
+			? `"${handle}" matches several brains: ${hits.map((b) => b.label).join(', ')}.`
 			: `No brain matching "${handle}". This runtime serves: ${known}.`
 	);
 }
 
 // One user, full rights. Both roles report owner, as the Worker's single-tenant path
-// does. `opts.brain` is honoured, which is the whole point: the Worker's getContext
-// has always received it, and this one used to take no arguments at all.
+// does. `opts.brain` is honoured, as it is in the Worker.
 async function getContext(opts?: { brain?: string }): Promise<BrainContext> {
 	const b = resolveBrain(opts?.brain);
 	return {
@@ -152,7 +147,7 @@ async function getContext(opts?: { brain?: string }): Promise<BrainContext> {
 		author,
 		db: b.db,
 		brainId: b.brainId,
-		activeBrain: { id: b.brainId, label: b.label }
+		activeBrain: { id: b.label, label: b.label }
 	};
 }
 
@@ -233,9 +228,7 @@ serve({ fetch: app.fetch, port, hostname: '127.0.0.1' }, () => {
 	const toolCount = Object.keys(registeredTools(buildServer())).length;
 	console.log(`\nIsomorphic local: ${basename(dir)}`);
 	for (const b of brains.values()) {
-		console.log(
-			`  brain:  ${b.brainId}${b.brainId === defaultBrainId ? ' (default)' : ''}  ${b.dir}`
-		);
+		console.log(`  brain:  ${b.label}${b.label === defaultBrainId ? ' (default)' : ''}  ${b.dir}`);
 	}
 	console.log(
 		`  tools:  ${toolCount}${custom.defs.length ? ` (${custom.defs.length} brain-authored)` : ''}`

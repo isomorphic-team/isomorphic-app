@@ -237,7 +237,7 @@ export function tokenizeQuery(query: string): QueryTerms {
 	const terms = [...new Set(chosen)].slice(0, MAX_TERMS);
 	// A query that tokenizes to nothing (punctuation, a single character, CJK text
 	// that this splitter cannot segment) still has to search for something, and the
-	// literal phrase is what the old engine would have used.
+	// literal phrase is the natural fallback.
 	if (terms.length === 0 && phrase)
 		return { terms: [phrase], phrase, bigrams: [], narrowed: false };
 	return {

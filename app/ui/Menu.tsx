@@ -1,19 +1,15 @@
 // The menu-button popover: a trigger plus a dismissible list of choices.
 //
-// This is the "not a component library" note in index.ts being redrawn, on the
-// criterion that file states — the app now HAS menus. There were two hand-rolled
-// ones (the ⋯ overflow, the brain switcher) carrying identical dismiss effects, and
-// the breadcrumb adds one PER SEGMENT, so the count went from two to unbounded. Three
-// copies of a `document.mousedown` listener is where a primitive stops being
-// speculative.
+// The header's display-mode menu (DisplayMenu in main.tsx) is its one caller. The
+// chrome's lists (brains, siblings, destinations) are pages, not popovers, because a
+// panel on a short card has only the room on its side of the trigger.
 //
-// Still hand-rolled, for Toolbar.tsx's reason: the menu-button pattern is small and
-// fully specified (https://www.w3.org/WAI/ARIA/apg/patterns/menu-button/). It does not
-// PORTAL — the panel is absolutely positioned inside the trigger's stacking context —
+// Hand-rolled, for Toolbar.tsx's reason: the menu-button pattern is small and fully
+// specified (https://www.w3.org/WAI/ARIA/apg/patterns/menu-button/). It does not
+// PORTAL (the panel is absolutely positioned inside the trigger's stacking context),
 // which is the point at which a positioning library (floating-ui) starts paying for
-// itself. It does now FLIP, because the premise that used to make that unnecessary
-// ("every menu hangs off the top bar") stopped being true when the rail put one at the
-// BOTTOM of its column.
+// itself. It FLIPS above the trigger when there is more room there
+// (app/core/menu-placement.ts).
 import type { ComponentChildren } from 'preact';
 import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks';
 import { cn } from './cn.ts';
@@ -58,8 +54,7 @@ export function Menu({
 	// simply get clipped: it makes the CARD scrollable, and opening the menu focuses its
 	// first row, which scrolls the card to reach it and drags the rail up out of sight.
 	// The rail then reads as clipped by a too-short window, which is not what happened.
-	// That is what a `Math.max(96, …)` floor here used to guarantee on a short card: on a
-	// 170px browse card the ⋯ has 32px beneath it, and the panel was told to take 96.
+	// So no minimum-height floor: on a 170px card a trigger may have 32px beneath it.
 	const [place, setPlace] = useState<Placement | null>(null);
 	// Wraps the trigger. The panel is absolute, so it does not affect this rect — one
 	// ref serves both the outside-click test and the measurement.

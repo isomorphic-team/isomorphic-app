@@ -61,12 +61,9 @@ import {
 } from './store.ts';
 import { toast, askConfirm } from './toast.tsx';
 
-// LEAVING AN OPEN EDITOR. Every destination in the app abandons an in-progress edit,
-// and the bar's answer used to be to HIDE the destinations while editing — which cost
-// the user their navigation and protected nothing, because the breadcrumb sitting
-// beside the hidden controls was still linked and still switching brains.
-//
-// So the controls stay live and this is the guard instead. It is a no-op unless there
+// LEAVING AN OPEN EDITOR. Every destination in the app abandons an in-progress edit.
+// The controls stay live while editing (hiding them protected nothing, since the trail
+// beside them still navigated), and this is the guard instead. It is a no-op unless there
 // is an editor open that has actually been typed in, which is why the nav surfaces can
 // route every click through it without asking anyone a question they do not need.
 //
@@ -121,7 +118,7 @@ function handleToolResult(result: CallToolResult) {
 	// hand the new brain the wiki/ default (see setActiveBrain in the store).
 	applyBrainContext(sc);
 	applyPolicy(sc);
-	// Learn the brain list once, lazily, so the switcher knows whether to appear.
+	// Learn the brain list, the org list and the server's features once per open.
 	void ensureBrainList();
 	// Which screen a payload opens is decided in the lib (parseToolView); this is only
 	// the wiring from that answer into the store.
@@ -162,8 +159,8 @@ function handleToolResult(result: CallToolResult) {
 }
 
 // Build a brains View from a tool result (brains / switch_brain / create_brain /
-// connect_brain). Also refreshes the cached brain list + shown brain so the header
-// switcher stays in sync.
+// connect_brain). Also refreshes the cached brain list and the shown brain, so the
+// trail stays in sync.
 //
 // Only a result that CHANGED the brain overrides the brain the widget is showing. A
 // plain list does not, and neither does connect_brain, which adopts a repo without
@@ -185,12 +182,12 @@ function brainsViewFromSc(sc: Payload, switched = false): View {
 	return { kind: 'brains', brains: p.brains, active: activeBrain?.id ?? p.active ?? '' };
 }
 
-// Fetch the caller's brain list once (idempotent). The switcher only appears when
-// there are 2+ brains, so this is what tells the header whether to render it.
+// Fetch the caller's brain list once (idempotent), with the org list and the server's
+// features riding the same call.
 //
 // UNKNOWN IS NOT ZERO. `null` means "we haven't found out yet"; `[]` means "we asked
-// and there are none" — and `[]` is what makes the header offer to create your first
-// brain. Anything that can't answer the question must leave the list null, or someone
+// and there are none", and `[]` is what labels the trail "No brain" and opens Add a
+// brain in its first-brain form. Anything that can't answer the question must leave the list null, or someone
 // sitting inside a brain gets told they have none.
 let brainListPromise: Promise<void> | null = null;
 function ensureBrainList(): Promise<void> {
@@ -206,20 +203,20 @@ function ensureBrainList(): Promise<void> {
 			const p = parseBrains(sc);
 			setBrainList(p.brains);
 			// Which orgs a brain can be added to, and which optional server surfaces
-			// exist (today: the org Analytics tab). Both ride this call because it is
-			// the one the app always makes on open.
+			// exist (the org Analytics tab, and `webBase` for "Open in browser"). Both
+			// ride this call because it is the one the app always makes on open.
 			if (p.orgs) setOrgList(p.orgs);
 			setFeatures(p.features);
 			// NOT a brain change: this call asks what brains exist, and it runs on every
 			// open, including the open that a `brain:`-targeted view_page or
-			// browse_brain just aimed at a specific brain. Adopting its `active` here is
-			// what pointed the whole widget back at the previously active brain.
+			// browse_brain just aimed at a specific brain. Adopting its `active` here
+			// would point the whole widget back at the pointer's brain.
 			const picked = pickShownBrain(p.brains, p.active, false);
 			if (picked) setActiveBrain(picked);
 			bump();
 		} catch {
-			// Stay unknown: the header keeps its neutral Files button rather than claiming
-			// you have no brains. Drop the memo so the next view retries instead of the
+			// Stay unknown: the trail keeps its neutral label rather than claiming you
+			// have no brains. Drop the memo so the next view retries instead of the
 			// whole session being stuck on one unlucky call.
 			brainListPromise = null;
 		}
@@ -227,8 +224,6 @@ function ensureBrainList(): Promise<void> {
 	return brainListPromise;
 }
 
-// Switch the active brain, then land on its file tree. Selecting the already-active
-// brain just (re)opens its files — so the switcher doubles as the Files action.
 // Move the active brain WITHOUT deciding where to land. switchBrain lands on the file
 // tree; a search hit lands on the page it named. Both go through brainsViewFromSc,
 // because adopting a brain is what drops the previous one's file tree and path policy
@@ -238,6 +233,8 @@ async function adoptBrain(id: string): Promise<void> {
 	brainsViewFromSc(payloadOf(res), true);
 }
 
+// Switch the active brain, then land on its file tree. Selecting the already-active
+// brain just (re)opens its files.
 async function switchBrain(id: string) {
 	if (activeBrain?.id === id) {
 		openBrowse();
@@ -282,9 +279,7 @@ function manageableOrgs(brains: BrainRow[]): OrgTarget[] {
 // there is no history (a flow reached straight from a tool result).
 
 // The ONE entry point for getting a brain into this workspace, whichever source it
-// comes from. There used to be two (openCreateBrain from the switcher and the empty
-// state, openAddBrain from the brains list), which is what put "New brain" and "Add a
-// brain" in front of the user as if they were different intents.
+// comes from: creating and connecting are one intent, so there is one opener.
 //
 // Both arguments are derived when omitted, so every call site is just openAddBrain().
 // `first` (no brains yet) tunes the copy and drops the source chooser: there is
@@ -368,7 +363,7 @@ async function submitCreateBrain(name: string) {
 	}
 }
 
-// Open the full brains view (the bi-modal counterpart to the header switcher).
+// Open the brains view (the trail's brain glyph lands here).
 async function openBrains() {
 	show({ kind: 'loading', label: 'Loading brains…', task: 'brains' });
 	try {
@@ -671,12 +666,8 @@ async function revalidateBrowse() {
 
 // A breadcrumb click on a folder: ALWAYS the tree, revealed at that folder.
 //
-// It used to open the folder's note (<folder>/index.md) when it had one and the tree
-// when it did not, which made one control do two different things depending on a fact
-// about the folder that the trail never showed you. Pressing `wiki` landed on a page,
-// pressing `concepts` landed on the tree, and nothing in the bar said why. A crumb that
-// is sometimes a page link and sometimes a navigation is not a crumb you can aim.
-//
+// Not the folder's note when it has one: a crumb that opens a page for one folder and
+// the tree for its neighbour, decided by a fact the trail never shows, cannot be aimed.
 // The tree is the answer that is always available and always the same, and it does not
 // hide the note: a folder with one shows it as that folder's own row, one press away.
 // The file TREE keeps opening folder notes on a folder click (views/Browse.tsx), which

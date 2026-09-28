@@ -1,7 +1,9 @@
 # Design: sharing a page by link (and the web app behind it)
 
-- Status: Phase 0 is BUILT (`src/lib/render.ts`, `pnpm test:render`). Phases 1-4 are a
-  draft for discussion. Open questions in §16 are unresolved.
+- Status: Partly built. Phase 0 (the shared, sanitizing renderer, `src/lib/render.ts`, `pnpm test:render`)
+  and Phase 3 (the web app at `/b/<brain>/<path>`, `pnpm test:web`) are BUILT and
+  deployed. Phases 1, 2 and 4 (share links for people without access, and a public site) are
+  not built. §3 and §4.6 describe the code before Phase 0 and are kept as history.
 - Author: Jon Hansing (via Claude)
 - Date: 2026-08-24
 - Audience: the engineering session that picks this up, and Jon deciding whether it should exist
@@ -102,7 +104,7 @@ New table `page_shares` (migration `0007`), additive per the expand-then-contrac
 | ------------------------------------------------------ | ------------------------------------------------------------------------------ |
 | `share_id`                                             | primary key, the public path segment                                           |
 | `token_hash`                                           | SHA-256 of the secret. **The secret itself is never stored**                   |
-| `brain_id`                                             | `owner/repo`, the same key the content index uses                              |
+| `brain_id`                                             | `brains.brain_id`, the same key the content index uses                         |
 | `scope_path`                                           | one page, or a folder prefix for a subtree share                               |
 | `pinned_sha`                                           | null for live, else the commit this share is frozen at                         |
 | `audience`                                             | `link` (secret in URL), `email` (recipient must sign in), `public` (no secret) |
@@ -325,7 +327,7 @@ This is the ask, end to end, and it is shippable on its own.
 shared subtree's folder notes. Mostly a rendering change, since the model already carries a
 prefix.
 
-**Phase 3: the web app. BUILT (not yet browser-verified).** Cookie-authenticated `/mcp`, the web
+**Phase 3: the web app. BUILT, and verified in a browser (`tests/ui/web-nav.spec.ts`).** Cookie-authenticated `/mcp`, the web
 host adapter, `/b/<brain>/<path>` deep links, sign-in and return. Taken FIRST rather than second,
 on the owner's call: the motivating want is opening pages in a browser alongside the chat, and the
 renderer (Phase 0) was the only thing Phase 1 was going to hand it anyway.

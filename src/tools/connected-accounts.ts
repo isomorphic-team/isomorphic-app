@@ -1,4 +1,4 @@
-// Connected-accounts tools — the per-PERSON identity-linking surface.
+// Connected-accounts tools: the per-PERSON identity-linking surface.
 //
 // One panel tool, two audiences (like members.ts): `connected_accounts` both opens
 // the interactive panel in the Isomorphic app (where the user adds/removes linked
@@ -6,10 +6,9 @@
 // are linked to me?" and the model can reason over it. `link_identity` /
 // `unlink_identity` are the conversational mutations.
 //
-// Unlike member tools, this is NOT org-scoped — a person can link identities even
-// with a single personal brain — so it gates on `ctx.actorUserId` (present on the
-// authjs path and the bridged-github path) rather than requireOrg. The legacy
-// static/tenants single-tenant path has no product identity and is rejected.
+// Unlike member tools, this is NOT org-scoped (a person can link identities even
+// with a single personal brain), so it gates on `ctx.actorUserId` rather than
+// requireOrg. The tools are registered only when people sign in (multiUser).
 //
 // Verification: `link_identity` does NOT link anything by itself. It stashes the
 // caller (the actor) under pending_link:<state> and returns a URL; the user opens
@@ -27,10 +26,10 @@ import {
 	type ConnectedAccount,
 	listConnectedAccounts,
 	getAppUserByEmail,
-	unlinkIdentity,
-	unlinkGithubLink
+	unlinkIdentity
 } from '../lib/orgs.ts';
 import { fail } from './shared.ts';
+import type { AccountsWire, SettingsWire } from '../lib/tool-payloads.ts';
 import { toolAnnotations } from '../lib/tool-annotations.ts';
 
 // The bits of the Worker Env these tools need: KV for the pending-link challenge
@@ -41,8 +40,6 @@ interface ConnectedAccountsEnv {
 }
 
 // Narrow to the signed-in person, or throw the caller-facing "not available" error.
-// actorUserId is set on the authjs path and the bridged-github path; never on the
-// legacy static/tenants single-tenant path.
 function requirePerson(ctx: BrainContext): string {
 	if (!ctx.actorUserId) {
 		throw new Error(
@@ -56,7 +53,7 @@ function requirePerson(ctx: BrainContext): string {
 // widget resolves to a settings-shaped payload: the identity card fields (from ctx)
 // PLUS the linked accounts. list/unlink return just `accounts` (read as data / used to
 // refresh the section in place).
-function settingsSc(ctx: BrainContext, accounts: ConnectedAccount[]) {
+function settingsSc(ctx: BrainContext, accounts: ConnectedAccount[]): SettingsWire {
 	return {
 		view: 'settings' as const,
 		email: ctx.author?.email,
@@ -68,12 +65,9 @@ function settingsSc(ctx: BrainContext, accounts: ConnectedAccount[]) {
 }
 
 function accountsText(accounts: ConnectedAccount[]): string {
-	const emails = accounts.filter((a) => a.kind === 'email');
-	const githubs = accounts.filter((a) => a.kind === 'github');
-	const lines = emails.map(
+	const lines = accounts.map(
 		(a) => `- ${a.email}${a.name ? ` (${a.name})` : ''}${a.is_self ? ' — this sign-in' : ''}`
 	);
-	for (const g of githubs) lines.push(`- @${g.github_login ?? g.github_user_id} (GitHub)`);
 	return lines.length
 		? `Connected accounts (${accounts.length}):\n${lines.join('\n')}`
 		: 'No connected accounts.';
@@ -95,7 +89,7 @@ export function registerConnectedAccountTools(
 		{
 			...toolAnnotations('Connected accounts', 'read'),
 			description:
-				'The email logins and GitHub accounts linked to the current person — shown inline as the interactive Connected accounts panel (with controls to link another account or unlink one) AND returned as text you can reason over. Call it whenever the user wants to see, manage, connect, or link their accounts / identities / other email / other login, or when YOU need the list as data.',
+				'The email logins linked to the current person — shown inline as the interactive Connected accounts panel (with controls to link another account or unlink one) AND returned as text you can reason over. Call it whenever the user wants to see, manage, connect, or link their accounts / identities / other email / other login, or when YOU need the list as data.',
 			inputSchema: {},
 			_meta: { ui: { resourceUri: BRAIN_APP_URI } }
 		},
@@ -161,16 +155,12 @@ export function registerConnectedAccountTools(
 		{
 			...toolAnnotations('Unlink a connected account', 'destructive'),
 			description:
-				'Detach one of your linked accounts. Pass `email` to unlink an email login, or `github` (the @login) to unlink a GitHub account. That connection stops sharing your brains; nothing else changes.',
+				'Detach one of your linked email logins. That login stops sharing your brains; nothing else changes.',
 			inputSchema: z.object({
-				email: z.string().optional().describe('Email login to unlink.'),
-				github: z
-					.string()
-					.optional()
-					.describe('GitHub account to unlink (its @login or numeric id).')
+				email: z.string().describe('Email login to unlink.')
 			})
 		},
-		async ({ email, github }) => {
+		async ({ email }) => {
 			const ctx = await getContext();
 			const actorUserId = requirePerson(ctx);
 
@@ -185,36 +175,11 @@ export function registerConnectedAccountTools(
 				const accounts = await listConnectedAccounts(ctx.db, actorUserId);
 				return {
 					content: [{ type: 'text' as const, text: `Unlinked ${target.email}.` }],
-					structuredContent: { accounts }
+					structuredContent: { accounts } satisfies AccountsWire
 				};
 			}
 
-			if (github) {
-				const handle = github.trim().replace(/^@/, '');
-				const accounts = await listConnectedAccounts(ctx.db, actorUserId);
-				const match = accounts.find(
-					(a) =>
-						a.kind === 'github' &&
-						(String(a.github_user_id) === handle ||
-							(a.github_login ?? '').toLowerCase() === handle.toLowerCase())
-				);
-				if (!match?.github_user_id)
-					return fail(`@${handle} isn't one of your connected GitHub accounts.`);
-				try {
-					await unlinkGithubLink(ctx.db, actorUserId, match.github_user_id);
-				} catch (err) {
-					return fail(err instanceof Error ? err.message : String(err));
-				}
-				const fresh = await listConnectedAccounts(ctx.db, actorUserId);
-				return {
-					content: [
-						{ type: 'text' as const, text: `Unlinked @${match.github_login ?? handle} (GitHub).` }
-					],
-					structuredContent: { accounts: fresh }
-				};
-			}
-
-			return fail('Specify which account to unlink: an `email` or a `github` handle.');
+			return fail('Specify the email login to unlink.');
 		}
 	);
 }

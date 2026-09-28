@@ -1,6 +1,8 @@
 # Design: the seam between brains
 
-- Status: Draft for discussion. Nothing built. Open questions in §13 are unresolved.
+- Status: Partly built. Phase 1, cross-brain SEARCH, is built (`search_pages` with `scope: "all"`,
+  2026-08-19, `pnpm test:search`). Publishing across a brain boundary is not built, and the
+  open questions in §13 about it are unresolved.
 - Author: Jon Hansing (via Claude)
 - Date: 2026-08-10
 - Audience: the engineering session that picks this up, and Jon deciding whether it should exist
@@ -422,7 +424,7 @@ page broken for one reader and fine for another.
   `writeMode`, so an arrival into a branch-protected client brain lands as a reviewable PR.
 - `okf-view`'s selection vocabulary for `select:`.
 - `effectiveBrainRole` for both authorization checks.
-- `resolve_import` for the human answers (suppress this key, delete, recreate).
+- `resolve_import` (since generalised into `resolve`) for the human answers (suppress this key, delete, recreate).
 
 **Genuinely new:**
 

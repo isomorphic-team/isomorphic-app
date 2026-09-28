@@ -7,9 +7,8 @@
 // adding a destination here and forgetting its icon is a typecheck error rather than a
 // blank square in the bar.
 //
-// It also exists because the list was written down TWICE — once for the breadcrumb's
-// pickers and once for the ⋯ menu — and the two had already drifted: the picker offered
-// Files and Graph, the menu did not.
+// One list, so every rendering of the destinations (the rail, the More page) offers the
+// same set.
 
 /** The three scopes a destination can belong to. See THE SCOPE TEST below. */
 export type Scope = 'brain' | 'org' | 'account';
@@ -48,11 +47,8 @@ export const DEST_META: Record<DestKey, { label: string; scope: Scope; blurb: st
 	// other way. Then Search, which is the way to a page you cannot point at. Then the
 	// feed and the audience.
 	//
-	// Search is a PLACE like the rest, and it took a detour to get here. It was briefly a
-	// control that swapped the trail for a field — the one item in the rail that opened a
-	// widget instead of going somewhere, which is exactly the inconsistency a rail of
-	// peers makes obvious. It has a view of its own holding its own field now, so it
-	// behaves like every other destination: press it, arrive, the rail lights.
+	// Search is a PLACE like the rest: a view of its own holding its own field, so it
+	// behaves like every other destination (press it, arrive, the rail lights).
 	files: { label: 'Files', scope: 'brain', blurb: 'The whole brain as a tree' },
 	graph: { label: 'Graph', scope: 'brain', blurb: 'How the pages link to each other' },
 	search: { label: 'Search', scope: 'brain', blurb: 'Find a page by its text' },
@@ -86,6 +82,12 @@ export type NavCaps = {
 	analytics: boolean;
 	/** Admin+ of at least one org — brain management is theirs alone. */
 	canManageBrains: boolean;
+	/**
+	 * Anyone besides the operator can sign in (`features.people`). A single-user
+	 * deployment registers none of the people, sharing or brain-management tools, so
+	 * Sharing, Members, Analytics and Manage brains would all come back "unknown tool".
+	 */
+	people: boolean;
 };
 
 // The destinations of one scope, in order, filtered to what a click would actually
@@ -95,8 +97,9 @@ export type NavCaps = {
 export function destinationsIn(scope: Scope, caps: NavCaps): DestKey[] {
 	return (Object.keys(DEST_META) as DestKey[]).filter((k) => {
 		if (DEST_META[k].scope !== scope) return false;
-		if (k === 'analytics') return caps.analytics;
-		if (k === 'brains') return caps.canManageBrains;
+		if (k === 'sharing' || k === 'members') return caps.people;
+		if (k === 'analytics') return caps.people && caps.analytics;
+		if (k === 'brains') return caps.people && caps.canManageBrains;
 		return true;
 	});
 }

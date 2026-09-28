@@ -63,7 +63,7 @@ export interface ImportRecord {
 
 // A question the last sync left unanswered — persisted in the ledger so it
 // stays visible (validate surfaces these) without a sync run in hand. State,
-// not notification: syncs refresh it, resolve_import clears it.
+// not notification: syncs refresh it, the `resolve` tool clears it.
 export interface PendingQuestion {
 	key: string;
 	kind: 'needs-decision' | 'proposed-deletion';
@@ -312,7 +312,7 @@ export function plan(input: PlanInput): ImportPlan {
 		if (claimedPaths.has(path)) {
 			out.errors.push({
 				key,
-				error: `the page at "${path}" is bound to a DIFFERENT source key — pick another path, or resolve the identity with resolve_import`
+				error: `the page at "${path}" is bound to a DIFFERENT source key: pick another path, or resolve the identity with the resolve tool`
 			});
 			continue;
 		}
@@ -342,7 +342,7 @@ export function plan(input: PlanInput): ImportPlan {
 			// claim on. (such a brain's initial bind runs with adopt_existing instead.)
 			out.errors.push({
 				key,
-				error: `a page already exists at "${path}" but doesn't claim this key — re-run with adopt_existing: true to bind it, or alias the key via resolve_import`
+				error: `a page already exists at "${path}" but doesn't claim this key: re-run with adopt_existing: true to bind it, or alias the key with the resolve tool (action "alias")`
 			});
 			continue;
 		}
@@ -394,7 +394,7 @@ export function plan(input: PlanInput): ImportPlan {
 	return out;
 }
 
-// ---------- decisions (resolve_import) ----------
+// ---------- decisions (the `resolve` tool, for import findings) ----------
 //
 // The human answers to a sync's questions (needsDecision / proposedDeletions),
 // applied durably so the next import doesn't re-ask:

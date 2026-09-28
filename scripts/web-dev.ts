@@ -3,12 +3,11 @@
 // This is a thin wrapper and is meant to stay one. The local runtime (src/local.ts,
 // `pnpm try`) serves the web shell at `/b/` and the real tool handlers at `/mcp`
 // itself, exactly as the Worker does, so there is no web server here: this script
-// materializes the shared seed onto disk and starts `pnpm try` over it. The first
-// version of it WAS a server (a shell route, a CSRF gate and a proxy to a second
-// process on a second port), which was a second copy of what the runtime already
-// did, plus a race between the two coming up.
+// materializes the shared seed onto disk and starts `pnpm try` over it. A server of
+// its own would be a second copy of the runtime's routes plus a race between the two
+// coming up.
 //
-//   pnpm web:dev              # the three seeded brains, http://127.0.0.1:8788/b/local/demo-brain
+//   pnpm web:dev              # the three seeded brains, http://127.0.0.1:8788/b/demo-brain
 //   pnpm web:dev --reset      # start over from a pristine seed
 //   pnpm web:dev ~/some/vault # a real folder instead (no seeding)
 //
@@ -52,8 +51,8 @@ const seeded = !args[0];
 // folders NAMED AFTER the root (`demo-brain-acme`, not `acme`): the test run uses its
 // own BRAIN_DIR and `--reset`, so unprefixed siblings would be shared with the
 // preview and wiped out from under a maintainer mid-session. The local runtime keys
-// each by folder name, so the URLs are `/b/local/demo-brain`,
-// `/b/local/demo-brain-acme`, `/b/local/demo-brain-northwind`.
+// each by folder name, so the URLs are `/b/demo-brain`,
+// `/b/demo-brain-acme`, `/b/demo-brain-northwind`.
 const SEEDS: { name: string; pages: () => Record<string, string>; asset?: string }[] = [
 	{ name: basename(root), pages: personalPages, asset: PERSONAL_ASSET_PATH },
 	{ name: 'acme', pages: () => ({ ...ACME_PAGES }) },

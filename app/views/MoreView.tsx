@@ -1,23 +1,18 @@
 // EVERYWHERE ELSE YOU CAN GO: the destinations that are not this brain, as a page.
 //
-// This is the rail's ⋯, and it used to be a popover carrying three groups (Organization,
-// Your account, Display). Two things were wrong with that, and only one of them was the
-// popover. The menu answered two different questions at once — four PLACES and one
-// WINDOW CONTROL — so it had no identity and read as a junk drawer. And the rail is
-// top-anchored, so its ⋯ sits ~145px down whatever the card's height is: on a 170px
-// inline card there were 32px beneath it, and every treatment that hangs off that button
-// (popover, flyout rail, labelled expanding rail) is bounded by the same 32px. Growing
-// the window does not help, because the trigger moves down with it.
+// This is where the rail's ⋯ goes. Not a popover: the rail is top-anchored, so its ⋯
+// sits ~145px down whatever the card's height is, and on a 170px inline card anything
+// hanging off it has 32px of room (growing the window does not help, because the
+// trigger moves down with it).
 //
 // A page is the one shape that escapes: it owns the content area and scrolls natively,
 // identically at every card size, with no clamping, flipping, or measuring. It also has
 // room for a line under each row, which a menu never did — "Analytics" alone is a guess,
 // "How much your organization uses its brains" is not.
 //
-// Display mode went to the right end of the top bar instead of onto this page. It is a
-// property of the window rather than a place, and putting it here would mean leaving the
-// page you are reading in order to go fullscreen, then arriving HERE rather than back at
-// your content.
+// Display mode is at the right end of the top bar, not on this page. It is a property
+// of the window rather than a place, and putting it here would mean leaving the page you
+// are reading in order to go fullscreen.
 import { destinations } from '../components/Destinations.tsx';
 import type { Scope } from '../core/nav.ts';
 import { defineView } from '../core/view-registry.ts';

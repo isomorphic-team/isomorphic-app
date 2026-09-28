@@ -15,12 +15,9 @@ import { Button, Input, List, Flow, FlowNote, submitOnEnter } from '../ui/index.
 //   * CREATE a new one. We scaffold a fresh repo and land in it.
 //   * CONNECT a repo you already have. Pick the org, then the repo; contents stay.
 //
-// These used to be two separate screens with two separate vocabularies ("New brain"
-// in the switcher, "Add a brain" on the brains list), reached from different controls,
-// with nothing saying they were alternatives to the same intent — so wanting a second
-// brain meant already knowing which noun we had filed your case under. Now there is
-// one intent, one entry point, and the source is the flow's first step, asked only
-// when both are actually available.
+// One intent, one entry point: the source is the flow's first step, asked only when
+// both are actually available, so wanting a second brain never means knowing in
+// advance which of two screens to look for.
 //
 // Whole VIEW rather than an inline composer, like every add-shaped action: see
 // app/ui/Flow.tsx.
@@ -28,9 +25,9 @@ type Source = 'create' | 'connect';
 
 function AddBrainView({ orgs, first }: { orgs: OrgTarget[]; first: boolean }) {
 	// Connecting needs an org you admin. The list comes from the server (the `brains`
-	// payload), so an org holding no brains yet is offered like any other. It used to
-	// be derived from the brains list, which could not name one. Creating is always
-	// available, including when there is no org to connect into.
+	// payload), so an org holding no brains yet is offered like any other; a list derived
+	// from the brains could not name one. Creating is always available, including when
+	// there is no org to connect into.
 	const canConnect = orgs.length > 0;
 	const canChoose = canConnect && !first;
 	// One admin org means there is nothing to choose — open straight on its repos.

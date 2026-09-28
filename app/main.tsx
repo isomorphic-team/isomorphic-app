@@ -1,13 +1,15 @@
-// Brain viewer/editor — the MCP App that runs inside the host's sandboxed iframe.
-// Rebuilt on Preact + Tailwind (Phase D foundation). Framework-agnostic MCP
-// plumbing stays module-level; Preact renders the views. Data flows over standard
-// MCP exactly as before: the host feeds the opening tool result via ontoolresult,
-// and in-app navigation calls back through app.callServerTool.
+// Brain viewer/editor: the MCP App that runs inside the host's sandboxed iframe, and
+// the same bundle as a web page (`/b/...`). Preact + Tailwind. Framework-agnostic
+// plumbing stays module-level; Preact renders the views. The host seam is
+// app/core/host.ts: inside an MCP host the opening tool result arrives via
+// ontoolresult and in-app calls go back over AppBridge; on the web host they go to
+// `/mcp` directly (app/core/host-web.ts).
 //
-// This entry file holds the app chrome (header, brain switcher, overflow menu, the
-// Body view switch) + the connect/render bootstrap. Everything else lives in layered
-// modules: app/core/* (types < store < toast < host < actions < icons/util) and one
-// file per view under app/views/*. Adding a view = one file there + one Body case here.
+// This entry file holds the app chrome (the rail, the header with its trail, page
+// actions and window controls) + the connect/render bootstrap. Everything else lives
+// in layered modules: app/core/* (types < store < toast < host < actions < icons/util)
+// and one file per view under app/views/*. Adding a view = one file there; `pnpm
+// gen:app` writes it into views/registry.generated.ts, which Body dispatches through.
 
 import { render } from 'preact';
 import type { ComponentChildren } from 'preact';
@@ -88,12 +90,9 @@ registerHostEvents({
 
 // WHICH WINDOW THIS IS, at the right end of the top bar.
 //
-// It used to be the third group inside the rail's ⋯ menu, filed beside Members and Your
-// settings, which put a WINDOW CONTROL among PLACES and is most of why that menu read as
-// a junk drawer. It is not a destination: it changes how the app is presented, not what
-// you are looking at, and it is the one thing here that must stay reachable without
-// navigating — going fullscreen to read something has to leave you on the thing you were
-// reading.
+// Not a destination: it changes how the app is presented, not what you are looking at,
+// and it must stay reachable without navigating (going fullscreen to read something has
+// to leave you on the thing you were reading). So it sits among no places.
 //
 // Right end of the bar rather than in the rail. The rail is destinations only, and the
 // bottom of the rail (the other candidate) collides with the destination group on a
@@ -175,7 +174,7 @@ function DisplayMenu() {
 }
 
 // One entry in the header's action slot. Views declare these (see ViewAction in
-// core/view-registry.ts); the header no longer knows which view it is rendering for.
+// core/view-registry.ts); the header does not know which view it is rendering for.
 //
 // Icon-only vs text is the view's call, and the two are not interchangeable: a bare
 // glyph works for the tree's frequent, conventional actions and does not work for
@@ -205,11 +204,10 @@ function HeaderAction({ action }: { action: ViewAction }) {
 				{action.label && <span class="tabular-nums">{action.label}</span>}
 			</Button>
 		);
-	// A LABELLED action lights up exactly like an icon one. This branch used to drop
-	// `active` on the floor, so a labelled toggle group (the analytics window: 7d /
-	// 30d / 90d) rendered as three identical buttons with no way to tell which one you
-	// were looking at. Same accent the icon branch uses, plus aria-pressed, since three
-	// buttons where one is selected is a toggle group and not three separate commands.
+	// A LABELLED action lights up exactly like an icon one, so a labelled toggle group
+	// (the analytics window: 7d / 30d / 90d) shows which one is selected. Same accent
+	// the icon branch uses, plus aria-pressed, since three buttons where one is selected
+	// is a toggle group and not three separate commands.
 	return (
 		<Button
 			variant={action.primary ? 'subtle' : 'ghost'}
@@ -289,9 +287,9 @@ function Rail({ view }: { view: View }) {
 		// z-30 IS THE CHROME LAYER, and it has to be stated rather than left to auto. It
 		// sits HERE rather than on the nav below because sticky creates a stacking context:
 		// a z-index inside this aside is scoped to it and cannot lift anything over <main>,
-		// a later sibling, which is how the overflow menu came to render underneath the
-		// analytics chart's bars. It now applies to the aside itself, which is positioned
-		// and would otherwise paint under any `relative` wrapper in main. Content-layer
+		// a later sibling (a menu opened from the rail would render under the analytics
+		// chart's bars). On the aside itself, which is positioned, it also keeps the rail
+		// above any `relative` wrapper in main. Content-layer
 		// overlays run up to z-20 (the analytics tooltip at 10, ProseMirror's column-resize
 		// handle at 20), so chrome sits above them at 30. Header carries the same value.
 		<aside class="sticky top-0 z-30 w-10 shrink-0 border-r border-border" aria-label="Places">
@@ -301,11 +299,9 @@ function Rail({ view }: { view: View }) {
 			    rather than the top of the window. A bottom-anchored group would collide with
 			    this one in a short inline card, where the whole app may be 200px tall. */}
 			<nav class="sticky top-0 flex flex-col items-center gap-0.5 py-1.5">
-				{/* THE RAIL DOES NOT GO AWAY WHILE YOU EDIT. Every destination does abandon an
-				    in-progress edit, which is why this row used to empty itself out — but
-				    hiding the controls cost the user their navigation and protected nothing,
-				    since the trail beside them stayed linked and kept its brain switcher. So
-				    the rail stays whole and `guardNav` asks before discarding (actions.ts). */}
+				{/* THE RAIL DOES NOT GO AWAY WHILE YOU EDIT. Every destination abandons an
+				    in-progress edit, so `guardNav` asks before discarding (actions.ts)
+				    rather than the rail hiding itself. */}
 				{destinations('brain').map((d) => {
 					// GRAPH IS THE ONE CONTEXTUAL CONTROL. From a page it passes that page's
 					// path, and view_graph with a path returns the subgraph around it, so the
@@ -367,9 +363,7 @@ function Rail({ view }: { view: View }) {
 //
 // A SECOND ROW IS A MODE, NOT A FIXTURE. It appears when you enter the editor, carrying
 // the formatting toolbar, and that is the whole of its job — the appearing is the
-// signal. A permanent second row holding two icons was the version before this, and it
-// read as leftover space rather than a zone, because a row that is always there cannot
-// tell you anything by being there.
+// signal: a row that is always there cannot tell you anything by being there.
 function Header({ view }: { view: View }) {
 	const editing = view.kind === 'edit';
 	// The toolbar waits for the editor to actually be bound, so the row drops in WITH
@@ -381,18 +375,14 @@ function Header({ view }: { view: View }) {
 			{/* Fixed row height (not padding-driven) so toggling the search icon ↔ input —
 			    which have slightly different intrinsic heights — can't nudge the header up/down. */}
 			<div class="flex h-9 items-center gap-1.5 px-2.5 text-sm">
-				{/* The trail owns the left edge, whole. It starts at the BRAIN — which is what
-				    killed the separate top-left switcher: that control and the ⌂ crumb beside
-				    it were the same destination twice (see components/Breadcrumb). Nothing may
-				    sit between the brain and the rest of the path, or the trail stops reading
-				    as one. */}
+				{/* The trail owns the left edge, whole, starting at the BRAIN (see
+				    components/Breadcrumb). Nothing may sit between the brain and the rest of
+				    the path, or the trail stops reading as one. */}
 				<Breadcrumb view={view} />
 				<span class="ml-auto flex shrink-0 items-center gap-0.5">
-					{/* "What you can do HERE" — supplied by the current view, not switched on
-					    here. Five views used to have an empty slot and had to put their primary
-					    action in the body instead; declaring actions per view is what closed
-					    that. They have this end of the bar to themselves now that the
-					    destinations have a rail. */}
+					{/* "What you can do HERE": supplied by the current view (viewActions),
+					    not switched on here. Destinations are the rail's, so this end of the
+					    bar belongs to the view. */}
 					{viewActions(view).map((a) => (
 						<HeaderAction key={a.key} action={a} />
 					))}

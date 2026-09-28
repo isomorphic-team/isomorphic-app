@@ -82,10 +82,9 @@ function ConfirmDialog() {
 	);
 }
 
-// How long a success toast stays up. It used to be a flat 2.5s, which was sized for
-// "Saved ✓" and is not enough for a sentence: the editor now shows what the server
-// actually reported about a write, and a message nobody can finish reading is worth
-// no more than the checkmark it replaced. Errors keep their own longer, flat budget.
+// How long a success toast stays up: scaled to the text, because the editor shows
+// what the server actually reported about a write and a message nobody can finish
+// reading is worth no more than a checkmark. Errors keep their own longer, flat budget.
 export function successMs(text: string): number {
 	return Math.min(8000, 2500 + text.length * 25);
 }

@@ -2,8 +2,8 @@
 
 Follows one request end to end, naming the file at each step.
 
-[`CLAUDE.md`](../CLAUDE.md) is the reference, organized by subsystem. Read this first, then the
-section covering whatever you are changing.
+[`CLAUDE.md`](../CLAUDE.md) and the subsystem files in [`.claude/rules/`](../.claude/rules/) are
+the reference. Read this first, then the rules file covering whatever you are changing.
 
 ## Three programs, one `src/`
 
@@ -13,9 +13,9 @@ section covering whatever you are changing.
 | **The local runtime**    | Node               | `src/local.ts`     | One person, one brain on disk, no accounts    |
 | **The bootstrap server** | Node               | `src/bootstrap.ts` | One-shot GitHub App registration              |
 
-`src/lib/` is imported by the Worker, so it may not import `node:*`. `pnpm typecheck` runs three
-tsconfigs to catch a leak. Node-only code goes in `src/local/`, `src/bootstrap.ts`, or a
-Node-only sibling.
+`src/lib/` is imported by the Worker, so it may not import `node:*`. `pnpm typecheck` runs four
+tsconfigs (node, worker, app, tests) to catch a leak. Node-only code goes in `src/local/`,
+`src/bootstrap.ts`, or a Node-only sibling.
 
 ## The journey of a tool call
 
@@ -33,6 +33,12 @@ registers every tool. Per request rather than per connection because the transpo
 (`sessionIdGenerator: undefined`); an `McpServer` binds to one transport, so a reused one answers
 the first call and fails the rest.
 
+`serveMcp` in `src/lib/mcp-serve.ts` then answers the request in whichever protocol era it
+speaks: a request carrying the 2026-07-28 per-request envelope goes to the SDK's
+`createMcpHandler`, and anything else to the 2025-era stateless transport. Both answer with JSON
+on the same POST, never SSE. The Worker and the local runtime share it, and
+`pnpm test:protocol` covers it.
+
 **3. The tool handler resolves a context.** Every tool calls `getContext()`, which is
 `tenantContext()` in the Worker. Four questions:
 
@@ -41,7 +47,10 @@ the first call and fails the rest.
   brain (persisted per user in KV), else the default.
 - **What may they do?** `role` is the caller's role on that brain, `orgRole` is their role in
   that brain's org. `effectiveBrainRole` in `src/lib/orgs.ts` is the authority on the first.
-- **How do we reach storage?** A `BrainStore`, below.
+- **How do we reach storage?** A `BrainStore`, below, built on the credential the brain is
+  bound to: its storage connection (`src/lib/storage-connections.ts`), a GitHub App
+  installation or, in static mode, `GITHUB_TOKEN`. The credential follows the brain rather than
+  the org, so moving a brain to another org leaves its storage where it was.
 
 A tool declares what it needs (`requires: 'editor'` for brain scope, `requiresOrg: 'admin'` for
 org scope) and resolution throws if the caller falls short. The two roles are separate so that an
@@ -59,7 +68,8 @@ half-applies rests on that atomicity.
 
 **6. The result may carry a widget.** Tools that open the in-client app attach
 `_meta.ui.resourceUri`, and the app bundle is served as a `ui://` resource. The bundle is
-generated: after editing `app/`, run `pnpm gen:app` or the deployed UI goes stale with no error.
+generated: after editing `app/` or a `src/lib/` file it imports, run `pnpm gen:app` or the
+deployed UI goes stale with no error.
 
 ## The storage seam
 
@@ -81,17 +91,18 @@ repositories, check a repo exists before connecting it.
 
 No org model, so no members, invitations, sharing, connected accounts, or brain switching. With
 one brain and one person those tools can only reject, and an advertised tool costs context in
-every conversation. The Worker applies the same rule to single-tenant deployments via
-`hasOrgModel`; `FEEDBACK_REPO` is the precedent.
+every conversation. The Worker applies the same rule to single-user deployments via
+`multiUser`; `FEEDBACK_REPO` is the precedent.
 
 ## Where to look next
 
-| Changing…                    | Read                                                                              |
-| ---------------------------- | --------------------------------------------------------------------------------- |
-| A write tool                 | `src/tools/librarian.ts`, then run `pnpm test:e2e-librarian`                      |
-| Markdown parsing or OKF      | `src/lib/wiki.ts`, `CLAUDE.md`'s Open Knowledge Format section                    |
-| `okf-view` directives        | `src/lib/views.ts` + `view-directives.ts`, `pnpm test:views`                      |
-| Search, backlinks, the graph | `src/lib/brain-index.ts`, `pnpm test:index`                                       |
-| Who can do what              | `src/lib/orgs.ts`, `pnpm test:access` and `pnpm test:scope`                       |
-| The viewer or editor         | `app/`, run `pnpm app:dev`; re-run `pnpm gen:app` before committing               |
-| Where a brain lives          | `src/lib/brain-repo.ts` (the seam), `src/local/brain-store-fs.ts` (the other end) |
+| Changing…                   | Read                                                                              |
+| --------------------------- | --------------------------------------------------------------------------------- |
+| A write tool                | `src/tools/librarian.ts`, then run `pnpm test:e2e-librarian`                      |
+| Markdown parsing or OKF     | `src/lib/wiki.ts`, `.claude/rules/okf-folder-notes-and-findings.md`               |
+| `okf-view` directives       | `src/lib/views.ts` + `view-directives.ts`, `pnpm test:views`                      |
+| Search ranking              | `src/lib/search.ts`, `pnpm test:search`                                           |
+| Backlinks, the graph, index | `src/lib/brain-index.ts`, `pnpm test:index`                                       |
+| Who can do what             | `src/lib/orgs.ts`, `pnpm test:access` and `pnpm test:scope`                       |
+| The viewer or editor        | `app/`, run `pnpm app:dev`; re-run `pnpm gen:app` before committing               |
+| Where a brain lives         | `src/lib/brain-repo.ts` (the seam), `src/local/brain-store-fs.ts` (the other end) |

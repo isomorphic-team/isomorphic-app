@@ -11,7 +11,7 @@ This is the guide for **using** Isomorphic. To run a server of your own, see
 An MCP client, and the URL of an Isomorphic server. That is all. You do not need a GitHub
 account, a Cloudflare account, or anything installed locally. This guide uses claude.ai
 because it renders the in-conversation app; [other MCP hosts](#other-mcp-hosts) get the same
-tools, and the same app runs in a browser tab on a multi-tenant deployment (`/b/<owner>/<repo>/`).
+tools, and the same app runs in a browser tab on a multi-tenant deployment (`/b/<brain>/`).
 
 Every Isomorphic server exposes MCP at **`/mcp`** on its own origin:
 
@@ -39,7 +39,7 @@ Client Registration, so Claude registers itself: it fetches
 its own credentials.
 
 Claude then sends you through sign-in. On a server running the default configuration
-(`AUTH_MODE=oauth`, `IDENTITY_MODE=authjs`), that is an **email magic link**: enter your
+(`AUTH_MODE=oauth`), that is an **email magic link**: enter your
 address, open the email, click the link, and you are returned to Claude with the connector
 active.
 
@@ -67,9 +67,13 @@ scaffolds a fresh repository, makes it your active brain, and opens it. From the
   the conversation.
 - **"What do I know about X?"** searches it.
 
-If you already have a GitHub repository of markdown you want to use, ask Claude to connect
-it instead (`connect_brain`), which adopts the existing repo rather than scaffolding a new
-one. See [`ops/adding-brains.md`](ops/adding-brains.md).
+If you already have a GitHub repository of markdown you want to use, it has to be reached
+through the GitHub organization that holds it, since your personal organization cannot adopt
+repositories. Ask Claude to create an organization connected to that GitHub organization
+(`create_org` with `github: true`, which has you install the Isomorphic GitHub App there),
+then to connect the repository (`connect_brain`), which adopts it rather than scaffolding a
+new one. See [`ops/onboarding-a-customer-org.md`](ops/onboarding-a-customer-org.md) and
+[`ops/adding-brains.md`](ops/adding-brains.md).
 
 ## Connecting to your own instance
 
@@ -102,7 +106,7 @@ the UI, not the tools.
 | ------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | The tools (search, read, write, move, validate, views, import)     | Any MCP client: claude.ai, Claude Code, Claude Desktop, the MCP Inspector, and anything else that speaks the protocol.                                                                                         |
 | The in-conversation app (viewer, editor, file tree, graph, roster) | Hosts that implement the [MCP Apps](https://modelcontextprotocol.io/extensions/apps/overview) extension. claude.ai does; the MCP Inspector and VS Code Copilot render it too. Elsewhere the tools return text. |
-| The same app in a browser tab                                      | Any browser, no MCP host: `https://<server>/b/<owner>/<repo>/<path>` on a multi-tenant deployment, with the same email sign-in. Locally, `pnpm try` serves it at `http://127.0.0.1:8788/b/local/<folder>`.     |
+| The same app in a browser tab                                      | Any browser, no MCP host: `https://<server>/b/<brain>/<path>` on a multi-tenant deployment, with the same email sign-in. Locally, `pnpm try` serves it at `http://127.0.0.1:8788/b/<folder>`.                  |
 
 **Claude Code:**
 
@@ -138,8 +142,11 @@ Clear cookies for the origin, or use a private window.
 the protocol exchange is correct. Test the same server against another host (the MCP
 Inspector, VS Code Copilot) to tell a host problem from a server problem.
 
-**Tools fail with a permissions error.** Reads need `viewer`, writes need `editor`. Ask an
-admin of your organization to check your role with the `members` tool.
+**Tools fail with a permissions error.** Reads need `viewer`, writes need `editor`, and
+those roles are per brain: being in the organization does not by itself open a brain, since a
+new brain is private to whoever created it. Ask an admin of that brain to check your access
+with `brain_access` and change it with `share_brain`. `members` shows your role in the
+organization, which is a different question.
 
 ## Where to go next
 

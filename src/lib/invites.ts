@@ -8,8 +8,8 @@
 // address was actually invited.
 //
 // This runs wherever an address has just been proven, and on every request that
-// resolves a person: the alternative is an invite that only ever applies to a
-// brand-new signed-in user, which is what issue #69 reported.
+// resolves a person, so an invite reaches an existing account too, not only a
+// brand-new signed-in user.
 //
 // Worker-safe (no node:* imports).
 

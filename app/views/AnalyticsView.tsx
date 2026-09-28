@@ -154,8 +154,7 @@ function AnalyticsView({
 }) {
 	return (
 		<div>
-			{/* Org only. "· last 30 days" used to sit here too, and the lit 30d button in
-			    the header now says that, so it was a caption restating a control. */}
+			{/* Org only. The window is the lit button in the header, not a caption. */}
 			<div class="mb-3 text-sm text-muted">{orgName}</div>
 
 			{truncated && (

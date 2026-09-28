@@ -1,8 +1,8 @@
 // D1, shimmed over `node:sqlite`. Node-only, so not in src/lib/.
 //
 // Every read goes through ensureFresh, which is D1 code, so anything running the real
-// tools outside a Worker needs a D1-shaped database. e2e-librarian, e2e-import, and
-// test-index each carried a near-identical copy of this shim; this is the one copy.
+// tools outside a Worker needs a D1-shaped database. This is the one shim the local
+// runtime and the offline batteries share.
 //
 // Only the surface the index and the org tables use: prepare/bind, first, all, run,
 // batch. D1 batches are transactional, so the shim is too; write-through relies on
@@ -14,17 +14,11 @@ import type { D1Database } from '@cloudflare/workers-types';
 
 const MIGRATIONS_DIR = new URL('../../migrations/', import.meta.url);
 
-// Which migrations this database has already had. Wrangler keeps the same ledger
-// against the real D1; without one here, every launch re-ran every file.
-//
-// That was invisible until a database OUTLIVED a process. Most callers pass
-// `:memory:` or a fresh temp dir, so they only ever migrate an empty database and
-// re-running is free — but `pnpm try` keeps its index in the brain's own
-// `.isomorphic/`, on purpose, so a large vault is not reindexed on every launch.
-// Its second launch on any folder died with `duplicate column name: schema_version`
-// and stayed dead: `CREATE TABLE IF NOT EXISTS` is fine to repeat, and SQLite has no
-// `ADD COLUMN IF NOT EXISTS`, so migrations 0002 and 0003 threw. The documented way
-// in for a contributor with no accounts worked exactly once per folder.
+// Which migrations this database has already had, the same ledger Wrangler keeps
+// against the real D1. It matters once a database outlives a process: `pnpm try`
+// keeps its index in the brain's own `.isomorphic/`, and re-running a migration is
+// not safe (SQLite has no `ADD COLUMN IF NOT EXISTS`, so 0002 and 0003 would throw
+// `duplicate column name`).
 const LEDGER = 'CREATE TABLE IF NOT EXISTS local_migrations (name TEXT PRIMARY KEY)';
 
 // SQLite's complaint when a migration's effect is already in place. Treated as "this

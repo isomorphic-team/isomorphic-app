@@ -5,15 +5,17 @@
 // platform installation) and adopts an existing repo as its first brain. Three
 // D1 rows make that real:
 //
-//   1. orgs         — the customer org (model='customer', their installation_id,
-//                     brain_owner = their GitHub org).
+//   1. orgs         — the customer org (model='customer'), with its storage
+//                     connection (their installation, account = their GitHub org)
+//                     as the default.
 //   2. brains       — adopt their existing KB repo (optional; skip with no --repo
 //                     and let them run connect_brain later). Writing it here keeps
 //                     the invited owner from landing in a brainless org on first
 //                     sign-in.
-//   3. invitations  — pre-invite the owner by email so their first magic-link
-//                     sign-in joins THIS org (provisionOrgForUser consumes it),
-//                     instead of auto-provisioning a personal Model-A brain.
+//   3. invitations  — pre-invite the owner by email. claimPendingInvites turns it
+//                     into a membership on their next request with that address
+//                     proven, so a first sign-in joins THIS org instead of being
+//                     given a personal Model-A org.
 //
 // What the script does that raw SQL can't:
 //   - Resolves the customer's installation_id from GitHub automatically (App JWT →
@@ -221,18 +223,30 @@ async function main() {
 			`    FROM app_users WHERE email = ${sqlStr(operatorEmail)};`
 	);
 
+	const connectionId = sqlStr(`github-app:${installationId}`);
+	statements.push(
+		`-- Its storage connection (the installation), owned by the org, as its default.\n` +
+			`INSERT OR IGNORE INTO storage_connections\n` +
+			`  (connection_id, provider, kind, external_id, account, owner_org_id)\n` +
+			`  VALUES (${connectionId}, 'github', 'github-app-installation', ${sqlStr(String(installationId))},\n` +
+			`          ${sqlStr(args.githubOrg)}, ${sqlStr(orgId)});\n` +
+			`UPDATE orgs SET default_connection_id = ${connectionId} WHERE org_id = ${sqlStr(orgId)};`
+	);
+
 	if (args.repo && brainId) {
 		statements.push(
 			`-- Adopt the existing KB repo as the org's first brain (no scaffold).\n` +
-				`INSERT OR IGNORE INTO brains (brain_id, org_id, repo_owner, repo_name, visibility)\n` +
-				`  VALUES (${sqlStr(brainId)}, ${sqlStr(orgId)}, ${sqlStr(args.githubOrg)}, ${sqlStr(args.repo)}, 'org');`
+				`INSERT OR IGNORE INTO brains\n` +
+				`  (brain_id, org_id, repo_owner, repo_name, visibility, storage_connection_id)\n` +
+				`  VALUES (${sqlStr(brainId)}, ${sqlStr(orgId)}, ${sqlStr(args.githubOrg)}, ${sqlStr(args.repo)}, 'org',\n` +
+				`          ${connectionId});`
 		);
 	}
 
 	statements.push(
-		`-- Pre-invite the owner by email. First magic-link sign-in joins THIS org\n` +
-			`-- (provisionOrgForUser consumes the invite) instead of auto-provisioning a\n` +
-			`-- personal brain. token_hash unused for the email-match path; far-future\n` +
+		`-- Pre-invite the owner by email. claimPendingInvites joins them to THIS org\n` +
+			`-- on their next request with the address proven, first sign-in included.\n` +
+			`-- token_hash unused for the email-match path; far-future\n` +
 			`-- expiry keeps it pending until claimed.\n` +
 			`INSERT OR IGNORE INTO invitations\n` +
 			`  (invite_id, org_id, email, role, invited_by, token_hash, expires_at)\n` +

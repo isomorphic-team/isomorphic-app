@@ -1,18 +1,18 @@
-// Manual end-to-end battery for the bulk importer (sync_records / resolve).
+// End-to-end battery for the bulk importer (sync_records / resolve).
 //
-// Runs offline by default (fs + git BrainStore in a temp dir), so it is in CI. `--github`
-// runs the identical assertions against a real scratch repo, by hand.
-// Run by hand when the import path changes:
+// Drives the REAL tool handlers through an in-memory MCP client. By default the brain
+// is the fs + git BrainStore in a temp directory: offline, no credentials, and in CI.
+// `--github` runs the identical assertions against a real scratch repo, by hand, when
+// the GitHub adapter's side of the import path changes:
 //
-//   pnpm test:e2e-import
-//   pnpm exec tsx scripts/e2e-import.ts --github
+//   pnpm test:e2e-import                              (local, offline, in CI)
+//   pnpm exec tsx scripts/e2e-import.ts --github      (real GitHub, by hand)
 //
-// Mirrors e2e-librarian.ts: requires `.dev.vars` with platform App creds +
-// PLATFORM_ORG / PLATFORM_INSTALLATION_ID, creates a scratch brain repo on the
-// platform org, drives the REAL tool handlers through an in-memory MCP client,
-// and deletes the repo afterwards (success or failure). The content index runs
-// on a real SQLite database via node:sqlite (Node 22+), shimmed to the D1
-// surface brain-index uses — so ensureFresh / key discovery run for real.
+// The --github mode mirrors e2e-librarian.ts: it requires `.dev.vars` with platform
+// App creds + PLATFORM_ORG / PLATFORM_INSTALLATION_ID, creates a scratch brain repo on
+// the platform org, and deletes it afterwards (success or failure). In both modes the
+// content index runs on a real SQLite database via node:sqlite, shimmed to the D1
+// surface brain-index uses, so ensureFresh / key discovery run for real.
 import { readFileSync } from 'node:fs';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';

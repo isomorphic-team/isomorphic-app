@@ -23,7 +23,7 @@ The schema for this brain. Read this before writing.
 
 One page is **maintained automatically — never edit it directly**:
 
-- `wiki/log.md` — append-only changelog. Every create, update, move, publish, and delete is logged.
+- `wiki/log.md` — append-only changelog. Every create, update, move, and delete is logged.
 
 ## Folder notes
 
@@ -87,10 +87,18 @@ OKF lifecycle status is optional: absent means `stable` (ready for consumption).
 
 - **Source material.** Keep transcripts, emails, and docs under `source/` (add them via GitHub); the platform treats that area as read-only and pages cite it in `sources:`.
 - **Query / browse.** The MCP server reads `wiki/` and serves answers with citations; the in-client app browses the wiki as a file tree.
-- **Librarian.** `write_page` (create or update, at a path you choose) / `move_page` / `delete_page` land instantly and atomically; every change is logged. `move_page` and `delete_page` also take a folder path to move or delete a whole subtree. `validate` checks for broken links; run it after big restructures.
+- **Librarian.** `write_page` (create or update, at a path you choose) / `move_page` / `delete_page` each land as one atomic commit, and every change is logged. On a brain whose default branch is protected, the change opens a pull request instead of committing directly, and it reaches the branch when that pull request merges. `move_page` and `delete_page` also take a folder path to move or delete a whole subtree. `validate` checks for broken links; run it after big restructures.
 - **Keeping the brain in shape.** `validate` also reports _findings_: advisory things that may be fine, each with a `[key]`. A page nothing links to, a folder note that lists none of its pages, two pages telling the same story, a name two pages both answer to. Work through them one at a time, reading the page before deciding. If one is deliberate, `resolve` it with `dismiss` and a reason and it will not be raised again. To check a page is actually findable, ask `search_pages` a question it should own and pass `expect` with its path: it reports where the page ranked and what beat it.
 - **Editing part of a page.** `write_page`'s `content` argument **replaces the whole body**, so it destroys anything you haven't read. To change part of a page, pass `edits` (a list of exact `find` / `replace` pairs) or `append` (text added at the end) instead: they touch only what you name, leave the rest byte-identical, and need no prior read. An anchor that matches zero times or more than once fails the whole call rather than guessing, so nothing is half-applied. Anchors match the body only; frontmatter is changed with `fields` or the `title` / `type` / `description` / `status` arguments. An anchor also cannot target the generated text inside an `okf-view` snapshot, which is recomputed on every save. Read the page first (`read_page`) only when you genuinely want a full rewrite via `content`.
 - **Setting fields.** `write_page`'s `fields` changes a page's metadata without touching its text. Reach for it instead of rewriting a page to change a `done:` or an `owner:`. Changing the same field across many pages is one call per page today.
+
+## Images and PDFs
+
+Pictures and PDFs are stored in the brain next to the pages that use them (PNG, JPEG, GIF, WebP, SVG, PDF; 5 MB each).
+
+- **Adding one.** `attach_media` with a public https `url`: the server downloads the file, so you never handle the bytes. Pass `page` and the file lands in an `assets/` folder beside that page, with an image link appended to it. A file with no public URL (an image attached to the chat, or one you made yourself) can't be passed through a tool call; ask the user to drop it into the Isomorphic panel.
+- **Looking at one.** `read_media` with the file's path returns the image itself, so you can see what it shows. `read_page` is for markdown only.
+- Attachments are ordinary files in the repo, so `move_page` on a folder moves its `assets/` with it, and relative image links keep working in any markdown reader.
 
 ## Custom tools
 
@@ -124,4 +132,4 @@ Grammar: `input: <name> (<type>[, default=<v>][, optional]) <description>` where
 
 ## Privacy
 
-Anything under `wiki/private/` (or `source/private/`) is invisible to the public-facing MCP server. The path is the ACL.
+Access is granted per brain, not per folder. Anyone who can open this brain can read every page and file in it, whatever the path, including anything under a folder named `private/`. Material that only some people should see belongs in a separate brain shared with just those people.

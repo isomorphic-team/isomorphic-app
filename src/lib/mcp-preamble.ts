@@ -1,14 +1,11 @@
 // What a POST /mcp is actually asking for, decided before the MCP SDK sees it.
 //
-// Every request to /mcp used to pay for full brain resolution before anyone
-// looked at the JSON-RPC method: `loadCustomTools` resolves a tenant (D1 rows
+// Full brain resolution is expensive: `loadCustomTools` resolves a tenant (D1 rows
 // plus an installation-token mint, a GitHub round trip), calls `ensureFresh`
 // (another GitHub round trip, sometimes an incremental reindex), and fetches a
-// blob per `tools/` page. `initialize` needs none of it — it is answered from
-// the static tool surface — and `initialize` is the connect, which is the one
-// request a user cannot retry past. Issue #50 reported a session that failed to
-// connect at all with a gateway error, so the handshake is the path that most
-// needs to be cheap.
+// blob per `tools/` page. `initialize` needs none of it (it is answered from the
+// static tool surface), and `initialize` is the connect, the one request a user
+// cannot retry past, so the handshake is the path that most needs to be cheap.
 //
 // Pure and Worker-safe: no `node:*`, no bindings, no I/O. The Worker peeks the
 // body once, asks the two functions below, and hands the same bytes to the
@@ -108,10 +105,9 @@ export function needsBrainPreamble(peek: JsonRpcPeek): boolean {
 
 /**
  * A JSON-RPC error object for a request that failed before the SDK could
- * answer it. `data.ray` carries Cloudflare's ray id so a report can be matched
- * to a log line: issue #50 arrived with four ray ids and nothing to join them
- * against, because an exception thrown out of the handler leaves no reply at
- * all.
+ * answer it. `data.ray` carries Cloudflare's ray id so a user's report can be
+ * matched to a log line; an exception thrown out of the handler would otherwise
+ * leave no reply at all.
  */
 export function jsonRpcError(
 	id: string | number | null,

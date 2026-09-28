@@ -5,8 +5,8 @@
 // plus `brains.visibility` (who can reach ONE brain, and at what brain role).
 // Keeping them apart is the point of the model:
 //
-//   ORG role:   invite/remove people, set org roles, connect the GitHub org,
-//               create brains, connect/disconnect brains.
+//   ORG role:   invite/remove people, set org roles, create, connect, and
+//               disconnect brains. (create_org makes a new org and needs no role.)
 //   BRAIN role: read, write, move/delete pages, configure, share.
 //
 // Authorization (enforced here, not in the lib):
@@ -14,10 +14,10 @@
 //     knowing who else is in a room you are already in is not privileged.
 //   • Mutations require ADMIN ON THE BRAIN (`requires: 'admin'`), which an org
 //     admin always has via the floor, and a creator has via their own grant.
-//   • Guardrails: you can only share with people already in the brain's org
-//     (invite them to the org first), you can't grant above your own brain role,
-//     and you can't revoke your own access (an org admin can always fix a
-//     mistake, and this stops someone locking themselves out of their own brain).
+//   • Guardrails: you can't grant above your own brain role, someone outside the
+//     brain's org is a GUEST capped at editor (GUEST_ROLE_CAP), and you can't
+//     revoke your own access (an org admin can always fix a mistake, and this
+//     stops someone locking themselves out of their own brain).
 //
 // Two tools, not four: `brain_access` reads (widget + data), `share_brain` writes
 // every mutation: grant, change role, revoke (`access: 'none'`), and the
@@ -51,6 +51,7 @@ import {
 } from '../lib/orgs.ts';
 import { webPathFor } from '../lib/web-app.ts';
 import { brainArgFor, fail } from './shared.ts';
+import type { BrainAccessWire } from '../lib/tool-payloads.ts';
 import { toolAnnotations } from '../lib/tool-annotations.ts';
 
 const brainArg = brainArgFor(
@@ -58,16 +59,13 @@ const brainArg = brainArgFor(
 );
 
 // The brain a tool call resolved to, as the access tools need it: the PK to write
-// grants against plus its current visibility. tenantContext resolves a brain by
-// repo, so look the row up by the canonical owner/repo id.
+// grants against plus its current visibility.
 async function resolveBrainRow(
 	ctx: BrainContext
 ): Promise<{ brain_id: string; visibility: string; org_id: string } | null> {
 	return await ctx.db
-		.prepare(
-			`SELECT brain_id, visibility, org_id FROM brains WHERE repo_owner = ?1 AND repo_name = ?2`
-		)
-		.bind(ctx.repoArgs.owner, ctx.repoArgs.repo)
+		.prepare(`SELECT brain_id, visibility, org_id FROM brains WHERE brain_id = ?1`)
+		.bind(ctx.brainId)
 		.first<{ brain_id: string; visibility: string; org_id: string }>();
 }
 
@@ -77,7 +75,7 @@ async function resolveBrainRow(
 async function accessPayload(
 	ctx: BrainContext,
 	row: { brain_id: string; visibility: string; org_id: string }
-) {
+): Promise<BrainAccessWire> {
 	const [entries, invites] = await Promise.all([
 		listBrainAccess(ctx.db, row.brain_id, row.org_id, row.visibility),
 		listPendingBrainInvites(ctx.db, row.brain_id)
@@ -85,7 +83,7 @@ async function accessPayload(
 	return {
 		view: 'brain-access' as const,
 		access: entries,
-		// Shares to addresses with no account yet, claimed as grants at first sign-in.
+		// Shares to addresses with no account yet, claimed as grants once that address signs in.
 		invites,
 		visibility: row.visibility,
 		activeBrain: ctx.activeBrain,
@@ -156,7 +154,7 @@ export function registerBrainAccessTools(
 		{
 			...toolAnnotations('Who can access this brain', 'read'),
 			description:
-				"Show who can reach a brain and at what level (Viewer / Editor / Admin), and whether it's private or shared with the whole organization: rendered inline as the interactive Isomorphic sharing panel (brain admins get controls to share, change access, and revoke) AND returned as text you can reason over. Call it whenever the user asks who can see / who has access to / who a brain is shared with, and whenever YOU need that list as data before calling share_brain. This is per-BRAIN access; for the organization's roster of people and their org roles, call members instead.",
+				"Show who can reach a brain and at what level (Viewer / Editor / Admin), and whether it's private or shared with the whole organization: rendered inline as the interactive Isomorphic sharing panel (brain admins get controls to share, change access, and revoke) AND returned as text you can reason over. Call brain_access whenever the user asks who can see / who has access to / who a brain is shared with, and whenever YOU need that list as data. This is per-BRAIN access, not the organization's roster of members.",
 			inputSchema: { brain: brainArg },
 			_meta: { ui: { resourceUri: BRAIN_APP_URI } }
 		},
@@ -186,7 +184,7 @@ export function registerBrainAccessTools(
 		{
 			...toolAnnotations('Share a brain / change who can access it', 'destructive'),
 			description:
-				"Change who can access a brain. Either share it with ONE person by email at a given level (`email` + `access`: viewer | editor | admin, or `none` to revoke), or change the brain's overall `visibility` ('private' = only people it's shared with, 'org' = everyone in the organization). Use when the user wants to share / unshare a brain, give someone access, change what someone can do in a brain, or make a brain private or organization-wide. Requires admin on that brain. The person does NOT need to be in the organization: someone outside it becomes a GUEST of this one brain (viewer or editor, never admin) and reaches nothing else, and an address with no account yet is invited and joins as a guest when they first sign in. To make someone a member of the whole organization instead, use invite_member; to change someone's ORGANIZATION role, use set_member_role.",
+				"Change who can access a brain. Either share it with ONE person by email at a given level (`email` + `access`: viewer | editor | admin, or `none` to revoke), or change the brain's overall `visibility` ('private' = only people it's shared with, 'org' = everyone in the organization). Use when the user wants to share / unshare a brain, give someone access, change what someone can do in a brain, or make a brain private or organization-wide. Requires admin on that brain. The person does NOT need to be in the organization: someone outside it becomes a GUEST of this one brain (viewer or editor, never admin) and reaches nothing else, and an address with no account yet is invited and joins as a guest when they first sign in. share_brain changes access to this one brain only, never anyone's organization membership or role.",
 			inputSchema: z.object({
 				email: z
 					.string()
@@ -248,7 +246,7 @@ export function registerBrainAccessTools(
 				if (!emailTrim.includes('@')) return fail(`"${emailTrim}" is not an email address.`);
 				const user = await getAppUserByEmail(ctx.db, emailTrim);
 
-				// No account yet: a BRAIN invite, claimed as a grant on first sign-in.
+				// No account yet: a BRAIN invite, claimed as a grant once the address signs in.
 				// Never a membership, so sharing cannot widen what they reach.
 				if (!user) {
 					const pending = await getPendingBrainInvite(ctx.db, row.brain_id, emailTrim);

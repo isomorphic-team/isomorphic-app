@@ -1,11 +1,11 @@
-// Per-brain content-shape config — what makes an arbitrary GitHub repo a "brain".
+// Per-brain content-shape config: what makes an arbitrary repo a "brain".
 //
 // A brain is any repo owned by any org. This module LOADS, per brain, which
 // paths are EDITABLE CONTENT, which are IMMUTABLE SOURCE, and where the
-// tool-maintained changelog lives — so the write tools stop hardcoding the
-// string "wiki/". The declaration is a `.isomorphic.json` file committed at the
-// repo root; when it's ABSENT the defaults reproduce the original wiki/ + raw/
-// behavior exactly, so pre-existing brains (isomorphic-mind) need no migration.
+// tool-maintained changelog lives, so the write tools never hardcode "wiki/".
+// The declaration is a `.isomorphic.json` file committed at the repo root; when
+// it's ABSENT the defaults are the wiki/ + raw/ layout new brains are scaffolded
+// with.
 //
 // Example for a whole-repo brain (e.g. an adopted external knowledge base with
 // its own top-level layout):
@@ -15,11 +15,11 @@
 // see parsePaths.)
 //
 // The pure path predicates (isContentPath, isHiddenName, …) live in
-// brain-policy.ts — a no-dependency module the app UI bundles too, so the tree's
+// brain-policy.ts, a no-dependency module the app UI bundles too, so the tree's
 // notion of editable/hidden can never drift from the Worker's. This module adds
-// the repo-touching half (octokit loads) and re-exports the policy for existing
-// importers. Worker-safe (no node:*): loaded from the repo via octokit at
-// request time.
+// the repo-touching half (loads through the brain's BrainStore, so GitHub or a git
+// repo on disk) and re-exports the policy for existing importers. Worker-safe (no
+// node:*).
 
 import type { RepoRef, BrainStore } from './brain-repo.ts';
 import {
@@ -40,13 +40,10 @@ export * from './brain-policy.ts';
 // Everything in the repo that is NOT a content page, split into the two kinds the
 // app treats differently.
 //
-// `assets` are attachments: real content, uploaded on purpose, just not markdown.
-// They used to fall into `hidden` purely because they lack a `.md` extension, which
-// filed a picture someone deliberately added alongside `.gitkeep` markers and the
-// config file, reachable only by turning on "show hidden". A brain that stores
-// something and then will not show it to you is the bug this split fixes.
+// `assets` are attachments: real content, uploaded on purpose, just not markdown,
+// so they are shown rather than filed beside `.gitkeep` markers behind "show hidden".
 //
-// `hidden` keeps its old meaning: system files, source material, the log, dotfiles.
+// `hidden` is everything else: system files, source material, the log, dotfiles.
 //
 // One tree walk for both, because the two call sites (list_pages and browse_brain)
 // each need both lists and a second walk would double the cost of every file tree.
@@ -176,8 +173,8 @@ export async function loadBrainConfig(store: BrainStore, repo: RepoRef): Promise
 
 // Reload only the settings that shape the derived content index, pinned to the
 // exact commit whose tree will be indexed. The caller already resolved branch
-// protection and merge policy; repeating that work here used to cost two extra
-// GitHub calls on every stale read. A missing config at this revision means the
+// protection and merge policy, so this does not repeat those two GitHub calls on
+// every stale read. A missing config at this revision means the
 // defaults, while a failed read keeps the caller's known-good config.
 export async function loadIndexConfig(
 	store: BrainStore,

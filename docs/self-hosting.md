@@ -69,7 +69,7 @@ MCP host at it:
 claude mcp add --transport http isomorphic-local http://127.0.0.1:8788/mcp
 ```
 
-Or skip the MCP host and open `http://127.0.0.1:8788/b/local/notes` in a browser: the same
+Or skip the MCP host and open `http://127.0.0.1:8788/b/notes` in a browser: the same
 viewer and editor the connector renders inside Claude, served as an ordinary web page, over the
 same tools.
 
@@ -294,13 +294,11 @@ Do path 2 first and confirm it works, taking **option B** in 2a: multi-tenant me
 a token per organization from one App installation, which a personal access token cannot do.
 Then:
 
-### 3a. Choose an identity mode
+### 3a. Sign-in
 
-`IDENTITY_MODE=github` uses GitHub OAuth. Simplest, but every user needs a GitHub account,
-which defeats much of the point if your users are not engineers.
-
-`IDENTITY_MODE=authjs` uses Auth.js with an email magic link, so members never touch GitHub.
-This is usually what you want. Two caveats, both from running it:
+Members sign in with Auth.js and an email magic link, so they never touch GitHub. (GitHub
+sign-in, `IDENTITY_MODE=github`, was removed; a deployment still setting it is told so at
+`/authorize`.) Two caveats, both from running it:
 
 - Magic links are weaker than a redirect-based provider. Email prefetchers can consume a
   link, and cross-browser flows are fragile. A redirect-based OIDC provider (Google, your
@@ -313,7 +311,6 @@ This is usually what you want. Two caveats, both from running it:
 
 ```sh
 AUTH_MODE=oauth \
-IDENTITY_MODE=authjs \
 AUTO_PROVISION=true \
 PUBLIC_BASE_URL=https://brain.example.com \
 AUTH_EMAIL_FROM="Your Brain <login@example.com>" \
@@ -337,9 +334,10 @@ you add people with `invite_member`.
 
 ### 3c. Your own account
 
-The generic auto-provision path would create a brand-new empty brain for you, which is
-usually not what you want if you already have one from path 2. `src/db/seed-operator-org.sql`
-is a fill-in-the-placeholders template that maps your email onto an existing brain instead.
+Auto-provision gives a first-time user a new organization with no brain in it, which is
+usually not what you want if you already have a brain from path 2.
+`src/db/seed-operator-org.sql` is a fill-in-the-placeholders template that makes you the owner
+of an organization holding that existing brain instead.
 Apply it to both the local and remote database.
 
 ### 3d. Bringing on another organization
@@ -419,16 +417,17 @@ every run, so re-running `pnpm bootstrap` usually fixes it. Never hand-edit
 `GITHUB_APP_PRIVATE_KEY_BASE64`.
 
 **Edited `.dev.vars`, and `wrangler dev` still uses the old values.** Restart it. Wrangler's
-reload does not reliably re-create existing Durable Object instances or re-read every var.
+reload does not reliably re-read every var.
 
 **The app UI does not appear in Claude.** Claude sometimes does not mount the iframe even
 when the protocol exchange is byte-correct. It is a host-side issue and not fixable from the
 server. Isolate it by testing the same server against a different MCP host (the MCP Inspector,
 or VS Code Copilot). See [`docs/references.md`](references.md).
 
-**Everything is slow, or scans stop at about 40 pages.** You are on a code path that predates
-the content index, or the index is not being used. Read tools should be issuing one or two D1
-statements, not fetching every page from GitHub.
+**The first reads of a large brain are slow.** The content index builds on first read, and
+the work is budgeted per request and resumes where it stopped, so a brain of a few thousand
+pages converges over several reads rather than in one. After that, a read is one or two D1
+statements plus one check of the branch head.
 
 **A tool you wrote as a page under `tools/` does not show up.** The transport is stateless and
 cannot push a tool-list-changed notification, so the host only sees a new, renamed, or removed

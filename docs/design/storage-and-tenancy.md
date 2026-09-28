@@ -1,6 +1,11 @@
 # Design: storage and tenancy
 
-- Status: Steps 1 and 2 built (branch `storage-and-tenancy`). Steps 3 to 6 not started.
+- Status: Partly built. Steps 1, 2, 2b and 3 built (storage connections,
+  `src/lib/storage-connections.ts` and migration 0010; moving a brain between orgs with
+  `connect_brain`, `src/lib/brain-move.ts`; one tenancy model,
+  `src/lib/static-tenant.ts`; derived state keyed by `brain_id`, migration 0011) and step 4
+  (slug URLs, `src/lib/brain-slug.ts` and migration 0012) and step 6 (contract,
+  migrations 0013 and 0014). Step 5 not started.
 - Author: Jon Hansing (via Claude)
 - Date: 2026-09-22
 - Related: `docs/design/brain-seams.md` (§6, identity is a key, never a path),
@@ -89,16 +94,16 @@ column, `brains.storage_connection_id`, and the locator is the existing `repo_ow
 `repo_name`, which is what a GitHub locator is. Step 5 generalizes the locator when a
 backend needs a different shape (Azure's organization, project and repository).
 
-A brain whose binding is NULL (every brain written before step 1, and any written by
-old code during the deploy window) falls back to its org's installation, which is
-exactly how it resolved before. The fallback is removed in step 6.
+Every brain is bound (step 1's backfill, and every writer since). The fallback to the
+org's installation for an unbound brain was removed in step 6: an unbound brain is not
+listed, rather than read through a credential that may not reach it.
 
 ### Brain identity
 
-A brain's identity must not be derived from where it is stored. Today `owner/repo` is
-the content index key, the `brain` handle tools accept, the active-brain pointer and the
-web URL. `brains.brain_id` is already a stored string rather than recomputed, so the
-primary key is stable; the rest is step 3 and 4.
+A brain's identity is not derived from where it is stored. `brains.brain_id` keys
+derived state and the active-brain pointer (step 3); the `brain` handle tools accept and
+the web URL are `<name>-<handle>`, with `brains.handle` a random six-character id (step 4).
+`owner/repo` is only the storage locator, still accepted as an alias.
 
 ### Org
 
@@ -207,16 +212,40 @@ its deploy window, because a rollback reverts code and never schema.
    the `hosted` org model, and
    `create_org`, which replaces `connect_github_org` and creates a hosted org in
    product (gated on `AUTO_PROVISION`) or starts the GitHub install.
-3. **Key derived state by `brain_id`.** The content index, write-attempt ledger and
-   active-brain pointer stop using `owner/repo`. A lazy rebuild, the same shape as an
-   `INDEX_SCHEMA_VERSION` bump.
-4. **URLs by brain slug.** `/b/<slug>/<path>`, with `/b/<owner>/<repo>/...` redirecting
-   permanently: a URL is a contract. Tools accept `owner/repo` as an alias.
+   2b. **One tenancy model (built).** Every deployment runs the org model. A static
+   (single-user) deployment writes its org, operator member, storage connection and brain
+   from config on first use (`ensureStaticTenant`), recording `GITHUB_TOKEN` as a
+   `github-token` connection that names the secret without holding it; `credentialFor`
+   picks token or installation from the binding. GitHub sign-in (`IDENTITY_MODE=github`)
+   and the per-user `tenants` table were removed (production held one row, unreachable
+   under `authjs`). What differs between deployments is one capability, `multiUser`:
+   whether anyone besides the operator signs in, which gates the people, sharing and
+   brain-management tools and reaches the app as `features.people`. The local runtime
+   (`pnpm try`) writes no rows: it has one person, no sharing and a separate index per
+   folder, so there is nothing for the org model to decide there.
+3. **Key derived state by `brain_id` (built).** The content index, write-retry ledger,
+   usage counters and active-brain pointer are keyed by `brains.brain_id`
+   (`brainRefs`, `isActiveBrain` in `src/lib/orgs.ts`). Migration 0011 re-keys existing
+   rows in place, so nothing reindexes; a pointer still holding `owner/repo` matches
+   until the caller next switches.
+4. **URLs by brain slug (built).** `/b/<name>-<handle>/<path>`. The handle identifies the
+   brain, so a rename changes the name part and the old URL still resolves. `/b/<owner>/<repo>/...`
+   and stale names `301` to the current URL after sign-in, among the caller's own brains
+   (`canonicalWebPath`); tools accept `owner/repo` and stale slugs through `matchBrain`. No
+   alias table: the handle never changes, and the repo columns answer old links until a
+   relocation (step 5) changes them, which is when step 5 needs one.
 5. **A second backend.** An Azure Repos `BrainStore`, a service-principal connection
    kind, a generalized locator, and relocation. Built when a customer needs it, with an
    e2e battery against a scratch repository (the twin of the `--github` mode).
-6. **Contract.** Drop the binding fallback, `orgs.installation_id`, `orgs.brain_owner`
-   and `orgs.model` (replaced by `personal` and a default connection).
+6. **Contract (built).** Checked against production first (18 brains, all bound; every
+   org's installation a recorded connection; one dead `tenants` row; no `github_links`).
+   Removed: the binding fallback, the `tenants` table, the GitHub half of Connected
+   accounts and `github_links` (migration 0014). `orgs.default_connection_id` (migration 0013) names the org's storage, so nothing reads `orgs.installation_id`, `brain_owner`
+   or `github_org_login`. They stay, still written: they are NOT NULL, and SQLite cannot
+   relax that without rebuilding `orgs`, so a rollback-safe drop would take a table rebuild
+   and two more deploys to remove columns nothing reads. They go with the next change
+   that rebuilds `orgs` anyway (step 5 is the likely one). `orgs.model` stays: it labels
+   orgs and gates adoption correctly, and replacing it changes nothing a person sees.
 
 Provider-specific concepts that stay provider-specific, inside the store: pull requests
 (`commitOrPR`), branch protection (`repoWritePolicy`) and commit attribution. Azure Repos

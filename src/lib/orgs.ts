@@ -6,16 +6,24 @@
 // GitHub-keyed `tenants` table (src/lib/tenants.ts) for the authjs identity path.
 //
 // Resolution shape used by `tenantContext()`:
-//   app_users.user_id (Auth.js id) → membership → org (+ role) → default brain
+//   app_users.user_id (Auth.js id) + linked ids → memberships and brain grants
+//     → accessible brains (each admitted by effectiveBrainRole) → the chosen brain
 //     → { repo_owner, repo_name } + the brain's storage connection (or, for a brain
 //       with no binding, org.installation_id)
 //
-// Worker-safe (no node:* imports) — reachable from worker.ts. See
-// docs/design/org-roles-permissions.md and src/db/auth-schema.sql.
+// Worker-safe (no node:* imports), reachable from worker.ts. See
+// docs/design/org-roles-permissions.md; the schema is migrations/.
 
 import type { D1Database } from '@cloudflare/workers-types';
 import type { Octokit } from 'octokit';
 import type { CommitAuthor } from './brain-repo.ts';
+import { brainSlug, handleOfSlug, newBrainHandle } from './brain-slug.ts';
+import {
+	GITHUB_APP_KIND,
+	connectionOwnerFor,
+	githubAppConnectionId,
+	type StorageConnection
+} from './storage-connections.ts';
 
 // Four roles, ordered least → most privileged. Writes require `editor`+;
 // `viewer` is read-only. `admin`/`owner` add member-management powers. `owner`
@@ -95,9 +103,8 @@ function minRole(a: Role, b: Role): Role {
 // `orgRole` is NULLABLE, and a null means "not a member of the organization holding
 // this brain". Sources (1) and (3) are both about membership, so for a non-member they
 // are skipped and only an explicit grant can admit them. That is the shape any access
-// from outside an organization takes, and making it a designed input rather than an
-// accident of `undefined` is what lets the gates downstream tell "not a member" from
-// "a member with few powers".
+// from outside an organization takes, and it lets the gates downstream tell "not a
+// member" from "a member with few powers".
 //
 // `readOnly` is the one thing that lowers the result rather than raising it. It is a
 // CEILING on the whole computation, applied last, because a read-only brain has to be
@@ -170,9 +177,8 @@ export interface TenantOpts {
 	// (member management, connect/disconnect a brain). Kept separate from
 	// `requires` because the two scopes genuinely diverge: an org Admin may hold
 	// only viewer on a brain shared with them, and an org Editor may hold admin on
-	// a brain they created. Gating org actions on the brain role (which is what
-	// happened before per-brain access existed, when they were the same number)
-	// would let a brain admin manage the whole org roster.
+	// a brain they created. Gating org actions on the brain role would let a brain
+	// admin manage the whole org roster.
 	requiresOrg?: Role;
 	brain?: string;
 }
@@ -180,10 +186,8 @@ export interface TenantOpts {
 // Throw a caller-facing authorization error when `actual` ranks below `required`.
 //
 // `actual` is nullable because a caller can reach a brain without holding any role in
-// the organization that owns it. That has to read as "you are not a member", not as
-// the literal string "undefined": with the old signature ROLE_RANK[undefined] is
-// undefined and every comparison against it is false, so it failed closed by accident
-// rather than by design, and rendered the accident to the user.
+// the organization that owns it. A null has to read as "you are not a member", never
+// as "your role is undefined" or as "no gate".
 export function assertRole(actual: Role | null, required?: Role): void {
 	if (!required) return;
 	if (!actual) {
@@ -204,9 +208,10 @@ export interface Org {
 	// 'platform' (Model A, a personal org) | 'customer' (Model B, the customer's own
 	// installation) | 'hosted' (a named team org on the platform's installation).
 	model: string;
-	installation_id: number;
-	brain_owner: string;
-	github_org_login: string | null;
+	// The storage connection new brains in this org are created on
+	// (storage_connections). Its account is where they live, its credential what
+	// reads them. NULL only for an org written by code older than migration 0013.
+	default_connection_id: string | null;
 	created_by: string;
 	created_at: string;
 	suspended_at: string | null;
@@ -246,10 +251,13 @@ export interface MembershipWithOrg {
 
 // Org-scope context: the installation token + org + role, resolved WITHOUT a brain.
 // Backs create_brain and any org-level action that must work before the user has a
-// brain (Phase 8). Distinct from BrainContext, which always carries a resolved brain.
+// brain. Distinct from BrainContext, which always carries a resolved brain.
 export interface OrgScope {
 	octokit: Octokit;
 	org: Org;
+	// The org's default connection: where its new brains are stored, and the
+	// credential `octokit` holds.
+	storage: StorageConnection;
 	role: Role;
 	db: D1Database;
 	actorUserId: string;
@@ -257,8 +265,8 @@ export interface OrgScope {
 }
 
 // The fully resolved product-identity context: which org, which brain, what role.
-// `brain` is null when the user has an org but no brain yet (post-Phase-8: brains are
-// created explicitly, not auto-provisioned) — callers surface a "create a brain" state.
+// `brain` is null when the user has an org but no brain yet (brains are created
+// explicitly, not auto-provisioned): callers surface a "create a brain" state.
 export interface OrgContext {
 	org: Org;
 	brain: Brain | null;
@@ -315,55 +323,28 @@ export async function linkedUserIds(db: D1Database, userId: string): Promise<str
 	return [...ids];
 }
 
-// Resolve a legacy GitHub identity (numeric gh_user_id) to its owning app_user via
-// the github_links bridge. Returns null when the GitHub id isn't linked (the caller
-// then falls back to the flat tenants path). See src/tools/connected-accounts.ts.
-export async function getAppUserByGithubUserId(
-	db: D1Database,
-	ghUserId: number
-): Promise<AppUser | null> {
-	return await db
-		.prepare(
-			`SELECT u.* FROM github_links g
-			   JOIN app_users u ON u.user_id = g.user_id
-			  WHERE g.github_user_id = ?1`
-		)
-		.bind(ghUserId)
-		.first<AppUser>();
-}
-
-// One entry in a person's "Connected accounts" roster: either an email identity
-// (an app_users row) or a linked GitHub account (a github_links row).
+// One entry in a person's "Connected accounts" roster: an email identity (an
+// app_users row).
 export interface ConnectedAccount {
-	kind: 'email' | 'github';
+	kind: 'email';
 	is_self: boolean;
-	// email identities
 	user_id?: string;
 	email?: string;
 	name?: string | null;
-	// github identities
-	github_user_id?: number;
-	github_login?: string | null;
 }
 
 // The full roster for a person: every linked email identity (is_self flags the
-// signed-in one) plus every linked GitHub account. Drives view/list_connected_accounts.
+// signed-in one). Drives connected_accounts.
 export async function listConnectedAccounts(
 	db: D1Database,
 	userId: string
 ): Promise<ConnectedAccount[]> {
 	const ids = await linkedUserIds(db, userId);
 	const ph = ids.map((_, i) => `?${i + 1}`).join(', ');
-	const [emails, githubs] = await Promise.all([
-		db
-			.prepare(`SELECT user_id, email, name FROM app_users WHERE user_id IN (${ph})`)
-			.bind(...ids)
-			.all<{ user_id: string; email: string; name: string | null }>(),
-		db
-			.prepare(`SELECT github_user_id, github_login FROM github_links WHERE user_id IN (${ph})`)
-			.bind(...ids)
-			.all<{ github_user_id: number; github_login: string | null }>()
-	]);
+	const emails = await db
+		.prepare(`SELECT user_id, email, name FROM app_users WHERE user_id IN (${ph})`)
+		.bind(...ids)
+		.all<{ user_id: string; email: string; name: string | null }>();
 	const out: ConnectedAccount[] = [];
 	for (const e of emails.results ?? [])
 		out.push({
@@ -372,13 +353,6 @@ export async function listConnectedAccounts(
 			user_id: e.user_id,
 			email: e.email,
 			name: e.name
-		});
-	for (const g of githubs.results ?? [])
-		out.push({
-			kind: 'github',
-			is_self: false,
-			github_user_id: g.github_user_id,
-			github_login: g.github_login
 		});
 	return out;
 }
@@ -422,24 +396,6 @@ export async function unlinkIdentity(
 		.prepare(`UPDATE app_users SET person_id = NULL WHERE user_id = ?1`)
 		.bind(targetUserId)
 		.run();
-}
-
-// Detach a linked GitHub account from the caller's person. Guards that the link
-// belongs to one of the caller's linked identities before deleting.
-export async function unlinkGithubLink(
-	db: D1Database,
-	actorUserId: string,
-	githubUserId: number
-): Promise<void> {
-	const ids = await linkedUserIds(db, actorUserId);
-	const link = await db
-		.prepare(`SELECT user_id FROM github_links WHERE github_user_id = ?1`)
-		.bind(githubUserId)
-		.first<{ user_id: string }>();
-	if (!link || !ids.includes(link.user_id)) {
-		throw new Error('That GitHub account is not linked to yours.');
-	}
-	await db.prepare(`DELETE FROM github_links WHERE github_user_id = ?1`).bind(githubUserId).run();
 }
 
 // One membership of this user id, oldest first, plus its org.
@@ -539,6 +495,12 @@ export async function getDefaultBrainForUser(
 	return null;
 }
 
+// An org and the storage connection it creates brains on, in one batch. The
+// connection is the installation (`github-app:<id>`), recorded once however many
+// orgs share it: a customer org owns its own; the platform installation, shared by
+// every personal and hosted org, is owned by none. `installation_id`,
+// `brain_owner` and `github_org_login` are written only because the columns are
+// NOT NULL until they are dropped; nothing reads them.
 export async function createOrg(
 	db: D1Database,
 	o: {
@@ -551,21 +513,40 @@ export async function createOrg(
 		created_by: string;
 	}
 ): Promise<void> {
-	await db
-		.prepare(
-			`INSERT INTO orgs (org_id, name, model, installation_id, brain_owner, github_org_login, created_by)
-       VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)`
-		)
-		.bind(
-			o.org_id,
-			o.name,
-			o.model,
-			o.installation_id,
-			o.brain_owner,
-			o.github_org_login ?? null,
-			o.created_by
-		)
-		.run();
+	const connectionId = githubAppConnectionId(o.installation_id);
+	await db.batch([
+		db
+			.prepare(
+				`INSERT INTO orgs (org_id, name, model, installation_id, brain_owner, github_org_login,
+				                   created_by)
+				 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)`
+			)
+			.bind(
+				o.org_id,
+				o.name,
+				o.model,
+				o.installation_id,
+				o.brain_owner,
+				o.github_org_login ?? null,
+				o.created_by
+			),
+		db
+			.prepare(
+				`INSERT OR IGNORE INTO storage_connections
+				   (connection_id, provider, kind, external_id, account, owner_org_id)
+				 VALUES (?1, 'github', ?2, ?3, ?4, ?5)`
+			)
+			.bind(
+				connectionId,
+				GITHUB_APP_KIND,
+				String(o.installation_id),
+				o.brain_owner,
+				connectionOwnerFor(o)
+			),
+		db
+			.prepare(`UPDATE orgs SET default_connection_id = ?2 WHERE org_id = ?1`)
+			.bind(o.org_id, connectionId)
+	]);
 }
 
 export async function addMembership(
@@ -637,14 +618,16 @@ export async function deleteBrain(db: D1Database, brainId: string): Promise<void
 //
 // An `invitations` row is how an admin puts someone in an org without touching
 // GitHub: it is the only way a member with no GitHub account joins a SPECIFIC
-// org (a first sign-in otherwise mints them a personal Model-A one). Matching is
+// org (a first sign-in otherwise mints them a personal Model-A one). A row with
+// `brain_id` set is a brain invite instead: it becomes a grant on that one brain,
+// never a membership (see lib/invites.ts). Matching is
 // by email, because magic-link/SSO already proves the person owns the address,
 // so no separate invite token is required for this path (the token_hash column
 // stays for a future link-based flow).
 //
 // Claiming lives in lib/invites.ts, and is not restricted to a first sign-in:
 // an existing account can be invited to a second org, and an address linked to
-// an existing account carries its invitation with it (issue #69).
+// an existing account carries its invitation with it.
 
 export async function acceptInvite(db: D1Database, inviteId: string): Promise<void> {
 	await db
@@ -1036,17 +1019,21 @@ export async function deleteUserBrainGrantsInOrg(
 
 // ---------- accessible brains (multi-brain selection) ----------
 //
-// The set of brains one PERSON can reach. Deliberately takes a SET of user_ids so
-// that when identity-linking lands (P2), passing all of a person's linked ids yields
-// the union of their brains across every email — no re-architecting. In P1 the set is
-// just [current user]. Each brain carries the caller's role IN THAT brain's org (you
-// can be owner of one and viewer of another) and the org's installation, so the caller
-// can mint a per-brain token. `id` is the canonical "owner/repo" key — the same id the
-// content index uses (brainId) and what the tools/app pass as the `brain` handle.
+// The set of brains one PERSON can reach. Takes a SET of user_ids (a person's linked
+// identities, from linkedUserIds), so the result is the union of their brains across
+// every email. Each brain carries the caller's role on it and in its org (you can be
+// owner of one and viewer of another) and the installation that reaches its storage,
+// so the caller can mint a per-brain token. `id` is the canonical "owner/repo" key:
+// the same id the content index uses (brainId) and what the tools/app pass as the
+// `brain` handle.
 
 export interface AccessibleBrain {
-	id: string; // "owner/repo" — canonical brainId, tool/app-facing handle
-	brain_id: string; // brains PK
+	// The handle tools and the app pass, and the web URL's brain segment:
+	// `<name>-<handle>` (src/lib/brain-slug.ts). Changes when the brain is renamed;
+	// the handle part does not.
+	id: string;
+	brain_id: string; // brains PK: keys derived state (brainRefs)
+	handle: string; // brains.handle, the part of `id` that identifies the brain
 	org_id: string;
 	org_name: string;
 	org_model: string; // 'platform' | 'customer' | 'hosted'
@@ -1057,8 +1044,11 @@ export interface AccessibleBrain {
 	// The provider account holding the brain (its connection's), for saying where a
 	// brain is stored without implying that the org it belongs to holds it.
 	storage_account: string;
-	// Its storage binding; null for a brain written before bindings existed.
-	storage_connection_id: string | null;
+	// Its storage binding. A brain without one is not listed (the join requires it).
+	storage_connection_id: string;
+	// The binding's connection kind (storage-connections.ts), which decides whether a
+	// token or an installation reads it: see credentialFor.
+	storage_kind?: string | null;
 	repo_owner: string;
 	repo_name: string;
 	name?: string | null; // user-given display name (brains.name); NULL = derive from repo
@@ -1080,26 +1070,17 @@ export interface AccessibleBrain {
 	read_only?: boolean;
 }
 
-// A human label for a brain — what the switcher shows and what fuzzy `brain` matches
-// against. Personal (platform-model) orgs are auto-named with the owner's email, which
-// reads badly, so those fall back to "Personal"; when an org holds more than one brain
-// the repo name is appended to disambiguate.
+// A human label for a brain: what the switcher shows and what fuzzy `brain` matches
+// against. ONE RULE: a brain is called what it is named (brains.name), and an unnamed
+// one is called after its repo (minus a `brain-` prefix). No org prefix and no
+// org-derived name: a label that depended on a brain's siblings would silently rename
+// the first brain when a second was added. Surfaces that show brains side by side
+// group them under an org heading (app/core/util groupBrainsByOrg), which is where the
+// org belongs.
 // Structurally typed rather than taking AccessibleBrain, so the plain `brains` row
-// (Brain) gets the same label as the resolved one. The rule below is the single
-// place a brain's display name is decided; a second copy for the analytics rows
-// would drift the moment either changed.
+// (Brain) gets the same label as the resolved one; this is the single place a brain's
+// display name is decided.
 export function brainLabel(b: { name?: string | null; repo_name: string }): string {
-	// ONE RULE: a brain is called what it is named, and an unnamed one is called after
-	// its repo. Nothing else — no org prefix when an org holds several, no borrowing the
-	// org's name when it holds one, no "Personal" for a platform org.
-	//
-	// Those three special cases all compensated for the same missing capability rather
-	// than for anything about brains: three of the four ways a brain is created cannot
-	// set a name at all (connect_brain, the operator seed, scripts/onboard-org), so the
-	// label had to invent one. Inventing it here made the name depend on how many
-	// siblings a brain had, which meant adopting a second brain silently RENAMED the
-	// first. Surfaces that show brains side by side group them under an org heading
-	// (app/core/util groupBrainsByOrg), which is where org belongs.
 	const named = b.name?.trim();
 	if (named) return named;
 	return (
@@ -1122,7 +1103,7 @@ export function orgDisplay(b: AccessibleBrain): string {
 // "which of these did you mean" list, chiefly, where a brainless org is the whole point.
 export function orgLabel(org: Org): string {
 	if (org.model === 'platform') return 'Personal';
-	return org.name?.trim() || org.brain_owner;
+	return org.name?.trim() || 'Organization';
 }
 
 // A label with its org named. For the one place brains are listed side by side with no
@@ -1147,8 +1128,7 @@ export function brainLabelQualified(b: AccessibleBrain): string {
 // Two legs, one per way in. The first walks memberships (every brain in every org
 // you belong to, with whatever grant you hold under that same identity). The
 // second walks GRANTS, which is how a guest reaches a brain in an organization they
-// are not a member of: it used to be unreachable, since the query began at
-// memberships and a non-member produced no row at all. Each leg is driven by its
+// are not a member of (a memberships-only walk produces no row for them). Each leg is driven by its
 // own user index; the dedupe below folds a brain reached by both, or by two linked
 // identities, to the highest of each role. A guest's org_role is null, and the rule
 // caps them.
@@ -1156,13 +1136,45 @@ export async function listAccessibleBrains(
 	db: D1Database,
 	userIds: string[]
 ): Promise<AccessibleBrain[]> {
+	const first = await queryAccessibleBrains(db, userIds);
+	const unnamed = first.filter((b) => !b.handle);
+	if (unnamed.length === 0) return first;
+	// A brain written without a handle (by an insert path that sets none, or by code
+	// older than migration 0012) gets one the first time it is listed.
+	for (const b of unnamed) await assignBrainHandle(db, b.brain_id);
+	return queryAccessibleBrains(db, userIds);
+}
+
+// Give a brain a handle if it has none. Conditional, so two requests racing on the
+// same brain agree on the first one written; retried on the rare collision with
+// another brain's handle (the unique index refuses it).
+export async function assignBrainHandle(db: D1Database, brainId: string): Promise<void> {
+	for (let attempt = 0; attempt < 3; attempt++) {
+		try {
+			await db
+				.prepare(`UPDATE brains SET handle = ?2 WHERE brain_id = ?1 AND handle IS NULL`)
+				.bind(brainId, newBrainHandle())
+				.run();
+			return;
+		} catch (err) {
+			if (attempt === 2) throw err;
+		}
+	}
+}
+
+async function queryAccessibleBrains(
+	db: D1Database,
+	userIds: string[]
+): Promise<AccessibleBrain[]> {
 	if (userIds.length === 0) return [];
 	const placeholders = userIds.map((_, i) => `?${i + 1}`).join(', ');
-	const columns = `b.brain_id AS brain_id, b.repo_owner AS repo_owner, b.repo_name AS repo_name,
+	const columns = `b.brain_id AS brain_id, b.handle AS handle,
+			        b.repo_owner AS repo_owner, b.repo_name AS repo_name,
 			        b.name AS name, b.visibility AS visibility, b.org_id AS org_id,
 			        o.name AS org_name, o.model AS org_model,
-			        COALESCE(CAST(c.external_id AS INTEGER), o.installation_id) AS installation_id,
+			        CAST(c.external_id AS INTEGER) AS installation_id,
 			        c.account AS storage_account, b.storage_connection_id AS storage_connection_id,
+			        c.kind AS storage_kind,
 			        m.role AS org_role,
 			        bm.role AS grant_role, b.created_at AS created_at,
 			        b.read_only AS read_only`;
@@ -1172,7 +1184,7 @@ export async function listAccessibleBrains(
 			   FROM memberships m
 			   JOIN orgs o   ON o.org_id = m.org_id
 			   JOIN brains b ON b.org_id = o.org_id
-			   LEFT JOIN storage_connections c ON c.connection_id = b.storage_connection_id
+			   JOIN storage_connections c ON c.connection_id = b.storage_connection_id
 			   LEFT JOIN brain_memberships bm
 			          ON bm.brain_id = b.brain_id AND bm.user_id = m.user_id
 			  WHERE m.user_id IN (${placeholders})
@@ -1183,7 +1195,7 @@ export async function listAccessibleBrains(
 			   FROM brain_memberships bm
 			   JOIN brains b ON b.brain_id = bm.brain_id
 			   JOIN orgs o   ON o.org_id = b.org_id
-			   LEFT JOIN storage_connections c ON c.connection_id = b.storage_connection_id
+			   JOIN storage_connections c ON c.connection_id = b.storage_connection_id
 			   LEFT JOIN memberships m
 			          ON m.org_id = b.org_id AND m.user_id IN (${placeholders})
 			  WHERE bm.user_id IN (${placeholders})
@@ -1194,6 +1206,7 @@ export async function listAccessibleBrains(
 		.bind(...userIds)
 		.all<{
 			brain_id: string;
+			handle: string | null;
 			repo_owner: string;
 			repo_name: string;
 			name: string | null;
@@ -1203,7 +1216,8 @@ export async function listAccessibleBrains(
 			org_model: string;
 			installation_id: number;
 			storage_account: string | null;
-			storage_connection_id: string | null;
+			storage_connection_id: string;
+			storage_kind: string | null;
 			org_role: string | null;
 			grant_role: string | null;
 			read_only: number | null;
@@ -1211,7 +1225,6 @@ export async function listAccessibleBrains(
 
 	const byId = new Map<string, AccessibleBrain>();
 	for (const r of results ?? []) {
-		const id = `${r.repo_owner}/${r.repo_name}`;
 		const orgRole = r.org_role as Role | null;
 		const role = effectiveBrainRole({
 			visibility: r.visibility,
@@ -1220,7 +1233,7 @@ export async function listAccessibleBrains(
 			readOnly: !!r.read_only
 		});
 		if (!role) continue; // private brain, no grant, not an org admin: invisible.
-		const existing = byId.get(id);
+		const existing = byId.get(r.brain_id);
 		if (existing) {
 			// Same brain reached via two legs or two linked identities: keep the higher
 			// of each. A null org role never overwrites a membership found by the other.
@@ -1229,15 +1242,19 @@ export async function listAccessibleBrains(
 				existing.org_role = orgRole;
 			continue;
 		}
-		byId.set(id, {
-			id,
+		// Without a handle the id falls back to the primary key; listAccessibleBrains
+		// assigns one and lists again, so a caller never sees that.
+		byId.set(r.brain_id, {
+			id: r.handle ? brainSlug(brainLabel(r), r.handle) : r.brain_id,
 			brain_id: r.brain_id,
+			handle: r.handle ?? '',
 			org_id: r.org_id,
 			org_name: r.org_name,
 			org_model: r.org_model,
 			installation_id: r.installation_id,
 			storage_account: r.storage_account ?? r.repo_owner,
 			storage_connection_id: r.storage_connection_id,
+			storage_kind: r.storage_kind,
 			repo_owner: r.repo_owner,
 			repo_name: r.repo_name,
 			name: r.name,
@@ -1254,8 +1271,8 @@ export async function listAccessibleBrains(
 // brain yet. listAccessibleBrains inner-joins `brains`, so an org whose first repo has
 // not been adopted yet produces no row there and is invisible to brain-scope
 // resolution. That is right for choosing a brain to act on and wrong for choosing a
-// place to PUT one, which is the question create_brain and connect_brain ask: without
-// this, the first brain in a newly connected org was unreachable from either tool.
+// place to PUT one, which is the question create_brain and connect_brain ask: the
+// first brain in a newly connected org has to be placeable.
 //
 // Takes the person's whole id set for the same reason every brain query does: a
 // membership that hangs off one linked email has to be reachable from the others.
@@ -1264,6 +1281,9 @@ export async function listAccessibleBrains(
 export interface AccessibleOrg {
 	org: Org;
 	role: Role;
+	// The provider account the org's default connection reaches (a GitHub login), a
+	// name people also call the org by.
+	storage_account?: string | null;
 }
 
 export async function listAccessibleOrgs(
@@ -1274,9 +1294,10 @@ export async function listAccessibleOrgs(
 	const placeholders = userIds.map((_, i) => `?${i + 1}`).join(', ');
 	const { results } = await db
 		.prepare(
-			`SELECT m.role AS role, o.*
+			`SELECT m.role AS role, c.account AS storage_account, o.*
 			   FROM memberships m
 			   JOIN orgs o ON o.org_id = m.org_id
+			   LEFT JOIN storage_connections c ON c.connection_id = o.default_connection_id
 			  WHERE m.user_id IN (${placeholders})
 			    AND o.suspended_at IS NULL
 			  ORDER BY o.created_at ASC, o.org_id ASC`
@@ -1285,10 +1306,15 @@ export async function listAccessibleOrgs(
 		.all<Record<string, unknown>>();
 	const byId = new Map<string, AccessibleOrg>();
 	for (const row of results ?? []) {
-		const { role, ...rest } = row;
+		const { role, storage_account, ...rest } = row;
 		const org = rest as unknown as Org;
 		const seen = byId.get(org.org_id);
-		if (!seen) byId.set(org.org_id, { org, role: role as Role });
+		if (!seen)
+			byId.set(org.org_id, {
+				org,
+				role: role as Role,
+				storage_account: (storage_account as string | null) ?? null
+			});
 		else if (roleAtLeast(role as Role, seen.role)) seen.role = role as Role;
 	}
 	return [...byId.values()];
@@ -1306,9 +1332,7 @@ export function matchOrg(
 	const q = query.trim().toLowerCase();
 	if (!q) return {};
 	const handles = (o: AccessibleOrg) =>
-		[o.org.org_id, o.org.name, o.org.github_org_login ?? '', o.org.brain_owner]
-			.filter(Boolean)
-			.map((s) => s.toLowerCase());
+		[o.org.org_id, o.org.name, o.storage_account ?? ''].filter(Boolean).map((s) => s.toLowerCase());
 	const exact = orgs.find((o) => handles(o).includes(q));
 	if (exact) return { org: exact };
 	const subs = orgs.filter((o) => handles(o).some((h) => h.includes(q)));
@@ -1340,10 +1364,25 @@ export async function firstSuspendedOrg(db: D1Database, userIds: string[]): Prom
 		.first<Org>();
 }
 
+/**
+ * The active brain after one is disconnected. Removing any other brain leaves the
+ * pointer alone; removing the active one moves it to the first survivor in `before`
+ * (the caller's brains, in the order it lists them), or to nothing when none is left.
+ * disconnect_brain moved the pointer and then reported the brain it had just
+ * deleted as active, so the refreshed list marked no row at all.
+ */
+export function activeAfterDisconnect(
+	activeId: string | undefined,
+	removedId: string,
+	before: string[]
+): string | undefined {
+	if (activeId !== removedId) return activeId;
+	return before.find((id) => id !== removedId);
+}
+
 // Which org an org-scope action lands in. Pure, and split out of the Worker's
-// orgContext so the rule can be tested: it decides where a new brain gets WRITTEN, and
-// what it replaced was a `SELECT ... LIMIT 1` with no ORDER BY, so a person in two orgs
-// got an arbitrary one that could differ between two calls in the same session.
+// orgContext so the rule can be tested: it decides where a new brain gets WRITTEN, so
+// the pick must be deterministic for a person in several orgs.
 //
 // A named handle wins; failing that the org the caller is already working in; failing
 // that the oldest. Throws rather than guessing when a handle matches nothing or several
@@ -1366,18 +1405,14 @@ export function chooseOrg(
 	return orgs.find((o) => o.org.org_id === opts.activeOrgId) ?? orgs[0];
 }
 
-// Which brain a brain-scope call acts on. The exact twin of chooseOrg above, and it
-// was the half that never got extracted: the same ladder (named handle, then the
-// brain the caller is working in, then the oldest) sat inline in a private method on
-// McpSession, where no test could reach it. That is the decision routing every read
-// and every write, so the two halves of one rule should not have different standards
-// of proof.
+// Which brain a brain-scope call acts on. The twin of chooseOrg above, with the same
+// ladder (named handle, then the brain the caller is working in, then the oldest),
+// pure so the decision routing every read and write is testable.
 //
 // Throws rather than guessing for the same reason chooseOrg does: a handle matching
 // several brains that silently picked one would act on a brain the caller did not
-// name. A BLANK handle throws too — a caller who passed `brain` asked for a specific
-// one, and quietly falling back to a different brain is the same failure wearing a
-// friendlier face. Callers resolve the empty-list case before reaching here (it means
+// name. A BLANK handle throws too: a caller who passed `brain` asked for a specific
+// one, and falling back to a different brain is the same failure. Callers resolve the empty-list case before reaching here (it means
 // provision, not fail), but throwing is still the right answer if one does not.
 export function chooseBrain(
 	brains: AccessibleBrain[],
@@ -1394,7 +1429,26 @@ export function chooseBrain(
 				: `No brain matching "${opts.brain}". You have access to: ${names.join(', ')}.`
 		);
 	}
-	return brains.find((b) => b.id === opts.activeBrainId) ?? brains[0];
+	return brains.find((b) => isActiveBrain(b, opts.activeBrainId)) ?? brains[0];
+}
+
+// The two names a resolved brain goes by. `brainId`, its primary key, keys derived
+// state (the content index, the write-retry ledger, usage); `activeBrain.id` is the
+// handle tools and the app pass around. Separate so that changing how a brain is
+// addressed never orphans its index.
+export function brainRefs(b: AccessibleBrain): {
+	brainId: string;
+	activeBrain: { id: string; label: string };
+} {
+	return { brainId: b.brain_id, activeBrain: { id: b.id, label: brainLabel(b) } };
+}
+
+// Whether the caller's active-brain pointer names this brain. The pointer holds a
+// `brain_id`; one written before brains were keyed by id holds "owner/repo", which
+// still matches until the caller next switches.
+export function isActiveBrain(b: AccessibleBrain, pointer: string | undefined): boolean {
+	if (!pointer) return false;
+	return pointer === b.brain_id || pointer === `${b.repo_owner}/${b.repo_name}`;
 }
 
 // The whole org-selection decision for a person, in one function a test can drive
@@ -1433,18 +1487,27 @@ export function matchBrain(
 ): { brain?: AccessibleBrain; candidates?: AccessibleBrain[] } {
 	const q = query.trim().toLowerCase();
 	if (!q) return {};
-	const exact = brains.find((b) => b.id.toLowerCase() === q || b.repo_name.toLowerCase() === q);
+	// Exact names first, in the order that cannot mislead: the full slug, the primary
+	// key, the storage locator ("owner/repo", which every earlier handle was), the repo
+	// name. Then a slug whose name part is stale (the brain was renamed since the link
+	// was made), by its handle.
+	const exact =
+		brains.find((b) => b.id.toLowerCase() === q) ??
+		brains.find((b) => b.brain_id.toLowerCase() === q) ??
+		brains.find((b) => `${b.repo_owner}/${b.repo_name}`.toLowerCase() === q) ??
+		brains.find((b) => b.repo_name.toLowerCase() === q);
 	if (exact) return { brain: exact };
+	const handle = handleOfSlug(q);
+	const byHandle = handle ? brains.find((b) => b.handle === handle) : undefined;
+	if (byHandle) return { brain: byHandle };
 	const subs = brains.filter((b) => {
 		const label = brainLabel(b).toLowerCase();
-		// org_name is matched EXPLICITLY rather than incidentally. It used to ride along
-		// inside the label of any brain in a multi-brain org ("Beckers Healthcare — ed
-		// brain"), so `brain: "beckers"` resolved by accident of formatting; dropping the
-		// prefix would have silently broken every org-qualified handle an agent had
-		// learned. How a brain is DISPLAYED and what a human can call it are two
-		// questions, and only the first one changed.
+		// org_name is matched EXPLICITLY, so an org-qualified handle (`brain: "acme"`
+		// for a brain in the Acme org) resolves even though the label carries no org.
+		// How a brain is DISPLAYED and what a human can call it are separate questions.
 		return (
 			b.id.toLowerCase().includes(q) ||
+			`${b.repo_owner}/${b.repo_name}`.toLowerCase().includes(q) ||
 			b.repo_name.toLowerCase().includes(q) ||
 			(b.org_name ?? '').toLowerCase().includes(q) ||
 			label.includes(q)

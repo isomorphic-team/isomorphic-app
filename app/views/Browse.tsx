@@ -204,10 +204,9 @@ function AddInput({
 //
 // Hand-rolled rather than ui/Menu because the TREE owns the open state (one row's menu
 // at a time, closed by the tree's own listener), but it takes the same placement rule
-// from app/core/menu-placement.ts. It had no cap at all before that: the last row of an
-// expanded tree in an inline card put its panel ~50px past the bottom of the card, which
-// is the same defect the rail's ⋯ and the brain switcher were both moved off popovers
-// for. Overflow does not clip here, it makes the CARD scroll.
+// from app/core/menu-placement.ts, so the last row of an expanded tree in an inline card
+// opens its panel upward rather than past the bottom of the card. Overflow does not clip
+// here, it makes the CARD scroll.
 function RowMenu({
 	open,
 	toggle,

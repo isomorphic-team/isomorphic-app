@@ -1,10 +1,8 @@
 // The app's button recipe.
 //
-// Derived from what the views were already doing rather than invented: before this
-// existed there were four near-identical "primary" strings that had drifted apart on
-// padding (px-3 vs px-3.5), type scale (text-sm vs text-sm), disabled opacity
-// (50 vs 60), and whether they carried a transition at all. The variants below are
-// the union of those, normalized to one value each.
+// Derived from what the views were already doing rather than invented: the variants
+// below normalize the views' drifted button strings (padding, disabled opacity,
+// transition) to one value each.
 //
 // Styling only. These are plain <button>s: no portal, no focus management, nothing
 // that would need a headless library. If a real dialog/menu/tooltip ever lands, that

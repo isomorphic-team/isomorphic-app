@@ -1,16 +1,14 @@
-// Manual end-to-end battery for the librarian write tools — covers the write_page
-// create/update/publish surface, its non-destructive append/edits modes (partial
-// edits that never send the rest of the page), and the index-driven page discovery the write path
-// relies on (delete_page "still referenced" notes via backlinksTo; move_page link
-// repointing via fetchInboundLinkersForPaths, for both a single page and a folder
-// subtree — move_page/delete_page take a folder path with no .md).
+// End-to-end battery for the librarian write tools: write_page create/update, its
+// non-destructive append/edits/fields modes, and the index-driven page discovery the
+// write path relies on (delete_page "still referenced" notes via backlinksTo;
+// move_page link repointing via fetchInboundLinkersForPaths, for a single page, a
+// folder subtree, and an attachment).
 //
 // It also covers the ORG-scope tools that decide where a brain LANDS (`brains`,
 // `connect_brain`), which resolve through orgContext / resolveOrgForPerson rather
-// than tenantContext and were uncovered until 2026-08-10. The org rows are real, in
-// the same D1 as the content index, and one of them deliberately holds NO brain:
-// listAccessibleBrains cannot see such an org, which is what once made adopting a
-// FIRST repo into a newly connected org impossible.
+// than tenantContext. The org rows are real, in the same D1 as the content index, and
+// one of them deliberately holds NO brain: listAccessibleBrains cannot see such an
+// org, so it is the case a first adoption has to get right.
 //
 // TWO BACKENDS, ONE BATTERY. By default it runs against the fs + git BrainStore in a
 // temporary directory: no network, no credentials, no scratch repo, so it runs in CI
@@ -18,10 +16,9 @@
 // assertions against a real scratch repo on the platform org, which is the only way
 // to prove the GitHub adapter itself.
 //
-//   pnpm test:e2e                              (local, offline, in CI)
-//   pnpm exec tsx scripts/e2e-librarian.ts --github   (real GitHub, by hand)
+//   pnpm test:e2e-librarian                            (local, offline, in CI)
+//   pnpm exec tsx scripts/e2e-librarian.ts --github    (real GitHub, by hand)
 //
-import { registerImportTools } from '../src/tools/importer.ts';
 // The --github mode requires `.dev.vars` (repo root, or DEV_VARS_PATH) with the
 // platform App creds + PLATFORM_ORG / PLATFORM_INSTALLATION_ID, creates a scratch
 // brain repo `brain-librarian-e2e-*`, and deletes it afterwards (success or failure).
@@ -35,6 +32,7 @@ import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
 import { Client } from '@modelcontextprotocol/client';
 import { McpServer, InMemoryTransport } from '@modelcontextprotocol/server';
+import { registerImportTools } from '../src/tools/importer.ts';
 import { registerLibrarianTools } from '../src/tools/librarian.ts';
 import { registerBrainTools } from '../src/tools/brains.ts';
 import {
@@ -192,7 +190,7 @@ const getContext = async () => ({
 	author: undefined,
 	db,
 	brainId,
-	activeBrain: { id: brainId, label: name }
+	activeBrain: { id: name, label: name }
 });
 registerLibrarianTools(server, getContext);
 registerImportTools(server, getContext);
@@ -230,6 +228,8 @@ async function eventually<T>(
 }
 
 import { checker } from './check.ts';
+import { BIND_FIXTURE_STORAGE } from './fixture-storage.ts';
+import { orgStorage } from '../src/lib/storage-connections.ts';
 
 const { check, done } = checker('librarian E2E checks');
 async function call(tool: string, args: Record<string, unknown>) {
@@ -1214,7 +1214,7 @@ try {
 		// structuredContent hands the model that and drops the text, so a link only
 		// in the text block is a link no model sees (which is how the first version
 		// shipped). Whole-string equality, not a substring search.
-		const expectedUrl = `${WEB_BASE}/b/${brainId}/${path}`;
+		const expectedUrl = `${WEB_BASE}/b/${name}/${path}`;
 		check(
 			'view_page carries the page URL in structuredContent',
 			viewed.sc.webUrl === expectedUrl,
@@ -1229,7 +1229,7 @@ try {
 		const browsed = await callSc('browse_brain', {});
 		check(
 			'browse_brain carries the brain URL',
-			browsed.sc.webUrl === `${WEB_BASE}/b/${brainId}`,
+			browsed.sc.webUrl === `${WEB_BASE}/b/${name}`,
 			String(browsed.sc.webUrl)
 		);
 
@@ -1351,9 +1351,9 @@ try {
 			links.text
 		);
 
-		// Moving an attachment has to repoint what displays it. This is the payoff of
-		// the assetEdges change: without it backlinksTo returns nothing here and the
-		// link on the page silently rots.
+		// Moving an attachment has to repoint what displays it. That rests on the index
+		// resolving file links (`fileEdges` in brain-index.ts): without them backlinksTo
+		// returns nothing here and the link on the page silently rots.
 		const moved = await call('move_page', {
 			path: assetPath,
 			new_path: 'wiki/vendors/assets/logo.png'
@@ -1509,12 +1509,13 @@ try {
 	);
 	await run(
 		`INSERT INTO orgs (org_id, name, model, installation_id, brain_owner, created_by, created_at)
-		 VALUES (?1, ?2, 'customer', 1, ?3, ?4, '2026-02-01')`,
+		 VALUES (?1, ?2, 'customer', 2, ?3, ?4, '2026-02-01')`,
 		ORG_EMPTY,
 		'Contoso Group',
 		repoArgs.owner,
 		USER
 	);
+	// Each customer org owns its own installation (connection), as in production.
 	// A third org whose GitHub owner DIFFERS from the other two. Those two share one
 	// deliberately, so connect_brain's candidate list can reach the adopt target, which
 	// also means the owner cannot reveal which org was resolved. This one can:
@@ -1522,7 +1523,7 @@ try {
 	const ORG_OTHER = 'org-e2e-other';
 	await run(
 		`INSERT INTO orgs (org_id, name, model, installation_id, brain_owner, created_by, created_at)
-		 VALUES (?1, ?2, 'customer', 1, ?3, ?4, '2026-03-01')`,
+		 VALUES (?1, ?2, 'customer', 3, ?3, ?4, '2026-03-01')`,
 		ORG_OTHER,
 		'Third Party',
 		'other-owner-org',
@@ -1553,6 +1554,8 @@ try {
 		'Main'
 	);
 
+	for (const sql of BIND_FIXTURE_STORAGE) await db.prepare(sql).run();
+
 	let activeId = brainId;
 	// Mirrors the Worker's orgContext minus the two things a test cannot own: minting
 	// an installation token, and first-touch provisioning. The DECISION is the real
@@ -1564,6 +1567,7 @@ try {
 		return {
 			octokit: platformOctokit,
 			org: picked.org,
+			storage: await orgStorage(db, picked.org),
 			role: picked.role,
 			db,
 			actorUserId: USER,
@@ -1573,6 +1577,7 @@ try {
 
 	const brainServer = new McpServer({ name: 'librarian-e2e-brains', version: '0.0.0' });
 	registerBrainTools(brainServer, {
+		multiUser: true,
 		getContext,
 		orgContext,
 		listOrgs: () => listAccessibleOrgs(db, [USER]),

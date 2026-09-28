@@ -272,12 +272,11 @@ test.describe('the app in a browser tab', () => {
 
 	// THE URL NAMES THE BRAIN, AND THE CALLS HAVE TO GO THERE.
 	//
-	// This is the test the harness could not previously hold, and the reason it now
-	// serves three brains. With one brain, a URL naming any brain rendered that one,
-	// so being wrong looked exactly like being right — and it WAS wrong: nothing read
-	// the URL's brain, every call carried no `brain` at all, and the server answered
-	// from the connection's active-brain pointer. A link to one brain silently showed
-	// another's page whenever the path existed in both, which `wiki/index.md` does.
+	// Why the seed serves three brains: with one, a URL naming any brain renders that
+	// one, so being wrong looks exactly like being right. The failure this guards is a
+	// call that carries no `brain` and is answered from the connection's active-brain
+	// pointer, so a link to one brain shows another's page whenever the path exists in
+	// both, which `wiki/index.md` does.
 	//
 	// Asserted on BOTH halves. The heading alone would pass if the app rendered the
 	// right brain for the wrong reason; the request argument alone would pass if the

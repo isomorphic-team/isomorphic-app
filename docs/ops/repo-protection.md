@@ -1,6 +1,6 @@
 # Repository protection with outside contributors
 
-What to turn on before the repo goes public, and the reasoning behind each setting. The
+What is turned on for a public repo with outside contributors, and the reasoning behind each setting. The
 short version: **outside contributors already cannot touch anything**, so the job is not to
 restrict their access, it is to make sure a merge is a deliberate act and that untrusted CI
 cannot reach a secret.

@@ -46,19 +46,15 @@
 	],
 	"vars": {
 		// `static` is the single-bearer-token path: one person, one token, no
-		// identity, no roles, nothing to configure. It is the right starting
-		// point for a personal self-hosted instance.
-		// `oauth` activates `workers-oauth-provider` and the full multi-tenant
-		// org/role model, and needs the extra setup in docs/self-hosting.md.
+		// sign-in, nothing to configure. It is the right starting point for a
+		// personal self-hosted instance.
+		// `oauth` activates `workers-oauth-provider`, email sign-in (Auth.js magic
+		// link) and everything that needs other people: members, sharing, invites.
+		// It needs AUTH_SECRET + AUTH_RESEND_KEY + AUTH_EMAIL_FROM via
+		// `wrangler secret put` (prod) or `.dev.vars` (local); see
+		// docs/self-hosting.md. Both modes run the same org model.
 		"AUTH_MODE": "__AUTH_MODE__",
-		// Upstream identity for OAuth `/authorize` (ignored when AUTH_MODE=static).
-		// `github` uses GitHub OAuth, so every user needs a GitHub account.
-		// `authjs` uses Auth.js (email magic-link / SSO) so members never do; it
-		// additionally needs AUTH_SECRET + AUTH_RESEND_KEY + AUTH_EMAIL_FROM via
-		// `wrangler secret put` (prod) or `.dev.vars` (local).
-		// See docs/design/org-roles-permissions.md.
-		"IDENTITY_MODE": "__IDENTITY_MODE__",
-		// Magic-link From address (authjs mode). The sending domain must be
+		// Magic-link From address (oauth mode). The sending domain must be
 		// verified with your email provider (DKIM/SPF), or delivery is limited to
 		// the provider account's own address.
 		"AUTH_EMAIL_FROM": "__AUTH_EMAIL_FROM__",

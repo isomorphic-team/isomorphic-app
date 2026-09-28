@@ -1,17 +1,17 @@
 // Dev server for the MCP App UI (`pnpm app:dev`).
 //
-// The brain viewer/editor is normally codegen'd into the Worker and only renders
-// inside a real MCP host (claude.ai). This serves the SAME generated ui:// bytes
-// locally, driven by the official AppBridge host (dev/harness.ts) with stubbed
-// tools over in-memory fixtures — so you can iterate on the tree/editor UI with no
-// Worker, no auth, and no host.
+// Serves the generated ui:// bytes locally inside a sandboxed iframe, driven by the
+// official AppBridge host (dev/harness.ts) with stubbed tools over in-memory fixtures:
+// the tree/editor UI with no Worker, no auth, and no MCP host.
 //
-// Loop: edit anything in app/ (or src/lib/wiki.ts) -> the ui:// bundle regenerates
-// (pnpm gen:app) -> esbuild rebuilds the harness -> the browser live-reloads.
+// Loop: edit anything in app/ or src/lib/ (the app imports a dozen lib modules, and
+// they import more) -> the ui:// bundle regenerates (pnpm gen:app) -> esbuild rebuilds
+// the harness -> the browser live-reloads.
 //
 // Caveat: tools are STUBBED against fixtures, so this exercises the UI, not the real
-// path-based create/move/delete against a GitHub repo. For that, run `pnpm worker:dev`
-// and point a local MCP host (Inspector / Claude Desktop) at http://localhost:8787/mcp.
+// write path. For the real tools over a git repo on disk, run `pnpm web:dev` (or
+// `pnpm try <folder>`); for the Worker, `pnpm worker:dev` plus a local MCP host
+// (Inspector / Claude Desktop) at http://localhost:8787/mcp.
 
 import { context } from 'esbuild';
 import { spawn } from 'node:child_process';
@@ -121,18 +121,24 @@ async function startWatchMode() {
 		}
 	};
 	const trigger = (file?: string) => {
-		// Skip ALL codegen outputs (.tailwind.out.css, views/registry.generated.ts) —
-		// gen:app writes them into app/, so reacting to them is an infinite watch loop.
+		// Skip ALL codegen outputs (.tailwind.out.css, views/registry.generated.ts,
+		// src/lib/app-bundle.generated.ts): gen:app writes them, so reacting to them is an
+		// infinite watch loop.
 		if (!file || !/\.(tsx|ts|css|html)$/.test(file)) return;
 		if (file.includes('.tailwind.out') || file.includes('.generated.')) return;
 		if (timer) clearTimeout(timer);
 		timer = setTimeout(runGenApp, 150);
 	};
+	// All of src/lib/ rather than the files app/ imports today: the import graph grows,
+	// and a lib edit the watcher misses serves a stale bundle with no error.
+	// gen:app writes src/lib/app-bundle.generated.ts, which `trigger` skips.
 	watch(abs('app'), { recursive: true }, (_e, f) => trigger(f ?? undefined));
-	watch(abs('src/lib/wiki.ts'), () => trigger('wiki.ts'));
+	watch(abs('src/lib'), { recursive: true }, (_e, f) => trigger(f ?? undefined));
 
 	console.log(`\n  app:dev → http://localhost:${port}/`);
-	console.log('  Edit app/* → the ui:// bundle regenerates and the browser live-reloads.');
+	console.log(
+		'  Edit app/* or src/lib/* → the ui:// bundle regenerates and the browser live-reloads.'
+	);
 	console.log(
 		'  Views:  /   ·   /#browse   ·   /#edit   ·   /#edit=wiki/playbooks/brand-voice.md   ·   ?mode=pip\n'
 	);
