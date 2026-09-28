@@ -48,6 +48,7 @@ import {
 } from '../lib/brain-config.ts';
 import type { TenantOpts } from '../lib/orgs.ts';
 import { brainArgFor, fail } from './shared.ts';
+import { toolAnnotations } from '../lib/tool-annotations.ts';
 
 // The editability policy the in-client app needs to gate its own UI. Lives in
 // brain-policy.ts (pathPolicyOf) so the tools OUTSIDE this file that also feed
@@ -234,7 +235,7 @@ export function registerBrainApp(
 		server,
 		'view_page',
 		{
-			title: 'Open a brain page',
+			...toolAnnotations('Open a brain page', 'read'),
 			// Deliberately does NOT name read_page. It used to say "prefer this over
 			// read_page / use read_page only when...", which meant this description
 			// contained the string "read_page" twice while read_page's own contained
@@ -247,7 +248,6 @@ export function registerBrainApp(
 				path: z.string().describe('Page path, e.g. "wiki/customers/acme.md".'),
 				brain: brainArg
 			},
-			annotations: { readOnlyHint: true },
 			_meta: { ui: { resourceUri: BRAIN_APP_URI } }
 		},
 		async ({ path, brain }) => {
@@ -292,11 +292,10 @@ export function registerBrainApp(
 		server,
 		'browse_brain',
 		{
-			title: 'Browse the brain',
+			...toolAnnotations('Browse the brain', 'read'),
 			description:
 				'Open the brain in the interactive Isomorphic viewer, shown inside Claude, so the user can browse its pages, follow links, and search. Use when the user wants to explore or "see" their brain as a whole rather than ask one specific question, or when your answer points them at several pages at once.',
 			inputSchema: { brain: brainArg },
-			annotations: { readOnlyHint: true },
 			_meta: { ui: { resourceUri: BRAIN_APP_URI } }
 		},
 		async ({ brain }) => {
@@ -348,7 +347,7 @@ export function registerBrainApp(
 		server,
 		'view_activity',
 		{
-			title: 'View recent changes',
+			...toolAnnotations('View recent changes', 'read'),
 			description:
 				"Open the brain's activity log in Isomorphic — recent changes with who made each one and when (an audit trail). Pass a `path` to see one page's history instead of the whole brain. Use when the user asks what changed, who edited something, or wants to review recent activity.",
 			inputSchema: {
@@ -361,7 +360,6 @@ export function registerBrainApp(
 				limit: z.number().optional().describe('How many changes to return (default 20, max 50).'),
 				brain: brainArg
 			},
-			annotations: { readOnlyHint: true },
 			_meta: { ui: { resourceUri: BRAIN_APP_URI } }
 		},
 		async ({ path, limit, brain }) => {
@@ -414,7 +412,7 @@ export function registerBrainApp(
 		server,
 		'view_graph',
 		{
-			title: 'Open the brain graph',
+			...toolAnnotations('Open the brain graph', 'read'),
 			description:
 				"Open the brain as an interactive graph in Isomorphic — every page is a node and every link (markdown link or [[wikilink]]) is an edge, laid out force-directed like Obsidian's graph view. Use when the user wants to SEE how their brain is connected, explore its structure, or find hubs and orphans, rather than read one page. Best viewed fullscreen. Pass a `path` to center and highlight one page and its neighbors.",
 			inputSchema: {
@@ -424,7 +422,6 @@ export function registerBrainApp(
 					.describe('Optional page to center and highlight, e.g. "wiki/concepts/vision.md".'),
 				brain: brainArg
 			},
-			annotations: { readOnlyHint: true },
 			_meta: { ui: { resourceUri: BRAIN_APP_URI } }
 		},
 		async ({ path, brain }) => {
@@ -457,14 +454,13 @@ export function registerBrainApp(
 		server,
 		'edit_page',
 		{
-			title: 'Edit a brain page in the editor',
+			...toolAnnotations('Edit a brain page in the editor', 'read'),
 			description:
 				'Open a brain page in the in-client editor so the USER can edit its body directly. Metadata stays managed automatically. For your own programmatic edits, use write_page instead.',
 			inputSchema: {
 				path: z.string().describe('Page path, e.g. "wiki/concepts/vision.md".'),
 				brain: brainArg
 			},
-			annotations: { readOnlyHint: true },
 			_meta: { ui: { resourceUri: BRAIN_APP_URI } }
 		},
 		async ({ path, brain }) => {

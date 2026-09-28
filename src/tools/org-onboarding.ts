@@ -26,6 +26,7 @@ import type { AccessibleOrg, OrgScope, Role } from '../lib/orgs.ts';
 import { createHostedOrg, orgNameProblem } from '../lib/org-connect.ts';
 import { platformInstall } from '../lib/provision.ts';
 import { fail } from './shared.ts';
+import { toolAnnotations } from '../lib/tool-annotations.ts';
 
 // The Worker Env bits this tool needs. A tool handler has no request context, so the
 // App slug for the install URL and the platform installation come from here.
@@ -56,7 +57,7 @@ export function registerOrgOnboardingTools(
 	server.registerTool(
 		'create_org',
 		{
-			title: 'Create an organization',
+			...toolAnnotations('Create an organization', 'additive'),
 			description:
 				"Create a new organization (a team, company or client) on Isomorphic, with the user as its owner. By default its brains are stored on Isomorphic, so nobody needs GitHub: use this for a new team or client org, then create_brain to start a brain in it, or connect_brain to move an existing brain in. Pass `github: true` to connect the user's own GitHub organization instead (formerly connect_github_org): that returns a link to install the Isomorphic app on their GitHub org, installing creates the org, and connect_brain then adopts a repo as a brain. Product (email/SSO) sign-ins only.",
 			inputSchema: z.object({

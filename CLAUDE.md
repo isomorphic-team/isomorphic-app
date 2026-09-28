@@ -52,6 +52,7 @@ pnpm test:preamble      # the /mcp preamble: which requests need a brain, and wh
 pnpm test:protocol      # both MCP protocol eras (2025, 2026-07-28) through the real serveMcp
 pnpm test:dedupe        # write-attempt ledger: an identical retry is answered, not applied twice
 pnpm test:appmeta       # the ui:// app resource's host contract (prefersBorder, tool→app link)
+pnpm test:annotations   # every tool's annotations.title + read/destructive hint (directory review)
 pnpm test:feedback      # submit_feedback composition golden test (redaction, nothing identifying published)
 pnpm test:email         # the magic-link sign-in email: content, escaping, the Resend request
 pnpm test:usage         # usage-analytics golden test (tool-classification coverage, the summary fold)
@@ -368,6 +369,20 @@ owner likes, not forced into our schema.
   the write-policy guards. Schema doc for agents: `brain-template/AGENTS.md`.
 - Future: "special folders" (e.g. skills) may get meaning later, but there's no use case
   yet — don't reintroduce a taxonomy speculatively.
+
+## Tool annotations (the connector directory checks them)
+
+Anthropic's connector directory rejects any tool without `annotations.title` and the hint
+that applies to it: `readOnlyHint: true` for a read, `destructiveHint` for a write (Claude
+also uses them to decide what runs without asking). Checklist:
+<https://claude.com/docs/connectors/building/review-criteria>. Every registration spreads
+`...toolAnnotations(title, effect)` (`src/lib/tool-annotations.ts`) in place of a bare
+`title:`, so the top-level title and `annotations.title` cannot drift. `effect` is `read`,
+`additive` (creates, overwrites nothing that exists) or `destructive` (can overwrite, move,
+revoke or delete); when in doubt, `destructive`. `pnpm test:annotations` lists every tool
+through a real client and scans every registration site, so a new tool that skips the
+helper fails CI. It is NOT the same axis as `TOOL_KINDS` (usage analytics): `edit_page` is
+read-only here (it opens an editor; the save is `write_page`) and counted as a write there.
 
 ## `read_page` vs `view_page` (keep them separate; write the descriptions apart)
 

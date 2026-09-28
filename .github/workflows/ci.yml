@@ -123,6 +123,7 @@ jobs:
       - run: pnpm test:protocol
       - run: pnpm test:dedupe
       - run: pnpm test:appmeta
+      - run: pnpm test:annotations
       - run: pnpm test:loading
       - run: pnpm test:access
       - run: pnpm test:invites

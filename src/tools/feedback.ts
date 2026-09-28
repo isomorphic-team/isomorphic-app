@@ -37,6 +37,7 @@ import {
 	type FeedbackKind
 } from '../lib/feedback.ts';
 import { fail, ok } from './shared.ts';
+import { toolAnnotations } from '../lib/tool-annotations.ts';
 
 // Best-effort identity. Every field is optional on purpose: feedback must work on
 // the static single-bearer path (no user at all) and for someone who has an org but
@@ -143,7 +144,7 @@ export function registerFeedbackTools(
 	server.registerTool(
 		'submit_feedback',
 		{
-			title: 'Send feedback to the Isomorphic maintainers',
+			...toolAnnotations('Send feedback to the Isomorphic maintainers', 'additive'),
 			// Stands alone and names itself, because a host tool-search for "submit_feedback"
 			// or "report a bug" has to land here. See the read_page/view_page note in
 			// CLAUDE.md for what happens when a description only describes its sibling.

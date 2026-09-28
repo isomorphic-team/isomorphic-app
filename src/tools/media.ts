@@ -42,6 +42,7 @@ import {
 	validateAttachment
 } from '../lib/media.ts';
 import { brainArg, fail } from './shared.ts';
+import { toolAnnotations } from '../lib/tool-annotations.ts';
 
 // Strip a `data:` URL wrapper if a caller sends one. The app reads files with
 // FileReader, whose readAsDataURL output is the most likely thing to arrive by
@@ -64,7 +65,7 @@ export function registerMediaTools(
 	server.registerTool(
 		'attach_media',
 		{
-			title: 'Attach a file to the brain',
+			...toolAnnotations('Attach a file to the brain', 'additive'),
 			description:
 				// Self-naming and explicit about which argument belongs to whom, for the
 				// same reason read_page's description is verbose: an agent that goes
@@ -254,8 +255,7 @@ export function registerMediaTools(
 	server.registerTool(
 		'read_media',
 		{
-			title: 'Read an attached file',
-			annotations: { readOnlyHint: true },
+			...toolAnnotations('Read an attached file', 'read'),
 			description:
 				'read_media fetches a file stored in the brain (an image, a PDF) by its path. For an image type Claude can see (PNG, JPEG, GIF, WebP) it returns the picture itself, so you can look at it and describe or reason about it. The app also calls this to render images inside a page. Use it when a page references an image and the question depends on what the image actually shows.',
 			inputSchema: z.object({

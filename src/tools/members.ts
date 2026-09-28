@@ -48,6 +48,7 @@ import {
 	parseRole
 } from '../lib/orgs.ts';
 import { brainArgFor, fail } from './shared.ts';
+import { toolAnnotations } from '../lib/tool-annotations.ts';
 
 // Member tools are org-scoped; the org follows the selected brain, so `brain` picks
 // which brain's org roster to act on (defaults to the active brain).
@@ -130,11 +131,10 @@ export function registerMemberTools(
 		server,
 		'members',
 		{
-			title: 'Organization members',
+			...toolAnnotations('Organization members', 'read'),
 			description:
 				"The organization's members and roles (Viewer / Editor / Admin / Owner) plus pending invites — shown inline as the interactive Isomorphic roster (admins get controls to invite, change roles, and remove people) AND returned as text you can reason over. Call it whenever the user wants to see, check, or manage members / who has access / their team, and whenever YOU need the roster as data (e.g. before invite_member / set_member_role / remove_member).",
 			inputSchema: { brain: brainArg },
-			annotations: { readOnlyHint: true },
 			_meta: { ui: { resourceUri: BRAIN_APP_URI } }
 		},
 		async ({ brain }) => {
@@ -152,7 +152,7 @@ export function registerMemberTools(
 	server.registerTool(
 		'invite_member',
 		{
-			title: 'Invite a person to the organization',
+			...toolAnnotations('Invite a person to the organization', 'additive'),
 			description:
 				"Invite someone to the organization by email at a given role (Viewer, Editor, or Admin — default Editor). If they've already signed in, they're added immediately; otherwise they join automatically at their first sign-in. Admin only.",
 			inputSchema: z.object({
@@ -224,7 +224,7 @@ export function registerMemberTools(
 	server.registerTool(
 		'set_member_role',
 		{
-			title: "Change a member's role",
+			...toolAnnotations("Change a member's role", 'destructive'),
 			description:
 				"Change an existing member's role to Viewer, Editor, or Admin. Admin only. You can't change your own role or the owner's.",
 			inputSchema: z.object({
@@ -267,7 +267,7 @@ export function registerMemberTools(
 	server.registerTool(
 		'remove_member',
 		{
-			title: 'Remove a person from the organization',
+			...toolAnnotations('Remove a person from the organization', 'destructive'),
 			description:
 				"Remove someone from the organization by email — revokes their access, or cancels a pending invitation if they haven't joined yet. Admin only. You can't remove yourself or the owner.",
 			inputSchema: z.object({

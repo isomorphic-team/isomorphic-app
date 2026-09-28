@@ -93,6 +93,7 @@ import {
 	jsonRpcError,
 	describeRequest
 } from './lib/mcp-preamble.ts';
+import { toolAnnotations } from './lib/tool-annotations.ts';
 
 interface Env {
 	// Auth mode selector
@@ -804,8 +805,7 @@ class McpSession {
 		server.registerTool(
 			'whoami',
 			{
-				title: 'Identify the current user',
-				annotations: { readOnlyHint: true },
+				...toolAnnotations('Identify the current user', 'read'),
 				description:
 					'Return the GitHub identity of the authenticated user (OAuth mode). In static-bearer mode, returns a placeholder.',
 				inputSchema: z.object({})

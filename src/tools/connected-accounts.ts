@@ -31,6 +31,7 @@ import {
 	unlinkGithubLink
 } from '../lib/orgs.ts';
 import { fail } from './shared.ts';
+import { toolAnnotations } from '../lib/tool-annotations.ts';
 
 // The bits of the Worker Env these tools need: KV for the pending-link challenge
 // and the public origin to build the sign-in URL (a tool handler has no request URL).
@@ -92,11 +93,10 @@ export function registerConnectedAccountTools(
 		server,
 		'connected_accounts',
 		{
-			title: 'Connected accounts',
+			...toolAnnotations('Connected accounts', 'read'),
 			description:
 				'The email logins and GitHub accounts linked to the current person — shown inline as the interactive Connected accounts panel (with controls to link another account or unlink one) AND returned as text you can reason over. Call it whenever the user wants to see, manage, connect, or link their accounts / identities / other email / other login, or when YOU need the list as data.',
 			inputSchema: {},
-			annotations: { readOnlyHint: true },
 			_meta: { ui: { resourceUri: BRAIN_APP_URI } }
 		},
 		async () => {
@@ -114,7 +114,7 @@ export function registerConnectedAccountTools(
 	server.registerTool(
 		'link_identity',
 		{
-			title: 'Link another account to yours',
+			...toolAnnotations('Link another account to yours', 'additive'),
 			description:
 				'Start linking another of YOUR sign-in identities (a different email) to this account, so all your brains are reachable from either. Returns a verification link the user opens and signs in with the OTHER email — ownership is proven by that sign-in. Does not link anything until they complete it.',
 			inputSchema: z.object({
@@ -159,7 +159,7 @@ export function registerConnectedAccountTools(
 	server.registerTool(
 		'unlink_identity',
 		{
-			title: 'Unlink a connected account',
+			...toolAnnotations('Unlink a connected account', 'destructive'),
 			description:
 				'Detach one of your linked accounts. Pass `email` to unlink an email login, or `github` (the @login) to unlink a GitHub account. That connection stops sharing your brains; nothing else changes.',
 			inputSchema: z.object({
