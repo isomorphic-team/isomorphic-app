@@ -31,6 +31,9 @@ call it) goes in a pure or db-only function in `src/lib/` (compare `planPageWrit
 
 - In the matching `src/tools/*.ts` file: `server.registerTool(...)` for a quiet tool, or
   `registerAppTool(...)` when its result opens the MCP App widget.
+- The config opens with `...toolAnnotations('<Title>', 'read' | 'additive' | 'destructive')`
+  (`src/lib/tool-annotations.ts`), never a bare `title:`. The directory review rejects a tool
+  without `annotations.title` and its hint; `pnpm test:annotations` fails the build first.
 - `McpSession.buildServer()` in `src/worker.ts` calls that file's `register*Tools`. A content
   tool the local runtime should also serve is registered in `src/local.ts` too.
 - **Gating.** A tool that only means something when other people can sign in registers under

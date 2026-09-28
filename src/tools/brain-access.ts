@@ -52,6 +52,7 @@ import {
 import { webPathFor } from '../lib/web-app.ts';
 import { brainArgFor, fail } from './shared.ts';
 import type { BrainAccessWire } from '../lib/tool-payloads.ts';
+import { toolAnnotations } from '../lib/tool-annotations.ts';
 
 const brainArg = brainArgFor(
 	"Which brain's sharing to act on (name/handle). Defaults to the active brain."
@@ -151,11 +152,10 @@ export function registerBrainAccessTools(
 		server,
 		'brain_access',
 		{
-			title: 'Who can access this brain',
+			...toolAnnotations('Who can access this brain', 'read'),
 			description:
 				"Show who can reach a brain and at what level (Viewer / Editor / Admin), and whether it's private or shared with the whole organization: rendered inline as the interactive Isomorphic sharing panel (brain admins get controls to share, change access, and revoke) AND returned as text you can reason over. Call brain_access whenever the user asks who can see / who has access to / who a brain is shared with, and whenever YOU need that list as data. This is per-BRAIN access, not the organization's roster of members.",
 			inputSchema: { brain: brainArg },
-			annotations: { readOnlyHint: true },
 			_meta: { ui: { resourceUri: BRAIN_APP_URI } }
 		},
 		async ({ brain }) => {
@@ -182,7 +182,7 @@ export function registerBrainAccessTools(
 	server.registerTool(
 		'share_brain',
 		{
-			title: 'Share a brain / change who can access it',
+			...toolAnnotations('Share a brain / change who can access it', 'destructive'),
 			description:
 				"Change who can access a brain. Either share it with ONE person by email at a given level (`email` + `access`: viewer | editor | admin, or `none` to revoke), or change the brain's overall `visibility` ('private' = only people it's shared with, 'org' = everyone in the organization). Use when the user wants to share / unshare a brain, give someone access, change what someone can do in a brain, or make a brain private or organization-wide. Requires admin on that brain. The person does NOT need to be in the organization: someone outside it becomes a GUEST of this one brain (viewer or editor, never admin) and reaches nothing else, and an address with no account yet is invited and joins as a guest when they first sign in. share_brain changes access to this one brain only, never anyone's organization membership or role.",
 			inputSchema: z.object({

@@ -110,6 +110,7 @@ import {
 	resolveMoveTarget
 } from '../lib/write-target.ts';
 import type { SearchWire } from '../lib/tool-payloads.ts';
+import { toolAnnotations } from '../lib/tool-annotations.ts';
 
 // Frontmatter keys are free-form and brain-owned, exactly like folders and
 // `type:` values, so this takes whatever the brain calls things rather than a
@@ -882,7 +883,7 @@ export function registerLibrarianTools(
 	server.registerTool(
 		'write_page',
 		{
-			title: 'Write a brain page',
+			...toolAnnotations('Write a brain page', 'destructive'),
 			description:
 				'Create a new page, or change an existing one, at a content path you choose (folders are free-form). ONE PAGE = ONE CONCEPT: anything another page should be able to link to — a person, vendor, system, event series, project — gets its own file, never a section inside a bigger page. If you are about to write a heading per item, write a page per item instead. To change PART of a page use `edits` (exact find/replace; each anchor must match exactly once) or `append` (add to the end): both leave the rest of the page untouched, so you do not have to read it first and cannot destroy text you have not seen. To change METADATA rather than page text, use `fields` (set or remove any frontmatter key the brain tracks, e.g. done/owner/due) or the title/type/description/status arguments: those leave the body untouched. `content` REPLACES the entire body, so pass it only for a new page or a deliberate full rewrite, and read the page first (read_page) if you did not just write it. OKF lifecycle status is optional: absent means stable; set draft, stable, or deprecated only when the distinction should be explicit. On an existing page frontmatter is preserved and merged, the "updated" date is bumped, a retitle repoints inbound links, and passing none of content/edits/append changes only metadata. Every change is logged. Pass mode: "create" to require a new path (fails if it exists) or "update" to require an existing one. If this call FAILS WITHOUT A RESULT — a timeout, a 502 or any other gateway error, a dropped connection — its outcome is ambiguous and the write may still have landed. Retrying the IDENTICAL call is the safe move: a repeat with the same arguments within a few minutes is recognised as a retry and answered from the first attempt rather than applied twice. Change anything about the call and that no longer holds, so read the page before retrying a changed one: a repeated create fails if the first attempt landed, and a repeated append would duplicate the text.',
 			inputSchema: z.object({
@@ -1006,7 +1007,7 @@ export function registerLibrarianTools(
 	server.registerTool(
 		'move_page',
 		{
-			title: 'Move or rename a page or folder',
+			...toolAnnotations('Move or rename a page or folder', 'destructive'),
 			description:
 				"Move a page (or a whole folder and everything under it) to a different location and/or rename it. Every link pointing at the moved page(s) from other pages is repointed in the same save, and the moved content's own links keep working. Nothing dangles. Pass a folder path (no .md extension) to move or rename an entire subtree; moving a folder ONTO an existing one merges them, and is refused only if a page would be overwritten. If this call FAILS WITHOUT A RESULT (a timeout, a 502 or any other gateway error, a dropped connection), retrying the identical call is safe: a repeat with the same arguments within a few minutes is recognised as a retry rather than applied twice. A move lands whole or not at all, so if you change the call, check whether the page is already at the destination before retrying.",
 			inputSchema: z.object({
@@ -1154,7 +1155,7 @@ export function registerLibrarianTools(
 	server.registerTool(
 		'delete_page',
 		{
-			title: 'Delete a page or folder',
+			...toolAnnotations('Delete a page or folder', 'destructive'),
 			description:
 				'Remove a page (or a whole folder and everything under it) from the wiki. The deletion is logged. If other pages still link into what you deleted, they are listed so the references can be cleaned up. Pass a folder path (no .md extension) to delete an entire subtree, or the path of a non-page file (an image, a folder marker) to delete just that file. If this call FAILS WITHOUT A RESULT (a timeout, a 502 or any other gateway error, a dropped connection), retrying the identical call is safe: a repeat with the same arguments within a few minutes is recognised as a retry rather than applied twice. A delete lands whole or not at all, so if you change the call, check whether the path still exists before retrying.',
 			inputSchema: z.object({
@@ -1220,8 +1221,7 @@ export function registerLibrarianTools(
 	server.registerTool(
 		'find_inbound_links',
 		{
-			title: 'Find pages linking to a page',
-			annotations: { readOnlyHint: true },
+			...toolAnnotations('Find pages linking to a page', 'read'),
 			description:
 				'List everything that links to the given page or attachment — via markdown links, image embeds, or [[wikilinks]]. Useful before restructuring, before deleting an image (to see which pages would lose it), or to gauge how connected a page is.',
 			inputSchema: z.object({
@@ -1289,8 +1289,7 @@ export function registerLibrarianTools(
 	server.registerTool(
 		'validate',
 		{
-			title: 'Check the brain for problems',
-			annotations: { readOnlyHint: true },
+			...toolAnnotations('Check the brain for problems', 'read'),
 			description:
 				'`validate` checks a brain and reports what needs attention. Two kinds of result, deliberately separate. DEFECTS: broken links — markdown links to missing pages and [[wikilinks]] that match no page. Those have one right answer and cannot be silenced. FINDINGS: everything advisory, each carrying a `[key]` — pending import decisions, Open Knowledge Format structure notes (concepts written as sections inside a folder note instead of getting their own page, pages missing a `type:`, names two pages both answer to), and consolidation tensions (a page nothing links to, a folder note that lists none of its pages, two pages telling the same story). Nothing advisory blocks a save, and any finding can be answered or permanently silenced with `resolve` using its key, so a deliberate choice stops being re-reported. Run after big changes or restructures, or when asked to tidy a brain up.',
 			inputSchema: z.object({ brain: brainArg })
@@ -1460,8 +1459,7 @@ export function registerLibrarianTools(
 	server.registerTool(
 		'search_pages',
 		{
-			title: 'Search brain pages',
-			annotations: { readOnlyHint: true },
+			...toolAnnotations('Search brain pages', 'read'),
 			// It also states that a question works, since a model tends to arrive
 			// assuming search takes keywords only.
 			description:

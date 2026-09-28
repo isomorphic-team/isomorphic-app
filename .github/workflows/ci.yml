@@ -128,6 +128,8 @@ jobs:
       - run: pnpm test:protocol
       - run: pnpm test:dedupe
       - run: pnpm test:appmeta
+      # Every tool carries annotations.title and its read/destructive hint (directory review).
+      - run: pnpm test:annotations
       - run: pnpm test:loading
       - run: pnpm test:access
       - run: pnpm test:invites
