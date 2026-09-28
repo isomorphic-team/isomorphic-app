@@ -15,10 +15,27 @@
 
 import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
-import { isAbsolute, join, relative } from 'node:path';
+import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 // ---------- deciding (pure) ----------
+
+/**
+ * `target` as a repo-relative path with forward slashes, the form `git ls-files` prints and
+ * `refuseEdit` matches, or null when it is outside the repo. `path.relative` answers with
+ * the platform's separator, which on Windows no `^migrations\/` test matches, and across
+ * Windows drives it answers with an absolute path rather than one starting `..`. `p` is a
+ * parameter so `pnpm test:hooks` checks the Windows form on every platform.
+ */
+export function repoRelative(
+	root: string,
+	target: string,
+	p: typeof path.posix = path
+): string | null {
+	const rel = p.relative(root, p.isAbsolute(target) ? target : p.join(root, target));
+	if (rel.startsWith('..') || p.isAbsolute(rel)) return null;
+	return rel.split(p.sep).join('/');
+}
 
 /** Why an edit to `path` (repo-relative) is refused, or null to allow it. */
 export function refuseEdit(path: string, committed: boolean): string | null {
@@ -101,10 +118,10 @@ function main(mode: string, input: HookInput): void {
 	if (mode === 'pre-edit') {
 		const target = input.tool_input?.file_path ?? input.tool_input?.notebook_path;
 		if (!target) return;
-		const path = relative(root, isAbsolute(target) ? target : join(root, target));
-		if (path.startsWith('..')) return;
-		const committed = git(root, ['ls-files', '--', path]).length > 0;
-		const reason = refuseEdit(path, committed);
+		const rel = repoRelative(root, target);
+		if (rel === null) return;
+		const committed = git(root, ['ls-files', '--', rel]).length > 0;
+		const reason = refuseEdit(rel, committed);
 		if (reason) block(reason);
 		return;
 	}
@@ -125,7 +142,7 @@ function main(mode: string, input: HookInput): void {
 		const regenerated: string[] = [];
 		for (const gen of generatorsFor(changed)) {
 			const read = (p: string) =>
-				existsSync(join(root, p)) ? readFileSync(join(root, p), 'utf8') : '';
+				existsSync(path.join(root, p)) ? readFileSync(path.join(root, p), 'utf8') : '';
 			const before = gen.outputs.map(read);
 			try {
 				execFileSync('pnpm', ['-s', gen.script], { cwd: root, stdio: 'pipe' });
