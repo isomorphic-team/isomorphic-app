@@ -4,7 +4,11 @@
 // pin each extractor, and shared with `scripts/rules-for-change.ts`, which uses the
 // glob half to say which rules files a pull request touches.
 
-import { matchesGlob } from 'node:path';
+// POSIX throughout: every path here is a git path (`git ls-files` prints forward
+// slashes on every platform), and `node:path` would answer in backslashes on Windows.
+import { posix } from 'node:path';
+
+const { dirname, join, matchesGlob, normalize } = posix;
 
 /** Inline code spans outside fenced blocks, with the 1-based line each sits on. */
 export function codeSpans(markdown: string): { text: string; line: number }[] {
@@ -38,6 +42,11 @@ export function relativeLinks(markdown: string): { target: string; line: number 
 		}
 	});
 	return out;
+}
+
+/** Where a relative link in `doc` points, as a repo path in the form `git ls-files` prints. */
+export function resolveLink(doc: string, target: string): string {
+	return normalize(join(dirname(doc), target)).replace(/\/$/, '');
 }
 
 const REPO_DIRS = [

@@ -21,7 +21,7 @@
 
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
-import { basename, dirname, join, normalize } from 'node:path';
+import { posix } from 'node:path';
 
 import { checker } from './check.ts';
 import {
@@ -34,6 +34,7 @@ import {
 	NOT_TOOLS,
 	registeredToolNames,
 	relativeLinks,
+	resolveLink,
 	repoPathIn,
 	RETIREMENT_WORDS,
 	rulesFor,
@@ -64,6 +65,17 @@ console.log('\nextractors');
 		JSON.stringify(
 			relativeLinks('[a](docs/x.md#h) [b](https://x) [c](#top)').map((l) => l.target)
 		) === JSON.stringify(['docs/x.md'])
+	);
+	// Git prints forward slashes on every platform, so a resolved link must too; the
+	// platform `node:path` answered in backslashes on Windows and no link resolved.
+	check(
+		'a link resolves to a git path',
+		resolveLink('docs/ops/a.md', '../design/b.md') === 'docs/design/b.md'
+	);
+	check('...up to the root', resolveLink('docs/ops/a.md', '../../README.md') === 'README.md');
+	check(
+		'...and a directory link drops its slash',
+		resolveLink('CLAUDE.md', '.claude/rules/') === '.claude/rules'
 	);
 	check(
 		'a repo path is recognized',
@@ -168,7 +180,7 @@ const dirSet = new Set(
 		return parts.slice(1).map((_, i) => parts.slice(0, i + 1).join('/'));
 	})
 );
-const baseSet = new Set(files.map((p) => basename(p)));
+const baseSet = new Set(files.map((p) => posix.basename(p)));
 // Generated locally and gitignored, and still correct to name.
 const GENERATED = new Set(['wrangler.jsonc', '.dev.vars']);
 
@@ -228,7 +240,7 @@ for (const doc of referenceDocs) {
 		}
 	}
 	for (const { target, line } of relativeLinks(text)) {
-		const resolved = normalize(join(dirname(doc), target)).replace(/\/$/, '');
+		const resolved = resolveLink(doc, target);
 		if (!fileSet.has(resolved) && !dirSet.has(resolved) && !GENERATED.has(resolved)) {
 			problems.push(`:${line} link to ${target} does not resolve`);
 		}

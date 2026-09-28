@@ -17,9 +17,17 @@
 
 import { execFileSync, spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
+import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { GEN_APP, GEN_TEMPLATES, generatorsFor, refuseCommand, refuseEdit } from './agent-hooks.ts';
+import {
+	GEN_APP,
+	GEN_TEMPLATES,
+	generatorsFor,
+	refuseCommand,
+	refuseEdit,
+	repoRelative
+} from './agent-hooks.ts';
 import { checker } from './check.ts';
 
 const { check, done } = checker('hooks checks');
@@ -45,6 +53,31 @@ check(
 	'the refusal names the way forward',
 	refuseEdit('src/lib/app-bundle.generated.ts', true)!.includes('pnpm gen:app')
 );
+
+console.log('\npaths: refuseEdit sees the form git prints, on every platform');
+{
+	// The Windows rules, run on whatever OS this is. Without the conversion a Windows
+	// edit reached refuseEdit as `migrations\0001_init.sql`, and a committed
+	// migration was editable there.
+	const win = repoRelative('C:\\repo', 'C:\\repo\\migrations\\0001_init.sql', path.win32);
+	check(
+		'a Windows absolute path comes back with forward slashes',
+		win === 'migrations/0001_init.sql',
+		String(win)
+	);
+	check('...and in that form a committed migration is refused', refuseEdit(win!, true) !== null);
+	const winRel = repoRelative('C:\\repo', 'migrations\\0001_init.sql', path.win32);
+	check('a Windows relative path too', winRel === 'migrations/0001_init.sql', String(winRel));
+	const posix = repoRelative('/repo', '/repo/migrations/0001_init.sql', path.posix);
+	check('a POSIX path is unchanged', posix === 'migrations/0001_init.sql', String(posix));
+	// Across Windows drives path.relative answers with an absolute path, not `..`.
+	const drive = repoRelative('C:\\repo', 'D:\\elsewhere\\x.sql', path.win32);
+	check('another drive is outside the repo', drive === null, String(drive));
+	const up = repoRelative('C:\\repo', 'C:\\other\\x.sql', path.win32);
+	check('a sibling folder is outside the repo', up === null, String(up));
+	const posixUp = repoRelative('/repo', '/other/x.sql', path.posix);
+	check('...on POSIX too', posixUp === null, String(posixUp));
+}
 
 console.log('\ncommands: remote D1 writes and force-added secrets are refused');
 const refused = [

@@ -1,0 +1,5 @@
+# Every checkout gets LF, whatever core.autocrlf the machine has. The docs and hook
+# parsers, Prettier (endOfLine: lf) and the generated artifacts all assume LF; a
+# Windows clone with autocrlf=true otherwise fails test:docs and prettier --check
+# on files nobody touched.
+* text=auto eol=lf
