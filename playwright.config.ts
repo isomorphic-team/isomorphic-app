@@ -76,7 +76,7 @@ export default defineConfig({
 		{
 			name: 'functional',
 			use: { ...devices['Desktop Chrome'] },
-			testIgnore: [/visual\.spec\.ts/, /web-nav\.spec\.ts/]
+			testIgnore: [/visual\.spec\.ts/, /web-(nav|move)\.spec\.ts/]
 		},
 		{
 			name: 'visual',
@@ -88,7 +88,7 @@ export default defineConfig({
 			// specs load a top-level document from the web server, not the harness.
 			name: 'web',
 			use: { ...devices['Desktop Chrome'], baseURL: `http://localhost:${WEB_TEST_PORT}` },
-			testMatch: /web-nav\.spec\.ts/
+			testMatch: /web-(nav|move)\.spec\.ts/
 		}
 	],
 	webServer: [

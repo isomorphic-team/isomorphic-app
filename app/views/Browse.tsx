@@ -760,16 +760,21 @@ function FileTree({
 		const name = moving.path.split('/').pop()!;
 		const newPath = moveTarget ? `${moveTarget}/${name}` : name;
 		setBusy(true);
-		const res = await callTool('move_page', {
-			path: moving.path,
-			new_path: newPath,
-			...brainArgs()
-		});
-		setBusy(false);
-		if (res.isError) return toast(firstText(res), true);
-		setMoving(null);
-		toast('Moved ✓');
-		refreshBrowse();
+		try {
+			const res = await callTool('move_page', {
+				path: moving.path,
+				new_path: newPath,
+				...brainArgs()
+			});
+			if (res.isError) return toast(firstText(res), true);
+			setMoving(null);
+			toast(firstText(res));
+			refreshBrowse();
+		} catch (e) {
+			toast(`Move failed: ${e}`, true);
+		} finally {
+			setBusy(false);
+		}
 	}
 
 	async function commitRename() {

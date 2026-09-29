@@ -1,7 +1,7 @@
 // A browser user can organize the brain without dragging or using an MCP client.
 // The picker calls the same move_page tool as drag-and-drop. The real move tool's
 // link and folder behavior is covered by the librarian end-to-end battery.
-import { test, expect, type FrameLocator } from '@playwright/test';
+import { test, expect, type FrameLocator, type Page } from '@playwright/test';
 import { openApp } from './harness.ts';
 
 async function moveMenu(app: FrameLocator, name: string) {
@@ -9,6 +9,19 @@ async function moveMenu(app: FrameLocator, name: string) {
 	await row.hover();
 	await row.getByRole('button', { name: 'More' }).click();
 	await row.getByRole('button', { name: 'Move to…' }).click();
+}
+
+async function expectMove(page: Page, path: string, new_path: string) {
+	await expect
+		.poll(() =>
+			page.evaluate(
+				() =>
+					(
+						window as unknown as { __toolRequests?: { name: string; args: unknown }[] }
+					).__toolRequests?.find((request) => request.name === 'move_page')?.args
+			)
+		)
+		.toMatchObject({ path, new_path, brain: 'personal-wiki-0a1b2c' });
 }
 
 test('a note moves into a chosen folder through the file tree', async ({ page }) => {
@@ -21,17 +34,11 @@ test('a note moves into a chosen folder through the file tree', async ({ page })
 	await destination.selectOption('wiki/playbooks');
 	await expect(app.getByText('New location: wiki/playbooks/vision.md')).toBeVisible();
 	await app.getByRole('button', { name: 'Move', exact: true }).click();
-	const requests = await page.evaluate(
-		() =>
-			(window as unknown as { __toolRequests?: { name: string; args: unknown }[] })
-				.__toolRequests ?? []
-	);
-	expect(requests.find((request) => request.name === 'move_page')?.args).toMatchObject({
-		path: 'wiki/concepts/vision.md',
-		new_path: 'wiki/playbooks/vision.md'
-	});
+	await expectMove(page, 'wiki/concepts/vision.md', 'wiki/playbooks/vision.md');
 
-	await expect(app.getByText('Moved ✓')).toBeVisible();
+	await expect(
+		app.getByText('Moved wiki/concepts/vision.md → wiki/playbooks/vision.md.')
+	).toBeVisible();
 });
 
 test('the folder picker excludes itself and its descendants and cancel does not move', async ({
@@ -61,15 +68,7 @@ test('a folder move uses its full path and an eligible destination', async ({ pa
 	await app.getByRole('combobox', { name: 'Destination folder' }).selectOption('wiki/people');
 	await expect(app.getByText('New location: wiki/people/concepts')).toBeVisible();
 	await app.getByRole('button', { name: 'Move', exact: true }).click();
-	const requests = await page.evaluate(
-		() =>
-			(window as unknown as { __toolRequests?: { name: string; args: unknown }[] })
-				.__toolRequests ?? []
-	);
-	expect(requests.find((request) => request.name === 'move_page')?.args).toMatchObject({
-		path: 'wiki/concepts',
-		new_path: 'wiki/people/concepts'
-	});
+	await expectMove(page, 'wiki/concepts', 'wiki/people/concepts');
 });
 
 test('an attachment has the same move action as other draggable files', async ({ page }) => {
@@ -78,7 +77,8 @@ test('an attachment has the same move action as other draggable files', async ({
 	await moveMenu(app, 'vision-sketch.png');
 	await app.getByRole('combobox', { name: 'Destination folder' }).selectOption('wiki/people');
 	await expect(app.getByText('New location: wiki/people/vision-sketch.png')).toBeVisible();
-	await app.getByRole('button', { name: 'Cancel' }).click();
+	await app.getByRole('button', { name: 'Move', exact: true }).click();
+	await expectMove(page, 'wiki/concepts/assets/vision-sketch.png', 'wiki/people/vision-sketch.png');
 });
 
 test('keyboard focus reveals the file menu that opens the picker', async ({ page }) => {

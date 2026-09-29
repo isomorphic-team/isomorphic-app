@@ -623,14 +623,19 @@ async function moveFolderWrite(
 
 	// 2. Non-markdown blobs under the folder (.gitkeep, etc.) — copied across verbatim
 	//    (contents fetched above); the superseded scaffolding is delete-only.
-	copiedNonMd.forEach((e, i) => {
+	for (const [i, e] of copiedNonMd.entries()) {
+		const file = nonMdFiles[i];
+		if (!file || file.sha !== e.sha)
+			return fail(
+				`Can't move "${folder}" — "${e.path}" changed or couldn't be read. Refresh and try again.`
+			);
 		writes.push({
 			path: rename(e.path),
-			content: nonMdFiles[i]?.contentBase64 ?? '',
+			content: file.contentBase64,
 			encoding: 'base64'
 		});
 		deletes.push(e.path);
-	});
+	}
 	for (const e of supersededScaffolding) deletes.push(e);
 
 	// 3. Outside pages linking INTO a moved page or attachment — repoint their links.

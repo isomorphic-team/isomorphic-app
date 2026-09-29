@@ -1372,6 +1372,39 @@ try {
 		);
 
 		// Folder moves must carry attachment bytes and both inside/outside image links.
+		for (const failure of ['missing', 'changed'] as const) {
+			const folder = `wiki/media-read-${failure}`;
+			const asset = `${folder}/logo.png`;
+			await store.commitFiles(repoArgs, {
+				message: 'seed attachment read guard',
+				writes: [{ path: asset, content: PNG_1PX, encoding: 'base64' }]
+			});
+			const beforeReadFailure = await commitCount();
+			const realStore = store;
+			store = {
+				...realStore,
+				readBinary: async (repo, path) => {
+					const file = await realStore.readBinary(repo, path);
+					if (path !== asset) return file;
+					return failure === 'missing' ? null : { ...file!, sha: 'changed-sha' };
+				}
+			};
+			try {
+				const refused = await call('move_page', { path: folder, new_path: `${folder}-moved` });
+				check(`${failure} attachment read refuses the folder move`, refused.isError, refused.text);
+			} finally {
+				store = realStore;
+			}
+			check(
+				`${failure} attachment read creates no commit`,
+				(await commitCount()) === beforeReadFailure
+			);
+			check(
+				`${failure} attachment read leaves source bytes intact`,
+				(await store.readBinary(repoArgs, asset))?.contentBase64 === PNG_1PX
+			);
+		}
+
 		await call('write_page', {
 			path: 'wiki/media-move/inside.md',
 			title: 'Inside media move',
