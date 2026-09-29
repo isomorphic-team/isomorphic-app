@@ -52,17 +52,15 @@ view's real layout, and a generic skeleton that matches nothing is worse than th
 Reuse the `.loading-shimmer` sweep and the `prefers-reduced-motion` rule already in
 `app/styles.css`.
 
-# TODO: file tree polish (a non-drag move, and keyboard support)
+# TODO: file tree keyboard support
 
 The file tree (`FileTree` in `app/views/Browse.tsx`) now covers the whole create / rename /
 move / delete surface for files **and** folders: "New note" and "New folder" in the header
 toolbar and in each folder's `⋯` menu, inline rename for both (a folder rename repoints every
-child path and inbound link through `move_page`), drag-and-drop of files and folders into
-nested folders, and a delete with a confirm that says a folder takes everything inside it.
+child path and inbound link through `move_page`), drag-and-drop and a "Move to…" folder picker
+for files and folders, and a delete with a confirm that says a folder takes everything inside it.
 What is missing:
 
-- **A non-drag "move to…" picker.** Drag-and-drop is the only way to move something in the
-  app today. A picker is the precise option and the accessible one.
 - **Keyboard support across the tree**, beyond Enter and Escape in the rename and add inputs.
 
 Keep the conversational path working alongside it: Claude creates, moves, and deletes through

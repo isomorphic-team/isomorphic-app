@@ -1312,6 +1312,12 @@ bridge.oncalltool = async (params) => {
 	// NOT ask for (see `#pending-input`: an app waiting for a result it knows is coming
 	// must not fetch the tree). Nothing in the preview reads this.
 	((window as unknown as { __toolCalls?: string[] }).__toolCalls ??= []).push(params.name);
+	// The move-picker tests also check the exact source and destination sent to the tool.
+	((window as unknown as { __toolRequests?: { name: string; args: unknown }[] }).__toolRequests ??=
+		[]).push({
+		name: params.name,
+		args: params.arguments
+	});
 	// The slow-result routes need the app's OWN tree fetch to still be in flight when
 	// the opening result lands — that overlap is the whole scenario, and an instant
 	// answer here would close it (see slowResultMode).

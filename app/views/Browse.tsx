@@ -5,7 +5,7 @@
 // header contextually while this view is open, exactly like the editor's formatting
 // toolbar. The seam is `treeCtl` (mirrors `editCtl` in EditView): FileTree binds its
 // handlers + toggle state here, and the Header (main.tsx) renders them. Per-item
-// actions (rename, delete, new note/folder in a folder) live in one hover `⋯` menu.
+// actions (rename, move, delete, new note/folder in a folder) live in one hover `⋯` menu.
 
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { slugify } from '../../src/lib/wiki.ts';
@@ -24,7 +24,7 @@ import { navigateTo, openAsset, refreshBrowse } from '../core/actions.ts';
 import { FOLDER_NOTE_NAMES } from '../core/util.ts';
 import { panelPlacement, type Placement } from '../core/menu-placement.ts';
 import { toast, askConfirm } from '../core/toast.tsx';
-import { Button } from '../ui/index.ts';
+import { Button, Flow, Select } from '../ui/index.ts';
 import {
 	ChevronIcon,
 	FolderIcon,
@@ -145,6 +145,24 @@ function collectFolders(nodes: TreeNode[], out: string[] = []): string[] {
 	return out;
 }
 
+// Offer only locations the existing move_page tool can write to. The content roots
+// include a destination even when its folder has no visible row in the tree yet.
+function moveDestinations(
+	source: { path: string; dir: boolean },
+	roots: string[],
+	folders: string[]
+): string[] {
+	const name = source.path.split('/').pop()!;
+	const candidates = new Set([...roots.map((root) => root.replace(/\/$/, '')), ...folders]);
+	return [...candidates].filter((folder) => {
+		const dest = folder ? `${folder}/${name}` : name;
+		if (dest === source.path) return false;
+		if (source.dir && (folder === source.path || folder.startsWith(`${source.path}/`)))
+			return false;
+		return isEditablePath(source.dir ? `${dest}/x.md` : dest);
+	});
+}
+
 // A folder note (<folder>/index.md) seeded with a directory-index view, so the
 // folder materializes with a real page that lists whatever it holds (git has no
 // empty folders, and a bare .gitkeep folder carries no meaning). Shared by "New
@@ -208,10 +226,12 @@ function AddInput({
 // opens its panel upward rather than past the bottom of the card. Overflow does not clip
 // here, it makes the CARD scroll.
 function RowMenu({
+	path,
 	open,
 	toggle,
 	items
 }: {
+	path: string;
 	open: boolean;
 	toggle: () => void;
 	items: {
@@ -234,6 +254,7 @@ function RowMenu({
 		<span data-row-menu class="relative shrink-0">
 			<button
 				ref={trigger}
+				data-row-menu-for={path}
 				type="button"
 				title="More"
 				onClick={(e) => {
@@ -241,7 +262,7 @@ function RowMenu({
 					toggle();
 				}}
 				class={`rounded px-1 py-0.5 text-muted hover:text-fg ${
-					open ? 'text-fg' : 'opacity-0 group-hover:opacity-100'
+					open ? 'text-fg' : 'opacity-0 group-hover:opacity-100 group-focus-within:opacity-100'
 				}`}
 			>
 				<MoreIcon />
@@ -390,6 +411,7 @@ function TreeItem({
 					</button>
 					{editable && (
 						<RowMenu
+							path={node.path}
 							open={actions.openMenu === node.path}
 							toggle={() => actions.setOpenMenu(actions.openMenu === node.path ? null : node.path)}
 							items={[
@@ -417,6 +439,11 @@ function TreeItem({
 									label: 'Rename',
 									icon: <PencilIcon />,
 									onClick: () => actions.startRename(node.path, node.name, true)
+								},
+								{
+									label: 'Move to…',
+									icon: <FolderIcon />,
+									onClick: () => actions.startMove(node.path, true)
 								},
 								{
 									label: 'Delete',
@@ -495,22 +522,36 @@ function TreeItem({
 				</span>
 				{!editable && <LockIcon />}
 			</button>
-			{editable && isPage && (
+			{editable && openable && (
 				<RowMenu
+					path={node.path}
 					open={actions.openMenu === node.path}
 					toggle={() => actions.setOpenMenu(actions.openMenu === node.path ? null : node.path)}
 					items={[
+						...(isPage
+							? [
+									{
+										label: 'Rename',
+										icon: <PencilIcon />,
+										onClick: () => actions.startRename(node.path, node.name, false)
+									}
+								]
+							: []),
 						{
-							label: 'Rename',
-							icon: <PencilIcon />,
-							onClick: () => actions.startRename(node.path, node.name, false)
+							label: 'Move to…',
+							icon: <FolderIcon />,
+							onClick: () => actions.startMove(node.path, false)
 						},
-						{
-							label: 'Delete',
-							icon: <TrashIcon />,
-							danger: true,
-							onClick: () => actions.askDelete(node.path, false, node.name)
-						}
+						...(isPage
+							? [
+									{
+										label: 'Delete',
+										icon: <TrashIcon />,
+										danger: true,
+										onClick: () => actions.askDelete(node.path, false, node.name)
+									}
+								]
+							: [])
 					]}
 				/>
 			)}
@@ -548,6 +589,9 @@ function FileTree({
 	const [openMenu, setOpenMenu] = useState<string | null>(null);
 	const [editing, setEditing] = useState<{ path: string; dir: boolean } | null>(null);
 	const [editValue, setEditValue] = useState('');
+	const [moving, setMoving] = useState<{ path: string; dir: boolean } | null>(null);
+	const [moveTarget, setMoveTarget] = useState('');
+	const restoreMoveFocus = useRef<string | null>(null);
 	const [add, setAdd] = useState<{ kind: 'note' | 'folder'; parent: string } | null>(null);
 	const [addValue, setAddValue] = useState('');
 	const [dragging, setDragging] = useState<{ path: string; dir: boolean } | null>(null);
@@ -560,6 +604,7 @@ function FileTree({
 	// empty brain (no folders to hover).
 	const contentRoots = rootsOf(brainPolicy, 'content');
 	const rootBase = (contentRoots[0] ?? '').replace(/\/$/, '');
+	const destinations = moving ? moveDestinations(moving, contentRoots, allFolders) : [];
 	const canManage = contentRoots.length > 0;
 	const allExpanded = allFolders.length > 0 && allFolders.every((p) => expanded.has(p));
 
@@ -576,6 +621,16 @@ function FileTree({
 			.querySelector('[data-tree-focus]')
 			?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
 	}, [focus, tree]);
+	useLayoutEffect(() => {
+		if (moving) document.querySelector<HTMLSelectElement>('[data-move-destination]')?.focus();
+		else if (restoreMoveFocus.current) {
+			const path = restoreMoveFocus.current;
+			restoreMoveFocus.current = null;
+			[...document.querySelectorAll<HTMLButtonElement>('[data-row-menu-for]')]
+				.find((button) => button.dataset.rowMenuFor === path)
+				?.focus();
+		}
+	}, [moving]);
 
 	// One outside-click listener closes any open row menu (its own button + items
 	// stopPropagation; anything else closes it).
@@ -685,6 +740,38 @@ function FileTree({
 		setEditing({ path, dir });
 	}
 
+	function startMove(path: string, dir: boolean) {
+		const source = { path, dir };
+		setOpenMenu(null);
+		setEditing(null);
+		setAdd(null);
+		setMoveTarget(moveDestinations(source, contentRoots, allFolders)[0] ?? '');
+		setMoving(source);
+	}
+
+	function cancelMove() {
+		if (!moving) return;
+		restoreMoveFocus.current = moving.path;
+		setMoving(null);
+	}
+
+	async function commitMove() {
+		if (!moving || busy || !destinations.includes(moveTarget)) return;
+		const name = moving.path.split('/').pop()!;
+		const newPath = moveTarget ? `${moveTarget}/${name}` : name;
+		setBusy(true);
+		const res = await callTool('move_page', {
+			path: moving.path,
+			new_path: newPath,
+			...brainArgs()
+		});
+		setBusy(false);
+		if (res.isError) return toast(firstText(res), true);
+		setMoving(null);
+		toast('Moved ✓');
+		refreshBrowse();
+	}
+
 	async function commitRename() {
 		if (!editing) return;
 		const value = editValue.trim();
@@ -746,7 +833,7 @@ function FileTree({
 	// toggle state the header renders from changes, and unbinds on unmount so the
 	// header drops the toolbar when we leave the view.
 	useLayoutEffect(() => {
-		treeCtl.bound = true;
+		treeCtl.bound = !moving;
 		treeCtl.canManage = canManage;
 		treeCtl.hasHidden = hidden.length > 0;
 		treeCtl.showHidden = showHidden;
@@ -766,7 +853,7 @@ function FileTree({
 			bump();
 		};
 		// eslint-disable-next-line react-hooks/exhaustive-deps
-	}, [canManage, hidden.length, showHidden, sortDesc, allExpanded, allFolders]);
+	}, [canManage, hidden.length, showHidden, sortDesc, allExpanded, allFolders, moving]);
 
 	// Auto-configure the active brain (writes .isomorphic.json for the whole repo), then
 	// reload — the index rebuilds against the new roots and the pages appear.
@@ -792,6 +879,7 @@ function FileTree({
 		startRename,
 		commitRename,
 		cancelRename: () => setEditing(null),
+		startMove,
 		askDelete,
 		add,
 		addValue,
@@ -829,6 +917,52 @@ function FileTree({
 					{configuring ? 'Configuring…' : 'Auto-configure'}
 				</Button>
 			</div>
+		);
+	}
+
+	if (moving) {
+		const name = moving.path.split('/').pop()!;
+		const newPath = moveTarget ? `${moveTarget}/${name}` : name;
+		return (
+			<Flow
+				icon={<FolderIcon />}
+				title={`Move ${moving.dir ? 'folder' : moving.path.endsWith('.md') ? 'note' : 'file'}`}
+				subtitle={moving.path}
+				footer={
+					<>
+						<Button variant="outline" onClick={cancelMove} disabled={busy}>
+							Cancel
+						</Button>
+						<Button onClick={commitMove} disabled={busy || !destinations.length}>
+							{busy ? 'Moving…' : 'Move'}
+						</Button>
+					</>
+				}
+			>
+				{destinations.length ? (
+					<>
+						<label class="block text-sm text-muted">
+							Destination folder
+							<Select
+								data-move-destination
+								value={moveTarget}
+								onChange={(e) => setMoveTarget((e.target as HTMLSelectElement).value)}
+								disabled={busy}
+								class="mt-1 w-full"
+							>
+								{destinations.map((folder) => (
+									<option value={folder} key={folder}>
+										{folder || 'Brain root'}
+									</option>
+								))}
+							</Select>
+						</label>
+						<p class="mt-3 break-all text-xs text-muted">New location: {newPath}</p>
+					</>
+				) : (
+					<p class="text-center text-sm text-muted">There are no other editable folders.</p>
+				)}
+			</Flow>
 		);
 	}
 
