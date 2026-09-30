@@ -21,6 +21,17 @@ export type DetectionKind =
 
 export type Severity = 'low' | 'medium' | 'high';
 
+// What a person reads for each kind. The app shows these; `validate` keeps the kind
+// ids, which an agent reads as well as a label and can quote back.
+export const DETECTION_LABELS: Record<DetectionKind, string> = {
+	'private-key': 'Private key',
+	'api-token': 'API token',
+	'card-number': 'Card number',
+	'us-ssn': 'SSN',
+	'medical-record-number': 'Medical record number',
+	'date-of-birth': 'Date of birth'
+};
+
 export interface Detection {
 	kind: DetectionKind;
 	severity: Severity;

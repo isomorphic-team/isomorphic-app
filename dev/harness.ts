@@ -653,6 +653,7 @@ const STALLED_IN_LOADING_MODE = new Set([
 	'search_pages',
 	'view_graph',
 	'view_activity',
+	'view_review',
 	'members',
 	'analytics',
 	'brain_access'
@@ -915,6 +916,33 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
 			}));
 			const r = text(`${entries.length} recent change(s).`);
 			return { ...r, structuredContent: { view: 'activity', scope: { path: scopePath }, entries } };
+		}
+		case 'view_review': {
+			// Fixtures record no writes, so the guard's report is synthesized: shadow mode
+			// on, two flagged pages, to preview the Review screen with rows in it.
+			const pages = [
+				{
+					path: 'wiki/open-questions.md',
+					count: 3,
+					kinds: [
+						{ kind: 'us-ssn', count: 2 },
+						{ kind: 'date-of-birth', count: 1 }
+					]
+				},
+				{
+					path: 'wiki/playbooks/brand-voice.md',
+					count: 1,
+					kinds: [{ kind: 'api-token', count: 1 }]
+				}
+			];
+			const r = text('4 detection(s) across 2 page(s) in the last 30 days.');
+			return {
+				...r,
+				structuredContent: {
+					view: 'review',
+					policy: { mode: 'shadow', windowDays: 30, total: 4, pages }
+				}
+			};
 		}
 		case 'view_graph': {
 			// Build a real link graph from the fixtures, mirroring the server's view_graph
@@ -1438,6 +1466,7 @@ const editMode = hashMode === 'edit';
 // worth looking at once the app knows where it is.
 const browseMode = hashMode === 'browse' || hashMode === 'loading';
 const activityMode = hashMode === 'activity';
+const reviewMode = hashMode === 'review';
 const graphMode = hashMode === 'graph';
 const membersMode = hashMode === 'members';
 const analyticsMode = hashMode === 'analytics';
@@ -1570,15 +1599,18 @@ bridge.oninitialized = async () => {
 						? 'graph'
 						: activityMode
 							? 'activity'
-							: browseMode
-								? 'browse'
-								: editMode
-									? 'edit'
-									: 'page';
+							: reviewMode
+								? 'review'
+								: browseMode
+									? 'browse'
+									: editMode
+										? 'edit'
+										: 'page';
 	bridge.sendToolInput({
 		arguments:
 			browseMode ||
 			activityMode ||
+			reviewMode ||
 			graphMode ||
 			membersMode ||
 			analyticsMode ||
@@ -1645,6 +1677,8 @@ bridge.oninitialized = async () => {
 		bridge.sendToolResult(await handleTool('view_graph', {}));
 	} else if (activityMode) {
 		bridge.sendToolResult(await handleTool('view_activity', {}));
+	} else if (reviewMode) {
+		bridge.sendToolResult(await handleTool('view_review', {}));
 	} else {
 		const ap = activePages();
 		const apth = Object.keys(ap);

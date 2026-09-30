@@ -55,7 +55,7 @@ Order:
 
 1. **Guard in shadow mode, deterministic detectors only.** Built: `guardStore` plus the
    detectors, recording to D1 `policy_detections` without blocking, opt-in per brain with
-   `"review": {"policy": {"mode": "shadow"}}`, and reported to brain admins in `validate`.
+   `"review": {"policy": {"mode": "shadow"}}`, and reported to brain admins in `validate` and in the app's Review screen (`view_review`).
    Left: turn it on for real brains and measure false positives before anything enforces.
 2. **Foundation.**
    - Revisit [`design/open-source-boundary.md`](design/open-source-boundary.md) and the

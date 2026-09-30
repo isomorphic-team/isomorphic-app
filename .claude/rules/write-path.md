@@ -94,6 +94,11 @@ runtime hand to every tool, so it sees every write that reaches `commitOrPR` or 
   `REPORT_WINDOW_DAYS` of rows as pages and kinds with counts. Brain admin and owner only,
   since a path plus a kind already says where sensitive data sits; editors and viewers get no
   section.
+- **The app's Review screen** (`view_review` in `src/tools/apps.ts`, `app/views/ReviewView.tsx`)
+  shows the same rows through `groupDetections`, the one ordering both surfaces use. The tool
+  refuses below brain admin, and More offers Review (never the rail) only when the active
+  brain's row says `canShare` (`activeBrainIsAdmin`), or on a single-user deployment, whose
+  operator owns it.
 - **The detectors (`policy-detectors.ts`) favor precision.** Emails and phone numbers are
   deliberately not detected, and PHI detectors fire only on labelled values. Add a negative case
   to the battery with any new detector.

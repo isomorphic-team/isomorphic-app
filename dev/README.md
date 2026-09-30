@@ -58,6 +58,7 @@ for everything. Right tool for behaviour, wrong tool for access. Loopback only.
 | `/?mode=pip` (or `?mode=inline` / `?mode=fullscreen`) | force a display mode                       |
 | `/#graph`                                             | the link graph                             |
 | `/#activity`                                          | recent changes                             |
+| `/#review`                                            | the admin Review screen (data policy)      |
 | `/#brains`                                            | the brains list (a shortcut, below)        |
 | `/#nobrains`                                          | first touch: no brains, the create form    |
 | `/#members`                                           | the org roster                             |

@@ -31,6 +31,8 @@ import {
 	guardStore,
 	scanWrites,
 	detectionSection,
+	groupDetections,
+	reviewSummary,
 	MAX_REPORT_PATHS,
 	type WriteDetection
 } from '../src/lib/policy-guard.ts';
@@ -312,6 +314,37 @@ console.log('\nvalidate report: admins only, kinds and counts (6)');
 		capped.includes('- and 3 more page(s)') &&
 			capped.split('\n- wiki/').length === MAX_REPORT_PATHS + 1,
 		capped
+	);
+}
+
+console.log('\nReview screen: grouping and summary (6)');
+{
+	const counts = [
+		{ path: 'wiki/b.md', kind: 'api-token', count: 1 },
+		{ path: 'wiki/a.md', kind: 'date-of-birth', count: 1 },
+		{ path: 'wiki/a.md', kind: 'us-ssn', count: 2 },
+		{ path: 'wiki/c.md', kind: 'api-token', count: 1 }
+	];
+	const g = groupDetections(counts);
+	check('totals every detection', g.total === 5);
+	check(
+		'busiest page first, ties by path',
+		g.pages.map((p) => p.path).join() === 'wiki/a.md,wiki/b.md,wiki/c.md'
+	);
+	check(
+		"a page's kinds busiest first, with its own total",
+		g.pages[0].count === 3 && g.pages[0].kinds.map((k) => k.kind).join() === 'us-ssn,date-of-birth'
+	);
+
+	const off = reviewSummary('off', { total: 0, pages: [] });
+	check('off says how to turn it on', off.includes('"review": {"policy": {"mode": "shadow"}}'));
+	check('nothing recorded says so', off.includes('Nothing recorded in the last 30 days.'));
+	const on = reviewSummary('shadow', g);
+	check(
+		'shadow lists the pages',
+		on.includes('shadow mode') &&
+			on.includes('5 detection(s) across 3 page(s)') &&
+			on.includes('- wiki/a.md: 2 us-ssn, 1 date-of-birth')
 	);
 }
 

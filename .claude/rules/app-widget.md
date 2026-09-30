@@ -34,7 +34,9 @@ too.
   tree and path policy of the brain being left. Every widget call passes `brain` explicitly.
 - **The nav learns what exists from `features` on the `brains` payload** (`analytics`,
   `webBase`, `people`), because a widget cannot list the host's tools. Never offer a destination
-  whose click is refused. Destination lists and scopes: `app/core/nav.ts`. Without
+  whose click is refused. Destination lists and scopes: `app/core/nav.ts`. Review is the one brain destination gated by role
+  (`brainAdmin`, admin+ on the brain being shown), and the one placed in More rather than
+  the rail (`overflow`, `inRail`). Without
   `features.people` (`multiUser` off) the nav hides Sharing, Members, Analytics, Manage brains,
   Share, disconnect, Add brain and Connected accounts (`NavCaps`); `pnpm test:policy` pins
   that, and `pnpm test:scope` pins the matching tool surface.

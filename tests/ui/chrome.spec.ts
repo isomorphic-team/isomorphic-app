@@ -189,6 +189,15 @@ test.describe('the ⋯', () => {
 		for (const name of ['Inline', 'Fullscreen', 'Pop-out'])
 			await expect(body.getByText(name, { exact: true })).toHaveCount(0);
 	});
+
+	test('holds Review, the one brain view that is not in the rail', async ({ page }) => {
+		const app = await openApp(page, 'browse');
+		await go(app, 'More').click();
+		await app.getByRole('button', { name: /Review/ }).click();
+		await expectView(app, 'review');
+		await expect(app.getByText('wiki/open-questions.md')).toBeVisible();
+		await expect(go(app, 'More')).toHaveAttribute('aria-current', 'page');
+	});
 });
 
 test.describe('the trail', () => {

@@ -25,7 +25,7 @@ import {
 	setActiveBrain,
 	webLinkFor
 } from './core/store.ts';
-import { activeDestination, isMorePlace } from './core/nav.ts';
+import { activeDestination, inRail, isMorePlace } from './core/nav.ts';
 import { destinations } from './components/Destinations.tsx';
 import {
 	connectHost,
@@ -303,31 +303,33 @@ function Rail({ view }: { view: View }) {
 				{/* THE RAIL DOES NOT GO AWAY WHILE YOU EDIT. Every destination abandons an
 				    in-progress edit, so `guardNav` asks before discarding (actions.ts)
 				    rather than the rail hiding itself. */}
-				{destinations('brain').map((d) => {
-					// GRAPH IS THE ONE CONTEXTUAL CONTROL. From a page it passes that page's
-					// path, and view_graph with a path returns the subgraph around it, so the
-					// button means "this page's neighbours" there and "the whole brain"
-					// everywhere else. A control whose meaning changes with context has to
-					// say so, which is what the title does.
-					const onPage = d.key === 'graph' && view.kind === 'page';
-					const title = onPage ? 'Show this page in the graph' : d.label;
-					const current = d.key === here;
-					return (
-						<RailItem key={d.key} current={current}>
-							<Button
-								variant="ghost"
-								size="icon"
-								title={title}
-								aria-label={title}
-								aria-current={current ? 'page' : undefined}
-								onClick={guardNav(onPage ? () => openGraph(view.path) : d.open)}
-								class={current ? 'text-accent' : undefined}
-							>
-								{d.icon}
-							</Button>
-						</RailItem>
-					);
-				})}
+				{destinations('brain')
+					.filter((d) => inRail(d.key))
+					.map((d) => {
+						// GRAPH IS THE ONE CONTEXTUAL CONTROL. From a page it passes that page's
+						// path, and view_graph with a path returns the subgraph around it, so the
+						// button means "this page's neighbours" there and "the whole brain"
+						// everywhere else. A control whose meaning changes with context has to
+						// say so, which is what the title does.
+						const onPage = d.key === 'graph' && view.kind === 'page';
+						const title = onPage ? 'Show this page in the graph' : d.label;
+						const current = d.key === here;
+						return (
+							<RailItem key={d.key} current={current}>
+								<Button
+									variant="ghost"
+									size="icon"
+									title={title}
+									aria-label={title}
+									aria-current={current ? 'page' : undefined}
+									onClick={guardNav(onPage ? () => openGraph(view.path) : d.open)}
+									class={current ? 'text-accent' : undefined}
+								>
+									{d.icon}
+								</Button>
+							</RailItem>
+						);
+					})}
 				<span class="my-0.5 h-px w-4 bg-border" />
 				{/* ⋯ IS A DESTINATION LIKE THE REST OF THE RAIL, not a menu. It opens the More
 				    page, which carries the org and account scopes: one press further in than

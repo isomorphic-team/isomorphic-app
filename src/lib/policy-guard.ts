@@ -66,30 +66,74 @@ export function guardStore(store: BrainStore, opts: GuardOptions): BrainStore {
 export const REPORT_WINDOW_DAYS = 30;
 export const MAX_REPORT_PATHS = 20;
 
+/** One page's detections, busiest kind first. */
+export interface DetectionPage {
+	path: string;
+	count: number;
+	kinds: { kind: string; count: number }[];
+}
+
+// Per-(path, kind) counts folded into pages, busiest page first, then by path. The
+// ONE ordering both the `validate` text and the app's Review screen show.
+export function groupDetections(counts: readonly DetectionCount[]): {
+	total: number;
+	pages: DetectionPage[];
+} {
+	const byPath = new Map<string, DetectionPage>();
+	for (const c of counts) {
+		const page = byPath.get(c.path) ?? { path: c.path, count: 0, kinds: [] };
+		page.count += c.count;
+		page.kinds.push({ kind: c.kind, count: c.count });
+		byPath.set(c.path, page);
+	}
+	const pages = [...byPath.values()].sort(
+		(a, b) => b.count - a.count || a.path.localeCompare(b.path)
+	);
+	for (const p of pages) p.kinds.sort((a, b) => b.count - a.count || a.kind.localeCompare(b.kind));
+	return { total: pages.reduce((n, p) => n + p.count, 0), pages };
+}
+
 // The `validate` section for shadow-mode detections: '' unless the caller is a brain
 // admin and there is something to report. Admin-only because even a path and a kind
 // ("wiki/intake.md: us-ssn") says where sensitive data sits. It names kinds and
 // counts, never values, since none are stored.
 export function detectionSection(role: Role, counts: readonly DetectionCount[]): string {
 	if (!roleAtLeast(role, 'admin') || counts.length === 0) return '';
-	const byPath = new Map<string, DetectionCount[]>();
-	for (const c of counts) byPath.set(c.path, [...(byPath.get(c.path) ?? []), c]);
-	const total = (cs: DetectionCount[]) => cs.reduce((n, c) => n + c.count, 0);
-	const pages = [...byPath].sort((a, b) => total(b[1]) - total(a[1]) || a[0].localeCompare(b[0]));
-	const lines = pages.slice(0, MAX_REPORT_PATHS).map(([path, cs]) => {
-		const kinds = [...cs]
-			.sort((a, b) => b.count - a.count || a.kind.localeCompare(b.kind))
-			.map((c) => `${c.count} ${c.kind}`)
-			.join(', ');
-		return `- ${path}: ${kinds}`;
-	});
-	const more = pages.length - lines.length;
-	if (more > 0) lines.push(`- and ${more} more page(s)`);
-	const all = total(counts as DetectionCount[]);
+	const { total, pages } = groupDetections(counts);
 	return (
-		`\n\nData-policy guard (shadow mode, shown to admins only): ${all} detection(s) across` +
+		`\n\nData-policy guard (shadow mode, shown to admins only): ${total} detection(s) across` +
 		` ${pages.length} page(s) in the last ${REPORT_WINDOW_DAYS} days. Recorded as each write` +
 		` landed; nothing was blocked, and a page may have changed since. Values are not stored,` +
-		` so read the page to review.\n${lines.join('\n')}`
+		` so read the page to review.\n${detectionLines(pages)}`
+	);
+}
+
+function detectionLines(pages: readonly DetectionPage[]): string {
+	const lines = pages
+		.slice(0, MAX_REPORT_PATHS)
+		.map((p) => `- ${p.path}: ${p.kinds.map((k) => `${k.count} ${k.kind}`).join(', ')}`);
+	const more = pages.length - lines.length;
+	if (more > 0) lines.push(`- and ${more} more page(s)`);
+	return lines.join('\n');
+}
+
+// The Review screen's text block, for the model reading the result. Says how to turn
+// the guard on when it is off, because that is the only thing to do with an empty
+// screen.
+export function reviewSummary(
+	mode: PolicyMode,
+	grouped: { total: number; pages: readonly DetectionPage[] }
+): string {
+	const state =
+		mode === 'shadow'
+			? 'The data-policy guard is in shadow mode: it records sensitive data in writes and never blocks them.'
+			: 'The data-policy guard is off for this brain. Add "review": {"policy": {"mode": "shadow"}} to .isomorphic.json to record, without blocking, where sensitive data lands.';
+	if (grouped.total === 0) {
+		return `${state}\n\nNothing recorded in the last ${REPORT_WINDOW_DAYS} days.`;
+	}
+	return (
+		`${state}\n\n${grouped.total} detection(s) across ${grouped.pages.length} page(s) in the last` +
+		` ${REPORT_WINDOW_DAYS} days. Values are not stored, so read the page to review.\n` +
+		detectionLines(grouped.pages)
 	);
 }

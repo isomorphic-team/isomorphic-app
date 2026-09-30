@@ -124,7 +124,7 @@ own role.
 **Nav scopes** live in `app/core/nav.ts` (`Scope` = `brain` / `org` / `account`,
 `DEST_META`, `destinationsIn`), pure and pinned by `pnpm test:policy`; glyphs and clicks are
 `app/components/Destinations.tsx`. Brain views (files, graph, search, activity, sharing) are
-the rail; Members and Analytics are ORG scope because sibling brains in one org show the same
+the rail; Review, admin-only and occasional, is a brain view placed in More (`overflow`); Members and Analytics are ORG scope because sibling brains in one org show the same
 answer. The brain glyph at the root of the trail opens the Brains page, which is the switcher.
 
 ## Claiming invitations
