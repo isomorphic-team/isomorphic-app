@@ -48,3 +48,27 @@ export async function recordDetections(
 		)
 	]);
 }
+
+export interface DetectionCount {
+	path: string;
+	kind: string;
+	count: number;
+}
+
+// Detections per (path, kind) recorded since `since` (epoch ms), for the `validate`
+// report. Grouped in SQL so the read stays one small result however noisy a brain is.
+export async function readDetectionCounts(
+	db: D1Database,
+	brainId: string,
+	since: number
+): Promise<DetectionCount[]> {
+	const { results } = await db
+		.prepare(
+			`SELECT path, kind, COUNT(*) AS count FROM policy_detections
+			 WHERE brain_id = ?1 AND created_at >= ?2
+			 GROUP BY path, kind`
+		)
+		.bind(brainId, since)
+		.all<DetectionCount>();
+	return results;
+}

@@ -19,13 +19,22 @@
 //      `review.policy.mode` values mean off, and off returns the store untouched.
 //   5. A WRITE PATH THE GUARD MISSES. Both commitOrPR and commitFiles are wrapped,
 //      and binary (base64) writes are skipped rather than scanned as text.
+//   6. THE REPORT REACHING THE WRONG PERSON. `validate` shows detections to brain
+//      admins only, since even "wiki/intake.md: us-ssn" says where sensitive data
+//      sits, and it lists kinds and counts, never values.
 
 import { localD1 } from '../src/local/d1-sqlite.ts';
 import type { D1Database } from '@cloudflare/workers-types';
 import type { BrainStore, FileWrite } from '../src/lib/brain-repo.ts';
 import { detectSensitive, luhn, type DetectionKind } from '../src/lib/policy-detectors.ts';
-import { guardStore, scanWrites, type WriteDetection } from '../src/lib/policy-guard.ts';
-import { recordDetections, RETENTION_MS } from '../src/lib/policy-store.ts';
+import {
+	guardStore,
+	scanWrites,
+	detectionSection,
+	MAX_REPORT_PATHS,
+	type WriteDetection
+} from '../src/lib/policy-guard.ts';
+import { recordDetections, readDetectionCounts, RETENTION_MS } from '../src/lib/policy-store.ts';
 import { loadBrainConfig, DEFAULT_BRAIN_CONFIG } from '../src/lib/brain-config.ts';
 
 import { checker } from './check.ts';
@@ -252,6 +261,57 @@ console.log('\npolicy_detections: the real migration (2)');
 		'expired rows pruned for this brain only',
 		left.length === 2 && left[0].brain_id === 'b2' && left[1].created_at === now + RETENTION_MS + 1,
 		JSON.stringify(left)
+	);
+}
+
+console.log('\nvalidate report: admins only, kinds and counts (6)');
+{
+	const db = localD1(':memory:').db as unknown as D1Database;
+	const now = 1_800_000_000_000;
+	const scope = { brainId: 'b1', mode: 'shadow' as const };
+	const twoKinds: FileWrite[] = [
+		{ path: 'wiki/intake.md', content: 'SSN 123-45-6789, SSN 234-56-7890, DOB: 04/12/1981' },
+		{ path: 'wiki/setup.md', content: 'AKIAIOSFODNN7EXAMPLE' }
+	];
+	await recordDetections(db, scope, scanWrites(twoKinds), now - 40 * 86_400_000);
+	await recordDetections(db, scope, scanWrites(twoKinds), now);
+	await recordDetections(db, { ...scope, brainId: 'b2' }, scanWrites(twoKinds), now);
+	const counts = await readDetectionCounts(db, 'b1', now - 30 * 86_400_000);
+	const ssn = counts.find((c) => c.path === 'wiki/intake.md' && c.kind === 'us-ssn');
+	check(
+		'counts are per path and kind, inside the window, this brain only',
+		ssn?.count === 2 && counts.length === 3,
+		JSON.stringify(counts)
+	);
+
+	const text = detectionSection('admin', counts);
+	check(
+		'an admin sees the section',
+		text.includes('shadow mode') && text.includes('4 detection(s) across 2 page(s)'),
+		text
+	);
+	check(
+		'the busiest page first, kinds by count',
+		text.includes('- wiki/intake.md: 2 us-ssn, 1 date-of-birth\n- wiki/setup.md: 1 api-token'),
+		text
+	);
+	check('an owner sees it too', detectionSection('owner', counts) === text);
+	check('an editor sees nothing', detectionSection('editor', counts) === '');
+	check('a viewer sees nothing', detectionSection('viewer', counts) === '');
+	check('nothing to report, no section', detectionSection('admin', []) === '');
+	check('no value appears', !text.includes('6789') && !text.includes('AKIA'));
+
+	const many = Array.from({ length: MAX_REPORT_PATHS + 3 }, (_, i) => ({
+		path: `wiki/p${i}.md`,
+		kind: 'us-ssn',
+		count: 1
+	}));
+	const capped = detectionSection('admin', many);
+	check(
+		'long lists are capped',
+		capped.includes('- and 3 more page(s)') &&
+			capped.split('\n- wiki/').length === MAX_REPORT_PATHS + 1,
+		capped
 	);
 }
 

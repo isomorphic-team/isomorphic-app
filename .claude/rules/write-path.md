@@ -90,6 +90,10 @@ runtime hand to every tool, so it sees every write that reaches `commitOrPR` or 
   migration 0015). A failing recorder is swallowed; a failed write records nothing.
 - **Detections carry offsets, never the matched text,** and the table has no column that could
   hold it. Keep it that way: copying a leaked secret into D1 makes the leak worse.
+- **Admins read detections in `validate`** (`detectionSection`): the last
+  `REPORT_WINDOW_DAYS` of rows as pages and kinds with counts. Brain admin and owner only,
+  since a path plus a kind already says where sensitive data sits; editors and viewers get no
+  section.
 - **The detectors (`policy-detectors.ts`) favor precision.** Emails and phone numbers are
   deliberately not detected, and PHI detectors fire only on labelled values. Add a negative case
   to the battery with any new detector.

@@ -12,7 +12,9 @@
 
 import type { BrainStore, FileWrite } from './brain-repo.ts';
 import type { PolicyMode } from './brain-policy.ts';
+import { roleAtLeast, type Role } from './orgs.ts';
 import { detectSensitive, type Detection } from './policy-detectors.ts';
+import type { DetectionCount } from './policy-store.ts';
 
 export interface WriteDetection extends Detection {
 	path: string;
@@ -58,4 +60,36 @@ export function guardStore(store: BrainStore, opts: GuardOptions): BrainStore {
 		commitFiles: (repo, o) => recordLanded(o.writes, () => store.commitFiles(repo, o)),
 		commitOrPR: (repo, o) => recordLanded(o.writes, () => store.commitOrPR(repo, o))
 	};
+}
+
+// How far back `validate` reports, and how many pages it lists.
+export const REPORT_WINDOW_DAYS = 30;
+export const MAX_REPORT_PATHS = 20;
+
+// The `validate` section for shadow-mode detections: '' unless the caller is a brain
+// admin and there is something to report. Admin-only because even a path and a kind
+// ("wiki/intake.md: us-ssn") says where sensitive data sits. It names kinds and
+// counts, never values, since none are stored.
+export function detectionSection(role: Role, counts: readonly DetectionCount[]): string {
+	if (!roleAtLeast(role, 'admin') || counts.length === 0) return '';
+	const byPath = new Map<string, DetectionCount[]>();
+	for (const c of counts) byPath.set(c.path, [...(byPath.get(c.path) ?? []), c]);
+	const total = (cs: DetectionCount[]) => cs.reduce((n, c) => n + c.count, 0);
+	const pages = [...byPath].sort((a, b) => total(b[1]) - total(a[1]) || a[0].localeCompare(b[0]));
+	const lines = pages.slice(0, MAX_REPORT_PATHS).map(([path, cs]) => {
+		const kinds = [...cs]
+			.sort((a, b) => b.count - a.count || a.kind.localeCompare(b.kind))
+			.map((c) => `${c.count} ${c.kind}`)
+			.join(', ');
+		return `- ${path}: ${kinds}`;
+	});
+	const more = pages.length - lines.length;
+	if (more > 0) lines.push(`- and ${more} more page(s)`);
+	const all = total(counts as DetectionCount[]);
+	return (
+		`\n\nData-policy guard (shadow mode, shown to admins only): ${all} detection(s) across` +
+		` ${pages.length} page(s) in the last ${REPORT_WINDOW_DAYS} days. Recorded as each write` +
+		` landed; nothing was blocked, and a page may have changed since. Values are not stored,` +
+		` so read the page to review.\n${lines.join('\n')}`
+	);
 }

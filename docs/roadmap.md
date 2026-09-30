@@ -55,9 +55,8 @@ Order:
 
 1. **Guard in shadow mode, deterministic detectors only.** Built: `guardStore` plus the
    detectors, recording to D1 `policy_detections` without blocking, opt-in per brain with
-   `"review": {"policy": {"mode": "shadow"}}`. Left: a way for an admin to read the
-   detections (today only a D1 query), then measure false positives on real traffic before
-   anything enforces.
+   `"review": {"policy": {"mode": "shadow"}}`, and reported to brain admins in `validate`.
+   Left: turn it on for real brains and measure false positives before anything enforces.
 2. **Foundation.**
    - Revisit [`design/open-source-boundary.md`](design/open-source-boundary.md) and the
      "Nothing hosted-only" rule in `CLAUDE.md`, toward an open-core split: review's model stages
