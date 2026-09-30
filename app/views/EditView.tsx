@@ -16,7 +16,12 @@ import { callTool, firstText } from '../core/host.ts';
 import { bump, show, brainArgs, setEditDirty } from '../core/store.ts';
 import { fetchPage, pageView } from '../core/actions.ts';
 import { toast } from '../core/toast.tsx';
-import { PageProperties } from './PageView.tsx';
+import {
+	PageProperties,
+	applyPropertyChanges,
+	propertyWriteArgs,
+	type PropertyValue
+} from './PageView.tsx';
 import { defineView } from '../core/view-registry.ts';
 import { Button, Toolbar, ToolbarButton, ToolbarSeparator } from '../ui/index.ts';
 
@@ -359,11 +364,27 @@ function EditView({
 }: {
 	state: { path: string; markdown: string; sha: string; fetchedAt?: number };
 }) {
-	// Edit the body only; frontmatter is split off and re-attached server-side, but
-	// still shown (Notion-style) as a bare properties block at the top for context.
+	// The editor holds the body only; frontmatter is split off and re-attached
+	// server-side. Property edits are a draft over it, written by the same Save.
 	const { frontmatter, body } = parseFrontmatter(state.markdown);
 	const apiRef = useRef<EditorApi | null>(null);
 	const [saving, setSaving] = useState(false);
+	const [changes, setChanges] = useState<Record<string, PropertyValue>>({});
+	function changeProperty(key: string, value: PropertyValue) {
+		setChanges((prev) => {
+			const next = { ...prev };
+			const original = frontmatter?.[key];
+			// Setting a key back to what the page already holds is no change at all.
+			const same =
+				value === null
+					? original === undefined
+					: JSON.stringify(value) === JSON.stringify(original);
+			if (same) delete next[key];
+			else next[key] = value;
+			return next;
+		});
+		setEditDirty(true);
+	}
 	async function save() {
 		// The real guard, not just a disabled button: Save also lives in the navbar, and
 		// a page saved mid-upload links to a file the brain does not have yet.
@@ -377,6 +398,7 @@ function EditView({
 				path: state.path,
 				content: apiRef.current?.getMarkdown() ?? body,
 				sha: state.sha,
+				...propertyWriteArgs(changes),
 				...brainArgs()
 			});
 			if (result.isError) {
@@ -443,14 +465,14 @@ function EditView({
 		editCtl.cancel = cancel;
 		editCtl.saving = saving;
 		bump();
-	}, [saving, state.path, state.sha]);
+	}, [saving, state.path, state.sha, changes]);
 
 	// Re-read on every render; the root subscribes to the store and uploadOne bumps it.
 	const uploading = uploadsInFlight();
 
 	return (
 		<div>
-			<PageProperties fm={frontmatter} />
+			<PageProperties fm={applyPropertyChanges(frontmatter, changes)} onChange={changeProperty} />
 			<MarkdownEditor initialMarkdown={body} pagePath={state.path} apiRef={apiRef} />
 			{/* A matching Save at the end for long pages — plain buttons, no boxed footer. */}
 			<div class="mt-8 flex items-center gap-1">

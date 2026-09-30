@@ -150,8 +150,8 @@ agent that opens this repo. When they drift, an agent acts on the drift with con
   and to committed migrations, and refuses remote D1 writes and force-adding `.dev.vars` or
   `wrangler.jsonc`. The Stop hook reruns `gen:app` / `gen:templates` when their sources changed
   and hands the turn back if that changed a file. Reading `.dev.vars` is denied.
-- **Skills** (`.claude/skills/`): `add-tool`, `add-battery`, `new-migration`, and the
-  user-invoked `regen-pr` and `ui-baselines`. `pnpm test:docs` checks them like the rules.
+- **Skills** (`.claude/skills/`): `add-tool`, `add-battery`, `new-migration`, `ui-baselines`,
+  and the user-invoked `regen-pr`. `pnpm test:docs` checks them like the rules.
 
 | Rules file                             | Covers                                                                                         |
 | -------------------------------------- | ---------------------------------------------------------------------------------------------- |

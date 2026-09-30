@@ -1,7 +1,6 @@
 ---
 name: ui-baselines
 description: Regenerate the Playwright visual baselines under tests/ui/__screenshots__/ after an intended change to how the MCP App looks.
-disable-model-invocation: true
 ---
 
 # Regenerate the visual baselines

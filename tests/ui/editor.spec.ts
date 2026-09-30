@@ -5,7 +5,7 @@
 // engine by `pnpm test:patch`. Neither of those can see the editor. What is only
 // visible here is whether the app WIRES the editor up: whether typing reaches the
 // document, whether Save sends what you typed, and whether Cancel really discards.
-import { test, expect } from '@playwright/test';
+import { test, expect, type Page } from '@playwright/test';
 import { openApp, expectView } from './harness.ts';
 
 type App = Awaited<ReturnType<typeof openApp>>;
@@ -80,14 +80,97 @@ test('the same page renders its view live outside the editor', async ({ page }) 
 	await expect(main).not.toContainText('okf-view:snapshot');
 });
 
-test('a legacy published status can migrate to an OKF lifecycle value', async ({ page }) => {
-	const app = await openApp(page, '');
-	await expectView(app, 'page');
+// Property edits are a draft inside the editor: nothing is written until Save, and
+// Save carries them in the SAME write_page call as the body, so the two land in one
+// commit against the sha the editor opened.
+type ToolCall = { name: string; args: Record<string, unknown> };
+const writesOf = (page: Page) =>
+	page.evaluate(() =>
+		((window as unknown as { __toolArgs?: ToolCall[] }).__toolArgs ?? []).filter(
+			(c) => c.name === 'write_page'
+		)
+	);
 
-	await app.getByText('published', { exact: true }).click();
+test('the viewer shows properties read-only', async ({ page }) => {
+	const app = await openApp(page, 'page=wiki/concepts/vision.md');
+	await expectView(app, 'page');
+	const panel = app.locator('main[data-view="page"] dl').first();
+	await expect(panel.getByText('high', { exact: true })).toBeVisible();
+	await expect(panel.getByRole('button')).toHaveCount(0);
+	await expect(app.getByText('+ Add property')).toHaveCount(0);
+});
+
+test('property edits and the body save together in one write', async ({ page }) => {
+	const app = await openApp(page, 'edit=wiki/concepts/vision.md');
+	await expectView(app, 'edit');
+
+	// The legacy `published` status is offered so the select can show it, and any
+	// change lands on an OKF lifecycle value.
+	await app.getByRole('button', { name: 'published', exact: true }).click();
 	const status = app.getByRole('combobox');
 	await expect(status.locator('option')).toHaveText(['published', 'draft', 'stable', 'deprecated']);
 	await status.selectOption('stable');
 
-	await expect(app.getByText('stable', { exact: true })).toBeVisible();
+	await app.getByRole('button', { name: 'high', exact: true }).click();
+	await app.locator('main[data-view="edit"] dl input').fill('medium');
+	await page.keyboard.press('Enter');
+
+	await app.getByText('+ Add property').click();
+	await app.getByPlaceholder('name').fill('owner');
+	await app.getByPlaceholder('value').fill('Northwind');
+	await page.keyboard.press('Enter');
+
+	// Nothing is written while editing.
+	expect(await writesOf(page)).toHaveLength(0);
+
+	const editor = editorOf(app);
+	await editor.click();
+	await page.keyboard.press('ControlOrMeta+End');
+	await page.keyboard.type('\nSaved with its properties.');
+	await action(app, 'Save').click();
+	await expectView(app, 'page');
+
+	const writes = await writesOf(page);
+	expect(writes).toHaveLength(1);
+	expect(writes[0].args).toMatchObject({
+		path: 'wiki/concepts/vision.md',
+		sha: 'preview-sha',
+		status: 'stable',
+		fields: { confidence: 'medium', owner: 'Northwind' }
+	});
+	expect(String(writes[0].args.content)).toContain('Saved with its properties.');
+
+	const panel = app.locator('main[data-view="page"] dl').first();
+	await expect(panel.getByText('stable', { exact: true })).toBeVisible({ timeout: 10_000 });
+	await expect(panel.getByText('medium', { exact: true })).toBeVisible();
+	await expect(panel.getByText('Northwind', { exact: true })).toBeVisible();
+});
+
+test('removing a property is a null in the same write', async ({ page }) => {
+	const app = await openApp(page, 'edit=wiki/concepts/vision.md');
+	await expectView(app, 'edit');
+	await app.getByRole('button', { name: 'Remove Confidence' }).click();
+	await expect(app.getByText('high', { exact: true })).toHaveCount(0);
+
+	await action(app, 'Save').click();
+	await expectView(app, 'page');
+	const writes = await writesOf(page);
+	expect(writes).toHaveLength(1);
+	expect(writes[0].args).toMatchObject({ fields: { confidence: null } });
+	await expect(app.locator('main[data-view="page"]').getByText('Confidence')).toHaveCount(0);
+});
+
+test('Cancel discards property edits', async ({ page }) => {
+	const app = await openApp(page, 'edit=wiki/concepts/vision.md');
+	await expectView(app, 'edit');
+	await app.getByRole('button', { name: 'high', exact: true }).click();
+	await app.locator('main[data-view="edit"] dl input').fill('low');
+	await page.keyboard.press('Enter');
+	await expect(app.getByRole('button', { name: 'low', exact: true })).toBeVisible();
+
+	await action(app, 'Cancel').click();
+	await expectView(app, 'page');
+	expect(await writesOf(page)).toHaveLength(0);
+	const panel = app.locator('main[data-view="page"] dl').first();
+	await expect(panel.getByText('high', { exact: true })).toBeVisible();
 });

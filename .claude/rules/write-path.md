@@ -46,9 +46,10 @@ paths:
 - **Per page by design.** A fields-only batch tool (`set_fields`) was built and cut; the
   reasoning is in `docs/roadmap.md`. **Do not re-add one without reading that item.**
 - **The properties panel** (`PageProperties` in `app/views/PageView.tsx`) imports
-  `isUsableFieldKey` from the write path rather than copying the rules, never edits `sources`
-  or `updated`, and is offered in the viewer only, never in `EditView` (it would race the
-  unsaved body).
+  `isUsableFieldKey` from the write path rather than copying the rules, and never edits
+  `sources` or `updated`. It is read-only in the viewer and editable only in `EditView`, as a
+  draft that Save sends in the same `write_page` call as the body (`propertyWriteArgs`), so a
+  page's properties and body land in one commit against one sha.
 
 ## Retried writes: the write-attempt ledger
 

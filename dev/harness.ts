@@ -18,9 +18,11 @@
 import { AppBridge, PostMessageTransport } from '@modelcontextprotocol/ext-apps/app-bridge';
 import type { CallToolResult } from '@modelcontextprotocol/client';
 import { BRAIN_APP_HTML } from '../src/lib/app-bundle.generated.ts';
-import { slugify, resolveRelative, parseFrontmatter, withFrontmatter } from '../src/lib/wiki.ts';
+import { slugify, resolveRelative, parseFrontmatter } from '../src/lib/wiki.ts';
 import { DEFAULT_BRAIN_CONFIG, isContentPath } from '../src/lib/brain-policy.ts';
 import { classifyMdLink } from '../src/lib/links.ts';
+import { composeUpdate } from '../src/lib/page-write.ts';
+import { MAX_FIELD_KEYS_PER_PAGE } from '../src/lib/brain-index.ts';
 import { uniqueAttachmentPath } from '../src/lib/media.ts';
 import { renderViews, stripSnapshots, hasViews, type ViewContext } from '../src/lib/views.ts';
 // The REAL per-brain access rule (pure, no D1) so the sharing preview resolves
@@ -833,20 +835,17 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
 			if (exists && args?.mode === 'create') return errText(`"${p}" already exists.`);
 			const content = String(args?.content ?? '');
 			if (exists) {
-				const parsed = parseFrontmatter(pg[p]);
-				if (args?.content !== undefined) {
-					// Keep the existing frontmatter, exactly like the server's body-only save.
-					const fm = pg[p].match(/^---\n[\s\S]*?\n---\n?/)?.[0] ?? '';
-					pg[p] = fm + content;
-				} else {
-					// Property-panel writes carry metadata only. Mirror the server enough for
-					// the app to reload and observe the field it just changed.
-					const fm = { ...(parsed.frontmatter ?? {}) };
-					for (const key of ['title', 'type', 'description', 'status'] as const) {
-						if (typeof args?.[key] === 'string') fm[key] = args[key];
-					}
-					pg[p] = withFrontmatter(fm, parsed.body);
-				}
+				// The server's own merge: the body from `content` (or kept), frontmatter
+				// preserved, and title / type / description / status / `fields` applied.
+				const composed = composeUpdate(
+					p,
+					pg[p],
+					args as Parameters<typeof composeUpdate>[2],
+					nowDate().toISOString().slice(0, 10),
+					MAX_FIELD_KEYS_PER_PAGE
+				);
+				if (!composed.ok) return errText(composed.error);
+				pg[p] = composed.content;
 			} else {
 				const title = String(args?.title ?? p.split('/').pop()!.replace(/\.md$/, ''));
 				pg[p] = `---\ntitle: ${title}\n---\n\n${content}`;
@@ -1312,6 +1311,9 @@ bridge.oncalltool = async (params) => {
 	// NOT ask for (see `#pending-input`: an app waiting for a result it knows is coming
 	// must not fetch the tree). Nothing in the preview reads this.
 	((window as unknown as { __toolCalls?: string[] }).__toolCalls ??= []).push(params.name);
+	// The same calls with their arguments, for tests that assert on WHAT a write sent.
+	((window as unknown as { __toolArgs?: { name: string; args: unknown }[] }).__toolArgs ??=
+		[]).push({ name: params.name, args: params.arguments ?? {} });
 	// The slow-result routes need the app's OWN tree fetch to still be in flight when
 	// the opening result lands — that overlap is the whole scenario, and an instant
 	// answer here would close it (see slowResultMode).
