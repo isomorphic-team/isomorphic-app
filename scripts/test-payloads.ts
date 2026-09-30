@@ -261,12 +261,16 @@ check(
 	check('parseReview: a page without a path is dropped', r.pages.length === 1);
 	const empty = parseReview({}).policy;
 	check(
-		'parseReview: an empty payload is an off guard with nothing flagged',
-		empty.mode === 'off' && empty.total === 0 && empty.pages.length === 0 && empty.windowDays === 30
+		'parseReview: an empty payload is the default (on) with nothing flagged',
+		empty.mode === 'shadow' &&
+			empty.total === 0 &&
+			empty.pages.length === 0 &&
+			empty.windowDays === 30
 	);
 	check(
-		'parseReview: an unknown mode reads as off, never as on',
-		parseReview({ policy: { mode: 'enforce' } }).policy.mode === 'off'
+		'parseReview: only an explicit off reads as off',
+		parseReview({ policy: { mode: 'enforce' } }).policy.mode === 'shadow' &&
+			parseReview({ policy: { mode: 'off' } }).policy.mode === 'off'
 	);
 }
 check(

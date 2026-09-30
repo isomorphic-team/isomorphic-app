@@ -174,10 +174,10 @@ export async function loadBrainConfig(store: BrainStore, repo: RepoRef): Promise
 	};
 }
 
-// Unknown or absent → off: a typo must not silently switch a guard on or off in a
-// way the owner did not ask for, and off is the state every brain started in.
+// Only an explicit "off" turns the guard off. Anything else, including a typo, keeps the
+// default: it never blocks, so leaving it on costs a writer nothing.
 export function parsePolicyMode(raw: ConfigFile): PolicyMode {
-	return raw.review?.policy?.mode === 'shadow' ? 'shadow' : 'off';
+	return raw.review?.policy?.mode === 'off' ? 'off' : 'shadow';
 }
 
 // Reload only the settings that shape the derived content index, pinned to the

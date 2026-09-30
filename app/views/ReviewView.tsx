@@ -16,20 +16,11 @@ function kindsLine(p: ReviewPolicyPage): string {
 // The data-policy guard's record for this brain. Admin-only: a path and a kind already
 // say where sensitive data sits.
 function ReviewView({ policy }: { policy: ReviewPolicy }) {
-	if (policy.mode === 'off' && policy.pages.length === 0)
-		return (
-			<div class="mt-16 text-center text-sm text-muted">
-				The data-policy guard is off. Turn it on with{' '}
-				<code class="text-fg">
-					"review": {'{'} "policy": {'{'} "mode": "shadow" {'}'} {'}'}
-				</code>{' '}
-				in <code class="text-fg">.isomorphic.json</code>.
-			</div>
-		);
 	return (
 		<div>
 			<div class="mb-3 text-sm text-muted">
-				{policy.mode === 'shadow' ? 'Shadow mode' : 'Off'} · last {policy.windowDays} days
+				{policy.mode === 'off' ? 'Checks are off for this brain · ' : ''}Last {policy.windowDays}{' '}
+				days
 			</div>
 			{policy.pages.length === 0 ? (
 				<div class="mt-16 text-center text-muted">Nothing flagged.</div>

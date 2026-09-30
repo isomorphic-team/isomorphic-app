@@ -77,14 +77,15 @@ Coverage: `pnpm test:e2e-librarian` drives every write tool against a real brain
 default), including every refusal proving nothing was written; `pnpm test:scope` asserts the
 content writes gate on the BRAIN role at `editor`.
 
-## The data-policy guard (shadow mode)
+## The data-policy guard
 
 `guardStore` (`src/lib/policy-guard.ts`) wraps the `BrainStore` the Worker and the local
 runtime hand to every tool, so it sees every write that reaches `commitOrPR` or `commitFiles`.
 `pnpm test:guard`. Roadmap: "brain review".
 
-- **Off unless the brain opts in** with `"review": {"policy": {"mode": "shadow"}}` in
-  `.isomorphic.json`. Any other value is off, and off returns the store untouched.
+- **On for every brain by default, and never blocking** (`shadow`, an internal name nothing
+  user-facing shows). Only `"review": {"policy": {"mode": "off"}}` in `.isomorphic.json`
+  turns it off; any other value keeps it on, and off returns the store untouched.
 - **Shadow never blocks.** It scans the text writes (`encoding: 'base64'` is skipped), lets the
   write land, then records detections through `policy-store.ts` (D1 `policy_detections`,
   migration 0015). A failing recorder is swallowed; a failed write records nothing.

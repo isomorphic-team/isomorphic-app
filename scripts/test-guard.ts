@@ -15,8 +15,8 @@
 //   3. SHADOW MODE COSTING A WRITE. A failing recorder, or a failing write, must
 //      behave exactly as the unguarded store would: the write lands, or its own
 //      error surfaces, and nothing is recorded for a write that did not land.
-//   4. A GUARD THAT IS ON WHEN NOBODY ASKED. Absent, malformed or unknown
-//      `review.policy.mode` values mean off, and off returns the store untouched.
+//   4. A GUARD THAT IS OFF WHEN NOBODY ASKED. It is on by default and never blocks;
+//      only an explicit `"off"` turns it off, and off returns the store untouched.
 //   5. A WRITE PATH THE GUARD MISSES. Both commitOrPR and commitFiles are wrapped,
 //      and binary (base64) writes are skipped rather than scanned as text.
 //   6. THE REPORT REACHING THE WRONG PERSON. `validate` shows detections to brain
@@ -198,14 +198,14 @@ console.log('\nguardStore: shadow records, never blocks (3, 5)');
 	check('a failed write records nothing', recorded.length === 0);
 }
 
-console.log('\nguardStore and config: off unless asked (4)');
+console.log('\nguardStore and config: on unless turned off (4)');
 {
 	const { store } = stubStore();
 	check(
 		'off returns the store itself',
 		guardStore(store, { mode: 'off', record: async () => {} }) === store
 	);
-	check('the default config is off', DEFAULT_BRAIN_CONFIG.policyMode === 'off');
+	check('the default config is on (shadow)', DEFAULT_BRAIN_CONFIG.policyMode === 'shadow');
 
 	const withConfig = (content: string | null) =>
 		({
@@ -219,14 +219,14 @@ console.log('\nguardStore and config: off unless asked (4)');
 	const modeOf = async (content: string | null) =>
 		(await loadBrainConfig(withConfig(content), repo)).policyMode;
 
+	check('off when asked', (await modeOf('{"review":{"policy":{"mode":"off"}}}')) === 'off');
+	check('absent file: on', (await modeOf(null)) === 'shadow');
+	check('absent key: on', (await modeOf('{"paths":{"wiki/":"content"}}')) === 'shadow');
 	check(
-		'shadow when asked',
-		(await modeOf('{"review":{"policy":{"mode":"shadow"}}}')) === 'shadow'
+		'a typo does not turn it off',
+		(await modeOf('{"review":{"policy":{"mode":"of"}}}')) === 'shadow'
 	);
-	check('absent file: off', (await modeOf(null)) === 'off');
-	check('absent key: off', (await modeOf('{"paths":{"wiki/":"content"}}')) === 'off');
-	check('unknown mode: off', (await modeOf('{"review":{"policy":{"mode":"enforce"}}}')) === 'off');
-	check('malformed file: off', (await modeOf('{not json')) === 'off');
+	check('malformed file: on', (await modeOf('{not json')) === 'shadow');
 }
 
 console.log('\npolicy_detections: the real migration (2)');
@@ -289,7 +289,7 @@ console.log('\nvalidate report: admins only, kinds and counts (6)');
 	const text = detectionSection('admin', counts);
 	check(
 		'an admin sees the section',
-		text.includes('shadow mode') && text.includes('4 detection(s) across 2 page(s)'),
+		text.includes('shown to admins only') && text.includes('4 detection(s) across 2 page(s)'),
 		text
 	);
 	check(
@@ -337,12 +337,16 @@ console.log('\nReview screen: grouping and summary (6)');
 	);
 
 	const off = reviewSummary('off', { total: 0, pages: [] });
-	check('off says how to turn it on', off.includes('"review": {"policy": {"mode": "shadow"}}'));
-	check('nothing recorded says so', off.includes('Nothing recorded in the last 30 days.'));
+	check('off says so', off.includes('turned off for this brain'));
+	check('nothing flagged says so', off.includes('Nothing flagged in the last 30 days.'));
+	check(
+		'no internal mode names reach people',
+		!/shadow/i.test(reviewSummary('shadow', { total: 0, pages: [] }))
+	);
 	const on = reviewSummary('shadow', g);
 	check(
 		'shadow lists the pages',
-		on.includes('shadow mode') &&
+		!/shadow/i.test(on) &&
 			on.includes('5 detection(s) across 3 page(s)') &&
 			on.includes('- wiki/a.md: 2 us-ssn, 1 date-of-birth')
 	);

@@ -545,7 +545,7 @@ export function parseReview(sc: Payload): { policy: ReviewPolicy } {
 	const pages = list<ReviewPolicyPage>(p.pages).filter((x) => typeof x?.path === 'string');
 	return {
 		policy: {
-			mode: p.mode === 'shadow' ? 'shadow' : 'off',
+			mode: p.mode === 'off' ? 'off' : 'shadow',
 			windowDays: typeof p.windowDays === 'number' ? p.windowDays : 30,
 			total: typeof p.total === 'number' ? p.total : 0,
 			pages: pages.map((x) => ({

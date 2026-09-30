@@ -416,7 +416,7 @@ export function registerBrainApp(
 		{
 			...toolAnnotations('Open the review screen', 'read'),
 			description:
-				"view_review: open a brain's Review screen in Isomorphic, for brain admins. It shows what the data-policy guard recorded: which pages had sensitive data written into them (API tokens, private keys, card numbers, Social Security numbers, medical record numbers, dates of birth), how many of each kind, over the last 30 days, and whether the guard is on. Values are never shown or stored. Use when an admin asks whether sensitive or confidential data has landed in the brain, or wants to review data-policy activity.",
+				"view_review: open a brain's Review screen in Isomorphic, for brain admins. It shows what the data-policy guard recorded: which pages had sensitive data written into them (API tokens, private keys, card numbers, Social Security numbers, medical record numbers, dates of birth), how many of each kind, over the last 30 days. Values are never shown or stored. Use when an admin asks whether sensitive or confidential data has landed in the brain, or wants to review data-policy activity.",
 			inputSchema: { brain: brainArg },
 			_meta: { ui: { resourceUri: BRAIN_APP_URI } }
 		},

@@ -918,8 +918,8 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
 			return { ...r, structuredContent: { view: 'activity', scope: { path: scopePath }, entries } };
 		}
 		case 'view_review': {
-			// Fixtures record no writes, so the guard's report is synthesized: shadow mode
-			// on, two flagged pages, to preview the Review screen with rows in it.
+			// Fixtures record no writes, so the guard's report is synthesized: two
+			// flagged pages, to preview the Review screen with rows in it.
 			const pages = [
 				{
 					path: 'wiki/open-questions.md',

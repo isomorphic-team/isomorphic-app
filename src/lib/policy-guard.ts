@@ -4,7 +4,7 @@
 // importer, config) reaches storage through commitOrPR or commitFiles.
 //
 // Shadow mode only, for now (docs/roadmap.md, "brain review", step 1): the guard
-// records what it would flag and never blocks, changes or delays a write beyond
+// records what it finds and never blocks, changes or delays a write beyond
 // the scan itself. A failure to record is swallowed for the same reason, since
 // measurement must never cost a user their edit.
 //
@@ -101,10 +101,9 @@ export function detectionSection(role: Role, counts: readonly DetectionCount[]):
 	if (!roleAtLeast(role, 'admin') || counts.length === 0) return '';
 	const { total, pages } = groupDetections(counts);
 	return (
-		`\n\nData-policy guard (shadow mode, shown to admins only): ${total} detection(s) across` +
-		` ${pages.length} page(s) in the last ${REPORT_WINDOW_DAYS} days. Recorded as each write` +
-		` landed; nothing was blocked, and a page may have changed since. Values are not stored,` +
-		` so read the page to review.\n${detectionLines(pages)}`
+		`\n\nSensitive data found in writes (shown to admins only): ${total} detection(s) across` +
+		` ${pages.length} page(s) in the last ${REPORT_WINDOW_DAYS} days. A page may have changed` +
+		` since. Values are not stored, so read the page to review.\n${detectionLines(pages)}`
 	);
 }
 
@@ -117,22 +116,17 @@ function detectionLines(pages: readonly DetectionPage[]): string {
 	return lines.join('\n');
 }
 
-// The Review screen's text block, for the model reading the result. Says how to turn
-// the guard on when it is off, because that is the only thing to do with an empty
-// screen.
+// The Review screen's text block, for the model reading the result.
 export function reviewSummary(
 	mode: PolicyMode,
 	grouped: { total: number; pages: readonly DetectionPage[] }
 ): string {
-	const state =
-		mode === 'shadow'
-			? 'The data-policy guard is in shadow mode: it records sensitive data in writes and never blocks them.'
-			: 'The data-policy guard is off for this brain. Add "review": {"policy": {"mode": "shadow"}} to .isomorphic.json to record, without blocking, where sensitive data lands.';
+	const off = mode === 'off' ? 'Sensitive-data checks are turned off for this brain.\n\n' : '';
 	if (grouped.total === 0) {
-		return `${state}\n\nNothing recorded in the last ${REPORT_WINDOW_DAYS} days.`;
+		return `${off}Nothing flagged in the last ${REPORT_WINDOW_DAYS} days.`;
 	}
 	return (
-		`${state}\n\n${grouped.total} detection(s) across ${grouped.pages.length} page(s) in the last` +
+		`${off}${grouped.total} detection(s) across ${grouped.pages.length} page(s) in the last` +
 		` ${REPORT_WINDOW_DAYS} days. Values are not stored, so read the page to review.\n` +
 		detectionLines(grouped.pages)
 	);

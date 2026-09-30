@@ -33,8 +33,8 @@ export type MergeMethod = 'MERGE' | 'SQUASH' | 'REBASE';
 
 export type PathRole = 'content' | 'source' | 'log' | 'system';
 
-// The data-policy guard (src/lib/policy-guard.ts). `off` checks nothing; `shadow`
-// records what the guard would flag without ever blocking a write.
+// The data-policy guard (src/lib/policy-guard.ts). `shadow`, the default, records what
+// it finds without ever blocking a write; `off` checks nothing.
 export type PolicyMode = 'off' | 'shadow';
 
 export const PATH_ROLES: readonly PathRole[] = ['content', 'source', 'log', 'system'];
@@ -74,7 +74,7 @@ export interface BrainConfig extends PathPolicy {
 	// importer refuses it rather than guessing at destructive semantics).
 	sourceOfTruth: 'app' | 'source';
 	// The data-policy guard's mode, from `"review": {"policy": {"mode": ...}}`.
-	// Defaults off, so no brain is checked until its owner opts in.
+	// Defaults to shadow: it never blocks, so there is nothing to opt into.
 	policyMode: PolicyMode;
 }
 
@@ -91,7 +91,7 @@ export const DEFAULT_BRAIN_CONFIG: BrainConfig = {
 	mergeMethod: 'MERGE',
 	indexedFields: null,
 	sourceOfTruth: 'app',
-	policyMode: 'off'
+	policyMode: 'shadow'
 };
 
 // Normalize a root/prefix so prefix checks are unambiguous:

@@ -62,7 +62,7 @@ would go stale on `switch_brain`.
 answer, carry no key, and cannot be silenced. **Findings** are advisory, carry a stable
 `[key]`, and can be answered with `resolve` (editor+, in `src/tools/importer.ts`). Nothing
 advisory blocks a save. A third section, shown to brain admins only, lists what the
-data-policy guard recorded in shadow mode (`detectionSection`, see `write-path.md`); it carries
+data-policy guard recorded (`detectionSection`, see `write-path.md`); it carries
 no keys yet and is not answerable with `resolve`.
 
 - **`src/lib/findings.ts`** owns the `Finding` type, keys, and the dismissal ledger at

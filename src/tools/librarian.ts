@@ -1293,7 +1293,7 @@ export function registerLibrarianTools(
 		{
 			...toolAnnotations('Check the brain for problems', 'read'),
 			description:
-				'`validate` checks a brain and reports what needs attention. Two kinds of result, deliberately separate. DEFECTS: broken links — markdown links to missing pages and [[wikilinks]] that match no page. Those have one right answer and cannot be silenced. FINDINGS: everything advisory, each carrying a `[key]` — pending import decisions, Open Knowledge Format structure notes (concepts written as sections inside a folder note instead of getting their own page, pages missing a `type:`, names two pages both answer to), and consolidation tensions (a page nothing links to, a folder note that lists none of its pages, two pages telling the same story). Nothing advisory blocks a save, and any finding can be answered or permanently silenced with `resolve` using its key, so a deliberate choice stops being re-reported. For brain admins it also lists what the data-policy guard recorded in shadow mode (pages and kinds of sensitive data, never the values). Run after big changes or restructures, or when asked to tidy a brain up.',
+				'`validate` checks a brain and reports what needs attention. Two kinds of result, deliberately separate. DEFECTS: broken links — markdown links to missing pages and [[wikilinks]] that match no page. Those have one right answer and cannot be silenced. FINDINGS: everything advisory, each carrying a `[key]` — pending import decisions, Open Knowledge Format structure notes (concepts written as sections inside a folder note instead of getting their own page, pages missing a `type:`, names two pages both answer to), and consolidation tensions (a page nothing links to, a folder note that lists none of its pages, two pages telling the same story). Nothing advisory blocks a save, and any finding can be answered or permanently silenced with `resolve` using its key, so a deliberate choice stops being re-reported. For brain admins it also lists sensitive data found in writes (pages and kinds, never the values). Run after big changes or restructures, or when asked to tidy a brain up.',
 			inputSchema: z.object({ brain: brainArg })
 		},
 		async ({ brain }) => {
@@ -1444,7 +1444,7 @@ export function registerLibrarianTools(
 				// Advisory only; link validation stands alone.
 			}
 
-			// Shadow-mode data-policy detections, for brain admins. Best-effort like the
+			// Data-policy detections, for brain admins. Best-effort like the
 			// rest: an unreadable table costs the caller this section, not the report.
 			let policyText = '';
 			try {
