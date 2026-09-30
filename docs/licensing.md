@@ -2,7 +2,8 @@
 
 Isomorphic is **open source** under the [GNU Affero General Public License v3.0
 only](../LICENSE) (`AGPL-3.0-only`), an [OSI-approved](https://opensource.org/licenses)
-license. Read it, run it, fork it, deploy it, sell services around it. The one obligation that
+license. The one exception is the `ee/` directory, the enterprise features, which is under the
+[Isomorphic Enterprise License](../ee/LICENSE); see [Enterprise features](#enterprise-features). Read it, run it, fork it, deploy it, sell services around it. The one obligation that
 matters: if you modify Isomorphic and let people use your modified version over a network,
 those users are entitled to your modified source.
 
@@ -24,8 +25,19 @@ Where this page and [`LICENSE`](../LICENSE) disagree, the license wins.
 | Run a competing hosted service                                 | Yes, if you publish your modifications   |
 | Embed it in a proprietary product you ship without source      | No, unless you buy a commercial license  |
 
-There is no seat cap, no phone-home, no license key, and nothing in the code checks any of
-this. Internal use is unrestricted.
+For the core there is no seat cap, no phone-home, no license key, and nothing in the code
+checks any of this. Internal use is unrestricted. Only the enterprise features in `ee/` check
+anything, and what they check is a per-org entitlement in your own database.
+
+## Enterprise features
+
+The code in `ee/` (today: model-powered review and the model gateway it uses) is source
+available under the [Isomorphic Enterprise License](../ee/LICENSE): read it, run it, and modify
+it for development and testing; production use needs a subscription. Each feature checks a
+per-org entitlement and does nothing without one, so an unentitled org runs the core product
+unchanged. `ee/` does not accept outside contributions, so no contributor's work is ever under
+that license. Where the line falls and why:
+[`docs/design/open-source-boundary.md`](design/open-source-boundary.md).
 
 ## What AGPL actually requires of you
 

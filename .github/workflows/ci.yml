@@ -129,6 +129,8 @@ jobs:
       - run: pnpm test:dedupe
       # The data-policy guard in shadow mode: detector precision, never blocking a write.
       - run: pnpm test:guard
+      # Enterprise foundation: ZDR routing on every model request, entitlements, the spend cap.
+      - run: pnpm test:ee
       - run: pnpm test:appmeta
       # Every tool carries annotations.title and its read/destructive hint (directory review).
       - run: pnpm test:annotations

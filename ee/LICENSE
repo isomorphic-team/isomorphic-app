@@ -1,0 +1,40 @@
+Isomorphic Enterprise License
+
+Copyright (c) 2026 Isomorphic
+
+This license applies to all files in the "ee" directory of this repository and its
+subdirectories (the "Enterprise Software"). Everything outside that directory is licensed under
+the GNU Affero General Public License, version 3 only, as described in the LICENSE file at the
+root of this repository. The Enterprise Software is not licensed under the AGPL.
+
+1. Production use. You may use the Enterprise Software in production only if you, and any
+   entity you represent, have agreed to and comply with an Isomorphic subscription or other
+   written commercial agreement that covers it (an "Agreement"), and only for the
+   organizations and features that Agreement covers.
+
+2. Development and testing. Without an Agreement, you may copy, modify, and run the Enterprise
+   Software solely for developing and testing it or software that works with it, and not in
+   production.
+
+3. Modifications. You may modify the Enterprise Software as permitted above. Isomorphic and its
+   licensors retain all right, title, and interest in the Enterprise Software, and you agree
+   that Isomorphic retains all right, title, and interest in any modifications you make to it,
+   to the extent permitted by law.
+
+4. Restrictions. You may not remove, disable, or circumvent the entitlement or license checks
+   in the Enterprise Software, and you may not copy, distribute, sell, sublicense, or otherwise
+   make the Enterprise Software available to a third party except as an Agreement permits.
+
+5. Third-party components. Third-party software used by the Enterprise Software remains under
+   its own license.
+
+6. Contributions. Isomorphic does not accept outside contributions to the Enterprise Software.
+
+7. No warranty. THE ENTERPRISE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+   EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS
+   FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL ISOMORPHIC OR ITS LICENSORS
+   BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT
+   OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE ENTERPRISE SOFTWARE OR THE USE
+   OR OTHER DEALINGS IN THE ENTERPRISE SOFTWARE.
+
+For an Agreement, contact legal@isomorphic.sh.
