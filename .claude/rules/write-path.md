@@ -3,7 +3,8 @@ paths:
   - "src/tools/librarian.ts"
   - "src/lib/{page-write,page-patch,change-record,write-target,write-dedupe,write-dedupe-store,brain-policy}.ts"
   - "app/views/{PageView,EditView}.tsx"
-  - "scripts/{test-page-patch,test-record,test-policy,test-dedupe,e2e-librarian}.ts"
+  - "src/lib/{policy-guard,policy-detectors,policy-store}.ts"
+  - "scripts/{test-page-patch,test-record,test-policy,test-dedupe,test-guard,e2e-librarian}.ts"
 ---
 
 # The write path (`write_page`, `move_page`, `delete_page`)
@@ -75,3 +76,20 @@ through `src/lib/write-dedupe.ts` (pure) + `write-dedupe-store.ts` (D1, migratio
 Coverage: `pnpm test:e2e-librarian` drives every write tool against a real brain (offline by
 default), including every refusal proving nothing was written; `pnpm test:scope` asserts the
 content writes gate on the BRAIN role at `editor`.
+
+## The data-policy guard (shadow mode)
+
+`guardStore` (`src/lib/policy-guard.ts`) wraps the `BrainStore` the Worker and the local
+runtime hand to every tool, so it sees every write that reaches `commitOrPR` or `commitFiles`.
+`pnpm test:guard`. Roadmap: "brain review".
+
+- **Off unless the brain opts in** with `"review": {"policy": {"mode": "shadow"}}` in
+  `.isomorphic.json`. Any other value is off, and off returns the store untouched.
+- **Shadow never blocks.** It scans the text writes (`encoding: 'base64'` is skipped), lets the
+  write land, then records detections through `policy-store.ts` (D1 `policy_detections`,
+  migration 0015). A failing recorder is swallowed; a failed write records nothing.
+- **Detections carry offsets, never the matched text,** and the table has no column that could
+  hold it. Keep it that way: copying a leaked secret into D1 makes the leak worse.
+- **The detectors (`policy-detectors.ts`) favor precision.** Emails and phone numbers are
+  deliberately not detected, and PHI detectors fire only on labelled values. Add a negative case
+  to the battery with any new detector.

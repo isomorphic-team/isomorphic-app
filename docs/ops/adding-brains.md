@@ -91,7 +91,8 @@ Roles: `content` (editable pages), `source` (immutable evidence: read by agents,
 written by the tools), `log` (tool-maintained changelog), `system` (out of scope; also the default for any
 unmapped path). Longest prefix wins; `"."` maps the whole repo. Optional blocks:
 `"writes": {"mode": "pull-request", "autoMerge": false}` and
-`"index": {"fields": ["type"]}`. The legacy `contentRoots`/`sourceRoots`/`logPath`/
+`"index": {"fields": ["type"]}`, and `"review": {"policy": {"mode": "shadow"}}` to record
+what the data-policy guard would flag without blocking anything. The legacy `contentRoots`/`sourceRoots`/`logPath`/
 `ignore` shape is still accepted.
 
 See `src/lib/brain-policy.ts` for the full schema and defaults.

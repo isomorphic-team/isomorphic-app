@@ -50,6 +50,8 @@ import { loadCustomToolDefs, registerCustomTools } from './tools/custom.ts';
 import { loadBrainConfig } from './lib/brain-config.ts';
 import { SERVER_INSTRUCTIONS } from './lib/server-instructions.ts';
 import { ensureGitRepo, fsBrainStore } from './local/brain-store-fs.ts';
+import { guardStore } from './lib/policy-guard.ts';
+import { recordDetections } from './lib/policy-store.ts';
 import { localD1 } from './local/d1-sqlite.ts';
 import { WEB_ROUTE_PREFIX, checkWebMcpRequest, webPathFor } from './lib/web-app.ts';
 import { WEB_APP_HEADERS, webShell } from './lib/web-shell.ts';
@@ -138,12 +140,17 @@ function resolveBrain(handle?: string): LocalBrain {
 // does. `opts.brain` is honoured, as it is in the Worker.
 async function getContext(opts?: { brain?: string }): Promise<BrainContext> {
 	const b = resolveBrain(opts?.brain);
+	const config = await loadBrainConfig(b.store, b.repoArgs);
 	return {
-		store: b.store,
+		store: guardStore(b.store, {
+			mode: config.policyMode,
+			record: (detections) =>
+				recordDetections(b.db, { brainId: b.brainId, mode: config.policyMode }, detections)
+		}),
 		repoArgs: b.repoArgs,
 		role: 'owner',
 		orgRole: 'owner',
-		config: await loadBrainConfig(b.store, b.repoArgs),
+		config,
 		author,
 		db: b.db,
 		brainId: b.brainId,

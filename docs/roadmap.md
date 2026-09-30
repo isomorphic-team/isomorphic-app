@@ -19,6 +19,65 @@ UI items near the top. See [`CONTRIBUTING.md`](../CONTRIBUTING.md).
 
 ---
 
+# TODO: brain review (data-policy guard, then consolidation)
+
+One review subsystem with two consumers. The **guard** checks every write before it lands
+against the brain's data policy. **Consolidation** sweeps a brain after content lands for
+duplicates, contradictions and stale derived pages. They share a model gateway, one findings
+queue, rulebooks written as brain pages, and an audit log, so a user resolves a flagged write
+and a proposed merge in the same place.
+
+Settled so far:
+
+- **The choke point is `BrainStore.commitOrPR`,** wrapped where the store is built, so every
+  tool's writes are checked (page writes, moves, media, `sync_records`, config). Checking in
+  `commitBundle` alone would miss media, the importer and config writes.
+- **Policy is a brain page plus structured rules.** A natural-language rulebook page with
+  numbered clauses, referenced from `.isomorphic.json`, which also carries detector toggles,
+  entity lists and per-clause severity. Editing either requires brain admin. Not an OKF change.
+- **Detection is staged, cheapest first:** deterministic detectors in the Worker (credentials,
+  card numbers, national ids, health identifiers), then a fast typed-decision model as a
+  high-recall gate, then a structured-output model only on flagged writes, for span-level
+  findings with the clause cited. Severity comes from the clause, never from model confidence.
+- **Outcomes are tiered.** Low: commit and warn. Medium: return the findings to the agent to
+  fix and resubmit. High: quarantine. The author can fix quarantined content, or release it
+  with a reason that is logged and shown to admins.
+- **Quarantined content lives in D1 with a TTL, never in git,** because anything committed
+  stays in history.
+- **Content goes only to zero-data-retention model endpoints.**
+- **Writes made outside Isomorphic are scanned after the fact** (push webhook), not blocked.
+  Branch lockdown is left to the brain owner.
+- **Forward-only.** No backfill scan of existing content.
+- **A classifier is a guardrail, not a guarantee.** Recall on well-edited prose is limited, and
+  the docs and UI say so.
+
+Order:
+
+1. **Guard in shadow mode, deterministic detectors only.** Built: `guardStore` plus the
+   detectors, recording to D1 `policy_detections` without blocking, opt-in per brain with
+   `"review": {"policy": {"mode": "shadow"}}`. Left: a way for an admin to read the
+   detections (today only a D1 query), then measure false positives on real traffic before
+   anything enforces.
+2. **Foundation.**
+   - Revisit [`design/open-source-boundary.md`](design/open-source-boundary.md) and the
+     "Nothing hosted-only" rule in `CLAUDE.md`, toward an open-core split: review's model stages
+     under `ee/` with a commercial license, and per-org entitlements (`org_entitlements`,
+     `hasFeature`).
+   - The model gateway (zero-retention routing, per-org spend cap).
+   - The unified findings queue in D1, extending the `validate` / `resolve` pattern with a
+     finding `kind` and per-kind visibility. Policy findings are visible to the author and
+     admins only. Consolidation findings are visible to editors.
+3. **Guard enforcement.** The rulebook page, both model stages, the tiers, quarantine,
+   self-release and the audit log.
+4. **Push webhook.** The after-the-fact scan for the guard, and the incremental trigger for
+   consolidation. Can run alongside step 3.
+5. **Consolidation.** Approve/reject only at first, with automatic small fixes enabled per brain
+   by an admin. Its own edits go through the guard like any other write.
+6. **When a deployment needs it:** an entitlement writer driven by billing (outside this
+   repository), and signed offline license keys for self-hosters.
+
+The deterministic detectors, the findings queue and `resolve` stay in the AGPL core.
+
 # TODO: honor hostContext.safeAreaInsets in the app
 
 The `ui://` resource now declares `_meta.ui.prefersBorder: false`, because the app draws

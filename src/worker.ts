@@ -86,6 +86,8 @@ import { dayKey, countedCall } from './lib/usage.ts';
 import { loadCustomToolDefs, registerCustomTools, type CustomToolLoad } from './tools/custom.ts';
 import { resolveInstallationOrg, connectCustomerOrg } from './lib/org-connect.ts';
 import { loadBrainConfig, type BrainConfig } from './lib/brain-config.ts';
+import { guardStore } from './lib/policy-guard.ts';
+import { recordDetections } from './lib/policy-store.ts';
 import {
 	peekJsonRpc,
 	needsBrainPreamble,
@@ -554,15 +556,30 @@ class McpSession {
 				? undefined
 				: commitAuthorFor(await getAppUser(env.PLATFORM_DB, userId), email);
 		this.noteScope(target.org_id, target.brain_id);
+		const store = githubStore(octokit);
+		const config = await this.loadConfig(store, repoArgs);
 		return {
 			octokit,
-			store: githubStore(octokit),
+			store: guardStore(store, {
+				mode: config.policyMode,
+				record: (detections) =>
+					recordDetections(
+						env.PLATFORM_DB,
+						{
+							brainId: target.brain_id,
+							orgId: target.org_id,
+							actorUserId: userId,
+							mode: config.policyMode
+						},
+						detections
+					)
+			}),
 			repoArgs,
 			role: target.role,
 			orgRole: target.org_role,
 			orgId: target.org_id,
 			actorUserId: userId,
-			config: await this.loadConfig(githubStore(octokit), repoArgs),
+			config,
 			author,
 			db: env.PLATFORM_DB,
 			...brainRefs(target)
