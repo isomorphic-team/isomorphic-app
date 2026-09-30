@@ -203,9 +203,12 @@ app UI; performance work with a number attached; better error messages, particul
 will read; support for an OKF construct the spec allows and we mishandle.
 
 **Discuss first:** new MCP tools. The tool surface was cut from 42 to 30 deliberately and
-stands at 36 today, and every tool costs context in every conversation with every user. The bar is high and the reasoning is
+stands at 37 today, and every tool costs context in every conversation with every user. The bar is high and the reasoning is
 in `CLAUDE.md`. Also: new dependencies, schema migrations, and anything that changes what gets
 written into a brain repo.
+
+**Not accepted:** changes to `ee/`, which is under the Isomorphic Enterprise License rather
+than the AGPL. Report a bug there as an issue instead.
 
 **Unlikely merged:** reintroducing a fixed entity-type taxonomy (removed on purpose; `CLAUDE.md`
 explains why); speculative abstraction for a use case that does not exist yet; large refactors

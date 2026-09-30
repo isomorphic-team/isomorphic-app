@@ -14,6 +14,9 @@ this program, in the file LICENSE. If not, see <https://www.gnu.org/licenses/>.
 
 SPDX-License-Identifier: AGPL-3.0-only
 
+The ee/ directory is excluded: it is licensed under the Isomorphic Enterprise License in
+ee/LICENSE, not the AGPL.
+
 See docs/licensing.md for a plain-language explanation of what the AGPL asks of you,
 what it does not reach (your knowledge base, and any MCP client), and how commercial
 licensing works for organizations that cannot accept copyleft.

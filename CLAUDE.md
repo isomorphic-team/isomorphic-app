@@ -5,9 +5,9 @@ protocol, Claude host design guidelines, ProseMirror, Cloudflare limits) live in
 [`docs/references.md`](docs/references.md). Read it, and the primary source, before answering
 from memory about any of that tech; it moves fast.
 
-**This repository is public and open source** (GNU AGPL-3.0-only; contributors sign a CLA).
-Nothing written here carries customer names, real account or resource identifiers, or "our
-deployment" assumptions; see [Public-repo hygiene](#public-repo-hygiene) and
+**This repository is public** (GNU AGPL-3.0-only, contributors sign a CLA; `ee/` is under the
+Isomorphic Enterprise License). Nothing here carries customer names, real account or resource
+identifiers, or "our deployment" assumptions: [Public-repo hygiene](#public-repo-hygiene),
 [`docs/design/open-source-boundary.md`](docs/design/open-source-boundary.md).
 
 This file holds what every session needs. Subsystem detail lives in
@@ -120,8 +120,8 @@ item, check the code before assuming it exists or does not.
 - **No real account or resource identifiers.** Cloudflare ids, installation ids, org logins, the
   Worker name and our hostname come from generated config or env vars. `src/db/seed-*.sql` are
   `<PLACEHOLDER>` templates. `/ops/` is gitignored for anything naming real infrastructure.
-- **Nothing hosted-only.** The hosted service is a deployment of `main`: no private module, no
-  paid-tier flag, no `if (isHosted)`. A deployment-specific need goes in as configuration.
+- **Nothing hosted-only.** The hosted service is a deployment of `main`: no `if (isHosted)`.
+  Paid features live in `ee/` behind a per-org entitlement (`hasFeature`).
 - **No telemetry.** Nothing may report anything to us or to anyone but the operator. The
   Analytics tab counts into the deployment's own D1 and never leaves it.
 
@@ -174,6 +174,7 @@ agent that opens this repo. When they drift, an agent acts on the drift with con
 | `usage-analytics.md`                   | the Analytics tab, `TOOL_KINDS`, recording                                                     |
 | `feedback.md`                          | `submit_feedback` privacy and credential rules                                                 |
 | `loading-states.md`                    | the rotating loading line and its tests                                                        |
+| `ee.md`                                | enterprise features: entitlements, the ZDR model gateway, the spend cap                        |
 
 ## Rules that apply everywhere
 
