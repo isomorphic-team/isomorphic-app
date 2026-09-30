@@ -85,8 +85,8 @@ opens by asking whether the tool should exist at all:
 
 Claude uses a skill when a task matches its description, or you invoke it by name (for example
 `/add-tool`). This repository has five: `add-tool`, `add-battery` (a new test suite),
-`new-migration` (a database change), and two that only a person can start, `regen-pr` and
-`ui-baselines`, because they push code or accept visual changes.
+`new-migration` (a database change), `ui-baselines` (accepting an intended visual change),
+and `regen-pr`, which only a person can start because it pushes code.
 
 ## 4. Hooks for what must always hold
 
