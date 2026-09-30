@@ -12,6 +12,7 @@ import { ensureFresh, listIndexedPages, detectNeedsConfig } from '../lib/brain-i
 import { listNonPagePaths, pathPolicyOf, isContentPath } from '../lib/brain-config.ts';
 import { tryRenderViews } from '../lib/views.ts';
 import type { ListPagesWire, ReadPageWire } from '../lib/tool-payloads.ts';
+import { toolAnnotations } from '../lib/tool-annotations.ts';
 
 export function registerCoreTools(
 	server: McpServer,
@@ -21,8 +22,7 @@ export function registerCoreTools(
 	server.registerTool(
 		'list_pages',
 		{
-			title: 'List brain pages',
-			annotations: { readOnlyHint: true },
+			...toolAnnotations('List brain pages', 'read'),
 			description:
 				"List markdown pages in the brain. With no prefix, returns the brain's editable content (per its .isomorphic.json roots); pass a prefix to filter to a subtree. Paths are relative to the repo root.",
 			inputSchema: z.object({
@@ -115,8 +115,7 @@ export function registerCoreTools(
 	server.registerTool(
 		'read_page',
 		{
-			title: 'Read a brain page',
-			annotations: { readOnlyHint: true },
+			...toolAnnotations('Read a brain page', 'read'),
 			// Deliberately verbose and self-naming. This tool is the one an agent
 			// looks for by name mid-task ("I need read_page"), and a terse one-liner
 			// lost host tool-search ranking to view_page, whose description named

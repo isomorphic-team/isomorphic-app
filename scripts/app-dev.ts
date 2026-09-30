@@ -18,7 +18,7 @@ import { spawn } from 'node:child_process';
 import { createReadStream, watch } from 'node:fs';
 import { stat } from 'node:fs/promises';
 import { createServer } from 'node:http';
-import { extname, join, normalize } from 'node:path';
+import { extname, join, posix } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const abs = (rel: string) => fileURLToPath(new URL(`../${rel}`, import.meta.url));
@@ -37,7 +37,13 @@ const ONCE = process.argv.includes('--once');
 
 function genApp(): Promise<void> {
 	return new Promise((resolve) => {
-		spawn('pnpm', ['gen:app'], { cwd: abs('.'), stdio: 'inherit' }).on('close', () => resolve());
+		// tsx's own entry point under THIS node, rather than `pnpm gen:app`: on Windows
+		// `pnpm` is a .cmd shim that spawn cannot launch without a shell, and a shell
+		// splits paths at spaces (and Node deprecates passing it args, DEP0190).
+		spawn(process.execPath, [abs('node_modules/tsx/dist/cli.mjs'), abs('scripts/gen-app.ts')], {
+			cwd: abs('.'),
+			stdio: 'inherit'
+		}).on('close', () => resolve());
 	});
 }
 
@@ -69,7 +75,12 @@ if (ONCE) {
 	createServer(async (req, res) => {
 		// Path only: the harness reads ?now=/?mode= client-side, and a query string must
 		// not become part of the filename we try to open.
-		const rel = normalize(decodeURIComponent((req.url ?? '/').split('?')[0]));
+		//
+		// POSIX normalize, because this is a URL path and not a file path. The platform one
+		// turns `/` into `\` on Windows, so the `rel === '/'` test below never matched,
+		// the root resolved to the dev/ FOLDER, and every page answered 404: every
+		// functional UI test failed on Windows before it opened the app.
+		const rel = posix.normalize(decodeURIComponent((req.url ?? '/').split('?')[0]));
 		const file = join(root, rel === '/' || rel.endsWith('/') ? `${rel}/index.html` : rel);
 		// Contain the server to dev/ even though it only ever serves this repo's own
 		// files: a static server that honours `..` is not one to leave lying around.

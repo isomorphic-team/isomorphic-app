@@ -141,6 +141,38 @@ test.describe('the app in a browser tab', () => {
 		expect(await at(page)).toEqual(second);
 	});
 
+	// The header's own back button, in a tab, IS the browser's Back. If it popped the
+	// app's stack instead it would replaceState over the current entry, so the page
+	// would come back while the browser's Forward silently stopped working: the
+	// goForward below is the assertion that tells the two apart.
+	test("the header's back button is the browser's Back, so Forward still works", async ({
+		page
+	}) => {
+		await page.goto(`${BASE}${INDEX}`);
+		await settled(page);
+		const first = await at(page);
+		const back = page.getByRole('button', { name: 'Back', exact: true });
+		// A tab that arrived cold has nothing IN THE APP behind it. Back would leave for
+		// whatever site came before, which is the browser's button's job.
+		await expect(back).toBeDisabled();
+
+		const link = page.locator('.prose a').first();
+		const name = await link.innerText();
+		await link.click();
+		await settled(page, name);
+		const second = await at(page);
+		await expect(back).toBeEnabled();
+
+		await back.click();
+		await settled(page, first.heading);
+		expect(await at(page)).toEqual(first);
+		await expect(back).toBeDisabled();
+
+		await page.goForward();
+		await settled(page, second.heading);
+		expect(await at(page)).toEqual(second);
+	});
+
 	test('the URL you copy opens the page you were reading', async ({ page, context }) => {
 		await page.goto(`${BASE}${INDEX}`);
 		await settled(page);
