@@ -1,40 +1,33 @@
-Isomorphic Enterprise License
-
+The Isomorphic Enterprise license (the "Enterprise License")
 Copyright (c) 2026 Isomorphic
 
-This license applies to all files in the "ee" directory of this repository and its
-subdirectories (the "Enterprise Software"). Everything outside that directory is licensed under
-the GNU Affero General Public License, version 3 only, as described in the LICENSE file at the
-root of this repository. The Enterprise Software is not licensed under the AGPL.
+With regard to the Isomorphic Software in this "ee" directory and its subdirectories:
 
-1. Production use. You may use the Enterprise Software in production only if you, and any
-   entity you represent, have agreed to and comply with an Isomorphic subscription or other
-   written commercial agreement that covers it (an "Agreement"), and only for the
-   organizations and features that Agreement covers.
+This software and associated documentation files (the "Software") may only be used in
+production, if you (and any entity that you represent) have agreed to, and are in compliance
+with, the Isomorphic subscription terms, or other agreement governing the use of the Software,
+as agreed by you and Isomorphic (the "Enterprise Terms"), and otherwise have a valid Isomorphic
+Enterprise license for the organizations and features you use it for. Subject to the foregoing
+sentence, you are free to modify this Software and publish patches to the Software. You agree
+that Isomorphic and/or its licensors (as applicable) retain all right, title and interest in and
+to all such modifications and/or patches, and all such modifications and/or patches may only be
+used, copied, modified, displayed, distributed, or otherwise exploited with a valid Isomorphic
+Enterprise license for the organizations and features they are used for. Notwithstanding the
+foregoing, you may copy and modify the Software for development and testing purposes, without
+requiring a subscription. You agree that Isomorphic and/or its licensors (as applicable) retain
+all right, title and interest in and to all such modifications. You are not granted any other
+rights beyond what is expressly stated herein. Subject to the foregoing, it is forbidden to
+copy, merge, publish, distribute, sublicense, and/or sell the Software.
 
-2. Development and testing. Without an Agreement, you may copy, modify, and run the Enterprise
-   Software solely for developing and testing it or software that works with it, and not in
-   production.
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING
+BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM,
+DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-3. Modifications. You may modify the Enterprise Software as permitted above. Isomorphic and its
-   licensors retain all right, title, and interest in the Enterprise Software, and you agree
-   that Isomorphic retains all right, title, and interest in any modifications you make to it,
-   to the extent permitted by law.
+For all third party components incorporated into the Isomorphic Software, those components are
+licensed under the original license provided by the owner of the applicable component.
 
-4. Restrictions. You may not remove, disable, or circumvent the entitlement or license checks
-   in the Enterprise Software, and you may not copy, distribute, sell, sublicense, or otherwise
-   make the Enterprise Software available to a third party except as an Agreement permits.
-
-5. Third-party components. Third-party software used by the Enterprise Software remains under
-   its own license.
-
-6. Contributions. Isomorphic does not accept outside contributions to the Enterprise Software.
-
-7. No warranty. THE ENTERPRISE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
-   EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS
-   FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL ISOMORPHIC OR ITS LICENSORS
-   BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT
-   OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE ENTERPRISE SOFTWARE OR THE USE
-   OR OTHER DEALINGS IN THE ENTERPRISE SOFTWARE.
-
-For an Agreement, contact legal@isomorphic.sh.
+Everything outside this "ee" directory is licensed under the GNU Affero General Public License,
+version 3 only, in the LICENSE file at the root of this repository. For an Enterprise license,
+contact legal@isomorphic.sh.
