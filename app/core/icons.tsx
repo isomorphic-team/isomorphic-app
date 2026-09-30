@@ -142,6 +142,27 @@ const ChartIcon = () => (
 		/>
 	</svg>
 );
+// Review. A shield, because what the screen answers is "is anything here that should
+// not be".
+const ShieldIcon = () => (
+	<svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true">
+		<path
+			fill="none"
+			stroke="currentColor"
+			stroke-width="1.5"
+			stroke-linejoin="round"
+			d="M8 1.8l5 1.9v4.1c0 3.1-2.1 5.4-5 6.4-2.9-1-5-3.3-5-6.4V3.7z"
+		/>
+		<path
+			fill="none"
+			stroke="currentColor"
+			stroke-width="1.5"
+			stroke-linecap="round"
+			stroke-linejoin="round"
+			d="M5.8 8l1.6 1.6 2.9-3"
+		/>
+	</svg>
+);
 const HistoryIcon = () => (
 	<svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true">
 		<circle cx="8" cy="8" r="6.25" fill="none" stroke="currentColor" stroke-width="1.5" />
@@ -456,6 +477,7 @@ export {
 	ListIcon,
 	SearchIcon,
 	HistoryIcon,
+	ShieldIcon,
 	ChartIcon,
 	GraphIcon,
 	PeopleIcon,

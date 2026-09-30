@@ -33,6 +33,7 @@ export type LoadingTask =
 	| 'search'
 	| 'graph'
 	| 'activity'
+	| 'review'
 	| 'members'
 	| 'analytics'
 	| 'brains'
@@ -80,6 +81,7 @@ const WARM: Record<LoadingTask, string[]> = {
 	],
 	graph: ['Drawing the links in {brain}…', 'Wiring up {pages} pages…', 'Finding the clusters…'],
 	activity: ['Rewinding {brain}…', 'Reading the changelog…', 'Working out who touched what…'],
+	review: ['Checking {brain} for anything sensitive…', 'Reading the flags…'],
 	members: ['Rounding up {org}…', 'Counting heads…', 'Reading the roster…'],
 	analytics: ['Tallying up {org}…', 'Doing the arithmetic…', 'Adding up the week…'],
 	brains: ['Lining up your brains…', 'Seeing where you can go…'],

@@ -259,6 +259,25 @@ export interface ActivityViewWire extends InBrain {
 	entries: ActivityEntry[];
 }
 
+/** One page the data-policy guard flagged, as the Review screen lists it. */
+export interface ReviewPolicyPage {
+	path: string;
+	count: number;
+	kinds: { kind: string; count: number }[];
+}
+
+/** The Review screen (view_review in src/tools/apps.ts). Brain admins only. */
+export interface ReviewViewWire extends InBrain {
+	view: 'review';
+	webUrl?: string;
+	policy: {
+		mode: 'off' | 'shadow';
+		windowDays: number;
+		total: number;
+		pages: ReviewPolicyPage[];
+	};
+}
+
 export interface GraphViewWire extends InBrain {
 	view: 'graph';
 	webUrl?: string;
@@ -514,6 +533,30 @@ export function parseActivity(sc: Payload): { entries: ActivityEntry[]; scopePat
 	return { entries: list<ActivityEntry>(w.entries), scopePath: str(obj(w.scope).path) };
 }
 
+export interface ReviewPolicy {
+	mode: 'off' | 'shadow';
+	windowDays: number;
+	total: number;
+	pages: ReviewPolicyPage[];
+}
+
+export function parseReview(sc: Payload): { policy: ReviewPolicy } {
+	const p = obj(wire<ReviewViewWire>(sc).policy);
+	const pages = list<ReviewPolicyPage>(p.pages).filter((x) => typeof x?.path === 'string');
+	return {
+		policy: {
+			mode: p.mode === 'off' ? 'off' : 'shadow',
+			windowDays: typeof p.windowDays === 'number' ? p.windowDays : 30,
+			total: typeof p.total === 'number' ? p.total : 0,
+			pages: pages.map((x) => ({
+				path: x.path,
+				count: typeof x.count === 'number' ? x.count : 0,
+				kinds: list<{ kind: string; count: number }>(x.kinds)
+			}))
+		}
+	};
+}
+
 export function parseGraph(sc: Payload): {
 	nodes: GraphNode[];
 	links: GraphLink[];
@@ -685,6 +728,7 @@ export type ToolView =
 	| ({ kind: 'edit' } & Required<PageContent>)
 	| ({ kind: 'activity' } & ReturnType<typeof parseActivity>)
 	| ({ kind: 'graph' } & ReturnType<typeof parseGraph>)
+	| ({ kind: 'review' } & ReturnType<typeof parseReview>)
 	| ({ kind: 'members' } & ReturnType<typeof parseMembers>)
 	| ({ kind: 'analytics' } & ReturnType<typeof parseAnalytics>)
 	| ({ kind: 'brain-access' } & ReturnType<typeof parseBrainAccess>)
@@ -708,6 +752,8 @@ export function parseToolView(sc: Payload): ToolView {
 			return { kind: 'activity', ...parseActivity(sc) };
 		case 'graph':
 			return { kind: 'graph', ...parseGraph(sc) };
+		case 'review':
+			return { kind: 'review', ...parseReview(sc) };
 		case 'members':
 			return { kind: 'members', ...parseMembers(sc) };
 		case 'analytics':

@@ -31,7 +31,9 @@ export type {
 	OrgTarget,
 	BrainAccessEntry,
 	BrainAccessSelf,
-	ConnectedAccount
+	ConnectedAccount,
+	ReviewPolicy,
+	ReviewPolicyPage
 } from '../../src/lib/tool-payloads.ts';
 
 // A backlink surfaced by find_inbound_links (see src/tools/librarian.ts).

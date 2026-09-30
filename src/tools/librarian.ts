@@ -92,6 +92,8 @@ import { elisionNote } from '../lib/search.ts';
 import { parseLedger } from '../lib/brain-import.ts';
 import { dedupeWrite, writeFingerprint, secondsSince } from '../lib/write-dedupe.ts';
 import { d1WriteLedger } from '../lib/write-dedupe-store.ts';
+import { detectionSection, REPORT_WINDOW_DAYS } from '../lib/policy-guard.ts';
+import { readDetectionCounts } from '../lib/policy-store.ts';
 import { brainLabel, type TenantOpts, type Role, type AccessibleBrain } from '../lib/orgs.ts';
 import { brainArg, fail, ok } from './shared.ts';
 import { checkPageWrite, planPageWrite, composeCreate, composeUpdate } from '../lib/page-write.ts';
@@ -1291,11 +1293,11 @@ export function registerLibrarianTools(
 		{
 			...toolAnnotations('Check the brain for problems', 'read'),
 			description:
-				'`validate` checks a brain and reports what needs attention. Two kinds of result, deliberately separate. DEFECTS: broken links — markdown links to missing pages and [[wikilinks]] that match no page. Those have one right answer and cannot be silenced. FINDINGS: everything advisory, each carrying a `[key]` — pending import decisions, Open Knowledge Format structure notes (concepts written as sections inside a folder note instead of getting their own page, pages missing a `type:`, names two pages both answer to), and consolidation tensions (a page nothing links to, a folder note that lists none of its pages, two pages telling the same story). Nothing advisory blocks a save, and any finding can be answered or permanently silenced with `resolve` using its key, so a deliberate choice stops being re-reported. Run after big changes or restructures, or when asked to tidy a brain up.',
+				'`validate` checks a brain and reports what needs attention. Two kinds of result, deliberately separate. DEFECTS: broken links — markdown links to missing pages and [[wikilinks]] that match no page. Those have one right answer and cannot be silenced. FINDINGS: everything advisory, each carrying a `[key]` — pending import decisions, Open Knowledge Format structure notes (concepts written as sections inside a folder note instead of getting their own page, pages missing a `type:`, names two pages both answer to), and consolidation tensions (a page nothing links to, a folder note that lists none of its pages, two pages telling the same story). Nothing advisory blocks a save, and any finding can be answered or permanently silenced with `resolve` using its key, so a deliberate choice stops being re-reported. For brain admins it also lists sensitive data found in writes (pages and kinds, never the values). Run after big changes or restructures, or when asked to tidy a brain up.',
 			inputSchema: z.object({ brain: brainArg })
 		},
 		async ({ brain }) => {
-			const { store, repoArgs, config, db, brainId } = await getContext({ brain });
+			const { store, repoArgs, config, db, brainId, role } = await getContext({ brain });
 			const { truncated } = await ensureFresh(db, store, repoArgs, brainId, config);
 			const resolved = await loadResolvedGraph(db, brainId, config);
 
@@ -1442,7 +1444,17 @@ export function registerLibrarianTools(
 				// Advisory only; link validation stands alone.
 			}
 
-			const extras = `${truncationNote(truncated)}${pendingText}${toolText}${findingsText}`;
+			// Data-policy detections, for brain admins. Best-effort like the
+			// rest: an unreadable table costs the caller this section, not the report.
+			let policyText = '';
+			try {
+				const since = Date.now() - REPORT_WINDOW_DAYS * 24 * 60 * 60 * 1000;
+				policyText = detectionSection(role, await readDetectionCounts(db, brainId, since));
+			} catch {
+				// Advisory only; link validation stands alone.
+			}
+
+			const extras = `${truncationNote(truncated)}${pendingText}${toolText}${findingsText}${policyText}`;
 			if (problemCount === 0) {
 				return ok(`Checked ${pageCount} page(s) — no broken links.${extras}`);
 			}

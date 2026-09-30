@@ -13,7 +13,8 @@ import {
 	ListIcon,
 	PeopleIcon,
 	SearchIcon,
-	ShareIcon
+	ShareIcon,
+	ShieldIcon
 } from '../core/icons.tsx';
 import {
 	openActivity,
@@ -23,10 +24,11 @@ import {
 	openBrowse,
 	openGraph,
 	openMembers,
+	openReview,
 	openSearch,
 	openSettings
 } from '../core/actions.ts';
-import { brainList, features } from '../core/store.ts';
+import { activeBrainIsAdmin, brainList, features } from '../core/store.ts';
 import { DEST_META, destinationsIn, type DestKey, type Scope } from '../core/nav.ts';
 
 const DEST_ICON: Record<DestKey, VNode> = {
@@ -35,6 +37,7 @@ const DEST_ICON: Record<DestKey, VNode> = {
 	graph: <GraphIcon />,
 	activity: <HistoryIcon />,
 	sharing: <ShareIcon />,
+	review: <ShieldIcon />,
 	members: <PeopleIcon />,
 	analytics: <ChartIcon />,
 	brains: <BrainGlyph />,
@@ -47,6 +50,7 @@ const DEST_OPEN: Record<DestKey, () => void> = {
 	graph: () => openGraph(),
 	activity: () => openActivity(),
 	sharing: () => openBrainAccess(),
+	review: () => openReview(),
 	members: () => openMembers(),
 	analytics: () => openAnalytics(),
 	brains: () => openBrains(),
@@ -69,6 +73,7 @@ export function destinations(scope: Scope): Destination[] {
 	const caps = {
 		analytics: features.analytics,
 		canManageBrains: !!brainList?.some((b) => b.canManage),
+		brainAdmin: activeBrainIsAdmin(),
 		people: features.people
 	};
 	return destinationsIn(scope, caps).map((key) => ({

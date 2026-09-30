@@ -53,6 +53,7 @@ export const WEB_TOOL_ROUTING: Readonly<Record<string, WebRouting>> = {
 	browse_brain: { kind: 'root' },
 	view_graph: { kind: 'view', token: 'graph', param: 'focus' },
 	view_activity: { kind: 'view', token: 'activity', param: 'path' },
+	view_review: { kind: 'view', token: 'review' },
 	brain_access: { kind: 'view', token: 'access' },
 	// Not a widget tool (the app calls it and renders the hits itself), but it is a
 	// destination by the three tests above, and the query is the whole of its state.

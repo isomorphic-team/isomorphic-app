@@ -36,6 +36,7 @@ export const TOOL_KINDS: Record<string, UsageKind> = {
 	find_inbound_links: 'read',
 	view_graph: 'read',
 	view_activity: 'read',
+	view_review: 'read',
 	validate: 'read',
 	brains: 'read',
 	switch_brain: 'read',
