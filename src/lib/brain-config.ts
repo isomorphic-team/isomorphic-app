@@ -26,6 +26,7 @@ import {
 	type BrainConfig,
 	type MergeMethod,
 	type PathRole,
+	type PolicyMode,
 	type WriteMode,
 	CONFIG_PATH,
 	DEFAULT_BRAIN_CONFIG,
@@ -86,6 +87,7 @@ interface ConfigFile extends LegacyConfigFile {
 	sourceOfTruth?: unknown;
 	writes?: { mode?: unknown; autoMerge?: unknown };
 	index?: { fields?: unknown };
+	review?: { policy?: { mode?: unknown } };
 }
 
 // Parse the path→role map from either file shape. New shape: a `paths` record
@@ -167,8 +169,15 @@ export async function loadBrainConfig(store: BrainStore, repo: RepoRef): Promise
 		mergeMethod,
 		// Distinguish "absent" (null → index all keys) from an explicit list.
 		indexedFields: Array.isArray(rawFields) ? stringList(rawFields, []) : null,
-		sourceOfTruth: raw.sourceOfTruth === 'source' ? 'source' : 'app'
+		sourceOfTruth: raw.sourceOfTruth === 'source' ? 'source' : 'app',
+		policyMode: parsePolicyMode(raw)
 	};
+}
+
+// Only an explicit "off" turns the guard off. Anything else, including a typo, keeps the
+// default: it never blocks, so leaving it on costs a writer nothing.
+export function parsePolicyMode(raw: ConfigFile): PolicyMode {
+	return raw.review?.policy?.mode === 'off' ? 'off' : 'shadow';
 }
 
 // Reload only the settings that shape the derived content index, pinned to the

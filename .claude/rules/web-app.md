@@ -83,7 +83,8 @@ explicit `why` it is not. **Every new widget tool needs a decision here.**
 - **"Open in browser"** is in the header's window group (`WindowControls` in `app/main.tsx`).
   The widget builds the URL (`webLinkFor` in `store.ts`) from `features.webBase` on the `brains`
   payload (`webBaseUrl`: authjs + `PUBLIC_BASE_URL`, else absent). Never on the web host or the
-  editor. Every widget result (`view_page`, `browse_brain`, `view_graph`, `view_activity`)
+  editor. Every widget result (`view_page`, `browse_brain`, `view_graph`, `view_activity`,
+  `view_review`)
   carries `webUrl` in BOTH `structuredContent` and the text: hosts that get
   `structuredContent` drop the text. `test:e2e-librarian` pins both. `read_page` carries none.
 - **`script-src` still carries `'unsafe-inline'`** because the bundle is one self-contained

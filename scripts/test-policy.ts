@@ -54,7 +54,13 @@ import {
 } from '../app/core/store.ts';
 import type { View } from '../app/core/types.ts';
 import { renderAge, refreshOutcome } from '../app/core/util.ts';
-import { DEST_META, destinationsIn, activeDestination, isMorePlace } from '../app/core/nav.ts';
+import {
+	DEST_META,
+	destinationsIn,
+	activeDestination,
+	isMorePlace,
+	inRail
+} from '../app/core/nav.ts';
 import { panelPlacement, GAP, COMFORTABLE } from '../app/core/menu-placement.ts';
 
 import { checker } from './check.ts';
@@ -417,23 +423,37 @@ console.log('\nbrowse_brain fits in a tool result');
 // are somewhere they are not.
 console.log('\nnav destinations');
 {
-	const full = { analytics: true, canManageBrains: true, people: true };
-	const bare = { analytics: false, canManageBrains: false, people: true };
+	const full = { analytics: true, canManageBrains: true, people: true, brainAdmin: true };
+	const bare = { analytics: false, canManageBrains: false, people: true, brainAdmin: false };
 	// A single-user deployment: nobody else signs in, so none of the people, sharing
-	// or brain-management tools exist, whatever the caller's role.
-	const solo = { analytics: true, canManageBrains: true, people: false };
+	// or brain-management tools exist, whatever the caller's role. Its operator owns
+	// every brain, so Review stays.
+	const solo = { analytics: true, canManageBrains: true, people: false, brainAdmin: true };
 
 	check(
-		'the rail is the five views OF a brain, in rail order',
-		destinationsIn('brain', full).join() === 'files,graph,search,activity,sharing'
+		'the brain scope is its six views, in order',
+		destinationsIn('brain', full).join() === 'files,graph,search,activity,sharing,review'
 	);
 	check(
-		'…and none of them is gated by ROLE: every one is open to anyone who can reach the brain',
+		'the rail holds five of them: Review lives in More, so the rail is the same for every role',
+		destinationsIn('brain', full).filter(inRail).join() === 'files,graph,search,activity,sharing'
+	);
+	check(
+		'More lights on Review, and not on a rail view',
+		isMorePlace('review') && !isMorePlace('activity')
+	);
+	check(
+		'…and only Review is gated by ROLE: the rest are open to anyone who can reach the brain',
 		destinationsIn('brain', bare).join() === 'files,graph,search,activity,sharing'
 	);
 	check(
+		'Review follows the brain role alone, not org admin or the deployment',
+		destinationsIn('brain', { ...bare, brainAdmin: true }).includes('review') &&
+			!destinationsIn('brain', { ...full, brainAdmin: false }).includes('review')
+	);
+	check(
 		'a single-user deployment offers no Sharing, Members, Analytics or Manage brains',
-		destinationsIn('brain', solo).join() === 'files,graph,search,activity' &&
+		destinationsIn('brain', solo).join() === 'files,graph,search,activity,review' &&
 			destinationsIn('org', solo).join() === '' &&
 			destinationsIn('account', solo).join() === 'settings'
 	);
@@ -466,6 +486,7 @@ console.log('\nnav destinations');
 	);
 
 	check('a view that IS a destination marks it', activeDestination('browse') === 'files');
+	check('…Review too', activeDestination('review') === 'review');
 	check('…including the org ones', activeDestination('members') === 'members');
 	// A pushed flow has not left the destination it was opened from, so the control that
 	// got you there stays lit rather than going dark mid-flow.

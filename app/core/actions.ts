@@ -24,6 +24,7 @@ import {
 	parseAsset,
 	parseSearchHits,
 	parseActivity,
+	parseReview,
 	parseGraph,
 	parseMembers,
 	parseBrainAccess,
@@ -499,6 +500,8 @@ function openWebTarget(t: WebTarget): void {
 			return void openGraph(t.arg);
 		case 'activity':
 			return void openActivity(t.arg);
+		case 'review':
+			return void openReview();
 		case 'access':
 			return void openBrainAccess();
 		case 'members':
@@ -721,6 +724,25 @@ async function openActivity(path?: string) {
 			headline: "Couldn't load recent changes.",
 			detail: String(e),
 			retry: () => openActivity(path)
+		});
+	}
+}
+
+// Open the Review screen: what the data-policy guard recorded in this brain. Drives
+// the same view the view_review tool opens; brain admins only.
+async function openReview() {
+	const live = startLoad({ kind: 'loading', label: 'Loading review…', task: 'review' });
+	try {
+		const result = await callTool('view_review', brainArgs());
+		if (!live()) return;
+		show({ kind: 'review', ...parseReview(payloadOf(result)) });
+	} catch (e) {
+		if (!live()) return;
+		show({
+			kind: 'error',
+			headline: "Couldn't load the review.",
+			detail: String(e),
+			retry: () => openReview()
 		});
 	}
 }
@@ -1019,6 +1041,7 @@ export {
 	openBrowse,
 	openFolder,
 	openActivity,
+	openReview,
 	openMembers,
 	openAnalytics,
 	refreshMembers,

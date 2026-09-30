@@ -58,6 +58,7 @@ for everything. Right tool for behaviour, wrong tool for access. Loopback only.
 | `/?mode=pip` (or `?mode=inline` / `?mode=fullscreen`) | force a display mode                       |
 | `/#graph`                                             | the link graph                             |
 | `/#activity`                                          | recent changes                             |
+| `/#review`                                            | the admin Review screen (data policy)      |
 | `/#brains`                                            | the brains list (a shortcut, below)        |
 | `/#nobrains`                                          | first touch: no brains, the create form    |
 | `/#members`                                           | the org roster                             |
@@ -285,9 +286,12 @@ For Linux baselines from a Mac, run it in the image CI itself runs the UI job in
 the fonts and the browser build are the same ones that will compare them:
 
 ```sh
-docker run --rm -v "$PWD":/w -w /w mcr.microsoft.com/playwright:v1.63.0-noble \
-  sh -c "corepack enable && pnpm install --frozen-lockfile && pnpm ui:baselines"
+docker run --rm -v "$PWD":/w -v /w/node_modules -w /w mcr.microsoft.com/playwright:v1.63.0-noble \
+  sh -c "corepack enable && pnpm install --frozen-lockfile --store-dir /tmp/pnpm-store && pnpm ui:baselines"
 ```
+
+`-v /w/node_modules` gives the container its own `node_modules`, so the Linux install does
+not replace the host's macOS binaries. `--store-dir` keeps pnpm's store out of the checkout.
 
 That tag and the `container:` in `.github/workflows/ci.yml` must both match the
 resolved `@playwright/test` version; `pnpm test:wiring` fails if any of the three

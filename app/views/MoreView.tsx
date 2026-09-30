@@ -14,15 +14,17 @@
 // of the window rather than a place, and putting it here would mean leaving the page you
 // are reading in order to go fullscreen.
 import { destinations } from '../components/Destinations.tsx';
-import type { Scope } from '../core/nav.ts';
+import { inRail, type Scope } from '../core/nav.ts';
 import { defineView } from '../core/view-registry.ts';
 import { List, ListRow } from '../ui/index.ts';
 import { eyebrow } from '../ui/typography.ts';
 
-// The two scopes this page carries. The brain's own views are NOT here: Search, Files,
-// Graph, Recent changes and Sharing are the five icons standing in the rail, and a row
-// each would be a second way to say the same thing.
-const GROUPS: { scope: Exclude<Scope, 'brain'>; heading: string }[] = [
+// The groups this page carries. The brain's RAIL views are not here: Search, Files,
+// Graph, Recent changes and Sharing are the icons standing in the rail, and a row each
+// would be a second way to say the same thing. A brain view marked `overflow` (Review)
+// is the exception, and heads the page, since it is about the brain you are in.
+const GROUPS: { scope: Scope; heading: string }[] = [
+	{ scope: 'brain', heading: 'This brain' },
 	{ scope: 'org', heading: 'Organization' },
 	{ scope: 'account', heading: 'Your account' }
 ];
@@ -32,9 +34,10 @@ function MoreView() {
 	// `canManage` changes with the active brain, so a group can be empty on one brain
 	// and full on the next. An empty one is dropped whole, heading included, since a
 	// heading over nothing is a promise of rows that were gated away.
-	const groups = GROUPS.map((g) => ({ ...g, rows: destinations(g.scope) })).filter(
-		(g) => g.rows.length > 0
-	);
+	const groups = GROUPS.map((g) => ({
+		...g,
+		rows: destinations(g.scope).filter((d) => !inRail(d.key))
+	})).filter((g) => g.rows.length > 0);
 	if (!groups.length)
 		return (
 			<div class="mt-6 text-center text-sm text-muted">

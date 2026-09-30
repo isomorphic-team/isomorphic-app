@@ -48,12 +48,15 @@ import {
 	listNonPagePaths,
 	pathPolicyOf
 } from '../lib/brain-config.ts';
-import type { TenantOpts } from '../lib/orgs.ts';
+import { roleAtLeast, type TenantOpts } from '../lib/orgs.ts';
+import { groupDetections, reviewSummary, REPORT_WINDOW_DAYS } from '../lib/policy-guard.ts';
+import { readDetectionCounts } from '../lib/policy-store.ts';
 import { brainArgFor, fail } from './shared.ts';
 import type {
 	PageViewWire,
 	BrowseViewWire,
 	ActivityViewWire,
+	ReviewViewWire,
 	GraphViewWire,
 	EditViewWire,
 	GraphNode,
@@ -399,6 +402,52 @@ export function registerBrainApp(
 					config: editPolicy(config),
 					activeBrain
 				} satisfies ActivityViewWire
+			};
+		}
+	);
+
+	// ---------- view_review ----------
+	// A tool of its own rather than a mode of `validate`: validate is the agent's
+	// whole-brain check and costs a full index pass, while this is one grouped D1 read
+	// the app opens as a screen. Admin-only for the reason in detectionSection.
+	registerAppTool(
+		server,
+		'view_review',
+		{
+			...toolAnnotations('Open the review screen', 'read'),
+			description:
+				"view_review: open a brain's Review screen in Isomorphic, for brain admins. It shows what the data-policy guard recorded: which pages had sensitive data written into them (API tokens, private keys, card numbers, Social Security numbers, medical record numbers, dates of birth), how many of each kind, over the last 30 days. Values are never shown or stored. Use when an admin asks whether sensitive or confidential data has landed in the brain, or wants to review data-policy activity.",
+			inputSchema: { brain: brainArg },
+			_meta: { ui: { resourceUri: BRAIN_APP_URI } }
+		},
+		async ({ brain }) => {
+			const { config, db, brainId, role, activeBrain } = await getContext({ brain });
+			if (!roleAtLeast(role, 'admin')) {
+				return fail(
+					'Review is for admins of this brain: it says where sensitive data sits. Ask a brain admin.'
+				);
+			}
+			const since = Date.now() - REPORT_WINDOW_DAYS * 24 * 60 * 60 * 1000;
+			const grouped = groupDetections(await readDetectionCounts(db, brainId, since));
+			return {
+				content: [
+					{
+						type: 'text' as const,
+						text: withLink(reviewSummary(config.policyMode, grouped), 'view_review', activeBrain.id)
+					}
+				],
+				structuredContent: {
+					view: 'review',
+					...webUrl('view_review', activeBrain.id),
+					policy: {
+						mode: config.policyMode,
+						windowDays: REPORT_WINDOW_DAYS,
+						total: grouped.total,
+						pages: grouped.pages
+					},
+					config: editPolicy(config),
+					activeBrain
+				} satisfies ReviewViewWire
 			};
 		}
 	);

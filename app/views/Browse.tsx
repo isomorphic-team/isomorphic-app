@@ -24,7 +24,7 @@ import { navigateTo, openAsset, refreshBrowse } from '../core/actions.ts';
 import { FOLDER_NOTE_NAMES } from '../core/util.ts';
 import { panelPlacement, type Placement } from '../core/menu-placement.ts';
 import { toast, askConfirm } from '../core/toast.tsx';
-import { Button, Flow, Select } from '../ui/index.ts';
+import { Button } from '../ui/index.ts';
 import {
 	ChevronIcon,
 	FolderIcon,
@@ -314,6 +314,8 @@ function TreeItem({
 	if (node.hidden && !actions.showHidden) return null;
 	// Content-area test: a folder is editable if a page could live under it.
 	const editable = isEditablePath(node.dir ? `${node.path}/x.md` : node.path);
+	const moving = actions.moving !== null;
+	const source = actions.moving === node.path;
 
 	// ---- inline rename (files and folders) ----
 	if (actions.editing?.path === node.path) {
@@ -355,12 +357,18 @@ function TreeItem({
 		// The folder the tree was opened at: marked so the tree can scroll to it, and
 		// tinted so the eye lands where the click pointed.
 		const focused = actions.focus === node.path;
+		const destination = actions.moveDestinations.has(node.path);
 		return (
 			<div>
 				<div
 					{...(focused ? { 'data-tree-focus': true } : {})}
+					data-moving-source={source || undefined}
 					class={`group flex items-center rounded ${
-						isDrop ? 'bg-accent/20 ring-1 ring-accent' : focused ? 'bg-chip' : 'hover:bg-chip'
+						source || isDrop
+							? 'bg-accent/20 ring-1 ring-accent'
+							: focused
+								? 'bg-chip'
+								: 'hover:bg-chip'
 					}`}
 					onDragOver={(e) => {
 						if (actions.dragging && editable) {
@@ -377,8 +385,10 @@ function TreeItem({
 					{/* The chevron + folder icon are the drag handle — grab them to move the
 					    folder. Clicking them still toggles; the name toggles too but isn't a
 					    handle, so the row body stays for clicking / selecting. */}
-					<span
-						draggable={editable}
+					<button
+						type="button"
+						aria-label={`${open ? 'Collapse' : 'Expand'} ${node.name}`}
+						draggable={editable && !moving}
 						onDragStart={(e) => {
 							e.stopPropagation();
 							actions.onDragStart(node.path, true);
@@ -386,17 +396,20 @@ function TreeItem({
 						onDragEnd={actions.onDragEnd}
 						onClick={() => toggle(node.path)}
 						style={{ paddingLeft: `${6 + depth * 14}px` }}
-						class={`flex shrink-0 items-center gap-1.5 py-1 ${editable ? 'cursor-grab' : ''}`}
+						class={`flex shrink-0 items-center gap-1.5 py-1 ${editable && !moving ? 'cursor-grab' : ''}`}
 					>
 						<ChevronIcon open={open} />
 						{/* The glyph says whether this folder is also a PAGE. Clicking the name
 						    opens that note, and without the distinction the two kinds of folder
 						    looked identical while behaving differently. */}
 						{folderPage ? <FolderNoteIcon /> : <FolderIcon />}
-					</span>
+					</button>
 					<button
 						type="button"
+						aria-label={moving ? `Move to ${node.path || 'brain root'}` : undefined}
+						disabled={moving && (!destination || actions.busy)}
 						onClick={() => {
+							if (moving) return actions.moveHere(node.path);
 							if (folderPage) {
 								if (!open) toggle(node.path);
 								navigateTo(folderPage);
@@ -404,12 +417,15 @@ function TreeItem({
 								toggle(node.path);
 							}
 						}}
-						class={`flex min-w-0 flex-1 items-center gap-1.5 py-1 pl-1.5 text-left text-sm ${folderPage ? 'hover:text-accent' : ''}`}
+						class={`flex min-w-0 flex-1 items-center gap-1.5 py-1 pl-1.5 text-left text-sm ${folderPage ? 'hover:text-accent' : ''} ${moving && !destination && !source ? 'opacity-40' : ''}`}
 					>
 						<span class={`truncate ${dim ? 'text-muted' : ''}`}>{node.name}</span>
+						{moving && destination && (
+							<span class="ml-auto shrink-0 pr-2 text-xs text-accent">Move here</span>
+						)}
 						{!editable && <LockIcon />}
 					</button>
-					{editable && (
+					{editable && !moving && (
 						<RowMenu
 							path={node.path}
 							open={actions.openMenu === node.path}
@@ -494,14 +510,18 @@ function TreeItem({
 	const isPage = node.path.endsWith('.md');
 	const isAsset = !!node.asset;
 	const openable = isPage || isAsset;
-	const open = () => (isPage ? navigateTo(node.path) : isAsset ? openAsset(node.path) : undefined);
+	const open = () =>
+		!moving && (isPage ? navigateTo(node.path) : isAsset ? openAsset(node.path) : undefined);
 	const pad = `${6 + depth * 14 + 18}px`;
 	const dim = node.hidden || !editable;
 	return (
-		<div class="group flex items-center rounded pr-2 hover:bg-chip">
+		<div
+			data-moving-source={source || undefined}
+			class={`group flex items-center rounded pr-2 ${source ? 'bg-accent/20 ring-1 ring-accent' : moving ? 'opacity-40' : 'hover:bg-chip'}`}
+		>
 			{/* The file icon is the drag handle; clicking it (or the name) opens the page. */}
 			<span
-				draggable={editable && openable}
+				draggable={editable && openable && !moving}
 				onDragStart={() => openable && actions.onDragStart(node.path, false)}
 				onDragEnd={actions.onDragEnd}
 				onClick={open}
@@ -512,6 +532,7 @@ function TreeItem({
 			</span>
 			<button
 				type="button"
+				disabled={moving}
 				onClick={open}
 				class={`flex min-w-0 flex-1 items-center gap-1.5 py-1 pl-1.5 text-left text-sm ${openable ? 'hover:text-accent' : 'cursor-default'}`}
 			>
@@ -522,7 +543,7 @@ function TreeItem({
 				</span>
 				{!editable && <LockIcon />}
 			</button>
-			{editable && openable && (
+			{editable && openable && !moving && (
 				<RowMenu
 					path={node.path}
 					open={actions.openMenu === node.path}
@@ -590,7 +611,6 @@ function FileTree({
 	const [editing, setEditing] = useState<{ path: string; dir: boolean } | null>(null);
 	const [editValue, setEditValue] = useState('');
 	const [moving, setMoving] = useState<{ path: string; dir: boolean } | null>(null);
-	const [moveTarget, setMoveTarget] = useState('');
 	const restoreMoveFocus = useRef<string | null>(null);
 	const [add, setAdd] = useState<{ kind: 'note' | 'folder'; parent: string } | null>(null);
 	const [addValue, setAddValue] = useState('');
@@ -622,7 +642,7 @@ function FileTree({
 			?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
 	}, [focus, tree]);
 	useLayoutEffect(() => {
-		if (moving) document.querySelector<HTMLSelectElement>('[data-move-destination]')?.focus();
+		if (moving) document.querySelector<HTMLButtonElement>('[data-move-cancel]')?.focus();
 		else if (restoreMoveFocus.current) {
 			const path = restoreMoveFocus.current;
 			restoreMoveFocus.current = null;
@@ -745,7 +765,6 @@ function FileTree({
 		setOpenMenu(null);
 		setEditing(null);
 		setAdd(null);
-		setMoveTarget(moveDestinations(source, contentRoots, allFolders)[0] ?? '');
 		setMoving(source);
 	}
 
@@ -755,10 +774,10 @@ function FileTree({
 		setMoving(null);
 	}
 
-	async function commitMove() {
-		if (!moving || busy || !destinations.includes(moveTarget)) return;
+	async function commitMove(folder: string) {
+		if (!moving || busy || !destinations.includes(folder)) return;
 		const name = moving.path.split('/').pop()!;
-		const newPath = moveTarget ? `${moveTarget}/${name}` : name;
+		const newPath = folder ? `${folder}/${name}` : name;
 		setBusy(true);
 		try {
 			const res = await callTool('move_page', {
@@ -885,6 +904,9 @@ function FileTree({
 		commitRename,
 		cancelRename: () => setEditing(null),
 		startMove,
+		moving: moving?.path ?? null,
+		moveDestinations: new Set(destinations),
+		moveHere: commitMove,
 		askDelete,
 		add,
 		addValue,
@@ -925,54 +947,55 @@ function FileTree({
 		);
 	}
 
-	if (moving) {
-		const name = moving.path.split('/').pop()!;
-		const newPath = moveTarget ? `${moveTarget}/${name}` : name;
-		return (
-			<Flow
-				icon={<FolderIcon />}
-				title={`Move ${moving.dir ? 'folder' : moving.path.endsWith('.md') ? 'note' : 'file'}`}
-				subtitle={moving.path}
-				footer={
-					<>
-						<Button variant="outline" onClick={cancelMove} disabled={busy}>
+	return (
+		<div
+			class="select-none"
+			onKeyDown={(e) => {
+				if (moving && !busy && e.key === 'Escape') {
+					e.preventDefault();
+					cancelMove();
+				}
+			}}
+		>
+			{moving && (
+				<>
+					<div
+						class="mb-2 flex items-center gap-2 rounded border border-border bg-chip px-3 py-1.5 text-sm"
+						role="status"
+					>
+						<span class="min-w-0 flex-1 break-words" title={moving.path}>
+							Moving <strong>{moving.path.split('/').pop()}</strong>
+							{busy ? '…' : ': choose a folder'}
+						</span>
+						<Button
+							data-move-cancel
+							variant="outline"
+							size="sm"
+							onClick={cancelMove}
+							disabled={busy}
+						>
 							Cancel
 						</Button>
-						<Button onClick={commitMove} disabled={busy || !destinations.length}>
-							{busy ? 'Moving…' : 'Move'}
-						</Button>
-					</>
-				}
-			>
-				{destinations.length ? (
-					<>
-						<label class="block text-sm text-muted">
-							Destination folder
-							<Select
-								data-move-destination
-								value={moveTarget}
-								onChange={(e) => setMoveTarget((e.target as HTMLSelectElement).value)}
-								disabled={busy}
-								class="mt-1 w-full"
-							>
-								{destinations.map((folder) => (
-									<option value={folder} key={folder}>
-										{folder || 'Brain root'}
-									</option>
-								))}
-							</Select>
-						</label>
-						<p class="mt-3 break-all text-xs text-muted">New location: {newPath}</p>
-					</>
-				) : (
-					<p class="text-center text-sm text-muted">There are no other editable folders.</p>
-				)}
-			</Flow>
-		);
-	}
-
-	return (
-		<div class="select-none">
+					</div>
+					{!destinations.length && (
+						<p class="mb-2 text-sm text-muted">There are no other editable folders.</p>
+					)}
+					{contentRoots
+						.map((root) => root.replace(/\/$/, ''))
+						.filter((root) => !allFolders.includes(root))
+						.map((path) => (
+							<TreeItem
+								key={path}
+								node={{ name: path || 'Brain root', path, dir: true, children: [], hidden: false }}
+								depth={0}
+								expanded={expanded}
+								toggle={toggle}
+								actions={actions}
+								titleByPath={titleByPath}
+							/>
+						))}
+				</>
+			)}
 			{add?.parent === '' && (
 				<AddInput
 					kind={add.kind}

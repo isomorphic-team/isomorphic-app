@@ -3,7 +3,8 @@ paths:
   - "src/tools/librarian.ts"
   - "src/lib/{page-write,page-patch,change-record,write-target,write-dedupe,write-dedupe-store,brain-policy}.ts"
   - "app/views/{PageView,EditView}.tsx"
-  - "scripts/{test-page-patch,test-record,test-policy,test-dedupe,e2e-librarian}.ts"
+  - "src/lib/{policy-guard,policy-detectors,policy-store}.ts"
+  - "scripts/{test-page-patch,test-record,test-policy,test-dedupe,test-guard,e2e-librarian}.ts"
 ---
 
 # The write path (`write_page`, `move_page`, `delete_page`)
@@ -46,9 +47,10 @@ paths:
 - **Per page by design.** A fields-only batch tool (`set_fields`) was built and cut; the
   reasoning is in `docs/roadmap.md`. **Do not re-add one without reading that item.**
 - **The properties panel** (`PageProperties` in `app/views/PageView.tsx`) imports
-  `isUsableFieldKey` from the write path rather than copying the rules, never edits `sources`
-  or `updated`, and is offered in the viewer only, never in `EditView` (it would race the
-  unsaved body).
+  `isUsableFieldKey` from the write path rather than copying the rules, and never edits
+  `sources` or `updated`. It is read-only in the viewer and editable only in `EditView`, as a
+  draft that Save sends in the same `write_page` call as the body (`propertyWriteArgs`), so a
+  page's properties and body land in one commit against one sha.
 
 ## Retried writes: the write-attempt ledger
 
@@ -74,3 +76,30 @@ through `src/lib/write-dedupe.ts` (pure) + `write-dedupe-store.ts` (D1, migratio
 Coverage: `pnpm test:e2e-librarian` drives every write tool against a real brain (offline by
 default), including every refusal proving nothing was written; `pnpm test:scope` asserts the
 content writes gate on the BRAIN role at `editor`.
+
+## The data-policy guard
+
+`guardStore` (`src/lib/policy-guard.ts`) wraps the `BrainStore` the Worker and the local
+runtime hand to every tool, so it sees every write that reaches `commitOrPR` or `commitFiles`.
+`pnpm test:guard`. Roadmap: "brain review".
+
+- **On for every brain by default, and never blocking** (`shadow`, an internal name nothing
+  user-facing shows). Only `"review": {"policy": {"mode": "off"}}` in `.isomorphic.json`
+  turns it off; any other value keeps it on, and off returns the store untouched.
+- **Shadow never blocks.** It scans the text writes (`encoding: 'base64'` is skipped), lets the
+  write land, then records detections through `policy-store.ts` (D1 `policy_detections`,
+  migration 0015). A failing recorder is swallowed; a failed write records nothing.
+- **Detections carry offsets, never the matched text,** and the table has no column that could
+  hold it. Keep it that way: copying a leaked secret into D1 makes the leak worse.
+- **Admins read detections in `validate`** (`detectionSection`): the last
+  `REPORT_WINDOW_DAYS` of rows as pages and kinds with counts. Brain admin and owner only,
+  since a path plus a kind already says where sensitive data sits; editors and viewers get no
+  section.
+- **The app's Review screen** (`view_review` in `src/tools/apps.ts`, `app/views/ReviewView.tsx`)
+  shows the same rows through `groupDetections`, the one ordering both surfaces use. The tool
+  refuses below brain admin, and More offers Review (never the rail) only when the active
+  brain's row says `canShare` (`activeBrainIsAdmin`), or on a single-user deployment, whose
+  operator owns it.
+- **The detectors (`policy-detectors.ts`) favor precision.** Emails and phone numbers are
+  deliberately not detected, and PHI detectors fire only on labelled values. Add a negative case
+  to the battery with any new detector.

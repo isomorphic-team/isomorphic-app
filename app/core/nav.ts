@@ -18,6 +18,7 @@ export type DestKey =
 	| 'files'
 	| 'graph'
 	| 'activity'
+	| 'review'
 	| 'sharing'
 	| 'members'
 	| 'analytics'
@@ -26,7 +27,7 @@ export type DestKey =
 
 // THE SCOPE TEST: does switching brains change what this screen shows?
 //
-// Yes for Search, Files, Graph, Recent changes and Sharing — those are views OF a
+// Yes for Search, Files, Graph, Recent changes, Sharing and Review — those are views OF a
 // brain, and they are the ones standing in the rail down the left edge.
 // No for Manage brains and Your settings: the same list and the same identity whichever
 // brain is active, so they are views of your ACCOUNT.
@@ -34,11 +35,17 @@ export type DestKey =
 // sibling brain in the same org shows the SAME roster and the SAME numbers, and only
 // crossing into another org changes them. They are views of the ORG, reached through
 // whichever brain is active, not properties of the brain you happen to be in.
-// `blurb` is one line saying what the destination is FOR. Required on all nine even
+// `blurb` is one line saying what the destination is FOR. Required on all ten even
 // though only the More page renders it today: an optional field is one a new
 // destination quietly omits, and the row it lands in is then a bare word with a gap
 // under it where its neighbours have a sentence.
-export const DEST_META: Record<DestKey, { label: string; scope: Scope; blurb: string }> = {
+// `overflow` puts a BRAIN destination in More instead of the rail. The rail is the views
+// everyone uses on every visit; an admin-only, occasional screen belongs with Members and
+// Analytics, and an icon only some people see would make the rail differ by role.
+export const DEST_META: Record<
+	DestKey,
+	{ label: string; scope: Scope; blurb: string; overflow?: true }
+> = {
 	// DECLARATION ORDER IS RAIL ORDER — destinationsIn filters these keys in place, so
 	// moving an entry here moves the icon.
 	//
@@ -58,6 +65,12 @@ export const DEST_META: Record<DestKey, { label: string; scope: Scope; blurb: st
 		blurb: 'What changed, and who changed it'
 	},
 	sharing: { label: 'Sharing', scope: 'brain', blurb: 'Who can open this brain' },
+	review: {
+		label: 'Review',
+		scope: 'brain',
+		blurb: 'Sensitive data the data-policy guard found',
+		overflow: true
+	},
 	members: { label: 'Members', scope: 'org', blurb: 'Who is in your organization' },
 	analytics: {
 		label: 'Analytics',
@@ -83,6 +96,11 @@ export type NavCaps = {
 	/** Admin+ of at least one org — brain management is theirs alone. */
 	canManageBrains: boolean;
 	/**
+	 * Admin+ ON THE BRAIN BEING SHOWN. Review says where sensitive data sits, so
+	 * `view_review` refuses anyone below admin.
+	 */
+	brainAdmin: boolean;
+	/**
 	 * Anyone besides the operator can sign in (`features.people`). A single-user
 	 * deployment registers none of the people, sharing or brain-management tools, so
 	 * Sharing, Members, Analytics and Manage brains would all come back "unknown tool".
@@ -100,6 +118,7 @@ export function destinationsIn(scope: Scope, caps: NavCaps): DestKey[] {
 		if (k === 'sharing' || k === 'members') return caps.people;
 		if (k === 'analytics') return caps.people && caps.analytics;
 		if (k === 'brains') return caps.people && caps.canManageBrains;
+		if (k === 'review') return caps.brainAdmin;
 		return true;
 	});
 }
@@ -118,6 +137,7 @@ const VIEW_DEST: Record<string, DestKey> = {
 	activity: 'activity',
 	'brain-access': 'sharing',
 	'share-brain': 'sharing',
+	review: 'review',
 	members: 'members',
 	'invite-member': 'members',
 	analytics: 'analytics',
@@ -136,10 +156,15 @@ export function activeDestination(viewKind: string): DestKey | null {
 // Without the second half, opening Members from More lights nothing and the rail reads
 // as though you had left it.
 //
-// Defined by SCOPE rather than by a list, so a destination added to org or account is
-// covered the day it exists — those are exactly the ones the rail does not show itself.
+// Defined by placement rather than by a list, so a destination added to org or account,
+// or a brain one marked `overflow`, is covered the day it exists.
 export function isMorePlace(viewKind: string): boolean {
 	if (viewKind === 'more') return true;
 	const d = activeDestination(viewKind);
-	return !!d && DEST_META[d].scope !== 'brain';
+	return !!d && !inRail(d);
+}
+
+/** Whether a destination stands in the rail; everything else is reached through More. */
+export function inRail(key: DestKey): boolean {
+	return DEST_META[key].scope === 'brain' && !DEST_META[key].overflow;
 }

@@ -17,6 +17,7 @@ import LoadingView from './LoadingView.tsx';
 import MembersView from './MembersView.tsx';
 import MoreView from './MoreView.tsx';
 import PageView from './PageView.tsx';
+import ReviewView from './ReviewView.tsx';
 import SearchView from './SearchView.tsx';
 import SettingsView from './SettingsView.tsx';
 import ShareBrainView from './ShareBrainView.tsx';
@@ -38,6 +39,7 @@ const VIEW_DEFS = [
 	MembersView,
 	MoreView,
 	PageView,
+	ReviewView,
 	SearchView,
 	SettingsView,
 	ShareBrainView

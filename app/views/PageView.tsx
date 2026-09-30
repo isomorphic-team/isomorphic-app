@@ -3,11 +3,9 @@ import { parseFrontmatter, type Frontmatter } from '../../src/lib/wiki.ts';
 import { displayFromSnapshots } from '../../src/lib/view-directives.ts';
 import { isUsableFieldKey, OKF_PAGE_STATUSES } from '../../src/lib/page-patch.ts';
 import type { Backref } from '../core/types.ts';
-import { callTool, firstText } from '../core/host.ts';
-import { brainArgs, bump, isEditablePath, show } from '../core/store.ts';
+import { callTool } from '../core/host.ts';
+import { brainArgs, bump, isEditablePath } from '../core/store.ts';
 import {
-	fetchPage,
-	pageView,
 	refreshPage,
 	navigateTo,
 	renderMarkdown,
@@ -53,81 +51,68 @@ type EditSpec = {
 };
 type Row = { key: string; label: string; value: preact.ComponentChildren; edit?: EditSpec };
 
-// Send one property change and swap in the saved page. `fields` never touches the
-// body, so this cannot clobber text the reader can see.
-async function saveProperty(path: string, spec: EditSpec, raw: string): Promise<string | null> {
+// The frontmatter keys write_page sets through their own argument rather than `fields`.
+const PROPERTY_ARG_KEYS: readonly string[] = ['type', 'status', 'description'];
+
+/** A pending property value: text, a list, or null to remove the key. */
+type PropertyValue = string | string[] | null;
+type PropertyChange = (key: string, value: PropertyValue) => void;
+
+// Parse what the author typed into the value the write will carry: a list splits on
+// commas, and an emptied `field` means remove.
+function parsePropertyInput(spec: EditSpec, raw: string): PropertyValue {
 	const trimmed = raw.trim();
-	const value = spec.list
-		? trimmed
-				.split(',')
-				.map((s) => s.trim())
-				.filter(Boolean)
-		: trimmed;
-	const payload =
-		spec.kind === 'arg'
-			? { [spec.key]: value }
-			: { fields: { [spec.key]: trimmed === '' && !spec.list ? null : value } };
-	const result = await callTool('write_page', { path, ...payload, ...brainArgs() });
-	if (result.isError) return firstText(result);
-	return null;
+	if (spec.list)
+		return trimmed
+			.split(',')
+			.map((s) => s.trim())
+			.filter(Boolean);
+	return trimmed === '' ? null : trimmed;
 }
 
-// Silent reload after the panel writes a property. Not refreshPage(): that one
-// reports what it found, which is right for a control the reader pressed and wrong
-// straight after their own save, where "Already up to date" answers a question
-// nobody asked.
-async function reloadPage(path: string) {
-	try {
-		show(pageView(path, await fetchPage(path)), { push: false });
-	} catch {
-		// Leave the stale view up rather than blanking the page over a refresh blip.
+// The pending changes applied over the page's frontmatter: what the editor shows.
+function applyPropertyChanges(
+	fm: Frontmatter | null,
+	changes: Record<string, PropertyValue>
+): Frontmatter | null {
+	if (!Object.keys(changes).length) return fm;
+	const next: Frontmatter = { ...(fm ?? {}) };
+	for (const [key, value] of Object.entries(changes)) {
+		if (value === null) delete next[key];
+		else next[key] = value;
 	}
+	return next;
 }
 
-function PropertyRow({ row, path }: { row: Row; path?: string }) {
+// The pending changes as write_page arguments, split the way the tool takes them.
+function propertyWriteArgs(changes: Record<string, PropertyValue>): Record<string, unknown> {
+	const args: Record<string, unknown> = {};
+	const fields: Record<string, PropertyValue> = {};
+	for (const [key, value] of Object.entries(changes)) {
+		if (PROPERTY_ARG_KEYS.includes(key)) args[key] = value;
+		else fields[key] = value;
+	}
+	if (Object.keys(fields).length) args.fields = fields;
+	return args;
+}
+
+function PropertyRow({ row, onChange }: { row: Row; onChange?: PropertyChange }) {
 	const [editing, setEditing] = useState(false);
 	const [draft, setDraft] = useState(row.edit?.value ?? '');
-	const [busy, setBusy] = useState(false);
-	const editable = !!path && !!row.edit;
+	const editable = !!onChange && !!row.edit;
 
-	async function commit(next: string) {
-		if (!path || !row.edit) return;
-		if (next.trim() === row.edit.value.trim()) {
-			setEditing(false);
-			return;
-		}
-		// write_page ignores an empty title/type/description/status, so an empty
-		// submit here would silently leave the old value on screen.
-		if (!next.trim() && row.edit.kind === 'arg') {
-			toast(`${row.label} cannot be emptied here. Edit the page to remove it.`, true);
-			setDraft(row.edit.value);
-			setEditing(false);
-			return;
-		}
-		setBusy(true);
-		const error = await saveProperty(path, row.edit, next);
-		setBusy(false);
+	function commit(next: string) {
 		setEditing(false);
-		if (error) {
-			toast(error, true);
+		if (!onChange || !row.edit) return;
+		if (next.trim() === row.edit.value.trim()) return;
+		// write_page ignores an empty title/type/description/status, so an empty
+		// value here would save as the old one.
+		if (!next.trim() && row.edit.kind === 'arg') {
+			toast(`${row.label} cannot be emptied here.`, true);
 			setDraft(row.edit.value);
 			return;
 		}
-		await reloadPage(path);
-	}
-
-	async function remove() {
-		if (!path || !row.edit) return;
-		setBusy(true);
-		// Clearing an `arg`-owned key is not something write_page offers, so the ×
-		// only appears on `field` rows (see the rows builder).
-		const error = await saveProperty(path, row.edit, '');
-		setBusy(false);
-		if (error) {
-			toast(error, true);
-			return;
-		}
-		await reloadPage(path);
+		onChange(row.edit.key, parsePropertyInput(row.edit, next));
 	}
 
 	return (
@@ -138,7 +123,6 @@ function PropertyRow({ row, path }: { row: Row; path?: string }) {
 					row.edit.options ? (
 						<select
 							autofocus
-							disabled={busy}
 							value={draft}
 							class="rounded-md border border-border bg-transparent px-1 py-0.5 text-sm text-fg"
 							onChange={(e) => commit((e.target as HTMLSelectElement).value)}
@@ -153,7 +137,6 @@ function PropertyRow({ row, path }: { row: Row; path?: string }) {
 					) : (
 						<input
 							autofocus
-							disabled={busy}
 							value={draft}
 							class="w-full rounded-md border border-border bg-transparent px-1 py-0.5 text-sm text-fg"
 							onInput={(e) => setDraft((e.target as HTMLInputElement).value)}
@@ -169,7 +152,6 @@ function PropertyRow({ row, path }: { row: Row; path?: string }) {
 						{editable ? (
 							<button
 								type="button"
-								disabled={busy}
 								onClick={() => {
 									setDraft(row.edit?.value ?? '');
 									setEditing(true);
@@ -185,9 +167,9 @@ function PropertyRow({ row, path }: { row: Row; path?: string }) {
 							<button
 								type="button"
 								title={`Remove ${row.label}`}
-								disabled={busy}
-								onClick={remove}
-								class="cursor-pointer border-none bg-transparent p-0 text-xs text-muted opacity-0 group-hover:opacity-100"
+								aria-label={`Remove ${row.label}`}
+								onClick={() => onChange!(row.key, null)}
+								class="cursor-pointer border-none bg-transparent p-0 text-xs text-muted opacity-0 group-hover:opacity-100 focus-visible:opacity-100"
 							>
 								×
 							</button>
@@ -202,17 +184,15 @@ function PropertyRow({ row, path }: { row: Row; path?: string }) {
 // Add a key the brain has not used on this page yet. The key rule is imported from
 // the write path rather than restated, so the panel cannot accept a name the tool
 // would reject (or one whose row would vanish on the next read).
-function AddProperty({ path }: { path: string }) {
+function AddProperty({ onChange }: { onChange: PropertyChange }) {
 	const [open, setOpen] = useState(false);
 	const [key, setKey] = useState('');
 	const [value, setValue] = useState('');
-	const [busy, setBusy] = useState(false);
 
-	async function submit() {
+	function submit() {
 		const name = key.trim();
 		if (!name) return;
-		// An empty value would send `null`, which is the REMOVE case: the property
-		// would appear to save and then not be there.
+		// An empty value is the REMOVE case: the property would never appear.
 		if (!value.trim()) {
 			toast('Give the property a value.', true);
 			return;
@@ -224,17 +204,10 @@ function AddProperty({ path }: { path: string }) {
 			);
 			return;
 		}
-		setBusy(true);
-		const error = await saveProperty(path, { key: name, value: '', kind: 'field' }, value);
-		setBusy(false);
-		if (error) {
-			toast(error, true);
-			return;
-		}
+		onChange(name, value.trim());
 		setOpen(false);
 		setKey('');
 		setValue('');
-		await reloadPage(path);
 	}
 
 	if (!open) {
@@ -254,14 +227,12 @@ function AddProperty({ path }: { path: string }) {
 				autofocus
 				placeholder="name"
 				value={key}
-				disabled={busy}
 				onInput={(e) => setKey((e.target as HTMLInputElement).value)}
 				class="w-32 rounded-md border border-border bg-transparent px-1 py-0.5 text-sm text-fg"
 			/>
 			<input
 				placeholder="value"
 				value={value}
-				disabled={busy}
 				onInput={(e) => setValue((e.target as HTMLInputElement).value)}
 				onKeyDown={(e) => {
 					if (e.key === 'Enter') submit();
@@ -271,11 +242,10 @@ function AddProperty({ path }: { path: string }) {
 			/>
 			<button
 				type="button"
-				disabled={busy}
 				onClick={submit}
 				class={`cursor-pointer border-none bg-transparent p-0 ${eyebrow} hover:text-fg`}
 			>
-				Save
+				Add
 			</button>
 		</div>
 	);
@@ -286,9 +256,9 @@ function AddProperty({ path }: { path: string }) {
 // fields get a stable order and light treatment (a status dot, tabular dates);
 // everything else is rendered generically so no metadata is hidden.
 //
-// Pass `path` to make it editable. The viewer does; the editor does not, because
-// a property write there would race the body the author has open and unsaved.
-function PageProperties({ fm, path }: { fm: Frontmatter | null; path?: string }) {
+// Read-only in the viewer. The editor passes `onChange`, which makes the rows
+// editable as a draft that its Save writes together with the body.
+function PageProperties({ fm, onChange }: { fm: Frontmatter | null; onChange?: PropertyChange }) {
 	const rows: Row[] = [];
 	// `title` is rendered as the page heading, so it never appears as a property.
 	const seen = new Set<string>(['title']);
@@ -371,7 +341,7 @@ function PageProperties({ fm, path }: { fm: Frontmatter | null; path?: string })
 				text,
 				// `type` is OKF's required field and has its own argument; everything else
 				// on a page is brain-owned and goes through `fields`.
-				key === 'type'
+				PROPERTY_ARG_KEYS.includes(key)
 					? { key, value: text, kind: 'arg' }
 					: isUsableFieldKey(key)
 						? { key, value: text, kind: 'field', list }
@@ -380,7 +350,7 @@ function PageProperties({ fm, path }: { fm: Frontmatter | null; path?: string })
 		}
 	}
 
-	if (!rows.length && !path) return null;
+	if (!rows.length && !onChange) return null;
 	// One Notion-style treatment in BOTH view and edit: no boxed card, just the
 	// label/value grid with a divider under it. Identical across modes so the
 	// frontmatter doesn't restyle/jump when you enter or leave the editor.
@@ -388,10 +358,10 @@ function PageProperties({ fm, path }: { fm: Frontmatter | null; path?: string })
 		<div class="mb-5 border-b border-border pb-4">
 			<dl class="grid grid-cols-[minmax(0,max-content)_1fr] gap-x-4 gap-y-1.5 text-sm">
 				{rows.map((r) => (
-					<PropertyRow key={r.key} row={r} path={path} />
+					<PropertyRow key={r.key} row={r} onChange={onChange} />
 				))}
 			</dl>
-			{path && <AddProperty path={path} />}
+			{onChange && <AddProperty onChange={onChange} />}
 		</div>
 	);
 }
@@ -502,7 +472,7 @@ function PageView({ path, markdown }: { path: string; markdown: string }) {
 	const showTitle = title && !/^#\s/m.test(body);
 	return (
 		<div>
-			<PageProperties fm={frontmatter} path={isEditablePath(path) ? path : undefined} />
+			<PageProperties fm={frontmatter} />
 			<article class="prose max-w-none" onClick={onProseClick(path)}>
 				{showTitle && <h1>{title}</h1>}
 				<MarkdownBody path={path} body={body} />
@@ -512,7 +482,16 @@ function PageView({ path, markdown }: { path: string; markdown: string }) {
 	);
 }
 
-export { PageView, PageProperties, LinkedReferences, humanizeKey, scalarText };
+export {
+	PageView,
+	PageProperties,
+	LinkedReferences,
+	humanizeKey,
+	scalarText,
+	applyPropertyChanges,
+	propertyWriteArgs,
+	type PropertyValue
+};
 
 declare module '../core/view-registry.ts' {
 	interface ViewProps {

@@ -18,9 +18,11 @@
 import { AppBridge, PostMessageTransport } from '@modelcontextprotocol/ext-apps/app-bridge';
 import type { CallToolResult } from '@modelcontextprotocol/client';
 import { BRAIN_APP_HTML } from '../src/lib/app-bundle.generated.ts';
-import { slugify, resolveRelative, parseFrontmatter, withFrontmatter } from '../src/lib/wiki.ts';
+import { slugify, resolveRelative, parseFrontmatter } from '../src/lib/wiki.ts';
 import { DEFAULT_BRAIN_CONFIG, isContentPath } from '../src/lib/brain-policy.ts';
 import { classifyMdLink } from '../src/lib/links.ts';
+import { composeUpdate } from '../src/lib/page-write.ts';
+import { MAX_FIELD_KEYS_PER_PAGE } from '../src/lib/brain-index.ts';
 import { uniqueAttachmentPath } from '../src/lib/media.ts';
 import { renderViews, stripSnapshots, hasViews, type ViewContext } from '../src/lib/views.ts';
 // The REAL per-brain access rule (pure, no D1) so the sharing preview resolves
@@ -651,6 +653,7 @@ const STALLED_IN_LOADING_MODE = new Set([
 	'search_pages',
 	'view_graph',
 	'view_activity',
+	'view_review',
 	'members',
 	'analytics',
 	'brain_access'
@@ -833,20 +836,17 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
 			if (exists && args?.mode === 'create') return errText(`"${p}" already exists.`);
 			const content = String(args?.content ?? '');
 			if (exists) {
-				const parsed = parseFrontmatter(pg[p]);
-				if (args?.content !== undefined) {
-					// Keep the existing frontmatter, exactly like the server's body-only save.
-					const fm = pg[p].match(/^---\n[\s\S]*?\n---\n?/)?.[0] ?? '';
-					pg[p] = fm + content;
-				} else {
-					// Property-panel writes carry metadata only. Mirror the server enough for
-					// the app to reload and observe the field it just changed.
-					const fm = { ...(parsed.frontmatter ?? {}) };
-					for (const key of ['title', 'type', 'description', 'status'] as const) {
-						if (typeof args?.[key] === 'string') fm[key] = args[key];
-					}
-					pg[p] = withFrontmatter(fm, parsed.body);
-				}
+				// The server's own merge: the body from `content` (or kept), frontmatter
+				// preserved, and title / type / description / status / `fields` applied.
+				const composed = composeUpdate(
+					p,
+					pg[p],
+					args as Parameters<typeof composeUpdate>[2],
+					nowDate().toISOString().slice(0, 10),
+					MAX_FIELD_KEYS_PER_PAGE
+				);
+				if (!composed.ok) return errText(composed.error);
+				pg[p] = composed.content;
 			} else {
 				const title = String(args?.title ?? p.split('/').pop()!.replace(/\.md$/, ''));
 				pg[p] = `---\ntitle: ${title}\n---\n\n${content}`;
@@ -916,6 +916,33 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
 			}));
 			const r = text(`${entries.length} recent change(s).`);
 			return { ...r, structuredContent: { view: 'activity', scope: { path: scopePath }, entries } };
+		}
+		case 'view_review': {
+			// Fixtures record no writes, so the guard's report is synthesized: two
+			// flagged pages, to preview the Review screen with rows in it.
+			const pages = [
+				{
+					path: 'wiki/open-questions.md',
+					count: 3,
+					kinds: [
+						{ kind: 'us-ssn', count: 2 },
+						{ kind: 'date-of-birth', count: 1 }
+					]
+				},
+				{
+					path: 'wiki/playbooks/brand-voice.md',
+					count: 1,
+					kinds: [{ kind: 'api-token', count: 1 }]
+				}
+			];
+			const r = text('4 detection(s) across 2 page(s) in the last 30 days.');
+			return {
+				...r,
+				structuredContent: {
+					view: 'review',
+					policy: { mode: 'shadow', windowDays: 30, total: 4, pages }
+				}
+			};
 		}
 		case 'view_graph': {
 			// Build a real link graph from the fixtures, mirroring the server's view_graph
@@ -1312,12 +1339,9 @@ bridge.oncalltool = async (params) => {
 	// NOT ask for (see `#pending-input`: an app waiting for a result it knows is coming
 	// must not fetch the tree). Nothing in the preview reads this.
 	((window as unknown as { __toolCalls?: string[] }).__toolCalls ??= []).push(params.name);
-	// The move-picker tests also check the exact source and destination sent to the tool.
-	((window as unknown as { __toolRequests?: { name: string; args: unknown }[] }).__toolRequests ??=
-		[]).push({
-		name: params.name,
-		args: params.arguments
-	});
+	// The same calls with their arguments, for tests that assert on WHAT a write sent.
+	((window as unknown as { __toolArgs?: { name: string; args: unknown }[] }).__toolArgs ??=
+		[]).push({ name: params.name, args: params.arguments ?? {} });
 	// The slow-result routes need the app's OWN tree fetch to still be in flight when
 	// the opening result lands — that overlap is the whole scenario, and an instant
 	// answer here would close it (see slowResultMode).
@@ -1442,6 +1466,7 @@ const editMode = hashMode === 'edit';
 // worth looking at once the app knows where it is.
 const browseMode = hashMode === 'browse' || hashMode === 'loading';
 const activityMode = hashMode === 'activity';
+const reviewMode = hashMode === 'review';
 const graphMode = hashMode === 'graph';
 const membersMode = hashMode === 'members';
 const analyticsMode = hashMode === 'analytics';
@@ -1574,15 +1599,18 @@ bridge.oninitialized = async () => {
 						? 'graph'
 						: activityMode
 							? 'activity'
-							: browseMode
-								? 'browse'
-								: editMode
-									? 'edit'
-									: 'page';
+							: reviewMode
+								? 'review'
+								: browseMode
+									? 'browse'
+									: editMode
+										? 'edit'
+										: 'page';
 	bridge.sendToolInput({
 		arguments:
 			browseMode ||
 			activityMode ||
+			reviewMode ||
 			graphMode ||
 			membersMode ||
 			analyticsMode ||
@@ -1649,6 +1677,8 @@ bridge.oninitialized = async () => {
 		bridge.sendToolResult(await handleTool('view_graph', {}));
 	} else if (activityMode) {
 		bridge.sendToolResult(await handleTool('view_activity', {}));
+	} else if (reviewMode) {
+		bridge.sendToolResult(await handleTool('view_review', {}));
 	} else {
 		const ap = activePages();
 		const apth = Object.keys(ap);

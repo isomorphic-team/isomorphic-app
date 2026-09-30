@@ -31,7 +31,9 @@ export type {
 	OrgTarget,
 	BrainAccessEntry,
 	BrainAccessSelf,
-	ConnectedAccount
+	ConnectedAccount,
+	ReviewPolicy,
+	ReviewPolicyPage
 } from '../../src/lib/tool-payloads.ts';
 
 // A backlink surfaced by find_inbound_links (see src/tools/librarian.ts).
@@ -111,6 +113,9 @@ export interface TreeActions {
 	cancelRename: () => void;
 	// Choose a destination folder without dragging the row.
 	startMove: (path: string, dir: boolean) => void;
+	moving: string | null;
+	moveDestinations: Set<string>;
+	moveHere: (folder: string) => void;
 	// Delete (modal-confirmed; folder deletes remove the whole subtree).
 	askDelete: (path: string, dir: boolean, name: string) => void;
 	// Inline add (a new note or folder) under a parent folder.

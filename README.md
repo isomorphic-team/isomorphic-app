@@ -183,8 +183,8 @@ What is in it:
 
 - **Viewer.** Rendered markdown with clickable links in both syntaxes, wikilinks resolved by
   the same function `validate` uses, so a link the viewer refuses to open is one validate
-  reports. Frontmatter renders as a properties panel, editable in place. Computed views render
-  live. Linked references at the foot of every page. A refresh control that reports the page's
+  reports. Frontmatter renders as a properties panel, edited in the editor and saved with the
+  body. Computed views render live. Linked references at the foot of every page. A refresh control that reports the page's
   age and says so when the page moved underneath you.
 - **File tree.** Clicking a folder opens its folder note (`index.md`) when it has one; a
   note-less folder offers to create one, pre-seeded with a directory view.

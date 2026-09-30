@@ -246,6 +246,12 @@ export function Breadcrumb({ view }: { view: View }) {
 				<span class={crumbCurrent}>Search</span>
 			</DestinationCrumb>
 		);
+	if (view.kind === 'review')
+		return (
+			<DestinationCrumb>
+				<span class={crumbCurrent}>Review</span>
+			</DestinationCrumb>
+		);
 	if (view.kind === 'activity')
 		return (
 			<DestinationCrumb>

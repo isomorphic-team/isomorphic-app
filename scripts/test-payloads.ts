@@ -31,6 +31,7 @@ import {
 	parseAsset,
 	parseSearchHits,
 	parseActivity,
+	parseReview,
 	parseGraph,
 	parseMembers,
 	parseBrainAccess,
@@ -243,6 +244,35 @@ check(
 	'parseActivity: no scope is the whole brain',
 	parseActivity({}).scopePath === undefined && parseActivity({}).entries.length === 0
 );
+{
+	const r = parseReview({
+		view: 'review',
+		policy: {
+			mode: 'shadow',
+			windowDays: 30,
+			total: 3,
+			pages: [{ path: 'a.md', count: 3, kinds: [{ kind: 'us-ssn', count: 3 }] }, { count: 1 }]
+		}
+	}).policy;
+	check(
+		'parseReview: reads mode, window, total and pages',
+		r.mode === 'shadow' && r.windowDays === 30 && r.total === 3 && r.pages[0]?.kinds[0]?.count === 3
+	);
+	check('parseReview: a page without a path is dropped', r.pages.length === 1);
+	const empty = parseReview({}).policy;
+	check(
+		'parseReview: an empty payload is the default (on) with nothing flagged',
+		empty.mode === 'shadow' &&
+			empty.total === 0 &&
+			empty.pages.length === 0 &&
+			empty.windowDays === 30
+	);
+	check(
+		'parseReview: only an explicit off reads as off',
+		parseReview({ policy: { mode: 'enforce' } }).policy.mode === 'shadow' &&
+			parseReview({ policy: { mode: 'off' } }).policy.mode === 'off'
+	);
+}
 check(
 	'parseGraph: edges become links',
 	parseGraph({ edges: [{ source: 'a', target: 'b' }] }).links.length === 1
@@ -399,6 +429,7 @@ for (const v of [
 	'browse',
 	'edit',
 	'activity',
+	'review',
 	'graph',
 	'members',
 	'analytics',
