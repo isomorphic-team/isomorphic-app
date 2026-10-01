@@ -131,7 +131,7 @@ jobs:
       - name: Collect the artifact
         run: cp -R migrations "$RUNNER_TEMP/preview/migrations"
 
-      - uses: actions/upload-artifact@v5
+      - uses: actions/upload-artifact@v7
         with:
           name: preview-bundle
           path: |
@@ -201,7 +201,7 @@ jobs:
         if: steps.guard.outputs.ready == 'true'
         run: pnpm exec tsx scripts/preview.ts plan >> "$GITHUB_OUTPUT"
 
-      - uses: actions/download-artifact@v5
+      - uses: actions/download-artifact@v8
         if: steps.guard.outputs.ready == 'true'
         with:
           name: preview-bundle
