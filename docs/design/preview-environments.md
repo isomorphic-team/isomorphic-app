@@ -194,15 +194,13 @@ Cloudflare's docs left these open; the first deployed Preview (2026-10-01) settl
 - **The per-Worker Editor role ("Individual Workers Editor") creates Previews**, alongside
   account-level D1 Edit in the same token.
 - **`WRANGLER_OUTPUT_FILE_DIRECTORY` carries a `preview` entry with `preview_urls`.**
-- **Base-config secrets reach a new Preview**: its Auth.js sign-in page renders.
+- **Base-config secrets reach a new Preview and survive its redeploys**: its Auth.js sign-in
+  page, which needs `AUTH_SECRET`, renders after the first deploy and after a push.
 
 ## Still unverified
 
 Each has a visible failure, not a silent one:
 
-- **Whether a Preview keeps its secrets across redeploys.** The docs say base secrets are
-  copied on create; a redeploy that dropped them would fail sign-in and, most likely, the
-  `/b/` smoke assertion.
 - **Whether the Editor role can delete a Preview.** If not, `cleanup` logs a notice and still
   deletes the database; the Preview is evicted at the per-Worker limit.
 - **Pricing.** Unstated; presumably ordinary Workers usage.
