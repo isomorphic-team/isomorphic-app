@@ -14,7 +14,8 @@
 // temporary directory: no network, no credentials, no scratch repo, so it runs in CI
 // and a contributor can run it on a fresh clone. With --github it runs the identical
 // assertions against a real scratch repo on the platform org, which is the only way
-// to prove the GitHub adapter itself.
+// to prove the GitHub adapter itself. It ends by protecting the scratch repo's default
+// branch and checking that successive writes join one pull request.
 //
 //   pnpm test:e2e-librarian                            (local, offline, in CI)
 //   pnpm exec tsx scripts/e2e-librarian.ts --github    (real GitHub, by hand)
@@ -49,6 +50,7 @@ import { loadCustomToolDefs, registerCustomTools } from '../src/tools/custom.ts'
 import { installationOctokit } from '../src/lib/github.ts';
 import { createAndScaffoldBrain, buildScaffoldFiles } from '../src/lib/scaffold-core.ts';
 import { loadBrainConfig } from '../src/lib/brain-config.ts';
+import type { Octokit } from 'octokit';
 import { githubStore, type BrainStore } from '../src/lib/brain-repo.ts';
 import { ensureGitRepo, fsBrainStore } from '../src/local/brain-store-fs.ts';
 import { localD1 } from '../src/local/d1-sqlite.ts';
@@ -69,6 +71,9 @@ let cleanup: () => Promise<void>;
 // a brain as storage, so BrainStore deliberately cannot back them and the offline
 // mode has to stand in for them the way it stands in for the repo itself.
 let platformOctokit: never;
+// --github only: the installation client that created the scratch repo, for the
+// protected-branch phase (setting protection, listing pull requests).
+let scratchOctokit: Octokit | undefined;
 // A second repo, existing but not yet a brain: what connect_brain adopts.
 let adoptRepo: string;
 // Repos create_brain scaffolds during the run, deleted with the rest in --github mode.
@@ -104,6 +109,7 @@ if (GITHUB_MODE) {
 	repoArgs = { owner: brain.owner, repo: brain.name };
 	brainId = `${brain.owner}/${brain.name}`;
 	platformOctokit = octokit as never;
+	scratchOctokit = octokit;
 	// A real second repo for connect_brain to adopt. Scaffolded like the first so the
 	// post-adopt config detection has actual content to look at.
 	adoptRepo = `${name}-adopt`;
@@ -1945,6 +1951,98 @@ try {
 			'...and the new config is what landed',
 			((await fileText('.isomorphic.json')) ?? '').includes('"docs/": "content"'),
 			(await fileText('.isomorphic.json')) ?? ''
+		);
+	}
+
+	// ---- --github: writes on a protected branch join one pull request ----------
+	// Runs last: protecting the default branch turns every later write into a pull
+	// request. One required approval keeps that pull request open (the App cannot
+	// approve its own), so the next writes have something to join. The pauses give
+	// GitHub's pull request listing time to show a pull request opened a moment ago.
+	if (scratchOctokit) {
+		const gh = scratchOctokit;
+		await gh.rest.repos.updateBranchProtection({
+			...repoArgs,
+			branch: 'main',
+			required_status_checks: null,
+			enforce_admins: false,
+			required_pull_request_reviews: { required_approving_review_count: 1 },
+			restrictions: null
+		});
+		const openPrs = async () =>
+			(await gh.rest.pulls.list({ ...repoArgs, state: 'open', per_page: 100 })).data.filter((p) =>
+				p.head.ref.startsWith('isomorphic/')
+			);
+		const mainBefore = await settledHead();
+		const dir = 'docs/pr-mode';
+
+		r = await call('write_page', { path: `${dir}/a.md`, content: 'first' });
+		check(
+			'protected: the first write becomes a pull request',
+			!r.isError && /\/pull\/\d+/.test(r.text),
+			r.text
+		);
+		const first = await eventually(openPrs, (prs) => prs.length === 1);
+		check('protected: one pull request is open', first.length === 1, `open = ${first.length}`);
+		await sleep(3000);
+
+		r = await call('write_page', { path: `${dir}/a.md`, append: 'second' });
+		check('protected: an append to the pending page finds it', !r.isError, r.text);
+		check(
+			'protected: the reply says it joined the open pull request',
+			/joined/.test(r.text),
+			r.text
+		);
+		await sleep(3000);
+		r = await call('write_page', { path: `${dir}/b.md`, content: 'third' });
+		check('protected: a write to another page succeeds', !r.isError, r.text);
+
+		const prs = await openPrs();
+		check(
+			'protected: still exactly one pull request',
+			prs.length === 1,
+			prs.map((p) => p.number).join(',')
+		);
+		const pr = prs[0];
+		check(
+			'protected: the pull request is retitled for three changes',
+			/and 2 more changes$/.test(pr?.title ?? ''),
+			pr?.title
+		);
+		const atPr = async (path: string) =>
+			(await store.readFile(repoArgs, path, pr.head.ref))?.content ?? '';
+		const a = await eventually(
+			() => atPr(`${dir}/a.md`),
+			(t) => t.includes('second')
+		);
+		check(
+			'protected: the branch holds the page with both writes',
+			a.includes('first') && a.includes('second'),
+			a
+		);
+		check(
+			'protected: the branch holds the third write',
+			(await atPr(`${dir}/b.md`)).includes('third')
+		);
+		check('protected: the default branch did not move', (await headSha()) === mainBefore);
+
+		// The editor opens the pending version, and saving with its sha is accepted.
+		const opened = await callSc('edit_page', { path: `${dir}/a.md` });
+		check(
+			'protected: edit_page opens the pending version',
+			opened.text.includes('second'),
+			opened.text
+		);
+		const saved = await callSc('write_page', {
+			path: `${dir}/a.md`,
+			content: 'edited in the editor',
+			sha: opened.sc.sha
+		});
+		check('protected: an editor save with that sha is accepted', !saved.isError, saved.text);
+		check(
+			'protected: ...and lands on the same pull request',
+			(await openPrs()).length === 1,
+			saved.text
 		);
 	}
 
