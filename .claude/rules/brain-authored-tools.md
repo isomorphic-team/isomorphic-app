@@ -2,14 +2,14 @@
 paths:
   - "src/lib/custom-tools.ts"
   - "src/tools/custom.ts"
-  - "scripts/test-tools.ts"
+  - "scripts/test-custom-tools.ts"
 ---
 
 # User-defined tools (brain-authored)
 
 Any content page under a `tools/` folder (e.g. `wiki/tools/standup-digest.md`) is registered
 as an MCP tool named `tool_<filename>`. Engine: `src/lib/custom-tools.ts` (pure parse, schema,
-interpolation; `pnpm test:tools`) + `src/tools/custom.ts` (discovery, registration, execution).
+interpolation; `pnpm test:custom-tools`) + `src/tools/custom.ts` (discovery, registration, execution).
 Contract for agents: `brain-template/AGENTS.md`.
 
 - **A tool is a page.** `isToolPagePath` = any `.md` under a `tools/` segment that is not a

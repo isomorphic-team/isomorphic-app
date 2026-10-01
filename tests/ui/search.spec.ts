@@ -1,4 +1,5 @@
-// Cross-brain search, through the real app over the host harness.
+// Search, through the real app over the host harness: the search page itself, and
+// cross-brain search.
 //
 // The engine is pinned by `pnpm test:search` (which brains a search reaches, how hits
 // are budgeted across them). What only a browser can catch is the CLICK: a fan-out
@@ -13,13 +14,46 @@ import { openApp, expectView } from './harness.ts';
 // search left the brain the app opened in (Personal).
 const ONLY_IN_NORTHWIND = 'Primary site';
 
-async function search(app: ReturnType<typeof openApp> extends Promise<infer T> ? T : never) {
+type App = Awaited<ReturnType<typeof openApp>>;
+
+// Open the search page from the rail.
+async function openSearch(app: App) {
 	await app.locator('aside[aria-label="Places"]').getByRole('button', { name: 'Search' }).click();
-	const box = app.getByPlaceholder('Search this brain…');
+	await expectView(app, 'search');
+	return app.locator('main[data-view="search"]').getByPlaceholder('Search this brain…');
+}
+
+async function search(app: App) {
+	const box = await openSearch(app);
 	await box.fill(ONLY_IN_NORTHWIND);
 	await box.press('Enter');
 	return box;
 }
+
+test('search is a PAGE that owns its own field', async ({ page }) => {
+	// Search arrives like every other destination in the rail, with the field ON the
+	// page: that gives it room for a long query, keeps the query visible while you read
+	// the results, and leaves somewhere to put the empty state.
+	const app = await openApp(page, 'browse');
+	const box = await openSearch(app);
+	const body = app.locator('main[data-view="search"]');
+	// Nothing has been asked yet, so this is an invitation and not "no results". Saying
+	// "no matches for ''" would report a failure that never happened.
+	await expect(body.getByText('Search the pages of this brain by their text.')).toBeVisible();
+	await expect(box).toBeFocused();
+
+	// A term in the fixture pages, so this exercises a hit rather than the empty state.
+	await box.fill('vision');
+	await box.press('Enter');
+	await expectView(app, 'search');
+	const hit = body.getByRole('button').filter({ hasText: 'wiki/concepts/vision.md' });
+	await expect(hit.first()).toBeVisible();
+	// The query survives the search, in the thing you typed it into.
+	await expect(body.getByPlaceholder('Search this brain…')).toHaveValue('vision');
+	// And a hit navigates.
+	await hit.first().click();
+	await expectView(app, 'page');
+});
 
 test('a search stays in the active brain until you widen it', async ({ page }) => {
 	const app = await openApp(page, 'browse');

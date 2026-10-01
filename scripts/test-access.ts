@@ -16,6 +16,12 @@
 // access bug no amount of testing the pure function can see, which is why half 2
 // runs the real exported functions rather than restating their queries.
 //
+// Half 2 also covers what decides where a call lands and what it reads through:
+// the org and brain a call resolves to (chooseOrg, chooseBrain, resolveOrgForPerson,
+// brain handles), the storage binding that picks a brain's credential (with the 0010
+// and 0013 backfills), moving a brain between orgs, a customer org from a GitHub
+// install, and the single-user deployment's org (staticAuth, ensureStaticTenant).
+//
 //   pnpm test:access
 
 import {
@@ -24,11 +30,9 @@ import {
 	ASSIGNABLE_BRAIN_ROLES,
 	type Role
 } from '../src/lib/orgs.ts';
-import { commitAuthorFor, githubNoreplyAuthor, validCommitAuthor } from '../src/lib/brain-repo.ts';
 import { staticAuth } from '../src/lib/github.ts';
-import { platformInstall } from '../src/lib/provision.ts';
 
-import { checker } from './check.ts';
+import { checker, errorOf, rejects, throws } from './check.ts';
 
 const { check, done } = checker('access-rule checks');
 
@@ -38,8 +42,8 @@ const GRANTS: (Role | null)[] = [null, 'viewer', 'editor', 'admin'];
 // ---------------------------------------------------------------------------
 console.log('\nOrg-visible brain: every member reaches it at their org role');
 // ---------------------------------------------------------------------------
-// This is the grandfathered path. Every brain that exists TODAY is visibility='org',
-// so these cases are literally "nobody loses access when this ships".
+// Brains created before per-brain access are visibility='org', so these cases are
+// what every member of an older brain still holds.
 for (const orgRole of ORG_ROLES) {
 	const got = effectiveBrainRole({ visibility: 'org', orgRole });
 	check(`${orgRole} in org → ${orgRole}`, got === orgRole, `got ${got}`);
@@ -116,19 +120,12 @@ for (const visibility of ['org', 'private']) {
 }
 
 // ---------------------------------------------------------------------------
-console.log('\nAn org viewer stays a viewer: a brain share is not an org promotion');
+console.log("\n'owner' is never a brain role");
 // ---------------------------------------------------------------------------
-// Sharing a brain with someone at `admin` makes them admin OF THAT BRAIN. It must
-// not make them an org admin: the org role is a separate axis, and the member
-// tools gate on it (TenantOpts.requiresOrg). This test documents the boundary; the
-// enforcement is that members.ts reads ctx.orgRole, never ctx.role.
-const brainAdminOrgViewer = effectiveBrainRole({
-	visibility: 'private',
-	orgRole: 'viewer',
-	grant: 'admin'
-});
-check('org viewer + admin grant → admin on the brain', brainAdminOrgViewer === 'admin');
-check("...and 'owner' is never a brain role", !ASSIGNABLE_BRAIN_ROLES.includes('owner' as Role));
+// A brain share makes someone admin OF THAT BRAIN at most. Ownership is an org
+// role, and the member tools gate on the org role (TenantOpts.requiresOrg), which
+// test-scope pins.
+check('owner is not an assignable brain role', !ASSIGNABLE_BRAIN_ROLES.includes('owner' as Role));
 
 // ---------------------------------------------------------------------------
 console.log('\nUnknown visibility fails OPEN to org-visible');
@@ -215,7 +212,7 @@ check(
 );
 check(
 	'and is off by default',
-	effectiveBrainRole({ visibility: 'org', orgRole: 'owner', readOnly: false }) === 'owner'
+	effectiveBrainRole({ visibility: 'org', orgRole: 'owner' }) === 'owner'
 );
 
 // ===========================================================================
@@ -229,12 +226,10 @@ check(
 // (same shim the e2e batteries use), and the real exported functions are called.
 // No network: node:sqlite is a Node builtin.
 
-import { localD1 } from '../src/local/d1-sqlite.ts';
+import { localD1, replayMigrations } from '../src/local/d1-sqlite.ts';
 import { bindFixtureStorage } from './fixture-storage.ts';
 import { brainSlug } from '../src/lib/brain-slug.ts';
 import { DatabaseSync } from 'node:sqlite';
-import { readdirSync, readFileSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
 import { planBrainMove, loadMovePeople, describeMove, moveBrain } from '../src/lib/brain-move.ts';
 import { connectCustomerOrg } from '../src/lib/org-connect.ts';
 import { ensureStaticTenant, STATIC_USER_ID } from '../src/lib/static-tenant.ts';
@@ -669,14 +664,6 @@ console.log('\nactiveAfterDisconnect: the brain a disconnect leaves you in');
 }
 
 console.log('\nchooseOrg: where a new brain actually gets written');
-const threw = (fn: () => unknown) => {
-	try {
-		fn();
-		return false;
-	} catch {
-		return true;
-	}
-};
 check('a named handle wins', chooseOrg(daveOrgs, { org: 'Contoso Group' }).org.org_id === 'org2');
 check(
 	'...over the org the caller is working in',
@@ -702,16 +689,16 @@ check(
 );
 check(
 	'an unmatched handle throws rather than picking one',
-	threw(() => chooseOrg(daveOrgs, { org: 'acme' }))
+	throws(() => chooseOrg(daveOrgs, { org: 'acme' }))
 );
 check(
 	'an AMBIGUOUS handle throws too (never silently takes the first)',
-	threw(() => chooseOrg(daveOrgs, { org: 'org' })),
+	throws(() => chooseOrg(daveOrgs, { org: 'org' })),
 	'"org" is a substring of both org ids and must not resolve'
 );
 check(
 	'no orgs at all throws',
-	threw(() => chooseOrg([], {}))
+	throws(() => chooseOrg([], {}))
 );
 
 console.log('\nchooseBrain: which brain a read or a write actually lands on');
@@ -771,18 +758,18 @@ console.log('\nchooseBrain: which brain a read or a write actually lands on');
 	);
 	check(
 		'an unmatched handle throws rather than picking one',
-		threw(() => chooseBrain(aliceBrains, { brain: 'nonexistent' }))
+		throws(() => chooseBrain(aliceBrains, { brain: 'nonexistent' }))
 	);
 	// The case that matters most: silently taking the first of several would write
 	// into a brain the caller did not name.
 	check(
 		'an AMBIGUOUS handle throws too',
-		threw(() => chooseBrain(aliceBrains, { brain: 'northwind' })),
+		throws(() => chooseBrain(aliceBrains, { brain: 'northwind' })),
 		'the org owns both repos, so the handle cannot pick one'
 	);
 	check(
 		'no brains at all throws',
-		threw(() => chooseBrain([], {}))
+		throws(() => chooseBrain([], {}))
 	);
 	// A blank handle THROWS rather than falling through to the active brain. That is
 	// the behavior the Worker already had and it matches chooseOrg: a caller who
@@ -791,118 +778,9 @@ console.log('\nchooseBrain: which brain a read or a write actually lands on');
 	// this whole function exists to prevent.
 	check(
 		'a blank handle throws rather than silently falling back to the active brain',
-		threw(() => chooseBrain(aliceBrains, { brain: '   ', activeBrainId: ids[1] }))
+		throws(() => chooseBrain(aliceBrains, { brain: '   ', activeBrainId: ids[1] }))
 	);
 }
-
-console.log('\ncommitAuthorFor: how a human edit is attributed in git history');
-// Nothing tested this before: it lived inline in McpSession, in two copies, and it
-// decides what `git blame` shows for every write a person makes.
-check(
-	'the app_users row wins, since its address is the verified one',
-	commitAuthorFor({ name: 'Ada', email: 'ada@example.com' }, 'token@example.com')?.email ===
-		'ada@example.com'
-);
-check(
-	'the token email is the fallback when there is no row yet',
-	commitAuthorFor(null, 'token@example.com')?.email === 'token@example.com'
-);
-check(
-	'...and when the row carries no address',
-	commitAuthorFor({ name: 'Ada', email: null }, 'token@example.com')?.email === 'token@example.com'
-);
-check(
-	'a person with no name is attributed under their address, not dropped',
-	commitAuthorFor({ name: null, email: 'ada@example.com' }, '')?.name === 'ada@example.com'
-);
-check(
-	'no address anywhere means no attribution, so the App authors instead',
-	commitAuthorFor(null, '') === undefined
-);
-check(
-	'whitespace is trimmed rather than written into history',
-	commitAuthorFor({ name: '  Ada  ', email: '  ada@example.com  ' }, '')?.name === 'Ada'
-);
-check(
-	'a whitespace-only address counts as none',
-	commitAuthorFor({ name: 'Ada', email: '   ' }, '   ') === undefined
-);
-
-console.log('\ngithubNoreplyAuthor: the GitHub-identity attribution rule');
-// The third attribution rule, for the path with no app_users row to read. The format
-// is GitHub's canonical noreply form, and getting it wrong is silent: the commit still
-// lands, it just attributes to nobody, on every write that identity makes.
-check(
-	'the canonical <id>+<login>@users.noreply.github.com form',
-	githubNoreplyAuthor(1234, 'ada')?.email === '1234+ada@users.noreply.github.com'
-);
-check('the name is the login', githubNoreplyAuthor(1234, 'ada')?.name === 'ada');
-check(
-	'no login means no attribution, so the App authors instead',
-	githubNoreplyAuthor(1234, null) === undefined
-);
-check('...and an empty login too', githubNoreplyAuthor(1234, '') === undefined);
-check(
-	'a whitespace-only login counts as none, never as a blank address',
-	githubNoreplyAuthor(1234, '   ') === undefined
-);
-check(
-	'a padded login is trimmed on both sides of the address',
-	githubNoreplyAuthor(7, '  ada  ')?.email === '7+ada@users.noreply.github.com'
-);
-
-console.log('\nvalidCommitAuthor: WHETHER a computed attribution is usable');
-// The guard the other two rules feed into, and the last of the three that had no
-// test. It decides whether a commit carries a human at all: createCommit rejects a
-// garbage email, and a bad value is worse than falling back to the App author.
-check(
-	'a well-formed author is kept',
-	validCommitAuthor({ name: 'Ada', email: 'ada@example.com' })?.email === 'ada@example.com'
-);
-check('no author at all is undefined, not a throw', validCommitAuthor(undefined) === undefined);
-check(
-	'a blank name is refused: git blame on an empty string helps nobody',
-	validCommitAuthor({ name: '   ', email: 'ada@example.com' }) === undefined
-);
-check(
-	'an address with no @ is refused rather than sent to createCommit',
-	validCommitAuthor({ name: 'Ada', email: 'not-an-email' }) === undefined
-);
-check(
-	'...and one with no dot in the domain',
-	validCommitAuthor({ name: 'Ada', email: 'ada@localhost' }) === undefined
-);
-check(
-	'...and one carrying whitespace inside it',
-	validCommitAuthor({ name: 'Ada', email: 'ada @example.com' }) === undefined
-);
-check(
-	'both sides are trimmed, so padding never reaches history',
-	(() => {
-		const a = validCommitAuthor({ name: '  Ada  ', email: '  ada@example.com  ' });
-		return a?.name === 'Ada' && a?.email === 'ada@example.com';
-	})()
-);
-
-// The three rules COMPOSE: the two that decide WHO both hand their answer to this
-// one, so a tightening here silently unattributes an entire identity path. These
-// two checks are the seam, and they are the reason the guard is worth pinning at
-// all rather than merely reading.
-check(
-	'what commitAuthorFor produces survives the guard',
-	validCommitAuthor(commitAuthorFor({ name: 'Ada', email: 'ada@example.com' }, ''))?.name === 'Ada'
-);
-check(
-	'a person with no name is attributed under their address, not dropped',
-	validCommitAuthor(commitAuthorFor({ name: null, email: 'ada@example.com' }, ''))?.name ===
-		'ada@example.com'
-);
-check(
-	'the GitHub noreply address survives the guard, + and all',
-	validCommitAuthor(githubNoreplyAuthor(1234, 'ada'))?.email ===
-		'1234+ada@users.noreply.github.com',
-	'a stricter email pattern here would silently unattribute every GitHub-identity commit'
-);
 
 console.log('\nstaticAuth: what a self-hosted deployment resolves to, or is told');
 // AUTH_MODE=static is the documented self-hosting entry point, so these errors are
@@ -912,17 +790,13 @@ check(
 	'a token resolves to the token path',
 	staticAuth({ ...REPO, GITHUB_TOKEN: 'ghp_x' }).kind === 'token'
 );
-check(
-	'an installation id resolves to the App path',
-	staticAuth({ ...REPO, GITHUB_APP_INSTALLATION_ID: '42' }).kind === 'installation'
-);
-check(
-	'...and parses to a number, not a string',
-	(() => {
-		const a = staticAuth({ ...REPO, GITHUB_APP_INSTALLATION_ID: '42' });
-		return a.kind === 'installation' && a.installationId === 42;
-	})()
-);
+{
+	const a = staticAuth({ ...REPO, GITHUB_APP_INSTALLATION_ID: '42' });
+	check(
+		'an installation id resolves to the App path, parsed to a number',
+		a.kind === 'installation' && a.installationId === 42
+	);
+}
 check(
 	'the token wins when both are set, being the more specific act',
 	staticAuth({ ...REPO, GITHUB_TOKEN: 'ghp_x', GITHUB_APP_INSTALLATION_ID: '42' }).kind === 'token'
@@ -933,100 +807,23 @@ check(
 );
 check(
 	'no repo named at all is refused, whatever the credential',
-	threw(() => staticAuth({ GITHUB_TOKEN: 'ghp_x' }))
+	throws(() => staticAuth({ GITHUB_TOKEN: 'ghp_x' }))
 );
 check(
 	'half a repo is refused too',
-	threw(() => staticAuth({ BRAIN_REPO_OWNER: 'acme', GITHUB_TOKEN: 'ghp_x' }))
+	throws(() => staticAuth({ BRAIN_REPO_OWNER: 'acme', GITHUB_TOKEN: 'ghp_x' }))
 );
 check(
 	'a repo with no credential is refused',
-	threw(() => staticAuth(REPO))
+	throws(() => staticAuth(REPO))
 );
-// Deliberate improvement over the inline version, which accepted any non-empty
-// string here and sent Number('abc') = NaN to GitHub as an installation id.
 check(
 	'a non-numeric installation id is refused here, not at GitHub',
-	threw(() => staticAuth({ ...REPO, GITHUB_APP_INSTALLATION_ID: 'not-a-number' }))
+	throws(() => staticAuth({ ...REPO, GITHUB_APP_INSTALLATION_ID: 'not-a-number' }))
 );
 check(
 	'a whitespace-only credential counts as absent',
-	threw(() => staticAuth({ ...REPO, GITHUB_TOKEN: '   ' }))
-);
-
-console.log('\nplatformInstall: the config both provisioning paths read');
-// The two call sites in the Worker each read these two variables inline and threw
-// the same sentence. The copies had drifted on the one thing that matters: the
-// GitHub path coerced the id unconditionally, so `Number('abc')` reached
-// provisionBrainForUser as NaN and failed later, at GitHub, as an auth problem.
-const PLATFORM = { PLATFORM_ORG: 'acme-brains', PLATFORM_INSTALLATION_ID: '99' };
-check(
-	'a configured platform resolves to its org and installation',
-	(() => {
-		const p = platformInstall(PLATFORM);
-		return p.org === 'acme-brains' && p.installationId === 99;
-	})()
-);
-check(
-	'the installation id is a number, not the string it arrives as',
-	typeof platformInstall(PLATFORM).installationId === 'number'
-);
-check(
-	'a missing org is refused',
-	threw(() => platformInstall({ PLATFORM_INSTALLATION_ID: '99' }))
-);
-check(
-	'a missing installation id is refused',
-	threw(() => platformInstall({ PLATFORM_ORG: 'acme-brains' }))
-);
-check(
-	'both errors name both variables, since either one alone is not enough',
-	(() => {
-		try {
-			platformInstall({});
-			return false;
-		} catch (e) {
-			const m = String((e as Error).message);
-			return m.includes('PLATFORM_ORG') && m.includes('PLATFORM_INSTALLATION_ID');
-		}
-	})()
-);
-check(
-	'a whitespace-only value counts as unset rather than as an org named " "',
-	threw(() => platformInstall({ PLATFORM_ORG: '   ', PLATFORM_INSTALLATION_ID: '99' }))
-);
-check(
-	'a non-numeric installation id is refused here, not passed on as NaN',
-	threw(() => platformInstall({ ...PLATFORM, PLATFORM_INSTALLATION_ID: 'not-a-number' })),
-	'this is the defect the two inline copies shared'
-);
-check(
-	'...and that error names the variable and shows what was read',
-	(() => {
-		try {
-			platformInstall({ ...PLATFORM, PLATFORM_INSTALLATION_ID: 'abc' });
-			return false;
-		} catch (e) {
-			const m = String((e as Error).message);
-			return m.includes('PLATFORM_INSTALLATION_ID') && m.includes('abc');
-		}
-	})()
-);
-check(
-	'a fractional id is refused: installation ids are whole numbers',
-	threw(() => platformInstall({ ...PLATFORM, PLATFORM_INSTALLATION_ID: '9.5' }))
-);
-check(
-	'zero and negatives are refused rather than sent to GitHub',
-	threw(() => platformInstall({ ...PLATFORM, PLATFORM_INSTALLATION_ID: '0' })) &&
-		threw(() => platformInstall({ ...PLATFORM, PLATFORM_INSTALLATION_ID: '-3' }))
-);
-check(
-	'surrounding whitespace is tolerated on both, since these come from env files',
-	(() => {
-		const p = platformInstall({ PLATFORM_ORG: ' acme-brains ', PLATFORM_INSTALLATION_ID: ' 99 ' });
-		return p.org === 'acme-brains' && p.installationId === 99;
-	})()
+	throws(() => staticAuth({ ...REPO, GITHUB_TOKEN: '   ' }))
 );
 
 console.log('\nresolveOrgForPerson: the whole decision, against the real schema');
@@ -1034,14 +831,6 @@ console.log('\nresolveOrgForPerson: the whole decision, against the real schema'
 // Worker so the empty case is drivable, because empty is where the subtlety is:
 // "brand new" and "your only org is suspended" look identical to listAccessibleOrgs
 // and must not produce the same outcome.
-const threwAsync = async (p: Promise<unknown>) => {
-	try {
-		await p;
-		return false;
-	} catch {
-		return true;
-	}
-};
 const daveIds = await linkedUserIds(db, 'dave-home');
 check(
 	'a person with no membership anywhere returns null (the caller provisions)',
@@ -1049,7 +838,7 @@ check(
 );
 check(
 	'someone whose only org is suspended THROWS instead of returning null',
-	await threwAsync(resolveOrgForPerson(db, ['erin'])),
+	await rejects(resolveOrgForPerson(db, ['erin'])),
 	'a suspension would be provisioned past, replacing their org with a new one'
 );
 check(
@@ -1058,13 +847,12 @@ check(
 );
 check(
 	'an unknown org name throws rather than falling back to a default',
-	await threwAsync(resolveOrgForPerson(db, daveIds, { org: 'acme' })),
+	await rejects(resolveOrgForPerson(db, daveIds, { org: 'acme' })),
 	'writing into the wrong org is worse than refusing'
 );
 
-// The active-org lookup is a real query in the Worker, so it must not run when it
-// cannot change the answer. Counting the thunk pins that, and pins that it IS used
-// when it can.
+// The active-org lookup is a real query in the Worker: it runs only when it can
+// change the answer.
 let thunkCalls = 0;
 const activeOrgId = async () => {
 	thunkCalls++;
@@ -1098,11 +886,7 @@ console.log('\nStorage bindings: the migration backfill');
 	// applied on top. localD1 applies every migration to an EMPTY database, where a
 	// backfill has nothing to do and so proves nothing.
 	const pre = new DatabaseSync(':memory:');
-	const files = readdirSync(fileURLToPath(new URL('../migrations/', import.meta.url)))
-		.filter((f) => f.endsWith('.sql'))
-		.sort();
-	const at = (f: string) => readFileSync(new URL(`../migrations/${f}`, import.meta.url), 'utf8');
-	for (const f of files.filter((f) => f < '0010')) pre.exec(at(f));
+	replayMigrations(pre, { to: '0010' });
 	pre.exec(`
 	  INSERT INTO orgs (org_id, name, model, installation_id, brain_owner, created_by, created_at) VALUES
 	    ('p1', 'a@example.com', 'platform', 100, 'platform-org', 'u', '2026-01-01'),
@@ -1112,7 +896,7 @@ console.log('\nStorage bindings: the migration backfill');
 	    ('bp1', 'p1', 'platform-org', 'brain-a'),
 	    ('bc1', 'c1', 'acme', 'wiki');
 	`);
-	pre.exec(at(files.find((f) => f.startsWith('0010'))!));
+	replayMigrations(pre, { from: '0010', to: '0011' });
 	const conns = pre
 		.prepare('SELECT connection_id, account, owner_org_id FROM storage_connections ORDER BY 1')
 		.all() as { connection_id: string; account: string; owner_org_id: string | null }[];
@@ -1195,11 +979,7 @@ console.log('\nOrgs name their storage: the 0013 backfill');
 	// Production's shape before 0013: orgs carrying their installation, 0010's
 	// connections, and a single-user org whose brain reads through a token.
 	const pre = new DatabaseSync(':memory:');
-	const files = readdirSync(fileURLToPath(new URL('../migrations/', import.meta.url)))
-		.filter((f) => f.endsWith('.sql'))
-		.sort();
-	const at = (f: string) => readFileSync(new URL(`../migrations/${f}`, import.meta.url), 'utf8');
-	for (const f of files.filter((f) => f < '0013')) pre.exec(at(f));
+	replayMigrations(pre, { to: '0013' });
 	pre.exec(`
 	  INSERT INTO orgs (org_id, name, model, installation_id, brain_owner, created_by) VALUES
 	    ('p1', 'a@example.com', 'platform', 100, 'platform-org', 'u'),
@@ -1215,7 +995,7 @@ console.log('\nOrgs name their storage: the 0013 backfill');
 	  INSERT INTO tenants (gh_user_id, installation_id, brain_owner, brain_repo) VALUES
 	    (1, 100, 'platform-org', 'brain-old');
 	`);
-	pre.exec(at(files.find((f) => f.startsWith('0013'))!));
+	replayMigrations(pre, { from: '0013', to: '0014' });
 	const defaults = pre
 		.prepare('SELECT org_id, default_connection_id AS conn FROM orgs ORDER BY org_id')
 		.all() as { org_id: string; conn: string | null }[];
@@ -1246,7 +1026,7 @@ console.log('\nOrgs name their storage: the 0013 backfill');
 		'the tenants table of the removed GitHub sign-in is gone',
 		!pre.prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'tenants'`).get()
 	);
-	pre.exec(at(files.find((f) => f.startsWith('0014'))!));
+	replayMigrations(pre, { from: '0014', to: '0015' });
 	check(
 		'...and 0014 removes its identity bridge, github_links, with its index',
 		!pre
@@ -1254,69 +1034,6 @@ console.log('\nOrgs name their storage: the 0013 backfill');
 				`SELECT name FROM sqlite_master WHERE name IN ('github_links', 'github_links_user_idx')`
 			)
 			.get()
-	);
-}
-
-console.log('\nDerived state keyed by brain_id: the 0011 re-key');
-{
-	// Production's shape before 0011: index, ledger and usage rows under "owner/repo".
-	// Re-keyed in place, a brain keeps its index; missed, it silently reindexes from
-	// GitHub and its usage history reads zero.
-	const pre = new DatabaseSync(':memory:');
-	const files = readdirSync(fileURLToPath(new URL('../migrations/', import.meta.url)))
-		.filter((f) => f.endsWith('.sql'))
-		.sort();
-	const at = (f: string) => readFileSync(new URL(`../migrations/${f}`, import.meta.url), 'utf8');
-	for (const f of files.filter((f) => f < '0011')) pre.exec(at(f));
-	pre.exec(`
-	  INSERT INTO orgs (org_id, name, model, installation_id, brain_owner, created_by) VALUES
-	    ('c1', 'Acme', 'customer', 200, 'acme', 'u');
-	  INSERT INTO brains (brain_id, org_id, repo_owner, repo_name) VALUES
-	    ('brain-acme-wiki', 'c1', 'acme', 'wiki');
-	  INSERT INTO brain_index_meta (brain_id, indexed_commit_sha) VALUES
-	    ('acme/wiki', 'abc'), ('gone/repo', 'def');
-	  INSERT INTO brain_pages (brain_id, path, title, blob_sha, content) VALUES
-	    ('acme/wiki', 'wiki/a.md', 'A', 's1', 'x'), ('acme/wiki', 'wiki/b.md', 'B', 's2', 'y');
-	  INSERT INTO brain_links (brain_id, source, raw_target, kind) VALUES
-	    ('acme/wiki', 'wiki/a.md', 'b.md', 'md');
-	  INSERT INTO brain_page_fields (brain_id, path, key, value) VALUES
-	    ('acme/wiki', 'wiki/a.md', 'type', 'note');
-	  INSERT INTO write_attempts (brain_id, fingerprint, state, started_at) VALUES
-	    ('acme/wiki', 'f1', 'done', 1);
-	  INSERT INTO usage_daily (day, org_id, brain_id, user_id, tool, calls) VALUES
-	    ('2026-09-01', 'c1', 'acme/wiki', 'u', 'read_page', 3),
-	    ('2026-09-01', 'c1', '', 'u', 'members', 1);
-	`);
-	pre.exec(at(files.find((f) => f.startsWith('0011'))!));
-	const keys = (table: string) =>
-		(
-			pre.prepare(`SELECT DISTINCT brain_id FROM ${table} ORDER BY 1`).all() as {
-				brain_id: string;
-			}[]
-		).map((r) => r.brain_id);
-	for (const table of ['brain_pages', 'brain_links', 'brain_page_fields', 'write_attempts']) {
-		check(
-			`${table} is re-keyed to the brain's primary key`,
-			JSON.stringify(keys(table)) === JSON.stringify(['brain-acme-wiki']),
-			JSON.stringify(keys(table))
-		);
-	}
-	check(
-		'the index marker moves with its pages, so the brain does not reindex',
-		(
-			pre
-				.prepare(`SELECT indexed_commit_sha AS sha FROM brain_index_meta WHERE brain_id = ?`)
-				.get('brain-acme-wiki') as { sha: string } | undefined
-		)?.sha === 'abc'
-	);
-	check(
-		'rows for a repo no brain holds are left alone',
-		keys('brain_index_meta').includes('gone/repo')
-	);
-	check(
-		"usage keeps its counts under the brain's key, and org-scope rows stay ''",
-		JSON.stringify(keys('usage_daily')) === JSON.stringify(['', 'brain-acme-wiki']),
-		JSON.stringify(keys('usage_daily'))
 	);
 }
 
@@ -1593,22 +1310,20 @@ console.log('\nA single-user (static) deployment runs the org model (ensureStati
 	    VALUES ('old', 'Old', 'customer', 5, 'solo', 'x');
 	  INSERT INTO brains (brain_id, org_id, repo_owner, repo_name) VALUES ('b-legacy-id', 'old', 'solo', 'notes');
 	`);
-	let adopted = true;
-	try {
-		await ensureStaticTenant(db2, { owner: 'solo', repo: 'notes', credential: { kind: 'token' } });
-	} catch {
-		adopted = false;
-	}
+	const failure = await errorOf(() =>
+		ensureStaticTenant(db2, { owner: 'solo', repo: 'notes', credential: { kind: 'token' } })
+	);
 	const reached = await listAccessibleBrains(db2, [STATIC_USER_ID]);
 	check(
 		'an existing row for the configured repo is adopted, not a constraint failure',
-		adopted && reached.length === 1 && reached[0].brain_id === 'b-legacy-id'
+		failure === null && reached.length === 1 && reached[0].brain_id === 'b-legacy-id',
+		String(failure)
 	);
 }
 
 console.log('\ncredentialFor: which credential reads a brain');
 check(
-	'no binding (written before migration 0010): the org installation, as before',
+	'a row with no storage kind: the installation id it carries',
 	JSON.stringify(credentialFor({ storage_kind: null, installation_id: 7 })) ===
 		JSON.stringify({ kind: 'installation', installationId: 7 })
 );
@@ -1629,16 +1344,13 @@ check(
 );
 {
 	const { db } = localD1();
-	let message = '';
-	try {
-		await orgStorage(db, { org_id: 'o-bare', default_connection_id: null });
-	} catch (err) {
-		message = err instanceof Error ? err.message : String(err);
-	}
+	const message = await errorOf(() =>
+		orgStorage(db, { org_id: 'o-bare', default_connection_id: null })
+	);
 	check(
 		'an org with no default connection is an error, never a guess at an installation',
-		message.includes('no storage connection'),
-		message
+		message?.includes('no storage connection') === true,
+		String(message)
 	);
 }
 

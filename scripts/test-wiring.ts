@@ -1,7 +1,7 @@
 // Golden test for the test wiring itself: every `test:*` script must appear in both
 // `package.json`'s aggregate `test` script and `.github/workflows/ci.yml`, and the
 // Playwright container CI runs the UI job in must be the version of Playwright this
-// checkout resolves.
+// checkout resolves, and that job must run `pnpm test:ui` with UI_STRICT=1.
 //
 // CONTRIBUTING.md and CLAUDE.md carried the first half as prose, which does not fail a
 // pull request. A battery wired only into `package.json` passes for whoever wrote it
@@ -228,5 +228,18 @@ for (const { file, version } of pinned) {
 		`Playwright resolves to ${installedPlaywright} — update the image tag to v${installedPlaywright}-noble`
 	);
 }
+
+// ---------- the UI job runs strict ----------
+
+// Without UI_STRICT=1, `pnpm test:ui` skips green when the browser or this platform's
+// visual baselines are missing, so CI would pass while running no UI tests or comparing
+// no screenshots.
+const uiJob = /\n {2}ui:\n([\s\S]*?)(?=\n {2}[\w-]+:\n|$)/.exec(ci)?.[1] ?? '';
+console.log(`\nthe UI job runs pnpm test:ui with UI_STRICT=1`);
+check(
+	"ci.yml's ui job sets UI_STRICT: '1' on pnpm test:ui",
+	/- run: pnpm test:ui\n\s+env:\n\s+UI_STRICT: '1'/.test(uiJob),
+	'a missing browser or missing linux baselines would skip green in CI'
+);
 
 done();

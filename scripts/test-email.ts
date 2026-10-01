@@ -17,7 +17,7 @@ import {
 	PRODUCT_NAME
 } from '../src/lib/signin-email.ts';
 
-import { checker } from './check.ts';
+import { checker, errorOf } from './check.ts';
 
 const { check, done } = checker('sign-in email checks');
 
@@ -88,19 +88,14 @@ console.log('\nsend: the Resend request');
 
 	const refused = (async () =>
 		new Response('{"message":"domain not verified"}', { status: 403 })) as unknown as typeof fetch;
-	let threw: unknown;
-	try {
-		await sendSignInEmail({ ...input, apiKey: 're_test', from: 'x@example.com' }, refused);
-	} catch (e) {
-		threw = e;
-	}
-	check('a refused send throws', threw instanceof Error);
+	const err = await errorOf(() =>
+		sendSignInEmail({ ...input, apiKey: 're_test', from: 'x@example.com' }, refused)
+	);
+	check('a refused send throws', err !== null);
 	check(
 		'the error carries status and reason',
-		threw instanceof Error &&
-			threw.message.includes('403') &&
-			threw.message.includes('domain not verified'),
-		String(threw)
+		err !== null && err.includes('403') && err.includes('domain not verified'),
+		String(err)
 	);
 }
 

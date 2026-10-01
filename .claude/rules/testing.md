@@ -2,7 +2,7 @@
 paths:
   - "scripts/test-*.ts"
   - "scripts/e2e-*.ts"
-  - "scripts/{check,roundtrip-check}.ts"
+  - "scripts/check.ts"
   - "tests/**"
   - "playwright.config.ts"
   - "dev/harness.ts"
@@ -22,8 +22,11 @@ battery is blind to: routes mount, the tree, folder notes and brain switching wi
 editor round-trips, and how the app LOOKS in three display modes and two themes. It does not
 re-assert tool semantics.
 
-- It **skips green** (loudly) without Chromium or without baselines for this platform; CI sets
-  `UI_STRICT=1` so a missing browser cannot hide a broken container.
+- It **skips green** (loudly) without Chromium or without baselines for this platform. CI sets
+  `UI_STRICT=1`, which turns both skips into failures (`pnpm test:wiring` pins it), so the
+  visual comparison against the committed `linux/` baselines is a CI gate.
+- The route sweep (every route in `ROUTES` in `tests/ui/harness.ts` mounts its view) is the
+  inline pass of `bounds.spec.ts`'s "every route" sweep. A new harness route goes in `ROUTES`.
 - Determinism needs **two** frozen clocks (`?now=` for fixtures, `page.clock.setFixedTime` for
   the app's relative times). `page.clock.install()` does NOT pause `setTimeout` here.
 - Regenerate baselines with `pnpm ui:baselines` (the `ui-baselines` skill), never a bare

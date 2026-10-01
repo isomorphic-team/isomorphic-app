@@ -22,7 +22,6 @@
 //
 //   pnpm test:policy
 
-import { readFileSync } from 'node:fs';
 import { parsePaths } from '../src/lib/brain-config.ts';
 import { pathPolicyOf, isContentPath, isHiddenName } from '../src/lib/brain-policy.ts';
 import { browseSummary, treeFitsInline, MAX_INLINE_TREE_CHARS } from '../src/lib/browse.ts';
@@ -61,11 +60,11 @@ import {
 	isMorePlace,
 	inRail
 } from '../app/core/nav.ts';
-import { panelPlacement, GAP, COMFORTABLE } from '../app/core/menu-placement.ts';
+import { panelPlacement, GAP } from '../app/core/menu-placement.ts';
 
 import { checker } from './check.ts';
 
-const { check, done } = checker('wire-contract checks');
+const { check, done } = checker('app-policy checks');
 
 // A whole-repo brain, exactly as a live .isomorphic.json declares it.
 const wholeRepo = { paths: parsePaths({ contentRoots: ['.'], sourceRoots: [], logPath: '' }) };
@@ -195,30 +194,9 @@ console.log('\nthe app and the Worker agree');
 
 console.log('\nbrain identity rides the same payload');
 {
-	// The SEND side. Driving the real handler would need a live index and a store, so
-	// this reads the source the way test-usage scans the tool files for registered
-	// names: the assertion is that the field is in the payload at all, and the failure
-	// it catches is someone editing that return without it.
-	//
-	// COMMENTS ARE STRIPPED FIRST, and that is not a detail — the prose around this
-	// return names every field in it, so the first version of this check passed on a
-	// comment while the payload itself had already lost `activeBrain`.
-	const core = readFileSync(new URL('../src/tools/core.ts', import.meta.url), 'utf8').replace(
-		/^[ \t]*\/\/.*$/gm,
-		''
-	);
-	// The only structuredContent in the file is the no-prefix branch's (the prefix
-	// branch returns text alone).
-	const at = core.indexOf('structuredContent: {');
-	const payload = at === -1 ? '' : core.slice(at, core.indexOf('};', at));
-	check('list_pages sends the path policy', /config:\s*pathPolicyOf\(config\)/.test(payload));
-	check('list_pages sends the active brain', /\bactiveBrain\b/.test(payload));
-	check(
-		'…resolved from the context, not invented',
-		/const \{[^}]*\bactiveBrain\b[^}]*\} = await getContext/.test(core)
-	);
-
-	// The RECEIVE side: what the app does with it, and what it refuses to do without it.
+	// list_pages builds its payload `satisfies ListPagesWire`, so typecheck pins that it
+	// sends the brain. This is what the app does with it, and what it refuses to do
+	// without it.
 	applyBrainContext({ activeBrain: { id: 'acme/brain-acme', label: 'Acme' } });
 	check('the app adopts a delivered brain', activeBrain?.label === 'Acme');
 
@@ -550,11 +528,9 @@ console.log('\nmenu placement');
 	// The flip is not "whichever side is bigger". Down is preferred while down is
 	// usable, or a menu with plenty of room beneath it would jump above the trigger the
 	// moment the card grew a little taller than the panel.
+	// 172px below is less than the 292px above, and still comfortable.
 	const roomy = panelPlacement({ top: 300, bottom: 320 }, H);
-	check(
-		'a cramped side does not flip while it is still comfortable',
-		H - 320 - GAP >= COMFORTABLE ? !roomy.up : roomy.up
-	);
+	check('a smaller side does not flip while it is still comfortable', !roomy.up);
 	const both = panelPlacement({ top: 200, bottom: 220 }, 1000);
 	check('plenty of room below wins even with more above', !both.up);
 

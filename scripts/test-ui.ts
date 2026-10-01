@@ -15,13 +15,9 @@
 //      missing baseline is a setup gap, not a regression. Only the visual project is
 //      skipped; the functional tests still run.
 //
-// That is the same shape as the deploy workflow's readiness guard: warn and continue,
-// so an unconfigured checkout is diagnosable rather than red for a reason the reader
-// has to go and discover.
-//
-// Set UI_STRICT=1 to turn both skips into failures. CI does this for the browser
-// check, where a missing browser means the workflow forgot to install it and a green
-// skip would hide that the UI tests never ran.
+// UI_STRICT=1 turns both skips into failures. CI sets it: there a missing browser
+// means the container stopped carrying one, and missing baselines mean the visual
+// comparison would silently not run. Baselines for `linux` and `darwin` are committed.
 
 import { spawnSync } from 'node:child_process';
 import { existsSync, readdirSync } from 'node:fs';
@@ -78,10 +74,15 @@ const projects = ['functional', 'web'];
 if (hasBaselines) {
 	projects.push('visual');
 } else {
-	warn(
-		`No visual baselines for ${process.platform}, so only the functional tests ran.`,
-		`pnpm exec playwright test --project=visual --update-snapshots=all  (then commit tests/ui/__screenshots__/${process.platform}/)`
-	);
+	const message = `No visual baselines for ${process.platform}, so the visual project did not run.`;
+	const fix = `pnpm ui:baselines  (then commit tests/ui/__screenshots__/${process.platform}/; see dev/README.md §Visual baselines)`;
+	if (strict) {
+		console.error(`\n  ✗ ${message}`);
+		console.error('    UI_STRICT=1 is set, so this is a failure.');
+		console.error(`    fix: ${fix}\n`);
+		process.exit(1);
+	}
+	warn(message, fix);
 }
 
 // ---------- run ----------

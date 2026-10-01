@@ -40,3 +40,41 @@ export function checker(subject: string): Checker {
 		}
 	};
 }
+
+// Throw catchers for checks on a refusal. Each answers with a value a `check` can
+// read, so a function that returns where it should throw fails the check rather
+// than the battery.
+
+const messageOf = (e: unknown): string => (e instanceof Error ? e.message : String(e));
+
+/** Whether `fn` throws. */
+export function throws(fn: () => unknown): boolean {
+	try {
+		fn();
+		return false;
+	} catch {
+		return true;
+	}
+}
+
+/** Whether `p` rejects. */
+export async function rejects(p: Promise<unknown>): Promise<boolean> {
+	try {
+		await p;
+		return false;
+	} catch {
+		return true;
+	}
+}
+
+/** The message `fn` throws (or its promise rejects with), or null when it completes. */
+export function errorOf(fn: () => Promise<unknown>): Promise<string | null>;
+export function errorOf(fn: () => unknown): string | null;
+export function errorOf(fn: () => unknown): string | null | Promise<string | null> {
+	try {
+		const out = fn();
+		return out instanceof Promise ? out.then(() => null, messageOf) : null;
+	} catch (e) {
+		return messageOf(e);
+	}
+}

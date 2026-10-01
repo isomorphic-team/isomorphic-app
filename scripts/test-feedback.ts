@@ -30,20 +30,30 @@ const { check, done } = checker('feedback checks');
 
 console.log('\nredaction: credential shapes are removed');
 {
-	const cases: Array<[string, string]> = [
-		['classic PAT', 'token ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789'],
-		['fine-grained PAT', 'github_pat_11ABCDEFG0aBcDeFgHiJkLmNoPqRsTuVwXyZ0123456789'],
-		['installation token', 'ghs_ABCDEFGHIJKLMNOPQRSTUVWXYZ0123'],
-		['resend key', 're_ABCdefGHIjklMNOpqrSTU123'],
-		['sk- provider key', 'sk-ABCdefGHIjklMNOpqrSTUvwx1234567890'],
+	// Each case names a run of its secret that must not survive anywhere in the output.
+	const cases: Array<[string, string, string[]]> = [
+		['classic PAT', 'token ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789', ['WXYZ0123456789']],
+		[
+			'fine-grained PAT',
+			'github_pat_11ABCDEFG0aBcDeFgHiJkLmNoPqRsTuVwXyZ0123456789',
+			['VwXyZ0123456789']
+		],
+		['installation token', 'ghs_ABCDEFGHIJKLMNOPQRSTUVWXYZ0123', ['WXYZ0123']],
+		['resend key', 're_ABCdefGHIjklMNOpqrSTU123', ['qrSTU123']],
+		['sk- provider key', 'sk-ABCdefGHIjklMNOpqrSTUvwx1234567890', ['vwx1234567890']],
 		[
 			'jwt',
-			'eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U'
+			'eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U',
+			['eyJhbGciOiJIUzI1NiJ9', 'eyJzdWIiOiIxMjM0NTY3ODkwIn0', 'dozjgNryP4J3jVmNHl0w5N']
 		]
 	];
-	for (const [label, text] of cases) {
+	for (const [label, text, secrets] of cases) {
 		const out = redact(text);
-		check(label, out.includes('[token redacted]') && !out.includes('ABC'), out);
+		check(
+			label,
+			out.includes('[token redacted]') && secrets.every((part) => !out.includes(part)),
+			out
+		);
 	}
 
 	check(

@@ -238,7 +238,7 @@ What the suite covers, and deliberately does not:
   and the view in step (`web-nav`, the `web` project), and how it all looks in three
   display modes and two themes (`visual`).
 - **Does not cover**: tool semantics. The view engine, page patches, the access rule
-  and the analytics fold are pinned by pure golden tests (`test:views`, `test:patch`,
+  and the analytics fold are pinned by pure golden tests (`test:views`, `test:page-write`,
   `test:access`, `test:usage`) that run in milliseconds. Re-asserting those through the
   DOM would be a slow duplicate that fails for unrelated reasons.
 - **Says nothing about the real host.** This harness IS the host, so the claude.ai
@@ -263,15 +263,17 @@ chain such as the loading rotation cannot be stepped, only watched (see
 ### Visual baselines
 
 Baselines live in `tests/ui/__screenshots__/<platform>/` and are **committed**: they
-are the expected output, not an artifact. They are platform-specific because font
-rasterization differs between macOS and the Linux CI runner, so a macOS baseline never
-matches CI and vice versa.
+are the expected output, not an artifact. `darwin/` and `linux/` are both committed.
+They are platform-specific because font rasterization differs between macOS and the
+Linux CI runner, so a macOS baseline never matches CI and vice versa. A change that
+alters rendering regenerates both.
 
 `pnpm test:ui` **skips the visual project entirely** on a platform with no baselines,
 and skips everything if Chromium is not installed, rather than failing. A missing
 browser or a missing baseline is a setup gap, not a regression, and `pnpm test` should
-stay green on a fresh clone. `UI_STRICT=1` turns those skips into failures; CI sets it
-so a container that stopped carrying a browser cannot hide behind a green skip.
+stay green on a fresh clone. `UI_STRICT=1` turns both skips into failures. CI sets it
+(`pnpm test:wiring` checks that it does), so the UI job fails rather than skipping when
+its container has no browser or `linux/` has no baselines.
 
 To generate or refresh them:
 

@@ -24,7 +24,7 @@
 //     scrollport rather than the page. So the rail is sticky, and the check has to
 //     SCROLL: at rest it looked right in every mode while being wrong in one.
 import { test, expect } from '@playwright/test';
-import { openApp, settle, ROUTES, type DisplayMode } from './harness.ts';
+import { openApp, expectView, settle, ROUTES, type DisplayMode, type Route } from './harness.ts';
 
 type App = Awaited<ReturnType<typeof openApp>>;
 
@@ -242,25 +242,44 @@ test.describe('every route', () => {
 	// screen: it was about a card short enough for the rail to be the tallest thing in
 	// it, and which screens those are changes with the fixtures.
 	//
-	// ONE TEST PER MODE, AND A BUDGET STATED OUT LOUD. This was a single test walking
-	// all three modes, which is ~48 full app boots. It passed locally and timed out on
-	// CI at the default 30s, which is the classic shape of a test that measures the
-	// machine rather than the app. Split, the three run on separate workers and each
-	// retries alone; the raised budget is because a sweep is MEANT to be long, and
-	// trimming one until it fits the default is how it quietly stops sweeping.
+	// Inline, plus pip for the window modes: pip is the smaller of the two fixed
+	// windows. Fullscreen is measured by the tests above on the routes they open.
+	//
+	// The inline pass is also the route smoke: every route in ROUTES mounts the view it
+	// promises, never the error view, and with no uncaught error. A view that throws
+	// during render leaves the host connected and the frame blank, which reads
+	// identically to "slow", so page errors are collected and named by route.
+	//
+	// One test per mode, each with a stated budget: a sweep is a dozen or more full app
+	// boots, and trimming one until it fits the default 30s is how it stops sweeping.
 	test.describe.configure({ timeout: 120_000 });
 
-	for (const mode of ['inline', 'fullscreen', 'pip'] as DisplayMode[]) {
-		test(`keeps the rail whole in ${mode}`, async ({ page }) => {
+	for (const mode of ['inline', 'pip'] as DisplayMode[]) {
+		const smoke = mode === 'inline';
+		test(`${smoke ? 'mounts its view and ' : ''}keeps the rail whole in ${mode}`, async ({
+			page
+		}) => {
+			let current = '';
+			const errors: string[] = [];
+			page.on('pageerror', (e) => errors.push(`${current}: ${String(e)}`));
 			const bad: string[] = [];
-			for (const route of Object.keys(ROUTES)) {
+			for (const [route, kind] of Object.entries(ROUTES) as [Route, string][]) {
+				if (!smoke && UNSETTLED.has(route)) continue;
+				current = `#${route || '(default)'}`;
+				const app = await openApp(page, route, { mode });
+				if (smoke) {
+					await expectView(app, kind);
+					// The error view is what the app shows when the handshake fails, so its
+					// absence is the assertion that the real AppBridge handshake completed.
+					await expect(app.locator('main[data-view="error"]'), current).toHaveCount(0);
+					// `#cold` sends no opening result: the app self-boots into the tree.
+					if (route === 'cold') await expect(page.locator('#status')).toContainText('cold');
+				}
 				if (UNSETTLED.has(route)) continue;
-				const app = await openApp(page, route as never, { mode });
 				// Only INLINE needs settling: its card is sized by a host message
 				// (onsizechange), so a measurement taken mid-resize reads a height the
-				// app never actually showed. Fullscreen and pip own a fixed window that
-				// presentMode has already set, so the wait there was pure sleeping —
-				// two thirds of this sweep's wall clock, spent on nothing.
+				// app never actually showed. Pip owns a fixed window that presentMode has
+				// already set.
 				if (mode === 'inline') await settle(page);
 				const m = await rail(app).evaluate((el) => {
 					const nav = el.querySelector('nav') as HTMLElement;
@@ -272,6 +291,7 @@ test.describe('every route', () => {
 				if (m.out > 0.5) bad.push(`${route} by ${m.out.toFixed(1)}px`);
 			}
 			expect(bad).toEqual([]);
+			expect(errors, 'uncaught errors while rendering').toEqual([]);
 		});
 	}
 });

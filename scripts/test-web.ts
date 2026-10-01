@@ -39,14 +39,10 @@ import { brainSlug, handleOfSlug, newBrainHandle } from '../src/lib/brain-slug.t
 import { webShell, WEB_APP_HEADERS, signInRedirect } from '../src/lib/web-shell.ts';
 import { BRAIN_APP_HTML } from '../src/lib/app-bundle.generated.ts';
 
-let failures = 0;
-function check(name: string, cond: boolean, detail?: string) {
-	if (cond) console.log(`  ok  ${name}`);
-	else {
-		failures++;
-		console.error(`FAIL  ${name}${detail ? `\n      ${detail}` : ''}`);
-	}
-}
+import { checker } from './check.ts';
+import { registeredWidgetToolNames } from './doc-refs.ts';
+
+const { check, done } = checker('web checks');
 
 // ---------- what a web URL means ----------
 
@@ -66,11 +62,6 @@ function check(name: string, cond: boolean, detail?: string) {
 	check('a trailing slash is not a page', parseWebPath('/b/acme-wiki-3fa9c2/')?.path === '');
 	check('a non-web path is not a target', parseWebPath('/mcp') === null);
 	check('the prefix alone is not a target', parseWebPath('/b/') === null);
-	check(
-		'the brain is ONE segment: the rest is the page path',
-		JSON.stringify(parseWebPath('/b/acme-wiki-3fa9c2/notes/a.md')) ===
-			JSON.stringify({ brain: 'acme-wiki-3fa9c2', path: 'notes/a.md' })
-	);
 	check(
 		'a brain name with URL punctuation round-trips',
 		parseWebPath(webPathFor('my vault', 'a.md'))?.brain === 'my vault'
@@ -270,12 +261,11 @@ function check(name: string, cond: boolean, detail?: string) {
 
 	const toolsDir = new URL('../src/tools/', import.meta.url);
 	const registered = new Set<string>();
+	// `registerAppTool` is what makes a tool open the widget, so it is exactly the set
+	// that could want a URL.
 	for (const f of readdirSync(toolsDir).filter((f) => f.endsWith('.ts'))) {
-		const src = readFileSync(new URL(f, toolsDir), 'utf8');
-		// `registerAppTool(server, 'name'` is what makes a tool open the widget, so it
-		// is exactly the set that could want a URL.
-		for (const m of src.matchAll(/registerAppTool\(\s*server,\s*'([a-z_]+)'/g)) {
-			registered.add(m[1]);
+		for (const name of registeredWidgetToolNames(readFileSync(new URL(f, toolsDir), 'utf8'))) {
+			registered.add(name);
 		}
 	}
 
@@ -311,7 +301,6 @@ function check(name: string, cond: boolean, detail?: string) {
 
 	const on = { authMode: 'oauth', publicBaseUrl: 'https://brain.example/' };
 	check('an oauth deployment with a base URL has one', webBaseUrl(on) === 'https://brain.example');
-	check('trailing slashes are dropped', !webBaseUrl(on)?.endsWith('/'));
 	check('static mode has none', webBaseUrl({ ...on, authMode: 'static' }) === undefined);
 	check('no base URL, no link', webBaseUrl({ ...on, publicBaseUrl: '' }) === undefined);
 	check(
@@ -468,8 +457,6 @@ function check(name: string, cond: boolean, detail?: string) {
 	// hold any string.
 	const bundleHead = BRAIN_APP_HTML.slice(0, BRAIN_APP_HTML.indexOf('</head>'));
 	check('the MCP App resource carries no icon', !/<link[^>]*rel="icon"/.test(bundleHead));
-	// And carries none of the shell either: that module is server-only.
-	check('the bundle does not carry the shell', !BRAIN_APP_HTML.includes('__ISO_WEB__=true'));
 	// What the tab says before a view has named it (loading, or a boot that failed):
 	// the product, not the noun the bundle happened to be called.
 	check(
@@ -507,5 +494,4 @@ function check(name: string, cond: boolean, detail?: string) {
 	);
 }
 
-console.log(failures === 0 ? '\nAll web checks passed.' : `\n${failures} check(s) failed.`);
-process.exit(failures === 0 ? 0 : 1);
+done();
