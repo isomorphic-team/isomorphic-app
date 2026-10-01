@@ -1,6 +1,7 @@
-// Golden test for link resolution — how a [[wikilink]] finds its page, and what
-// validate says about the ones that find nothing. Pure: D1 is shimmed over
-// node:sqlite, GitHub is a stub, no network.
+// Golden test for the link graph: how a [[wikilink]] finds its page, what validate
+// says about the ones that find nothing, what a markdown link means
+// (classifyMdLink), attachments as file edges, and backlinksTo. Pure: D1 is shimmed
+// over node:sqlite, GitHub is scripts/fake-github.ts, no network.
 //
 //   pnpm test:links
 //
@@ -12,6 +13,7 @@
 // Every case below is a form a human writes by hand and expects to work.
 
 import {
+	backlinksTo,
 	ensureFresh,
 	loadResolvedGraph,
 	type BrokenLink,
@@ -25,64 +27,23 @@ import { classifyMdLink } from '../src/lib/links.ts';
 import { brokenLinkReport } from '../src/lib/advisories.ts';
 
 import { checker } from './check.ts';
+import { fakeGithub, type FakePage } from './fake-github.ts';
 
 const { check, done } = checker('link checks');
 
-// ---- D1 over node:sqlite (real migrations) + a GitHub stub behind githubStore ----
+// ---- D1 over node:sqlite (real migrations) + a fake GitHub behind githubStore ----
 
 let { db } = localD1();
-
-interface FakePage {
-	path: string;
-	sha: string;
-	content: string;
-}
-let currentPages: FakePage[] = [];
-let currentHead = 'commit-0';
-
-const octokit = {
-	graphql: async (_query: string, variables: Record<string, string>) => {
-		const byOid = new Map(currentPages.map((p) => [p.sha, p]));
-		const repository: Record<string, { text: string; isTruncated: boolean } | null> = {};
-		for (const [k, v] of Object.entries(variables)) {
-			if (!k.startsWith('o')) continue;
-			const p = byOid.get(v);
-			repository[`b${k.slice(1)}`] = p ? { text: p.content, isTruncated: false } : null;
-		}
-		return { repository };
-	},
-	rest: {
-		repos: {
-			get: async () => ({
-				data: { default_branch: 'main', allow_squash_merge: true, allow_merge_commit: true }
-			}),
-			getBranch: async () => ({ data: { protected: false } }),
-			getContent: async () => {
-				throw Object.assign(new Error('Not Found'), { status: 404 });
-			}
-		},
-		git: {
-			getRef: async () => ({ data: { object: { sha: currentHead } } }),
-			getCommit: async () => ({ data: { tree: { sha: `tree-${currentHead}` } } }),
-			getTree: async () => ({
-				data: { tree: currentPages.map((p) => ({ type: 'blob', path: p.path, sha: p.sha })) }
-			}),
-			getBlob: async () => {
-				throw new Error('getBlob should not be needed (no oversized blobs in this fixture)');
-			}
-		}
-	}
-} as never;
-
-const store = githubStore(octokit);
+const gh = fakeGithub();
+const store = githubStore(gh.octokit);
 const repo = { owner: 'example-org', repo: 'brain' };
 const brainId = 'example-org/brain';
 const config: BrainConfig = { ...DEFAULT_BRAIN_CONFIG };
 
 async function indexAndResolve(pages: FakePage[]): Promise<ResolvedGraph> {
 	({ db } = localD1());
-	currentPages = pages;
-	currentHead = `commit-${pages.length}`;
+	gh.pages = pages;
+	gh.head = `commit-${pages.length}`;
 	await ensureFresh(db, store, repo, brainId, config);
 	return loadResolvedGraph(db, brainId, config);
 }
@@ -187,11 +148,9 @@ console.log('\nLink resolution — how a [[wikilink]] finds its page\n');
 	// The reported bug: filenames that are not already slug-shaped.
 	resolves('dated filename with spaces resolves', 'wiki/Meetings/2026-06-26 Weekly Sync.md');
 	resolves('dated filename in another folder resolves', 'wiki/Todos/2026-Q3.md');
-	resolves('single-word filename resolves', 'wiki/Projects/Atlas/Architecture.md');
-	check(
-		'a filename that differs from the page title resolves',
-		!brokenTargets.has('Architecture'),
-		[...brokenTargets].join(' | ')
+	resolves(
+		'a single-word filename that differs from the page title resolves',
+		'wiki/Projects/Atlas/Architecture.md'
 	);
 	// The forms that already worked — regression guards.
 	resolves('title match still resolves', 'wiki/People/Jane Doe.md');
@@ -369,6 +328,138 @@ console.log('\nLink resolution — how a [[wikilink]] finds its page\n');
 	// A hidden file is not content anyone links to on purpose, and treating
 	// `.gitkeep` as a reference would make every scaffolded folder look load-bearing.
 	check('a dotfile is not a file reference', kindOf('./.gitkeep') === 'ignore');
+}
+
+// ---- attachments in the link graph ----
+//
+// An image or other non-page file a page links to is a FILE edge: kept out of the
+// page edge list, never reported broken, and found by backlinksTo, which is the call
+// move_page and delete_page make before repointing or removing it.
+//
+// The .png is never added to the tree: the index has no inventory of assets, so the
+// file edge comes from the link alone.
+{
+	console.log('\nattachments in the link graph');
+	const g = await indexAndResolve([
+		page(
+			'wiki/vendors/acme.md',
+			[
+				'# Acme',
+				'',
+				'![The logo](./assets/logo.png)',
+				'A [real page](../index.md) and a [missing one](./nope.md).',
+				'A [source doc](../../raw/notes.txt) too.',
+				'And a [spreadsheet](./data/pricing.csv) the app cannot render.'
+			].join('\n')
+		),
+		page('wiki/index.md', '# Index\n\nAlso shows ![it](./vendors/assets/logo.png).')
+	]);
+
+	const asset = 'wiki/vendors/assets/logo.png';
+	check(
+		'image link is recorded as an asset edge',
+		g.fileEdges.some((e) => e.source === 'wiki/vendors/acme.md' && e.target === asset),
+		JSON.stringify(g.fileEdges)
+	);
+	check(
+		'a second page referencing it is recorded too',
+		g.fileEdges.filter((e) => e.target === asset).length === 2,
+		JSON.stringify(g.fileEdges)
+	);
+	// The graph view builds nodes from `pages` and degree from `edges`; an asset in
+	// that list would be a link to a node the renderer has no data for.
+	check(
+		'asset edges stay OUT of the page edge list',
+		!g.edges.some((e) => e.target === asset),
+		JSON.stringify(g.edges)
+	);
+	check(
+		'page-to-page links still resolve',
+		g.edges.some((e) => e.source === 'wiki/vendors/acme.md' && e.target === 'wiki/index.md')
+	);
+	// The index has no inventory of assets, so it cannot tell a typo from a file it
+	// has not indexed.
+	check(
+		'a missing attachment is never reported broken',
+		!g.broken.some((b) => b.target?.endsWith('.png')),
+		JSON.stringify(g.broken)
+	);
+	check(
+		'but a missing PAGE still is',
+		g.broken.some((b) => b.target === 'wiki/vendors/nope.md'),
+		JSON.stringify(g.broken)
+	);
+	// Source material is not indexed, so a link into raw/ is neither broken nor a file
+	// edge.
+	check(
+		'a link into source material is neither broken nor a file edge',
+		!g.broken.some((b) => b.target?.startsWith('raw/')) &&
+			!g.fileEdges.some((e) => e.target.startsWith('raw/')),
+		JSON.stringify({ broken: g.broken, fileEdges: g.fileEdges })
+	);
+	// A non-page file the app cannot render is still a file the brain can lose, so
+	// deleting a linked .csv warns exactly as deleting a .png does.
+	const csv = 'wiki/vendors/data/pricing.csv';
+	check(
+		'a link to a non-media content file is a file edge too',
+		g.fileEdges.some((e) => e.target === csv),
+		JSON.stringify(g.fileEdges)
+	);
+	check(
+		'and backlinksTo finds it',
+		backlinksTo(g, csv).some((r) => r.path === 'wiki/vendors/acme.md'),
+		JSON.stringify(backlinksTo(g, csv))
+	);
+	check(
+		'while staying out of the page edge list',
+		!g.edges.some((e) => e.target === csv),
+		JSON.stringify(g.edges)
+	);
+
+	const refs = backlinksTo(g, asset);
+	check(
+		'backlinksTo finds both referrers of an attachment',
+		refs.length === 2,
+		JSON.stringify(refs)
+	);
+	check(
+		'and counts them, so "still referenced" can say how many',
+		refs.every((r) => r.count === 1),
+		JSON.stringify(refs)
+	);
+	const pageRefs = backlinksTo(g, 'wiki/index.md');
+	check(
+		'page backlinks still work and do not pick up assets',
+		pageRefs.length === 1 && pageRefs[0].path === 'wiki/vendors/acme.md',
+		JSON.stringify(pageRefs)
+	);
+}
+
+// ---- backlinksTo aggregation ----
+//
+// One `count` per referring page, totalled across both link syntaxes.
+{
+	console.log('\nbacklinksTo aggregation');
+	const graph: ResolvedGraph = {
+		pages: [
+			{ path: 'a.md', title: 'A' },
+			{ path: 'b.md', title: 'B' }
+		],
+		edges: [
+			{ source: 'a.md', target: 'b.md', kind: 'md', cnt: 2 },
+			{ source: 'a.md', target: 'b.md', kind: 'wiki', cnt: 3 }
+		],
+		fileEdges: [],
+		broken: []
+	};
+	const refs = backlinksTo(graph, 'b.md');
+	check('backlinks: single source aggregated', refs.length === 1, JSON.stringify(refs));
+	check('backlinks: count totals both syntaxes', refs[0]?.count === 5, JSON.stringify(refs[0]));
+	check(
+		'backlinks: split still available',
+		refs[0]?.mdCount === 2 && refs[0]?.wikiCount === 3,
+		JSON.stringify(refs[0])
+	);
 }
 
 done();
