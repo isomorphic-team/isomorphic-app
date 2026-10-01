@@ -162,7 +162,9 @@ None of this can be created from a workflow. Use a separate Cloudflare account i
    ```
    Leave `FEEDBACK_REPO` and `FEEDBACK_TOKEN` unset.
 5. **A Cloudflare API token**: Workers, scoped to the preview Worker only, Editor role; plus
-   Account D1 Edit. A user token, for the reason `deploy.yml` gives.
+   Account D1 Edit. An account API token (per-Worker scoping exists only there);
+   setting `CLOUDFLARE_ACCOUNT_ID` below keeps wrangler from the `/memberships` lookup that
+   makes `deploy.yml` need a user token.
 6. **A GitHub environment named `preview`**, with no branch restriction (pull request runs
    use their merge ref), holding the token:
    ```sh
