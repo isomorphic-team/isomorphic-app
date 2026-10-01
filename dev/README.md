@@ -238,7 +238,7 @@ What the suite covers, and deliberately does not:
   and the view in step (`web-nav`, the `web` project), and how it all looks in three
   display modes and two themes (`visual`).
 - **Does not cover**: tool semantics. The view engine, page patches, the access rule
-  and the analytics fold are pinned by pure golden tests (`test:views`, `test:patch`,
+  and the analytics fold are pinned by pure golden tests (`test:views`, `test:page-write`,
   `test:access`, `test:usage`) that run in milliseconds. Re-asserting those through the
   DOM would be a slow duplicate that fails for unrelated reasons.
 - **Says nothing about the real host.** This harness IS the host, so the claude.ai

@@ -21,7 +21,7 @@
 // the path a session takes AFTER a deploy changed the bundle hash, so it is the
 // registration nobody looks at while working, and it carries the same contract.
 //
-//   pnpm test:appmeta
+//   pnpm test:app-resource
 
 import { Client } from '@modelcontextprotocol/client';
 import { McpServer, InMemoryTransport } from '@modelcontextprotocol/server';
@@ -102,10 +102,9 @@ console.log('\nresources/read: what the host renders from');
 console.log('\nthe post-deploy path: a hash this build never minted');
 {
 	const stale = 'ui://isomorphic-mind/brain-app.staleHash0.html';
-	check('the stale hash differs from the current one', stale !== BRAIN_APP_URI);
 	const res = await client.readResource({ uri: stale });
 	const item = res.contents[0];
-	check('...it still resolves, serving the current bytes', bodyText(item).length > 0);
+	check('a stale hash still resolves, serving the current bytes', bodyText(item).length > 0);
 	check('...at the URI the host asked for', item?.uri === stale);
 	check(
 		'...with the same border preference',

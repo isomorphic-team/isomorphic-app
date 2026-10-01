@@ -113,8 +113,8 @@ jobs:
       - run: pnpm test:web
       - run: pnpm test:views
       - run: pnpm test:import
-      - run: pnpm test:tools
-      - run: pnpm test:patch
+      - run: pnpm test:custom-tools
+      - run: pnpm test:page-write
       - run: pnpm test:structure
       - run: pnpm test:consolidate
       - run: pnpm test:probe
@@ -129,7 +129,7 @@ jobs:
       - run: pnpm test:dedupe
       # The data-policy guard in shadow mode: detector precision, never blocking a write.
       - run: pnpm test:guard
-      - run: pnpm test:appmeta
+      - run: pnpm test:app-resource
       # Every tool carries annotations.title and its read/destructive hint (directory review).
       - run: pnpm test:annotations
       - run: pnpm test:loading

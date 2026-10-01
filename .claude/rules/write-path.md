@@ -4,14 +4,14 @@ paths:
   - "src/lib/{page-write,page-patch,change-record,write-target,write-dedupe,write-dedupe-store,brain-policy}.ts"
   - "app/views/{PageView,EditView}.tsx"
   - "src/lib/{policy-guard,policy-detectors,policy-store}.ts"
-  - "scripts/{test-page-patch,test-record,test-policy,test-dedupe,test-guard,e2e-librarian}.ts"
+  - "scripts/{test-page-write,test-record,test-policy,test-dedupe,test-guard,e2e-librarian}.ts"
 ---
 
 # The write path (`write_page`, `move_page`, `delete_page`)
 
 ## What `write_page` decides is pure
 
-- **`src/lib/page-write.ts`** (`pnpm test:patch`): `checkPageWrite` answers refusals that need
+- **`src/lib/page-write.ts`** (`pnpm test:page-write`): `checkPageWrite` answers refusals that need
   no page; `planPageWrite` picks create, update or refusal from the page as the branch holds it
   (clobber guard, the editor's sha guard, "nothing to update", a patch aimed at a missing
   page); `composeCreate` / `composeUpdate` build the file. The tool keeps only the IO.

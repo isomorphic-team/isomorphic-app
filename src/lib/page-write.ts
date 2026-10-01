@@ -1,5 +1,5 @@
 // What write_page does with its arguments, decided without touching a repository.
-// Pure, pinned by `pnpm test:patch` beside the body and field patchers it calls.
+// Pure, pinned by `pnpm test:page-write` beside the body and field patchers it calls.
 //
 // Two halves, split where the tool has to read the repository:
 //

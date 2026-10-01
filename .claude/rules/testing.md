@@ -2,7 +2,7 @@
 paths:
   - "scripts/test-*.ts"
   - "scripts/e2e-*.ts"
-  - "scripts/{check,roundtrip-check}.ts"
+  - "scripts/check.ts"
   - "tests/**"
   - "playwright.config.ts"
   - "dev/harness.ts"

@@ -63,7 +63,7 @@ the operator's role and brain in static mode; the app's settings card reads its
 `structuredContent`.
 
 The ui:// resource's host contract (`prefersBorder: false`, served at every bundle hash) is
-pinned by `pnpm test:appmeta`. `pnpm test:annotations` pins that every widget tool
+pinned by `pnpm test:app-resource`. `pnpm test:annotations` pins that every widget tool
 (`registerAppTool`, in every suite) carries `resourceUri: BRAIN_APP_URI` and no plain
 first-party tool carries one.
 

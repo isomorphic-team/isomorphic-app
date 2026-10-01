@@ -95,7 +95,7 @@ The alternative is to hand the chrome back to the host: `prefersBorder: true` AN
 the app's own inline border, since the two must never both draw one. That gets the
 padding for free and is closer to the design guidelines' "inherit the containing
 environment", at the cost of the app no longer controlling its own card. Either way the
-two halves move together, which is what `pnpm test:appmeta` pins.
+two halves move together, which is what `pnpm test:app-resource` pins.
 
 # TODO: skeleton shells for the page, tree, and graph
 
