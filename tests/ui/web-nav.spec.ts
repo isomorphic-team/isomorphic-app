@@ -1,22 +1,19 @@
-// The app AS A WEB PAGE: the same bundle, served at `/b/<owner>/<repo>/<path>`,
-// talking to `/mcp` over fetch instead of to a host over AppBridge.
+// The app AS A WEB PAGE: the same bundle, served at `/b/<brain>/<path>`, talking to
+// `/mcp` over fetch instead of to a host over AppBridge.
 //
 // This is the only battery that drives that host. Every other spec here mounts the
 // bundle in the harness's iframe as an MCP App, and `pnpm test:web` covers the
-// Worker's rules as pure functions — so between them the WEB half of the app booted
-// nowhere, and the first thing that ran it found a defect neither could see.
+// Worker's rules as pure functions, so neither boots the web half of the app.
 //
-// THE DEFECT, since it is what these assertions exist for. Navigation never wrote
-// the address bar. `webPathFor` — the URL builder — had no caller outside its own
-// round-trip test, so clicking a link changed the page and left the URL naming the
-// one you arrived on. Three things were broken at once and only the third is
-// cosmetic: Back left the app entirely, Forward could not return, and the URL you
-// copied to send someone was never the page you were reading. Sharing a link to a
-// page is the reason the web app exists, so that last one is the whole feature.
+// What these assertions guard: navigation writes the address bar. Clicking a link
+// that changed the page and left the URL naming the one you arrived on breaks three
+// things at once: Back leaves the app, Forward cannot return, and the URL you copy to
+// send someone is not the page you were reading. Sharing a link to a page is the
+// reason the web app exists.
 //
-// Assert on the PAIR (url, heading) every time, never on one alone. The bug was
-// precisely a heading that moved while a URL stood still; a spec watching either by
-// itself stays green through it.
+// Assert on the PAIR (url, heading) every time, never on one alone. That failure is a
+// heading that moves while the URL stands still; a spec watching either by itself
+// stays green through it.
 
 import { test, expect, type Page } from '@playwright/test';
 import { WEB_TEST_PORT, WEB_TEST_BRAIN } from '../../playwright.config.ts';
@@ -69,10 +66,9 @@ test.describe('the app in a browser tab', () => {
 		await page.goto(`${BASE}${INDEX}`);
 		await settled(page, 'Index');
 
-		// The root fills the viewport with no height cap and no card border. Left in
-		// the MCP App's inline mode, the same bundle drew the chat-column card inside
-		// the tab: a rounded 560px box scrolling within itself on the browser's own
-		// page background. The MCP App keeps that card; the web host must not.
+		// The root fills the viewport with no height cap and no card border. In the MCP
+		// App's inline mode the same bundle draws the chat-column card: a rounded 560px
+		// box scrolling within itself. The MCP App keeps that card; the web host must not.
 		const root = page
 			.locator('main[data-view="page"]')
 			.locator('xpath=ancestor::div[contains(@class, "bg-bg")]')
@@ -84,11 +80,10 @@ test.describe('the app in a browser tab', () => {
 
 		// The document's own background is the app's, so overscroll and the instant
 		// before mount do not flash the browser default (a different dark in dark mode).
-		const bg = await page.evaluate(() => {
-			const root = getComputedStyle(document.documentElement);
-			return { html: root.backgroundColor, token: root.getPropertyValue('--c-bg').trim() };
-		});
-		expect(bg.html).not.toBe('rgba(0, 0, 0, 0)');
+		const html = await page.evaluate(
+			() => getComputedStyle(document.documentElement).backgroundColor
+		);
+		expect(html).not.toBe('rgba(0, 0, 0, 0)');
 
 		// A tab is already the window, so the door INTO a tab is not offered here.
 		await expect(page.getByRole('button', { name: 'Open in browser' })).toHaveCount(0);
@@ -99,24 +94,6 @@ test.describe('the app in a browser tab', () => {
 		await page.getByRole('link', { name: 'Organizations' }).first().click();
 		await settled(page, 'Organizations');
 		await expect(page).toHaveTitle(/^Organizations · /);
-	});
-
-	test('following a link moves the address bar with the page', async ({ page }) => {
-		await page.goto(`${BASE}${INDEX}`);
-		await settled(page);
-
-		const link = page.locator('.prose a').first();
-		const name = await link.innerText();
-		await link.click();
-		await settled(page, name);
-
-		const now = await at(page);
-		expect(now.heading).toBe(name);
-		// The assertion the defect failed: the URL has to have MOVED, and it has to
-		// name a page rather than merely differ.
-		expect(now.url).not.toBe(INDEX);
-		expect(now.url.startsWith(`/b/${BRAIN}/`)).toBe(true);
-		expect(now.url.endsWith('.md')).toBe(true);
 	});
 
 	test('back and forward move between pages instead of leaving the app', async ({ page }) => {
@@ -130,8 +107,8 @@ test.describe('the app in a browser tab', () => {
 		await settled(page, name);
 		const second = await at(page);
 
-		// Back. Before the fix this left for about:blank, because the click had put
-		// no entry in the browser's history to return from.
+		// Back. A click that put no entry in the browser's history would leave for
+		// about:blank here.
 		await page.goBack();
 		await settled(page, first.heading);
 		expect(await at(page)).toEqual(first);
@@ -173,7 +150,10 @@ test.describe('the app in a browser tab', () => {
 		expect(await at(page)).toEqual(second);
 	});
 
-	test('the URL you copy opens the page you were reading', async ({ page, context }) => {
+	test('following a link moves the address bar, and the URL you copy opens that page', async ({
+		page,
+		context
+	}) => {
 		await page.goto(`${BASE}${INDEX}`);
 		await settled(page);
 
@@ -182,6 +162,10 @@ test.describe('the app in a browser tab', () => {
 		await link.click();
 		await settled(page, name);
 		const shared = await at(page);
+		// The URL has to have MOVED, and it has to name a page rather than merely differ.
+		expect(shared.url).not.toBe(INDEX);
+		expect(shared.url.startsWith(`/b/${BRAIN}/`)).toBe(true);
+		expect(shared.url.endsWith('.md')).toBe(true);
 
 		// A FRESH tab, which is the whole point: no in-memory state, nothing but the
 		// URL. This is what a colleague receiving the link actually does.
@@ -193,19 +177,19 @@ test.describe('the app in a browser tab', () => {
 	});
 
 	// The destinations that are not a page. They ride the query string because the
-	// path after the brain is a repo path, so `/b/o/r/graph` is a page called
-	// `graph` — a collision that would appear the day someone wrote one.
+	// path after the brain is a repo path, so `/b/<brain>/graph` is a page called
+	// `graph`.
 	test('a search is a URL, and reopens cold', async ({ page, context }) => {
 		await page.goto(`${BASE}${INDEX}`);
 		await settled(page);
 
 		// Through the app's own control, not by typing a URL: the point is that
 		// searching WRITES the address bar, not merely that the app can read one.
-		await page.getByTitle('Search', { exact: false }).first().click();
-		const field = page.locator('input[type="search"], input[type="text"]').first();
+		await page.getByRole('button', { name: 'Search', exact: true }).click();
+		const field = page.locator('main[data-view="search"] input[type="search"]');
 		await field.fill('vision');
 		await field.press('Enter');
-		await expect(page.locator('.prose, [data-testid="search-results"], body')).toBeVisible();
+		await expect(page.locator('main[data-view="search"]')).toBeVisible();
 		await expect
 			.poll(() => new URL(page.url()).searchParams.get('q'), { timeout: 15_000 })
 			.toBe('vision');
@@ -214,9 +198,10 @@ test.describe('the app in a browser tab', () => {
 		// the view, since the hits themselves are derived and were never in the URL.
 		const other = await context.newPage();
 		await other.goto(page.url());
-		await expect
-			.poll(() => other.locator('input').first().inputValue(), { timeout: 15_000 })
-			.toBe('vision');
+		await expect(other.locator('main[data-view="search"] input[type="search"]')).toHaveValue(
+			'vision',
+			{ timeout: 15_000 }
+		);
 		await other.close();
 	});
 
@@ -226,7 +211,9 @@ test.describe('the app in a browser tab', () => {
 
 		await page.goto(`${BASE}/b/${BRAIN}?view=graph`);
 		// The graph builds from a tool call, so wait for the view rather than a tick.
-		await expect(page.locator('svg, canvas').first()).toBeVisible({ timeout: 20_000 });
+		await expect(page.locator('main[data-view="graph"] canvas')).toBeVisible({
+			timeout: 20_000
+		});
 		expect(new URL(page.url()).searchParams.get('view')).toBe('graph');
 
 		await page.goBack();
@@ -234,10 +221,7 @@ test.describe('the app in a browser tab', () => {
 		expect(await at(page)).toEqual({ url: INDEX, heading: 'Index' });
 	});
 
-	// The two that had no URL at all until the routing table was derived from the
-	// tool surface rather than from the view list.
-	// `?view=activity`, one of the two destinations that had no URL at all until the
-	// routing table was derived from the tool surface instead of the view list.
+	// `?view=activity` is reachable by URL.
 	//
 	// `?view=access` is NOT covered here and cannot be: `brain_access` is org-model
 	// machinery that the local runtime deliberately does not register (no orgs, no
@@ -245,10 +229,8 @@ test.describe('the app in a browser tab', () => {
 	// `pnpm test:web`; the app actually opening it is uncovered, like every other
 	// org-scope screen.
 	test('activity is reachable by URL', async ({ page }) => {
-		// Asserted on the RAIL's `aria-current`, not on body text. The first version
-		// matched /change|edit|commit|history/ against the whole body, and "Edit" is a
-		// button in the chrome of every page — so it passed while `?view=access` was
-		// silently doing nothing, which is how that gap was found.
+		// Asserted on the RAIL's `aria-current`, not on body text: "Edit" is a button in
+		// the chrome of every page, so a body-text match passes whatever view is open.
 		await page.goto(`${BASE}/b/${BRAIN}?view=activity`);
 		await expect(page.getByRole('button', { name: 'Recent changes' })).toHaveAttribute(
 			'aria-current',
@@ -262,17 +244,16 @@ test.describe('the app in a browser tab', () => {
 
 	// Back between two destinations that differ ONLY in the query string.
 	//
-	// The popstate handler parsed `location.pathname` and dropped `location.search`,
-	// so returning to `?view=search` landed on the file tree instead — the pathname
-	// is identical for every non-page destination, and the whole difference between
-	// them is the half that was being thrown away. Every earlier Back test moved
-	// between a page and something else, where the paths differ, so all of them
-	// stayed green through it.
+	// The pathname is identical for every non-page destination, so the whole difference
+	// between them is `location.search`. A popstate handler that parses only the
+	// pathname returns from `?view=graph` to the file tree instead of to `?view=search`.
+	// Every other Back test moves between a page and something else, where the paths
+	// differ, so none of them can see it.
+	//
 	// NAVIGATE IN-APP, never with a second `goto`. Two `goto`s and a `goBack` is a
-	// document LOAD, which re-boots the app from the URL and reads the query
-	// correctly — so a test written that way passes with the defect reinstated, which
-	// is exactly what happened on the first attempt here. Only a pushState
-	// navigation makes Back fire `popstate`, which is the code under test.
+	// document LOAD, which re-boots the app from the URL and reads the query correctly,
+	// so it passes with that defect present. Only a pushState navigation makes Back
+	// fire `popstate`, which is the code under test.
 	test('back between two query-only destinations keeps the query', async ({ page }) => {
 		await page.goto(`${BASE}${INDEX}`);
 		await settled(page);
@@ -294,9 +275,9 @@ test.describe('the app in a browser tab', () => {
 		await expect
 			.poll(() => new URL(page.url()).searchParams.get('view'), { timeout: 15_000 })
 			.toBe('search');
-		// And the VIEW, not just the bar: the defect left the address bar correct and
-		// put the file tree on screen, because the query it dropped was the whole
-		// difference between these two destinations.
+		// And the VIEW, not just the bar: the address bar can be right while the file
+		// tree is on screen, because the query is the whole difference between these
+		// two destinations.
 		await expect
 			.poll(() => page.locator('input').first().inputValue(), { timeout: 15_000 })
 			.toBe('vision');
