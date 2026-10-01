@@ -493,17 +493,17 @@ check(
 
 // `brains` runs on every widget open and checks every manageable brain for "connected
 // but not configured". A CONFIGURED brain must cost nothing: resolving its context
-// mints a token and reads its config, and the freshness check behind that reached
-// GitHub per brain and reindexed inline, which on an account with several brains was
-// a 17-second call that Anthropic's edge cut off as a 502 (issues #50, #85). One
-// indexed row is the whole answer.
+// mints a token and reads its config, and the freshness check behind that reaches
+// GitHub per brain and can reindex inline (issues #50, #85). One indexed row is the
+// whole answer. The index is keyed by the brain's primary key (`b-main`), not by the
+// handle tools address it with (`northwind/main`), so the fixture keys it the same way.
 console.log('\nbrains answers a configured brain from the index alone');
 {
 	sqlite
 		.prepare(
 			`INSERT INTO brain_pages (brain_id, path, title, blob_sha, content) VALUES (?, ?, ?, ?, ?)`
 		)
-		.run('northwind/main', 'wiki/index.md', 'Index', 'sha', '# Index');
+		.run('b-main', 'wiki/index.md', 'Index', 'sha', '# Index');
 	brainAsks.length = 0;
 	await toolsFor(orgBoss).get('brains')!({});
 	check(
@@ -516,7 +516,7 @@ console.log('\nbrains answers a configured brain from the index alone');
 		brainAsks.includes('northwind/other'),
 		`asked for: ${JSON.stringify(brainAsks)}`
 	);
-	sqlite.prepare(`DELETE FROM brain_pages WHERE brain_id = ?`).run('northwind/main');
+	sqlite.prepare(`DELETE FROM brain_pages WHERE brain_id = ?`).run('b-main');
 }
 
 // ===========================================================================

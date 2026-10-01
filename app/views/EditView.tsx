@@ -525,5 +525,8 @@ export default defineView('edit', (v) => <EditView state={v} />, {
 			onClick: () => editCtl.save()
 		},
 		{ key: 'cancel', label: 'Cancel', onClick: () => editCtl.cancel() }
-	]
+	],
+	// The row waits for the editor to actually be bound, so it drops in WITH the buttons
+	// already in it: no blank-toolbar frame, and no opacity fade, which was the visible flash.
+	mode: () => (editCtl.view ? <EditorToolbar view={editCtl.view} /> : null)
 });

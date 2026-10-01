@@ -1221,6 +1221,105 @@ try {
 			'old asset still present'
 		);
 
+		// Folder moves must carry attachment bytes and both inside/outside image links.
+		for (const failure of ['missing', 'changed'] as const) {
+			const folder = `wiki/media-read-${failure}`;
+			const asset = `${folder}/logo.png`;
+			await store.commitFiles(repoArgs, {
+				message: 'seed attachment read guard',
+				writes: [{ path: asset, content: PNG_1PX, encoding: 'base64' }]
+			});
+			const beforeReadFailure = await commitCount();
+			const realStore = store;
+			store = {
+				...realStore,
+				readBinary: async (repo, path) => {
+					const file = await realStore.readBinary(repo, path);
+					if (path !== asset) return file;
+					return failure === 'missing' ? null : { ...file!, sha: 'changed-sha' };
+				}
+			};
+			try {
+				const refused = await call('move_page', { path: folder, new_path: `${folder}-moved` });
+				check(`${failure} attachment read refuses the folder move`, refused.isError, refused.text);
+			} finally {
+				store = realStore;
+			}
+			check(
+				`${failure} attachment read creates no commit`,
+				(await commitCount()) === beforeReadFailure
+			);
+			check(
+				`${failure} attachment read leaves source bytes intact`,
+				(await store.readBinary(repoArgs, asset))?.contentBase64 === PNG_1PX
+			);
+		}
+
+		await call('write_page', {
+			path: 'wiki/media-move/inside.md',
+			title: 'Inside media move',
+			content: '# Inside\n\n![Logo](assets/logo.png)\n'
+		});
+		await call('write_page', {
+			path: 'wiki/media-ref.md',
+			title: 'Outside media move',
+			content: '# Outside\n\n![Logo](media-move/assets/logo.png)\n'
+		});
+		await store.commitFiles(repoArgs, {
+			message: 'seed folder attachment',
+			writes: [{ path: 'wiki/media-move/assets/logo.png', content: PNG_1PX, encoding: 'base64' }]
+		});
+		await settledHead();
+		const assetFolderMove = await call('move_page', {
+			path: 'wiki/media-move/assets',
+			new_path: 'wiki/media-move/images'
+		});
+		check('an attachment-only folder moves', !assetFolderMove.isError, assetFolderMove.text);
+		check(
+			'attachment-only folder preserves binary bytes',
+			(await store.readBinary(repoArgs, 'wiki/media-move/images/logo.png'))?.contentBase64 ===
+				PNG_1PX
+		);
+		check(
+			'attachment-only folder repoints outside image links',
+			(await fileText('wiki/media-ref.md'))?.includes('](media-move/images/logo.png)') === true
+		);
+		check(
+			'attachment-only folder repoints its parent page image',
+			(await fileText('wiki/media-move/inside.md'))?.includes('](images/logo.png)') === true
+		);
+
+		await settledHead();
+		const folderBefore = await commitCount();
+		const mixedFolderMove = await call('move_page', {
+			path: 'wiki/media-move',
+			new_path: 'wiki/archive/media-move'
+		});
+		check(
+			'a folder containing pages and attachments moves',
+			!mixedFolderMove.isError,
+			mixedFolderMove.text
+		);
+		await assertOneCommit('folder attachment move and link repairs', folderBefore);
+		check(
+			'mixed folder preserves binary bytes',
+			(await store.readBinary(repoArgs, 'wiki/archive/media-move/images/logo.png'))
+				?.contentBase64 === PNG_1PX
+		);
+		check(
+			'moved page keeps its relative image link',
+			(await fileText('wiki/archive/media-move/inside.md'))?.includes('](images/logo.png)') === true
+		);
+		check(
+			'mixed folder repoints outside image links',
+			(await fileText('wiki/media-ref.md'))?.includes('](archive/media-move/images/logo.png)') ===
+				true
+		);
+		check(
+			'source attachment is removed',
+			(await store.readBinary(repoArgs, 'wiki/media-move/images/logo.png')) === null
+		);
+
 		// And deleting one has to say who still shows it, since an image that vanishes
 		// leaves a hole rather than a broken link anyone would notice. Asserted on the
 		// page being NAMED rather than on the wording: the contract is that nothing

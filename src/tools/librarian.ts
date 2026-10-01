@@ -531,13 +531,9 @@ export function folderMoveCollisions(
 	return { blocking, scaffolding };
 }
 
-// The folder-path form of move_page: move/rename a whole subtree in one atomic commit.
-// Two link classes are handled:
-//   - Moved pages' OWN outbound links: intra-subtree links are invariant (source and
-//     target shift by the same prefix), so only links pointing OUTSIDE the subtree are
-//     repointed to a moved sibling first, then the body is rebased for the new location.
-//     Titles never change on a move, so [[wikilinks]] still resolve.
-//   - OUTSIDE pages linking INTO a moved page: their relative md links are repointed.
+// Move a whole subtree in one atomic commit. Moved pages repoint subtree targets,
+// then rebase outbound links for their new location. Outside pages repoint links
+// to every moved file, including attachments. Titles and wikilinks stay unchanged.
 async function moveFolderWrite(
 	ctx: BrainContext,
 	args: { path: string; new_path?: string; new_name?: string },
@@ -582,6 +578,7 @@ async function moveFolderWrite(
 	// folder rather than written over the top of them.
 	const supersededScaffolding = new Set(scaffolding);
 
+	const movedPaths = moved.map((e) => e.path);
 	const movedMdEntries = moved.filter((e) => e.path.endsWith('.md'));
 	const movedMd = new Set(movedMdEntries.map((e) => e.path));
 	// Non-markdown blobs to copy across, minus the scaffolding the destination already
@@ -597,13 +594,13 @@ async function moveFolderWrite(
 	// changelog.
 	const [movedRes, nonMdFiles, linkersRes, log] = await Promise.all([
 		store.fetchPages(repoArgs, movedMdEntries),
-		Promise.all(copiedNonMd.map((e) => store.readFile(repoArgs, e.path))),
-		fetchInboundLinkersForPaths(ctx, head, [...movedMd], movedMd, tree),
+		Promise.all(copiedNonMd.map((e) => store.readBinary(repoArgs, e.path))),
+		fetchInboundLinkersForPaths(ctx, head, movedPaths, movedMd, tree),
 		store.readFile(repoArgs, logPathOf(config))
 	]);
 	const movedContent = new Map(movedRes.pages.map((p) => [p.path, p.content]));
 	const today = todayIso();
-	const writes: { path: string; content: string }[] = [];
+	const writes: FileWrite[] = [];
 	const deletes: string[] = [];
 	let repointedPages = 0;
 
@@ -615,7 +612,7 @@ async function moveFolderWrite(
 		const newPath = rename(oldPath);
 		const { frontmatter, body } = parseFrontmatter(content);
 		let rebased = body;
-		for (const sibling of movedMd) {
+		for (const sibling of movedPaths) {
 			rebased = rewriteMdLinks(rebased, oldPath, sibling, rename(sibling)).body;
 		}
 		rebased = rebaseMdLinks(rebased, oldPath, newPath);
@@ -628,19 +625,28 @@ async function moveFolderWrite(
 
 	// 2. Non-markdown blobs under the folder (.gitkeep, etc.) — copied across verbatim
 	//    (contents fetched above); the superseded scaffolding is delete-only.
-	copiedNonMd.forEach((e, i) => {
-		writes.push({ path: rename(e.path), content: nonMdFiles[i]?.content ?? '' });
+	for (const [i, e] of copiedNonMd.entries()) {
+		const file = nonMdFiles[i];
+		if (!file || file.sha !== e.sha)
+			return fail(
+				`Can't move "${folder}" — "${e.path}" changed or couldn't be read. Refresh and try again.`
+			);
+		writes.push({
+			path: rename(e.path),
+			content: file.contentBase64,
+			encoding: 'base64'
+		});
 		deletes.push(e.path);
-	});
+	}
 	for (const e of supersededScaffolding) deletes.push(e);
 
-	// 3. Outside pages linking INTO a moved page — repoint their md links.
+	// 3. Outside pages linking INTO a moved page or attachment — repoint their links.
 	const { pages: linkers, truncated } = linkersRes;
 	for (const page of linkers) {
 		if (isToolMaintained(page.path, config)) continue;
 		let content = page.content;
 		let changed = 0;
-		for (const oldPath of movedMd) {
+		for (const oldPath of movedPaths) {
 			const r = rewriteMdLinks(content, page.path, oldPath, rename(oldPath));
 			content = r.body;
 			changed += r.changed;
