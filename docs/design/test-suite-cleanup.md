@@ -1,6 +1,6 @@
 # Test suite cleanup
 
-- Status: proposed
+- Status: decided 2026-10-01
 - Related: [`.claude/rules/testing.md`](../../.claude/rules/testing.md),
   [`.claude/skills/add-battery/SKILL.md`](../../.claude/skills/add-battery/SKILL.md)
 
@@ -32,12 +32,12 @@ comments that describe an older version of the code.
 
 All 37 batteries pass on `main`. Measured on a quiet machine:
 
-| Battery                 | Time  | Note                                                    |
-| ----------------------- | ----- | ------------------------------------------------------- |
-| `test:ui`               | 150s  | `bounds.spec` 121s, `web-nav.spec` 94s (worker time)    |
-| `test:e2e-librarian`    | 40s   | at least 24s of it is `settledHead` sleeping            |
-| `test:e2e-import`       | 24s   | 18s of it is twelve unconditional `sleep(1500)` calls   |
-| the 34 other batteries  | ~22s  | 0.4 to 2.4s each, mostly `tsx` startup                  |
+| Battery                | Time | Note                                                  |
+| ---------------------- | ---- | ----------------------------------------------------- |
+| `test:ui`              | 150s | `bounds.spec` 121s, `web-nav.spec` 94s (worker time)  |
+| `test:e2e-librarian`   | 40s  | at least 24s of it is `settledHead` sleeping          |
+| `test:e2e-import`      | 24s  | 18s of it is twelve unconditional `sleep(1500)` calls |
+| the 34 other batteries | ~22s | 0.4 to 2.4s each, mostly `tsx` startup                |
 
 ## Phase 0: defects the audit found (fix first, each its own PR)
 
@@ -55,12 +55,10 @@ Cost, not correctness, but it is the cost the code comment says is gone.
 `tests/ui/__screenshots__/` holds only `darwin/`, so `scripts/test-ui.ts:72-82` drops the
 `visual` project with a warning. That branch ignores `UI_STRICT`, so CI is green while comparing no
 screenshots, and the header's "Set UI_STRICT=1 to turn both skips into failures" is false. The
-`ui-baselines` skill also describes Linux baselines that do not exist. Decide one of:
+`ui-baselines` skill also describes Linux baselines that do not exist.
 
-- (recommended) generate `linux/` baselines with the documented container command, commit them,
-  and make a missing-baseline skip fail under `UI_STRICT`; or
-- declare visual local-only and correct the three documents (`scripts/test-ui.ts` header,
-  `.claude/rules/testing.md`, the `ui-baselines` skill).
+Decided: generate `linux/` baselines with the documented container command, commit them, and make
+a missing-baseline skip fail under `UI_STRICT`. Visual comparison is a CI gate, not local-only.
 
 **0.3 CI's "generated artifacts in sync" step misses a file.** `gen:app` also writes
 `app/views/registry.generated.ts` (`scripts/gen-app.ts:31`), but `.github/workflows/ci.yml:91-97`
@@ -71,24 +69,24 @@ diffs only the bundle and the template module. Add it to both lists.
 Each of these needs a real assertion, and each fix is proven by breaking the code and watching it
 go red.
 
-| Where                                    | Problem                                                                                                                                     | Fix                                                                                        |
-| ---------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------ |
-| `scripts/roundtrip-check.ts:54-58`       | passes if byte-stable OR semantically stable. `- a` vs `* a` and `[[X]]` vs `\[\[X\]\]` are semantically equal, so the two regressions it guards (bullet style, escaped wikilinks) pass | give each fixture an expected mode; require byte stability except the table and emphasis fixtures |
-| `scripts/test-tools.ts:126`              | "reserved brain input" fixture has no body, so it fails as "empty tool". The reserved-name branch is untested. All `err:` cases assert only `!!error` | give it a body; match each error's message                                                  |
-| `scripts/test-tools.ts:160`              | "brain arg is optional" parses `{project}`; zod strips unknown keys, so it passes without `brain` in the shape                             | assert `brain` is in the shape and optional                                                 |
-| `scripts/test-usage.ts:458-461`          | "another org's rows are never returned" checks `calls <= 4`; a leaked row has `calls === 1`                                                  | assert the leaked day/org row is absent, or the row count                                   |
-| `scripts/test-invites.ts:328-331`        | "invite is marked accepted" reads `listPendingInvites`, which never lists brain invites                                                      | read `listPendingBrainInvites`                                                              |
-| `scripts/test-invites.ts:272-281`        | expired and accepted filters exercised in one call; either check passes for the other                                                       | split into two calls, drop the re-read                                                      |
-| `scripts/test-index.ts:333, 381, 412`    | `check('converged ...', true)`; non-convergence throws before it                                                                            | assert a read bound (`reads <= N`) or log instead                                           |
-| `scripts/test-search.ts:629-640`         | "the two ways of deriving a page signal agree" never builds the SQL-side signal                                                              | export the row-to-signal mapping and compare, or delete                                     |
-| `scripts/test-search.ts:453-460`         | builds `path:line: text` itself and parses its own string                                                                                    | delete; `e2e-librarian` pins the real format                                                |
-| `scripts/test-access.ts:216-219`         | "off by default" passes `readOnly: false` explicitly                                                                                         | drop the argument                                                                           |
-| `scripts/test-policy.ts:523-527`         | expected value recomputed from `COMFORTABLE`, so it restates the rule                                                                        | assert the literal outcome                                                                  |
-| `scripts/test-feedback.ts:46`            | `!out.includes('ABC')` is vacuous for the JWT fixture                                                                                        | assert a distinctive substring of each input is gone                                        |
-| `scripts/test-loading.ts:202`            | `hashSeed(x) === hashSeed(x)` in one process, labelled "stable across runs"                                                                 | delete; 195-197 cover determinism                                                           |
-| `tests/ui/editor.spec.ts:73-81`          | "same page renders its view live" opens `vision.md`, which has no view, so the negative cannot fail                                         | open `wiki/orgs/acme-health.md` and assert the rendered view                                |
-| `tests/ui/web-nav.spec.ts:208, 229`      | locators `'..., body'` and `'svg, canvas'` match at once                                                                                     | wait on `main[data-view="search"]` and the graph canvas                                     |
-| `scripts/test-probe.ts:196-206`          | `dropped first \|\| rankLast` where the first branch is always true                                                                          | assert `rankLast` alone                                                                     |
+| Where                                 | Problem                                                                                                                                                                                 | Fix                                                                                               |
+| ------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
+| `scripts/roundtrip-check.ts:54-58`    | passes if byte-stable OR semantically stable. `- a` vs `* a` and `[[X]]` vs `\[\[X\]\]` are semantically equal, so the two regressions it guards (bullet style, escaped wikilinks) pass | give each fixture an expected mode; require byte stability except the table and emphasis fixtures |
+| `scripts/test-tools.ts:126`           | "reserved brain input" fixture has no body, so it fails as "empty tool". The reserved-name branch is untested. All `err:` cases assert only `!!error`                                   | give it a body; match each error's message                                                        |
+| `scripts/test-tools.ts:160`           | "brain arg is optional" parses `{project}`; zod strips unknown keys, so it passes without `brain` in the shape                                                                          | assert `brain` is in the shape and optional                                                       |
+| `scripts/test-usage.ts:458-461`       | "another org's rows are never returned" checks `calls <= 4`; a leaked row has `calls === 1`                                                                                             | assert the leaked day/org row is absent, or the row count                                         |
+| `scripts/test-invites.ts:328-331`     | "invite is marked accepted" reads `listPendingInvites`, which never lists brain invites                                                                                                 | read `listPendingBrainInvites`                                                                    |
+| `scripts/test-invites.ts:272-281`     | expired and accepted filters exercised in one call; either check passes for the other                                                                                                   | split into two calls, drop the re-read                                                            |
+| `scripts/test-index.ts:333, 381, 412` | `check('converged ...', true)`; non-convergence throws before it                                                                                                                        | assert a read bound (`reads <= N`) or log instead                                                 |
+| `scripts/test-search.ts:629-640`      | "the two ways of deriving a page signal agree" never builds the SQL-side signal                                                                                                         | export the row-to-signal mapping and compare, or delete                                           |
+| `scripts/test-search.ts:453-460`      | builds `path:line: text` itself and parses its own string                                                                                                                               | delete; `e2e-librarian` pins the real format                                                      |
+| `scripts/test-access.ts:216-219`      | "off by default" passes `readOnly: false` explicitly                                                                                                                                    | drop the argument                                                                                 |
+| `scripts/test-policy.ts:523-527`      | expected value recomputed from `COMFORTABLE`, so it restates the rule                                                                                                                   | assert the literal outcome                                                                        |
+| `scripts/test-feedback.ts:46`         | `!out.includes('ABC')` is vacuous for the JWT fixture                                                                                                                                   | assert a distinctive substring of each input is gone                                              |
+| `scripts/test-loading.ts:202`         | `hashSeed(x) === hashSeed(x)` in one process, labelled "stable across runs"                                                                                                             | delete; 195-197 cover determinism                                                                 |
+| `tests/ui/editor.spec.ts:73-81`       | "same page renders its view live" opens `vision.md`, which has no view, so the negative cannot fail                                                                                     | open `wiki/orgs/acme-health.md` and assert the rendered view                                      |
+| `tests/ui/web-nav.spec.ts:208, 229`   | locators `'..., body'` and `'svg, canvas'` match at once                                                                                                                                | wait on `main[data-view="search"]` and the graph canvas                                           |
+| `scripts/test-probe.ts:196-206`       | `dropped first \|\| rankLast` where the first branch is always true                                                                                                                     | assert `rankLast` alone                                                                           |
 
 ## Phase 2: time
 
@@ -108,17 +106,17 @@ go red.
 
 ## Phase 3: shared harness
 
-| Copies                                                                                     | Extract                                                                                                                          | Est. lines |
-| ------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------- | ---------- |
+| Copies                                                                                                                                                                        | Extract                                                                                                                                | Est. lines |
+| ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- | ---------- |
 | `e2e-import.ts:33-159` and `e2e-librarian.ts:56-260`: `.dev.vars` parser, scratch brain on both backends, retried `rm`, in-memory client, `call`/`callSc`, `headSha`, `sleep` | one `scripts/e2e-harness.ts` (scratch brain, client, `call`, `eventually`); read `.dev.vars` through `readDevVars` in `src/persist.ts` | 70 to 90   |
-| octokit stub in `test-index.ts:149-220` and its subset in `test-links.ts:43-75`            | one fake GitHub factory in `scripts/`                                                                                            | 30         |
-| own `check` and failure counter in `test-render.ts`, `test-web.ts`, `roundtrip-check.ts`  | use `checker`                                                                                                                    | 25         |
-| throw catchers: `threw`/`threwAsync` and four IIFEs in `test-access`, four blocks in `test-invites`, one in `test-email`, `throws` in `test-payloads` | add `throws`, `rejects`, `errorOf` to `scripts/check.ts`                                                                         | 40         |
-| "migrated up to version N" replay, three times in `test-access` (1100, 1197, 1265) and a variant in `test-index` (1009) | one helper beside `applyMigrations` in `src/local/d1-sqlite.ts`                                                                  | 15         |
-| hand-written D1 shim in `test-dedupe.ts:376-403` (its comment says it matches `test-usage` and `test-access`, which both moved to `localD1`) | `localD1()`                                                                                                                      | 22         |
-| `memoryLedger` in `test-dedupe.ts:192-234` re-implements the ledger's SQL by hand          | run the `dedupeWrite` scenarios on `d1WriteLedger(localD1().db)`                                                                 | 35         |
-| `registeredToolNames` copied into `test-usage.ts:68-73`, a subset in `test-web.ts:273-280` | import it from `scripts/doc-refs.ts`                                                                                             | 8          |
-| two identical throwing proxies in `test-scope.ts:158-177`                                  | one `trap(name)` factory                                                                                                         | 8          |
+| octokit stub in `test-index.ts:149-220` and its subset in `test-links.ts:43-75`                                                                                               | one fake GitHub factory in `scripts/`                                                                                                  | 30         |
+| own `check` and failure counter in `test-render.ts`, `test-web.ts`, `roundtrip-check.ts`                                                                                      | use `checker`                                                                                                                          | 25         |
+| throw catchers: `threw`/`threwAsync` and four IIFEs in `test-access`, four blocks in `test-invites`, one in `test-email`, `throws` in `test-payloads`                         | add `throws`, `rejects`, `errorOf` to `scripts/check.ts`                                                                               | 40         |
+| "migrated up to version N" replay, three times in `test-access` (1100, 1197, 1265) and a variant in `test-index` (1009)                                                       | one helper beside `applyMigrations` in `src/local/d1-sqlite.ts`                                                                        | 15         |
+| hand-written D1 shim in `test-dedupe.ts:376-403` (its comment says it matches `test-usage` and `test-access`, which both moved to `localD1`)                                  | `localD1()`                                                                                                                            | 22         |
+| `memoryLedger` in `test-dedupe.ts:192-234` re-implements the ledger's SQL by hand                                                                                             | run the `dedupeWrite` scenarios on `d1WriteLedger(localD1().db)`                                                                       | 35         |
+| `registeredToolNames` copied into `test-usage.ts:68-73`, a subset in `test-web.ts:273-280`                                                                                    | import it from `scripts/doc-refs.ts`                                                                                                   | 8          |
+| two identical throwing proxies in `test-scope.ts:158-177`                                                                                                                     | one `trap(name)` factory                                                                                                               | 8          |
 
 Leave the D1 shim in `test-index.ts:41-91` (it counts statements and injects faults, and its
 comment says why) and the per-battery org seed SQL (the personas differ on purpose).
@@ -131,7 +129,7 @@ Each was checked by reading both copies on the same code path. Delete unless not
   pinned on `checkPageWrite`, `planPageWrite` and `applyFieldPatch` in `test-page-patch.ts`
   (365-384, 690-702, 729-737, 1037-1046), plus type ordering and titling (538-556, 610-634). The
   e2e copies check only `isError` and a regex, while `write-path.md` says e2e proves "nothing was
-  written". Keep one refusal per decider and make it assert the commit count is unchanged; keep
+  written". Decided: keep one refusal per decider and make it assert the commit count is unchanged; keep
   704-727 and 1044-1058, which do check the file. Also drop 356-361 (it tests the SDK's zod enum)
   and one of the two URL-guard refusals at 1410-1421.
 - `test-scope.ts:462-470, 473-478, 493-498` (org forwarding and the brains payload over a stubbed
