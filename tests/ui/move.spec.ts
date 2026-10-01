@@ -59,6 +59,25 @@ test('move mode takes over the header the way the editor does', async ({ page })
 	await expect(header.getByRole('button', { name: 'New note' })).toBeVisible();
 });
 
+// The destination a click or Enter would choose stands out, by pointer or by keyboard.
+test('the destination under the pointer or keyboard focus lights its row', async ({ page }) => {
+	const app = await openApp(page, 'browse');
+	await app.getByRole('button', { name: 'Expand all' }).click();
+	await moveMenu(app, 'Vision');
+	const target = app.getByRole('button', { name: 'Move to wiki/playbooks', exact: true });
+	const row = target.locator('..');
+	const plain = await row.evaluate((el) => getComputedStyle(el).backgroundColor);
+	await target.hover();
+	await expect(row).not.toHaveCSS('background-color', plain);
+	await app.locator('header').hover();
+	await expect(row).toHaveCSS('background-color', plain);
+	await app.getByRole('button', { name: 'Collapse playbooks', exact: true }).focus();
+	await expect(row).toHaveCSS('background-color', plain);
+	await page.keyboard.press('Tab');
+	await expect(target).toBeFocused();
+	await expect(row).not.toHaveCSS('background-color', plain);
+});
+
 test('invalid folders stay visible but cannot be chosen, and Cancel writes nothing', async ({
 	page
 }) => {

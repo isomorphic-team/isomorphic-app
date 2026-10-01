@@ -131,7 +131,9 @@ for (const colorScheme of ['light', 'dark'] as const) {
 		// Visibility alone misses text clipped by ellipsis. Measure the instruction's
 		// actual glyph rectangles against the label area beside Cancel.
 		const instructionFits = await status.evaluate((bar) => {
-			const label = bar.querySelector('span')!;
+			const label = [...bar.querySelectorAll('span')].find((span) =>
+				span.textContent?.includes('choose a folder')
+			)!;
 			const bounds = label.getBoundingClientRect();
 			const instruction = [...label.childNodes].find(
 				(node) => node.nodeType === Node.TEXT_NODE && node.textContent?.includes('choose a folder')

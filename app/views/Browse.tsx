@@ -36,6 +36,7 @@ import {
 	TrashIcon,
 	NewNoteIcon,
 	NewFolderIcon,
+	MoveIcon,
 	MoreIcon,
 	LockIcon,
 	SortIcon,
@@ -364,6 +365,10 @@ function TreeItem({
 		// tinted so the eye lands where the click pointed.
 		const focused = actions.focus === node.path;
 		const destination = actions.moveDestinations.has(node.path);
+		// The destination under the pointer or keyboard focus lights its row, so the
+		// folder a click or Enter would choose is the one that stands out. Keyed to the
+		// name button alone: the chevron beside it expands rather than moves.
+		const target = moving && destination;
 		return (
 			<div>
 				<div
@@ -372,9 +377,13 @@ function TreeItem({
 					class={`group flex items-center rounded ${
 						source || isDrop
 							? 'bg-accent/20 ring-1 ring-accent'
-							: focused
-								? 'bg-chip'
-								: 'hover:bg-chip'
+							: target
+								? 'has-[[data-move-target]:hover]:bg-accent/10 has-[[data-move-target]:focus-visible]:bg-accent/10 has-[[data-move-target]:focus-visible]:ring-1 has-[[data-move-target]:focus-visible]:ring-accent/60'
+								: moving
+									? ''
+									: focused
+										? 'bg-chip'
+										: 'hover:bg-chip'
 					}`}
 					onDragOver={(e) => {
 						if (actions.dragging && editable) {
@@ -413,6 +422,7 @@ function TreeItem({
 					<button
 						type="button"
 						aria-label={moving ? `Move to ${node.path || 'brain root'}` : undefined}
+						data-move-target={target || undefined}
 						disabled={moving && (!destination || actions.busy)}
 						onClick={() => {
 							if (moving) return actions.moveHere(node.path);
@@ -423,11 +433,13 @@ function TreeItem({
 								toggle(node.path);
 							}
 						}}
-						class={`flex min-w-0 flex-1 items-center gap-1.5 py-1 pl-1.5 text-left text-sm ${folderPage ? 'hover:text-accent' : ''} ${moving && !destination && !source ? 'opacity-40' : ''}`}
+						class={`flex min-w-0 flex-1 items-center gap-1.5 py-1 pl-1.5 text-left text-sm ${folderPage ? 'hover:text-accent' : ''} ${moving && !destination && !source ? 'opacity-40' : ''} ${target ? 'group/dest cursor-pointer focus-visible:outline-none' : ''}`}
 					>
 						<span class={`truncate ${dim ? 'text-muted' : ''}`}>{node.name}</span>
 						{moving && destination && (
-							<span class="ml-auto shrink-0 pr-2 text-xs text-accent">Move here</span>
+							<span class="ml-auto mr-1 shrink-0 rounded px-1.5 py-0.5 text-xs text-accent transition-colors group-hover/dest:bg-accent/15 group-focus-visible/dest:bg-accent/15 motion-reduce:transition-none">
+								Move here
+							</span>
 						)}
 						{!editable && <LockIcon />}
 					</button>
@@ -464,7 +476,7 @@ function TreeItem({
 								},
 								{
 									label: 'Move to…',
-									icon: <FolderIcon />,
+									icon: <MoveIcon />,
 									onClick: () => actions.startMove(node.path, true)
 								},
 								{
@@ -566,7 +578,7 @@ function TreeItem({
 							: []),
 						{
 							label: 'Move to…',
-							icon: <FolderIcon />,
+							icon: <MoveIcon />,
 							onClick: () => actions.startMove(node.path, false)
 						},
 						...(isPage
@@ -1040,7 +1052,9 @@ function FileTree({
 function MoveStatus({ name, busy, none }: { name: string; busy: boolean; none: boolean }) {
 	return (
 		<div role="status" class="flex min-h-7 min-w-0 flex-1 items-center gap-2 px-1 text-sm">
-			<FolderIcon />
+			<span class="text-accent">
+				<MoveIcon />
+			</span>
 			<span class="min-w-0 flex-1 break-words">
 				Moving <strong>{name}</strong>
 				{busy ? '…' : none ? '. There are no other editable folders.' : ': choose a folder'}
