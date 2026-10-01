@@ -124,8 +124,9 @@ Non-obvious things confirmed against the sources above (with the "why it bit us"
   has no `--no-bundle`, `--dry-run` or `--outdir`, but bundles a prebuilt `worker.js` given as
   its positional entry. `--var` and `--secrets-file` exist in wrangler's source but not in its
   docs. Limits: 100 Previews per Worker on Free, 500 on Paid, oldest evicted. Logs and traces
-  work (dashboard, per Preview); `wrangler tail` does not. Undocumented: how the hostname
-  derives from `--name`, and whether a per-Worker Editor token covers Previews.
+  work (dashboard, per Preview); `wrangler tail` does not. Undocumented, and observed on
+  the first live run (2026-10-01): the hostname is `<name>-<worker>.<subdomain>.workers.dev`
+  for a plain name like `pr-136`, and a per-Worker Editor token creates Previews.
 - **API tokens can be scoped to one Worker since 2026-09-15** ("Specified Workers", roles
   Metadata Read-Only, Content Read-Only, Editor, Admin):
   https://developers.cloudflare.com/workers/authorization/workers/. D1 and KV permissions are

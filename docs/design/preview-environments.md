@@ -1,10 +1,9 @@
 # Design: preview environments
 
 Status: **in implementation** (2026-10-01). `.github/workflows/preview.yml` and
-`scripts/preview.ts` are built and pinned by `pnpm test:preview`. The workflow skips green
-until the [one-time setup](#setup-one-time) exists, so the first live run is the remaining
-step, and the items under [Unverified until the first run](#unverified-until-the-first-run)
-are what it settles.
+`scripts/preview.ts` are built, pinned by `pnpm test:preview`, and have deployed a live
+Preview. The workflow skips green until the [one-time setup](#setup-one-time) exists. What
+remains open is under [Still unverified](#still-unverified).
 
 This replaces the 2026-08 design, which planned version aliases (`wrangler versions upload
 --preview-alias`) on a second Worker. Cloudflare has since shipped
@@ -161,8 +160,11 @@ None of this can be created from a workflow. Use a separate Cloudflare account i
    done
    ```
    Leave `FEEDBACK_REPO` and `FEEDBACK_TOKEN` unset.
-5. **A Cloudflare API token**: Workers, scoped to the preview Worker only, Editor role; plus
-   Account D1 Edit. An account API token (per-Worker scoping exists only there);
+5. **A Cloudflare API token**, built as a custom token, not from the "Edit Cloudflare Workers"
+   template: Workers, scoped to the preview Worker only, role "Individual Workers Editor"; plus
+   Account D1 Edit. The template's permission groups (Workers Scripts Write and the like)
+   cannot be scoped to one Worker, and the dashboard refuses them with
+   `"com.cloudflare.edge.worker.script" is not a supported resource type`. An account API token (per-Worker scoping exists only there);
    setting `CLOUDFLARE_ACCOUNT_ID` below keeps wrangler from the `/memberships` lookup that
    makes `deploy.yml` need a user token.
 6. **A GitHub environment named `preview`**, with no branch restriction (pull request runs
@@ -183,20 +185,26 @@ None of this can be created from a workflow. Use a separate Cloudflare account i
    The sending domain may be production's; a distinct From address shows a reviewer which
    deployment mailed them.
 
-## Unverified until the first run
+## Verified on the first live run
 
-Cloudflare's docs leave these open. Each has a visible failure, not a silent one:
+Cloudflare's docs left these open; the first deployed Preview (2026-10-01) settled them:
 
-- **Whether a Preview's hostname is `<name>-<worker>`.** The read-back corrects a mismatch and
-  warns.
+- **A Preview's hostname is `<name>-<worker>.<subdomain>.workers.dev`**, so the planned origin
+  is the real one. The read-back stays, for a name Cloudflare might rewrite.
+- **The per-Worker Editor role ("Individual Workers Editor") creates Previews**, alongside
+  account-level D1 Edit in the same token.
+- **`WRANGLER_OUTPUT_FILE_DIRECTORY` carries a `preview` entry with `preview_urls`.**
+- **Base-config secrets reach a new Preview**: its Auth.js sign-in page renders.
+
+## Still unverified
+
+Each has a visible failure, not a silent one:
+
 - **Whether a Preview keeps its secrets across redeploys.** The docs say base secrets are
   copied on create; a redeploy that dropped them would fail sign-in and, most likely, the
   `/b/` smoke assertion.
-- **Whether a per-Worker Editor token can create and delete Previews.** If not, the deploy
-  step fails with a permission error, and the token needs account-level Workers Scripts Edit,
-  which is the stronger reason for a separate account.
-- **That `WRANGLER_OUTPUT_FILE_DIRECTORY` carries a `preview` entry with `preview_urls`.** The
-  wrangler source writes one; `scripts/preview.ts preview-url` fails loudly if it is absent.
+- **Whether the Editor role can delete a Preview.** If not, `cleanup` logs a notice and still
+  deletes the database; the Preview is evicted at the per-Worker limit.
 - **Pricing.** Unstated; presumably ordinary Workers usage.
 
 ## Limitations
