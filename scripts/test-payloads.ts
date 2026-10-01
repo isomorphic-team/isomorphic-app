@@ -46,7 +46,7 @@ import {
 	type BrainRow
 } from '../src/lib/tool-payloads.ts';
 
-import { checker } from './check.ts';
+import { checker, errorOf } from './check.ts';
 
 const { check, done } = checker('payload checks');
 
@@ -58,14 +58,6 @@ const failed = (text: string): ToolResultLike => ({
 	isError: true,
 	content: [{ type: 'text', text }]
 });
-const throws = (fn: () => unknown): string | null => {
-	try {
-		fn();
-		return null;
-	} catch (e) {
-		return String((e as Error).message);
-	}
-};
 
 // ---------------------------------------------------------------------------
 console.log('\nThe envelope');
@@ -97,7 +89,7 @@ check(
 );
 check(
 	'payloadOf refuses an error result with its text',
-	throws(() => payloadOf(failed('You do not have access to that brain.'))) ===
+	errorOf(() => payloadOf(failed('You do not have access to that brain.'))) ===
 		'You do not have access to that brain.'
 );
 check('payloadOf: a success is its payload', payloadOf(ok({ a: 1 })).a === 1);
@@ -164,13 +156,13 @@ check(
 
 check(
 	'parseListPages REFUSES an error result rather than answering "empty brain"',
-	throws(() => parseListPages(failed("You don't have a brain yet."))) ===
+	errorOf(() => parseListPages(failed("You don't have a brain yet."))) ===
 		"You don't have a brain yet.",
 	'this is the fetchPaths defect: a failed list_pages was cached as an empty tree'
 );
 check(
 	'parseListPages refuses a success with no page list',
-	throws(() => parseListPages(ok({ config: {} }))) === 'list_pages: no page list in the result'
+	errorOf(() => parseListPages(ok({ config: {} }))) === 'list_pages: no page list in the result'
 );
 check(
 	'parseListPages: the tree',
@@ -221,7 +213,7 @@ check(
 );
 check(
 	'parseReadPage refuses an error result',
-	throws(() => parseReadPage(failed('nope'))) === 'nope'
+	errorOf(() => parseReadPage(failed('nope'))) === 'nope'
 );
 check(
 	'parseAsset defaults',
