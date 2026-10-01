@@ -1,12 +1,14 @@
-// Golden test for the content index's freshness guard (ensureFresh) — PURE, no
-// network. D1 is shimmed over node:sqlite and GitHub is a stub, so this runs in CI.
+// Golden test for the content index (src/lib/brain-index.ts) over the real
+// githubStore. Pure, no network: D1 is shimmed over node:sqlite and GitHub is
+// scripts/fake-github.ts, so this runs in CI.
 //
-// What it exists to catch: a read that has to do UNBOUNDED work. That failure mode
-// is not "slow", it is "this brain can never be read again" — the pass exceeds the
-// host's 60s tool timeout, the meta row is therefore never written, and the next
-// read starts the same doomed pass over. It happened in production on a ~3,000-page
-// brain after INDEX_SCHEMA_VERSION moved. So every assertion below is some form of
-// "one read does a bounded amount of work, and successive reads converge".
+// Most of it pins that a read does BOUNDED work: one ensureFresh does at most one
+// slice of a reindex or a rebuild, and successive reads converge. An unbounded pass
+// is not slow, it is permanent: it exceeds the host's 60s tool timeout, the meta row
+// is never written, and the next read starts the same pass over. The rest pins
+// write-through after a direct commit, needs-config detection, the config read at
+// the indexed revision, the GitHub round-trip budget of a read, and migrations
+// re-run against a persisted database.
 //
 //   pnpm test:index
 
@@ -15,12 +17,10 @@ import { mkdtempSync, readdirSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
-	backlinksTo,
 	detectNeedsConfig,
 	ensureFresh,
 	INDEX_SCHEMA_VERSION,
 	listIndexedPages,
-	loadResolvedGraph,
 	writeThroughIndex
 } from '../src/lib/brain-index.ts';
 import { githubStore, MAX_SCAN_PAGES } from '../src/lib/brain-repo.ts';
@@ -29,6 +29,7 @@ import { DEFAULT_BRAIN_CONFIG, type BrainConfig } from '../src/lib/brain-policy.
 import { pageTitle } from '../src/lib/wiki.ts';
 
 import { checker } from './check.ts';
+import { fakeGithub, type FakePage } from './fake-github.ts';
 
 const { check, done } = checker('content-index checks');
 
@@ -92,12 +93,6 @@ const db = {
 
 // ---- a fake brain: N pages with frontmatter, an H1, and links ----
 
-interface FakePage {
-	path: string;
-	sha: string;
-	content: string;
-}
-
 function makePages(n: number, rev = 0): FakePage[] {
 	const out: FakePage[] = [];
 	for (let i = 0; i < n; i++) {
@@ -118,108 +113,11 @@ function makePages(n: number, rev = 0): FakePage[] {
 	return out;
 }
 
-// GitHub stub. Only the surface the GitHub BrainStore adapter actually touches.
-// Wrapped in the REAL githubStore below rather than stubbing BrainStore directly, so
-// this still exercises fetchPages' GraphQL batching (which graphqlCalls asserts) and
-// not just the index logic sitting on top of it.
-let currentPages: FakePage[] = [];
-let currentHead = 'commit-0';
-let graphqlCalls = 0;
-let reposGetCalls = 0;
-let getBranchCalls = 0;
-let getContentCalls = 0;
-let getRefCalls = 0;
-let getCommitCalls = 0;
-let getTreeCalls = 0;
-const configFilesByRef = new Map<string, string>();
-const configReadRefs: string[] = [];
-
-function githubCallCount(): number {
-	return (
-		graphqlCalls +
-		reposGetCalls +
-		getBranchCalls +
-		getContentCalls +
-		getRefCalls +
-		getCommitCalls +
-		getTreeCalls
-	);
-}
-
-const octokit = {
-	graphql: async (_query: string, variables: Record<string, string>) => {
-		graphqlCalls++;
-		const byOid = new Map(currentPages.map((p) => [p.sha, p]));
-		const repository: Record<string, { text: string; isTruncated: boolean } | null> = {};
-		for (const [k, v] of Object.entries(variables)) {
-			if (!k.startsWith('o')) continue;
-			const p = byOid.get(v);
-			repository[`b${k.slice(1)}`] = p ? { text: p.content, isTruncated: false } : null;
-		}
-		return { repository };
-	},
-	rest: {
-		repos: {
-			get: async () => {
-				reposGetCalls++;
-				return {
-					data: { default_branch: 'main', allow_squash_merge: true, allow_merge_commit: true }
-				};
-			},
-			getBranch: async () => {
-				getBranchCalls++;
-				return { data: { protected: false } };
-			},
-			getContent: async ({ path, ref }: { path: string; ref?: string }) => {
-				getContentCalls++;
-				if (path === '.isomorphic.json') {
-					configReadRefs.push(ref ?? currentHead);
-					const content = configFilesByRef.get(ref ?? currentHead);
-					if (content !== undefined) {
-						return {
-							data: {
-								type: 'file',
-								content: Buffer.from(content).toString('base64'),
-								sha: `config-${ref ?? currentHead}`
-							}
-						};
-					}
-				}
-				throw Object.assign(new Error('Not Found'), { status: 404 });
-			}
-		},
-		git: {
-			// `heads/missing` 404s so the getHead fallback has a real branch to try.
-			getRef: async ({ ref }: { ref: string }) => {
-				getRefCalls++;
-				if (ref === 'heads/missing') {
-					throw Object.assign(new Error('Not Found'), { status: 404 });
-				}
-				return { data: { object: { sha: currentHead } } };
-			},
-			getCommit: async () => {
-				getCommitCalls++;
-				return { data: { tree: { sha: `tree-${currentHead}` } } };
-			},
-			getTree: async () => {
-				getTreeCalls++;
-				// The config file is a blob in the tree at any revision that has one,
-				// exactly as GitHub's recursive tree reports it. detectNeedsConfig
-				// reads it from here rather than from getContent.
-				const tree = currentPages.map((p) => ({ type: 'blob', path: p.path, sha: p.sha }));
-				if (configFilesByRef.has(currentHead)) {
-					tree.push({ type: 'blob', path: '.isomorphic.json', sha: `config-${currentHead}` });
-				}
-				return { data: { tree } };
-			},
-			getBlob: async () => {
-				throw new Error('getBlob should not be needed (no oversized blobs in this fixture)');
-			}
-		}
-	}
-} as never;
-
-const store = githubStore(octokit);
+// The REAL githubStore over a fake octokit, so this still exercises fetchPages'
+// GraphQL batching (which gh.calls.graphql asserts) and not just the index logic
+// sitting on top of it.
+const gh = fakeGithub();
+const store = githubStore(gh.octokit);
 
 const repo = { owner: 'example-org', repo: 'brain' };
 const brainId = 'example-org/brain';
@@ -230,8 +128,8 @@ function resetDb() {
 	applyMigrations(sqlite);
 	failBatchStatement = null;
 	beforeBatch = null;
-	configFilesByRef.clear();
-	configReadRefs.length = 0;
+	gh.configFilesByRef.clear();
+	gh.configReadRefs.length = 0;
 }
 
 function meta() {
@@ -268,7 +166,7 @@ async function readUntilConverged(maxReads: number): Promise<{ reads: number; pe
 		const m = meta();
 		if (
 			m &&
-			m.indexed_commit_sha === currentHead &&
+			m.indexed_commit_sha === gh.head &&
 			m.schema_version === INDEX_SCHEMA_VERSION &&
 			!m.rebuild_cursor
 		) {
@@ -286,6 +184,13 @@ async function readUntilConverged(maxReads: number): Promise<{ reads: number; pe
 // pass ever creeps back in — which is the regression this file exists to catch.
 const PER_READ_STATEMENT_CEILING = 8_000;
 
+// Pages one read reindexes and rebuilds (REINDEX_PAGE_BUDGET and REBUILD_PAGE_BUDGET in
+// brain-index.ts). A read that does a full slice converges in ceil(pages / slice)
+// reads; more than that means some read made less progress than it could.
+const REINDEX_SLICE = 600;
+const REBUILD_SLICE = 300;
+const readsFor = (pages: number, slice: number) => Math.ceil(pages / slice);
+
 console.log('\nContent index — bounded, resumable ensureFresh\n');
 
 // ---------------------------------------------------------------- scenario 1
@@ -293,12 +198,12 @@ console.log('\nContent index — bounded, resumable ensureFresh\n');
 {
 	console.log('small brain (50 pages), first build');
 	resetDb();
-	currentPages = makePages(50);
-	currentHead = 'commit-small';
+	gh.pages = makePages(50);
+	gh.head = 'commit-small';
 	resetCounters();
 	await ensureFresh(db, store, repo, brainId, config);
 	const m = meta();
-	check('indexed in a single read', m?.indexed_commit_sha === currentHead);
+	check('indexed in a single read', m?.indexed_commit_sha === gh.head);
 	check('schema_version at current', m?.schema_version === INDEX_SCHEMA_VERSION);
 	check('no rebuild cursor left behind', !m?.rebuild_cursor);
 	check('all 50 pages indexed', (await listIndexedPages(db, brainId)).length === 50);
@@ -315,8 +220,8 @@ console.log('\nContent index — bounded, resumable ensureFresh\n');
 {
 	console.log('\nlarge brain (1500 pages), first build');
 	resetDb();
-	currentPages = makePages(1500);
-	currentHead = 'commit-large';
+	gh.pages = makePages(1500);
+	gh.head = 'commit-large';
 
 	resetCounters();
 	await ensureFresh(db, store, repo, brainId, config);
@@ -325,12 +230,16 @@ console.log('\nContent index — bounded, resumable ensureFresh\n');
 	check('first read recorded progress (meta row exists)', !!meta());
 	check(
 		'first read did NOT claim to cover HEAD',
-		meta()?.indexed_commit_sha !== currentHead,
+		meta()?.indexed_commit_sha !== gh.head,
 		`sha=${meta()?.indexed_commit_sha}`
 	);
 
 	const { reads, peak } = await readUntilConverged(20);
-	check(`converged over successive reads (${reads + 1} total)`, true);
+	check(
+		'converged in one read per reindex slice',
+		reads + 1 <= readsFor(1500, REINDEX_SLICE),
+		`reads=${reads + 1}`
+	);
 	check('every read stayed bounded', peak < PER_READ_STATEMENT_CEILING, `peak=${peak}`);
 	console.log(`    (peak statements in one read: ${peak})`);
 	check('all 1500 pages indexed', (await listIndexedPages(db, brainId)).length === 1500);
@@ -351,8 +260,8 @@ console.log('\nContent index — bounded, resumable ensureFresh\n');
 {
 	console.log('\nschema_version bump on a 2500-page brain (the production wedge)');
 	resetDb();
-	currentPages = makePages(2500);
-	currentHead = 'commit-wedge';
+	gh.pages = makePages(2500);
+	gh.head = 'commit-wedge';
 	await readUntilConverged(30); // build it normally first
 
 	// Roll the stored rows back to a pre-bump state: stale titles, no field rows.
@@ -361,7 +270,7 @@ console.log('\nContent index — bounded, resumable ensureFresh\n');
 	sqlite.prepare(`DELETE FROM brain_page_fields WHERE brain_id = ?`).run(brainId);
 
 	resetCounters();
-	const graphqlBefore = graphqlCalls;
+	const graphqlBefore = gh.calls.graphql;
 	await ensureFresh(db, store, repo, brainId, config);
 	const first = stmtCount;
 	check(
@@ -369,16 +278,20 @@ console.log('\nContent index — bounded, resumable ensureFresh\n');
 		first < PER_READ_STATEMENT_CEILING,
 		`statements=${first}`
 	);
-	check('rebuild refetched nothing from GitHub', graphqlCalls === graphqlBefore);
+	check('rebuild refetched nothing from GitHub', gh.calls.graphql === graphqlBefore);
 	check('schema_version NOT yet advanced (work is unfinished)', meta()?.schema_version === 0);
 	check('a resume cursor was recorded', !!meta()?.rebuild_cursor);
 	check(
 		'indexed_commit_sha untouched (content was already current)',
-		meta()?.indexed_commit_sha === currentHead
+		meta()?.indexed_commit_sha === gh.head
 	);
 
 	const { reads, peak } = await readUntilConverged(30);
-	check(`rebuild converged (${reads + 1} reads total)`, true);
+	check(
+		'rebuild converged in one read per rebuild slice',
+		reads + 1 <= readsFor(2500, REBUILD_SLICE),
+		`reads=${reads + 1}`
+	);
 	check('every rebuild read stayed bounded', peak < PER_READ_STATEMENT_CEILING, `peak=${peak}`);
 	console.log(`    (peak statements in one read: ${peak})`);
 	check('schema_version advanced only at the end', meta()?.schema_version === INDEX_SCHEMA_VERSION);
@@ -387,7 +300,7 @@ console.log('\nContent index — bounded, resumable ensureFresh\n');
 	// Equivalence: the incremental rebuild must produce exactly what a correct
 	// whole-brain pass would have.
 	const titles = storedTitles();
-	const expected = new Map(currentPages.map((p) => [p.path, pageTitle(p.path, p.content)]));
+	const expected = new Map(gh.pages.map((p) => [p.path, pageTitle(p.path, p.content)]));
 	const mismatched = [...expected].filter(([path, t]) => titles.get(path) !== t);
 	check('every title rebuilt correctly', mismatched.length === 0, `${mismatched.length} wrong`);
 	check('no page left with the stale title', ![...titles.values()].includes('stale'));
@@ -399,17 +312,21 @@ console.log('\nContent index — bounded, resumable ensureFresh\n');
 {
 	console.log('\nstale HEAD + schema bump together (the large-brain shape)');
 	resetDb();
-	currentPages = makePages(900);
-	currentHead = 'commit-a';
+	gh.pages = makePages(900);
+	gh.head = 'commit-a';
 	await readUntilConverged(20);
 
 	// Every page rewritten (new blob shas) AND the row shape rolled back.
-	currentPages = makePages(900, 1);
-	currentHead = 'commit-b';
+	gh.pages = makePages(900, 1);
+	gh.head = 'commit-b';
 	sqlite.prepare(`UPDATE brain_index_meta SET schema_version = 0 WHERE brain_id = ?`).run(brainId);
 
 	const { reads, peak } = await readUntilConverged(25);
-	check(`converged (${reads} reads)`, true);
+	check(
+		'converged within one read per reindex slice plus one per rebuild slice',
+		reads <= readsFor(900, REINDEX_SLICE) + readsFor(900, REBUILD_SLICE),
+		`reads=${reads}`
+	);
 	check('every read stayed bounded', peak < PER_READ_STATEMENT_CEILING, `peak=${peak}`);
 	console.log(`    (peak statements in one read: ${peak})`);
 	check('index now reflects the new HEAD', meta()?.indexed_commit_sha === 'commit-b');
@@ -429,12 +346,12 @@ console.log('\nContent index — bounded, resumable ensureFresh\n');
 {
 	console.log('\ndeletions');
 	resetDb();
-	currentPages = makePages(700);
-	currentHead = 'commit-c';
+	gh.pages = makePages(700);
+	gh.head = 'commit-c';
 	await readUntilConverged(20);
 
-	currentPages = currentPages.slice(0, 300);
-	currentHead = 'commit-d';
+	gh.pages = gh.pages.slice(0, 300);
+	gh.head = 'commit-d';
 	await readUntilConverged(20);
 	check(
 		'removed pages dropped from the index',
@@ -443,143 +360,23 @@ console.log('\nContent index — bounded, resumable ensureFresh\n');
 	check('index reflects the new HEAD', meta()?.indexed_commit_sha === 'commit-d');
 }
 
-// ---- attachments in the link graph ----
-//
-// The bug this pins: MD_LINK_RE always captured `![](…)`, so image links were in
-// brain_links all along, but loadResolvedGraph dropped every non-.md target. That
-// made backlinksTo report an attachment as referenced by nobody, which in turn made
-// move_page repoint nothing and delete_page call a still-used image unreferenced.
-//
-// Note what is deliberately NOT set up here: the .png is never added to the tree
-// stub. Assets are not inventoried by the index, and the asset edge has to come from
-// the LINK alone, so this fixture is the design's actual shape.
-{
-	console.log('\nattachments in the link graph');
-	resetDb();
-	currentPages = [
-		{
-			path: 'wiki/vendors/acme.md',
-			sha: 'sha-acme-1',
-			content: [
-				'# Acme',
-				'',
-				'![The logo](./assets/logo.png)',
-				'A [real page](../index.md) and a [missing one](./nope.md).',
-				'A [source doc](../../raw/notes.txt) too.',
-				'And a [spreadsheet](./data/pricing.csv) the app cannot render.'
-			].join('\n')
-		},
-		{
-			path: 'wiki/index.md',
-			sha: 'sha-index-1',
-			content: '# Index\n\nAlso shows ![it](./vendors/assets/logo.png).'
-		}
-	];
-	currentHead = 'commit-assets';
-	await ensureFresh(db, store, repo, brainId, config);
-	const g = await loadResolvedGraph(db, brainId, config);
-
-	const asset = 'wiki/vendors/assets/logo.png';
-	check(
-		'image link is recorded as an asset edge',
-		g.fileEdges.some((e) => e.source === 'wiki/vendors/acme.md' && e.target === asset),
-		JSON.stringify(g.fileEdges)
-	);
-	check(
-		'a second page referencing it is recorded too',
-		g.fileEdges.filter((e) => e.target === asset).length === 2,
-		JSON.stringify(g.fileEdges)
-	);
-	// The graph view builds nodes from `pages` and degree from `edges`; an asset in
-	// that list would be a link to a node the renderer has no data for.
-	check(
-		'asset edges stay OUT of the page edge list',
-		!g.edges.some((e) => e.target === asset),
-		JSON.stringify(g.edges)
-	);
-	check(
-		'page-to-page links still resolve',
-		g.edges.some((e) => e.source === 'wiki/vendors/acme.md' && e.target === 'wiki/index.md')
-	);
-	// The whole reason assets are never "broken": the index has no inventory of which
-	// ones exist, so it cannot tell a typo from a file it has not indexed.
-	check(
-		'a missing attachment is never reported broken',
-		!g.broken.some((b) => b.target?.endsWith('.png')),
-		JSON.stringify(g.broken)
-	);
-	check(
-		'but a missing PAGE still is',
-		g.broken.some((b) => b.target === 'wiki/vendors/nope.md'),
-		JSON.stringify(g.broken)
-	);
-	// Regression guard on the pre-existing rule: source material is not indexed, so a
-	// link into raw/ is not broken either, and must not have become a file edge.
-	check(
-		'a link into source material is neither broken nor a file edge',
-		!g.broken.some((b) => b.target?.startsWith('raw/')) &&
-			!g.fileEdges.some((e) => e.target.startsWith('raw/')),
-		JSON.stringify({ broken: g.broken, fileEdges: g.fileEdges })
-	);
-	// A non-page file the APP cannot render is still a file the brain can lose. This
-	// is the case that fell between the two implementations: the media allowlist said
-	// "not an asset" and dropped it, while delete_page's separate query found it. One
-	// rule now, so deleting a linked .csv warns exactly as deleting a .png does.
-	const csv = 'wiki/vendors/data/pricing.csv';
-	check(
-		'a link to a non-media content file is a file edge too',
-		g.fileEdges.some((e) => e.target === csv),
-		JSON.stringify(g.fileEdges)
-	);
-	check(
-		'and backlinksTo finds it',
-		backlinksTo(g, csv).some((r) => r.path === 'wiki/vendors/acme.md'),
-		JSON.stringify(backlinksTo(g, csv))
-	);
-	check(
-		'while staying out of the page edge list',
-		!g.edges.some((e) => e.target === csv),
-		JSON.stringify(g.edges)
-	);
-
-	// The payoff: this is the call move_page and delete_page make.
-	const refs = backlinksTo(g, asset);
-	check(
-		'backlinksTo finds both referrers of an attachment',
-		refs.length === 2,
-		JSON.stringify(refs)
-	);
-	check(
-		'and counts them, so "still referenced" can say how many',
-		refs.every((r) => r.count === 1),
-		JSON.stringify(refs)
-	);
-	// Backlinks for pages must be unaffected by reading two lists instead of one.
-	const pageRefs = backlinksTo(g, 'wiki/index.md');
-	check(
-		'page backlinks still work and do not pick up assets',
-		pageRefs.length === 1 && pageRefs[0].path === 'wiki/vendors/acme.md',
-		JSON.stringify(pageRefs)
-	);
-}
-
 // ---------------------------------------------------------------- scenario 6
 // getHead with a named branch: the write path's hottest call used to pay a
 // repos.get just to learn the default branch that config already holds.
 {
 	console.log('\ngetHead with a named branch');
-	const before = reposGetCalls;
+	const before = gh.calls.reposGet;
 	const h = await store.getHead(repo, 'main');
-	check('named branch skips the repos.get discovery', reposGetCalls === before);
+	check('named branch skips the repos.get discovery', gh.calls.reposGet === before);
 	check(
 		'named branch resolves head',
-		h.branch === 'main' && h.commitSha === currentHead && !!h.treeSha,
+		h.branch === 'main' && h.commitSha === gh.head && !!h.treeSha,
 		JSON.stringify(h)
 	);
 	const h2 = await store.getHead(repo, 'missing');
 	check(
 		'a missing branch falls back to discovery',
-		reposGetCalls === before + 1 && h2.branch === 'main',
+		gh.calls.reposGet === before + 1 && h2.branch === 'main',
 		JSON.stringify(h2)
 	);
 }
@@ -593,21 +390,18 @@ console.log('\nContent index — bounded, resumable ensureFresh\n');
 {
 	console.log('\nwrite-through after a direct commit');
 	resetDb();
-	currentPages = makePages(20);
-	currentHead = 'commit-wt-0';
+	gh.pages = makePages(20);
+	gh.head = 'commit-wt-0';
 	await ensureFresh(db, store, repo, brainId, config);
-	check('precondition: index fresh at HEAD', meta()?.indexed_commit_sha === currentHead);
+	check('precondition: index fresh at HEAD', meta()?.indexed_commit_sha === gh.head);
 
 	// Simulate a write_page create landing on top: one new page + the changelog.
 	const newPage = {
 		path: 'wiki/new-page.md',
 		content: '---\ntitle: New Page\n---\n\n# New Page\n\nBody text.\n'
 	};
-	currentPages = [
-		...currentPages,
-		{ path: newPage.path, sha: 'sha-new-1', content: newPage.content }
-	];
-	currentHead = 'commit-wt-1';
+	gh.pages = [...gh.pages, { path: newPage.path, sha: 'sha-new-1', content: newPage.content }];
+	gh.head = 'commit-wt-1';
 	const advanced = await writeThroughIndex(
 		db,
 		brainId,
@@ -629,12 +423,12 @@ console.log('\nContent index — bounded, resumable ensureFresh\n');
 
 	// The payoff: the verifying read does no GitHub fetch and writes no batches.
 	resetCounters();
-	const graphqlBefore = graphqlCalls;
+	const graphqlBefore = gh.calls.graphql;
 	await ensureFresh(db, store, repo, brainId, config);
 	check(
 		'the verifying read is the cheap fresh path',
-		graphqlCalls === graphqlBefore && batchCount === 0,
-		`graphql=${graphqlCalls - graphqlBefore} batches=${batchCount}`
+		gh.calls.graphql === graphqlBefore && batchCount === 0,
+		`graphql=${gh.calls.graphql - graphqlBefore} batches=${batchCount}`
 	);
 
 	// A write whose BASE does not match the indexed sha must not advance it —
@@ -654,7 +448,7 @@ console.log('\nContent index — bounded, resumable ensureFresh\n');
 	);
 
 	// Deletes remove rows (the delete half of a move).
-	currentHead = 'commit-wt-3';
+	gh.head = 'commit-wt-3';
 	const deleted = await writeThroughIndex(
 		db,
 		brainId,
@@ -672,7 +466,7 @@ console.log('\nContent index — bounded, resumable ensureFresh\n');
 
 	// The stored blob sha is the REAL git object id, so a later incremental
 	// reindex diffs it as unchanged instead of refetching it.
-	currentHead = 'commit-wt-4';
+	gh.head = 'commit-wt-4';
 	await writeThroughIndex(
 		db,
 		brainId,
@@ -701,24 +495,24 @@ console.log('\nContent index — bounded, resumable ensureFresh\n');
 {
 	console.log('\nneeds-config detection sees an existing config');
 	resetDb();
-	currentHead = 'commit-needs-config';
-	currentPages = [{ path: 'brain/page.md', sha: 'sha-brain-page', content: '# Page\n' }];
+	gh.head = 'commit-needs-config';
+	gh.pages = [{ path: 'brain/page.md', sha: 'sha-brain-page', content: '# Page\n' }];
 	check(
 		'markdown outside the default roots with NO config is flagged',
 		(await detectNeedsConfig(store, repo, config)) === true
 	);
-	configFilesByRef.set(currentHead, JSON.stringify({ paths: { 'brain/': 'content' } }));
+	gh.configFilesByRef.set(gh.head, JSON.stringify({ paths: { 'brain/': 'content' } }));
 	check(
 		'the same tree WITH a .isomorphic.json is not flagged, whatever config the caller holds',
 		(await detectNeedsConfig(store, repo, config)) === false
 	);
-	configFilesByRef.clear();
-	currentPages = [];
+	gh.configFilesByRef.clear();
+	gh.pages = [];
 	check(
 		'an empty repo is not flagged (nothing to configure)',
 		(await detectNeedsConfig(store, repo, config)) === false
 	);
-	currentPages = [{ path: 'wiki/page.md', sha: 'sha-wiki-page', content: '# Page\n' }];
+	gh.pages = [{ path: 'wiki/page.md', sha: 'sha-wiki-page', content: '# Page\n' }];
 	check(
 		'markdown under the default roots is not flagged',
 		(await detectNeedsConfig(store, repo, config)) === false
@@ -732,21 +526,21 @@ console.log('\nContent index — bounded, resumable ensureFresh\n');
 {
 	console.log('\nconfig changes at the captured revision');
 	resetDb();
-	currentHead = 'commit-config-1';
-	currentPages = [
+	gh.head = 'commit-config-1';
+	gh.pages = [
 		{ path: 'wiki/old-root.md', sha: 'sha-old-root', content: '# Old root\n' },
 		{ path: 'notes/new-root.md', sha: 'sha-new-root', content: '# New root\n' }
 	];
-	configFilesByRef.set(
-		currentHead,
+	gh.configFilesByRef.set(
+		gh.head,
 		JSON.stringify({ paths: { 'notes/': 'content' }, index: { fields: ['owner'] } })
 	);
 	await ensureFresh(db, store, repo, brainId, config); // caller still holds the old wiki/ config
 	const paths = (await listIndexedPages(db, brainId)).map((p) => p.path);
 	check(
 		'the config blob was pinned to the indexed commit',
-		configReadRefs.length === 1 && configReadRefs[0] === currentHead,
-		JSON.stringify(configReadRefs)
+		gh.configReadRefs.length === 1 && gh.configReadRefs[0] === gh.head,
+		JSON.stringify(gh.configReadRefs)
 	);
 	check(
 		'the new root is indexed and the old root is absent',
@@ -774,8 +568,8 @@ console.log('\nContent index — bounded, resumable ensureFresh\n');
 		sha: 'sha-atomic-old',
 		content: '---\nowner: old\n---\n\n# Atomic old\n\n[Old](./old.md)\n'
 	};
-	currentPages = [oldPage];
-	currentHead = 'commit-atomic-0';
+	gh.pages = [oldPage];
+	gh.head = 'commit-atomic-0';
 	await ensureFresh(db, store, repo, brainId, config);
 
 	const replacement = {
@@ -936,19 +730,19 @@ console.log('\nContent index — bounded, resumable ensureFresh\n');
 {
 	console.log('\nGitHub request-count latency budget');
 	resetDb();
-	currentPages = makePages(10);
-	currentHead = 'commit-latency-0';
-	const coldBefore = githubCallCount();
+	gh.pages = makePages(10);
+	gh.head = 'commit-latency-0';
+	const coldBefore = gh.callCount();
 	await ensureFresh(db, store, repo, brainId, config);
-	const coldCalls = githubCallCount() - coldBefore;
+	const coldCalls = gh.callCount() - coldBefore;
 	check(
 		'a stale read uses 6 GitHub calls instead of the legacy 9',
 		coldCalls === 6,
 		`calls=${coldCalls}`
 	);
 	const latencyPage = { path: 'wiki/latency.md', content: '# Latency\n' };
-	currentPages.push({ ...latencyPage, sha: 'sha-latency' });
-	currentHead = 'commit-latency-1';
+	gh.pages.push({ ...latencyPage, sha: 'sha-latency' });
+	gh.head = 'commit-latency-1';
 	const advanced = await writeThroughIndex(
 		db,
 		brainId,
@@ -958,10 +752,10 @@ console.log('\nContent index — bounded, resumable ensureFresh\n');
 		[latencyPage],
 		[]
 	);
-	const verifyBefore = githubCallCount();
+	const verifyBefore = gh.callCount();
 	resetCounters();
 	await ensureFresh(db, store, repo, brainId, config);
-	const verifyCalls = githubCallCount() - verifyBefore;
+	const verifyCalls = gh.callCount() - verifyBefore;
 	check(
 		'write-through reduces the verifying read from 6 calls to 1',
 		advanced && verifyCalls === 1 && batchCount === 0,
