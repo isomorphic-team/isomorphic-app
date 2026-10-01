@@ -32,7 +32,7 @@ import { registeredTools, wrapToolHandler } from './lib/registered-tools.ts';
 import { serveMcp, serverOptions } from './lib/mcp-serve.ts';
 import type { IdentityWire } from './lib/tool-payloads.ts';
 import { z } from 'zod';
-import { OAuthProvider, type OAuthHelpers } from '@cloudflare/workers-oauth-provider';
+import type { OAuthHelpers } from '@cloudflare/workers-oauth-provider';
 import { installationOctokit, tokenOctokit, staticAuth, type AppCreds } from './lib/github.ts';
 import { githubStore, commitAuthorFor, type BrainStore } from './lib/brain-repo.ts';
 import { platformInstall, provisionOrgForUser } from './lib/provision.ts';
@@ -86,6 +86,7 @@ import { dayKey, countedCall } from './lib/usage.ts';
 import { loadCustomToolDefs, registerCustomTools, type CustomToolLoad } from './tools/custom.ts';
 import { resolveInstallationOrg, connectCustomerOrg } from './lib/org-connect.ts';
 import { loadBrainConfig, type BrainConfig } from './lib/brain-config.ts';
+import { oauthProviderForOrigin } from './lib/oauth-provider.ts';
 import { guardStore } from './lib/policy-guard.ts';
 import { recordDetections } from './lib/policy-store.ts';
 import {
@@ -1054,9 +1055,9 @@ function requireToken(env: Env): string {
 //     success, the request is forwarded to `mcpApiHandler` with `ctx.props`
 //     populated from the grant.
 //
-// Endpoints are paths (not full URLs); the provider derives full URLs from
-// `request.url.origin` for metadata responses. Path-only matching also keeps
-// internal routing host-agnostic.
+// Endpoints are paths (not full URLs), and the canonical resource is
+// `<request origin>/mcp`, one provider per origin (`src/lib/oauth-provider.ts`),
+// so metadata and token audiences follow the host that served the request.
 // The upstream sign-in behind `/authorize`. Auth.js is the only one. A deployment
 // still configured for the removed GitHub sign-in (IDENTITY_MODE=github) is told
 // what changed, rather than dropped into an Auth.js flow it has no secrets for.
@@ -1074,8 +1075,7 @@ const identityHandler = {
 	}
 };
 
-const oauthProvider = new OAuthProvider<Env>({
-	apiRoute: '/mcp',
+const oauthProviderFor = oauthProviderForOrigin<Env>({
 	apiHandler: mcpApiHandler,
 	defaultHandler: identityHandler,
 	authorizeEndpoint: '/authorize',
@@ -1354,7 +1354,7 @@ export default {
 		}
 
 		if (env.AUTH_MODE === 'oauth') {
-			return oauthProvider.fetch(request, env, ctx);
+			return oauthProviderFor(url.origin).fetch(request, env, ctx);
 		}
 
 		// Static bearer: single token, the single-tenant self-hosting path. Refuse

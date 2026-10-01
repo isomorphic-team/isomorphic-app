@@ -70,8 +70,8 @@ apply in the step before, schema first.
   implementing a Durable Object (`metadata.has_preview`). This Worker has them today. **Adding a
   Durable Object binding would silently drop the pipeline onto promote-then-roll-back**, where a
   bad version serves real traffic during the smoke. The workflow warns rather than failing.
-- **Nothing catches a wrong `PUBLIC_BASE_URL`:** the OAuth provider builds metadata from the
-  request origin, so every check passes on any hostname.
+- **Nothing catches a wrong `PUBLIC_BASE_URL`:** the OAuth provider is built per request origin
+  (`src/lib/oauth-provider.ts`), so every check passes on any hostname.
 
 ## Dependency and code scanning
 

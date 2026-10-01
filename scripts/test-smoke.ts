@@ -21,6 +21,7 @@
 //   pnpm test:smoke
 
 import { readFileSync } from 'node:fs';
+import { register } from 'node:module';
 
 import { smokeOrigin, waitForOrigin, allPassed, type Check } from './smoke.ts';
 
@@ -373,6 +374,83 @@ console.log('\nwaitForOrigin gives a cold start time to answer');
 	});
 	check('it gives up rather than hanging', !up, `up=${up}`);
 	check('it used every attempt and no more', calls === 4, `calls=${calls}`);
+}
+
+// ---------------------------------------------------------------------------
+// The real OAuth provider, built the way the Worker builds it.
+// ---------------------------------------------------------------------------
+//
+// The stubs above pin what the checks assert; this pins that the provider the Worker
+// ships answers them. The package binds tokens to one resource fixed at construction,
+// and the pre-promotion smoke runs on a version preview URL, so a provider tied to one
+// hostname fails there and every deploy rolls back.
+
+console.log('\nthe real OAuth provider passes on any serving origin');
+{
+	// The package imports `cloudflare:workers`, which only the Workers runtime resolves.
+	register(
+		'data:text/javascript,' +
+			encodeURIComponent(
+				`export async function resolve(specifier, context, next) {
+					if (specifier === 'cloudflare:workers')
+						return { url: 'data:text/javascript,export class WorkerEntrypoint {}', shortCircuit: true };
+					return next(specifier, context);
+				}`
+			)
+	);
+	const { oauthProviderForOrigin } = await import('../src/lib/oauth-provider.ts');
+	const providerFor = oauthProviderForOrigin<Record<string, unknown>>({
+		apiHandler: { fetch: async () => new Response('reached the tools', { status: 200 }) },
+		defaultHandler: {
+			fetch: async (request: Request) => {
+				const url = new URL(request.url);
+				if (url.pathname === '/health') return new Response('ok');
+				return new Response(null, {
+					status: 302,
+					headers: { location: `${url.origin}/auth/signin` }
+				});
+			}
+		},
+		authorizeEndpoint: '/authorize',
+		tokenEndpoint: '/token',
+		clientRegistrationEndpoint: '/register'
+	});
+	const kv = new Map<string, string>();
+	const env = {
+		OAUTH_KV: {
+			get: async (key: string, type?: string) => {
+				const value = kv.get(key) ?? null;
+				return value !== null && type === 'json' ? JSON.parse(value) : value;
+			},
+			put: async (key: string, value: string) => void kv.set(key, value),
+			delete: async (key: string) => void kv.delete(key),
+			list: async () => ({ keys: [], list_complete: true })
+		}
+	};
+	const ctx = { waitUntil: () => {}, passThroughOnException: () => {}, props: {} };
+	for (const origin of [
+		'https://brain.example.com',
+		'https://0123abcd-example-brain.example.workers.dev',
+		'http://localhost:8787'
+	]) {
+		let checks: Check[] = [];
+		try {
+			checks = await smokeOrigin(origin, (url, init) =>
+				providerFor(new URL(url).origin).fetch(new Request(url, init), env, ctx as never)
+			);
+		} catch (err) {
+			checks = [{ name: 'provider construction', ok: false, detail: String(err) }];
+		}
+		check(
+			`${origin} passes every check`,
+			checks.length === 5 && allPassed(checks),
+			JSON.stringify(checks.filter((c) => !c.ok))
+		);
+	}
+	check(
+		'one provider per origin, reused',
+		providerFor('https://brain.example.com') === providerFor('https://brain.example.com')
+	);
 }
 
 // ---------------------------------------------------------------------------
