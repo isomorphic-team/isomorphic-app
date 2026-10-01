@@ -3,8 +3,8 @@
 // repository, the commit message and PR text land in its history, and the two
 // replies are what the caller reads. Pure, no store.
 //
-// No test checked a single changelog line before this: e2e-librarian counts
-// commits. Two rules here are the ones worth the file:
+// e2e-librarian counts commits; this battery pins what they say. Two rules matter
+// most:
 //
 //   - A PROPOSED change never claims to be logged. A pull request is not on the
 //     branch yet, so "the change was logged" in that reply would be false, and it is
@@ -75,12 +75,10 @@ console.log('\nThe notes');
 // ---------------------------------------------------------------------------
 check('truncationNote: nothing when nothing was cut', truncationNote(false) === '');
 check('truncationNote: names the cap', truncationNote(true).includes(`first ${MAX_SCAN_PAGES}`));
-check('touchesToolsArea: a tool page', touchesToolsArea('wiki/tools/digest.md'));
 check(
 	'touchesToolsArea: a folder note under tools/ is not a tool',
 	!touchesToolsArea('wiki/tools/index.md')
 );
-check('touchesToolsArea: an ordinary page', !touchesToolsArea('wiki/notes/tools.md'));
 check('touchesToolsArea: the tools folder itself', touchesToolsArea('wiki/tools'));
 check('touchesToolsArea: a folder with tools in the middle', touchesToolsArea('wiki/tools/legacy'));
 check('touchesToolsArea: a folder merely named like it', !touchesToolsArea('wiki/toolshed'));

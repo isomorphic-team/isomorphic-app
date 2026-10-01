@@ -63,7 +63,7 @@ the operator's role and brain in static mode; the app's settings card reads its
 `structuredContent`.
 
 The ui:// resource's host contract (`prefersBorder: false`, every widget tool's
-`resourceUri` naming a served resource) is pinned by `pnpm test:appmeta`.
+`resourceUri` naming a served resource) is pinned by `pnpm test:app-resource`.
 
 ## Annotations (`src/lib/tool-annotations.ts`, `pnpm test:annotations`)
 

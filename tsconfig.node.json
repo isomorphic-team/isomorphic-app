@@ -16,7 +16,7 @@
 		"verbatimModuleSyntax": true
 	},
 	// Everything under scripts/ EXCEPT the two that import from `app/`
-	// (roundtrip-check, test-policy), which need the DOM lib and are covered by
+	// (test-roundtrip, test-policy), which need the DOM lib and are covered by
 	// tsconfig.app.json. Typechecking the scripts matters: the e2e harnesses build a
 	// full BrainContext by hand, so a change to that shape should fail here rather
 	// than at 3am against a real repo.
@@ -29,5 +29,5 @@
 		"scripts/**/*.ts",
 		"src/lib/**/*.ts"
 	],
-	"exclude": ["scripts/roundtrip-check.ts", "scripts/test-policy.ts"]
+	"exclude": ["scripts/test-roundtrip.ts", "scripts/test-policy.ts"]
 }

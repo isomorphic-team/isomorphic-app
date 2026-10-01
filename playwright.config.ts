@@ -9,7 +9,7 @@
 //
 // WHAT THEY DELIBERATELY DO NOT COVER. Tool semantics. The view engine, page patches,
 // the access rule, the analytics fold, and OKF structure are all pinned by pure golden
-// tests (`test:views`, `test:patch`, `test:access`, `test:usage`, `test:structure`)
+// tests (`test:views`, `test:page-write`, `test:access`, `test:usage`, `test:structure`)
 // that run in milliseconds with no browser. Re-asserting any of that through the DOM
 // would be a slower duplicate that fails for unrelated reasons. These tests answer a
 // different question: does the app MOUNT, WIRE UP, and ROUTE.

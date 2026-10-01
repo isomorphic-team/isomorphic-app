@@ -2,7 +2,7 @@
 // generated content from ProseMirror.
 //
 // The markdown round trip itself is pinned by `pnpm test:roundtrip`, and the patch
-// engine by `pnpm test:patch`. Neither of those can see the editor. What is only
+// engine by `pnpm test:page-write`. Neither of those can see the editor. What is only
 // visible here is whether the app WIRES the editor up: whether typing reaches the
 // document, whether Save sends what you typed, and whether Cancel really discards.
 import { test, expect, type Page } from '@playwright/test';
