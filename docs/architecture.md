@@ -22,7 +22,8 @@ tsconfigs (node, worker, app, tests) to catch a leak. Node-only code goes in `sr
 The user asks Claude to write a page, and Claude calls `write_page`.
 
 **1. It arrives at `/mcp`.** In the Worker, `OAuthProvider` (from
-`@cloudflare/workers-oauth-provider`) owns the request lifecycle: it serves the OAuth metadata
+`@cloudflare/workers-oauth-provider`, one per serving origin with `<origin>/mcp` as its
+canonical resource) owns the request lifecycle: it serves the OAuth metadata
 endpoints, implements `/token` and `/register`, and rejects anything under `/mcp` without a
 valid access token. On success it forwards to `mcpApiHandler` with the grant's identity on
 `ctx.props`. Non-POST gets a 405; the stateless transport offers no server-to-client stream. In
