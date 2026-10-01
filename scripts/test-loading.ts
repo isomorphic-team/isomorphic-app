@@ -24,7 +24,6 @@ import {
 	possessive,
 	clip,
 	groupDigits,
-	hashSeed,
 	MAX_LINES,
 	WARM,
 	POOL,
@@ -59,6 +58,12 @@ function appSources(): string[] {
 }
 
 const TASKS = Object.keys(WARM) as LoadingTask[];
+// Every template a task's rotation draws from: its own lines, its library lines, the pool.
+const templatesFor = (task: LoadingTask): string[] => [
+	...WARM[task],
+	...(POOL_BY_TASK[task] ?? []),
+	...POOL
+];
 const FULL: LoadingFacts = {
 	brain: 'Acme Ops',
 	org: 'Acme Labs',
@@ -95,7 +100,7 @@ console.log('\nA slot is a requirement, not a default:');
 	let slotted = 0;
 	let leaks = 0;
 	for (const task of TASKS) {
-		for (const template of [...WARM[task], ...(POOL_BY_TASK[task] ?? []), ...POOL]) {
+		for (const template of templatesFor(task)) {
 			templates++;
 			const slots = [...template.matchAll(/\{(\w+)\}/g)].map((m) => m[1]);
 			if (!slots.length) continue;
@@ -123,7 +128,7 @@ console.log('\nA slot is a requirement, not a default:');
 	check('no template renders without every value it names', leaks === 0, `${leaks} leak(s)`);
 	check(
 		'every slot in the templates is one the engine can fill',
-		[...WARM.files, ...WARM.search, ...POOL]
+		TASKS.flatMap(templatesFor)
 			.flatMap((t) => [...t.matchAll(/\{(\w+)\}/g)].map((m) => m[1]))
 			.every((s) => (ALL_SLOTS as readonly string[]).includes(s))
 	);
@@ -163,7 +168,6 @@ console.log('\nShape of a rotation:');
 	// being waited on, not a joke about a library.
 	const first = loadingLines('page', FULL)[0];
 	check('the first line after the label is the specific one', first.includes('Weekly Sync'), first);
-	check('the pool is never reached first when a fact is known', !POOL.includes(first), first);
 
 	// ...and then ALTERNATES. The library lines are woven through the rotation rather
 	// than queued behind it: appending them meant a normal-length wait was entirely
@@ -199,7 +203,6 @@ console.log('\nDeterminism:');
 	check('a different page reads differently', other !== a);
 	const seeded = loadingLines('page', FULL, 99).join('|');
 	check('an explicit seed changes the order', seeded !== a);
-	check('the hash is stable across runs', hashSeed('files|Acme') === hashSeed('files|Acme'));
 }
 
 console.log('\nThe small pure helpers:');

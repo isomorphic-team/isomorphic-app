@@ -189,7 +189,7 @@ application/json and text/event-stream"`, even though `enableJsonResponse: true`
   `resources/list` entry and the `resources/read` content item (the content item wins
   when both carry `_meta.ui`). Borderless also means no host padding, which is what
   otherwise absorbs `hostContext.safeAreaInsets`, so the app owes those insets on
-  mobile. Pinned by `pnpm test:appmeta`.
+  mobile. Pinned by `pnpm test:app-resource`.
 - **Inline cards size to the app's own content height, with no minimum.** The SDK's
   `autoResize` measures `documentElement` and reports it via
   `ui/notifications/size-changed`, so a one-line render gets a one-line card. The

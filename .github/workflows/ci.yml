@@ -89,12 +89,14 @@ jobs:
         run: |
           if ! git diff --quiet -- \
             src/lib/app-bundle.generated.ts \
-            src/lib/brain-template.generated.ts
+            src/lib/brain-template.generated.ts \
+            app/views/registry.generated.ts
           then
             echo "Generated files that differ from a fresh regen:"
             git diff --stat -- \
               src/lib/app-bundle.generated.ts \
-              src/lib/brain-template.generated.ts
+              src/lib/brain-template.generated.ts \
+              app/views/registry.generated.ts
             echo "::error::Generated files are stale. If you edited app/ or brain-template/, run 'pnpm gen:app' and 'pnpm gen:templates' and commit the result. If this is a dependency bump (Dependabot cannot run codegen), a maintainer regenerates it with 'pnpm regen:pr <number>'."
             exit 1
           fi
@@ -113,8 +115,8 @@ jobs:
       - run: pnpm test:web
       - run: pnpm test:views
       - run: pnpm test:import
-      - run: pnpm test:tools
-      - run: pnpm test:patch
+      - run: pnpm test:custom-tools
+      - run: pnpm test:page-write
       - run: pnpm test:structure
       - run: pnpm test:consolidate
       - run: pnpm test:probe
@@ -129,7 +131,7 @@ jobs:
       - run: pnpm test:dedupe
       # The data-policy guard in shadow mode: detector precision, never blocking a write.
       - run: pnpm test:guard
-      - run: pnpm test:appmeta
+      - run: pnpm test:app-resource
       # Every tool carries annotations.title and its read/destructive hint (directory review).
       - run: pnpm test:annotations
       - run: pnpm test:loading
@@ -229,10 +231,10 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
-      # UI_STRICT=1 turns `pnpm test:ui`'s skip-green browser guard into a failure —
-      # locally a missing browser should not fail a contributor's `pnpm test`, but here
-      # it means the container stopped carrying one and the UI tests silently did not
-      # run, which is exactly the failure a green skip would hide.
+      # UI_STRICT=1 turns `pnpm test:ui`'s two skip-green guards into failures: a missing
+      # browser, and missing visual baselines for this platform (tests/ui/__screenshots__/
+      # linux/). Locally either one only warns; here it means the UI or visual tests
+      # silently did not run.
       - run: pnpm test:ui
         env:
           UI_STRICT: '1'

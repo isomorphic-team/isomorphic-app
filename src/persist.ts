@@ -24,9 +24,12 @@ function unquote(value: string): string {
 	return value;
 }
 
-export async function readDevVars(): Promise<Record<string, string>> {
-	if (!existsSync(DEV_VARS_PATH)) return {};
-	const text = await readFile(DEV_VARS_PATH, 'utf8');
+// `path` defaults to the repo root's `.dev.vars`.
+export async function readDevVars(
+	path: string | URL = DEV_VARS_PATH
+): Promise<Record<string, string>> {
+	if (!existsSync(path)) return {};
+	const text = await readFile(path, 'utf8');
 	const out: Record<string, string> = {};
 	for (const line of text.split('\n')) {
 		const trimmed = line.trim();

@@ -7,7 +7,7 @@
 // and an agent that can't read first is one clobber away from data loss. These
 // arguments change part of a page without needing the rest of it in context.
 //
-// Pure: no octokit, no D1, no index. Golden test: pnpm test:patch.
+// Pure: no octokit, no D1, no index. Golden test: pnpm test:page-write.
 //
 // Two rules make the body edits safe to call blind:
 //   1. A `find` string must match EXACTLY ONCE. Zero matches or several is an

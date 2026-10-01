@@ -1,7 +1,17 @@
-// Golden test for the derived-views engine (src/lib/views.ts): directive
-// parsing, page segmentation, rendering, snapshot upsert + idempotency, and the
-// editor strip path. Pure — no D1, no GitHub; the ViewContext is stubbed over a
-// tiny in-memory brain. Run: pnpm test:views
+// Golden test for the derived-views engine (src/lib/views.ts and the pure layer
+// it re-exports from src/lib/view-directives.ts). No D1, no GitHub: the
+// ViewContext is a fixed graph and field map over a small in-memory brain.
+//
+//   pnpm test:views
+//
+// 1. Directive parsing (`parseViewSpec`): every kind (`backlinks`, `pages`,
+//    `folders`, `count`), inline and block filters, and the per-kind refusals.
+// 2. Rendering (`renderViews`): counts, tables, grouping, `describe`, filters,
+//    the empty placeholder, a visible error for a malformed directive, and the
+//    links each row carries.
+// 3. Snapshots: upsert and its idempotency, `displayFromSnapshots`,
+//    `stripSnapshots` for the editor, and segmentation edge cases (nested and
+//    unclosed fences, an unmatched begin marker).
 import {
 	parseViewSpec,
 	segmentViews,

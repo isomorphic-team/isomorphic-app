@@ -23,7 +23,7 @@ type App = Awaited<ReturnType<typeof openApp>>;
 
 const rail = (app: App) => app.locator('aside[aria-label="Places"]');
 const bar = (app: App) => app.locator('header');
-const actionRow = (app: App) => app.locator('header [data-row="actions"]');
+const modeRow = (app: App) => app.locator('header [data-row="mode"]');
 /** A rail control by its accessible name. Scoped, because tree rows carry a ⋯ too. */
 const go = (app: App, name: string) => rail(app).getByRole('button', { name, exact: true });
 const railNames = (app: App) =>
@@ -295,15 +295,15 @@ test.describe('the second row', () => {
 		// permanent strip holding two icons once, and read as leftover space.
 		const app = await openApp(page, '');
 		await expectView(app, 'page');
-		await expect(actionRow(app)).toBeHidden();
+		await expect(modeRow(app)).toBeHidden();
 	});
 
 	test('carries the formatting toolbar in the editor, and no destination', async ({ page }) => {
 		const app = await openApp(page, 'edit=wiki/concepts/vision.md');
 		await expectView(app, 'edit');
-		await expect(actionRow(app).getByRole('toolbar', { name: 'Formatting' })).toBeVisible();
+		await expect(modeRow(app).getByRole('toolbar', { name: 'Formatting' })).toBeVisible();
 		for (const name of ['Files', 'Graph', 'Recent changes', 'Sharing', 'Search'])
-			await expect(actionRow(app).getByRole('button', { name, exact: true })).toHaveCount(0);
+			await expect(modeRow(app).getByRole('button', { name, exact: true })).toHaveCount(0);
 	});
 });
 

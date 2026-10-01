@@ -295,8 +295,8 @@ console.log('\nthe web app hands its shell to a stranger');
 	check('and says so', named(off, '/b/').detail?.includes('off-origin') === true);
 }
 {
-	// Not mounted at all. Static and github identity modes have no browser session,
-	// so the route does not exist there, and this script gates their deploys too.
+	// Not mounted at all. Static mode has no browser session, so the route does not
+	// exist there, and this script gates those deploys too.
 	const checks = await run(
 		withRoute({ 'GET /b/example/brain': () => new Response('not found', { status: 404 }) })
 	);

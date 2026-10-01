@@ -28,6 +28,7 @@ export const ROUTES = {
 	access: 'brain-access',
 	graph: 'graph',
 	activity: 'activity',
+	review: 'review',
 	settings: 'settings',
 	connected: 'settings',
 	'browse-empty': 'browse',

@@ -8,95 +8,24 @@
 //   pnpm test:e2e-import                              (local, offline, in CI)
 //   pnpm exec tsx scripts/e2e-import.ts --github      (real GitHub, by hand)
 //
-// The --github mode mirrors e2e-librarian.ts: it requires `.dev.vars` with platform
-// App creds + PLATFORM_ORG / PLATFORM_INSTALLATION_ID, creates a scratch brain repo on
-// the platform org, and deletes it afterwards (success or failure). In both modes the
-// content index runs on a real SQLite database via node:sqlite, shimmed to the D1
-// surface brain-index uses, so ensureFresh / key discovery run for real.
-import { readFileSync } from 'node:fs';
-import { mkdtemp, rm } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
-import { basename, join } from 'node:path';
-import { Client } from '@modelcontextprotocol/client';
-import { McpServer, InMemoryTransport } from '@modelcontextprotocol/server';
+// The scratch brain, the client and the GitHub-only waits come from e2e-harness.ts.
+// In both modes the content index runs on a real SQLite database via node:sqlite,
+// shimmed to the D1 surface brain-index uses, so ensureFresh / key discovery run for
+// real.
+import { McpServer } from '@modelcontextprotocol/server';
 import { registerImportTools } from '../src/tools/importer.ts';
 import { importKey } from '../src/lib/findings.ts';
 import { registerLibrarianTools } from '../src/tools/librarian.ts';
-import { installationOctokit } from '../src/lib/github.ts';
-import { createAndScaffoldBrain, buildScaffoldFiles } from '../src/lib/scaffold-core.ts';
 import { loadBrainConfig } from '../src/lib/brain-config.ts';
-import { githubStore, type BrainStore } from '../src/lib/brain-repo.ts';
-import { ensureGitRepo, fsBrainStore } from '../src/local/brain-store-fs.ts';
 import { localD1 } from '../src/local/d1-sqlite.ts';
 import { ledgerPath } from '../src/lib/brain-import.ts';
+import { checker } from './check.ts';
+import { connect, replicationLag, scratchBrain } from './e2e-harness.ts';
 
-const GITHUB_MODE = process.argv.includes('--github');
-
-// ---- D1 over node:sqlite, the real migrations (src/local/d1-sqlite.ts) ----
 const { db } = localD1();
+const brain = await scratchBrain('brain-import-e2e', 'Importer E2E test, safe to delete');
+const { store, repoArgs, brainId, name, headSha } = brain;
 
-// ---- the brain under test: fs+git by default, real GitHub with --github ----
-let store: BrainStore;
-let repoArgs: { owner: string; repo: string };
-let brainId: string;
-let name: string;
-let cleanup: () => Promise<void>;
-
-if (GITHUB_MODE) {
-	const devVarsPath =
-		process.env.DEV_VARS_PATH ?? new URL('../.dev.vars', import.meta.url).pathname;
-	const devVars: Record<string, string> = {};
-	for (const line of readFileSync(devVarsPath, 'utf8').split('\n')) {
-		const m = line.match(/^([A-Z0-9_]+)\s*=\s*(.*)$/);
-		if (!m) continue;
-		devVars[m[1]] = m[2].replace(/^"(.*)"$/, '$1');
-	}
-	const org = devVars.PLATFORM_ORG;
-	const installationId = Number(devVars.PLATFORM_INSTALLATION_ID);
-	if (!org || !installationId) throw new Error('PLATFORM_ORG / PLATFORM_INSTALLATION_ID missing');
-	const octokit = await installationOctokit(
-		{
-			appId: Number(devVars.GITHUB_APP_ID),
-			privateKeyBase64: devVars.GITHUB_APP_PRIVATE_KEY_BASE64
-		},
-		installationId
-	);
-	name = `brain-import-e2e-${Date.now().toString(36)}`;
-	console.log(`Creating scratch brain ${org}/${name} …`);
-	const brain = await createAndScaffoldBrain(octokit, {
-		org,
-		name,
-		description: 'Importer E2E test, safe to delete'
-	});
-	store = githubStore(octokit);
-	repoArgs = { owner: brain.owner, repo: brain.name };
-	brainId = `${brain.owner}/${brain.name}`;
-	cleanup = async () => {
-		console.log(`\nDeleting scratch repo ${org}/${name} …`);
-		try {
-			await octokit.rest.repos.delete(repoArgs);
-			console.log('Deleted.');
-		} catch (err) {
-			console.log(`Could not delete (${(err as { status?: number }).status}), delete it manually.`);
-		}
-	};
-} else {
-	const dir = await mkdtemp(join(tmpdir(), 'brain-import-e2e-'));
-	name = basename(dir);
-	console.log(`Creating scratch brain in ${dir} …`);
-	await ensureGitRepo(dir, { name: 'E2E', email: 'e2e@localhost' });
-	store = fsBrainStore({ dir, author: { name: 'E2E', email: 'e2e@localhost' } });
-	repoArgs = { owner: 'local', repo: name };
-	brainId = `local/${name}`;
-	await store.commitFiles(repoArgs, { message: 'Scaffold brain', writes: buildScaffoldFiles() });
-	cleanup = async () => {
-		// Retried for the same reason as e2e-librarian: git's background work after a
-		// commit can leave `.git` non-empty mid-removal.
-		await rm(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
-	};
-}
-
-// ---- in-memory MCP client wired to the real handlers ----
 const server = new McpServer({ name: 'import-e2e', version: '0.0.0' });
 const getContext = async () => ({
 	store,
@@ -111,51 +40,22 @@ const getContext = async () => ({
 });
 registerImportTools(server, getContext);
 registerLibrarianTools(server, getContext); // for validate (pending-decision surfacing)
-const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
-await server.connect(serverTransport);
-const client = new Client({ name: 'e2e', version: '0.0.0' });
-await client.connect(clientTransport);
-
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
-
-import { checker } from './check.ts';
+const { call } = await connect(server);
 
 const { check, done } = checker('import E2E checks');
-
-interface CallResult {
-	isError: boolean;
-	text: string;
-	sc: Record<string, unknown>;
-}
-async function call(tool: string, args: Record<string, unknown>): Promise<CallResult> {
-	const r = (await client.callTool({ name: tool, arguments: args })) as {
-		isError?: boolean;
-		content?: { type: string; text?: string }[];
-		structuredContent?: Record<string, unknown>;
-	};
-	return {
-		isError: !!r.isError,
-		text: r.content?.find((c) => c.type === 'text')?.text ?? '',
-		sc: r.structuredContent ?? {}
-	};
-}
 
 // A human curator editing the brain OUTSIDE our tools. Expressed through the store
 // so it works against either backend, and so these edits look exactly like the ones
 // the importer's no-resurrection rule has to respect.
-async function ghRead(path: string): Promise<{ content: string; sha: string } | null> {
+async function readPage(path: string): Promise<{ content: string; sha: string } | null> {
 	return store.readFile(repoArgs, path);
 }
-async function ghWrite(path: string, content: string, message: string) {
+async function humanWrite(path: string, content: string, message: string) {
 	await store.commitFiles(repoArgs, { message, writes: [{ path, content }] });
 }
-async function ghDelete(path: string, message: string) {
-	const existing = await ghRead(path);
-	if (!existing) throw new Error(`cannot delete missing ${path}`);
+async function humanDelete(path: string, message: string) {
+	if (!(await readPage(path))) throw new Error(`cannot delete missing ${path}`);
 	await store.commitFiles(repoArgs, { message, deletes: [path] });
-}
-async function headSha(): Promise<string> {
-	return (await store.getHead(repoArgs)).commitSha;
 }
 
 const SOURCE = 'e2e-feed';
@@ -198,14 +98,14 @@ try {
 		Array.isArray(r.sc.created) && (r.sc.created as unknown[]).length === 4,
 		r.text
 	);
-	await sleep(1500);
-	const adaFile = await ghRead(ada.path);
+	await replicationLag();
+	const adaFile = await readPage(ada.path);
 	check(
 		'page exists with source_key + body',
 		!!adaFile?.content.includes('source_key: ada@e2e.example') &&
 			!!adaFile?.content.includes('Seeded bio for Ada.')
 	);
-	const ledger1 = await ghRead(ledgerPath(SOURCE));
+	const ledger1 = await readPage(ledgerPath(SOURCE));
 	check(
 		'ledger committed with all keys',
 		!!ledger1 && allKeys.every((k) => ledger1.content.includes(k))
@@ -228,8 +128,8 @@ try {
 	const curated = adaFile!.content
 		.replace('---\n\n', '---\n\n> Curator note: verified 2026-07.\n\n')
 		.replace('type: Contact', 'type: Contact\nnotes: prefers morning meetings');
-	await ghWrite(ada.path, curated, 'Human curation');
-	await sleep(1500);
+	await humanWrite(ada.path, curated, 'Human curation');
+	await replicationLag();
 	r = await call('sync_records', {
 		source: SOURCE,
 		records: [{ ...ada, fields: { ...ada.fields, email: 'ada.lovelace@e2e.example' } }],
@@ -241,8 +141,8 @@ try {
 			(r.sc.updated as { changedFields: string[] }[])?.[0]?.changedFields.join() === 'email',
 		r.text
 	);
-	await sleep(1500);
-	const adaAfter = await ghRead(ada.path);
+	await replicationLag();
+	const adaAfter = await readPage(ada.path);
 	check('human field survives', !!adaAfter?.content.includes('notes: prefers morning meetings'));
 	check('human prose survives', !!adaAfter?.content.includes('Curator note: verified 2026-07.'));
 	check(
@@ -252,8 +152,8 @@ try {
 
 	// 4. Consolidation: human deletes the dupe page → no resurrection.
 	console.log('no resurrection:');
-	await ghDelete(dupe.path, 'Consolidate duplicate org');
-	await sleep(1500);
+	await humanDelete(dupe.path, 'Consolidate duplicate org');
+	await replicationLag();
 	r = await call('sync_records', {
 		source: SOURCE,
 		records: [dupe],
@@ -265,9 +165,9 @@ try {
 		!r.isError && (r.sc.needsDecision as { key: string }[])?.some((d) => d.key === dupe.key),
 		r.text
 	);
-	await sleep(1500);
-	check('dupe page still gone', (await ghRead(dupe.path)) === null);
-	const ledgerPending = await ghRead(ledgerPath(SOURCE));
+	await replicationLag();
+	check('dupe page still gone', (await readPage(dupe.path)) === null);
+	const ledgerPending = await readPage(ledgerPath(SOURCE));
 	check(
 		'question persisted in the ledger',
 		!!ledgerPending?.content.includes('"pending"') && !!ledgerPending?.content.includes(dupe.key)
@@ -285,7 +185,7 @@ try {
 		decisions: [{ finding: importKey(SOURCE, dupe.key), action: 'suppress' }]
 	});
 	check('suppress applied', !r.isError, r.text);
-	await sleep(1500);
+	await replicationLag();
 	r = await call('validate', {});
 	check('answered question leaves validate', !r.isError && !r.text.includes(dupe.key), r.text);
 	r = await call('sync_records', { source: SOURCE, records: [dupe], source_owned: OWNED });
@@ -299,12 +199,12 @@ try {
 
 	// 6. Alias: a human-authored page adopts a source key.
 	console.log('alias adoption:');
-	await ghWrite(
+	await humanWrite(
 		'wiki/people/helen-keller.md',
 		'---\ntitle: Helen Keller\ntype: Contact\n---\n\nHand-written page, made in the app.\n',
 		'Human-created page'
 	);
-	await sleep(1500);
+	await replicationLag();
 	r = await call('resolve', {
 		decisions: [
 			{
@@ -315,8 +215,8 @@ try {
 		]
 	});
 	check('alias applied', !r.isError, r.text);
-	await sleep(1500);
-	const helen = await ghRead('wiki/people/helen-keller.md');
+	await replicationLag();
+	const helen = await readPage('wiki/people/helen-keller.md');
 	check('page claims the key via source_keys', !!helen?.content.includes('helen@e2e.example'));
 	r = await call('sync_records', {
 		source: SOURCE,
@@ -335,8 +235,8 @@ try {
 			(r.sc.updated as { path: string }[])?.some((u) => u.path === 'wiki/people/helen-keller.md'),
 		r.text
 	);
-	await sleep(1500);
-	const helenAfter = await ghRead('wiki/people/helen-keller.md');
+	await replicationLag();
+	const helenAfter = await readPage('wiki/people/helen-keller.md');
 	check(
 		'adopted page keeps prose, gains email',
 		!!helenAfter?.content.includes('Hand-written page') &&
@@ -357,14 +257,14 @@ try {
 		!r.isError && (r.sc.proposedDeletions as { key: string }[])?.some((d) => d.key === grace.key),
 		r.text
 	);
-	check('grace page still exists', (await ghRead(grace.path)) !== null);
+	check('grace page still exists', (await readPage(grace.path)) !== null);
 	r = await call('resolve', {
 		decisions: [{ finding: importKey(SOURCE, grace.key), action: 'delete' }]
 	});
 	check('delete decision applied', !r.isError, r.text);
-	await sleep(1500);
-	check('grace page removed', (await ghRead(grace.path)) === null);
-	const ledgerFinal = await ghRead(ledgerPath(SOURCE));
+	await replicationLag();
+	check('grace page removed', (await readPage(grace.path)) === null);
+	const ledgerFinal = await readPage(ledgerPath(SOURCE));
 	const pendingFinal = ledgerFinal
 		? (JSON.parse(ledgerFinal.content).pending as { key: string }[])
 		: [];
@@ -375,12 +275,12 @@ try {
 
 	// 8. Adoption: bind an existing hand-made page (the adopt-an-ETL-seeded-brain path).
 	console.log('adoption:');
-	await ghWrite(
+	await humanWrite(
 		'wiki/people/ivan-petrov.md',
 		'---\ntitle: Ivan Petrov\ntype: Contact\nnotes: met at HIMSS\n---\n\nHand-written, predates import keys.\n',
 		'Human-created page (pre-key era)'
 	);
-	await sleep(1500);
+	await replicationLag();
 	const ivan = {
 		key: 'ivan@e2e.example',
 		path: 'wiki/people/ivan-petrov.md',
@@ -404,14 +304,12 @@ try {
 		!r.isError && (r.sc.adopted as unknown[])?.length === 1,
 		r.text
 	);
-	await sleep(1500);
-	const ivanAfter = await ghRead(ivan.path);
+	await replicationLag();
+	const ivanAfter = await readPage(ivan.path);
 	check(
-		'adopted page: key bound, fields merged, human content intact',
-		!!ivanAfter?.content.includes('source_key: ivan@e2e.example') &&
-			!!ivanAfter?.content.includes('email: ivan@e2e.example') &&
-			!!ivanAfter?.content.includes('notes: met at HIMSS') &&
-			!!ivanAfter?.content.includes('Hand-written, predates import keys.')
+		'adopted page carries its source_key',
+		!!ivanAfter?.content.includes('source_key: ivan@e2e.example'),
+		ivanAfter?.content
 	);
 	r = await call('sync_records', { source: SOURCE, records: [ivan], source_owned: OWNED });
 	check(
@@ -438,5 +336,5 @@ try {
 	// so the finally below still deletes the scratch brain.
 	done();
 } finally {
-	await cleanup();
+	await brain.cleanup();
 }
