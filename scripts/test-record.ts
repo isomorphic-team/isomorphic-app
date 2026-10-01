@@ -1,7 +1,8 @@
 // Golden test for the change record (src/lib/change-record.ts): what a write says
 // about itself. The changelog bullet lands in `wiki/log.md` inside the brain's own
 // repository, the commit message and PR text land in its history, and the two
-// replies are what the caller reads. Pure, no store.
+// replies are what the caller reads. Also who a commit is attributed to
+// (src/lib/brain-repo.ts). Pure, no store.
 //
 // e2e-librarian counts commits; this battery pins what they say. Two rules matter
 // most:
@@ -27,7 +28,12 @@ import {
 } from '../src/lib/change-record.ts';
 import { parsePaths } from '../src/lib/brain-config.ts';
 import type { BrainConfig } from '../src/lib/brain-policy.ts';
-import { MAX_SCAN_PAGES } from '../src/lib/brain-repo.ts';
+import {
+	MAX_SCAN_PAGES,
+	commitAuthorFor,
+	githubNoreplyAuthor,
+	validCommitAuthor
+} from '../src/lib/brain-repo.ts';
 
 import { checker } from './check.ts';
 
@@ -381,5 +387,108 @@ for (const c of EVERY) {
 		![r.bullet, r.done, r.proposed, r.commit.message].some((s) => s.includes('—'))
 	);
 }
+
+// ===========================================================================
+// Commit attribution (src/lib/brain-repo.ts): whose name a write carries in the
+// brain's history.
+// ===========================================================================
+
+console.log('\ncommitAuthorFor: how a human edit is attributed in git history');
+// It decides what `git blame` shows for every write a person makes.
+check(
+	'the app_users row wins, since its address is the verified one',
+	commitAuthorFor({ name: 'Ada', email: 'ada@example.com' }, 'token@example.com')?.email ===
+		'ada@example.com'
+);
+check(
+	'the token email is the fallback when there is no row yet',
+	commitAuthorFor(null, 'token@example.com')?.email === 'token@example.com'
+);
+check(
+	'...and when the row carries no address',
+	commitAuthorFor({ name: 'Ada', email: null }, 'token@example.com')?.email === 'token@example.com'
+);
+check(
+	'no address anywhere means no attribution, so the App authors instead',
+	commitAuthorFor(null, '') === undefined
+);
+check(
+	'whitespace is trimmed rather than written into history',
+	commitAuthorFor({ name: '  Ada  ', email: '  ada@example.com  ' }, '')?.name === 'Ada'
+);
+check(
+	'a whitespace-only address counts as none',
+	commitAuthorFor({ name: 'Ada', email: '   ' }, '   ') === undefined
+);
+
+console.log('\ngithubNoreplyAuthor: the GitHub-identity attribution rule');
+// The rule for a path with no app_users row to read. The format is GitHub's
+// canonical noreply form, and getting it wrong is silent: the commit still lands, it
+// just attributes to nobody, on every write that identity makes.
+check('the name is the login', githubNoreplyAuthor(1234, 'ada')?.name === 'ada');
+check(
+	'no login means no attribution, so the App authors instead',
+	githubNoreplyAuthor(1234, null) === undefined
+);
+check('...and an empty login too', githubNoreplyAuthor(1234, '') === undefined);
+check(
+	'a whitespace-only login counts as none, never as a blank address',
+	githubNoreplyAuthor(1234, '   ') === undefined
+);
+check(
+	'a padded login is trimmed on both sides of the address',
+	githubNoreplyAuthor(7, '  ada  ')?.email === '7+ada@users.noreply.github.com'
+);
+
+console.log('\nvalidCommitAuthor: WHETHER a computed attribution is usable');
+// The guard the other two rules feed into. It decides whether a commit carries a
+// human at all: createCommit rejects a garbage email, and a bad value is worse than
+// falling back to the App author.
+check(
+	'a well-formed author is kept',
+	validCommitAuthor({ name: 'Ada', email: 'ada@example.com' })?.email === 'ada@example.com'
+);
+check('no author at all is undefined, not a throw', validCommitAuthor(undefined) === undefined);
+check(
+	'a blank name is refused: git blame on an empty string helps nobody',
+	validCommitAuthor({ name: '   ', email: 'ada@example.com' }) === undefined
+);
+check(
+	'an address with no @ is refused rather than sent to createCommit',
+	validCommitAuthor({ name: 'Ada', email: 'not-an-email' }) === undefined
+);
+check(
+	'...and one with no dot in the domain',
+	validCommitAuthor({ name: 'Ada', email: 'ada@localhost' }) === undefined
+);
+check(
+	'...and one carrying whitespace inside it',
+	validCommitAuthor({ name: 'Ada', email: 'ada @example.com' }) === undefined
+);
+{
+	const a = validCommitAuthor({ name: '  Ada  ', email: '  ada@example.com  ' });
+	check(
+		'both sides are trimmed, so padding never reaches history',
+		a?.name === 'Ada' && a?.email === 'ada@example.com'
+	);
+}
+
+// The three rules COMPOSE: the two that decide WHO both hand their answer to this
+// one, so a tightening here silently unattributes an entire identity path.
+check(
+	'what commitAuthorFor produces survives the guard',
+	validCommitAuthor(commitAuthorFor({ name: 'Ada', email: 'ada@example.com' }, ''))?.name === 'Ada'
+);
+check(
+	'a person with no name is attributed under their address, not dropped',
+	validCommitAuthor(commitAuthorFor({ name: null, email: 'ada@example.com' }, ''))?.name ===
+		'ada@example.com'
+);
+check(
+	'the GitHub noreply address survives the guard, + and all',
+	validCommitAuthor(githubNoreplyAuthor(1234, 'ada'))?.email ===
+		'1234+ada@users.noreply.github.com',
+	'a stricter email pattern here would silently unattribute every GitHub-identity commit'
+);
 
 done();

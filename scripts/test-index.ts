@@ -13,7 +13,7 @@
 //   pnpm test:index
 
 import { DatabaseSync } from 'node:sqlite';
-import { mkdtempSync, readdirSync, readFileSync } from 'node:fs';
+import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -26,7 +26,7 @@ import {
 	REINDEX_PAGE_BUDGET
 } from '../src/lib/brain-index.ts';
 import { githubStore, MAX_SCAN_PAGES } from '../src/lib/brain-repo.ts';
-import { applyMigrations } from '../src/local/d1-sqlite.ts';
+import { applyMigrations, replayMigrations } from '../src/local/d1-sqlite.ts';
 import { DEFAULT_BRAIN_CONFIG, type BrainConfig } from '../src/lib/brain-policy.ts';
 import { pageTitle } from '../src/lib/wiki.ts';
 
@@ -801,12 +801,7 @@ console.log('\nContent index — bounded, resumable ensureFresh\n');
 	// and they must adopt themselves rather than force the user to delete the file.
 	const legacyFile = join(dir, 'legacy.sqlite');
 	const legacy = new DatabaseSync(legacyFile);
-	const migrations = new URL('../migrations/', import.meta.url);
-	for (const f of readdirSync(migrations)
-		.filter((f) => f.endsWith('.sql'))
-		.sort()) {
-		legacy.exec(readFileSync(new URL(f, migrations), 'utf8'));
-	}
+	replayMigrations(legacy);
 	legacy.close();
 
 	let adopted = '';
@@ -819,6 +814,65 @@ console.log('\nContent index — bounded, resumable ensureFresh\n');
 		adopted = String(e);
 	}
 	check('a pre-ledger database adopts itself', adopted === '', adopted);
+}
+
+console.log('\nDerived state keyed by brain_id: the 0011 re-key');
+{
+	// Production's shape before 0011: index, ledger and usage rows under "owner/repo".
+	// Re-keyed in place, a brain keeps its index; missed, it silently reindexes from
+	// GitHub and its usage history reads zero.
+	const pre = new DatabaseSync(':memory:');
+	replayMigrations(pre, { to: '0011' });
+	pre.exec(`
+	  INSERT INTO orgs (org_id, name, model, installation_id, brain_owner, created_by) VALUES
+	    ('c1', 'Acme', 'customer', 200, 'acme', 'u');
+	  INSERT INTO brains (brain_id, org_id, repo_owner, repo_name) VALUES
+	    ('brain-acme-wiki', 'c1', 'acme', 'wiki');
+	  INSERT INTO brain_index_meta (brain_id, indexed_commit_sha) VALUES
+	    ('acme/wiki', 'abc'), ('gone/repo', 'def');
+	  INSERT INTO brain_pages (brain_id, path, title, blob_sha, content) VALUES
+	    ('acme/wiki', 'wiki/a.md', 'A', 's1', 'x'), ('acme/wiki', 'wiki/b.md', 'B', 's2', 'y');
+	  INSERT INTO brain_links (brain_id, source, raw_target, kind) VALUES
+	    ('acme/wiki', 'wiki/a.md', 'b.md', 'md');
+	  INSERT INTO brain_page_fields (brain_id, path, key, value) VALUES
+	    ('acme/wiki', 'wiki/a.md', 'type', 'note');
+	  INSERT INTO write_attempts (brain_id, fingerprint, state, started_at) VALUES
+	    ('acme/wiki', 'f1', 'done', 1);
+	  INSERT INTO usage_daily (day, org_id, brain_id, user_id, tool, calls) VALUES
+	    ('2026-09-01', 'c1', 'acme/wiki', 'u', 'read_page', 3),
+	    ('2026-09-01', 'c1', '', 'u', 'members', 1);
+	`);
+	replayMigrations(pre, { from: '0011', to: '0012' });
+	const keys = (table: string) =>
+		(
+			pre.prepare(`SELECT DISTINCT brain_id FROM ${table} ORDER BY 1`).all() as {
+				brain_id: string;
+			}[]
+		).map((r) => r.brain_id);
+	for (const table of ['brain_pages', 'brain_links', 'brain_page_fields', 'write_attempts']) {
+		check(
+			`${table} is re-keyed to the brain's primary key`,
+			JSON.stringify(keys(table)) === JSON.stringify(['brain-acme-wiki']),
+			JSON.stringify(keys(table))
+		);
+	}
+	check(
+		'the index marker moves with its pages, so the brain does not reindex',
+		(
+			pre
+				.prepare(`SELECT indexed_commit_sha AS sha FROM brain_index_meta WHERE brain_id = ?`)
+				.get('brain-acme-wiki') as { sha: string } | undefined
+		)?.sha === 'abc'
+	);
+	check(
+		'rows for a repo no brain holds are left alone',
+		keys('brain_index_meta').includes('gone/repo')
+	);
+	check(
+		"usage keeps its counts under the brain's key, and org-scope rows stay ''",
+		JSON.stringify(keys('usage_daily')) === JSON.stringify(['', 'brain-acme-wiki']),
+		JSON.stringify(keys('usage_daily'))
+	);
 }
 
 done();

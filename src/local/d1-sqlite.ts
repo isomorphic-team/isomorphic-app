@@ -28,6 +28,13 @@ const LEDGER = 'CREATE TABLE IF NOT EXISTS local_migrations (name TEXT PRIMARY K
 // still throws.
 const ALREADY_APPLIED = /duplicate column name|already exists/i;
 
+const migrationFiles = (): string[] =>
+	readdirSync(MIGRATIONS_DIR)
+		.filter((f) => f.endsWith('.sql'))
+		.sort();
+
+const migrationSql = (f: string): string => readFileSync(new URL(f, MIGRATIONS_DIR), 'utf8');
+
 // The real migrations, not src/db/*.sql, which are reference copies. A migration that
 // fails here would fail a deployment too.
 export function applyMigrations(sqlite: DatabaseSync): void {
@@ -38,19 +45,32 @@ export function applyMigrations(sqlite: DatabaseSync): void {
 			.all()
 			.map((r) => (r as { name: string }).name)
 	);
-	const files = readdirSync(MIGRATIONS_DIR)
-		.filter((f) => f.endsWith('.sql'))
-		.sort();
-	for (const f of files) {
+	for (const f of migrationFiles()) {
 		if (done.has(f)) continue;
 		try {
-			sqlite.exec(readFileSync(new URL(f, MIGRATIONS_DIR), 'utf8'));
+			sqlite.exec(migrationSql(f));
 		} catch (e) {
 			if (!ALREADY_APPLIED.test(String(e))) throw e;
 		}
 		// Recorded either way, so the self-healing pass above happens once rather than
 		// on every launch forever.
 		sqlite.prepare('INSERT OR IGNORE INTO local_migrations (name) VALUES (?)').run(f);
+	}
+}
+
+// Runs the migrations numbered from `from` (inclusive) up to `to` (exclusive), by their
+// four-digit prefix, with no ledger and no tolerance for an already-applied file. That
+// is a database as a deployment had it at a given version, which a backfill test needs:
+// localD1 applies every migration to an empty database, where a backfill has nothing
+// to do. With no range it runs them all, which is a database from before the ledger.
+export function replayMigrations(
+	sqlite: DatabaseSync,
+	range: { from?: string; to?: string } = {}
+): void {
+	for (const f of migrationFiles()) {
+		if (range.from !== undefined && f < range.from) continue;
+		if (range.to !== undefined && f >= range.to) continue;
+		sqlite.exec(migrationSql(f));
 	}
 }
 
