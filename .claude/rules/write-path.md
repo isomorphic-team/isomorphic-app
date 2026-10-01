@@ -73,9 +73,11 @@ through `src/lib/write-dedupe.ts` (pure) + `write-dedupe-store.ts` (D1, migratio
   already applied, and says so. `sync_records` has its own idempotency; editor saves are
   sha-guarded.
 
-Coverage: `pnpm test:e2e-librarian` drives every write tool against a real brain (offline by
-default), including every refusal proving nothing was written; `pnpm test:scope` asserts the
-content writes gate on the BRAIN role at `editor`.
+Coverage: `pnpm test:page-write` pins every refusal `checkPageWrite`, `planPageWrite` and
+`applyFieldPatch` make, with its message. `pnpm test:e2e-librarian` drives every write tool
+against a real brain (offline by default) and takes one refusal per deciding function through
+its tool, proving nothing was committed; `pnpm test:scope` asserts the content writes gate on
+the BRAIN role at `editor`.
 
 ## The data-policy guard
 
