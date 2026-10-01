@@ -21,7 +21,9 @@ import {
 	ensureFresh,
 	INDEX_SCHEMA_VERSION,
 	listIndexedPages,
-	writeThroughIndex
+	writeThroughIndex,
+	REBUILD_PAGE_BUDGET,
+	REINDEX_PAGE_BUDGET
 } from '../src/lib/brain-index.ts';
 import { githubStore, MAX_SCAN_PAGES } from '../src/lib/brain-repo.ts';
 import { applyMigrations } from '../src/local/d1-sqlite.ts';
@@ -184,11 +186,10 @@ async function readUntilConverged(maxReads: number): Promise<{ reads: number; pe
 // pass ever creeps back in — which is the regression this file exists to catch.
 const PER_READ_STATEMENT_CEILING = 8_000;
 
-// Pages one read reindexes and rebuilds (REINDEX_PAGE_BUDGET and REBUILD_PAGE_BUDGET in
-// brain-index.ts). A read that does a full slice converges in ceil(pages / slice)
-// reads; more than that means some read made less progress than it could.
-const REINDEX_SLICE = 600;
-const REBUILD_SLICE = 300;
+// A read that does a full slice converges in ceil(pages / slice) reads; more than that
+// means some read made less progress than it could.
+const REINDEX_SLICE = REINDEX_PAGE_BUDGET;
+const REBUILD_SLICE = REBUILD_PAGE_BUDGET;
 const readsFor = (pages: number, slice: number) => Math.ceil(pages / slice);
 
 console.log('\nContent index — bounded, resumable ensureFresh\n');

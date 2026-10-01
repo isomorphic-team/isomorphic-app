@@ -298,7 +298,7 @@ export async function ensureFresh(
 // statements, past the host's 60s tool timeout, and a pass that never finishes never
 // records its progress. Bounded, it converges: each read advances the cursor by a
 // slice.
-const REBUILD_PAGE_BUDGET = 300;
+export const REBUILD_PAGE_BUDGET = 300;
 
 // Rebuild the DERIVED rows — the page title, its links, and the queryable
 // frontmatter fields — for at most REBUILD_PAGE_BUDGET pages, from the content
@@ -404,7 +404,7 @@ async function fullBuild(
 // request big enough to reconcile all of it, because that request just times out
 // and the index never advances. Over budget, the pass reports incomplete, the
 // indexed commit sha is left alone, and the next read picks up the remainder.
-const REINDEX_PAGE_BUDGET = 600;
+export const REINDEX_PAGE_BUDGET = 600;
 
 // Incremental: re-fetch only pages whose blob sha changed (added or modified) and
 // drop pages that disappeared. Inbound links to a dropped page are left in place —
