@@ -228,10 +228,10 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
-      # UI_STRICT=1 turns `pnpm test:ui`'s skip-green browser guard into a failure —
-      # locally a missing browser should not fail a contributor's `pnpm test`, but here
-      # it means the container stopped carrying one and the UI tests silently did not
-      # run, which is exactly the failure a green skip would hide.
+      # UI_STRICT=1 turns `pnpm test:ui`'s two skip-green guards into failures: a missing
+      # browser, and missing visual baselines for this platform (tests/ui/__screenshots__/
+      # linux/). Locally either one only warns; here it means the UI or visual tests
+      # silently did not run.
       - run: pnpm test:ui
         env:
           UI_STRICT: '1'

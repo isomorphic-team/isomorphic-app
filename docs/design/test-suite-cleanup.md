@@ -1,6 +1,6 @@
 # Test suite cleanup
 
-- Status: decided 2026-10-01
+- Status: built 2026-10-01
 - Related: [`.claude/rules/testing.md`](../../.claude/rules/testing.md),
   [`.claude/skills/add-battery/SKILL.md`](../../.claude/skills/add-battery/SKILL.md)
 
@@ -232,3 +232,33 @@ Six PRs, in order, each independently green:
 
 Expected result: about 450 fewer lines, about 40s off the e2e batteries and 30 to 50s of UI worker
 time, no lost coverage, and roughly fifteen assertions that can now fail.
+
+## Outcome
+
+Built in one pull request, except Phase 0.1, which shipped separately because it changes
+production behavior. Measured on the same machine before and after:
+
+| Measure               | Before | After |
+| --------------------- | ------ | ----- |
+| `test:e2e-librarian`  | 35s    | 10s   |
+| `test:e2e-import`     | 21s    | 2s    |
+| `test:ui` wall time   | 72s    | 58s   |
+| `test:ui` worker time | 250s   | 200s  |
+| Playwright tests      | 135    | 110   |
+
+The net line count fell by far less than the estimate (about 70 lines across `scripts/`,
+`tests/` and `src/`, not 450). Deletions landed as planned, but several fixes added coverage
+the audit found missing: the `webUrl` check over every widget tool, `resourceUri` on every widget
+tool in every suite, the `read_media` refusals at the handler, field-by-field signal agreement
+through the new `indexSignals`, and per-fixture round-trip modes.
+
+Changes beyond the plan:
+
+- Batteries were renamed `test:custom-tools`, `test:page-write` (`test-page-write.ts`) and
+  `test:app-resource`; `test:roundtrip` runs `test-roundtrip.ts`.
+- `REINDEX_PAGE_BUDGET` and `REBUILD_PAGE_BUDGET` are exported so `test-index` bounds reads by
+  the real slice sizes.
+- The web test harness keys its brain directory by checkout path, so two checkouts running
+  `test:ui` no longer reset each other's brains. Two checkouts still share the default ports
+  under `reuseExistingServer`; set `UI_TEST_PORT` and `WEB_TEST_PORT` to run them side by side.
+- `test:wiring` asserts the `ui` job sets `UI_STRICT`.
