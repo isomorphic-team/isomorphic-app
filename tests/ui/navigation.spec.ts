@@ -39,9 +39,8 @@ test('the tree SAYS which folders are also pages', async ({ page }) => {
 	await app.getByRole('button', { name: 'Expand all' }).click();
 	const iconFor = (name: string) =>
 		app
-			.getByRole('button', { name, exact: true })
-			.locator('xpath=preceding-sibling::span[1]')
-			// The chevron is the other svg in that span; the file/folder glyph is the 15px one.
+			.getByRole('button', { name: `Collapse ${name}`, exact: true })
+			// The chevron is the other svg in that button; the file/folder glyph is the 15px one.
 			.locator('svg[width="15"] path');
 	// `wiki/` has an index.md, `concepts/` does not.
 	await expect(iconFor('wiki')).toHaveAttribute('fill-rule', 'evenodd');

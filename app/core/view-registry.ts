@@ -48,6 +48,7 @@ export interface ViewDef<K extends keyof ViewProps = keyof ViewProps> {
 	kind: K;
 	render: (view: Extract<View, { kind: K }>) => VNode;
 	actions?: (view: Extract<View, { kind: K }>) => ViewAction[];
+	mode?: (view: Extract<View, { kind: K }>) => VNode | null;
 }
 
 // Typed constructor: `kind` is constrained to a registered kind, and `render` and
@@ -56,10 +57,18 @@ export interface ViewDef<K extends keyof ViewProps = keyof ViewProps> {
 // `actions` is called on every header render, so it may read live state off the
 // module-level control handles (treeCtl, editCtl) — those already bump()
 // the store when they change, which is what re-renders the header.
+//
+// `mode` is the header's second row: what the view is in the middle of (the editor's
+// formatting toolbar, the tree's move instruction), or null when it is in no mode.
+// A view in a mode swaps its `actions` for the ones that leave it (Save / Cancel),
+// so entering and leaving a mode looks the same everywhere.
 export function defineView<K extends keyof ViewProps>(
 	kind: K,
 	render: (view: Extract<View, { kind: K }>) => VNode,
-	opts?: { actions?: (view: Extract<View, { kind: K }>) => ViewAction[] }
+	opts?: {
+		actions?: (view: Extract<View, { kind: K }>) => ViewAction[];
+		mode?: (view: Extract<View, { kind: K }>) => VNode | null;
+	}
 ): ViewDef<K> {
-	return { kind, render, actions: opts?.actions };
+	return { kind, render, actions: opts?.actions, mode: opts?.mode };
 }
