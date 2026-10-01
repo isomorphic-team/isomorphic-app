@@ -263,15 +263,17 @@ chain such as the loading rotation cannot be stepped, only watched (see
 ### Visual baselines
 
 Baselines live in `tests/ui/__screenshots__/<platform>/` and are **committed**: they
-are the expected output, not an artifact. They are platform-specific because font
-rasterization differs between macOS and the Linux CI runner, so a macOS baseline never
-matches CI and vice versa.
+are the expected output, not an artifact. `darwin/` and `linux/` are both committed.
+They are platform-specific because font rasterization differs between macOS and the
+Linux CI runner, so a macOS baseline never matches CI and vice versa. A change that
+alters rendering regenerates both.
 
 `pnpm test:ui` **skips the visual project entirely** on a platform with no baselines,
 and skips everything if Chromium is not installed, rather than failing. A missing
 browser or a missing baseline is a setup gap, not a regression, and `pnpm test` should
-stay green on a fresh clone. `UI_STRICT=1` turns those skips into failures; CI sets it
-so a container that stopped carrying a browser cannot hide behind a green skip.
+stay green on a fresh clone. `UI_STRICT=1` turns both skips into failures. CI sets it
+(`pnpm test:wiring` checks that it does), so the UI job fails rather than skipping when
+its container has no browser or `linux/` has no baselines.
 
 To generate or refresh them:
 

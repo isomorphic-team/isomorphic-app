@@ -74,10 +74,14 @@ test('the same page renders its view live outside the editor', async ({ page }) 
 	// The other half of the contract: what the editor strips, the page view computes.
 	// A page whose okf-view came back as a raw fence in BOTH places would pass the
 	// test above for the wrong reason.
-	const app = await openApp(page, '');
+	const app = await openApp(page, 'page=wiki/orgs/acme-health.md');
 	await expectView(app, 'page');
 	const main = app.locator('main[data-view="page"]');
-	await expect(main).not.toContainText('okf-view:snapshot');
+	// The backlinks view's roster: a table row per Contact page that links here.
+	await expect(main.getByRole('cell', { name: 'Grace Hopper' })).toBeVisible();
+	// And no directive source: a fence shown as code instead of computed.
+	await expect(main).not.toContainText('kind: backlinks');
+	await expect(main).not.toContainText('okf-view');
 });
 
 // Property edits are a draft inside the editor: nothing is written until Save, and

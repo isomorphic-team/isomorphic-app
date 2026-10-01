@@ -89,12 +89,14 @@ jobs:
         run: |
           if ! git diff --quiet -- \
             src/lib/app-bundle.generated.ts \
-            src/lib/brain-template.generated.ts
+            src/lib/brain-template.generated.ts \
+            app/views/registry.generated.ts
           then
             echo "Generated files that differ from a fresh regen:"
             git diff --stat -- \
               src/lib/app-bundle.generated.ts \
-              src/lib/brain-template.generated.ts
+              src/lib/brain-template.generated.ts \
+              app/views/registry.generated.ts
             echo "::error::Generated files are stale. If you edited app/ or brain-template/, run 'pnpm gen:app' and 'pnpm gen:templates' and commit the result. If this is a dependency bump (Dependabot cannot run codegen), a maintainer regenerates it with 'pnpm regen:pr <number>'."
             exit 1
           fi
