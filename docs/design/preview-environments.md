@@ -64,6 +64,22 @@ copies its vars and bindings into `previews`, writing `wrangler.preview.json`.
 how a Preview's hostname is derived from its name, so `deploy` reads the origin wrangler
 reports and, if it differs, redeploys once with `--var PUBLIC_BASE_URL:<actual>`.
 
+### Sign-in
+
+A Preview signs anyone in as any email address they type, with no email sent
+(`AUTH_SIGN_IN=open`). It is still Auth.js's own flow: the sign-in POST is answered with a
+redirect to the link Auth.js minted instead of an email carrying it, so the verification
+token, the session cookie and the return through `callbackUrl` are the ones production uses.
+The `preview-email` label on a pull request (or `-f email=true` on a dispatch) switches that
+Preview to the real Resend magic link; adding or removing the label redeploys. The comment on
+the pull request says which mode is on.
+
+Open sign-in means anyone with the URL can sign in as anyone. That reaches only the pull
+request's own database and the throwaway organization's GitHub App; the worst a stranger can
+do is create repositories there. `AUTH_SIGN_IN` defaults to `email`, `deploy.yml` never sets it
+(`pnpm test:preview` pins both), `pnpm setup:config` warns when it is `open`, and the Worker
+logs a warning when it serves with it.
+
 ### Forks
 
 A fork's `pull_request` run has no secrets, so it stops in `resolve` with a notice. Previewing

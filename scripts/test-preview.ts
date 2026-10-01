@@ -202,9 +202,14 @@ console.log('\nthe comment');
 	const args = {
 		origin: 'https://pr-128-example-preview.example.workers.dev',
 		sha: 'a5f9d34702c5f2017b6ca6be98ef608659e1948b',
-		runUrl: 'https://github.com/example/repo/actions/runs/1'
+		runUrl: 'https://github.com/example/repo/actions/runs/1',
+		signIn: 'open' as const
 	};
 	const ok = previewComment({ ...args, smoke: 'success' });
+	const email = previewComment({ ...args, smoke: 'success', signIn: 'email' });
+	check('open sign-in says no email is sent', ok.includes('no email is sent'));
+	check('and names the label that turns email on', ok.includes('`preview-email`'));
+	check('email sign-in says a real email is sent', email.includes('real magic-link email'));
 	const bad = previewComment({ ...args, smoke: 'failure' });
 	check('starts with the marker the workflow searches for', ok.startsWith(COMMENT_MARKER));
 	check('links the web app first', ok.indexOf('/b') < ok.indexOf('/mcp'));
@@ -271,6 +276,38 @@ console.log('\nthe workflow keeps secrets away from pull request code');
 	check(
 		'the comment search uses the same marker',
 		yaml.includes(`startswith("${COMMENT_MARKER}")`)
+	);
+}
+
+console.log('\nopen sign-in is a preview setting and nothing else');
+{
+	const yaml = readFileSync('.github/workflows/preview.yml', 'utf8').replace(/^\s*#.*\n/gm, '');
+	const resolve = yaml.slice(yaml.indexOf('\n  resolve:'), yaml.indexOf('\n  build:'));
+	check(
+		'previews default to open sign-in',
+		/echo "signin=open"/.test(resolve) && /else\n\s+echo "signin=open"/.test(resolve)
+	);
+	check(
+		'the preview-email label switches to email',
+		/contains\(github\.event\.pull_request\.labels\.\*\.name, 'preview-email'\)/.test(resolve)
+	);
+	check(
+		'the config step takes the decided mode',
+		/AUTH_SIGN_IN: \$\{\{ needs\.resolve\.outputs\.signin \}\}/.test(yaml)
+	);
+	check(
+		'deploy.yml never sets AUTH_SIGN_IN',
+		!readFileSync('.github/workflows/deploy.yml', 'utf8').includes('AUTH_SIGN_IN')
+	);
+	check(
+		'setup-config defaults it to email',
+		/key: 'AUTH_SIGN_IN',[\s\S]*?default: 'email'/.test(
+			readFileSync('scripts/setup-config.ts', 'utf8')
+		)
+	);
+	check(
+		'the template fills it from setup-config',
+		readFileSync('wrangler.template.jsonc', 'utf8').includes('"AUTH_SIGN_IN": "__AUTH_SIGN_IN__"')
 	);
 }
 

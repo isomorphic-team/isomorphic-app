@@ -12,7 +12,8 @@
 //
 // Inputs come from the environment: PR_NUMBER, PREVIEW_WORKER_NAME,
 // PREVIEW_WORKERS_SUBDOMAIN, PREVIEW_D1_DATABASE_NAME, and for `comment` also
-// PREVIEW_ORIGIN, PREVIEW_SHA, PREVIEW_SMOKE (success | failure), PREVIEW_RUN_URL.
+// PREVIEW_ORIGIN, PREVIEW_SHA, PREVIEW_SMOKE (success | failure), PREVIEW_RUN_URL,
+// PREVIEW_SIGN_IN (open | email).
 
 import { readFileSync, writeFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
@@ -153,9 +154,10 @@ export type CommentInputs = {
 	sha: string;
 	smoke: 'success' | 'failure';
 	runUrl: string;
+	signIn: 'open' | 'email';
 };
 
-export function previewComment({ origin, sha, smoke, runUrl }: CommentInputs): string {
+export function previewComment({ origin, sha, smoke, runUrl, signIn }: CommentInputs): string {
 	const short = sha.slice(0, 7);
 	const status =
 		smoke === 'success'
@@ -169,6 +171,10 @@ export function previewComment({ origin, sha, smoke, runUrl }: CommentInputs): s
 		'',
 		`- Web app: ${origin}/b`,
 		`- Connector URL: \`${origin}/mcp\``,
+		'',
+		signIn === 'open'
+			? 'Sign in with any email address; no email is sent. Add the `preview-email` label to test real magic-link sign-in.'
+			: 'Sign-in sends a real magic-link email (the `preview-email` label is on). Remove the label for open sign-in.',
 		'',
 		'An isolated Worker Preview with its own database and GitHub App, never production. ' +
 			'Each push redeploys it; closing the pull request deletes it.',
@@ -223,7 +229,8 @@ function main(argv: string[]): void {
 					origin: required('PREVIEW_ORIGIN'),
 					sha: required('PREVIEW_SHA'),
 					smoke: required('PREVIEW_SMOKE') === 'success' ? 'success' : 'failure',
-					runUrl: required('PREVIEW_RUN_URL')
+					runUrl: required('PREVIEW_RUN_URL'),
+					signIn: required('PREVIEW_SIGN_IN') === 'email' ? 'email' : 'open'
 				})
 			);
 			return;

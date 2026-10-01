@@ -38,7 +38,8 @@ name: Preview
 
 on:
   pull_request:
-    types: [opened, synchronize, reopened]
+    # labeled/unlabeled: the `preview-email` label switches sign-in, so it redeploys.
+    types: [opened, synchronize, reopened, labeled, unlabeled]
   pull_request_target:
     types: [closed]
   workflow_dispatch:
@@ -49,12 +50,17 @@ on:
       sha:
         description: The head commit you reviewed (gh pr view <pr> --json headRefOid)
         required: true
+      email:
+        description: Real magic-link email sign-in instead of open sign-in
+        type: boolean
+        default: false
 
 permissions:
   contents: read
 
+# Any other label change gets a group of its own, so it cannot cancel a deploy in flight.
 concurrency:
-  group: preview-${{ github.event.pull_request.number || inputs.pr }}-${{ github.event_name == 'pull_request_target' && 'cleanup' || 'deploy' }}
+  group: preview-${{ github.event.pull_request.number || inputs.pr }}-${{ github.event_name == 'pull_request_target' && 'cleanup' || ((github.event.action == 'labeled' || github.event.action == 'unlabeled') && github.event.label.name != 'preview-email') && format('label-{0}', github.run_id) || 'deploy' }}
   cancel-in-progress: true
 
 jobs:
@@ -66,19 +72,33 @@ jobs:
       run: ${{ steps.which.outputs.run }}
       pr: ${{ steps.which.outputs.pr }}
       sha: ${{ steps.which.outputs.sha }}
+      signin: ${{ steps.which.outputs.signin }}
     steps:
+      # Sign-in is open (any address, no email) unless the pull request carries the
+      # `preview-email` label or the dispatch asks for email.
       - name: Decide what to preview
         id: which
         env:
           EVENT: ${{ github.event_name }}
+          ACTION: ${{ github.event.action }}
+          CHANGED_LABEL: ${{ github.event.label.name }}
+          HAS_EMAIL_LABEL: ${{ contains(github.event.pull_request.labels.*.name, 'preview-email') }}
           PR_EVENT_NUMBER: ${{ github.event.pull_request.number }}
           PR_EVENT_SHA: ${{ github.event.pull_request.head.sha }}
           HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
           THIS_REPO: ${{ github.repository }}
           INPUT_PR: ${{ inputs.pr }}
           INPUT_SHA: ${{ inputs.sha }}
+          INPUT_EMAIL: ${{ inputs.email }}
         run: |
-          if [ "$EVENT" = workflow_dispatch ]; then
+          if [ "$HAS_EMAIL_LABEL" = true ] || [ "$INPUT_EMAIL" = true ]; then
+            echo "signin=email" >> "$GITHUB_OUTPUT"
+          else
+            echo "signin=open" >> "$GITHUB_OUTPUT"
+          fi
+          if { [ "$ACTION" = labeled ] || [ "$ACTION" = unlabeled ]; } && [ "$CHANGED_LABEL" != preview-email ]; then
+            echo "run=false" >> "$GITHUB_OUTPUT"
+          elif [ "$EVENT" = workflow_dispatch ]; then
             if ! printf '%s' "$INPUT_PR" | grep -Eq '^[1-9][0-9]*$' || ! printf '%s' "$INPUT_SHA" | grep -Eq '^[0-9a-f]{40}$'; then
               echo "::error::pr must be a number and sha a full 40-character commit id."
               exit 1
@@ -231,6 +251,7 @@ jobs:
         env:
           WORKER_NAME: ${{ vars.PREVIEW_WORKER_NAME }}
           AUTH_MODE: oauth
+          AUTH_SIGN_IN: ${{ needs.resolve.outputs.signin }}
           AUTO_PROVISION: 'true'
           USAGE_ANALYTICS: 'true'
           PUBLIC_BASE_URL: ${{ steps.plan.outputs.origin }}
@@ -302,6 +323,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           PREVIEW_ORIGIN: ${{ steps.deploy.outputs.origin }}
           PREVIEW_SMOKE: ${{ steps.smoke.outcome }}
+          PREVIEW_SIGN_IN: ${{ needs.resolve.outputs.signin }}
           PREVIEW_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           set -euo pipefail

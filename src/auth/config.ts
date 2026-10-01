@@ -16,6 +16,7 @@ import type { AuthConfig } from '@auth/core';
 import { Auth } from '@auth/core';
 import Resend from '@auth/core/providers/resend';
 import { D1Adapter } from '@auth/d1-adapter';
+import type { D1Database } from '@cloudflare/workers-types';
 
 import { sendSignInEmail } from '../lib/signin-email.ts';
 
@@ -30,6 +31,16 @@ export interface AuthEnv {
 	// no sign-in link can be sent, so authjs mode needs it.
 	AUTH_RESEND_KEY?: string;
 	AUTH_EMAIL_FROM?: string;
+	// "open" signs anyone in as any email they type, with no email sent. For preview
+	// deployments only; anything else (unset included) is the emailed magic link.
+	AUTH_SIGN_IN?: string;
+}
+
+export type SignInMode = 'email' | 'open';
+
+/** Only the exact value "open" opens sign-in; a typo or an unset var keeps email. */
+export function signInMode(env: Pick<AuthEnv, 'AUTH_SIGN_IN'>): SignInMode {
+	return env.AUTH_SIGN_IN === 'open' ? 'open' : 'email';
 }
 
 // Auth.js owns every route under this prefix (signin, callback, session, csrf,
@@ -37,7 +48,12 @@ export interface AuthEnv {
 // (/authorize, /token, /register) which belong to @cloudflare/workers-oauth-provider.
 export const AUTH_BASE_PATH = '/auth';
 
-export function buildAuthConfig(env: AuthEnv): AuthConfig {
+export function buildAuthConfig(
+	env: AuthEnv,
+	// Open mode hands the sign-in link here instead of emailing it.
+	onSignInLink?: (url: string) => void
+): AuthConfig {
+	const open = signInMode(env) === 'open';
 	return {
 		basePath: AUTH_BASE_PATH,
 		secret: env.AUTH_SECRET,
@@ -61,6 +77,8 @@ export function buildAuthConfig(env: AuthEnv): AuthConfig {
 		},
 		providers: [
 			Resend({
+				// The name labels the button on Auth.js's sign-in page.
+				...(open ? { name: 'Preview sign-in (no email is sent)' } : {}),
 				apiKey: env.AUTH_RESEND_KEY,
 				// No hardcoded fallback sender. A default pointing at somebody else's
 				// domain is worse than no default: the send fails Resend's domain
@@ -71,14 +89,21 @@ export function buildAuthConfig(env: AuthEnv): AuthConfig {
 				from: env.AUTH_EMAIL_FROM ?? '',
 				// Our own template instead of Auth.js's stock one, which Gmail
 				// classifies as spam. See src/lib/signin-email.ts.
-				sendVerificationRequest: ({ identifier, url, provider }) =>
-					sendSignInEmail({
+				sendVerificationRequest: async ({ identifier, url, provider }) => {
+					if (open) {
+						if (!onSignInLink)
+							throw new Error('Open sign-in reached Auth.js without a link handler');
+						onSignInLink(url);
+						return;
+					}
+					await sendSignInEmail({
 						url,
 						email: identifier,
 						maxAgeSeconds: provider.maxAge ?? 24 * 60 * 60,
 						apiKey: provider.apiKey ?? '',
 						from: provider.from ?? ''
-					})
+					});
+				}
 			})
 		]
 	};
@@ -94,7 +119,7 @@ export interface AuthSessionUser {
 // cookies against Auth.js's own /auth/session endpoint. Returns null when the
 // caller is signed out. Every magic-link sign-in goes through this
 // (/oauth/complete reads the session it just created), as does the web app's
-// cookie path; no automated test drives it against a real Auth.js session.
+// cookie path. `pnpm test:signin` reads a real Auth.js session back through it.
 export async function getAuthSession(
 	request: Request,
 	env: AuthEnv
@@ -107,4 +132,39 @@ export async function getAuthSession(
 	if (!res.ok) return null;
 	const data = (await res.json().catch(() => null)) as { user?: AuthSessionUser } | null;
 	return data && data.user ? data : null;
+}
+
+let warnedOpen = false;
+
+/**
+ * Every request under AUTH_BASE_PATH. In open mode the email sign-in POST is answered with
+ * a redirect to the sign-in link itself instead of Auth.js's "check your email" page, so
+ * the link Auth.js mints, verifies and turns into a session is the one an email would
+ * carry. Nothing else about the flow differs.
+ */
+export async function handleAuthRequest(request: Request, env: AuthEnv): Promise<Response> {
+	if (signInMode(env) !== 'open') return Auth(request, buildAuthConfig(env));
+	if (!warnedOpen) {
+		warnedOpen = true;
+		console.warn(
+			'AUTH_SIGN_IN=open: anyone can sign in as any email address. This is for preview deployments only.'
+		);
+	}
+	const url = new URL(request.url);
+	if (request.method !== 'POST' || url.pathname !== `${AUTH_BASE_PATH}/signin/resend`) {
+		return Auth(request, buildAuthConfig(env));
+	}
+	let link: string | undefined;
+	const res = await Auth(
+		request,
+		buildAuthConfig(env, (u) => {
+			link = u;
+		})
+	);
+	if (!link || res.status < 300 || res.status >= 400) return res;
+	const target = new URL(link);
+	if (target.origin !== url.origin) return res;
+	const headers = new Headers(res.headers);
+	headers.set('location', target.toString());
+	return new Response(null, { status: 302, headers });
 }
