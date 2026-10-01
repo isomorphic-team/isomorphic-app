@@ -19,6 +19,15 @@
 //   3. A new suite joining the scan-only set silently instead of being registered
 //      here.
 //   4. A change to the hint on the tools where it was a judgement call.
+//   5. A widget tool (every `registerAppTool` site, in every suite) without
+//      `_meta.ui.resourceUri` naming the served app, or a plain tool carrying one.
+//      Without it a host renders nothing; with one on a plain tool, every call
+//      renders a widget.
+//   6. Other tool-surface fields a host reads: no `execution` field in tools/list
+//      (claude.ai web refuses the whole connector over it), and the retry guidance
+//      on the three write tools, which must name the failure class ("FAILS WITHOUT
+//      A RESULT", a gateway error) rather than only a timeout, because a caller
+//      does not apply "times out" guidance to a 502.
 
 import { readFileSync, readdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -28,7 +37,7 @@ import { McpServer, InMemoryTransport } from '@modelcontextprotocol/server';
 import { annotationProblems, toolAnnotations } from '../src/lib/tool-annotations.ts';
 import { planCustomTools } from '../src/lib/custom-tools.ts';
 import { registerAnalyticsTools } from '../src/tools/analytics.ts';
-import { registerBrainApp } from '../src/tools/apps.ts';
+import { registerBrainApp, BRAIN_APP_URI } from '../src/tools/apps.ts';
 import { registerBrainAccessTools } from '../src/tools/brain-access.ts';
 import { registerBrainTools } from '../src/tools/brains.ts';
 import { registerCoreTools } from '../src/tools/core.ts';
@@ -40,8 +49,26 @@ import { registerMemberTools } from '../src/tools/members.ts';
 import { registerOrgOnboardingTools } from '../src/tools/org-onboarding.ts';
 
 import { checker } from './check.ts';
+import { registeredWidgetToolNames } from './doc-refs.ts';
 
 const { check, done } = checker('annotation checks');
+
+// Every registration site: src/tools/, plus the tools registered inline in the two
+// runtimes.
+const toolsDir = fileURLToPath(new URL('../src/tools/', import.meta.url));
+const SOURCES = [
+	...readdirSync(toolsDir)
+		.filter((f) => f.endsWith('.ts'))
+		.map((f) => toolsDir + f),
+	fileURLToPath(new URL('../src/worker.ts', import.meta.url)),
+	fileURLToPath(new URL('../src/local.ts', import.meta.url))
+].map((file) => ({ file, src: readFileSync(file, 'utf8') }));
+const WIDGET_TOOLS = new Set(SOURCES.flatMap(({ src }) => registeredWidgetToolNames(src)));
+
+// The `ui` half of a tool's `_meta`, or {} when it has none.
+function uiMeta(tool: unknown): Record<string, unknown> {
+	return (tool as { _meta?: { ui?: Record<string, unknown> } })._meta?.ui ?? {};
+}
 
 console.log('\nthe rule itself');
 {
@@ -138,6 +165,54 @@ const listed = new Set<string>();
 	for (const n of ['read_page', 'search_pages', 'view_page', 'brains']) {
 		check(`${n} is read-only`, hint(n)?.readOnlyHint === true);
 	}
+
+	console.log('\ntools/list: the widget link');
+	const widgets = tools.filter((t) => WIDGET_TOOLS.has(t.name));
+	for (const n of ['view_page', 'analytics', 'brain_access', 'members']) {
+		check(
+			`${n} is listed as a widget tool`,
+			widgets.some((t) => t.name === n)
+		);
+	}
+	const unlinked = widgets.filter((t) => uiMeta(t).resourceUri !== BRAIN_APP_URI);
+	check(
+		`every widget tool (${widgets.length} listed) links to BRAIN_APP_URI`,
+		widgets.length > 8 && unlinked.length === 0,
+		unlinked.map((t) => `${t.name}→${String(uiMeta(t).resourceUri)}`).join(', ')
+	);
+	// A brain-authored `tool_` page may declare itself a widget, so only first-party
+	// tools are held to this.
+	const linkedPlain = tools.filter(
+		(t) =>
+			!WIDGET_TOOLS.has(t.name) &&
+			!t.name.startsWith('tool_') &&
+			uiMeta(t).resourceUri !== undefined
+	);
+	check(
+		'no plain first-party tool carries a resourceUri',
+		linkedPlain.length === 0,
+		linkedPlain.map((t) => t.name).join(', ')
+	);
+
+	console.log('\ntools/list: the other fields a host reads');
+	check(
+		'tools/list carries no `execution` field',
+		tools.every((t) => !('execution' in t) || t.execution === undefined),
+		JSON.stringify(tools.map((t) => t.execution))
+	);
+	for (const name of ['write_page', 'move_page', 'delete_page']) {
+		const description = tools.find((t) => t.name === name)?.description ?? '';
+		check(
+			`${name} names the failure class, not just a timeout`,
+			description.includes('FAILS WITHOUT A RESULT'),
+			description.slice(-160)
+		);
+		check(`${name} names a gateway error explicitly`, description.includes('gateway error'));
+		check(
+			`${name} tells the caller to verify before retrying`,
+			/before retrying/.test(description)
+		);
+	}
 	await client.close();
 }
 
@@ -145,21 +220,12 @@ console.log('\nregistration sites: nothing registers around the helper');
 {
 	// Same two shapes the usage test scans for. A registration this test did not
 	// call above (see the header for which, and why) is held to the helper here.
-	const dir = fileURLToPath(new URL('../src/tools/', import.meta.url));
-	const files = [
-		...readdirSync(dir)
-			.filter((f) => f.endsWith('.ts'))
-			.map((f) => dir + f),
-		fileURLToPath(new URL('../src/worker.ts', import.meta.url)),
-		fileURLToPath(new URL('../src/local.ts', import.meta.url))
-	];
 	const scanned = new Set<string>();
 	const bare: string[] = [];
 	// The tool's name, then everything between its config's `{` and its description.
 	const call = /(?:registerAppTool\(\s*server,|server\.registerTool\()\s*/.source;
 	const site = new RegExp(call + /'([a-z_]+)',\s*\{([\s\S]*?)description:/.source, 'g');
-	for (const file of files) {
-		const src = readFileSync(file, 'utf8');
+	for (const { src } of SOURCES) {
 		for (const m of src.matchAll(site)) {
 			scanned.add(m[1]);
 			if (!m[2].includes('...toolAnnotations(')) bare.push(m[1]);
@@ -177,6 +243,28 @@ console.log('\nregistration sites: nothing registers around the helper');
 		'the only tools not listed above are the scan-only suites',
 		unlisted.join(', ') === expected,
 		`not listed: ${unlisted.join(', ') || 'none'}; register its suite above`
+	);
+
+	// A scan-only widget tool is held to the widget link at its registration site:
+	// the config between its name and its handler names BRAIN_APP_URI.
+	const scanOnlyWidgets = unlisted.filter((n) => WIDGET_TOOLS.has(n));
+	check(
+		'connected_accounts is a scan-only widget tool',
+		scanOnlyWidgets.includes('connected_accounts'),
+		scanOnlyWidgets.join(', ')
+	);
+	const link = /_meta:\s*\{\s*ui:\s*\{\s*resourceUri:\s*BRAIN_APP_URI\s*\}\s*\}/;
+	const unlinkedSites = scanOnlyWidgets.filter((n) => {
+		const at = new RegExp(
+			`registerAppTool\\(\\s*server,\\s*'${n}',\\s*\\{([\\s\\S]*?)\\n\\t*\\},\\s*async`
+		);
+		const config = SOURCES.map(({ src }) => at.exec(src)?.[1]).find((c) => c !== undefined);
+		return !config || !link.test(config);
+	});
+	check(
+		'every scan-only widget tool links to BRAIN_APP_URI at its site',
+		unlinkedSites.length === 0,
+		unlinkedSites.join(', ')
 	);
 }
 

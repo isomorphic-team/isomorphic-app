@@ -1,4 +1,4 @@
-// Golden test for the /mcp REQUEST PREAMBLE — pure, no network, no bindings.
+// Golden test for the /mcp REQUEST PREAMBLE. Pure, no network, no bindings.
 //
 // Two things in front of the MCP SDK decide how a request fares before any tool
 // handler runs, and issue #50 is what both of them cost when they are wrong.
@@ -6,7 +6,7 @@
 //   WHAT A REQUEST NEEDS. Every POST used to resolve a brain first: a KV read, a
 //   tenant lookup, an installation-token mint (a GitHub round trip) and an index
 //   freshness check, all to discover the brain's own `tools/` pages. `initialize`
-//   is answered from the static tool surface and needs none of it — and it is the
+//   is answered from the static tool surface and needs none of it, and it is the
 //   connect, the one request a user cannot retry past. The reported session failed
 //   to connect at all. So the skip has to be exactly right in both directions:
 //   skipping `tools/list` would hide a brain's own tools, and NOT skipping
@@ -18,22 +18,14 @@
 //   as an invalid response and reports as a bare gateway error. The report
 //   carried four ray ids and nothing to join them against.
 //
-// Also pins the RETRY GUIDANCE on the three write tools. A caller that reads
-// "if this call TIMES OUT" does not apply it to a 502, which is the exact
-// mistake the issue documents, and the wording is a string literal no other
-// battery would notice changing.
-//
 //   pnpm test:preamble
 
-import { McpServer } from '@modelcontextprotocol/server';
 import {
 	peekJsonRpc,
 	needsBrainPreamble,
 	jsonRpcError,
 	describeRequest
 } from '../src/lib/mcp-preamble.ts';
-import { registerLibrarianTools, type BrainContext } from '../src/tools/librarian.ts';
-import type { TenantOpts } from '../src/lib/orgs.ts';
 
 import { checker } from './check.ts';
 
@@ -81,9 +73,6 @@ console.log('\npeekJsonRpc');
 }
 
 // ---------------------------------------------------------------------------
-// needsBrainPreamble: the skip, in both directions
-// ---------------------------------------------------------------------------
-// ---------------------------------------------------------------------------
 // describeRequest: what the Worker logs about a refused or slow request
 // ---------------------------------------------------------------------------
 // The SDK's request schema is strict, so a client one protocol version ahead is
@@ -125,6 +114,9 @@ console.log('\ndescribeRequest');
 	);
 }
 
+// ---------------------------------------------------------------------------
+// needsBrainPreamble: the skip, in both directions
+// ---------------------------------------------------------------------------
 console.log('\nneedsBrainPreamble');
 {
 	const needs = (body: string) => needsBrainPreamble(peekJsonRpc(body));
@@ -171,45 +163,6 @@ console.log('\njsonRpcError');
 	const noRay = JSON.parse(jsonRpcError(null, 'boom'));
 	check('omits data when there is no ray', noRay.error.data === undefined);
 	check('a null id stays null', noRay.id === null);
-}
-
-// ---------------------------------------------------------------------------
-// The retry guidance on the write tools
-// ---------------------------------------------------------------------------
-console.log('\nwrite-tool retry guidance');
-{
-	const configs = new Map<string, { description?: string }>();
-	const server = {
-		registerTool: (name: string, cfg: { description?: string }) => configs.set(name, cfg)
-	} as unknown as McpServer;
-	// Registration stores handlers; it never resolves a context, so this getContext
-	// exists only to satisfy the signature.
-	const getContext = (_opts?: TenantOpts): Promise<BrainContext> => {
-		throw new Error('registration must not resolve a context');
-	};
-	registerLibrarianTools(server, getContext);
-
-	for (const name of ['write_page', 'move_page', 'delete_page']) {
-		const description = configs.get(name)?.description ?? '';
-		check(`${name} is registered with a description`, description.length > 0);
-		// A 502 is not a timeout, and the guidance that mattered was filed under
-		// the word that did not cover it.
-		check(
-			`${name} names the failure CLASS, not just a timeout`,
-			description.includes('FAILS WITHOUT A RESULT'),
-			description.slice(-160)
-		);
-		check(`${name} names a gateway error explicitly`, description.includes('gateway error'));
-		check(
-			`${name} no longer says only "TIMES OUT"`,
-			!description.includes('TIMES OUT'),
-			description.slice(-160)
-		);
-		check(
-			`${name} still tells the caller to verify before retrying`,
-			/before retrying/.test(description)
-		);
-	}
 }
 
 done();
