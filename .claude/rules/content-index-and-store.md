@@ -14,7 +14,7 @@ paths:
 `src/lib/brain-repo.ts` exports `BrainStore`, the only interface between tools and a brain's
 storage, plus `githubStore(octokit)`; `src/local/brain-store-fs.ts` is the git-on-disk twin.
 
-- **Eleven operations:** `getHead`, `branchCommitSha`, `repoWritePolicy`, `listTree`,
+- **Twelve operations:** `getHead`, `writeHead`, `branchCommitSha`, `repoWritePolicy`, `listTree`,
   `fetchPages`, `readFile`, `readBinary`, `findOpenConfigPr`, `listCommits`, `commitFiles`,
   `commitOrPR`. It is what the tools do, not a general storage abstraction.
 - **If you reach for `ctx.octokit` while touching a brain's CONTENT, it belongs on the store.**

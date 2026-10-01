@@ -181,8 +181,17 @@ if (GITHUB_MODE) {
 
 // ---- in-memory MCP client wired to the real handlers, with a full context ----
 const server = new McpServer({ name: 'librarian-e2e', version: '0.0.0' });
+// Counts writeHead calls: in PR mode it is what puts a write on the brain's open pull
+// request, and a write tool that skips it plans against the default branch instead.
+let writeHeadCalls = 0;
 const getContext = async () => ({
-	store,
+	store: {
+		...store,
+		writeHead: (...a: Parameters<BrainStore['writeHead']>) => {
+			writeHeadCalls++;
+			return store.writeHead(...a);
+		}
+	},
 	repoArgs,
 	role: 'owner' as const,
 	orgRole: 'owner' as const,
@@ -383,18 +392,19 @@ try {
 		r.text
 	);
 
-	// The target blob must be read only after HEAD is captured. Delay getHead so the
-	// formerly-parallel implementation deterministically starts readFile first and
-	// fails this assertion; ordered reads pass and pin the blob to that commit.
+	// The target blob must be read only after the write's head is captured. Delay
+	// writeHead so the formerly-parallel implementation deterministically starts
+	// readFile first and fails this assertion; ordered reads pass and pin the blob to
+	// that commit.
 	const underlyingStore = store;
 	let capturedHead: string | null = null;
 	let targetReadBeforeHead = false;
 	let targetReadRef: string | undefined;
 	store = {
 		...underlyingStore,
-		getHead: async (repo, branch) => {
+		writeHead: async (repo, opts) => {
 			await sleep(30);
-			const head = await underlyingStore.getHead(repo, branch);
+			const head = await underlyingStore.writeHead(repo, opts);
 			capturedHead = head.commitSha;
 			return head;
 		},
@@ -1859,6 +1869,52 @@ try {
 			refused2.text
 		);
 		check('dedupe: ...and neither wrote anything', (await commitCount()) === before);
+	}
+
+	// ---- every write plans against writeHead -----------------------------------
+	// The fs store's writeHead is its working tree, so this pins only the wiring:
+	// test:pending-pr covers what the GitHub store's writeHead returns.
+	{
+		const base = 'wiki/write-head-probe';
+		const usesWriteHead = async (label: string, tool: string, args: Record<string, unknown>) => {
+			const before = writeHeadCalls;
+			const r = await call(tool, args);
+			check(`${label} succeeds`, !r.isError, r.text);
+			check(`${label} plans against writeHead`, writeHeadCalls > before);
+		};
+		await usesWriteHead('write_page create', 'write_page', {
+			path: `${base}/a.md`,
+			content: 'probe'
+		});
+		await usesWriteHead('write_page update', 'write_page', {
+			path: `${base}/a.md`,
+			append: 'more'
+		});
+		await usesWriteHead('edit_page', 'edit_page', { path: `${base}/a.md` });
+		await usesWriteHead('attach_media', 'attach_media', {
+			page: `${base}/a.md`,
+			filename: 'probe.png',
+			mime_type: 'image/png',
+			data: 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=='
+		});
+		await usesWriteHead('move_page (page)', 'move_page', {
+			path: `${base}/a.md`,
+			new_path: `${base}/b.md`
+		});
+		await usesWriteHead('move_page (file)', 'move_page', {
+			path: `${base}/assets/probe.png`,
+			new_path: `${base}/assets/moved.png`
+		});
+		await usesWriteHead('move_page (folder)', 'move_page', {
+			path: base,
+			new_path: `${base}-moved`
+		});
+		await usesWriteHead('delete_page (file)', 'delete_page', {
+			path: `${base}-moved/assets/moved.png`
+		});
+		await usesWriteHead('delete_page (page)', 'delete_page', { path: `${base}-moved/b.md` });
+		await call('write_page', { path: `${base}-moved/c.md`, content: 'probe' });
+		await usesWriteHead('delete_page (folder)', 'delete_page', { path: `${base}-moved` });
 	}
 
 	// ---- configure_brain leaves an existing config alone (issue #94) ------------
