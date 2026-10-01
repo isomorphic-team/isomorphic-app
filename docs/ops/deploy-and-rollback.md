@@ -66,8 +66,8 @@ production's bindings:
 
 ### What they do not assert
 
-- **A wrong `PUBLIC_BASE_URL`.** `@cloudflare/workers-oauth-provider` builds the metadata
-  above from the request origin, not from the configured base URL, so all of it is correct
+- **A wrong `PUBLIC_BASE_URL`.** The OAuth provider is built per request origin
+  (`src/lib/oauth-provider.ts`), so the metadata above comes from that origin, not from the configured base URL, so all of it is correct
   on any hostname whatever the config says. `PUBLIC_BASE_URL` is read where there is no
   request to derive an origin from: `src/manifest.ts`, and the connected-accounts tools
   building the `/link/start` URL. A deploy carrying the wrong value passes every check here
