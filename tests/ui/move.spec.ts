@@ -42,6 +42,23 @@ test('a note moves by choosing a folder in the visible tree', async ({ page }) =
 	await expect(app.getByRole('status')).toHaveCount(0);
 });
 
+// Move is a header mode, the way editing is: the instruction is the header's second row
+// and Cancel replaces the tree's own actions, which return when the mode ends.
+test('move mode takes over the header the way the editor does', async ({ page }) => {
+	const app = await openApp(page, 'browse');
+	const header = app.locator('header');
+	await app.getByRole('button', { name: 'Expand all' }).click();
+	await moveMenu(app, 'Vision');
+	await expect(header.locator('[data-row="mode"]').getByRole('status')).toContainText(
+		'Moving vision.md: choose a folder'
+	);
+	await expect(header.getByRole('button', { name: 'Cancel', exact: true })).toBeFocused();
+	await expect(header.getByRole('button', { name: 'New note' })).toHaveCount(0);
+	await header.getByRole('button', { name: 'Cancel', exact: true }).click();
+	await expect(header.locator('[data-row="mode"]')).toBeHidden();
+	await expect(header.getByRole('button', { name: 'New note' })).toBeVisible();
+});
+
 test('invalid folders stay visible but cannot be chosen, and Cancel writes nothing', async ({
 	page
 }) => {
@@ -97,8 +114,8 @@ test('Tab and Enter choose a destination without navigating away', async ({ page
 	const app = await openApp(page, 'browse');
 	await app.getByRole('button', { name: 'Expand all' }).click();
 	await moveMenu(app, 'Vision');
-	await app.getByRole('button', { name: 'Cancel', exact: true }).press('Tab');
-	await expect(app.getByRole('button', { name: 'Collapse wiki', exact: true })).toBeFocused();
+	await expect(app.getByRole('button', { name: 'Cancel', exact: true })).toBeFocused();
+	await app.getByRole('button', { name: 'Collapse wiki', exact: true }).focus();
 	await app.getByRole('button', { name: 'Collapse wiki', exact: true }).press('Tab');
 	const destination = app.getByRole('button', { name: 'Move to wiki', exact: true });
 	await expect(destination).toBeFocused();

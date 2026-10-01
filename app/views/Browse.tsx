@@ -4,7 +4,8 @@
 // expand/collapse-all, show-hidden) don't live in the body — they slide into the nav
 // header contextually while this view is open, exactly like the editor's formatting
 // toolbar. The seam is `treeCtl` (mirrors `editCtl` in EditView): FileTree binds its
-// handlers + toggle state here, and the Header (main.tsx) renders them. Per-item
+// handlers + toggle state here, and the Header (main.tsx) renders them. Move mode is a
+// header mode like the editor's: the instruction is the second row, Cancel the action. Per-item
 // actions (rename, move, delete, new note/folder in a folder) live in one hover `⋯` menu.
 
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'preact/hooks';
@@ -53,6 +54,9 @@ const treeCtl: {
 	showHidden: boolean;
 	sortDesc: boolean;
 	allExpanded: boolean;
+	// Set while a row is being moved: the header shows the instruction and Cancel.
+	moving: { name: string; busy: boolean; none: boolean } | null;
+	cancelMove: () => void;
 	newNote: () => void;
 	newFolder: () => void;
 	toggleSort: () => void;
@@ -65,6 +69,8 @@ const treeCtl: {
 	showHidden: false,
 	sortDesc: false,
 	allExpanded: false,
+	moving: null,
+	cancelMove: () => {},
 	newNote: () => {},
 	newFolder: () => {},
 	toggleSort: () => {},
@@ -642,8 +648,15 @@ function FileTree({
 			?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
 	}, [focus, tree]);
 	useLayoutEffect(() => {
-		if (moving) document.querySelector<HTMLButtonElement>('[data-move-cancel]')?.focus();
-		else if (restoreMoveFocus.current) {
+		// Cancel lives in the header, which re-renders after the bind effect below
+		// publishes the move, so it is focused on the next frame.
+		if (moving) {
+			const frame = requestAnimationFrame(() =>
+				document.querySelector<HTMLButtonElement>('header [data-action="cancel-move"]')?.focus()
+			);
+			return () => cancelAnimationFrame(frame);
+		}
+		if (restoreMoveFocus.current) {
 			const path = restoreMoveFocus.current;
 			restoreMoveFocus.current = null;
 			[...document.querySelectorAll<HTMLButtonElement>('[data-row-menu-for]')]
@@ -857,7 +870,11 @@ function FileTree({
 	// toggle state the header renders from changes, and unbinds on unmount so the
 	// header drops the toolbar when we leave the view.
 	useLayoutEffect(() => {
-		treeCtl.bound = !moving;
+		treeCtl.bound = true;
+		treeCtl.moving = moving
+			? { name: moving.path.split('/').pop()!, busy, none: !destinations.length }
+			: null;
+		treeCtl.cancelMove = cancelMove;
 		treeCtl.canManage = canManage;
 		treeCtl.hasHidden = hidden.length > 0;
 		treeCtl.showHidden = showHidden;
@@ -874,10 +891,34 @@ function FileTree({
 		bump();
 		return () => {
 			treeCtl.bound = false;
+			treeCtl.moving = null;
 			bump();
 		};
 		// eslint-disable-next-line react-hooks/exhaustive-deps
-	}, [canManage, hidden.length, showHidden, sortDesc, allExpanded, allFolders, moving]);
+	}, [
+		canManage,
+		hidden.length,
+		showHidden,
+		sortDesc,
+		allExpanded,
+		allFolders,
+		moving,
+		busy,
+		destinations.length
+	]);
+
+	// Escape leaves move mode wherever focus is, since Cancel sits in the header.
+	useEffect(() => {
+		if (!moving || busy) return;
+		const onKey = (e: KeyboardEvent) => {
+			if (e.key !== 'Escape') return;
+			e.preventDefault();
+			cancelMove();
+		};
+		window.addEventListener('keydown', onKey);
+		return () => window.removeEventListener('keydown', onKey);
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, [moving, busy]);
 
 	// Auto-configure the active brain (writes .isomorphic.json for the whole repo), then
 	// reload — the index rebuilds against the new roots and the pages appear.
@@ -948,38 +989,9 @@ function FileTree({
 	}
 
 	return (
-		<div
-			class="select-none"
-			onKeyDown={(e) => {
-				if (moving && !busy && e.key === 'Escape') {
-					e.preventDefault();
-					cancelMove();
-				}
-			}}
-		>
+		<div class="select-none">
 			{moving && (
 				<>
-					<div
-						class="mb-2 flex items-center gap-2 rounded border border-border bg-chip px-3 py-1.5 text-sm"
-						role="status"
-					>
-						<span class="min-w-0 flex-1 break-words" title={moving.path}>
-							Moving <strong>{moving.path.split('/').pop()}</strong>
-							{busy ? '…' : ': choose a folder'}
-						</span>
-						<Button
-							data-move-cancel
-							variant="outline"
-							size="sm"
-							onClick={cancelMove}
-							disabled={busy}
-						>
-							Cancel
-						</Button>
-					</div>
-					{!destinations.length && (
-						<p class="mb-2 text-sm text-muted">There are no other editable folders.</p>
-					)}
 					{contentRoots
 						.map((root) => root.replace(/\/$/, ''))
 						.filter((root) => !allFolders.includes(root))
@@ -1023,6 +1035,20 @@ function FileTree({
 	);
 }
 
+// Move mode's header row. The source stays lit in the tree; this names it and says what
+// a click does next.
+function MoveStatus({ name, busy, none }: { name: string; busy: boolean; none: boolean }) {
+	return (
+		<div role="status" class="flex min-h-7 min-w-0 flex-1 items-center gap-2 px-1 text-sm">
+			<FolderIcon />
+			<span class="min-w-0 flex-1 break-words">
+				Moving <strong>{name}</strong>
+				{busy ? '…' : none ? '. There are no other editable folders.' : ': choose a folder'}
+			</span>
+		</div>
+	);
+}
+
 export { FileTree, TreeItem, buildTree, treeCtl };
 
 declare module '../core/view-registry.ts' {
@@ -1058,42 +1084,52 @@ export default defineView(
 		actions: () =>
 			!treeCtl.bound || !treeCtl.canManage
 				? []
-				: [
-						{
-							key: 'new-note',
-							icon: <NewNoteIcon />,
-							title: 'New note',
-							onClick: () => treeCtl.newNote()
-						},
-						{
-							key: 'new-folder',
-							icon: <NewFolderIcon />,
-							title: 'New folder',
-							onClick: () => treeCtl.newFolder()
-						},
-						{
-							key: 'sort',
-							icon: <SortIcon desc={treeCtl.sortDesc} />,
-							title: treeCtl.sortDesc ? 'Sort Z → A' : 'Sort A → Z',
-							onClick: () => treeCtl.toggleSort()
-						},
-						{
-							key: 'expand',
-							icon: <ExpandCollapseIcon expanded={treeCtl.allExpanded} />,
-							title: treeCtl.allExpanded ? 'Collapse all' : 'Expand all',
-							onClick: () => treeCtl.toggleExpandAll()
-						},
-						...(treeCtl.hasHidden
-							? [
-									{
-										key: 'hidden',
-										icon: <EyeIcon off={!treeCtl.showHidden} />,
-										title: treeCtl.showHidden ? 'Hide hidden files' : 'Show hidden files',
-										active: treeCtl.showHidden,
-										onClick: () => treeCtl.toggleHidden()
-									}
-								]
-							: [])
-					]
+				: treeCtl.moving
+					? [
+							{
+								key: 'cancel-move',
+								label: 'Cancel',
+								disabled: treeCtl.moving.busy,
+								onClick: () => treeCtl.cancelMove()
+							}
+						]
+					: [
+							{
+								key: 'new-note',
+								icon: <NewNoteIcon />,
+								title: 'New note',
+								onClick: () => treeCtl.newNote()
+							},
+							{
+								key: 'new-folder',
+								icon: <NewFolderIcon />,
+								title: 'New folder',
+								onClick: () => treeCtl.newFolder()
+							},
+							{
+								key: 'sort',
+								icon: <SortIcon desc={treeCtl.sortDesc} />,
+								title: treeCtl.sortDesc ? 'Sort Z → A' : 'Sort A → Z',
+								onClick: () => treeCtl.toggleSort()
+							},
+							{
+								key: 'expand',
+								icon: <ExpandCollapseIcon expanded={treeCtl.allExpanded} />,
+								title: treeCtl.allExpanded ? 'Collapse all' : 'Expand all',
+								onClick: () => treeCtl.toggleExpandAll()
+							},
+							...(treeCtl.hasHidden
+								? [
+										{
+											key: 'hidden',
+											icon: <EyeIcon off={!treeCtl.showHidden} />,
+											title: treeCtl.showHidden ? 'Hide hidden files' : 'Show hidden files',
+											active: treeCtl.showHidden,
+											onClick: () => treeCtl.toggleHidden()
+										}
+									]
+								: [])
+						],
+		mode: () => (treeCtl.moving ? <MoveStatus {...treeCtl.moving} /> : null)
 	}
 );
