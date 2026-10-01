@@ -1,7 +1,7 @@
 ---
 paths:
   - "wrangler.template.jsonc"
-  - "scripts/{setup-config,smoke,test-smoke,regen-pr,doctor}.ts"
+  - "scripts/{setup-config,smoke,test-smoke,preview,test-preview,regen-pr,doctor}.ts"
   - "src/persist.ts"
   - ".github/workflows/**"
   - ".github/dependabot.yml"
@@ -65,7 +65,12 @@ apply in the step before, schema first.
   that must redirect to sign-in on the same origin, or 404.
 - **A rollback reverts CODE, never SCHEMA.** Migrations must stay additive (renames and drops go
   expand-then-contract) so the previous version is runnable at any moment. Remote migrations run
-  only in `deploy.yml`; the PreToolUse hook refuses them from a session.
+  only in CI: `deploy.yml` for production, `preview.yml` for each pull request's own preview
+  database. The PreToolUse hook refuses them from a session.
+- **Pull request previews** (`preview.yml`, `scripts/preview.ts`, pinned by `pnpm test:preview`)
+  are Worker Previews on a separate preview Worker. The job that runs pull request code holds
+  no secret; forks are previewed only by a maintainer's `workflow_dispatch`. Design and setup:
+  `docs/design/preview-environments.md`.
 - **The pre-promotion smoke depends on preview URLs,** which Cloudflare withholds from Workers
   implementing a Durable Object (`metadata.has_preview`). This Worker has them today. **Adding a
   Durable Object binding would silently drop the pipeline onto promote-then-roll-back**, where a

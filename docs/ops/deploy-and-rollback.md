@@ -79,11 +79,13 @@ production's bindings:
 
 ## Looking at a branch before it merges
 
-The same `versions upload` step, run by hand from a branch, gives a URL that serves no
-traffic and shares production's bindings. That makes it a read-only look, not a place to
-run arbitrary code: the rules and the procedure are in
-[`../design/preview-environments.md`](../design/preview-environments.md#until-it-is-built-the-manual-version-preview),
-and an isolated preview Worker is the design's unbuilt half.
+`.github/workflows/preview.yml` deploys every same-repository pull request as an isolated
+Worker Preview with its own database, and a fork's on a maintainer's request; see
+[`../design/preview-environments.md`](../design/preview-environments.md). The same
+`versions upload` step `deploy.yml` uses, run by hand from a branch, still gives a URL that
+serves no traffic and shares production's bindings. That is a read-only look at a branch
+against production data, not a place to run arbitrary code:
+[the manual version preview](../design/preview-environments.md#the-manual-version-preview).
 
 ## What a rollback does not undo
 

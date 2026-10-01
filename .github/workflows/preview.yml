@@ -1,0 +1,371 @@
+name: Preview
+
+# A Cloudflare Worker Preview per pull request, named `pr-<number>`, on a dedicated
+# preview Worker and bound to a database of its own, so a reviewer can open the
+# branch's web app and connect a host to it before the merge. Worker Previews are in
+# open beta. Design and setup: docs/design/preview-environments.md.
+#
+# THREE JOBS, AND THE SPLIT IS THE SECURITY MODEL
+# -----------------------------------------------
+#   resolve   decides whether this run previews anything, and which commit.
+#   build     runs the pull request's code (install, codegen, bundle) with NO secrets
+#             and a read-only token, and hands on two things as an artifact: the
+#             bundled worker.js and the migrations/ SQL.
+#   deploy    holds the Cloudflare token. It never executes code from the artifact:
+#             the bundle is uploaded as data and the SQL runs against the pull
+#             request's own database. Its scripts and config come from its own checkout.
+#
+# A token present while a pull request's `pnpm install` runs is a token the pull
+# request can read. A token can be narrowed to one Worker, but D1 permissions are
+# account-wide. Keeping it out of `build` is what makes previews of a contributor's
+# fork possible at all.
+#
+# FORKS ARE PREVIEWED ON REQUEST. A fork's pull_request run gets no secrets, so it
+# stops in `resolve` with a note. A Preview's secrets (the preview GitHub App key,
+# AUTH_SECRET, the Resend key) are readable by whatever code it runs, so running a
+# fork's code there is a maintainer's decision, made after reading the diff, for the
+# exact commit they read:
+#
+#   gh workflow run preview.yml -f pr=<number> -f sha=<head sha>
+#
+# Never `pull_request_target` for the build: it runs with secrets, and checking out
+# the fork's head under it hands the fork those secrets. `pull_request_target` here
+# triggers only `cleanup`, which checks out nothing from the pull request.
+#
+# Skips green, with a warning, until the `preview` environment and PREVIEW_* variables
+# exist, so a fork of this repository never sees a red check for infrastructure it
+# does not have.
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+  pull_request_target:
+    types: [closed]
+  workflow_dispatch:
+    inputs:
+      pr:
+        description: Pull request number
+        required: true
+      sha:
+        description: The head commit you reviewed (gh pr view <pr> --json headRefOid)
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: preview-${{ github.event.pull_request.number || inputs.pr }}-${{ github.event_name == 'pull_request_target' && 'cleanup' || 'deploy' }}
+  cancel-in-progress: true
+
+jobs:
+  resolve:
+    if: github.event_name != 'pull_request_target'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      run: ${{ steps.which.outputs.run }}
+      pr: ${{ steps.which.outputs.pr }}
+      sha: ${{ steps.which.outputs.sha }}
+    steps:
+      - name: Decide what to preview
+        id: which
+        env:
+          EVENT: ${{ github.event_name }}
+          PR_EVENT_NUMBER: ${{ github.event.pull_request.number }}
+          PR_EVENT_SHA: ${{ github.event.pull_request.head.sha }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          THIS_REPO: ${{ github.repository }}
+          INPUT_PR: ${{ inputs.pr }}
+          INPUT_SHA: ${{ inputs.sha }}
+        run: |
+          if [ "$EVENT" = workflow_dispatch ]; then
+            if ! printf '%s' "$INPUT_PR" | grep -Eq '^[1-9][0-9]*$' || ! printf '%s' "$INPUT_SHA" | grep -Eq '^[0-9a-f]{40}$'; then
+              echo "::error::pr must be a number and sha a full 40-character commit id."
+              exit 1
+            fi
+            { echo "run=true"; echo "pr=$INPUT_PR"; echo "sha=$INPUT_SHA"; } >> "$GITHUB_OUTPUT"
+          elif [ "$HEAD_REPO" != "$THIS_REPO" ]; then
+            echo "::notice::Pull request from a fork: not previewed automatically. A maintainer who has read the diff runs: gh workflow run preview.yml -f pr=$PR_EVENT_NUMBER -f sha=$PR_EVENT_SHA"
+            echo "run=false" >> "$GITHUB_OUTPUT"
+          else
+            { echo "run=true"; echo "pr=$PR_EVENT_NUMBER"; echo "sha=$PR_EVENT_SHA"; } >> "$GITHUB_OUTPUT"
+          fi
+
+  build:
+    needs: resolve
+    if: needs.resolve.outputs.run == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # No secrets are referenced in this job, and the token is read-only.
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.resolve.outputs.sha }}
+          persist-credentials: false
+
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 10.33.2
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm gen:templates
+      - run: pnpm gen:app
+
+      # Placeholder ids: wrangler needs a config to bundle, and bindings are attached
+      # in `deploy`, not here.
+      - run: pnpm setup:config --force
+
+      # `wrangler preview` has no dry run, so `versions upload --dry-run` bundles. The
+      # deploy job hands the result to `wrangler preview`, which bundles it again;
+      # bundling a bundle changes nothing but the wrapper.
+      - name: Bundle the Worker without uploading it
+        run: pnpm exec wrangler versions upload --dry-run --outdir "$RUNNER_TEMP/preview/bundle"
+
+      - name: Collect the artifact
+        run: cp -R migrations "$RUNNER_TEMP/preview/migrations"
+
+      - uses: actions/upload-artifact@v5
+        with:
+          name: preview-bundle
+          path: |
+            ${{ runner.temp }}/preview/bundle/worker.js
+            ${{ runner.temp }}/preview/migrations/*.sql
+          if-no-files-found: error
+          retention-days: 3
+
+  deploy:
+    needs: [resolve, build]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # The `preview` environment holds a Cloudflare token for the preview Worker, never
+    # production's. `url` links the run to the preview it made.
+    environment:
+      name: preview
+      url: ${{ steps.deploy.outputs.origin }}
+    permissions:
+      contents: read
+      pull-requests: write
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      PR_NUMBER: ${{ needs.resolve.outputs.pr }}
+      PREVIEW_SHA: ${{ needs.resolve.outputs.sha }}
+      PREVIEW_WORKER_NAME: ${{ vars.PREVIEW_WORKER_NAME }}
+      PREVIEW_WORKERS_SUBDOMAIN: ${{ vars.PREVIEW_WORKERS_SUBDOMAIN }}
+      PREVIEW_D1_DATABASE_NAME: ${{ vars.PREVIEW_D1_DATABASE_NAME }}
+    steps:
+      # The default ref: the merge commit for a same-repository pull request, whose
+      # author already has write access, and the dispatching branch for a fork's
+      # preview. Never the fork's head; that arrives only as the artifact.
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 10.33.2
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Check preview configuration
+        id: guard
+        env:
+          PREVIEW_CF_OAUTH_KV_ID: ${{ vars.PREVIEW_CF_OAUTH_KV_ID }}
+        run: |
+          missing=""
+          [ -n "$CLOUDFLARE_API_TOKEN" ] || missing="$missing CLOUDFLARE_API_TOKEN(secret)"
+          for v in PREVIEW_WORKER_NAME PREVIEW_WORKERS_SUBDOMAIN PREVIEW_D1_DATABASE_NAME PREVIEW_CF_OAUTH_KV_ID; do
+            [ -n "${!v}" ] || missing="$missing $v"
+          done
+          if [ -n "$missing" ]; then
+            echo "::warning::Previews are not set up, skipping. Missing in the preview environment or repository variables:$missing. See docs/design/preview-environments.md."
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Plan the preview
+        id: plan
+        if: steps.guard.outputs.ready == 'true'
+        run: pnpm exec tsx scripts/preview.ts plan >> "$GITHUB_OUTPUT"
+
+      - uses: actions/download-artifact@v5
+        if: steps.guard.outputs.ready == 'true'
+        with:
+          name: preview-bundle
+          path: ${{ runner.temp }}/artifact
+
+      # One database per pull request: Cloudflare provisions no D1 for a Preview, and a
+      # shared one would carry every open branch's migrations at once.
+      - name: Ensure the pull request's database
+        id: db
+        if: steps.guard.outputs.ready == 'true'
+        env:
+          DATABASE: ${{ steps.plan.outputs.database }}
+        run: |
+          set -euo pipefail
+          id=$(pnpm exec wrangler d1 list --json | pnpm exec tsx scripts/preview.ts database-id "$DATABASE")
+          if [ -z "$id" ]; then
+            pnpm exec wrangler d1 create "$DATABASE"
+            id=$(pnpm exec wrangler d1 list --json | pnpm exec tsx scripts/preview.ts database-id "$DATABASE")
+          fi
+          [ -n "$id" ] || { echo "::error::Could not create or find D1 database $DATABASE."; exit 1; }
+          echo "id=$id" >> "$GITHUB_OUTPUT"
+
+      # A Preview reads only the `previews` block of the config, never the top level,
+      # so the preview profile is generated as usual and then copied into that block.
+      - name: Generate the preview's config
+        if: steps.guard.outputs.ready == 'true'
+        env:
+          WORKER_NAME: ${{ vars.PREVIEW_WORKER_NAME }}
+          AUTH_MODE: oauth
+          AUTO_PROVISION: 'true'
+          USAGE_ANALYTICS: 'true'
+          PUBLIC_BASE_URL: ${{ steps.plan.outputs.origin }}
+          AUTH_EMAIL_FROM: ${{ vars.PREVIEW_AUTH_EMAIL_FROM }}
+          APP_SLUG: ${{ vars.PREVIEW_APP_SLUG }}
+          D1_DATABASE_NAME: ${{ steps.plan.outputs.database }}
+          CF_D1_DATABASE_ID: ${{ steps.db.outputs.id }}
+          CF_OAUTH_KV_ID: ${{ vars.PREVIEW_CF_OAUTH_KV_ID }}
+          CF_OAUTH_KV_PREVIEW_ID: ${{ vars.PREVIEW_CF_OAUTH_KV_ID }}
+        run: |
+          pnpm setup:config --force
+          pnpm exec tsx scripts/preview.ts config wrangler.jsonc wrangler.preview.json
+
+      # The branch's migrations, applied to the branch's database only. Schema first,
+      # as deploy.yml does.
+      - name: Apply the branch's migrations
+        if: steps.guard.outputs.ready == 'true'
+        env:
+          DATABASE: ${{ steps.plan.outputs.database }}
+        run: |
+          set -euo pipefail
+          rm -rf migrations
+          mkdir migrations
+          cp "$RUNNER_TEMP"/artifact/migrations/*.sql migrations/
+          pnpm exec wrangler d1 migrations apply "$DATABASE" --remote --config wrangler.preview.json
+
+      # Secrets come from the preview Worker's Previews base config, copied into a
+      # Preview when it is created. PUBLIC_BASE_URL is set from the planned origin;
+      # Cloudflare does not document how it derives a Preview's hostname, so the
+      # origin it reports is read back, and a mismatch is corrected by one redeploy.
+      - name: Deploy the Preview
+        id: deploy
+        if: steps.guard.outputs.ready == 'true'
+        env:
+          WRANGLER_OUTPUT_FILE_DIRECTORY: ${{ runner.temp }}/wrangler-output
+          NAME: ${{ steps.plan.outputs.name }}
+          PLANNED: ${{ steps.plan.outputs.origin }}
+        run: |
+          set -euo pipefail
+          deploy() {
+            rm -rf "$WRANGLER_OUTPUT_FILE_DIRECTORY"
+            mkdir -p "$WRANGLER_OUTPUT_FILE_DIRECTORY"
+            pnpm exec wrangler preview "$RUNNER_TEMP/artifact/bundle/worker.js" \
+              --config wrangler.preview.json \
+              --name "$NAME" \
+              --tag "${PREVIEW_SHA::7}" \
+              --message "PR #$PR_NUMBER at ${PREVIEW_SHA::7}" \
+              "$@" >&2
+            find "$WRANGLER_OUTPUT_FILE_DIRECTORY" -type f -name '*.json' -exec cat {} + \
+              | pnpm exec tsx scripts/preview.ts preview-url
+          }
+          origin=$(deploy)
+          if [ "$origin" != "$PLANNED" ]; then
+            echo "::warning::The Preview is served at $origin, not the planned $PLANNED. Redeploying with PUBLIC_BASE_URL corrected."
+            origin=$(deploy --var "PUBLIC_BASE_URL:$origin")
+          fi
+          echo "origin=$origin" >> "$GITHUB_OUTPUT"
+
+      - name: Smoke check the preview
+        id: smoke
+        if: steps.deploy.outcome == 'success'
+        continue-on-error: true
+        run: pnpm exec tsx scripts/smoke.ts "${{ steps.deploy.outputs.origin }}"
+
+      # One comment per pull request, edited on every push.
+      - name: Comment on the pull request
+        if: steps.deploy.outcome == 'success'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PREVIEW_ORIGIN: ${{ steps.deploy.outputs.origin }}
+          PREVIEW_SMOKE: ${{ steps.smoke.outcome }}
+          PREVIEW_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          body=$(pnpm exec tsx scripts/preview.ts comment)
+          existing=$(gh api "repos/$GITHUB_REPOSITORY/issues/$PR_NUMBER/comments" --paginate \
+            --jq '.[] | select(.body | startswith("<!-- isomorphic-preview -->")) | .id' | head -n 1)
+          if [ -n "$existing" ]; then
+            gh api -X PATCH "repos/$GITHUB_REPOSITORY/issues/comments/$existing" -f body="$body" > /dev/null
+          else
+            gh api -X POST "repos/$GITHUB_REPOSITORY/issues/$PR_NUMBER/comments" -f body="$body" > /dev/null
+          fi
+
+      - name: Fail the run if the preview is unhealthy
+        if: steps.smoke.outcome == 'failure'
+        run: |
+          echo "::error::The preview at ${{ steps.deploy.outputs.origin }} failed its smoke check."
+          exit 1
+
+  # Runs on close, merged or not, for forks too. Checks out the base branch only.
+  cleanup:
+    if: github.event_name == 'pull_request_target' && github.event.action == 'closed'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: preview
+    permissions:
+      contents: read
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      PR_NUMBER: ${{ github.event.pull_request.number }}
+      PREVIEW_WORKER_NAME: ${{ vars.PREVIEW_WORKER_NAME }}
+      PREVIEW_WORKERS_SUBDOMAIN: ${{ vars.PREVIEW_WORKERS_SUBDOMAIN }}
+      PREVIEW_D1_DATABASE_NAME: ${{ vars.PREVIEW_D1_DATABASE_NAME }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 10.33.2
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      # A pull request that was never previewed has nothing to delete, so absence is
+      # not a failure.
+      - name: Delete the Preview and its database
+        run: |
+          set -euo pipefail
+          if [ -z "$CLOUDFLARE_API_TOKEN" ] || [ -z "$PREVIEW_WORKER_NAME" ] || [ -z "$PREVIEW_WORKERS_SUBDOMAIN" ] || [ -z "$PREVIEW_D1_DATABASE_NAME" ]; then
+            echo "Previews are not set up; nothing to clean up."
+            exit 0
+          fi
+          plan=$(pnpm exec tsx scripts/preview.ts plan)
+          name=$(printf '%s\n' "$plan" | sed -n 's/^name=//p')
+          database=$(printf '%s\n' "$plan" | sed -n 's/^database=//p')
+          pnpm exec wrangler preview delete --name "$name" --worker-name "$PREVIEW_WORKER_NAME" --skip-confirmation \
+            || echo "::notice::No Preview $name was deleted. It may never have existed; Cloudflare also evicts the oldest Preview at the per-Worker limit."
+          id=$(pnpm exec wrangler d1 list --json | pnpm exec tsx scripts/preview.ts database-id "$database")
+          if [ -n "$id" ]; then
+            pnpm exec wrangler d1 delete "$database" --skip-confirmation
+          fi

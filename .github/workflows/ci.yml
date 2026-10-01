@@ -149,6 +149,9 @@ jobs:
       # The assertions the deploy runs against a live origin before it decides whether
       # to keep a merge in production. Offline here: driven against stub responses.
       - run: pnpm test:smoke
+      # The pull request preview: how it is named, addressed and configured, and that
+      # preview.yml keeps secrets away from the job that runs pull request code.
+      - run: pnpm test:preview
       # Lints the two lists above against package.json, so the instruction in the
       # comment stops depending on anyone reading the comment. It also pins the
       # Playwright container tag in the `ui` job to the resolved dependency version.

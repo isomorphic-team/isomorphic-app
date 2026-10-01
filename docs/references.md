@@ -115,6 +115,23 @@ Non-obvious things confirmed against the sources above (with the "why it bit us"
   **Adding a Durable Object binding takes this away silently**, so anything depending on it
   should branch on `has_preview` rather than assume.
 
+- **Worker Previews (`wrangler preview`, open beta) are what `preview.yml` deploys, and they
+  are not version URLs.** Verified against the docs and wrangler 4.142 on 2026-10-01:
+  https://developers.cloudflare.com/workers/previews/. A Preview reads only the config's
+  `previews` block (one per Worker) and inherits no vars, bindings or production secrets; its
+  secrets are copied from the Worker's Previews base config when it is created
+  (`wrangler preview base-config secret put`). D1 and KV are not provisioned per Preview. It
+  has no `--no-bundle`, `--dry-run` or `--outdir`, but bundles a prebuilt `worker.js` given as
+  its positional entry. `--var` and `--secrets-file` exist in wrangler's source but not in its
+  docs. Limits: 100 Previews per Worker on Free, 500 on Paid, oldest evicted. Logs and traces
+  work (dashboard, per Preview); `wrangler tail` does not. Undocumented: how the hostname
+  derives from `--name`, and whether a per-Worker Editor token covers Previews.
+- **API tokens can be scoped to one Worker since 2026-09-15** ("Specified Workers", roles
+  Metadata Read-Only, Content Read-Only, Editor, Admin):
+  https://developers.cloudflare.com/workers/authorization/workers/. D1 and KV permissions are
+  still account-wide, and a Worker-scoped token can deploy a version binding any D1 or KV id in
+  the account.
+
 - **SDK 2 dispatches a tool through `executor`, not `handler`** (verified 2026-09-22
   against `@modelcontextprotocol/server` 2.0.0). `registerTool` builds the executor
   from the handler once, so assigning `tool.handler` afterwards is a silent no-op:
