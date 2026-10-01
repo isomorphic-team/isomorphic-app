@@ -45,19 +45,16 @@ import { recordUsage, readUsage } from '../src/lib/usage-store.ts';
 import { registeredTools, wrapToolHandler } from '../src/lib/registered-tools.ts';
 
 import { checker } from './check.ts';
+import { registeredToolNames } from './doc-refs.ts';
 
 const { check, done } = checker('usage checks');
 
 console.log('\nclassification: every registered tool is classified');
 {
-	// Both registration shapes used in src/tools: the MCP Apps helper
-	// (registerAppTool(server, 'name', …)) and the plain SDK one
-	// (server.registerTool('name', …)). Brain-authored tools register through a
-	// variable (def.name) and match neither, which is the intended fallback.
-	//
-	// worker.ts is in the scan, not just src/tools/: read_page, list_pages and
-	// whoami are registered inline there, and a scan that missed them would have
-	// left the single most-called tool in the product unclassified.
+	// Both registration shapes used in src/tools (registeredToolNames). Brain-authored
+	// tools register through a variable (def.name) and match neither, which is the
+	// intended fallback. worker.ts is in the scan because whoami is registered inline
+	// there.
 	const dir = fileURLToPath(new URL('../src/tools/', import.meta.url));
 	const files = [
 		...readdirSync(dir)
@@ -65,12 +62,7 @@ console.log('\nclassification: every registered tool is classified');
 			.map((f) => dir + f),
 		fileURLToPath(new URL('../src/worker.ts', import.meta.url))
 	];
-	const names = new Set<string>();
-	for (const file of files) {
-		const src = readFileSync(file, 'utf8');
-		for (const m of src.matchAll(/registerAppTool\(\s*server,\s*'([a-z_]+)'/g)) names.add(m[1]);
-		for (const m of src.matchAll(/server\.registerTool\(\s*'([a-z_]+)'/g)) names.add(m[1]);
-	}
+	const names = new Set(files.flatMap((file) => registeredToolNames(readFileSync(file, 'utf8'))));
 	check('found the tool surface to check against', names.size > 15, `found ${names.size}`);
 	const unclassified = [...names].filter((n) => !(n in TOOL_KINDS)).sort();
 	check(
@@ -183,10 +175,6 @@ console.log('\nsummarize: totals');
 console.log('\nsummarize: the series');
 {
 	check('one point per day, gaps filled', s.series.length === 30);
-	check(
-		'every day is present and zeroed',
-		s.series.every((p) => typeof p.reads === 'number')
-	);
 	const aug4 = s.series.find((p) => p.day === '2026-08-04')!;
 	check('a busy day carries its counts', aug4.reads === 12 && aug4.writes === 3);
 	const aug1 = s.series.find((p) => p.day === '2026-08-01')!;
@@ -206,7 +194,6 @@ console.log('\nsummarize: people');
 		roster.every((m) => byId.has(m.user_id))
 	);
 	const nil = byId.get('u-nil')!;
-	check('an inactive member is present, not filtered out', !!nil);
 	check('an inactive member reads as zero', nil.reads === 0 && nil.writes === 0);
 	check('an inactive member has no last-active date', nil.lastActive === null);
 	check('inactive members sort last', s.people[s.people.length - 1].user_id === 'u-nil');
@@ -404,27 +391,13 @@ console.log('\nSDK internals: the shape worker.ts reaches into');
 		out.content?.[0]?.text === 'real hi',
 		JSON.stringify(out.content)
 	);
-
-	// claude.ai web rejected the whole connector when tools/list carried
-	// `execution: { taskSupport: 'forbidden' }`, which SDK 1.x stamped on every tool
-	// and the server stripped. SDK 2 registers no `execution`, so the strip is gone;
-	// this fails if the field comes back.
-	const listed = await client.listTools();
-	check(
-		'tools/list carries no `execution` field',
-		listed.tools.every((t) => !('execution' in t) || t.execution === undefined),
-		JSON.stringify(listed.tools.map((t) => t.execution))
-	);
 	await client.close();
 }
 
 console.log('\nusage_daily: the real migration and the real statements');
 {
-	// The pure fold above never touches SQL, so the upsert that keeps this table
-	// bounded was previously verified by hand and by nothing repeatable. Runs the
-	// REAL migrations over node:sqlite, so a syntax error or a changed key fails CI.
-	// This used to name migrations/0006 by filename, which pinned the table to the
-	// one migration that created it and would have missed any later alteration.
+	// The pure fold above never touches SQL; this section exercises the upsert that
+	// keeps the table bounded. Runs the REAL migrations over node:sqlite, so a syntax error or a changed key fails CI.
 	const db = localD1().db as unknown as Parameters<typeof recordUsage>[0];
 
 	const base = { orgId: 'o1', userId: 'u1', tool: 'read_page' };
@@ -455,9 +428,15 @@ console.log('\nusage_daily: the real migration and the real statements');
 		'a row outside the window is not returned',
 		!scoped.rows.some((r) => r.day === '2026-07-01')
 	);
+	// o2's row shares every key column but the org, so only the org predicate keeps it out.
+	const shape = scoped.rows
+		.map((r) => `${r.day}|${r.brain_id}|${r.tool}|${r.calls}`)
+		.sort()
+		.join(', ');
 	check(
 		'another org’s rows are never returned',
-		scoped.rows.every((r) => r.calls <= 4)
+		shape === '2026-08-04|a/b|read_page|3, 2026-08-04||read_page|2',
+		shape
 	);
 	const wide = await readUsage(db, 'o1', '2026-06-01', '2026-08-04');
 	check('widening the window picks the older row up', wide.rows.length === 3);

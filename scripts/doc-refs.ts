@@ -153,10 +153,15 @@ export function toolShapedWords(text: string): { name: string; line: number; tex
 	return out;
 }
 
+/** Widget tool names registered in a source file: the `registerAppTool` shape only. */
+export function registeredWidgetToolNames(source: string): string[] {
+	return Array.from(source.matchAll(/registerAppTool\(\s*server,\s*'([a-z_]+)'/g), (m) => m[1]);
+}
+
 /** Tool names registered in a source file, in both registration shapes. */
 export function registeredToolNames(source: string): string[] {
 	return [
-		...Array.from(source.matchAll(/registerAppTool\(\s*server,\s*'([a-z_]+)'/g), (m) => m[1]),
+		...registeredWidgetToolNames(source),
 		...Array.from(source.matchAll(/server\.registerTool\(\s*'([a-z_]+)'/g), (m) => m[1])
 	];
 }
