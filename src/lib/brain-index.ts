@@ -40,6 +40,7 @@ import {
 	mergeBrainResults,
 	type BrainSearchHit,
 	type PageSignal,
+	type QueryTerms,
 	type SearchResult
 } from './search.ts';
 
@@ -297,7 +298,7 @@ export async function ensureFresh(
 // statements, past the host's 60s tool timeout, and a pass that never finishes never
 // records its progress. Bounded, it converges: each read advances the cursor by a
 // slice.
-const REBUILD_PAGE_BUDGET = 300;
+export const REBUILD_PAGE_BUDGET = 300;
 
 // Rebuild the DERIVED rows — the page title, its links, and the queryable
 // frontmatter fields — for at most REBUILD_PAGE_BUDGET pages, from the content
@@ -403,7 +404,7 @@ async function fullBuild(
 // request big enough to reconcile all of it, because that request just times out
 // and the index never advances. Over budget, the pass reports incomplete, the
 // indexed commit sha is left alone, and the next read picks up the remainder.
-const REINDEX_PAGE_BUDGET = 600;
+export const REINDEX_PAGE_BUDGET = 600;
 
 // Incremental: re-fetch only pages whose blob sha changed (added or modified) and
 // drop pages that disappeared. Inbound links to a dropped page are left in place —
@@ -898,6 +899,51 @@ export async function loadPageContents(
 // than the alphabetically earliest of it.
 const MAX_SEARCH_CANDIDATES = 25;
 
+// Phase 1 of searchIndex: one signal per page holding any query term, from SQL alone.
+// Exported so pnpm test:search can compare it with signalsFromContent, which phase 2
+// and searchCorpus derive from the content itself; the two must agree.
+export async function indexSignals(
+	db: D1Database,
+	brainId: string,
+	q: QueryTerms,
+	prefix: string | undefined
+): Promise<PageSignal[]> {
+	// One bound parameter per term, reused between the SELECT list and the WHERE, so a
+	// term is escaped exactly once. escapeLike keeps a query's own % or _ literal.
+	const binds: unknown[] = [brainId];
+	const selects: string[] = [];
+	const conds: string[] = [];
+	for (const term of q.terms) {
+		binds.push(`%${escapeLike(term)}%`);
+		const p = `?${binds.length}`;
+		selects.push(`(content LIKE ${p} ESCAPE '\\') AS t${selects.length}`);
+		conds.push(`content LIKE ${p} ESCAPE '\\'`);
+	}
+	binds.push(`%${escapeLike(q.phrase)}%`);
+	selects.push(`(content LIKE ?${binds.length} ESCAPE '\\') AS ph`);
+
+	// OR, not AND: a page holding some of the terms is a worse match, not a non-match,
+	// and the scorer is what decides how much worse. ANDing here would reintroduce the
+	// defect this replaces — an empty result for a query the brain can nearly answer.
+	let where = `brain_id = ?1 AND (${conds.join(' OR ')})`;
+	if (prefix) {
+		binds.push(`${escapeLike(prefix)}%`);
+		where += ` AND path LIKE ?${binds.length} ESCAPE '\\'`;
+	}
+
+	const rows = await db
+		.prepare(`SELECT path, title, ${selects.join(', ')} FROM brain_pages WHERE ${where}`)
+		.bind(...binds)
+		.all<Record<string, string | number | null>>();
+
+	return rows.results.map((r) => ({
+		path: String(r.path),
+		title: r.title == null ? null : String(r.title),
+		has: q.terms.map((_, i) => Number(r[`t${i}`]) === 1),
+		phrase: Number(r.ph) === 1
+	}));
+}
+
 // Full-text search over indexed page content, in two phases.
 //
 // Phase 1 asks SQL only what is cheap to ask: for each page, does it contain each
@@ -927,40 +973,7 @@ export async function searchIndex(
 	};
 	if (q.terms.length === 0) return empty;
 
-	// One bound parameter per term, reused between the SELECT list and the WHERE, so a
-	// term is escaped exactly once. escapeLike keeps a query's own % or _ literal.
-	const binds: unknown[] = [brainId];
-	const selects: string[] = [];
-	const conds: string[] = [];
-	for (const term of q.terms) {
-		binds.push(`%${escapeLike(term)}%`);
-		const p = `?${binds.length}`;
-		selects.push(`(content LIKE ${p} ESCAPE '\\') AS t${selects.length}`);
-		conds.push(`content LIKE ${p} ESCAPE '\\'`);
-	}
-	binds.push(`%${escapeLike(q.phrase)}%`);
-	selects.push(`(content LIKE ?${binds.length} ESCAPE '\\') AS ph`);
-
-	// OR, not AND: a page holding some of the terms is a worse match, not a non-match,
-	// and the scorer is what decides how much worse. ANDing here would reintroduce the
-	// defect this replaces — an empty result for a query the brain can nearly answer.
-	let where = `brain_id = ?1 AND (${conds.join(' OR ')})`;
-	if (prefix) {
-		binds.push(`${escapeLike(prefix)}%`);
-		where += ` AND path LIKE ?${binds.length} ESCAPE '\\'`;
-	}
-
-	const rows = await db
-		.prepare(`SELECT path, title, ${selects.join(', ')} FROM brain_pages WHERE ${where}`)
-		.bind(...binds)
-		.all<Record<string, string | number | null>>();
-
-	const signals: PageSignal[] = rows.results.map((r) => ({
-		path: String(r.path),
-		title: r.title == null ? null : String(r.title),
-		has: q.terms.map((_, i) => Number(r[`t${i}`]) === 1),
-		phrase: Number(r.ph) === 1
-	}));
+	const signals = await indexSignals(db, brainId, q, prefix);
 	if (signals.length === 0) return empty;
 
 	const chosen = rankPages(signals, q.terms).slice(0, MAX_SEARCH_CANDIDATES);

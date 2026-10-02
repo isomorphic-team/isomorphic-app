@@ -53,9 +53,8 @@ import { MoreIcon } from './core/icons.tsx';
 import { Button, Menu, MenuRow } from './ui/index.ts';
 import { BackButton, Breadcrumb } from './components/Breadcrumb.tsx';
 // The Body dispatch table is codegenned from app/views/*.tsx (see scripts/gen-app.ts).
-import { renderView, viewActions } from './views/registry.generated.ts';
+import { renderView, viewActions, viewMode } from './views/registry.generated.ts';
 // Chrome still binds the editor's save/cancel + toolbar directly.
-import { EditorToolbar, editCtl } from './views/EditView.tsx';
 
 // ---------- host wiring ----------
 
@@ -194,6 +193,7 @@ function HeaderAction({ action }: { action: ViewAction }) {
 			<Button
 				variant="ghost"
 				size={action.label ? 'xs' : 'icon'}
+				data-action={action.key}
 				title={action.title}
 				aria-label={action.title}
 				disabled={action.disabled}
@@ -213,6 +213,7 @@ function HeaderAction({ action }: { action: ViewAction }) {
 		<Button
 			variant={action.primary ? 'subtle' : 'ghost'}
 			size="sm"
+			data-action={action.key}
 			title={action.title}
 			disabled={action.disabled}
 			onClick={action.onClick}
@@ -364,9 +365,11 @@ function Rail({ view }: { view: View }) {
 // ONE ROW: where you are, and what you can do to it. Where else you could be is the
 // rail (above), which is what lets this row stay one row.
 //
-// A SECOND ROW IS A MODE, NOT A FIXTURE. It appears when you enter the editor, carrying
-// the formatting toolbar, and that is the whole of its job — the appearing is the
-// signal: a row that is always there cannot tell you anything by being there.
+// A SECOND ROW IS A MODE, NOT A FIXTURE. It appears when a view enters a mode (the
+// editor's formatting toolbar, the tree's "Moving x: choose a folder"), and that is
+// the whole of its job: the appearing is the signal, and a row that is always there
+// cannot tell you anything by being there. The view supplies it (`mode` in
+// defineView), and while it shows, the view's actions are the ones that leave it.
 // The actions the header last drew for a finished screen. While a load is on screen
 // the header still shows that screen (chromeView), but some of its actions exist only
 // while their view is MOUNTED (the tree's, behind `treeCtl.bound`), and the body is the
@@ -376,15 +379,11 @@ function Rail({ view }: { view: View }) {
 let heldActions: ViewAction[] = [];
 
 function Header({ view }: { view: View }) {
-	const editing = view.kind === 'edit';
 	const loading = currentView.kind === 'loading';
 	const actions = loading
 		? heldActions.map((a) => ({ ...a, disabled: true }))
 		: (heldActions = viewActions(view));
-	// The toolbar waits for the editor to actually be bound, so the row drops in WITH
-	// the buttons already in it — no blank-toolbar frame, and no opacity fade, which was
-	// the visible flash.
-	const toolbar = editing && editCtl.view ? editCtl.view : null;
+	const mode = loading ? null : viewMode(view);
 	return (
 		<header class="sticky top-0 z-30 bg-bg/90 backdrop-blur">
 			{/* Fixed row height (not padding-driven) so toggling the search icon ↔ input —
@@ -408,20 +407,18 @@ function Header({ view }: { view: View }) {
 					<WindowControls view={view} />
 				</span>
 			</div>
-			{/* The formatting toolbar slides in / out as you enter / leave edit — grid-rows
+			{/* The mode row slides in / out as you enter / leave a mode — grid-rows
 			    0fr↔1fr animates to the exact content height. `data-row` rides on the
 			    collapsing element rather than the content inside it, so a collapsed row
 			    measures zero and a test can assert its absence the way a user sees it. */}
 			<div
-				data-row="actions"
+				data-row="mode"
 				class={`grid overflow-hidden transition-[grid-template-rows] duration-200 ease-out motion-reduce:transition-none ${
-					toolbar ? 'grid-rows-[1fr]' : 'grid-rows-[0fr]'
+					mode ? 'grid-rows-[1fr]' : 'grid-rows-[0fr]'
 				}`}
 			>
 				<div class="min-h-0 overflow-hidden">
-					<div class="flex items-center border-b border-border px-2 pb-1.5 pt-0.5">
-						<EditorToolbar view={toolbar} />
-					</div>
+					<div class="flex items-center border-b border-border px-2 pb-1.5 pt-0.5">{mode}</div>
 				</div>
 			</div>
 		</header>

@@ -4,14 +4,14 @@ paths:
   - "src/lib/{page-write,page-patch,change-record,write-target,write-dedupe,write-dedupe-store,brain-policy}.ts"
   - "app/views/{PageView,EditView}.tsx"
   - "src/lib/{policy-guard,policy-detectors,policy-store}.ts"
-  - "scripts/{test-page-patch,test-record,test-policy,test-dedupe,test-guard,test-pending-pr,e2e-librarian}.ts"
+  - "scripts/{test-page-write,test-record,test-policy,test-dedupe,test-guard,test-pending-pr,e2e-librarian}.ts"
 ---
 
 # The write path (`write_page`, `move_page`, `delete_page`)
 
 ## What `write_page` decides is pure
 
-- **`src/lib/page-write.ts`** (`pnpm test:patch`): `checkPageWrite` answers refusals that need
+- **`src/lib/page-write.ts`** (`pnpm test:page-write`): `checkPageWrite` answers refusals that need
   no page; `planPageWrite` picks create, update or refusal from the page as the branch holds it
   (clobber guard, the editor's sha guard, "nothing to update", a patch aimed at a missing
   page); `composeCreate` / `composeUpdate` build the file. The tool keeps only the IO.
@@ -80,9 +80,11 @@ through `src/lib/write-dedupe.ts` (pure) + `write-dedupe-store.ts` (D1, migratio
   already applied, and says so. `sync_records` has its own idempotency; editor saves are
   sha-guarded.
 
-Coverage: `pnpm test:e2e-librarian` drives every write tool against a real brain (offline by
-default), including every refusal proving nothing was written; `pnpm test:scope` asserts the
-content writes gate on the BRAIN role at `editor`.
+Coverage: `pnpm test:page-write` pins every refusal `checkPageWrite`, `planPageWrite` and
+`applyFieldPatch` make, with its message. `pnpm test:e2e-librarian` drives every write tool
+against a real brain (offline by default) and takes one refusal per deciding function through
+its tool, proving nothing was committed; `pnpm test:scope` asserts the content writes gate on
+the BRAIN role at `editor`.
 
 ## The data-policy guard
 

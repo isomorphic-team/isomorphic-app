@@ -83,3 +83,16 @@ const ACTIONS_BY_KIND = new Map<string, (view: View) => ViewAction[]>(
 export function viewActions(view: View): ViewAction[] {
 	return ACTIONS_BY_KIND.get(view.kind)?.(view) ?? [];
 }
+
+const MODE_BY_KIND = new Map<string, (view: View) => VNode | null>(
+	VIEW_DEFS.filter((d) => d.mode).map((d) => [
+		d.kind,
+		d.mode as unknown as (view: View) => VNode | null
+	])
+);
+
+// The mode the current view is in, for the header's second row. Null is the normal
+// case: no mode, no row.
+export function viewMode(view: View): VNode | null {
+	return MODE_BY_KIND.get(view.kind)?.(view) ?? null;
+}

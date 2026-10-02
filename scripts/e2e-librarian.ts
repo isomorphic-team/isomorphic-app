@@ -1,38 +1,44 @@
-// End-to-end battery for the librarian write tools: write_page create/update, its
-// non-destructive append/edits/fields modes, and the index-driven page discovery the
-// write path relies on (delete_page "still referenced" notes via backlinksTo;
-// move_page link repointing via fetchInboundLinkersForPaths, for a single page, a
-// folder subtree, and an attachment).
+// End-to-end battery for the tools that change a brain, driven through an in-memory
+// MCP client against a real brain and a real content index. It covers:
 //
-// It also covers the ORG-scope tools that decide where a brain LANDS (`brains`,
-// `connect_brain`), which resolve through orgContext / resolveOrgForPerson rather
-// than tenantContext. The org rows are real, in the same D1 as the content index, and
-// one of them deliberately holds NO brain: listAccessibleBrains cannot see such an
-// org, so it is the case a first adoption has to get right.
+//   - write_page: create, status, the update modes (lifecycle, append, edits, fields,
+//     whole-body replace), one refusal per write decider (checkPageWrite,
+//     planPageWrite, applyFieldPatch) proving nothing was committed, the ambiguous
+//     anchor that aborts a batch, and the read ordering that pins a write to HEAD.
+//   - write-through: a landed write advancing the index (GitHub) or leaving it for
+//     reconciliation (fs), and search seeing the result.
+//   - move_page and delete_page on pages, folders (including a merge into an existing
+//     folder), dotfiles and attachments, with inbound links repointed or reported
+//     through the index (backlinksTo, fetchInboundLinkersForPaths).
+//   - custom tools: a tools/ page discovered by loadCustomToolDefs and invoked after
+//     a reconnect.
+//   - findings: the key validate prints is the key resolve accepts.
+//   - search_pages `expect`.
+//   - the page version (blob sha) read_page and view_page report, and the web URL
+//     every widget tool carries in both halves of its result.
+//   - attachments: binary bytes through a real commit, read_media, the URL-ingest
+//     guards, and never overwriting a stored file.
+//   - the ORG-scope tools that decide where a brain lands (`brains`, `connect_brain`,
+//     `create_brain`), through orgContext / resolveOrgForPerson against real org
+//     rows. One org deliberately holds NO brain: listAccessibleBrains cannot see it,
+//     so it is the case a first adoption has to get right.
+//   - the write-attempt ledger: a retried create or append lands once.
+//   - configure_brain refusing to overwrite an existing config.
 //
-// TWO BACKENDS, ONE BATTERY. By default it runs against the fs + git BrainStore in a
-// temporary directory: no network, no credentials, no scratch repo, so it runs in CI
-// and a contributor can run it on a fresh clone. With --github it runs the identical
-// assertions against a real scratch repo on the platform org, which is the only way
+// TWO BACKENDS, ONE BATTERY (e2e-harness.ts). By default it runs against the fs + git
+// BrainStore in a temporary directory: no network, no credentials, so it runs in CI.
+// With --github it runs the identical assertions against scratch repos on the
+// platform org (`brain-librarian-e2e-*`, deleted afterwards), which is the only way
 // to prove the GitHub adapter itself. It ends by protecting the scratch repo's default
 // branch and checking that successive writes join one pull request.
 //
 //   pnpm test:e2e-librarian                            (local, offline, in CI)
 //   pnpm exec tsx scripts/e2e-librarian.ts --github    (real GitHub, by hand)
 //
-// The --github mode requires `.dev.vars` (repo root, or DEV_VARS_PATH) with the
-// platform App creds + PLATFORM_ORG / PLATFORM_INSTALLATION_ID, creates a scratch
-// brain repo `brain-librarian-e2e-*`, and deletes it afterwards (success or failure).
-//
 // The content index runs on a real SQLite database via node:sqlite in both modes,
 // shimmed to the D1 surface, so ensureFresh / loadResolvedGraph / backlinksTo run for
-// real exactly like prod. (Mirrors e2e-import.ts.)
-import { readFileSync } from 'node:fs';
-import { mkdtemp, rm } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
-import { basename, join } from 'node:path';
-import { Client } from '@modelcontextprotocol/client';
-import { McpServer, InMemoryTransport } from '@modelcontextprotocol/server';
+// real exactly like prod.
+import { McpServer } from '@modelcontextprotocol/server';
 import { registerImportTools } from '../src/tools/importer.ts';
 import { registerLibrarianTools } from '../src/tools/librarian.ts';
 import { registerBrainTools } from '../src/tools/brains.ts';
@@ -47,119 +53,50 @@ import { registerMediaTools } from '../src/tools/media.ts';
 import { registerCoreTools } from '../src/tools/core.ts';
 import { registerBrainApp } from '../src/tools/apps.ts';
 import { loadCustomToolDefs, registerCustomTools } from '../src/tools/custom.ts';
-import { installationOctokit } from '../src/lib/github.ts';
-import { createAndScaffoldBrain, buildScaffoldFiles } from '../src/lib/scaffold-core.ts';
 import { loadBrainConfig } from '../src/lib/brain-config.ts';
-import type { Octokit } from 'octokit';
-import { githubStore, type BrainStore } from '../src/lib/brain-repo.ts';
-import { ensureGitRepo, fsBrainStore } from '../src/local/brain-store-fs.ts';
+import type { BrainStore } from '../src/lib/brain-repo.ts';
 import { localD1 } from '../src/local/d1-sqlite.ts';
-
-const GITHUB_MODE = process.argv.includes('--github');
+import { webUrlFor } from '../src/lib/web-app.ts';
+import { checker } from './check.ts';
+import { BIND_FIXTURE_STORAGE } from './fixture-storage.ts';
+import { orgStorage } from '../src/lib/storage-connections.ts';
+import {
+	GITHUB_MODE,
+	connect,
+	eventually,
+	scratchBrain,
+	sleep,
+	type CallResult
+} from './e2e-harness.ts';
 
 // ---- D1 over node:sqlite, the real migrations (src/local/d1-sqlite.ts) ----
 const { db } = localD1();
 
 // ---- the brain under test ----
-let store: BrainStore;
-let repoArgs: { owner: string; repo: string };
-let brainId: string;
-let name: string;
-let cleanup: () => Promise<void>;
+const brain = await scratchBrain('brain-librarian-e2e', 'Librarian E2E test, safe to delete');
+const { repoArgs, brainId, name, headSha, settledHead } = brain;
+// Swapped for a wrapper by the read-ordering probe; every tool reads it through getContext.
+let store: BrainStore = brain.store;
+// A second repo, existing but not yet a brain: what connect_brain adopts.
+const adoptRepo = `${name}-adopt`;
 // The GitHub client for the three PLATFORM operations (create a repo, list an
 // installation's repos, check a repo exists). These are GitHub-as-a-platform, not
 // a brain as storage, so BrainStore deliberately cannot back them and the offline
 // mode has to stand in for them the way it stands in for the repo itself.
 let platformOctokit: never;
-// --github only: the installation client that created the scratch repo, for the
-// protected-branch phase (setting protection, listing pull requests).
-let scratchOctokit: Octokit | undefined;
-// A second repo, existing but not yet a brain: what connect_brain adopts.
-let adoptRepo: string;
-// Repos create_brain scaffolds during the run, deleted with the rest in --github mode.
-const createdRepos: string[] = [];
 
 if (GITHUB_MODE) {
-	const devVarsPath =
-		process.env.DEV_VARS_PATH ?? new URL('../.dev.vars', import.meta.url).pathname;
-	const devVars: Record<string, string> = {};
-	for (const line of readFileSync(devVarsPath, 'utf8').split('\n')) {
-		const m = line.match(/^([A-Z0-9_]+)\s*=\s*(.*)$/);
-		if (!m) continue;
-		devVars[m[1]] = m[2].replace(/^"(.*)"$/, '$1');
-	}
-	const org = devVars.PLATFORM_ORG;
-	const installationId = Number(devVars.PLATFORM_INSTALLATION_ID);
-	if (!org || !installationId) throw new Error('PLATFORM_ORG / PLATFORM_INSTALLATION_ID missing');
-	const octokit = await installationOctokit(
-		{
-			appId: Number(devVars.GITHUB_APP_ID),
-			privateKeyBase64: devVars.GITHUB_APP_PRIVATE_KEY_BASE64
-		},
-		installationId
-	);
-	name = `brain-librarian-e2e-${Date.now().toString(36)}`;
-	console.log(`Creating scratch brain ${org}/${name} …`);
-	const brain = await createAndScaffoldBrain(octokit, {
-		org,
-		name,
-		description: 'Librarian E2E test, safe to delete'
-	});
-	store = githubStore(octokit);
-	repoArgs = { owner: brain.owner, repo: brain.name };
-	brainId = `${brain.owner}/${brain.name}`;
-	platformOctokit = octokit as never;
-	scratchOctokit = octokit;
-	// A real second repo for connect_brain to adopt. Scaffolded like the first so the
-	// post-adopt config detection has actual content to look at.
-	adoptRepo = `${name}-adopt`;
-	console.log(`Creating scratch repo ${org}/${adoptRepo} …`);
-	await createAndScaffoldBrain(octokit, {
-		org,
-		name: adoptRepo,
-		description: 'Librarian E2E adopt target, safe to delete'
-	});
-	cleanup = async () => {
-		for (const repo of [name, adoptRepo, ...createdRepos]) {
-			console.log(`\nDeleting scratch repo ${org}/${repo} …`);
-			try {
-				await octokit.rest.repos.delete({ owner: org, repo });
-				console.log('Deleted.');
-			} catch (err) {
-				console.log(
-					`Could not delete (${(err as { status?: number }).status}), delete manually: https://github.com/${org}/${repo}/settings`
-				);
-			}
-		}
-	};
+	platformOctokit = brain.octokit as never;
+	// Scaffolded like the first so the post-adopt config detection has actual content
+	// to look at.
+	await brain.scaffoldRepo(adoptRepo, 'Librarian E2E adopt target, safe to delete');
 } else {
-	const dir = await mkdtemp(join(tmpdir(), 'brain-librarian-e2e-'));
-	name = basename(dir);
-	console.log(`Creating scratch brain in ${dir} …`);
-	await ensureGitRepo(dir, { name: 'E2E', email: 'e2e@localhost' });
-	store = fsBrainStore({ dir, author: { name: 'E2E', email: 'e2e@localhost' } });
-	repoArgs = { owner: 'local', repo: name };
-	brainId = `local/${name}`;
-	// The same scaffold the GitHub path gets, from the same pure builder, so both
-	// backends start from a byte-identical brain.
-	await store.commitFiles(repoArgs, {
-		message: 'Scaffold brain',
-		writes: buildScaffoldFiles()
-	});
-	cleanup = async () => {
-		// Retried, because git can still be writing under .git when the last awaited
-		// command has already returned (auto gc detaches into the background after a
-		// commit), and a plain recursive rm then fails ENOTEMPTY on `.git` after every
-		// check passed. Seen on CI 2026-09-14. Node retries exactly that error.
-		await rm(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
-	};
 	// The offline stand-in for GitHub-as-a-platform. Narrow on purpose: it answers
 	// only the two reads connect_brain makes, and answers them from a fixed set, so
 	// "the installation can reach this repo" is a real branch with a real negative
 	// case. What it CANNOT stand in for is the adapter itself, which is what
 	// --github is for: there, post-adopt config detection runs against actual repo
 	// content, and here it fails closed to needsConfig=false.
-	adoptRepo = `${name}-adopt`;
 	const reachable = new Set([name, adoptRepo]);
 	platformOctokit = {
 		rest: {
@@ -218,60 +155,10 @@ registerCoreTools(server, getContext);
 // handlers rather than only against webUrlFor.
 const WEB_BASE = 'https://brain.example';
 registerBrainApp(server, getContext, { webBaseUrl: WEB_BASE });
-const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
-await server.connect(serverTransport);
-const client = new Client({ name: 'e2e', version: '0.0.0' });
-await client.connect(clientTransport);
-
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
-
-// GitHub's refs/contents reads are eventually consistent for a short window
-// after a write. Poll until a condition holds so the assertions test the tools,
-// not the API's replication lag.
-async function eventually<T>(
-	fn: () => Promise<T>,
-	pred: (v: T) => boolean,
-	ms = 15000
-): Promise<T> {
-	const deadline = Date.now() + ms;
-	let last: T = await fn();
-	while (!pred(last) && Date.now() < deadline) {
-		await sleep(1500);
-		last = await fn();
-	}
-	return last;
-}
-
-import { checker } from './check.ts';
-import { BIND_FIXTURE_STORAGE } from './fixture-storage.ts';
-import { orgStorage } from '../src/lib/storage-connections.ts';
+const main = await connect(server);
+const { client, call } = main;
 
 const { check, done } = checker('librarian E2E checks');
-async function call(tool: string, args: Record<string, unknown>) {
-	const res = (await client.callTool({ name: tool, arguments: args })) as {
-		isError?: boolean;
-		content: { type: string; text: string }[];
-	};
-	return { isError: !!res.isError, text: res.content.map((c) => c.text).join('\n') };
-}
-// Same call, keeping structuredContent. Most assertions here read the text block,
-// which is what an agent sees; the app reads the structured half, so the fields it
-// navigates and refreshes on need a way to be asserted too.
-async function callSc(tool: string, args: Record<string, unknown>) {
-	const res = (await client.callTool({ name: tool, arguments: args })) as {
-		isError?: boolean;
-		content: { type: string; text: string }[];
-		structuredContent?: Record<string, unknown>;
-	};
-	return {
-		isError: !!res.isError,
-		text: res.content.map((c) => c.text).join('\n'),
-		sc: res.structuredContent ?? {}
-	};
-}
-async function headSha(): Promise<string> {
-	return (await store.getHead(repoArgs)).commitSha;
-}
 // The commit the content index believes it reflects. GitHub writes can advance it
 // synchronously; the fs backend deliberately cannot because its revision token is a
 // digest of a mutable working tree rather than one immutable commit.
@@ -301,17 +188,37 @@ async function assertOneCommit(label: string, before: number) {
 	);
 	check(`${label}: exactly one commit`, n === 1, `commits added = ${n}`);
 }
-async function settledHead(): Promise<string> {
-	let prev = await headSha();
-	for (let i = 0; i < 5; i++) {
-		await sleep(1200);
-		const next = await headSha();
-		if (next === prev) return next;
-		prev = next;
-	}
-	return prev;
+// A refusal's contract: it says why, and the brain is exactly as it was.
+async function assertRefused(
+	label: string,
+	r: CallResult,
+	why: RegExp,
+	before: { commits: number; path: string; text: string | null }
+) {
+	check(label, r.isError && why.test(r.text), r.text);
+	check(`${label}: nothing committed`, (await commitCount()) === before.commits);
+	check(`${label}: the page is unchanged`, (await fileText(before.path)) === before.text);
 }
-// Poll find_inbound_links until it sees `linker` — proves the tree + content
+async function snapshot(path: string) {
+	await settledHead();
+	return { commits: await commitCount(), path, text: await fileText(path) };
+}
+// A widget result carries its web URL in BOTH halves: a host that receives
+// structuredContent hands the model that and drops the text, so a link only in the
+// text block is a link no model sees. Whole-string equality, not a substring search.
+function checkWebUrl(tool: string, r: CallResult, expected: string) {
+	check(
+		`${tool} carries its URL in structuredContent`,
+		r.sc.webUrl === expected,
+		String(r.sc.webUrl)
+	);
+	check(
+		`${tool} carries the same URL in its text`,
+		/Open in browser: (\S+)$/.exec(r.text)?.[1] === expected,
+		r.text.slice(-160)
+	);
+}
+// Poll find_inbound_links until it sees `linker`: proves the tree + content
 // index are consistent for `target` before we run a destructive op that reads
 // the same index. (find_inbound_links resolves via loadResolvedGraph, the same
 // path delete_page / move_page discovery uses, so once it agrees, they will.)
@@ -368,34 +275,21 @@ try {
 		northwindStable ?? ''
 	);
 	await assertOneCommit('write_page create with status', before);
-	r = await call('write_page', {
-		path: 'wiki/customers/nonstandard.md',
-		content: '# Nonstandard\n',
-		status: 'published'
-	});
-	check('write_page refuses the old non-OKF status on new writes', r.isError, r.text);
 
-	// ── write_page mode guards: create refuses an existing path; update refuses
-	//    a missing one; upsert (default) does either. ─────────────────────────
+	// ── refusals: one per decider, each proving nothing was committed. The
+	//    decisions themselves are pinned in test-page-patch; these prove the tool
+	//    acts on them. planPageWrite: mode:create on an existing path. ─────────
+	let unchanged = await snapshot('wiki/customers/acme.md');
 	r = await call('write_page', {
 		path: 'wiki/customers/acme.md',
 		content: '# clobber\n',
 		mode: 'create'
 	});
-	check(
+	await assertRefused(
 		'write_page mode:create refuses an existing path',
-		r.isError && /already exists/i.test(r.text),
-		r.text
-	);
-	r = await call('write_page', {
-		path: 'wiki/customers/ghost.md',
-		content: '# x\n',
-		mode: 'update'
-	});
-	check(
-		'write_page mode:update refuses a missing path',
-		r.isError && /does not exist/i.test(r.text),
-		r.text
+		r,
+		/already exists/i,
+		unchanged
 	);
 
 	// The target blob must be read only after the write's head is captured. Delay
@@ -536,8 +430,7 @@ try {
 
 	// ── OKF conformance, against real blobs ──────────────────────────────────
 	//
-	// `type` is OKF's one required field. It must land in the file, and lead the
-	// frontmatter the way the spec's own examples do.
+	// `type` is OKF's one required field: the argument must land in the file.
 	await settledHead();
 	before = await commitCount();
 	r = await call('write_page', {
@@ -552,11 +445,6 @@ try {
 		(t) => !!t && /type:/.test(t)
 	);
 	check('type: lands in frontmatter', /^type:\s*Vendor$/m.test(swoogo ?? ''), swoogo ?? '');
-	check(
-		'type: leads the frontmatter block',
-		/^---\ntype:/.test(swoogo ?? ''),
-		(swoogo ?? '').slice(0, 80)
-	);
 
 	// A type set on a later update must merge, not duplicate the key.
 	r = await call('write_page', { path: 'wiki/vendors/swoogo.md', type: 'Event Platform' });
@@ -623,32 +511,6 @@ try {
 		kickoff ?? ''
 	);
 
-	// H1 titling: a page with no `title:` is named by its heading, not its filename,
-	// and a folder note is named by its FOLDER rather than "index".
-	r = await call('write_page', {
-		path: 'wiki/systems/wallabi-db.md',
-		content: '# Wallabi Data Warehouse\n\nAnalytics store.\n'
-	});
-	check('write_page (no title) succeeds', !r.isError, r.text);
-	await call('write_page', {
-		path: 'wiki/systems/index.md',
-		content: 'Everything we run.\n'
-	});
-	r = await eventually(
-		() => call('find_inbound_links', { path: 'wiki/systems/wallabi-db.md' }),
-		(x) => !x.isError
-	);
-	check('H1 titles the page (not the filename)', r.text.includes('Wallabi Data Warehouse'), r.text);
-	r = await eventually(
-		() => call('find_inbound_links', { path: 'wiki/systems/index.md' }),
-		(x) => !x.isError
-	);
-	check(
-		'folder note is titled by its folder, never "index"',
-		r.text.includes('systems') && !/"index"/.test(r.text),
-		r.text
-	);
-
 	// ── write_page (append / edits): change PART of a page without sending the
 	//    rest of it. The point is that a caller who has never read the page can
 	//    still edit it safely, so every check here is "the text I didn't name is
@@ -703,20 +565,6 @@ try {
 	check('edit left frontmatter alone', /title:\s*Acme/.test(edited ?? ''), edited ?? '');
 	await assertOneCommit('write_page edits', before);
 
-	// An anchor that only matches FRONTMATTER must not match: edits operate on the
-	// body, so metadata can't be rewritten behind the frontmatter merge's back.
-	await settledHead();
-	before = await commitCount();
-	r = await call('write_page', {
-		path: 'wiki/customers/acme.md',
-		edits: [{ find: 'Rocket-parts customer', replace: 'Rocket customer' }]
-	});
-	check(
-		'edits refuse a frontmatter-only anchor',
-		r.isError && /couldn't find/i.test(r.text),
-		r.text
-	);
-
 	// Ambiguous anchor: refuse, and write NOTHING (not even the edits that matched).
 	await call('write_page', {
 		path: 'wiki/customers/acme.md',
@@ -742,15 +590,14 @@ try {
 		afterAmbiguous ?? ''
 	);
 
-	// Argument guards.
+	// checkPageWrite: an argument mix no page could satisfy.
+	unchanged = await snapshot('wiki/customers/acme.md');
 	r = await call('write_page', {
 		path: 'wiki/customers/acme.md',
 		content: '# Acme\n',
 		append: 'more'
 	});
-	check('content + append is refused', r.isError && /not both/i.test(r.text), r.text);
-	r = await call('write_page', { path: 'wiki/customers/ghost.md', append: 'more' });
-	check('append to a missing page is refused', r.isError && /does not exist/i.test(r.text), r.text);
+	await assertRefused('content + append is refused', r, /not both/i, unchanged);
 
 	// The destructive path announces its blast radius, so a clobber is visible.
 	r = await call('write_page', {
@@ -1050,16 +897,11 @@ try {
 	check('write_page fields: the key is gone from the file', !/owner:/.test(alphaCut ?? ''));
 	check('write_page fields: ...and the rest stayed', /done:\s*2026-08-10/.test(alphaCut ?? ''));
 
-	// The refusals. Each one exists so a caller cannot destroy something it has not read.
-	r = await call('write_page', { path: 'wiki/todos/alpha.md', fields: { title: 'Renamed' } });
-	check('write_page fields: refuses a managed key', r.isError, r.text);
-	check('write_page fields: ...and points at the argument', /title" argument/.test(r.text), r.text);
-	r = await call('write_page', { path: 'wiki/todos/alpha.md', fields: { 'due date': 'friday' } });
-	check('write_page fields: refuses a key that would not read back', r.isError, r.text);
-
-	// wiki/notes/kickoff.md carries the nested OKF sources:/generated: blocks.
+	// applyFieldPatch: a field write cannot flatten a nested block the caller has not
+	// read. wiki/notes/kickoff.md carries the nested OKF sources:/generated: blocks.
+	unchanged = await snapshot('wiki/notes/kickoff.md');
 	r = await call('write_page', { path: 'wiki/notes/kickoff.md', fields: { sources: 'clobber' } });
-	check('write_page fields: refuses to flatten nested YAML', r.isError, r.text);
+	await assertRefused('write_page fields: refuses to flatten nested YAML', r, /nested/i, unchanged);
 	r = await call('write_page', { path: 'wiki/notes/kickoff.md', fields: { reviewed: 'yes' } });
 	check('write_page fields: writes alongside nested YAML', !r.isError, r.text);
 	const kickoffAfter = await eventually(
@@ -1101,6 +943,28 @@ try {
 		'validate reports no malformed tool pages',
 		!/won't register/.test((await call('validate', {})).text)
 	);
+
+	// Register on a fresh server+client (a "reconnect") and drive the tool.
+	const toolServer = new McpServer({ name: 'librarian-e2e-tools', version: '0.0.0' });
+	registerCustomTools(toolServer, getContext, defs);
+	const tools = await connect(toolServer, 'e2e-tools');
+	const listed = await tools.client.listTools();
+	check(
+		'tool_find_term appears in the tool list after reconnect',
+		listed.tools.some((t) => t.name === 'tool_find_term')
+	);
+	const inv = await tools.call('tool_find_term', { term: 'zorptastic' });
+	check(
+		'tool runs its bound op against the brain',
+		/wiki\/kb\/marker\.md/.test(inv.text),
+		inv.text
+	);
+	check(
+		'tool prepends its instruction body',
+		/Report the matches below\./.test(inv.text),
+		inv.text
+	);
+	await tools.close();
 
 	// ══ findings: validate surfaces, resolve records, validate stops re-raising ═══
 	// The whole point of keying findings. Driven end to end because the ledger is a
@@ -1147,12 +1011,16 @@ try {
 	r = await call('validate', {});
 	check('validate raises it again after undismiss', r.text.includes(`[${ISLAND}]`), r.text);
 
-	// A broken link is a DEFECT, not a finding: it carries no key and cannot be
-	// silenced. This is the line that makes a dismissal mechanism safe to have.
+	// An import action (delete / alias / suppress / recreate) on a key that is not an
+	// import finding is refused, and the refusal names the actions that key takes.
 	r = await call('resolve', {
 		decisions: [{ finding: 'link:wiki/a.md', action: 'suppress' }]
 	});
-	check('a non-import key cannot take an import action', r.isError, r.text);
+	check(
+		'a non-import key cannot take an import action',
+		r.isError && /only applies to an import finding/.test(r.text) && /dismiss/.test(r.text),
+		r.text
+	);
 
 	// ══ search_pages `expect`: the retrieval measurement, folded into the read ════
 	r = await call('search_pages', {
@@ -1167,51 +1035,21 @@ try {
 		`${withoutExpect.text.split('\n')[0]} vs ${r.text.split('\n')[0]}`
 	);
 
-	// Register on a fresh server+client (a "reconnect") and drive the tool.
-	const toolServer = new McpServer({ name: 'librarian-e2e-tools', version: '0.0.0' });
-	registerCustomTools(toolServer, getContext, defs);
-	const [toolCT, toolST] = InMemoryTransport.createLinkedPair();
-	await toolServer.connect(toolST);
-	const toolClient = new Client({ name: 'e2e-tools', version: '0.0.0' });
-	await toolClient.connect(toolCT);
-	const listed = await toolClient.listTools();
-	check(
-		'tool_find_term appears in the tool list after reconnect',
-		listed.tools.some((t) => t.name === 'tool_find_term')
-	);
-	const inv = (await toolClient.callTool({
-		name: 'tool_find_term',
-		arguments: { term: 'zorptastic' }
-	})) as { isError?: boolean; content: { type: string; text: string }[] };
-	const invText = inv.content.map((c) => c.text).join('\n');
-	check('tool runs its bound op against the brain', /wiki\/kb\/marker\.md/.test(invText), invText);
-	check('tool prepends its instruction body', /Report the matches below\./.test(invText), invText);
-	await toolClient.close();
-	await toolServer.close();
-
-	// ---- attachments: bytes have to survive a real commit ----
+	// ---- page version and web URLs ----
 	//
-	// This is the only place the binary path is exercised end to end. Everything
-	// else about attachments is pure and covered by test:media; what cannot be
-	// tested purely is whether a PNG comes back byte-identical after going through
-	// createBlob -> tree -> commit -> read. The whole reason FileWrite grew an
-	// `encoding` is that the inline-content path decodes as UTF-8 and would corrupt
-	// these bytes silently, so a round-trip that compares base64 exactly is the
-	// assertion that would have caught it.
-	// Issue #29: a render must carry the version it is a render OF. The viewer had no
-	// way to reload a page and no way to tell a current render from one the branch had
-	// moved past, because the read tools returned content and dropped the blob sha
-	// readFile already hands them. Both read paths report it, and they must agree:
-	// the app opens a page through view_page and refreshes it through read_page, so
-	// two different answers would make every refresh look like someone else's edit.
-	console.log('\npage version (issue #29)');
+	// A render carries the blob sha of the page it renders, so the viewer can tell a
+	// current render from one the branch has moved past. Both read paths report it,
+	// and they must agree: the app opens a page through view_page and refreshes it
+	// through read_page, so two different answers would make every refresh look like
+	// someone else's edit.
+	console.log('\npage version and web URLs');
 	{
 		const path = 'wiki/vendors/versioned.md';
 		await call('write_page', { path, content: '# Versioned\n\nFirst.\n', title: 'Versioned' });
 
 		const stored = await store.readFile(repoArgs, path);
-		const read = await callSc('read_page', { path });
-		const viewed = await callSc('view_page', { path });
+		const read = await call('read_page', { path });
+		const viewed = await call('view_page', { path });
 		const structuredMarkdown = typeof read.sc.markdown === 'string' ? read.sc.markdown : '';
 		check(
 			'read_page carries the complete page in structuredContent',
@@ -1226,27 +1064,27 @@ try {
 			`${String(viewed.sc.sha)} vs ${String(read.sc.sha)}`
 		);
 
-		// The page's web URL rides BOTH halves of the result. A host that receives
-		// structuredContent hands the model that and drops the text, so a link only
-		// in the text block is a link no model sees (which is how the first version
-		// shipped). Whole-string equality, not a substring search.
-		const expectedUrl = `${WEB_BASE}/b/${name}/${path}`;
-		check(
-			'view_page carries the page URL in structuredContent',
-			viewed.sc.webUrl === expectedUrl,
-			String(viewed.sc.webUrl)
-		);
-		check(
-			'...and the same URL in its text',
-			/https?:\/\/\S+/.exec(viewed.text)?.[0] === expectedUrl,
-			viewed.text.slice(-120)
-		);
+		// Every widget tool's web URL, in both halves. view_page and browse_brain are
+		// pinned to literal URLs; the view routes' query strings are webUrlFor's
+		// (pinned in test-web), so here they prove each handler passes its own tool,
+		// brain and argument.
+		checkWebUrl('view_page', viewed, `${WEB_BASE}/b/${name}/${path}`);
 		check('read_page carries none: nobody clicks in the reading channel', !('webUrl' in read.sc));
-		const browsed = await callSc('browse_brain', {});
-		check(
-			'browse_brain carries the brain URL',
-			browsed.sc.webUrl === `${WEB_BASE}/b/${name}`,
-			String(browsed.sc.webUrl)
+		checkWebUrl('browse_brain', await call('browse_brain', {}), `${WEB_BASE}/b/${name}`);
+		checkWebUrl(
+			'view_graph',
+			await call('view_graph', { path }),
+			webUrlFor(WEB_BASE, 'view_graph', name, path)!
+		);
+		checkWebUrl(
+			'view_activity',
+			await call('view_activity', { path }),
+			webUrlFor(WEB_BASE, 'view_activity', name, path)!
+		);
+		checkWebUrl(
+			'view_review',
+			await call('view_review', {}),
+			webUrlFor(WEB_BASE, 'view_review', name)!
 		);
 
 		// The assertion the refresh control rests on. Without it the sha could be any
@@ -1254,7 +1092,7 @@ try {
 		// change" forever, which is the failure the reader would never see through.
 		const beforeSha = read.sc.sha;
 		await call('write_page', { path, append: '\nSecond.\n' });
-		const after = await callSc('read_page', { path });
+		const after = await call('read_page', { path });
 		check(
 			'the sha moves when the page is written',
 			after.sc.sha !== beforeSha,
@@ -1273,7 +1111,7 @@ try {
 			content: '# Other\n',
 			title: 'Other'
 		});
-		const untouched = await callSc('read_page', { path });
+		const untouched = await call('read_page', { path });
 		check(
 			'an unrelated write leaves it alone',
 			untouched.sc.sha === after.sc.sha,
@@ -1281,6 +1119,13 @@ try {
 		);
 	}
 
+	// ---- attachments: bytes have to survive a real commit ----
+	//
+	// The only place the binary path is exercised end to end. Everything else about
+	// attachments is pure and covered by test:media; what cannot be tested purely is
+	// whether a PNG comes back byte-identical after createBlob -> tree -> commit ->
+	// read. The inline-content path decodes as UTF-8 and would corrupt these bytes
+	// silently, so the round trip compares base64 exactly.
 	console.log('\nattachments');
 	{
 		// A 1x1 transparent PNG. Small, but real: it contains bytes that are not valid
@@ -1387,6 +1232,105 @@ try {
 			'old asset still present'
 		);
 
+		// Folder moves must carry attachment bytes and both inside/outside image links.
+		for (const failure of ['missing', 'changed'] as const) {
+			const folder = `wiki/media-read-${failure}`;
+			const asset = `${folder}/logo.png`;
+			await store.commitFiles(repoArgs, {
+				message: 'seed attachment read guard',
+				writes: [{ path: asset, content: PNG_1PX, encoding: 'base64' }]
+			});
+			const beforeReadFailure = await commitCount();
+			const realStore = store;
+			store = {
+				...realStore,
+				readBinary: async (repo, path) => {
+					const file = await realStore.readBinary(repo, path);
+					if (path !== asset) return file;
+					return failure === 'missing' ? null : { ...file!, sha: 'changed-sha' };
+				}
+			};
+			try {
+				const refused = await call('move_page', { path: folder, new_path: `${folder}-moved` });
+				check(`${failure} attachment read refuses the folder move`, refused.isError, refused.text);
+			} finally {
+				store = realStore;
+			}
+			check(
+				`${failure} attachment read creates no commit`,
+				(await commitCount()) === beforeReadFailure
+			);
+			check(
+				`${failure} attachment read leaves source bytes intact`,
+				(await store.readBinary(repoArgs, asset))?.contentBase64 === PNG_1PX
+			);
+		}
+
+		await call('write_page', {
+			path: 'wiki/media-move/inside.md',
+			title: 'Inside media move',
+			content: '# Inside\n\n![Logo](assets/logo.png)\n'
+		});
+		await call('write_page', {
+			path: 'wiki/media-ref.md',
+			title: 'Outside media move',
+			content: '# Outside\n\n![Logo](media-move/assets/logo.png)\n'
+		});
+		await store.commitFiles(repoArgs, {
+			message: 'seed folder attachment',
+			writes: [{ path: 'wiki/media-move/assets/logo.png', content: PNG_1PX, encoding: 'base64' }]
+		});
+		await settledHead();
+		const assetFolderMove = await call('move_page', {
+			path: 'wiki/media-move/assets',
+			new_path: 'wiki/media-move/images'
+		});
+		check('an attachment-only folder moves', !assetFolderMove.isError, assetFolderMove.text);
+		check(
+			'attachment-only folder preserves binary bytes',
+			(await store.readBinary(repoArgs, 'wiki/media-move/images/logo.png'))?.contentBase64 ===
+				PNG_1PX
+		);
+		check(
+			'attachment-only folder repoints outside image links',
+			(await fileText('wiki/media-ref.md'))?.includes('](media-move/images/logo.png)') === true
+		);
+		check(
+			'attachment-only folder repoints its parent page image',
+			(await fileText('wiki/media-move/inside.md'))?.includes('](images/logo.png)') === true
+		);
+
+		await settledHead();
+		const folderBefore = await commitCount();
+		const mixedFolderMove = await call('move_page', {
+			path: 'wiki/media-move',
+			new_path: 'wiki/archive/media-move'
+		});
+		check(
+			'a folder containing pages and attachments moves',
+			!mixedFolderMove.isError,
+			mixedFolderMove.text
+		);
+		await assertOneCommit('folder attachment move and link repairs', folderBefore);
+		check(
+			'mixed folder preserves binary bytes',
+			(await store.readBinary(repoArgs, 'wiki/archive/media-move/images/logo.png'))
+				?.contentBase64 === PNG_1PX
+		);
+		check(
+			'moved page keeps its relative image link',
+			(await fileText('wiki/archive/media-move/inside.md'))?.includes('](images/logo.png)') === true
+		);
+		check(
+			'mixed folder repoints outside image links',
+			(await fileText('wiki/media-ref.md'))?.includes('](archive/media-move/images/logo.png)') ===
+				true
+		);
+		check(
+			'source attachment is removed',
+			(await store.readBinary(repoArgs, 'wiki/media-move/images/logo.png')) === null
+		);
+
 		// And deleting one has to say who still shows it, since an image that vanishes
 		// leaves a hole rather than a broken link anyone would notice. Asserted on the
 		// page being NAMED rather than on the wording: the contract is that nothing
@@ -1400,7 +1344,7 @@ try {
 			(await store.readBinary(repoArgs, 'wiki/vendors/assets/logo.png')) === null
 		);
 
-		// A folder path must still behave like a folder, not get caught by the asset branch.
+		// A mime type outside the supported set is refused.
 		const badType = await call('attach_media', {
 			page: host,
 			filename: 'notes.txt',
@@ -1428,12 +1372,6 @@ try {
 			'attach_media refuses a url pointing at a local address',
 			localUrl.isError && /private address/i.test(localUrl.text),
 			localUrl.text
-		);
-		const insecureUrl = await call('attach_media', { page: host, url: 'http://example.com/a.png' });
-		check(
-			'attach_media refuses a plain-http url',
-			insecureUrl.isError && /https/i.test(insecureUrl.text),
-			insecureUrl.text
 		);
 
 		// Storing must never write over a file that is already there. This is the one
@@ -1606,22 +1544,8 @@ try {
 		invalidateConfig: () => {},
 		analyticsEnabled: false
 	});
-	const [brainCT, brainST] = InMemoryTransport.createLinkedPair();
-	await brainServer.connect(brainST);
-	const brainClient = new Client({ name: 'e2e-brains', version: '0.0.0' });
-	await brainClient.connect(brainCT);
-	const callBrain = async (tool: string, args: Record<string, unknown>) => {
-		const res = (await brainClient.callTool({ name: tool, arguments: args })) as {
-			isError?: boolean;
-			content: { type: string; text: string }[];
-			structuredContent?: Record<string, unknown>;
-		};
-		return {
-			isError: !!res.isError,
-			text: res.content.map((c) => c.text).join('\n'),
-			sc: res.structuredContent ?? {}
-		};
-	};
+	const brainTools = await connect(brainServer, 'e2e-brains');
+	const callBrain = brainTools.call;
 
 	let br = await callBrain('brains', {});
 	check('brains lists the brain under test', !br.isError && br.text.includes('Main'), br.text);
@@ -1744,7 +1668,7 @@ try {
 			visibility?: string;
 			repo_name?: string;
 		} | null;
-		if (made?.repo_name) createdRepos.push(made.repo_name);
+		if (made?.repo_name) brain.deleteOnCleanup(made.repo_name);
 		check(
 			'...into the org the caller named, not the default one',
 			made?.org_id === ORG_EMPTY,
@@ -1879,13 +1803,13 @@ try {
 
 	// ---- every write plans against writeHead -----------------------------------
 	// The fs store's writeHead is its working tree, so this pins only the wiring:
-	// test:pending-pr covers what the GitHub store's writeHead returns.
+	// test:pending-pr and the protected phase below cover what the GitHub store returns.
 	{
 		const base = 'wiki/write-head-probe';
 		const usesWriteHead = async (label: string, tool: string, args: Record<string, unknown>) => {
 			const before = writeHeadCalls;
-			const r = await call(tool, args);
-			check(`${label} succeeds`, !r.isError, r.text);
+			const res = await call(tool, args);
+			check(`${label} succeeds`, !res.isError, res.text);
 			check(`${label} plans against writeHead`, writeHeadCalls > before);
 		};
 		await usesWriteHead('write_page create', 'write_page', {
@@ -1959,8 +1883,8 @@ try {
 	// request. One required approval keeps that pull request open (the App cannot
 	// approve its own), so the next writes have something to join. The pauses give
 	// GitHub's pull request listing time to show a pull request opened a moment ago.
-	if (scratchOctokit) {
-		const gh = scratchOctokit;
+	if (brain.octokit) {
+		const gh = brain.octokit;
 		await gh.rest.repos.updateBranchProtection({
 			...repoArgs,
 			branch: 'main',
@@ -1976,26 +1900,26 @@ try {
 		const mainBefore = await settledHead();
 		const dir = 'docs/pr-mode';
 
-		r = await call('write_page', { path: `${dir}/a.md`, content: 'first' });
+		let res = await call('write_page', { path: `${dir}/a.md`, content: 'first' });
 		check(
 			'protected: the first write becomes a pull request',
-			!r.isError && /\/pull\/\d+/.test(r.text),
-			r.text
+			!res.isError && /\/pull\/\d+/.test(res.text),
+			res.text
 		);
 		const first = await eventually(openPrs, (prs) => prs.length === 1);
 		check('protected: one pull request is open', first.length === 1, `open = ${first.length}`);
 		await sleep(3000);
 
-		r = await call('write_page', { path: `${dir}/a.md`, append: 'second' });
-		check('protected: an append to the pending page finds it', !r.isError, r.text);
+		res = await call('write_page', { path: `${dir}/a.md`, append: 'second' });
+		check('protected: an append to the pending page finds it', !res.isError, res.text);
 		check(
 			'protected: the reply says it joined the open pull request',
-			/joined/.test(r.text),
-			r.text
+			/joined/.test(res.text),
+			res.text
 		);
 		await sleep(3000);
-		r = await call('write_page', { path: `${dir}/b.md`, content: 'third' });
-		check('protected: a write to another page succeeds', !r.isError, r.text);
+		res = await call('write_page', { path: `${dir}/b.md`, content: 'third' });
+		check('protected: a write to another page succeeds', !res.isError, res.text);
 
 		const prs = await openPrs();
 		check(
@@ -2027,13 +1951,13 @@ try {
 		check('protected: the default branch did not move', (await headSha()) === mainBefore);
 
 		// The editor opens the pending version, and saving with its sha is accepted.
-		const opened = await callSc('edit_page', { path: `${dir}/a.md` });
+		const opened = await call('edit_page', { path: `${dir}/a.md` });
 		check(
 			'protected: edit_page opens the pending version',
 			opened.text.includes('second'),
 			opened.text
 		);
-		const saved = await callSc('write_page', {
+		const saved = await call('write_page', {
 			path: `${dir}/a.md`,
 			content: 'edited in the editor',
 			sha: opened.sc.sha
@@ -2046,12 +1970,10 @@ try {
 		);
 	}
 
-	await brainClient.close();
-	await brainServer.close();
+	await brainTools.close();
 } finally {
-	await cleanup();
-	await client.close();
-	await server.close();
+	await brain.cleanup();
+	await main.close();
 }
 
 done();

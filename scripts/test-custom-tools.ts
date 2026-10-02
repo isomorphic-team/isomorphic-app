@@ -1,7 +1,7 @@
 // Golden test for the user-defined tools parse layer (src/lib/custom-tools.ts):
 // the tools/ discovery predicate, tool_ naming, the ```tool fence grammar
 // (input/op/arg/widget/view), zod input building, and {{arg}} interpolation.
-// Pure — no D1, no GitHub. Run: pnpm test:tools
+// Pure: no D1, no GitHub. Run: pnpm test:custom-tools
 import { z } from 'zod';
 import {
 	isToolPagePath,
@@ -114,22 +114,52 @@ check('name: unusable filename → null', toolNameFor('tools/---.md') === null);
 }
 
 // ---------- error cases ----------
-function errOf(path: string, md: string): string | undefined {
-	return parseToolDef(path, md).error;
-}
+// Each case asserts its own message, so a fixture that trips an earlier check
+// (an empty tool, say) cannot pass for the branch it names.
 const fence = (lines: string[]) =>
-	['---', 'description: x.', '---', '```tool', ...lines, '```'].join('\n');
-check('err: unknown op', !!errOf('tools/a.md', fence(['op: delete_everything'])));
-check('err: op + view', !!errOf('tools/a.md', fence(['op: search_pages', 'view:', 'kind: pages'])));
-check('err: empty tool', !!errOf('tools/a.md', '---\ndescription: x.\n---\n'));
-check('err: enum without values', !!errOf('tools/a.md', fence(['input: s (enum:)'])));
-check('err: reserved brain input', !!errOf('tools/a.md', fence(['input: brain (string)'])));
-check(
-	'err: duplicate input',
-	!!errOf('tools/a.md', fence(['input: x (string)', 'input: x (number)']))
+	['---', 'description: x.', '---', 'Do the thing.', '', '```tool', ...lines, '```'].join('\n');
+function errCase(label: string, path: string, md: string, expected: string): void {
+	const error = parseToolDef(path, md).error ?? '';
+	check(`err: ${label}`, error.includes(expected), error || '(no error)');
+}
+errCase(
+	'unknown op',
+	'tools/a.md',
+	fence(['op: delete_everything']),
+	'unknown op "delete_everything"'
 );
-check('err: bad arg (no =)', !!errOf('tools/a.md', fence(['op: search_pages', 'arg: query'])));
-check('err: unusable filename', !!errOf('tools/---.md', 'body'));
+errCase(
+	'op + view',
+	'tools/a.md',
+	fence(['op: search_pages', 'view:', 'kind: pages']),
+	"can't be both an op and a view"
+);
+errCase('empty tool', 'tools/a.md', '---\ndescription: x.\n---\n', 'empty tool');
+errCase(
+	'enum without values',
+	'tools/a.md',
+	fence(['input: s (enum:)']),
+	'enum input "s" needs values'
+);
+errCase(
+	'reserved brain input',
+	'tools/a.md',
+	fence(['input: brain (string)']),
+	'"brain" is a reserved input name'
+);
+errCase(
+	'duplicate input',
+	'tools/a.md',
+	fence(['input: x (string)', 'input: x (number)']),
+	'duplicate input "x"'
+);
+errCase(
+	'bad arg (no =)',
+	'tools/a.md',
+	fence(['op: search_pages', 'arg: query']),
+	'arg needs "key = value"'
+);
+errCase('unusable filename', 'tools/---.md', 'body', 'has no usable tool name');
 
 // ---------- zod input building ----------
 {
@@ -157,7 +187,10 @@ check('err: unusable filename', !!errOf('tools/---.md', 'body'));
 	);
 	check('zod: enum default', (parsed as { status: string }).status === 'a');
 	check('zod: enum rejects bad value', !schema.safeParse({ project: 'x', status: 'zzz' }).success);
-	check('zod: brain arg is optional', schema.safeParse({ project: 'x' }).success);
+	check(
+		'zod: the shape carries an optional brain arg',
+		shape.brain !== undefined && shape.brain.safeParse(undefined).success
+	);
 	check('zod: missing required string fails', !schema.safeParse({}).success);
 }
 
@@ -168,9 +201,7 @@ check('fill: value is data, not code', fill('{{a}}', { a: '{{b}}' }) === '{{b}}'
 check('fill: coerces non-strings', fill('n={{n}}', { n: 7 }) === 'n=7');
 
 // ---------- which pages register (planCustomTools) ----------
-// The loader registers `defs` and validate reports `errors`, from this ONE function.
-// The two used to carry separate copies, and validate's had no cap: a page past it
-// never registered and validate said nothing.
+// The loader registers `defs` and validate reports `errors`, both from this one function.
 {
 	const tool = (desc: string) => `---\ndescription: ${desc}\n---\nDo the thing.`;
 	const page = (path: string, content: string | null = tool(path)) => ({ path, content });
@@ -206,7 +237,7 @@ check('fill: coerces non-strings', fill('n={{n}}', { n: 7 }) === 'n=7');
 	const capped = planCustomTools(many);
 	check('plan: registration stops at the cap', capped.defs.length === MAX_CUSTOM_TOOLS);
 	check(
-		'plan: every page past the cap is REPORTED, which validate did not do',
+		'plan: every page past the cap is reported as an error',
 		capped.errors.length === 3 &&
 			capped.errors.every((e) => e.error.includes(`${MAX_CUSTOM_TOOLS}-tool limit`))
 	);

@@ -9,7 +9,7 @@
 //
 // WHAT THEY DELIBERATELY DO NOT COVER. Tool semantics. The view engine, page patches,
 // the access rule, the analytics fold, and OKF structure are all pinned by pure golden
-// tests (`test:views`, `test:patch`, `test:access`, `test:usage`, `test:structure`)
+// tests (`test:views`, `test:page-write`, `test:access`, `test:usage`, `test:structure`)
 // that run in milliseconds with no browser. Re-asserting any of that through the DOM
 // would be a slower duplicate that fails for unrelated reasons. These tests answer a
 // different question: does the app MOUNT, WIRE UP, and ROUTE.
@@ -18,8 +18,10 @@
 // claude.ai mount gap (docs/references.md), the real iframe CSP, and the auth round
 // trip stay invisible. Those need a real host; see dev/README.md.
 import { defineConfig, devices } from '@playwright/test';
+import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 // Deliberately NOT 5175. That is `pnpm app:dev`'s port, and a maintainer with the
 // preview open should not have their session hijacked (or the run fail on a port
@@ -36,8 +38,16 @@ export const WEB_TEST_PORT = Number(process.env.WEB_TEST_PORT) || 8789;
 // it needs no gitignore entry and cannot be confused with the preview's copy; a
 // STABLE name rather than a fresh mkdtemp, so `reuseExistingServer` locally still
 // finds the server it started last time. `--reset` makes it pristine each run, which
-// is safe precisely because nothing but the tests ever looks at it.
-export const WEB_TEST_BRAIN_DIR = join(tmpdir(), 'isomorphic-web-tests');
+// is safe precisely because nothing but this checkout's tests ever looks at it.
+//
+// Suffixed with a hash of the checkout's path, because tmpdir() is shared by every
+// clone and worktree on the machine: a run in another checkout `--reset`s the
+// directory, deleting the brains and their index out from under a run in progress.
+const checkout = createHash('sha256')
+	.update(fileURLToPath(new URL('.', import.meta.url)))
+	.digest('hex')
+	.slice(0, 8);
+export const WEB_TEST_BRAIN_DIR = join(tmpdir(), `isomorphic-web-tests-${checkout}`);
 // The brain ids the specs address are derived from the folder names, so they follow
 // from this one constant rather than being spelled again in the specs.
 export const WEB_TEST_BRAIN = basename(WEB_TEST_BRAIN_DIR);
@@ -76,7 +86,7 @@ export default defineConfig({
 		{
 			name: 'functional',
 			use: { ...devices['Desktop Chrome'] },
-			testIgnore: [/visual\.spec\.ts/, /web-nav\.spec\.ts/]
+			testIgnore: [/visual\.spec\.ts/, /web-(nav|move)\.spec\.ts/]
 		},
 		{
 			name: 'visual',
@@ -88,7 +98,7 @@ export default defineConfig({
 			// specs load a top-level document from the web server, not the harness.
 			name: 'web',
 			use: { ...devices['Desktop Chrome'], baseURL: `http://localhost:${WEB_TEST_PORT}` },
-			testMatch: /web-nav\.spec\.ts/
+			testMatch: /web-(nav|move)\.spec\.ts/
 		}
 	],
 	webServer: [

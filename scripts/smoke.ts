@@ -131,8 +131,8 @@ export async function smokeOrigin(baseUrl: string, fetchImpl: FetchLike = fetch)
 	//    on this Worker that serves authenticated CONTENT on a GET, so a version
 	//    answering it with 200 to a request carrying no cookie has lost its session
 	//    check. The two acceptable answers are a redirect to sign-in on the same
-	//    origin (an authjs deployment) or a 404 (the route is not mounted: static or
-	//    github identity modes, where there is no browser session to read). A 404 is
+	//    origin (an oauth deployment) or a 404 (the route is not mounted: static mode,
+	//    where there is no browser session to read). A 404 is
 	//    deliberately NOT a failure, because this script gates every deployment that
 	//    uses deploy.yml, not only ours, and reverting a self-hoster's healthy deploy
 	//    for a route they do not have is the too-strict failure the header warns of.

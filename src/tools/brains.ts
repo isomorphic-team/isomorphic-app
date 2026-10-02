@@ -145,11 +145,12 @@ function rowsText(rows: BrainRow[]): string {
 async function detectRowSetup(
 	db: D1Database,
 	getContext: (opts?: TenantOpts) => Promise<BrainContext>,
-	brainId: string
+	b: AccessibleBrain
 ): Promise<{ needsConfig: boolean; configPrUrl?: string }> {
 	try {
-		if (await hasIndexedPages(db, brainId)) return { needsConfig: false };
-		const c = await getContext({ requires: 'admin', brain: brainId });
+		// The index is keyed by the primary key; the handle only addresses the brain.
+		if (await hasIndexedPages(db, b.brain_id)) return { needsConfig: false };
+		const c = await getContext({ requires: 'admin', brain: b.id });
 		await ensureFresh(c.db, c.store, c.repoArgs, c.brainId, c.config);
 		const pages = await listIndexedPages(c.db, c.brainId);
 		if (pages.length > 0) return { needsConfig: false };
@@ -324,9 +325,9 @@ export function registerBrainTools(
 			// Flag misconfigured brains so the list can offer "Set up" without the user
 			// switching into each one. Only the ones they manage (others can't configure).
 			await Promise.all(
-				rows.map(async (r) => {
+				rows.map(async (r, i) => {
 					if (!r.canManage) return;
-					const s = await detectRowSetup(db, getContext, r.id);
+					const s = await detectRowSetup(db, getContext, brains[i]);
 					r.needsConfig = s.needsConfig;
 					r.configPrUrl = s.configPrUrl;
 				})

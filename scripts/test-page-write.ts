@@ -1,10 +1,17 @@
-// Golden test for write_page's partial page updates (src/lib/page-patch.ts).
-// Body half: append, ordered find/replace, the exactly-once anchor rule, and the
-// refusal to anchor on generated okf-view snapshot text. Frontmatter half:
-// merge-patch semantics for `fields`, the key names that survive a read back, the
-// managed keys that route to their own arguments, and the nested-YAML refusal.
-// Pure: no D1, no GitHub.
-// Run: pnpm test:patch
+// Golden test for what write_page decides, all of it pure: no D1, no GitHub.
+//
+//   pnpm test:page-write
+//
+// 1. Partial body edits (src/lib/page-patch.ts): append, ordered find/replace,
+//    the exactly-once anchor rule, and the refusal to anchor on generated
+//    okf-view snapshot text.
+// 2. Frontmatter `fields` (page-patch.ts): merge-patch semantics, the key names
+//    that survive a read back, the managed keys that route to their own
+//    arguments, and the nested-YAML refusal.
+// 3. The decisions in src/lib/page-write.ts: `checkPageWrite` (refusals before
+//    the repository is read), `planPageWrite` (create, update or refuse against
+//    the page as the branch holds it), and `composeCreate` / `composeUpdate`
+//    (the file that gets written).
 import {
 	applyPageEdits,
 	applyFieldPatch,
@@ -26,7 +33,7 @@ import { parsePaths } from '../src/lib/brain-config.ts';
 
 import { checker } from './check.ts';
 
-const { check, done } = checker('page-patch checks');
+const { check, done } = checker('page-write checks');
 
 const BODY = `# Key documents
 
@@ -281,17 +288,8 @@ function fmOf(md: string): Frontmatter {
 	);
 }
 {
-	// The whole point of the write path: the body is never an input here.
-	const r = applyFieldPatch(fmOf(PAGE), { done: 'yes' });
-	check(
-		'fields: empty string is a value, not a removal',
-		applyFieldPatch(fmOf(PAGE), { note: '' }).ok
-	);
-	if (r.ok)
-		check(
-			'fields: serializes back to a readable page',
-			!!parseFrontmatter(withFrontmatter(r.frontmatter, 'Body.')).frontmatter?.done
-		);
+	const r = applyFieldPatch(fmOf(PAGE), { note: '' });
+	check('fields: empty string is a value, not a removal', r.ok && r.frontmatter.note === '');
 }
 
 // ---------- idempotence ----------
@@ -502,10 +500,6 @@ console.log('\nwrite_page: create, update, or refuse (planPageWrite)');
 	check(
 		'plan: an edit anchored in FRONTMATTER finds nothing, because only the body is searched',
 		!plan({ edits: [{ find: 'title: A', replace: 'title: B' }] }, PAGE_NOW).ok
-	);
-	check(
-		'plan: a patch refusal comes back as the refusal',
-		!plan({ edits: [{ find: 'not on the page', replace: 'x' }] }, PAGE_NOW).ok
 	);
 }
 

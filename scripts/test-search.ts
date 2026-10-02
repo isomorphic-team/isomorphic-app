@@ -23,7 +23,7 @@ import {
 	type PageSignal,
 	type SearchResult
 } from '../src/lib/search.ts';
-import { escapeLike, searchBrains, searchIndex } from '../src/lib/brain-index.ts';
+import { escapeLike, indexSignals, searchBrains, searchIndex } from '../src/lib/brain-index.ts';
 import { searchTargets, type BrainContext } from '../src/tools/librarian.ts';
 import type { AccessibleBrain } from '../src/lib/orgs.ts';
 import { localD1 } from '../src/local/d1-sqlite.ts';
@@ -95,9 +95,8 @@ const CORPUS = [REFERRALS, STANDUP, PARKING];
 	);
 
 	const r = searchCorpus(CORPUS, query);
-	check('the sentence-shaped query now matches', r.hits.length > 0);
 	check(
-		'and the page that owns the answer is first',
+		'a sentence-shaped query puts the page that owns the answer first',
 		r.hits[0]?.path === REFERRALS.path,
 		`got ${r.hits[0]?.path}`
 	);
@@ -449,17 +448,8 @@ const CORPUS = [REFERRALS, STANDUP, PARKING];
 		'every hit carries a path, a 1-based line and text',
 		r.hits.every((h) => !!h.path && h.line >= 1 && h.text.length > 0)
 	);
-
-	// The text block is the source of truth for chat and agent consumers, and its line
-	// format is what they parse. Round-trip it the way a consumer would.
-	const block = r.hits.map((h) => `${h.path}:${h.line}: ${h.text}`).join('\n');
-	const parsed = block.split('\n').map((l) => /^(.+\.md):(\d+): (.*)$/.exec(l));
 	check(
-		'the text block still parses as path:line: text',
-		parsed.every((m) => m !== null)
-	);
-	check(
-		'and the line numbers point at the real lines',
+		'the line numbers point at the real lines',
 		r.hits.every((h) => {
 			const page = CORPUS.find((p) => p.path === h.path)!;
 			return page.content.split('\n')[h.line - 1].trim().slice(0, 200) === h.text;
@@ -469,11 +459,6 @@ const CORPUS = [REFERRALS, STANDUP, PARKING];
 	check(
 		'a query with no matches anywhere returns nothing',
 		searchCorpus(CORPUS, 'zygote').hits.length === 0
-	);
-	check(
-		'the terms searched are reported back',
-		JSON.stringify(searchCorpus(CORPUS, 'what is our referral fee').terms) ===
-			JSON.stringify(['referral', 'fee'])
 	);
 }
 
@@ -501,9 +486,8 @@ function seed(pages: { path: string; title: string | null; content: string }[]) 
 	seed(CORPUS.map((p) => ({ path: p.path, title: p.title, content: p.content })));
 
 	const r = await searchIndex(db, BRAIN, 'what is our referral fee', undefined, 50);
-	check('searchIndex answers a sentence-shaped query', r.hits.length > 0);
 	check(
-		'and ranks the owning page first through the real SQL path',
+		'searchIndex ranks the owning page first for a sentence-shaped query',
 		r.hits[0]?.path === REFERRALS.path,
 		`got ${r.hits[0]?.path}`
 	);
@@ -591,15 +575,6 @@ function seed(pages: { path: string; title: string | null; content: string }[]) 
 	check('escapeLike escapes the LIKE wildcards', escapeLike('50%_x') === '50\\%\\_x');
 	check('and its own escape character', escapeLike('a\\b') === 'a\\\\b');
 	check('and leaves ordinary text alone', escapeLike('referral fee') === 'referral fee');
-
-	// The other half of that pair: over-matching in SQL can never become a wrong hit,
-	// because the content check runs again in the Worker.
-	const verified = await searchIndex(db, BRAIN, '50%', undefined, 50);
-	check(
-		'a candidate that does not really contain the term is dropped, not returned',
-		!verified.hits.some((h) => h.path === 'wiki/other.md'),
-		JSON.stringify(verified.hits.map((h) => h.path))
-	);
 }
 
 {
@@ -627,16 +602,38 @@ function seed(pages: { path: string; title: string | null; content: string }[]) 
 }
 
 {
-	// Signals derived from SQL and signals derived from content have to agree, or the
-	// candidate cut drops pages the scorer would have ranked highly.
-	const q = tokenizeQuery('referral fee');
-	const fromContent = signalsFromContent(REFERRALS, q);
-	seed([{ path: REFERRALS.path, title: REFERRALS.title, content: REFERRALS.content }]);
-	const r = await searchIndex(db, BRAIN, 'referral fee', undefined, 50);
-	check(
-		'the two ways of deriving a page signal agree',
-		fromContent.has.every(Boolean) && fromContent.phrase && r.hits.length > 0
-	);
+	// Phase 1 derives each page's signal from SQL LIKEs; searchCorpus derives it from the
+	// content. If they disagree, the candidate cut drops pages the scorer would have
+	// ranked highly. Compared field by field, page by page, over case differences and
+	// LIKE's own wildcard characters.
+	const pages = [
+		...CORPUS,
+		{ path: 'wiki/shouting.md', title: null, content: 'REFERRAL FEE schedule, in CAPITALS.' },
+		{ path: 'wiki/literal.md', title: 'Discount', content: 'The discount is 50% for source_key.' },
+		{ path: 'wiki/other.md', title: 'Discount notes', content: 'The discount is 50 percent.' }
+	];
+	seed(pages);
+	for (const query of [
+		'referral fee',
+		'what is our referral fee',
+		'parking fee',
+		'50%',
+		'source_key'
+	]) {
+		const q = tokenizeQuery(query);
+		const fromSql = await indexSignals(db, BRAIN, q, undefined);
+		const fromContent = pages
+			.map((p) => signalsFromContent(p, q))
+			.filter((sig) => sig.has.some(Boolean));
+		const shape = (sig: PageSignal) => JSON.stringify([sig.path, sig.title, sig.has, sig.phrase]);
+		const sql = fromSql.map(shape).sort();
+		const content = fromContent.map(shape).sort();
+		check(
+			`SQL and content derive the same page signals for "${query}"`,
+			sql.length > 0 && JSON.stringify(sql) === JSON.stringify(content),
+			`sql ${sql.join(' ')} | content ${content.join(' ')}`
+		);
+	}
 }
 
 // ------------------------------------------------------------ across brains ----

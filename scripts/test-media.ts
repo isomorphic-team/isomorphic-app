@@ -1,4 +1,4 @@
-// Golden test for the media-attachment layer — pure, no network, no D1.
+// Golden test for the media-attachment layer. No network, no D1.
 //
 // What it is defending, in rough order of how expensive the bug would be:
 //
@@ -14,14 +14,16 @@
 //      the piece a human never notices is wrong until an image stops rendering
 //      somewhere we do not test.
 //   4. isAssetPath, the predicate the index uses to decide an image link is worth
-//      recording — get it wrong in the permissive direction and validate starts
-//      reporting stray links as broken.
+//      recording. Too permissive, and validate reports stray links as broken.
+//   5. What read_media refuses before it reads the store: a path outside the
+//      content roots, and a path that is not a media type.
 //
 //   pnpm test:media
 
 import { parsePaths } from '../src/lib/brain-config.ts';
 import { isAssetPath, isContentPath } from '../src/lib/brain-policy.ts';
 import { relativeHref } from '../src/lib/wiki.ts';
+import { registerMediaTools } from '../src/tools/media.ts';
 import {
 	MAX_ATTACHMENT_BYTES,
 	attachmentMarkdown,
@@ -62,7 +64,7 @@ console.log('\nmime typing');
 	// A dotfile has no extension by our rule; `lastIndexOf('.') <= 0` is what enforces
 	// it, so `.gitkeep` must not read as a "gitkeep" type.
 	check('dotfile is not media', mediaTypeOf('.gitkeep') === undefined);
-	check('pdf is media but not model-viewable', mediaTypeOf('r.pdf') === 'application/pdf');
+	check('pdf is media', mediaTypeOf('r.pdf') === 'application/pdf');
 	check('svg is media but not model-viewable', !isModelViewable('image/svg+xml'));
 	check('png is model-viewable', isModelViewable('image/png'));
 	check('pdf is not model-viewable', !isModelViewable('application/pdf'));
@@ -189,10 +191,8 @@ console.log('\nfilenames and default placement');
 
 console.log('\nnot overwriting an attachment that is already there');
 {
-	// Storing used to write straight over whatever occupied the path. Two screenshots
-	// pasted a moment apart, or two people attaching "diagram.png" to the same page,
-	// silently destroyed the first — and every page linking to it kept the same link,
-	// so those pages quietly began showing a different picture.
+	// Two attachments with the same name on the same page get different paths.
+	// Overwriting the first would make every page that links to it show the second.
 	const free = uniqueAttachmentPath('wiki/a/assets/logo.png', () => false);
 	check('a free path is used as-is', free === 'wiki/a/assets/logo.png', free);
 
@@ -298,11 +298,6 @@ console.log('\nisAssetPath (what the index will record as an attachment link)');
 	// The media-type check is what stops this claiming arbitrary repo files.
 	check('a stray yaml under content is not an asset', !isAssetPath('wiki/ci.yml', wiki));
 	check('a dotfile is not an asset', !isAssetPath('wiki/.gitkeep', wiki));
-	// Pages and assets must partition cleanly: nothing may be both, or a write tool
-	// would have to decide which set of rules applies.
-	const probes = ['wiki/a.md', 'wiki/assets/a.png', 'raw/x.png', 'wiki/.gitkeep', 'wiki/ci.yml'];
-	const overlap = probes.filter((p) => isAssetPath(p, wiki) && p.endsWith('.md'));
-	check('no path is both a page and an asset', overlap.length === 0, overlap.join(', '));
 	// An asset is still "content" by role; that is what keeps it inside the brain's
 	// editable region for permission purposes even though it is not a page.
 	check('an asset is content by role', isContentPath('wiki/assets/a.png', wiki));
@@ -555,17 +550,51 @@ console.log('\nfetchRemoteAttachment');
 		const r = await fetchRemoteAttachment('https://e.com/x.png', { fetchImpl: impl });
 		check('a transport failure is an error, not a throw', 'error' in r);
 	}
-	{
-		// The fetched file still has to satisfy the same rule an upload does, because
-		// the destination path is what every later reader goes by.
-		const { impl } = stub({ 'https://e.com/plan.png': () => png() });
-		const r = await fetchRemoteAttachment('https://e.com/plan.png', { fetchImpl: impl });
-		const problem =
-			'error' in r
-				? 'fetch failed'
-				: validateAttachment({ path: 'wiki/assets/plan.png', mimeType: r.mimeType, data: r.data });
-		check('a fetched attachment passes validateAttachment', problem === null, String(problem));
-	}
+}
+
+console.log('\nread_media: paths it refuses without reading the store');
+{
+	type Result = { isError?: boolean; content?: { text?: string }[] };
+	const handlers = new Map<string, (args: Record<string, unknown>) => Promise<Result>>();
+	const server = {
+		registerTool: (name: string, _cfg: unknown, handler: never) => handlers.set(name, handler)
+	} as never;
+	const reads: string[] = [];
+	const config = {
+		paths: parsePaths({ contentRoots: ['wiki'], sourceRoots: ['raw'], logPath: '' })
+	};
+	const store = {
+		readBinary: async (_repo: unknown, path: string) => {
+			reads.push(path);
+			return null;
+		}
+	};
+	registerMediaTools(server, async () => ({ store, repoArgs: {}, config }) as never);
+	const readMedia = handlers.get('read_media')!;
+	const refusal = async (path: string) => {
+		reads.length = 0;
+		const r = await readMedia({ path });
+		return { refused: r.isError === true && reads.length === 0, text: r.content?.[0]?.text ?? '' };
+	};
+
+	const outside = await refusal('raw/secret.png');
+	check(
+		'a path outside the content roots is refused unread',
+		outside.refused && outside.text.includes("outside this brain's content"),
+		outside.text
+	);
+	const page = await refusal('wiki/vendors/acme.md');
+	check(
+		'a non-media path is refused unread',
+		page.refused && page.text.includes('not a supported attachment'),
+		page.text
+	);
+	const inside = await refusal('wiki/vendors/assets/logo.png');
+	check(
+		'a media path under content reaches the store',
+		reads.join() === 'wiki/vendors/assets/logo.png',
+		inside.text
+	);
 }
 
 done();

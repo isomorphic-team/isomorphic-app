@@ -350,6 +350,25 @@ const NewFolderIcon = () => (
 		<path stroke="currentColor" stroke-width="1.3" stroke-linecap="round" d="M7.5 9.5h3M9 8v3" />
 	</svg>
 );
+// Move to a folder: NewFolderIcon's outline with an arrow going in. Marks move mode in
+// the header and "Move to…" in a row's menu.
+const MoveIcon = () => (
+	<svg viewBox="0 0 16 16" width="15" height="15" fill="none" class="shrink-0" aria-hidden="true">
+		<path
+			stroke="currentColor"
+			stroke-width="1.3"
+			stroke-linejoin="round"
+			d="M1.75 4.25A1 1 0 0 1 2.75 3.5H6l1.4 1.4h5.85a1 1 0 0 1 1 1v6.35a1 1 0 0 1-1 1H2.75a1 1 0 0 1-1-1z"
+		/>
+		<path
+			stroke="currentColor"
+			stroke-width="1.3"
+			stroke-linecap="round"
+			stroke-linejoin="round"
+			d="M5 9.1h5M8.25 7.35 10 9.1l-1.75 1.75"
+		/>
+	</svg>
+);
 // Sort A→Z / Z→A: descending caret flips via the `desc` prop.
 const SortIcon = ({ desc = false }: { desc?: boolean }) => (
 	<svg viewBox="0 0 16 16" width="15" height="15" fill="none" aria-hidden="true">
@@ -492,6 +511,7 @@ export {
 	PlusIcon,
 	NewNoteIcon,
 	NewFolderIcon,
+	MoveIcon,
 	SortIcon,
 	ExpandCollapseIcon,
 	EyeIcon,

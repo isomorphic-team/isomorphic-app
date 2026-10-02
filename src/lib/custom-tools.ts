@@ -8,7 +8,7 @@
 // parses a page into a CustomToolDef and builds the zod input shape. Discovery
 // (which pages) and execution (running the op/view) live in ../tools/custom.ts,
 // which needs the index + GitHub. Keeping the parse layer pure makes it golden-
-// testable (pnpm test:tools) exactly like view-directives.ts.
+// testable (pnpm test:custom-tools) exactly like view-directives.ts.
 //
 // Nothing a brain-tool does escapes the brain: a tool either returns its
 // interpolated instructions to the model (a saved "skill"), runs one whitelisted

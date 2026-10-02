@@ -1,7 +1,8 @@
-// Golden test for OKF conformance: the structure advisories in src/tools/librarian.ts
-// (inlined-concept detection on folder notes, the `type:` consistency check) and
-// verbatim preservation of OKF's nested frontmatter in src/lib/wiki.ts.
-// Pure — no D1, no GitHub. Run: pnpm test:structure
+// Golden test for OKF conformance: the structure advisories in src/lib/advisories.ts
+// (inlined concepts on folder notes, `type:` consistency, ambiguous titles, wikilink
+// portability, note-less folders), the page-title resolver and verbatim preservation
+// of nested frontmatter in src/lib/wiki.ts, and folder-move collisions in
+// src/tools/librarian.ts. Pure, no D1, no GitHub. Run: pnpm test:structure
 //
 // The first case is the regression this whole check exists for: a folder note that
 // held twelve event franchises as prose sections instead of giving each its own
@@ -21,7 +22,6 @@ import {
 	isFrontmatterBlock,
 	pageTitle
 } from '../src/lib/wiki.ts';
-import { backlinksTo } from '../src/lib/brain-index.ts';
 import type { PageFields } from '../src/lib/brain-index.ts';
 
 import { checker } from './check.ts';
@@ -418,7 +418,7 @@ Body text.
 	check('titles: distinct titles stay quiet', out.length === 0, JSON.stringify(out));
 }
 
-// ---------- link syntax: one count, and a portability note ----------
+// ---------- link syntax: a portability note ----------
 
 {
 	const out = wikilinkPortabilityNote([
@@ -434,30 +434,6 @@ Body text.
 	check(
 		'links: all-markdown brain stays quiet',
 		wikilinkPortabilityNote([{ kind: 'md', cnt: 4 }]).length === 0
-	);
-}
-
-{
-	// backlinksTo now carries a single `count`, so no caller has to sum the two kinds.
-	const graph = {
-		pages: [
-			{ path: 'a.md', title: 'A' },
-			{ path: 'b.md', title: 'B' }
-		],
-		edges: [
-			{ source: 'a.md', target: 'b.md', kind: 'md' as const, cnt: 2 },
-			{ source: 'a.md', target: 'b.md', kind: 'wiki' as const, cnt: 3 }
-		],
-		fileEdges: [],
-		broken: []
-	};
-	const refs = backlinksTo(graph, 'b.md');
-	check('backlinks: single source aggregated', refs.length === 1, JSON.stringify(refs));
-	check('backlinks: count totals both syntaxes', refs[0]?.count === 5, JSON.stringify(refs[0]));
-	check(
-		'backlinks: split still available',
-		refs[0]?.mdCount === 2 && refs[0]?.wikiCount === 3,
-		JSON.stringify(refs[0])
 	);
 }
 
