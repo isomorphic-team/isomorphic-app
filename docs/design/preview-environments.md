@@ -229,6 +229,12 @@ Each has a visible failure, not a silent one:
 - **Open beta.** A wrangler bump can change `wrangler preview`; `pnpm test:preview` pins only
   this repository's side, so the first preview run after such a bump is the check.
 - **100 Previews per Worker on Free, 500 on Paid**; the least recently deployed is evicted.
+- **`cleanup` runs from the base branch's copy of `preview.yml`** (`pull_request_target`), so it
+  cannot run for a pull request whose base branch lacks the workflow, and it runs the base
+  branch's version, not the pull request's.
+- **A Preview copies base-config secrets only when it is created.** After changing them, delete
+  the Preview (`wrangler preview delete --name pr-<number> --worker-name <preview worker>`)
+  and re-run the workflow.
 - **A migration edited after it was applied** is not re-run on that pull request's database
   (D1 tracks applied migrations by name). Close and reopen the pull request to start clean.
 - **Fork previews are built from the fork's code but configured by the base branch's**
