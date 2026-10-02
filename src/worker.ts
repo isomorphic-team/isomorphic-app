@@ -150,6 +150,8 @@ interface Env {
 	AUTH_SECRET?: string;
 	AUTH_RESEND_KEY?: string;
 	AUTH_EMAIL_FROM?: string;
+	// "open" (previews only): sign in as any email typed, no email sent. See src/auth/config.ts.
+	AUTH_SIGN_IN?: string;
 
 	// Public origin of the deployed Worker (e.g. https://brain.example.com). Used by
 	// the connected-accounts tools to build the /link/start verification URL — a tool

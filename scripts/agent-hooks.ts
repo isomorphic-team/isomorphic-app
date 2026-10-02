@@ -55,7 +55,7 @@ export function refuseEdit(path: string, committed: boolean): string | null {
 export function refuseCommand(command: string): string | null {
 	for (const segment of command.split(/&&|\|\||[;|\n]/)) {
 		if (/\bd1\s+(migrations\s+apply|execute)\b/.test(segment) && /--remote\b/.test(segment)) {
-			return 'Remote D1 writes run only in deploy.yml, before the code that needs them ships. Apply locally with `pnpm db:migrate`; production gets the migration on merge.';
+			return "Remote D1 writes run only in CI: deploy.yml for production, before the code that needs them ships, and preview.yml for a pull request's own preview database. Apply locally with `pnpm db:migrate`; production gets the migration on merge.";
 		}
 		if (
 			/\bgit\s+add\b/.test(segment) &&
