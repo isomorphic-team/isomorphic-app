@@ -166,7 +166,10 @@ None of this can be created from a workflow. Use a separate Cloudflare account i
 2. **KV.** `wrangler kv namespace create` once; its id is `PREVIEW_CF_OAUTH_KV_ID`.
 3. **A GitHub App for previews**, installed on a throwaway **organization** (the App needs
    `administration: write`, as `src/manifest.ts` declares). Never the platform App: a Preview
-   holding it could write to real brains.
+   holding it could write to real brains. Create the organization (base permission none), then
+   `GITHUB_APP_ORG=<org> PUBLIC_BASE_URL=<preview worker origin> pnpm bootstrap` registers the
+   App under it and installs it there; the App is private, so it can only be installed on the
+   account that owns it.
 4. **Base-config secrets** on the preview Worker, copied into every new Preview:
    ```sh
    for k in GITHUB_APP_ID GITHUB_APP_PRIVATE_KEY_BASE64 GITHUB_APP_CLIENT_ID \

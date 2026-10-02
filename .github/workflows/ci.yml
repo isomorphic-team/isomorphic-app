@@ -143,6 +143,8 @@ jobs:
       # Real Auth.js over node:sqlite D1: open sign-in (previews) ends in a session for the
       # typed address; email sign-in still sends through Resend and signs no one in.
       - run: pnpm test:signin
+      # The platform App's exact permissions, and the org it is registered under.
+      - run: pnpm test:manifest
       - run: pnpm test:usage
       - run: pnpm test:media
       # What CLAUDE.md, the rules files and the reference docs name must exist: paths,

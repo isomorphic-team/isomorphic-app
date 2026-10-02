@@ -22,6 +22,20 @@ export interface AppManifest {
 	default_events: string[];
 }
 
+/**
+ * Where bootstrap posts the manifest. With an org, the App is created owned by that
+ * organization; without one, by the signed-in personal account. The App is private
+ * (`public: false`), so it can only be installed on its owner, and repository creation
+ * needs an organization: a platform App belongs to the org it will be installed on.
+ */
+export function manifestRegistrationUrl(state: string, org?: string): string {
+	const owner = org?.trim();
+	if (!owner) return `https://github.com/settings/apps/new?state=${encodeURIComponent(state)}`;
+	if (!/^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$/.test(owner))
+		throw new Error(`Not a GitHub organization login: ${owner}`);
+	return `https://github.com/organizations/${owner}/settings/apps/new?state=${encodeURIComponent(state)}`;
+}
+
 export function buildManifest(opts: {
 	name: string;
 	baseUrl: string;
