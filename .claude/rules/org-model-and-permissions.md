@@ -43,7 +43,9 @@ operator's placeholder address never attributes a commit. `pnpm test:access` pin
 
 Auth.js specifics that bite: config MUST be built per request with `env.PLATFORM_DB`
 (`buildAuthConfig(env)`, never a module singleton). DB-strategy sessions omit `user.id` unless
-a `session` callback copies it (we do; the OAuth bridge keys on it). `/oauth/complete` stashes
+a `session` callback copies it (we do; the OAuth bridge keys on it). The callback builds
+`{ user, expires }` field by field and never returns the stored row, which carries
+`sessionToken` (the cookie's value) to any script on the origin; `pnpm test:signin` pins it. `/oauth/complete` stashes
 the client's OAuth request in `OAUTH_KV` under `pending_auth:<state>` across the email hop.
 `authjs.callback-url` cookies are sticky and silently steer a bare `/auth/signin` visit: clear
 cookies or use incognito when testing.
