@@ -273,3 +273,35 @@ export function describeChange(c: Change): ChangeRecord {
 		}
 	}
 }
+
+// ---------- one pull request holding several changes ----------
+
+// Ends the change list in a joined pull request's body, so the next append finds the
+// list it is extending rather than reading prose people may have edited.
+const CHANGE_LIST_END = '<!-- isomorphic:changes -->';
+
+/**
+ * The title and body of the brain's open pull request once `added` (the new write's
+ * own PR title) joins it. The first append turns the original single-change text into
+ * a list; later appends extend that list.
+ */
+export function coalescedPrText(
+	pr: { title: string; body: string },
+	added: string
+): { title: string; body: string } {
+	const end = pr.body.indexOf(CHANGE_LIST_END);
+	const items =
+		end === -1
+			? [pr.title]
+			: pr.body
+					.slice(0, end)
+					.split('\n')
+					.filter((l) => l.startsWith('- '))
+					.map((l) => l.slice(2));
+	items.push(added.replace(/\s+/g, ' ').trim());
+	const more = items.length - 1;
+	return {
+		title: `${items[0]} and ${more} more ${more === 1 ? 'change' : 'changes'}`,
+		body: `Changes proposed via the Isomorphic brain tools:\n\n${items.map((i) => `- ${i}`).join('\n')}\n\n${CHANGE_LIST_END}\n`
+	};
+}
