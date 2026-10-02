@@ -64,15 +64,23 @@ export function buildAuthConfig(
 		// the OAuth completion step below via the /auth/session endpoint.
 		session: { strategy: 'database' },
 		callbacks: {
-			// With the database strategy, Auth.js does NOT surface the user id on
-			// session.user by default — /auth/session returns only email/name/image.
-			// The OAuth bridge (/oauth/complete) needs the stable user id to key the
-			// product identity (otherwise it falls back to email, which is not a
-			// durable primary key). The `user` arg here is the adapter's DB row, so
-			// copy its id onto the session.
+			// What /auth/session returns, built field by field. With the database
+			// strategy the `session` argument is the stored row, which carries
+			// `sessionToken`: the session cookie's value, which the cookie keeps from
+			// page scripts. Returning the row would hand it to any script on the origin.
+			// The user id is copied from the adapter's row because the OAuth bridge
+			// (/oauth/complete) keys the product identity on it, not on the email.
 			session({ session, user }) {
-				if (session.user && user?.id) session.user.id = user.id;
-				return session;
+				return {
+					user: {
+						id: user?.id ?? session.user?.id ?? '',
+						email: session.user?.email ?? '',
+						name: session.user?.name ?? null,
+						image: session.user?.image ?? null,
+						emailVerified: session.user?.emailVerified ?? null
+					},
+					expires: session.expires
+				} as typeof session;
 			}
 		},
 		providers: [

@@ -107,6 +107,28 @@ console.log('\nopen sign-in ends in a real session for the typed address');
 		);
 		check('with a user id', typeof session?.user?.id === 'string' && session.user.id.length > 0);
 
+		// What any script on the origin can fetch. The session token is the cookie's value.
+		const raw = await handleAuthRequest(
+			new Request(`${ORIGIN}/auth/session`, { headers: { cookie: jar.header() } }),
+			env
+		);
+		const body = await raw.text();
+		const parsed = JSON.parse(body) as Record<string, unknown>;
+		const cookieValue = jar
+			.header()
+			.split('; ')
+			.find((c) => c.includes('session-token='))
+			?.split('=')[1];
+		check(
+			'/auth/session returns only user and expires',
+			JSON.stringify(Object.keys(parsed).sort()) === JSON.stringify(['expires', 'user']),
+			JSON.stringify(Object.keys(parsed))
+		);
+		check(
+			'/auth/session never contains the session token',
+			!!cookieValue && !body.includes(cookieValue) && !body.includes('sessionToken')
+		);
+
 		const page = await handleAuthRequest(new Request(`${ORIGIN}/auth/signin`), env);
 		check(
 			'the sign-in page says no email is sent',
