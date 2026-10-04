@@ -29,7 +29,8 @@
 // BrainStore in a temporary directory: no network, no credentials, so it runs in CI.
 // With --github it runs the identical assertions against scratch repos on the
 // platform org (`brain-librarian-e2e-*`, deleted afterwards), which is the only way
-// to prove the GitHub adapter itself.
+// to prove the GitHub adapter itself. It ends by protecting the scratch repo's default
+// branch and checking that successive writes join one pull request.
 //
 //   pnpm test:e2e-librarian                            (local, offline, in CI)
 //   pnpm exec tsx scripts/e2e-librarian.ts --github    (real GitHub, by hand)
@@ -123,8 +124,17 @@ if (GITHUB_MODE) {
 
 // ---- in-memory MCP client wired to the real handlers, with a full context ----
 const server = new McpServer({ name: 'librarian-e2e', version: '0.0.0' });
+// Counts writeHead calls: in PR mode it is what puts a write on the brain's open pull
+// request, and a write tool that skips it plans against the default branch instead.
+let writeHeadCalls = 0;
 const getContext = async () => ({
-	store,
+	store: {
+		...store,
+		writeHead: (...a: Parameters<BrainStore['writeHead']>) => {
+			writeHeadCalls++;
+			return store.writeHead(...a);
+		}
+	},
 	repoArgs,
 	role: 'owner' as const,
 	orgRole: 'owner' as const,
@@ -282,18 +292,19 @@ try {
 		unchanged
 	);
 
-	// The target blob must be read only after HEAD is captured. Delay getHead so the
-	// formerly-parallel implementation deterministically starts readFile first and
-	// fails this assertion; ordered reads pass and pin the blob to that commit.
+	// The target blob must be read only after the write's head is captured. Delay
+	// writeHead so the formerly-parallel implementation deterministically starts
+	// readFile first and fails this assertion; ordered reads pass and pin the blob to
+	// that commit.
 	const underlyingStore = store;
 	let capturedHead: string | null = null;
 	let targetReadBeforeHead = false;
 	let targetReadRef: string | undefined;
 	store = {
 		...underlyingStore,
-		getHead: async (repo, branch) => {
+		writeHead: async (repo, opts) => {
 			await sleep(30);
-			const head = await underlyingStore.getHead(repo, branch);
+			const head = await underlyingStore.writeHead(repo, opts);
 			capturedHead = head.commitSha;
 			return head;
 		},
@@ -1790,6 +1801,52 @@ try {
 		check('dedupe: ...and neither wrote anything', (await commitCount()) === before);
 	}
 
+	// ---- every write plans against writeHead -----------------------------------
+	// The fs store's writeHead is its working tree, so this pins only the wiring:
+	// test:pending-pr and the protected phase below cover what the GitHub store returns.
+	{
+		const base = 'wiki/write-head-probe';
+		const usesWriteHead = async (label: string, tool: string, args: Record<string, unknown>) => {
+			const before = writeHeadCalls;
+			const res = await call(tool, args);
+			check(`${label} succeeds`, !res.isError, res.text);
+			check(`${label} plans against writeHead`, writeHeadCalls > before);
+		};
+		await usesWriteHead('write_page create', 'write_page', {
+			path: `${base}/a.md`,
+			content: 'probe'
+		});
+		await usesWriteHead('write_page update', 'write_page', {
+			path: `${base}/a.md`,
+			append: 'more'
+		});
+		await usesWriteHead('edit_page', 'edit_page', { path: `${base}/a.md` });
+		await usesWriteHead('attach_media', 'attach_media', {
+			page: `${base}/a.md`,
+			filename: 'probe.png',
+			mime_type: 'image/png',
+			data: 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=='
+		});
+		await usesWriteHead('move_page (page)', 'move_page', {
+			path: `${base}/a.md`,
+			new_path: `${base}/b.md`
+		});
+		await usesWriteHead('move_page (file)', 'move_page', {
+			path: `${base}/assets/probe.png`,
+			new_path: `${base}/assets/moved.png`
+		});
+		await usesWriteHead('move_page (folder)', 'move_page', {
+			path: base,
+			new_path: `${base}-moved`
+		});
+		await usesWriteHead('delete_page (file)', 'delete_page', {
+			path: `${base}-moved/assets/moved.png`
+		});
+		await usesWriteHead('delete_page (page)', 'delete_page', { path: `${base}-moved/b.md` });
+		await call('write_page', { path: `${base}-moved/c.md`, content: 'probe' });
+		await usesWriteHead('delete_page (folder)', 'delete_page', { path: `${base}-moved` });
+	}
+
 	// ---- configure_brain leaves an existing config alone (issue #94) ------------
 	// Runs last on purpose: the overwrite below replaces the scaffold's config with
 	// a whole-repo one, and every check above assumes the scaffold's roots. The
@@ -1818,6 +1875,98 @@ try {
 			'...and the new config is what landed',
 			((await fileText('.isomorphic.json')) ?? '').includes('"docs/": "content"'),
 			(await fileText('.isomorphic.json')) ?? ''
+		);
+	}
+
+	// ---- --github: writes on a protected branch join one pull request ----------
+	// Runs last: protecting the default branch turns every later write into a pull
+	// request. One required approval keeps that pull request open (the App cannot
+	// approve its own), so the next writes have something to join. The pauses give
+	// GitHub's pull request listing time to show a pull request opened a moment ago.
+	if (brain.octokit) {
+		const gh = brain.octokit;
+		await gh.rest.repos.updateBranchProtection({
+			...repoArgs,
+			branch: 'main',
+			required_status_checks: null,
+			enforce_admins: false,
+			required_pull_request_reviews: { required_approving_review_count: 1 },
+			restrictions: null
+		});
+		const openPrs = async () =>
+			(await gh.rest.pulls.list({ ...repoArgs, state: 'open', per_page: 100 })).data.filter((p) =>
+				p.head.ref.startsWith('isomorphic/')
+			);
+		const mainBefore = await settledHead();
+		const dir = 'docs/pr-mode';
+
+		let res = await call('write_page', { path: `${dir}/a.md`, content: 'first' });
+		check(
+			'protected: the first write becomes a pull request',
+			!res.isError && /\/pull\/\d+/.test(res.text),
+			res.text
+		);
+		const first = await eventually(openPrs, (prs) => prs.length === 1);
+		check('protected: one pull request is open', first.length === 1, `open = ${first.length}`);
+		await sleep(3000);
+
+		res = await call('write_page', { path: `${dir}/a.md`, append: 'second' });
+		check('protected: an append to the pending page finds it', !res.isError, res.text);
+		check(
+			'protected: the reply says it joined the open pull request',
+			/joined/.test(res.text),
+			res.text
+		);
+		await sleep(3000);
+		res = await call('write_page', { path: `${dir}/b.md`, content: 'third' });
+		check('protected: a write to another page succeeds', !res.isError, res.text);
+
+		const prs = await openPrs();
+		check(
+			'protected: still exactly one pull request',
+			prs.length === 1,
+			prs.map((p) => p.number).join(',')
+		);
+		const pr = prs[0];
+		check(
+			'protected: the pull request is retitled for three changes',
+			/and 2 more changes$/.test(pr?.title ?? ''),
+			pr?.title
+		);
+		const atPr = async (path: string) =>
+			(await store.readFile(repoArgs, path, pr.head.ref))?.content ?? '';
+		const a = await eventually(
+			() => atPr(`${dir}/a.md`),
+			(t) => t.includes('second')
+		);
+		check(
+			'protected: the branch holds the page with both writes',
+			a.includes('first') && a.includes('second'),
+			a
+		);
+		check(
+			'protected: the branch holds the third write',
+			(await atPr(`${dir}/b.md`)).includes('third')
+		);
+		check('protected: the default branch did not move', (await headSha()) === mainBefore);
+
+		// The editor opens the pending version, and saving with its sha is accepted.
+		const opened = await call('edit_page', { path: `${dir}/a.md` });
+		check(
+			'protected: edit_page opens the pending version',
+			opened.text.includes('second'),
+			opened.text
+		);
+		const saved = await call('write_page', {
+			path: `${dir}/a.md`,
+			content: 'edited in the editor',
+			sha: opened.sc.sha
+		});
+		check('protected: an editor save with that sha is accepted', !saved.isError, saved.text);
+		check(
+			'protected: ...and lands on the same pull request',
+			(await openPrs()).length === 1,
+			saved.text
 		);
 	}
 

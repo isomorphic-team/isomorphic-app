@@ -154,7 +154,7 @@ export function registerImportTools(
 			const matchedPaths = new Set(
 				[...claimsByPath].filter(([, keys]) => keys.some((k) => recordKeys.has(k))).map(([p]) => p)
 			);
-			const head = await store.getHead(repoArgs, config.defaultBranch);
+			const head = await store.writeHead(repoArgs, config);
 			const tree = await store.listTree(repoArgs, head);
 			const treePaths = new Set(tree.map((e) => e.path));
 			const existingPaths = new Set([...treePaths].filter((p) => isContentPath(p, config)));
@@ -180,7 +180,7 @@ export function registerImportTools(
 				: undefined;
 
 			// The source's ledger — importer-owned state in the repo.
-			const ledgerFile = await store.readFile(repoArgs, ledgerPath(source));
+			const ledgerFile = await store.readFile(repoArgs, ledgerPath(source), head.commitSha);
 			let ledger;
 			try {
 				ledger = parseLedger(ledgerFile?.content ?? null);
@@ -264,7 +264,7 @@ export function registerImportTools(
 			if (ledgerChanged) {
 				writes.push({ path: ledgerPath(source), content: serializeLedger(p.ledgerAfter) });
 			}
-			const log = await store.readFile(repoArgs, logPathOf(config));
+			const log = await store.readFile(repoArgs, logPathOf(config), head.commitSha);
 			if (log && p.writes.length) {
 				writes.push({
 					path: logPathOf(config),
@@ -357,7 +357,8 @@ export function registerImportTools(
 				);
 
 			if (reviewDecisions.length) {
-				const raw = await store.readFile(repoArgs, REVIEW_LEDGER_PATH);
+				const head = await store.writeHead(repoArgs, config);
+				const raw = await store.readFile(repoArgs, REVIEW_LEDGER_PATH, head.commitSha);
 				let ledger;
 				try {
 					ledger = parseReviewLedger(raw?.content ?? null);
@@ -373,7 +374,6 @@ export function registerImportTools(
 							? dismissFinding(ledger, d.finding, d.why?.trim() ?? '', at)
 							: undismissFinding(ledger, d.finding);
 				}
-				const head = await store.getHead(repoArgs, config.defaultBranch);
 				const dismissed = reviewDecisions.filter((d) => d.action === 'dismiss').length;
 				const restored = reviewDecisions.length - dismissed;
 				const summary = [
@@ -436,7 +436,7 @@ export function registerImportTools(
 			// Alias targets may carry no key claims yet — include them regardless.
 			for (const t of aliasTargets) relevant.add(t);
 
-			const head = await store.getHead(repoArgs, config.defaultBranch);
+			const head = await store.writeHead(repoArgs, config);
 			const tree = await store.listTree(repoArgs, head);
 			const { pages } = await store.fetchPages(
 				repoArgs,
@@ -448,7 +448,7 @@ export function registerImportTools(
 				content: p.content
 			}));
 
-			const ledgerFile = await store.readFile(repoArgs, ledgerPath(source));
+			const ledgerFile = await store.readFile(repoArgs, ledgerPath(source), head.commitSha);
 			let ledger;
 			try {
 				ledger = parseLedger(ledgerFile?.content ?? null);
@@ -475,7 +475,7 @@ export function registerImportTools(
 			if (serializeLedger(p.ledgerAfter) !== serializeLedger(ledger)) {
 				writes.push({ path: ledgerPath(source), content: serializeLedger(p.ledgerAfter) });
 			}
-			const log = await store.readFile(repoArgs, logPathOf(config));
+			const log = await store.readFile(repoArgs, logPathOf(config), head.commitSha);
 			if (log) {
 				writes.push({
 					path: logPathOf(config),

@@ -224,6 +224,9 @@ export function fsBrainStore(opts: FsStoreOptions): BrainStore {
 		// The branch name selects nothing here (every branch is the same working
 		// tree); the parameter exists so the GitHub adapter can skip a round trip.
 		getHead: () => head(),
+		// A local brain never opens pull requests (commitOrPR refuses PR mode), so a
+		// write is always based on the working tree.
+		writeHead: () => head(),
 
 		// Every branch is the same working tree here, so the branch name selects nothing.
 		// The tree digest moves whenever anything on disk moves, which is what the
