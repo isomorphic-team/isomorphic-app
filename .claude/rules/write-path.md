@@ -4,7 +4,7 @@ paths:
   - "src/lib/{page-write,page-patch,change-record,write-target,write-dedupe,write-dedupe-store,brain-policy}.ts"
   - "app/views/{PageView,EditView}.tsx"
   - "src/lib/{policy-guard,policy-detectors,policy-store}.ts"
-  - "scripts/{test-page-write,test-record,test-policy,test-dedupe,test-guard,e2e-librarian}.ts"
+  - "scripts/{test-page-write,test-record,test-policy,test-dedupe,test-guard,test-pending-pr,e2e-librarian}.ts"
 ---
 
 # The write path (`write_page`, `move_page`, `delete_page`)
@@ -34,6 +34,13 @@ paths:
 - Only `wiki/log.md` is tool-maintained. Writes to a protected branch become a PR, which
   merges itself on green only when auto-merge could be armed (`writes.autoMerge`, default true,
   and a repo that allows it). Never tell a caller a PR "will merge" unconditionally.
+- **A brain has at most one open Isomorphic PR at a time** (`pnpm test:pending-pr`). Every
+  write plans against `store.writeHead`, never `getHead`, and pins its reads to that head:
+  with an `isomorphic/` PR open (not `isomorphic/configure`, not reported as conflicting),
+  that is the PR's branch, and `commitOrPR` fast-forwards it, retitles it
+  (`coalescedPrText`), updates it when it is behind the default branch, and arms auto-merge
+  if needed. `edit_page` opens from the same head so the editor's sha matches. Reads,
+  search and the index stay on the default branch.
 
 ## Frontmatter: `fields` and the properties panel
 

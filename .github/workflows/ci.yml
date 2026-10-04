@@ -126,6 +126,8 @@ jobs:
       - run: pnpm test:policy
       - run: pnpm test:payloads
       - run: pnpm test:record
+      # PR-mode writes join the brain's open pull request instead of opening another.
+      - run: pnpm test:pending-pr
       - run: pnpm test:preamble
       - run: pnpm test:protocol
       - run: pnpm test:dedupe

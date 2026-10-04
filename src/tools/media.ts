@@ -173,7 +173,7 @@ export function registerMediaTools(
 			// Never write over a file that is already there. One tree read rather than a
 			// blob read: existence is all this needs, and readBinary would pull down the
 			// whole of whatever it collided with.
-			const head = await store.getHead(repoArgs, config.defaultBranch);
+			const head = await store.writeHead(repoArgs, config);
 			const taken = new Set(
 				(await store.listTree(repoArgs, head, { extension: '*' })).map((e) => e.path)
 			);
@@ -196,7 +196,7 @@ export function registerMediaTools(
 			// nothing references, which is exactly what an orphan-sweeper would delete.
 			let appendedTo = '';
 			if (pagePath) {
-				const existing = await store.readFile(repoArgs, pagePath);
+				const existing = await store.readFile(repoArgs, pagePath, head.commitSha);
 				if (!existing) return fail(`No page at "${pagePath}".`);
 				const link = attachmentMarkdown(pagePath, target, alt?.trim() || name);
 				const body = existing.content.endsWith('\n')
@@ -207,7 +207,7 @@ export function registerMediaTools(
 			}
 
 			const today = todayIso();
-			const log = await store.readFile(repoArgs, logPathOf(config));
+			const log = await store.readFile(repoArgs, logPathOf(config), head.commitSha);
 			if (log) {
 				writes.push({
 					path: logPathOf(config),
