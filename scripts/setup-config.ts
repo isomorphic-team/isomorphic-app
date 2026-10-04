@@ -67,6 +67,13 @@ const SETTINGS = [
 		help: 'Magic-link From address (authjs mode). The domain must be verified with your email provider.'
 	},
 	{
+		key: 'AUTH_SIGN_IN',
+		placeholder: '__AUTH_SIGN_IN__',
+		default: 'email',
+		help: '"email" (the magic link). "open" lets anyone sign in as any address with no email: preview deployments only.',
+		oneOf: ['email', 'open']
+	},
+	{
 		key: 'AUTO_PROVISION',
 		placeholder: '__AUTO_PROVISION__',
 		default: 'false',
@@ -390,6 +397,13 @@ async function main(): Promise<void> {
 
 	await writeFile(OUTPUT_PATH, header + out, 'utf8');
 	console.log('\nWrote wrangler.jsonc');
+
+	if (resolved.get('AUTH_SIGN_IN')!.value === 'open') {
+		console.warn(
+			'\nWARNING: AUTH_SIGN_IN=open. Anyone who can reach this deployment can sign in as\n' +
+				'any email address, with no email sent. Use it only for a preview deployment.'
+		);
+	}
 
 	if (usingFakeIds) {
 		console.log(

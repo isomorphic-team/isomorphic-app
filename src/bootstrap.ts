@@ -22,7 +22,7 @@ import {
 	installationOctokit,
 	type AppCreds
 } from './lib/github.ts';
-import { buildManifest } from './manifest.ts';
+import { buildManifest, manifestRegistrationUrl } from './manifest.ts';
 import { loadDevVarsIntoEnv, readDevVars, writeDevVars } from './persist.ts';
 import { createAndScaffoldBrain } from './lib/scaffold-core.ts';
 
@@ -53,9 +53,9 @@ app.get('/', (c) => {
 		workerBaseUrl: process.env.PUBLIC_BASE_URL
 	});
 	const manifestJson = JSON.stringify(manifest);
-	// Personal-account App registration. For an org, use:
-	//   https://github.com/organizations/{org}/settings/apps/new
-	const action = `https://github.com/settings/apps/new?state=${manifestState}`;
+	// GITHUB_APP_ORG registers the App under that organization, the one it will be
+	// installed on; unset, under the signed-in personal account.
+	const action = manifestRegistrationUrl(manifestState, process.env.GITHUB_APP_ORG);
 
 	return c.html(
 		page(

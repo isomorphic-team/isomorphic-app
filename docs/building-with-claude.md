@@ -110,8 +110,9 @@ The logic is in [`scripts/agent-hooks.ts`](../scripts/agent-hooks.ts). When Clau
 apply a database migration to production by hand, the command never runs, and Claude reads:
 
 ```text
-Remote D1 writes run only in deploy.yml, before the code that needs them ships. Apply locally
-with `pnpm db:migrate`; production gets the migration on merge.
+Remote D1 writes run only in CI: deploy.yml for production, before the code that needs them
+ships, and preview.yml for a pull request's own preview database. Apply locally with
+`pnpm db:migrate`; production gets the migration on merge.
 ```
 
 The refusal says what to do instead, so Claude changes course and does not retry the same
