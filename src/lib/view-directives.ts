@@ -292,7 +292,15 @@ export function parseViewSpec(yaml: string): ParsedView {
 	if (raw.under && kind === 'backlinks') {
 		return { yaml, error: `"under" applies to kind: pages or folders, not backlinks` };
 	}
-	const columns = raw.columns ? parseScalarOrList(raw.columns) : ['title'];
+	// Frontmatter keys cannot contain commas, so a bare `columns: a, b` is a list too.
+	const columns = raw.columns
+		? parseScalarOrList(raw.columns).flatMap((c) =>
+				c
+					.split(',')
+					.map((s) => stripQuotes(s))
+					.filter(Boolean)
+			)
+		: ['title'];
 	if (columns.length === 0) columns.push('title');
 	return {
 		yaml,

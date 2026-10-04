@@ -12,7 +12,8 @@
 // 3. Snapshots: upsert and its idempotency, `displayFromSnapshots`,
 //    `stripSnapshots` for the editor, and segmentation edge cases (nested and
 //    unclosed fences, an unmatched begin marker).
-// 4. Comparison filters: each operator over numbers, dates, `today` and day
+// 4. `columns:` bare (`a, b`) and bracketed (`[a, b]`) forms.
+// 5. Comparison filters: each operator over numbers, dates, `today` and day
 //    offsets with a pinned clock, missing and non-comparable fields, `!=` on
 //    text, equality unchanged alongside, and malformed operator values.
 import {
@@ -438,6 +439,33 @@ async function main() {
 	check(
 		'slug path stays bare (no needless wrapping)',
 		spaced.display.includes('[Plain](plain.md)')
+	);
+
+	// ---------- columns ----------
+	console.log('columns:');
+	const bare = parseViewSpec('kind: pages\nas: table\ncolumns: title, roles, email').spec;
+	check(
+		'bare comma-separated columns split',
+		bare?.columns.join('|') === 'title|roles|email',
+		bare?.columns.join('|')
+	);
+	const bracketed = parseViewSpec('kind: pages\nas: table\ncolumns: [title, roles, email]').spec;
+	check('bracketed columns unchanged', bracketed?.columns.join('|') === 'title|roles|email');
+	const single = parseViewSpec('kind: pages\nas: table\ncolumns: email').spec;
+	check('single bare column', single?.columns.join('|') === 'email');
+	const bareTable = await renderViews(
+		'```okf-view\nkind: pages\nunder: people/\nfilter: { type: Contact }\nas: table\ncolumns: title, email\n```',
+		'organizations/acme.md',
+		ctx
+	);
+	check(
+		'bare columns render as separate table columns',
+		bareTable.display.includes('| Title | email |') && bareTable.display.includes('ada@example.com')
+	);
+	check(
+		'bare filter value with a comma stays one value',
+		parseViewSpec('kind: pages\nfilter:\n  name: Acme, Inc').spec?.filter.name?.join('|') ===
+			'Acme, Inc'
 	);
 
 	// ---------- comparison filters ----------
