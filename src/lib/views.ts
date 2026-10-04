@@ -50,6 +50,7 @@ import {
 	SNAPSHOT_BEGIN,
 	SNAPSHOT_END,
 	hasViews,
+	matchesCondition,
 	segmentViews
 } from './view-directives.ts';
 
@@ -62,6 +63,9 @@ export * from './view-directives.ts';
 export interface ViewContext {
 	resolved: ResolvedGraph;
 	fieldsFor: (paths: string[]) => Promise<Map<string, PageFields>>;
+	// The date comparison filters read as `today` (YYYY-MM-DD, UTC). Defaults to
+	// the current date; tests pin it.
+	today?: string;
 }
 
 export async function buildViewContext(
@@ -90,12 +94,12 @@ interface ViewRow {
 	fields: PageFields;
 }
 
-function matchesFilter(fields: PageFields, filter: Record<string, string[]>): boolean {
-	for (const [key, wanted] of Object.entries(filter)) {
+function matchesFilter(fields: PageFields, spec: ViewSpec, today: string): boolean {
+	for (const [key, wanted] of Object.entries(spec.filter)) {
 		const have = (fields.get(key) ?? []).map((v) => v.toLowerCase());
 		if (!wanted.some((w) => have.includes(w.toLowerCase()))) return false;
 	}
-	return true;
+	return spec.conditions.every((c) => matchesCondition(fields.get(c.key) ?? [], c, today));
 }
 
 function compareRows(a: ViewRow, b: ViewRow, sort: string): number {
@@ -185,6 +189,7 @@ async function resolveRows(spec: ViewSpec, pagePath: string, ctx: ViewContext): 
 	}
 	const needFields =
 		Object.keys(spec.filter).length > 0 ||
+		spec.conditions.length > 0 ||
 		spec.columns.some((c) => c !== 'title') ||
 		spec.sort !== 'title' ||
 		spec.describe !== undefined ||
@@ -192,13 +197,14 @@ async function resolveRows(spec: ViewSpec, pagePath: string, ctx: ViewContext): 
 	const fieldsByPath = needFields
 		? await ctx.fieldsFor(candidates.map((c) => c.path))
 		: new Map<string, PageFields>();
+	const today = ctx.today ?? new Date().toISOString().slice(0, 10);
 	const rows = candidates
 		.map((c) => ({
 			path: c.path,
 			title: c.title,
 			fields: fieldsByPath.get(c.path) ?? new Map<string, string[]>()
 		}))
-		.filter((r) => matchesFilter(r.fields, spec.filter));
+		.filter((r) => matchesFilter(r.fields, spec, today));
 	rows.sort((a, b) => compareRows(a, b, spec.sort));
 	if (spec.order === 'desc') rows.reverse();
 	return rows;
@@ -324,9 +330,9 @@ export async function tryRenderViews(
 	}
 }
 
-// Compute every view on a page. Deterministic for a given index state, so
-// re-snapshotting an unchanged brain yields byte-identical content (idempotent
-// writes). Callers gate on hasViews() and MUST ensureFresh() first.
+// Compute every view on a page. Deterministic for a given index state and
+// date, so re-snapshotting an unchanged brain yields byte-identical content
+// (idempotent writes); a view with a date comparison can change day to day. Callers gate on hasViews() and MUST ensureFresh() first.
 export async function renderViews(
 	content: string,
 	pagePath: string,

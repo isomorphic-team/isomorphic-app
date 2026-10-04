@@ -15,6 +15,11 @@ Grammar: `kind` is the SOURCE (`backlinks` of `of`/this page; `pages`, optionall
 `under` defaulting to the page's own directory). `as` is the RENDERING (`list|table|count`).
 Plus `filter`, `group-by`, `columns`, `describe`, `sort`/`order`, `label`. `kind: count` is
 backlinks + `as: count`. A directory index is `kind: pages` + `under` + `group-by`.
+A `filter` value is equality (one value or any of a list, case-insensitive) unless it starts
+with an operator: `<`, `<=`, `>`, `>=` take a number, `YYYY-MM-DD`, `today` or a day offset
+(`-30d`, `+7d`, UTC); `!=` also takes text. A missing or non-comparable field never matches an
+operator, `!=` included. Parsed into `ViewSpec.conditions` and matched by `matchesCondition`
+(pure); `ViewContext.today` pins the date in tests.
 `FOLDER_NOTE_NAMES` lives here as the single source of truth.
 
 - **Three renderings from one source.** `display` (fence replaced by the live result; what

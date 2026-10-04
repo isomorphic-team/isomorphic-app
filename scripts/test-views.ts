@@ -12,6 +12,9 @@
 // 3. Snapshots: upsert and its idempotency, `displayFromSnapshots`,
 //    `stripSnapshots` for the editor, and segmentation edge cases (nested and
 //    unclosed fences, an unmatched begin marker).
+// 4. Comparison filters: each operator over numbers, dates, `today` and day
+//    offsets with a pinned clock, missing and non-comparable fields, `!=` on
+//    text, equality unchanged alongside, and malformed operator values.
 import {
 	parseViewSpec,
 	segmentViews,
@@ -19,6 +22,7 @@ import {
 	displayFromSnapshots,
 	renderViews,
 	hasViews,
+	matchesCondition,
 	SNAPSHOT_BEGIN,
 	SNAPSHOT_END,
 	type ViewContext
@@ -434,6 +438,170 @@ async function main() {
 	check(
 		'slug path stays bare (no needless wrapping)',
 		spaced.display.includes('[Plain](plain.md)')
+	);
+
+	// ---------- comparison filters ----------
+	console.log('comparison filters:');
+	const TODAY = '2026-06-15';
+	const deals = new Map<string, PageFields>([
+		[
+			'deals/acme.md',
+			new Map([
+				['type', ['Deal']],
+				['stage', ['proposal']],
+				['due', ['2026-06-10']],
+				['value', ['50000']]
+			])
+		],
+		[
+			'deals/northwind.md',
+			new Map([
+				['type', ['Deal']],
+				['stage', ['lost']],
+				['due', ['2026-06-15']],
+				['value', ['9000']]
+			])
+		],
+		[
+			'deals/globex.md',
+			new Map([
+				['type', ['Deal']],
+				['stage', ['won']],
+				['due', ['2026-07-01T09:30:00Z']],
+				['value', ['120000']]
+			])
+		],
+		[
+			'deals/initech.md',
+			new Map([
+				['type', ['Deal']],
+				['stage', ['prospect']],
+				['due', ['next week']],
+				['value', ['tbd']]
+			])
+		],
+		['deals/umbrella.md', new Map([['type', ['Deal']]])]
+	]);
+	const dealCtx: ViewContext = {
+		resolved: {
+			pages: [
+				{ path: 'deals/index.md', title: 'Deals' },
+				{ path: 'deals/acme.md', title: 'Acme' },
+				{ path: 'deals/northwind.md', title: 'Northwind' },
+				{ path: 'deals/globex.md', title: 'Globex' },
+				{ path: 'deals/initech.md', title: 'Initech' },
+				{ path: 'deals/umbrella.md', title: 'Umbrella' }
+			],
+			edges: [],
+			fileEdges: [],
+			broken: []
+		},
+		fieldsFor: async (paths) => new Map([...deals].filter(([p]) => paths.includes(p))),
+		today: TODAY
+	};
+	const names = ['Acme', 'Northwind', 'Globex', 'Initech', 'Umbrella'];
+	const listed = async (filterLines: string): Promise<string[]> => {
+		const r = await renderViews(
+			'```okf-view\nkind: pages\nunder: deals/\nfilter:\n' + filterLines + '\n```',
+			'deals/index.md',
+			dealCtx
+		);
+		return names.filter((n) => r.display.includes(`[${n}]`));
+	};
+	const expect = async (label: string, filterLines: string, want: string[]) => {
+		const got = await listed(filterLines);
+		check(`${label} -> ${want.join(', ') || 'none'}`, got.join() === want.join(), got.join());
+	};
+
+	await expect('< today', '  due: "< today"', ['Acme']);
+	await expect('<= today', '  due: "<= today"', ['Acme', 'Northwind']);
+	await expect('> today (timestamp compares by its date)', '  due: "> today"', ['Globex']);
+	await expect('>= today', '  due: ">= today"', ['Northwind', 'Globex']);
+	await expect('< -3d (offset from today)', '  due: "< -3d"', ['Acme']);
+	await expect('>= +16d', '  due: ">= +16d"', ['Globex']);
+	await expect('> +17d', '  due: "> +17d"', []);
+	await expect('explicit ISO date', '  due: "< 2026-06-12"', ['Acme']);
+	await expect('number compares numerically, not as text', '  value: "> 10000"', [
+		'Acme',
+		'Globex'
+	]);
+	await expect('<= number', '  value: "<= 9000"', ['Northwind']);
+	await expect('!= text excludes the value and missing fields', '  stage: "!= lost"', [
+		'Acme',
+		'Globex',
+		'Initech'
+	]);
+	await expect('!= is case-insensitive', '  stage: "!= LOST"', ['Acme', 'Globex', 'Initech']);
+	await expect('!= date skips non-dates', '  due: "!= today"', ['Acme', 'Globex']);
+	await expect('unquoted operator reads the same', '  due: < today', ['Acme']);
+	await expect('equality and condition on separate keys', '  type: Deal\n  value: ">= 50000"', [
+		'Acme',
+		'Globex'
+	]);
+	await expect('equality alongside a condition', '  stage: [proposal, won]\n  due: "> today"', [
+		'Globex'
+	]);
+	await expect('equality unchanged', '  stage: [proposal, lost]', ['Acme', 'Northwind']);
+	const inline = await renderViews(
+		'```okf-view\nkind: pages\nunder: deals/\nfilter: { value: "< 10000", type: Deal }\n```',
+		'deals/index.md',
+		dealCtx
+	);
+	check(
+		'inline-map condition',
+		inline.display.includes('[Northwind]') && !inline.display.includes('[Acme]')
+	);
+
+	const cond = parseViewSpec('kind: pages\nfilter:\n  due: "< -30d"\n  type: Deal').spec;
+	check(
+		'operator value parses into a condition, not an equality filter',
+		cond?.conditions.length === 1 &&
+			cond.conditions[0].op === '<' &&
+			cond.conditions[0].operand === '-30d' &&
+			cond.filter.due === undefined &&
+			cond.filter.type?.join() === 'Deal'
+	);
+	check(
+		'missing field never matches',
+		!matchesCondition([], { key: 'due', op: '!=', operand: 'x' }, TODAY)
+	);
+	check(
+		'non-comparable value never matches',
+		!matchesCondition(['soon'], { key: 'due', op: '<', operand: 'today' }, TODAY)
+	);
+	check(
+		'list field matches when any value does',
+		matchesCondition(['2020-01-01', 'n/a'], { key: 'due', op: '<', operand: 'today' }, TODAY)
+	);
+	check(
+		'impossible calendar date is not a date',
+		!matchesCondition(['2026-02-30'], { key: 'due', op: '<', operand: 'today' }, TODAY)
+	);
+	check(
+		'offsets cross month boundaries',
+		matchesCondition(['2026-05-31'], { key: 'due', op: '<=', operand: '-15d' }, TODAY)
+	);
+
+	for (const [label, line] of [
+		['ordering op on text', 'due: "< soon"'],
+		['empty operand', 'due: "<"'],
+		['operator inside a list', 'due: ["< today", "> -5d"]'],
+		['malformed offset', 'due: "< -30days"'],
+		['impossible date operand', 'due: "< 2026-13-01"']
+	] as const) {
+		check(
+			`malformed: ${label} is an error`,
+			!!parseViewSpec(`kind: pages\nfilter:\n  ${line}`).error
+		);
+	}
+	const badOp = await renderViews(
+		'```okf-view\nkind: pages\nfilter:\n  due: "< soon"\n```',
+		'deals/index.md',
+		dealCtx
+	);
+	check(
+		'malformed operator renders the visible note',
+		badOp.display.includes('could not be computed')
 	);
 
 	done();

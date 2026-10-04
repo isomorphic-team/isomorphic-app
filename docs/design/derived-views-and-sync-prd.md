@@ -130,7 +130,10 @@ renders from the content index at read/display time. Required view kinds for v1:
   the org — data already present in `brain_links`.)
 - **FR-1b Frontmatter-filtered listing** — "pages where `frontmatter.<key> [=|in] <value>`,"
   e.g. all `type: Health System` orgs, or all people with `organization = "HCA Healthcare"`.
-  (Requires FR-2.)
+  (Requires FR-2.) A filter value may also compare: `<`, `<=`, `>`, `>=` against a number, a
+  `YYYY-MM-DD` date, `today` or a day offset (`due: "< today"`, `last_touch: "<= -30d"`), and
+  `!=` against any of those or text (`stage: "!= lost"`). A missing or non-comparable field
+  never matches a comparison, `!=` included.
 - **FR-1c Count / aggregate** — the cardinality of any of the above (replaces "N tracked
   contacts"), and simple group-by counts (e.g. orgs per sector).
 - **FR-1d Directory index** — child pages under a path prefix, optionally grouped by a
