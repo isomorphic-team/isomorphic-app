@@ -16,6 +16,8 @@
 // 5. Comparison filters: each operator over numbers, dates, `today` and day
 //    offsets with a pinned clock, missing and non-comparable fields, `!=` on
 //    text, equality unchanged alongside, and malformed operator values.
+// 6. Readable tables: humanized headers and group headings, groups ordered by
+//    the filter's list, and relative dates in display only (never the snapshot).
 import {
 	parseViewSpec,
 	segmentViews,
@@ -24,6 +26,8 @@ import {
 	renderViews,
 	hasViews,
 	matchesCondition,
+	humanizeLabel,
+	formatDateCell,
 	SNAPSHOT_BEGIN,
 	SNAPSHOT_END,
 	type ViewContext
@@ -149,7 +153,7 @@ async function main() {
 		'table rows link relatively, sorted by title',
 		r1.display.indexOf('[Ada Lovelace](../people/ada-lovelace.md)') <
 			r1.display.indexOf('[Grace Hopper](../people/grace-hopper.md)') &&
-			r1.display.includes('| Title | email |')
+			r1.display.includes('| Title | Email |')
 	);
 	check('unlinked page not included', !r1.display.includes('Unlinked'));
 
@@ -460,7 +464,7 @@ async function main() {
 	);
 	check(
 		'bare columns render as separate table columns',
-		bareTable.display.includes('| Title | email |') && bareTable.display.includes('ada@example.com')
+		bareTable.display.includes('| Title | Email |') && bareTable.display.includes('ada@example.com')
 	);
 	check(
 		'bare filter value with a comma stays one value',
@@ -630,6 +634,50 @@ async function main() {
 	check(
 		'malformed operator renders the visible note',
 		badOp.display.includes('could not be computed')
+	);
+
+	// ---- 6. readable tables ----
+	check('humanize snake key', humanizeLabel('next_step_due') === 'Next step due');
+	check('humanize lowercase value', humanizeLabel('qualified') === 'Qualified');
+	check('capitalized value kept', humanizeLabel('Contact') === 'Contact');
+	check('(none) kept', humanizeLabel('(none)') === '(none)');
+	check('date: future', formatDateCell('2026-06-27', TODAY) === 'Jun 27 · in 12 days');
+	check('date: today', formatDateCell('2026-06-15', TODAY) === 'Jun 15 · today');
+	check('date: tomorrow', formatDateCell('2026-06-16', TODAY) === 'Jun 16 · tomorrow');
+	check('date: past', formatDateCell('2026-06-10', TODAY, 'last_touch') === 'Jun 10 · 5 days ago');
+	check('date: past deadline', formatDateCell('2026-06-10', TODAY, 'next_step_due') === 'Jun 10 · 5 days overdue');
+	check('date: other year shows year', formatDateCell('2027-03-01', TODAY) === 'Mar 1, 2027 · in 259 days');
+	check('date: invalid left alone', formatDateCell('2026-02-30', TODAY) === '2026-02-30');
+	check('date: text left alone', formatDateCell('next week', TODAY) === 'next week');
+	check('date: timestamp left alone', formatDateCell('2026-07-01T09:30:00Z', TODAY) === '2026-07-01T09:30:00Z');
+
+	const board = await renderViews(
+		'```okf-view\nkind: pages\nunder: deals/\nfilter:\n  stage: [won, proposal, lost]\nas: table\ngroup-by: stage\ncolumns: [title, due]\n```',
+		'deals/index.md',
+		dealCtx
+	);
+	const at = (h: string) => board.display.indexOf(h);
+	check(
+		'groups follow the filter list order',
+		at('### Won') >= 0 && at('### Won') < at('### Proposal') && at('### Proposal') < at('### Lost'),
+		board.display
+	);
+	check('table header humanized', board.display.includes('| Title | Due |'));
+	check('display shows relative deadline', board.display.includes('Jun 10 · 5 days overdue'));
+	check(
+		'snapshot keeps raw dates',
+		board.snapshotted.includes('| 2026-06-10 |') && !board.snapshotted.includes('overdue')
+	);
+	const unordered = await renderViews(
+		'```okf-view\nkind: pages\nunder: deals/\nfilter: { type: Deal }\ngroup-by: stage\n```',
+		'deals/index.md',
+		dealCtx
+	);
+	const u = (h: string) => unordered.display.indexOf(h);
+	check(
+		'without a list filter, groups stay alphabetical, (none) last',
+		u('### Lost') < u('### Proposal') && u('### Proposal') < u('### Prospect') &&
+			u('### Prospect') < u('### Won') && u('### Won') < u('### (none)')
 	);
 
 	done();
