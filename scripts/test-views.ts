@@ -645,11 +645,20 @@ async function main() {
 	check('date: today', formatDateCell('2026-06-15', TODAY) === 'Jun 15 · today');
 	check('date: tomorrow', formatDateCell('2026-06-16', TODAY) === 'Jun 16 · tomorrow');
 	check('date: past', formatDateCell('2026-06-10', TODAY, 'last_touch') === 'Jun 10 · 5 days ago');
-	check('date: past deadline', formatDateCell('2026-06-10', TODAY, 'next_step_due') === 'Jun 10 · 5 days overdue');
-	check('date: other year shows year', formatDateCell('2027-03-01', TODAY) === 'Mar 1, 2027 · in 259 days');
+	check(
+		'date: past deadline',
+		formatDateCell('2026-06-10', TODAY, 'next_step_due') === 'Jun 10 · 5 days overdue'
+	);
+	check(
+		'date: other year shows year',
+		formatDateCell('2027-03-01', TODAY) === 'Mar 1, 2027 · in 259 days'
+	);
 	check('date: invalid left alone', formatDateCell('2026-02-30', TODAY) === '2026-02-30');
 	check('date: text left alone', formatDateCell('next week', TODAY) === 'next week');
-	check('date: timestamp left alone', formatDateCell('2026-07-01T09:30:00Z', TODAY) === '2026-07-01T09:30:00Z');
+	check(
+		'date: timestamp left alone',
+		formatDateCell('2026-07-01T09:30:00Z', TODAY) === '2026-07-01T09:30:00Z'
+	);
 
 	const board = await renderViews(
 		'```okf-view\nkind: pages\nunder: deals/\nfilter:\n  stage: [won, proposal, lost]\nas: table\ngroup-by: stage\ncolumns: [title, due]\n```',
@@ -676,8 +685,10 @@ async function main() {
 	const u = (h: string) => unordered.display.indexOf(h);
 	check(
 		'without a list filter, groups stay alphabetical, (none) last',
-		u('### Lost') < u('### Proposal') && u('### Proposal') < u('### Prospect') &&
-			u('### Prospect') < u('### Won') && u('### Won') < u('### (none)')
+		u('### Lost') < u('### Proposal') &&
+			u('### Proposal') < u('### Prospect') &&
+			u('### Prospect') < u('### Won') &&
+			u('### Won') < u('### (none)')
 	);
 
 	done();

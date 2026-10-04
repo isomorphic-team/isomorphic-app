@@ -275,9 +275,16 @@ function cellText(values: string[], key: string, opts: RenderOptions): string {
 }
 
 // One flat run of rows as the chosen shape (grouping handled by the caller).
-function renderFlat(spec: ViewSpec, rows: ViewRow[], fromPath: string, opts: RenderOptions): string {
+function renderFlat(
+	spec: ViewSpec,
+	rows: ViewRow[],
+	fromPath: string,
+	opts: RenderOptions
+): string {
 	if (spec.as === 'table') {
-		const header = spec.columns.map((c) => (c === 'title' ? 'Title' : escapeCell(humanizeLabel(c))));
+		const header = spec.columns.map((c) =>
+			c === 'title' ? 'Title' : escapeCell(humanizeLabel(c))
+		);
 		const out = [`| ${header.join(' | ')} |`, `| ${header.map(() => '---').join(' | ')} |`];
 		for (const r of rows) {
 			const cells = spec.columns.map((c) =>
@@ -289,7 +296,9 @@ function renderFlat(spec: ViewSpec, rows: ViewRow[], fromPath: string, opts: Ren
 	}
 	return rows
 		.map((r) => {
-			const desc = spec.describe ? cellText(r.fields.get(spec.describe) ?? [], spec.describe, opts) : '';
+			const desc = spec.describe
+				? cellText(r.fields.get(spec.describe) ?? [], spec.describe, opts)
+				: '';
 			return desc ? `- ${linkTo(r, fromPath)} - ${desc}` : `- ${linkTo(r, fromPath)}`;
 		})
 		.join('\n');
@@ -316,7 +325,12 @@ function groupRows(rows: ViewRow[], key: string, order: string[] = []): [string,
 	);
 }
 
-function renderRows(spec: ViewSpec, rows: ViewRow[], fromPath: string, opts: RenderOptions): string {
+function renderRows(
+	spec: ViewSpec,
+	rows: ViewRow[],
+	fromPath: string,
+	opts: RenderOptions
+): string {
 	const groups = () => groupRows(rows, spec.groupBy!, spec.filter[spec.groupBy!]);
 	if (spec.as === 'count') {
 		if (spec.groupBy) {
