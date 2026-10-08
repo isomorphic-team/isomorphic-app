@@ -112,6 +112,9 @@ export function composeSignInEmail({ url, email, maxAgeSeconds }: SignInEmailInp
 export interface SendSignInEmailInput extends SignInEmailInput {
 	apiKey: string;
 	from: string;
+	// Where a reply to the email goes. The From address is usually send-only, so
+	// without this a reply bounces or vanishes. Empty or unset sends no Reply-To.
+	replyTo?: string;
 }
 
 /**
@@ -131,7 +134,14 @@ export async function sendSignInEmail(
 			Authorization: `Bearer ${input.apiKey}`,
 			'Content-Type': 'application/json'
 		},
-		body: JSON.stringify({ from: input.from, to: input.email, subject, html, text })
+		body: JSON.stringify({
+			from: input.from,
+			to: input.email,
+			subject,
+			html,
+			text,
+			...(input.replyTo ? { reply_to: input.replyTo } : {})
+		})
 	});
 	if (!res.ok) {
 		const detail = await res.text().catch(() => '');

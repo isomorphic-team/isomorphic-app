@@ -150,6 +150,8 @@ interface Env {
 	AUTH_SECRET?: string;
 	AUTH_RESEND_KEY?: string;
 	AUTH_EMAIL_FROM?: string;
+	// Reply-To on the magic-link email (e.g. a support address). Empty sends none.
+	AUTH_EMAIL_REPLY_TO?: string;
 	// "open" (previews only): sign in as any email typed, no email sent. See src/auth/config.ts.
 	AUTH_SIGN_IN?: string;
 

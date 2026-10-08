@@ -67,6 +67,12 @@ const SETTINGS = [
 		help: 'Magic-link From address (authjs mode). The domain must be verified with your email provider.'
 	},
 	{
+		key: 'AUTH_EMAIL_REPLY_TO',
+		placeholder: '__AUTH_EMAIL_REPLY_TO__',
+		default: '',
+		help: 'Reply-To on the magic-link email, e.g. a support address. Empty sends no Reply-To.'
+	},
+	{
 		key: 'AUTH_SIGN_IN',
 		placeholder: '__AUTH_SIGN_IN__',
 		default: 'email',
