@@ -38,6 +38,9 @@ export interface ViewSpec {
 	// Frontmatter filter on the candidate pages: every key must match one of the
 	// listed values (case-insensitive; list-valued frontmatter matches any element).
 	filter: Record<string, string[]>;
+	// Filter lines whose value starts with an operator (`due: "< today"`). Every
+	// condition must hold, alongside `filter`. See matchesCondition.
+	conditions: FilterCondition[];
 	// The RENDERING: linked list, table, or just the cardinality.
 	as: 'list' | 'table' | 'count';
 	// table only: columns — 'title' (linked) plus frontmatter keys.
@@ -54,6 +57,115 @@ export interface ViewSpec {
 	label?: string;
 }
 
+// ---------- comparison filters ----------
+//
+// A filter value that starts with an operator compares instead of matching:
+// `<`, `<=`, `>`, `>=` take a number, an ISO date (YYYY-MM-DD), `today`, or a
+// day offset from today (`-30d`, `+7d`, UTC). `!=` also takes plain text.
+// A page whose field is missing, or holds no value comparable to the operand,
+// never matches a condition, `!=` included.
+
+export type FilterOp = '<' | '<=' | '>' | '>=' | '!=';
+
+export interface FilterCondition {
+	key: string;
+	op: FilterOp;
+	// The operand as written (`today`, `-30d`, `2026-01-31`, `5`, `lost`).
+	operand: string;
+}
+
+const OP_RE = /^(<=|>=|!=|<|>)\s*(.*)$/;
+const ISO_DATE_RE = /^(\d{4})-(\d{2})-(\d{2})$/;
+const OFFSET_RE = /^([+-])(\d{1,5})d$/;
+
+function isRealDate(ymd: string): boolean {
+	const m = ymd.match(ISO_DATE_RE);
+	if (!m) return false;
+	const d = new Date(Date.UTC(+m[1], +m[2] - 1, +m[3]));
+	return d.toISOString().slice(0, 10) === ymd;
+}
+
+function isNumeric(s: string): boolean {
+	return s.trim() !== '' && Number.isFinite(Number(s));
+}
+
+// A field value's date part: `2026-09-01` or the date of `2026-09-01T10:00Z`.
+function datePart(value: string): string | undefined {
+	const d = value.trim().slice(0, 10);
+	const rest = value.trim().slice(10);
+	if (rest !== '' && !rest.startsWith('T')) return undefined;
+	return isRealDate(d) ? d : undefined;
+}
+
+type Operand =
+	{ kind: 'date'; date: string } | { kind: 'number'; n: number } | { kind: 'text'; text: string };
+
+// `today` is YYYY-MM-DD (UTC). Returns undefined for an operand an ordering
+// operator cannot use.
+function resolveOperand(op: FilterOp, raw: string, today: string): Operand | undefined {
+	const t = raw.trim();
+	if (t === 'today') return { kind: 'date', date: today };
+	const off = t.match(OFFSET_RE);
+	if (off) {
+		const d = new Date(today + 'T00:00:00Z');
+		d.setUTCDate(d.getUTCDate() + (off[1] === '-' ? -1 : 1) * Number(off[2]));
+		return { kind: 'date', date: d.toISOString().slice(0, 10) };
+	}
+	if (isRealDate(t)) return { kind: 'date', date: t };
+	if (isNumeric(t)) return { kind: 'number', n: Number(t) };
+	return op === '!=' && t !== '' ? { kind: 'text', text: t.toLowerCase() } : undefined;
+}
+
+// Parse one filter value. Not an operator: undefined (plain equality).
+function parseCondition(
+	key: string,
+	values: string[]
+): FilterCondition | { error: string } | undefined {
+	const withOp = values.filter((v) => OP_RE.test(v.trim()));
+	if (withOp.length === 0) return undefined;
+	if (values.length > 1) return { error: `filter "${key}": an operator cannot appear in a list` };
+	const [, op, operand] = values[0].trim().match(OP_RE)!;
+	// Any valid date stands in for `today` here: only the operand's shape is checked.
+	if (!resolveOperand(op as FilterOp, operand, '2000-01-01')) {
+		return {
+			error: `filter "${key}": "${values[0].trim()}" needs a number, a date (YYYY-MM-DD), today, or an offset like -30d${op === '!=' ? ', or text' : ''}`
+		};
+	}
+	return { key, op: op as FilterOp, operand: operand.trim() };
+}
+
+// Whether a page's values for the condition's key satisfy it. An ordering
+// operator matches when any comparable value does; `!=` matches when at least
+// one value is comparable and none equals the operand.
+export function matchesCondition(values: string[], cond: FilterCondition, today: string): boolean {
+	const operand = resolveOperand(cond.op, cond.operand, today);
+	if (!operand) return false;
+	const comparable: number[] = []; // sign of value vs operand: -1, 0, 1
+	for (const v of values) {
+		if (operand.kind === 'date') {
+			const d = datePart(v);
+			if (d !== undefined) comparable.push(d < operand.date ? -1 : d > operand.date ? 1 : 0);
+		} else if (operand.kind === 'number') {
+			if (isNumeric(v)) comparable.push(Math.sign(Number(v) - operand.n));
+		} else {
+			comparable.push(v.trim().toLowerCase() === operand.text ? 0 : 1);
+		}
+	}
+	if (comparable.length === 0) return false;
+	switch (cond.op) {
+		case '<':
+			return comparable.some((c) => c < 0);
+		case '<=':
+			return comparable.some((c) => c <= 0);
+		case '>':
+			return comparable.some((c) => c > 0);
+		case '>=':
+			return comparable.some((c) => c >= 0);
+		case '!=':
+			return comparable.every((c) => c !== 0);
+	}
+}
+
 export interface ParsedView {
 	spec?: ViewSpec;
 	error?: string; // malformed directive — rendered visibly, never fatal
@@ -65,6 +177,8 @@ export interface ParsedView {
 // Same dialect family as parseFrontmatter (scalars, quotes, inline arrays) plus
 // inline maps (`filter: { type: Contact }`) and one level of block nesting for
 // `filter:`. Deliberately tiny — the spec is a fixed shape, not general YAML.
+// Quote an operator value (`due: "< today"`): an unquoted `<` or `>` is read the
+// same way, but quoting keeps the line valid YAML for other readers.
 
 function stripQuotes(v: string): string {
 	const t = v.trim();
@@ -143,6 +257,15 @@ export function parseViewSpec(yaml: string): ParsedView {
 		}
 	}
 
+	const conditions: FilterCondition[] = [];
+	for (const [key, values] of Object.entries(filter)) {
+		const cond = parseCondition(key, values);
+		if (!cond) continue;
+		if ('error' in cond) return { yaml, error: cond.error };
+		conditions.push(cond);
+		delete filter[key];
+	}
+
 	let kind = stripQuotes(raw.kind ?? '');
 	let as = stripQuotes(raw.as ?? 'list');
 	// Phase 1 shorthand: `kind: count` == a backlinks count.
@@ -169,7 +292,15 @@ export function parseViewSpec(yaml: string): ParsedView {
 	if (raw.under && kind === 'backlinks') {
 		return { yaml, error: `"under" applies to kind: pages or folders, not backlinks` };
 	}
-	const columns = raw.columns ? parseScalarOrList(raw.columns) : ['title'];
+	// Frontmatter keys cannot contain commas, so a bare `columns: a, b` is a list too.
+	const columns = raw.columns
+		? parseScalarOrList(raw.columns).flatMap((c) =>
+				c
+					.split(',')
+					.map((s) => stripQuotes(s))
+					.filter(Boolean)
+			)
+		: ['title'];
 	if (columns.length === 0) columns.push('title');
 	return {
 		yaml,
@@ -178,6 +309,7 @@ export function parseViewSpec(yaml: string): ParsedView {
 			of: raw.of ? stripQuotes(raw.of) : undefined,
 			under: raw.under ? stripQuotes(raw.under) : undefined,
 			filter,
+			conditions,
 			as,
 			columns,
 			describe: raw.describe ? stripQuotes(raw.describe) : undefined,
