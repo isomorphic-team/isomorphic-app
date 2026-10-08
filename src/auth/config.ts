@@ -31,6 +31,8 @@ export interface AuthEnv {
 	// no sign-in link can be sent, so authjs mode needs it.
 	AUTH_RESEND_KEY?: string;
 	AUTH_EMAIL_FROM?: string;
+	// Reply-To for the magic-link email, e.g. a support address. Empty sends none.
+	AUTH_EMAIL_REPLY_TO?: string;
 	// "open" signs anyone in as any email they type, with no email sent. For preview
 	// deployments only; anything else (unset included) is the emailed magic link.
 	AUTH_SIGN_IN?: string;
@@ -109,7 +111,8 @@ export function buildAuthConfig(
 						email: identifier,
 						maxAgeSeconds: provider.maxAge ?? 24 * 60 * 60,
 						apiKey: provider.apiKey ?? '',
-						from: provider.from ?? ''
+						from: provider.from ?? '',
+						replyTo: env.AUTH_EMAIL_REPLY_TO
 					});
 				}
 			})

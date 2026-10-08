@@ -85,6 +85,18 @@ console.log('\nsend: the Resend request');
 	check('sends our subject', body.subject === composed.subject);
 	check('sends the html part', body.html === composed.html);
 	check('sends the text part', body.text === composed.text);
+	check('no reply_to when none is configured', !('reply_to' in body));
+
+	await sendSignInEmail(
+		{ ...input, apiKey: 're_test', from: 'Acme <login@example.com>', replyTo: 'help@example.com' },
+		ok
+	);
+	check(
+		'reply_to is the configured address',
+		JSON.parse(String(seen?.init.body)).reply_to === 'help@example.com'
+	);
+	await sendSignInEmail({ ...input, apiKey: 're_test', from: 'x@example.com', replyTo: '' }, ok);
+	check('an empty reply-to sends none', !('reply_to' in JSON.parse(String(seen?.init.body))));
 
 	const refused = (async () =>
 		new Response('{"message":"domain not verified"}', { status: 403 })) as unknown as typeof fetch;

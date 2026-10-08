@@ -314,6 +314,7 @@ AUTH_MODE=oauth \
 AUTO_PROVISION=true \
 PUBLIC_BASE_URL=https://brain.example.com \
 AUTH_EMAIL_FROM="Your Brain <login@example.com>" \
+AUTH_EMAIL_REPLY_TO=support@example.com \
 WORKER_NAME=your-brain \
   pnpm setup:config --provision --force
 
@@ -322,7 +323,8 @@ pnpm exec wrangler secret put AUTH_RESEND_KEY    # from resend.com
 ```
 
 The From domain must be verified (DKIM and SPF) with your email provider, or delivery is
-limited to your own address. Magic-link sending stays inert until `AUTH_RESEND_KEY` is set,
+limited to your own address. `AUTH_EMAIL_REPLY_TO` is optional: set it to an inbox someone
+reads, since the From address usually receives nothing. Magic-link sending stays inert until `AUTH_RESEND_KEY` is set,
 so you can bring the OAuth flow up first and add email after.
 
 Add `https://brain.example.com/oauth/github/callback` to your GitHub App's callback URLs if

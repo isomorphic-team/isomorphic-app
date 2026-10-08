@@ -91,6 +91,9 @@ PUBLIC_BASE_URL=
 # Magic-link From address (authjs mode). The domain must be verified with Resend.
 AUTH_EMAIL_FROM=
 
+# Reply-To on the magic-link email (e.g. support@example.com). Empty sends none.
+AUTH_EMAIL_REPLY_TO=
+
 # "true" creates a brain on a user's first request; "false" is invite-only.
 AUTO_PROVISION=
 
