@@ -1,100 +1,86 @@
 # The open-source boundary
 
-- Status: decided 2026-07-27, at the point of making the repository public
+- Status: decided 2026-07-27, revised 2026-09-30 to open core for enterprise features
 - Related: [`docs/licensing.md`](../licensing.md), [`GOVERNANCE.md`](../../GOVERNANCE.md),
-  [`docs/self-hosting.md`](../self-hosting.md)
+  [`docs/self-hosting.md`](../self-hosting.md), [`ee/README.md`](../../ee/README.md)
 
-This records where the line falls between what is in this repository and what belongs to the
-hosted service, and the constraint that keeps the line from drifting.
+This records where the line falls between the open source core, the enterprise features, and
+the hosted service, and the constraints that keep each line from drifting.
 
 ## The rule
 
-**Everything is in the repository. The hosted service is a deployment of it, not a fork of
-it, and not a superset of it.**
+**Everything is in this repository. The hosted service is a deployment of it, not a fork of
+it, and not a superset of it.** That part has not changed.
 
-The hosted service differs from your self-hosted instance in exactly three ways:
+What changed on 2026-09-30: the repository now has two licenses.
 
-1. **Configuration.** Which auth mode, which identity provider, which Cloudflare account,
-   which domain. All of it flows through `wrangler.template.jsonc` plus environment
-   variables. See `scripts/setup-config.ts` for the complete list; there is no other input.
-2. **Secrets.** A GitHub App private key, an Auth.js secret, an email provider key. Ours are
-   ours; yours are yours.
-3. **Operational work.** We run it, watch it, upgrade it, take the support calls, and carry
-   the uptime. That is the actual product we sell.
+- **Everything outside `ee/` is the core**, under GNU AGPL-3.0-only. It is complete on its own:
+  a self-hoster with a team gets brains, members, roles, sharing, multi-brain, search, the
+  editor, and the deterministic data-policy detectors, with no key and no limit.
+- **`ee/` holds the enterprise features**, under the [Isomorphic Enterprise
+  License](../../ee/LICENSE). The source is public and readable; production use needs a
+  subscription. Each feature checks a per-org entitlement (`org_entitlements`,
+  `ee/entitlements.ts`) and does nothing without one.
 
-There is no private module, no feature flag gating a paid capability, and no
-`if (isHosted)` branch. If you find one, it is a bug worth an issue.
+The hosted service differs from a self-hosted instance in four ways:
 
-## Why not open core
+1. **Configuration.** Auth mode, identity provider, Cloudflare account, domain. All of it flows
+   through `wrangler.template.jsonc` plus environment variables (`scripts/setup-config.ts`).
+2. **Secrets.** A GitHub App private key, an Auth.js secret, an email key, a model provider
+   key. Ours are ours; yours are yours.
+3. **Entitlements.** Which orgs have which enterprise features. Rows in `org_entitlements`,
+   written by the operator (`pnpm entitle`), never by code that asks whether it is hosted.
+4. **Operational work.** We run it, watch it, upgrade it, take the support calls.
 
-Open core (a permissive core plus a proprietary paid layer) is the obvious alternative and we
-rejected it. Three reasons, in order of how much they mattered:
+There is still no private module and no `if (isHosted)` branch. A feature is enterprise because
+it lives in `ee/` and checks an entitlement, never because of where it runs.
 
-- **It corrupts the roadmap.** Once a paid tier exists as a separate codebase, every design
-  question acquires a second axis: not "is this the right shape" but "which side of the wall
-  does this go on". Multi-brain support, roles, and the member roster are all things a
-  self-hoster with a team needs, and all things a naive open-core split would have put behind
-  the wall. The result is a public product kept incomplete on purpose.
-- **It makes contribution unpaid work on a product you cannot fully run.** A contributor fixes
-  the index and then cannot use the feature it enables.
-- **It splits the test surface.** Two configurations, and the one most people run is the one
-  we exercise least.
+## What goes in `ee/`, and what never does
 
-AGPL plus a CLA lets us skip all of that. The commercial option comes from being able to sell
-an exception to the copyleft, not from withholding capability, so the code can stay one thing.
-See [`docs/licensing.md`](../licensing.md) for the license reasoning.
+**The test is who buys it.** A capability a team needs to work together stays in the core. A
+capability an organization's compliance, security, or leadership function buys goes in `ee/`.
+This is the buyer-based split GitLab uses, and it is the reason the original objection to open
+core (below) no longer applies: the core is not kept incomplete for the people using it.
 
-AGPL section 13 also turns the invariant at the bottom of this document into a legal
-obligation rather than only a promise: because the hosted service runs unmodified `main` from
-a public repository, there is nothing extra to disclose. A private hosted-only patch would
-create a disclosure duty.
+In `ee/`: model-powered review (the data-policy guard's model stages and brain consolidation),
+the model gateway those use, and the entitlement check itself.
 
-## What "platform-izing" means here, then
+Never in `ee/`: multi-tenancy, orgs, roles, members, sharing, multi-brain, sign-in including
+Enterprise SSO / SAML, the deterministic detectors, the findings queue and `resolve`, and
+anything that fixes a bug in the core. A core feature never calls into `ee/` to do its own job.
 
-Multi-tenancy is a feature of the software, not a proprietary wrapper around it. It is
-already built and already public:
+## Why this is not the open core we rejected
 
-- An org model with roles (`src/lib/orgs.ts`), a member roster with invitations
-  (`src/tools/members.ts`), and per-brain access resolution.
-- Two identity modes, including email sign-in so members never need a GitHub account.
-- Auto-provisioning, so a new user's brain is created on first use with no GitHub interaction.
-- Model-B onboarding, where a customer keeps their brains in their own GitHub org under their
-  own App installation (`src/tools/org-onboarding.ts`).
+The 2026-07-27 decision rejected open core for three reasons. Each is answered, not waived:
 
-A self-hoster can turn every one of those on. Most will not want to, and will run
-`AUTH_MODE=static` with one brain, which is why that path stays supported and documented
-first. The multi-tenant path is a configuration, not a hosted-only capability.
+- **"It corrupts the roadmap."** The buyer test decides placement in one question, and the
+  list above fixes the hard cases in advance. A feature that fails the test stays in the core.
+- **"It makes contribution unpaid work on a product you cannot fully run."** `ee/` does not
+  accept outside contributions (`CONTRIBUTING.md`), so no contributor's work lands behind the
+  license, and everything a contribution to the core enables runs without a subscription.
+- **"It splits the test surface."** One codebase, one test suite: the `ee/` batteries run in
+  the same CI, and an unentitled org is just the core.
 
-So "platform-izing" is a business activity: sales, support, compliance, uptime, billing, and
-the accounts and infrastructure behind them. None of it needs to live in this repository, and
-therefore none of it does.
+The commercial options are now two: an exception to the AGPL for organizations that cannot
+ship copyleft (unchanged, see [`docs/licensing.md`](../licensing.md)), and a subscription for
+the enterprise features.
 
 ## Where the line will be tested
 
-Recording these now, with the answer, so that a future decision is a deliberate change rather
-than a drift:
-
-- **Billing and subscription management.** Not in this repository. It touches a payment
-  processor and our own accounts, and a self-hoster has no use for it. This is the one clean
-  example of something hosted-only, and it is infrastructure rather than product capability.
-- **Usage metering and analytics.** Not in this repository, and not in the Worker. No
-  telemetry, no phone-home, no anonymous usage beacon, in either the hosted build or yours.
-  We can measure our own deployment from our own logs.
-- **A future paid capability, for example a hosted synthesis agent that needs an LLM key.**
-  In this repository, with the key as configuration. Self-hosters bring their own key. We
-  bundle ours into the subscription. That is the pattern to reuse: the capability is public,
-  the credential is the product.
-- **Enterprise SSO / SAML.** In this repository. It is a provider slot in the Auth.js config,
-  and putting it behind a wall is the open-core mistake this document exists to prevent.
+- **Billing and subscription management.** Not in this repository. It writes entitlements; the
+  code only reads them.
+- **Usage metering.** The model gateway counts spend per org in the deployment's own D1 so it
+  can enforce a cap. Nothing reports it anywhere; billing reads our own records.
+- **Self-hosted enterprise use.** Needs a subscription and an entitlement row. Signed offline
+  license keys come when a self-hoster needs them (roadmap, "brain review", step 6).
+- **Sending content to a model provider.** Only the operator configures it, only to
+  zero-data-retention endpoints, and only for an entitled org. This is processing on the
+  operator's behalf, not telemetry.
 - **Our own operational runbooks and infrastructure state.** Not in this repository. Generic
   runbooks are (`docs/ops/`); anything naming a real customer, account, or resource is not.
-  The `/ops/` directory is gitignored for exactly this.
 
 ## The invariant that keeps this true
 
-**The hosted service is deployed from `main`, with no patches.** If we ever need a change that
-only makes sense for the hosted deployment, it goes in as configuration or it does not go in.
-
-This is a structural constraint rather than a promise of goodwill: the moment a private patch
-exists, the reasoning above stops being true. Keeping the invariant means occasionally solving
-a problem more generally than we strictly need to, which is usually the better design anyway.
+**The hosted service is deployed from `main`, with no patches.** Enterprise code ships in
+`main` like everything else. If we ever need a change that only makes sense for the hosted
+deployment, it goes in as configuration or an entitlement, or it does not go in.

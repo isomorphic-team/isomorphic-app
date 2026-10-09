@@ -397,6 +397,9 @@ network, and you owe those users your source. Your brain is your data and the li
 reach it; neither does it reach MCP clients, which talk to the server over a protocol rather
 than linking against it.
 
+The enterprise features in `ee/` are the one exception: source available under the
+[Isomorphic Enterprise License](ee/LICENSE), with production use needing a subscription.
+
 What the AGPL does and does not require, and why we chose it over Apache, FSL, and BSL:
 [`docs/licensing.md`](docs/licensing.md).
 

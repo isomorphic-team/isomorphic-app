@@ -58,12 +58,12 @@ Order:
    default (`"mode": "off"` opts out), and reported to brain admins in `validate` and in the app's Review screen (`view_review`).
    Left: turn it on for real brains and measure false positives before anything enforces.
 2. **Foundation.**
-   - Revisit [`design/open-source-boundary.md`](design/open-source-boundary.md) and the
-     "Nothing hosted-only" rule in `CLAUDE.md`, toward an open-core split: review's model stages
-     under `ee/` with a commercial license, and per-org entitlements (`org_entitlements`,
-     `hasFeature`).
-   - The model gateway (zero-retention routing, per-org spend cap).
-   - The unified findings queue in D1, extending the `validate` / `resolve` pattern with a
+   - Built: the open-core split. [`design/open-source-boundary.md`](design/open-source-boundary.md)
+     is revised, `ee/` is under the Isomorphic Enterprise License, and per-org entitlements
+     (`org_entitlements`, `hasFeature`, `pnpm entitle`) gate its features.
+   - Built: the model gateway (`ee/review/gateway.ts`): zero-data-retention routing on every
+     request, entitled orgs only, a monthly spend cap per org. Nothing calls it yet.
+   - Left: the unified findings queue in D1, extending the `validate` / `resolve` pattern with a
      finding `kind` and per-kind visibility. Policy findings are visible to the author and
      admins only. Consolidation findings are visible to editors.
 3. **Guard enforcement.** The rulebook page, both model stages, the tiers, quarantine,
@@ -75,7 +75,8 @@ Order:
 6. **When a deployment needs it:** an entitlement writer driven by billing (outside this
    repository), and signed offline license keys for self-hosters.
 
-The deterministic detectors, the findings queue and `resolve` stay in the AGPL core.
+The deterministic detectors, the findings queue and `resolve` stay in the AGPL core; the
+model stages, consolidation and the gateway are in `ee/`.
 
 # TODO: honor hostContext.safeAreaInsets in the app
 

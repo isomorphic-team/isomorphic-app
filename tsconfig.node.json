@@ -27,7 +27,8 @@
 		"src/local.ts",
 		"src/local/**/*.ts",
 		"scripts/**/*.ts",
-		"src/lib/**/*.ts"
+		"src/lib/**/*.ts",
+		"ee/**/*.ts"
 	],
 	"exclude": ["scripts/test-roundtrip.ts", "scripts/test-policy.ts"]
 }
