@@ -25,7 +25,11 @@ Full RFCs: `docs/design/org-roles-permissions.md`, `docs/design/brain-level-perm
 The Worker is an OAuth 2.1 server to Claude via `@cloudflare/workers-oauth-provider`. The human
 sign-in behind `/authorize` is Auth.js (`src/oauth/auth-handler.ts` + `src/auth/config.ts`,
 `@auth/core` + `@auth/d1-adapter`) with a Resend magic link; users need no GitHub account. Token
-props `{ user_id, email }`. Google/OIDC is the recommended future primary provider (not built).
+props `{ user_id, email }`. `AUTH_SIGN_IN=open` (preview deployments only, set by
+`preview.yml`; default `email`) signs anyone in as any address they type: `handleAuthRequest`
+redirects the sign-in POST to the link Auth.js minted instead of emailing it, so the session
+is a real Auth.js one. Only the exact value `open` opens it. `pnpm test:signin` drives both
+modes through real Auth.js over `node:sqlite`. Google/OIDC is the recommended future primary provider (not built).
 GitHub sign-in (`IDENTITY_MODE=github`, the per-user `tenants` table, `brain-<login>`
 auto-provisioning) was removed on 2026-09-23; `/authorize` answers 501 if it is still set.
 
@@ -39,7 +43,9 @@ operator's placeholder address never attributes a commit. `pnpm test:access` pin
 
 Auth.js specifics that bite: config MUST be built per request with `env.PLATFORM_DB`
 (`buildAuthConfig(env)`, never a module singleton). DB-strategy sessions omit `user.id` unless
-a `session` callback copies it (we do; the OAuth bridge keys on it). `/oauth/complete` stashes
+a `session` callback copies it (we do; the OAuth bridge keys on it). The callback builds
+`{ user, expires }` field by field and never returns the stored row, which carries
+`sessionToken` (the cookie's value) to any script on the origin; `pnpm test:signin` pins it. `/oauth/complete` stashes
 the client's OAuth request in `OAUTH_KV` under `pending_auth:<state>` across the email hop.
 `authjs.callback-url` cookies are sticky and silently steer a bare `/auth/signin` visit: clear
 cookies or use incognito when testing.

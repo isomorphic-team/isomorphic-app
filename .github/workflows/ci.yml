@@ -89,12 +89,14 @@ jobs:
         run: |
           if ! git diff --quiet -- \
             src/lib/app-bundle.generated.ts \
-            src/lib/brain-template.generated.ts
+            src/lib/brain-template.generated.ts \
+            app/views/registry.generated.ts
           then
             echo "Generated files that differ from a fresh regen:"
             git diff --stat -- \
               src/lib/app-bundle.generated.ts \
-              src/lib/brain-template.generated.ts
+              src/lib/brain-template.generated.ts \
+              app/views/registry.generated.ts
             echo "::error::Generated files are stale. If you edited app/ or brain-template/, run 'pnpm gen:app' and 'pnpm gen:templates' and commit the result. If this is a dependency bump (Dependabot cannot run codegen), a maintainer regenerates it with 'pnpm regen:pr <number>'."
             exit 1
           fi
@@ -113,8 +115,8 @@ jobs:
       - run: pnpm test:web
       - run: pnpm test:views
       - run: pnpm test:import
-      - run: pnpm test:tools
-      - run: pnpm test:patch
+      - run: pnpm test:custom-tools
+      - run: pnpm test:page-write
       - run: pnpm test:structure
       - run: pnpm test:consolidate
       - run: pnpm test:probe
@@ -124,6 +126,8 @@ jobs:
       - run: pnpm test:policy
       - run: pnpm test:payloads
       - run: pnpm test:record
+      # PR-mode writes join the brain's open pull request instead of opening another.
+      - run: pnpm test:pending-pr
       - run: pnpm test:preamble
       - run: pnpm test:protocol
       - run: pnpm test:dedupe
@@ -131,7 +135,7 @@ jobs:
       - run: pnpm test:guard
       # Enterprise foundation: ZDR routing on every model request, entitlements, the spend cap.
       - run: pnpm test:ee
-      - run: pnpm test:appmeta
+      - run: pnpm test:app-resource
       # Every tool carries annotations.title and its read/destructive hint (directory review).
       - run: pnpm test:annotations
       - run: pnpm test:loading
@@ -140,6 +144,11 @@ jobs:
       - run: pnpm test:scope
       - run: pnpm test:feedback
       - run: pnpm test:email
+      # Real Auth.js over node:sqlite D1: open sign-in (previews) ends in a session for the
+      # typed address; email sign-in still sends through Resend and signs no one in.
+      - run: pnpm test:signin
+      # The platform App's exact permissions, and the org it is registered under.
+      - run: pnpm test:manifest
       - run: pnpm test:usage
       - run: pnpm test:media
       # What CLAUDE.md, the rules files and the reference docs name must exist: paths,
@@ -151,6 +160,9 @@ jobs:
       # The assertions the deploy runs against a live origin before it decides whether
       # to keep a merge in production. Offline here: driven against stub responses.
       - run: pnpm test:smoke
+      # The pull request preview: how it is named, addressed and configured, and that
+      # preview.yml keeps secrets away from the job that runs pull request code.
+      - run: pnpm test:preview
       # Lints the two lists above against package.json, so the instruction in the
       # comment stops depending on anyone reading the comment. It also pins the
       # Playwright container tag in the `ui` job to the resolved dependency version.
@@ -228,10 +240,10 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
-      # UI_STRICT=1 turns `pnpm test:ui`'s skip-green browser guard into a failure —
-      # locally a missing browser should not fail a contributor's `pnpm test`, but here
-      # it means the container stopped carrying one and the UI tests silently did not
-      # run, which is exactly the failure a green skip would hide.
+      # UI_STRICT=1 turns `pnpm test:ui`'s two skip-green guards into failures: a missing
+      # browser, and missing visual baselines for this platform (tests/ui/__screenshots__/
+      # linux/). Locally either one only warns; here it means the UI or visual tests
+      # silently did not run.
       - run: pnpm test:ui
         env:
           UI_STRICT: '1'

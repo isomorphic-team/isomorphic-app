@@ -47,8 +47,8 @@ const BUDGET = 50;
 	const absent = scoreProbe('q', 'wiki/a.md', [], BUDGET);
 	check('absent: nothing in the brain matched', absent.verdict === 'absent');
 
-	// A miss under a full budget proves nothing: the engine returns rows in path
-	// order, so pages later in the alphabet may never have been reached.
+	// A miss under a full budget proves nothing: search stops at the budget, so pages
+	// ranked below it were never returned.
 	const truncated = scoreProbe(
 		'q',
 		'wiki/zzz.md',
@@ -195,7 +195,7 @@ const BUDGET = 50;
 	);
 	check(
 		'diff: worst results sort first so a regression cannot hide',
-		d.deltas[0].change === 'dropped' || rankLast(d),
+		rankLast(d),
 		JSON.stringify(d.deltas.map((x) => [x.query, x.after]))
 	);
 }

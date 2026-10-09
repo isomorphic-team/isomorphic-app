@@ -66,8 +66,8 @@ production's bindings:
 
 ### What they do not assert
 
-- **A wrong `PUBLIC_BASE_URL`.** `@cloudflare/workers-oauth-provider` builds the metadata
-  above from the request origin, not from the configured base URL, so all of it is correct
+- **A wrong `PUBLIC_BASE_URL`.** The OAuth provider is built per request origin
+  (`src/lib/oauth-provider.ts`), so the metadata above comes from that origin, not from the configured base URL, so all of it is correct
   on any hostname whatever the config says. `PUBLIC_BASE_URL` is read where there is no
   request to derive an origin from: `src/manifest.ts`, and the connected-accounts tools
   building the `/link/start` URL. A deploy carrying the wrong value passes every check here
@@ -79,11 +79,13 @@ production's bindings:
 
 ## Looking at a branch before it merges
 
-The same `versions upload` step, run by hand from a branch, gives a URL that serves no
-traffic and shares production's bindings. That makes it a read-only look, not a place to
-run arbitrary code: the rules and the procedure are in
-[`../design/preview-environments.md`](../design/preview-environments.md#until-it-is-built-the-manual-version-preview),
-and an isolated preview Worker is the design's unbuilt half.
+`.github/workflows/preview.yml` deploys every same-repository pull request as an isolated
+Worker Preview with its own database, and a fork's on a maintainer's request; see
+[`../design/preview-environments.md`](../design/preview-environments.md). The same
+`versions upload` step `deploy.yml` uses, run by hand from a branch, still gives a URL that
+serves no traffic and shares production's bindings. That is a read-only look at a branch
+against production data, not a place to run arbitrary code:
+[the manual version preview](../design/preview-environments.md#the-manual-version-preview).
 
 ## What a rollback does not undo
 

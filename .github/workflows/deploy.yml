@@ -34,7 +34,7 @@ name: Deploy Worker
 #      your local .dev.vars:
 #        gh variable set WORKER_NAME CF_OAUTH_KV_ID CF_OAUTH_KV_PREVIEW_ID \
 #                        CF_D1_DATABASE_ID D1_DATABASE_NAME PUBLIC_BASE_URL \
-#                        AUTH_MODE AUTO_PROVISION AUTH_EMAIL_FROM \
+#                        AUTH_MODE AUTO_PROVISION AUTH_EMAIL_FROM AUTH_EMAIL_REPLY_TO \
 #                        APP_SLUG USAGE_ANALYTICS
 #
 # Step 4 exists because wrangler.jsonc is generated and gitignored — it holds one
@@ -178,6 +178,7 @@ jobs:
           AUTH_MODE: ${{ vars.AUTH_MODE }}
           PUBLIC_BASE_URL: ${{ vars.PUBLIC_BASE_URL }}
           AUTH_EMAIL_FROM: ${{ vars.AUTH_EMAIL_FROM }}
+          AUTH_EMAIL_REPLY_TO: ${{ vars.AUTH_EMAIL_REPLY_TO }}
           AUTO_PROVISION: ${{ vars.AUTO_PROVISION }}
           USAGE_ANALYTICS: ${{ vars.USAGE_ANALYTICS }}
           # GitHub rejects repository variables named GITHUB_*, so the CI-facing

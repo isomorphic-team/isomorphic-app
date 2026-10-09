@@ -4,7 +4,8 @@
 //      role, and which are merely marked accepted.
 //   2. The QUERIES that apply it, against the real schema in an in-memory SQLite
 //      (node:sqlite, a Node builtin) shimmed to the D1 surface.
-//   3. `provisionOrgForUser`, the first-touch path, over the same database.
+//   3. `provisionOrgForUser`, the first-touch path, over the same database, and
+//      `platformInstall`, the platform config it creates orgs through.
 //
 // This exists because of issue #69, where an invitation could be permanently
 // unclaimable with nothing surfaced to either side. The scenarios below are that
@@ -17,12 +18,13 @@
 
 import { localD1 } from '../src/local/d1-sqlite.ts';
 import { bindFixtureStorage } from './fixture-storage.ts';
-import { checker } from './check.ts';
+import { checker, errorOf, throws } from './check.ts';
 import { planInviteClaims, claimPendingInvites, type MatchedInvite } from '../src/lib/invites.ts';
-import { noBrainOutcome, provisionOrgForUser } from '../src/lib/provision.ts';
+import { noBrainOutcome, platformInstall, provisionOrgForUser } from '../src/lib/provision.ts';
 import {
 	createInvitation,
 	listPendingInvites,
+	listPendingBrainInvites,
 	listMembers,
 	listAccessibleBrains,
 	linkedUserIds,
@@ -262,22 +264,27 @@ check(
 	secondOrg[0]?.user_id === 'ada-home' && secondOrg[0]?.org_id === 'orgC'
 );
 check(
-	'she is now in three orgs',
+	"she is on Org C's roster under that id",
 	(await listMembers(db, 'orgC')).some((m) => m.user_id === 'ada-home')
 );
 
 // ---------------------------------------------------------------------------
 console.log('\nWhat is NOT claimed');
 // ---------------------------------------------------------------------------
+// One invite per call, so each filter is the only thing that can stop its claim.
 sqlite.exec(`
   INSERT INTO invitations (invite_id, org_id, email, role, invited_by, token_hash, invited_at, expires_at, accepted_at) VALUES
-    ('inv-expired', 'orgC', 'cy@contoso.example', 'admin', 'boss', '', '2026-01-01', datetime('now', '-1 day'), NULL),
-    ('inv-done',    'orgC', 'cy@contoso.example', 'admin', 'boss', '', '2026-01-01', datetime('now', '+30 days'), '2026-02-01');
+    ('inv-expired', 'orgC', 'cy@contoso.example', 'admin', 'boss', '', '2026-01-01', datetime('now', '-1 day'), NULL);
 `);
 check('an expired invite is not claimed', (await claimPendingInvites(db, ['cy'])).length === 0);
+sqlite.exec(`
+  DELETE FROM invitations WHERE invite_id = 'inv-expired';
+  INSERT INTO invitations (invite_id, org_id, email, role, invited_by, token_hash, invited_at, expires_at, accepted_at) VALUES
+    ('inv-done', 'orgC', 'cy@contoso.example', 'admin', 'boss', '', '2026-01-01', datetime('now', '+30 days'), '2026-02-01');
+`);
 check(
 	'an already-accepted invite is not claimed',
-	(await listMembers(db, 'orgC')).every((m) => m.user_id !== 'cy')
+	(await claimPendingInvites(db, ['cy'])).length === 0
 );
 check('no user ids means no work', (await claimPendingInvites(db, [])).length === 0);
 
@@ -327,7 +334,7 @@ await createInvitation(db, {
 	);
 	check(
 		'the invite is marked accepted',
-		!(await listPendingInvites(db, 'orgB')).some((i) => i.invite_id === 'inv-guest')
+		!(await listPendingBrainInvites(db, 'b-northwind')).some((i) => i.invite_id === 'inv-guest')
 	);
 	const reach = await listAccessibleBrains(db, ['cy']);
 	check(
@@ -376,21 +383,18 @@ await createInvitation(db, {
 });
 {
 	// Claiming must happen ABOVE the AUTO_PROVISION gate. Below it, this throws.
-	let got: Awaited<ReturnType<typeof provisionOrgForUser>> | null = null;
-	let msg = '';
-	try {
+	let got = null as Awaited<ReturnType<typeof provisionOrgForUser>> | null;
+	const msg = await errorOf(async () => {
 		got = await provisionOrgForUser({
 			db,
 			user: { user_id: 'new-user', email: 'new@northwind.example', name: 'New' },
 			autoProvision: false
 		});
-	} catch (err) {
-		msg = err instanceof Error ? err.message : String(err);
-	}
+	});
 	check(
 		'AUTO_PROVISION=false still lands an invitee in their org',
 		got?.org.org_id === 'orgB',
-		msg
+		String(msg)
 	);
 	check('at the invited role', got?.role === 'editor');
 	check('on the org-visible brain', got?.brain?.brain_id === 'b-northwind');
@@ -398,17 +402,18 @@ await createInvitation(db, {
 
 {
 	// Nobody invited this one, and there is nothing to mint them.
-	let msg = '';
-	try {
-		await provisionOrgForUser({
+	const msg = await errorOf(() =>
+		provisionOrgForUser({
 			db,
 			user: { user_id: 'stranger', email: 'stranger@example.com', name: null },
 			autoProvision: false
-		});
-	} catch (err) {
-		msg = err instanceof Error ? err.message : String(err);
-	}
-	check('an uninvited person is still turned away', msg.includes('An admin must invite you'));
+		})
+	);
+	check(
+		'an uninvited person is still turned away',
+		msg?.includes('An admin must invite you') === true,
+		String(msg)
+	);
 }
 
 {
@@ -432,17 +437,18 @@ sqlite.exec(
 	`UPDATE memberships SET role = 'viewer' WHERE org_id = 'orgB' AND user_id = 'new-user';`
 );
 {
-	let msg = '';
-	try {
-		await provisionOrgForUser({
+	const msg = await errorOf(() =>
+		provisionOrgForUser({
 			db,
 			user: { user_id: 'new-user', email: 'new@northwind.example', name: null },
 			autoProvision: false
-		});
-	} catch (err) {
-		msg = err instanceof Error ? err.message : String(err);
-	}
-	check('a viewer, brains exist but none shared → say so', msg.includes('shared with you'));
+		})
+	);
+	check(
+		'a viewer, brains exist but none shared → say so',
+		msg?.includes('shared with you') === true,
+		String(msg)
+	);
 }
 {
 	// The same state for someone who can act is the app's create-a-brain screen.
@@ -464,17 +470,75 @@ sqlite.exec(
 	`INSERT INTO memberships (org_id, user_id, role, added_at) VALUES ('orgC', 'cy', 'viewer', '2026-04-01');`
 );
 {
-	let msg = '';
-	try {
-		await provisionOrgForUser({
+	const msg = await errorOf(() =>
+		provisionOrgForUser({
 			db,
 			user: { user_id: 'cy', email: 'cy@contoso.example', name: null },
 			autoProvision: false
-		});
-	} catch (err) {
-		msg = err instanceof Error ? err.message : String(err);
-	}
-	check('an empty org and a viewer → ask your admin', msg.includes('no brain configured'));
+		})
+	);
+	check(
+		'an empty org and a viewer → ask your admin',
+		msg?.includes('no brain configured') === true,
+		String(msg)
+	);
+}
+
+console.log('\nplatformInstall: the platform config provisioning reads');
+// The org and installation a first-touch personal org and a hosted org are created
+// through. Validated here, so a bad value fails as a config error naming the variable
+// rather than later, at GitHub, as an auth problem.
+const PLATFORM = { PLATFORM_ORG: 'acme-brains', PLATFORM_INSTALLATION_ID: '99' };
+{
+	const p = platformInstall(PLATFORM);
+	check(
+		'a configured platform resolves to its org and installation, as a number',
+		p.org === 'acme-brains' && p.installationId === 99
+	);
+}
+check(
+	'a missing org is refused',
+	throws(() => platformInstall({ PLATFORM_INSTALLATION_ID: '99' }))
+);
+check(
+	'a missing installation id is refused',
+	throws(() => platformInstall({ PLATFORM_ORG: 'acme-brains' }))
+);
+{
+	const m = errorOf(() => platformInstall({})) ?? '';
+	check(
+		'the error names both variables, since either one alone is not enough',
+		m.includes('PLATFORM_ORG') && m.includes('PLATFORM_INSTALLATION_ID'),
+		m
+	);
+}
+check(
+	'a whitespace-only value counts as unset rather than as an org named " "',
+	throws(() => platformInstall({ PLATFORM_ORG: '   ', PLATFORM_INSTALLATION_ID: '99' }))
+);
+{
+	const m = errorOf(() => platformInstall({ ...PLATFORM, PLATFORM_INSTALLATION_ID: 'abc' })) ?? '';
+	check(
+		'a non-numeric installation id is refused, naming the variable and what was read',
+		m.includes('PLATFORM_INSTALLATION_ID') && m.includes('abc'),
+		m
+	);
+}
+check(
+	'a fractional id is refused: installation ids are whole numbers',
+	throws(() => platformInstall({ ...PLATFORM, PLATFORM_INSTALLATION_ID: '9.5' }))
+);
+check(
+	'zero and negatives are refused rather than sent to GitHub',
+	throws(() => platformInstall({ ...PLATFORM, PLATFORM_INSTALLATION_ID: '0' })) &&
+		throws(() => platformInstall({ ...PLATFORM, PLATFORM_INSTALLATION_ID: '-3' }))
+);
+{
+	const p = platformInstall({ PLATFORM_ORG: ' acme-brains ', PLATFORM_INSTALLATION_ID: ' 99 ' });
+	check(
+		'surrounding whitespace is tolerated on both, since these come from env files',
+		p.org === 'acme-brains' && p.installationId === 99
+	);
 }
 
 done();

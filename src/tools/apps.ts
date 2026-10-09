@@ -516,7 +516,11 @@ export function registerBrainApp(
 			if (!path.endsWith('.md')) return fail('Only markdown pages can be edited.');
 			if (!isContentPath(path, config))
 				return fail(`"${path}" is outside this brain's editable content.`);
-			const file = await store.readFile(repoArgs, path);
+			// Opened where write_page will save it (BrainStore.writeHead): with an open
+			// pull request, the page as that pull request holds it, so the sha guard
+			// matches and the save keeps the changes already waiting there.
+			const head = await store.writeHead(repoArgs, config);
+			const file = await store.readFile(repoArgs, path, head.commitSha);
 			if (!file) return fail(`"${path}" does not exist.`);
 			// Derived views: the editor gets the okf-view fences but NOT the generated
 			// snapshot regions — generated content must never round-trip through

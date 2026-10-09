@@ -9,12 +9,11 @@
 //    function, so the constructs below pin the HTML the viewer already shows.
 //    A change that alters them is a change to every page in every brain.
 //
-// 2. SANITIZATION. `marked` sanitizes nothing at all (verified against v18:
-//    `<script>`, `<iframe>`, `onerror=`, and `javascript:` hrefs all pass
-//    through verbatim). The app rendered that straight into
-//    `dangerouslySetInnerHTML`, which the host iframe's CSP bounded; served
-//    from our own origin beside a session cookie it is stored XSS. Every
-//    payload below is one that reached the browser before this module existed.
+// 2. SANITIZATION. `marked` sanitizes nothing: `<script>`, `<iframe>`,
+//    `onerror=` and `javascript:` hrefs pass through it verbatim. The rendered
+//    HTML goes into `dangerouslySetInnerHTML`, and the web app serves it from
+//    the same origin as the session cookie, so anything that survives the
+//    render is stored XSS. Every payload below must come back inert.
 //
 // Break the sanitizer deliberately and confirm this goes red before believing
 // it: a test that passes against both the old and the new behaviour is testing
@@ -22,14 +21,9 @@
 
 import { renderMarkdown, isSafeUrl, sanitizeRawHtml } from '../src/lib/render.ts';
 
-let failures = 0;
-function check(name: string, cond: boolean, detail?: string) {
-	if (cond) console.log(`  ok  ${name}`);
-	else {
-		failures++;
-		console.error(`FAIL  ${name}${detail ? `\n      ${detail}` : ''}`);
-	}
-}
+import { checker } from './check.ts';
+
+const { check, done } = checker('render checks');
 
 // Nothing a browser will execute or fetch off-origin survived the render.
 //
@@ -114,9 +108,8 @@ function inert(html: string): boolean {
 			'<p><a href="#wikilink=Weekly%20Sync">the sync</a></p>\n'
 	);
 
-	// A conventions page explaining the syntax is the case this protects: the
-	// old string pre-pass rewrote inside fences, so the code block displayed
-	// `[Name](#wikilink=Name)` instead of what the author typed.
+	// A conventions page that explains the syntax shows `[[Name]]` in code
+	// exactly as the author typed it.
 	const fenced = renderMarkdown('```\n[[Name]]\n```');
 	check('a wikilink inside a fence is left alone', /\[\[Name\]\]/.test(fenced), fenced);
 	const inline = renderMarkdown('Write `[[Name]]` to link.');
@@ -253,5 +246,4 @@ function inert(html: string): boolean {
 	check('file is not', !isSafeUrl('file:///etc/passwd'));
 }
 
-console.log(failures === 0 ? '\nAll render checks passed.' : `\n${failures} check(s) failed.`);
-process.exit(failures === 0 ? 0 : 1);
+done();

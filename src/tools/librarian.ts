@@ -188,6 +188,7 @@ export interface BrainContext {
 //   - PR, auto-merged immediately → "done" (it's already live on the branch)
 //   - PR, auto-merge armed        → "proposed", will merge itself once checks pass
 //   - PR, no auto-merge           → "proposed", needs a human to merge
+// A PR reply says when the change joined the brain's already-open pull request.
 // The single composer for every write's user-facing message, which is why the brain is
 // named here rather than in eight call sites.
 //
@@ -202,10 +203,13 @@ export function landed(ctx: BrainContext, outcome: WriteOutcome, done: string, p
 	const where = `\n\nBrain: ${ctx.activeBrain.label || ctx.activeBrain.id}.`;
 	if (!outcome.prUrl) return ok(`${done}${where}`);
 	if (outcome.merged) return ok(`${done} (via PR ${outcome.prUrl})${where}`);
+	const joined = outcome.appended
+		? 'It joined the changes already waiting in the open pull request. '
+		: '';
 	const tail = outcome.autoMergeEnabled
 		? `It will merge automatically once checks pass: ${outcome.prUrl}`
 		: `Review and merge it here: ${outcome.prUrl}`;
-	return ok(`${proposed} ${tail}${where}`);
+	return ok(`${proposed} ${joined}${tail}${where}`);
 }
 
 // The one write chokepoint for the librarian tools: commitOrPR plus a write-through
@@ -229,6 +233,13 @@ async function commitBundle(ctx: BrainContext, opts: CommitOrPROpts): Promise<Wr
 		).catch(() => {});
 	}
 	return outcome;
+}
+
+// The head a write plans against and commits onto (BrainStore.writeHead): in PR mode,
+// the brain's open pull request when there is one, so this write builds on the
+// changes still waiting there instead of on a default branch that lacks them.
+function writeBase(ctx: BrainContext): Promise<Head> {
+	return ctx.store.writeHead(ctx.repoArgs, ctx.config);
 }
 
 // The dedupe wrapper the three content writes run inside.
@@ -409,7 +420,7 @@ async function createPageWrite(
 	// independent, so they run together rather than back to back.
 	const [newContent, log] = await Promise.all([
 		withFreshSnapshots(ctx, target, composed.content),
-		store.readFile(repoArgs, logPathOf(config))
+		store.readFile(repoArgs, logPathOf(config), head.commitSha)
 	]);
 	const rec = describeChange({
 		kind: 'create',
@@ -444,7 +455,7 @@ async function updatePageWrite(
 	// The changelog read is independent of everything below (snapshot refresh, link
 	// repointing), so it starts first and overlaps them. The detached catch keeps an
 	// early return below from leaving an unhandled rejection; the await still rethrows.
-	const logPromise = store.readFile(repoArgs, logPathOf(config));
+	const logPromise = store.readFile(repoArgs, logPathOf(config), head.commitSha);
 	logPromise.catch(() => {});
 	const today = todayIso();
 	const composed = composeUpdate(path, existing.content, args, today, MAX_FIELD_KEYS_PER_PAGE);
@@ -492,15 +503,12 @@ async function updatePageWrite(
 	});
 	const res = landed(ctx, outcome, rec.done, rec.proposed);
 	// The in-client editor (which passes a sha) wants a fresh sha back so it can keep
-	// saving without reopening. Re-read only when the change actually landed on the
-	// branch; an unmerged PR leaves the editor's current sha valid.
+	// saving without reopening. An unmerged PR is read where the write went: the
+	// editor's next save plans against that pull request's branch (writeBase).
 	if (sha !== undefined) {
-		let freshSha = sha;
-		if (!(outcome.prUrl && !outcome.merged)) {
-			const saved = await store.readFile(repoArgs, path);
-			freshSha = saved?.sha ?? '';
-		}
-		return { ...res, structuredContent: { path, sha: freshSha } };
+		const unmerged = outcome.prUrl && !outcome.merged;
+		const saved = await store.readFile(repoArgs, path, unmerged ? outcome.branchSha : undefined);
+		return { ...res, structuredContent: { path, sha: saved?.sha ?? '' } };
 	}
 	return res;
 }
@@ -531,13 +539,9 @@ export function folderMoveCollisions(
 	return { blocking, scaffolding };
 }
 
-// The folder-path form of move_page: move/rename a whole subtree in one atomic commit.
-// Two link classes are handled:
-//   - Moved pages' OWN outbound links: intra-subtree links are invariant (source and
-//     target shift by the same prefix), so only links pointing OUTSIDE the subtree are
-//     repointed to a moved sibling first, then the body is rebased for the new location.
-//     Titles never change on a move, so [[wikilinks]] still resolve.
-//   - OUTSIDE pages linking INTO a moved page: their relative md links are repointed.
+// Move a whole subtree in one atomic commit. Moved pages repoint subtree targets,
+// then rebase outbound links for their new location. Outside pages repoint links
+// to every moved file, including attachments. Titles and wikilinks stay unchanged.
 async function moveFolderWrite(
 	ctx: BrainContext,
 	args: { path: string; new_path?: string; new_name?: string },
@@ -555,7 +559,7 @@ async function moveFolderWrite(
 	if (!isContentPath(`${newFolder}/.gitkeep`, config))
 		return fail(`Can't move to "${newFolder}" — it's outside this brain's editable content.`);
 
-	const head = pre?.head ?? (await store.getHead(repoArgs, config.defaultBranch));
+	const head = pre?.head ?? (await writeBase(ctx));
 	const tree = pre?.tree ?? (await store.listTree(repoArgs, head, { extension: '*' }));
 	const moved = tree.filter((e) => e.path.startsWith(`${folder}/`));
 	if (moved.length === 0) return fail(`No folder "${folder}" found (it has no files).`);
@@ -582,6 +586,7 @@ async function moveFolderWrite(
 	// folder rather than written over the top of them.
 	const supersededScaffolding = new Set(scaffolding);
 
+	const movedPaths = moved.map((e) => e.path);
 	const movedMdEntries = moved.filter((e) => e.path.endsWith('.md'));
 	const movedMd = new Set(movedMdEntries.map((e) => e.path));
 	// Non-markdown blobs to copy across, minus the scaffolding the destination already
@@ -597,13 +602,13 @@ async function moveFolderWrite(
 	// changelog.
 	const [movedRes, nonMdFiles, linkersRes, log] = await Promise.all([
 		store.fetchPages(repoArgs, movedMdEntries),
-		Promise.all(copiedNonMd.map((e) => store.readFile(repoArgs, e.path))),
-		fetchInboundLinkersForPaths(ctx, head, [...movedMd], movedMd, tree),
-		store.readFile(repoArgs, logPathOf(config))
+		Promise.all(copiedNonMd.map((e) => store.readBinary(repoArgs, e.path, head.commitSha))),
+		fetchInboundLinkersForPaths(ctx, head, movedPaths, movedMd, tree),
+		store.readFile(repoArgs, logPathOf(config), head.commitSha)
 	]);
 	const movedContent = new Map(movedRes.pages.map((p) => [p.path, p.content]));
 	const today = todayIso();
-	const writes: { path: string; content: string }[] = [];
+	const writes: FileWrite[] = [];
 	const deletes: string[] = [];
 	let repointedPages = 0;
 
@@ -615,7 +620,7 @@ async function moveFolderWrite(
 		const newPath = rename(oldPath);
 		const { frontmatter, body } = parseFrontmatter(content);
 		let rebased = body;
-		for (const sibling of movedMd) {
+		for (const sibling of movedPaths) {
 			rebased = rewriteMdLinks(rebased, oldPath, sibling, rename(sibling)).body;
 		}
 		rebased = rebaseMdLinks(rebased, oldPath, newPath);
@@ -628,19 +633,28 @@ async function moveFolderWrite(
 
 	// 2. Non-markdown blobs under the folder (.gitkeep, etc.) — copied across verbatim
 	//    (contents fetched above); the superseded scaffolding is delete-only.
-	copiedNonMd.forEach((e, i) => {
-		writes.push({ path: rename(e.path), content: nonMdFiles[i]?.content ?? '' });
+	for (const [i, e] of copiedNonMd.entries()) {
+		const file = nonMdFiles[i];
+		if (!file || file.sha !== e.sha)
+			return fail(
+				`Can't move "${folder}" — "${e.path}" changed or couldn't be read. Refresh and try again.`
+			);
+		writes.push({
+			path: rename(e.path),
+			content: file.contentBase64,
+			encoding: 'base64'
+		});
 		deletes.push(e.path);
-	});
+	}
 	for (const e of supersededScaffolding) deletes.push(e);
 
-	// 3. Outside pages linking INTO a moved page — repoint their md links.
+	// 3. Outside pages linking INTO a moved page or attachment — repoint their links.
 	const { pages: linkers, truncated } = linkersRes;
 	for (const page of linkers) {
 		if (isToolMaintained(page.path, config)) continue;
 		let content = page.content;
 		let changed = 0;
-		for (const oldPath of movedMd) {
+		for (const oldPath of movedPaths) {
 			const r = rewriteMdLinks(content, page.path, oldPath, rename(oldPath));
 			content = r.body;
 			changed += r.changed;
@@ -711,9 +725,9 @@ async function moveFileWrite(
 	// The blob, the pages linking it, and the changelog are independent reads at the
 	// same head, so they run together (the linker fetch reuses the router's tree).
 	const [file, linkersRes, log] = await Promise.all([
-		store.readBinary(repoArgs, path),
+		store.readBinary(repoArgs, path, head.commitSha),
 		fetchInboundLinkers(ctx, head, path, tree),
-		store.readFile(repoArgs, logPathOf(config))
+		store.readFile(repoArgs, logPathOf(config), head.commitSha)
 	]);
 	if (!file) return fail(`"${path}" does not exist.`);
 
@@ -766,7 +780,7 @@ async function deleteFileWrite(ctx: BrainContext, head: Head, args: { path: stri
 	// The reference count and the changelog are independent reads, so they run together.
 	const [refsRes, log] = await Promise.all([
 		inboundRefs(ctx, [path]),
-		store.readFile(repoArgs, logPathOf(config))
+		store.readFile(repoArgs, logPathOf(config), head.commitSha)
 	]);
 	const { refs, truncated } = refsRes;
 
@@ -797,7 +811,7 @@ async function deleteFolderWrite(
 	const folder = normFolderPath(args.path);
 	if (!folder) return fail('Give a folder path, e.g. "wiki/Projects".');
 
-	const head = pre?.head ?? (await store.getHead(repoArgs, config.defaultBranch));
+	const head = pre?.head ?? (await writeBase(ctx));
 	const tree = pre?.tree ?? (await store.listTree(repoArgs, head, { extension: '*' }));
 	const doomed = tree.filter((e) => e.path.startsWith(`${folder}/`));
 	if (doomed.length === 0) return fail(`No folder "${folder}" found.`);
@@ -810,7 +824,7 @@ async function deleteFolderWrite(
 	// changelog read is independent — run them together.
 	const [refsRes, log] = await Promise.all([
 		inboundRefs(ctx, [...doomedMd]),
-		store.readFile(repoArgs, logPathOf(config))
+		store.readFile(repoArgs, logPathOf(config), head.commitSha)
 	]);
 	const { refs, truncated } = refsRes;
 
@@ -975,7 +989,7 @@ export function registerLibrarianTools(
 				// Capture the commit base before reading authoritative content. If the
 				// branch moves afterwards, updateRef rejects this write instead of letting
 				// content read from an older revision overwrite the newer commit.
-				const head = await store.getHead(repoArgs, config.defaultBranch);
+				const head = await writeBase(ctx);
 				const existing = await store.readFile(repoArgs, target, head.commitSha);
 				const plan = planPageWrite(args, target, existing, config);
 				if (!plan.ok) return fail(plan.error);
@@ -1044,7 +1058,7 @@ export function registerLibrarianTools(
 				// fits. The tree answers this for EVERY non-page file, attachments included.
 				if (!path.endsWith('.md')) {
 					const cleaned = normFolderPath(path);
-					const head = await ctx.store.getHead(ctx.repoArgs, ctx.config.defaultBranch);
+					const head = await writeBase(ctx);
 					const tree = await ctx.store.listTree(ctx.repoArgs, head, { extension: '*' });
 					const kind = nonPageKind(cleaned, tree);
 					if (kind === 'file')
@@ -1064,7 +1078,7 @@ export function registerLibrarianTools(
 				if (!resolved.ok) return fail(resolved.error);
 				const newPath = resolved.target;
 
-				const head = await store.getHead(repoArgs, config.defaultBranch);
+				const head = await writeBase(ctx);
 				const existing = await store.readFile(repoArgs, path, head.commitSha);
 				if (!existing) return fail(`"${path}" does not exist.`);
 
@@ -1088,7 +1102,7 @@ export function registerLibrarianTools(
 				// linker fetch reuses the tree above, and runs alongside the changelog read.
 				const [linkersRes, log] = await Promise.all([
 					fetchInboundLinkers(ctx, head, path, tree),
-					store.readFile(repoArgs, logPathOf(config))
+					store.readFile(repoArgs, logPathOf(config), head.commitSha)
 				]);
 				const { pages, truncated } = linkersRes;
 				const today = todayIso();
@@ -1178,7 +1192,7 @@ export function registerLibrarianTools(
 				// says which, for the same reason it does in move_page.
 				if (!path.endsWith('.md')) {
 					const cleaned = normFolderPath(path);
-					const head = await ctx.store.getHead(ctx.repoArgs, ctx.config.defaultBranch);
+					const head = await writeBase(ctx);
 					const tree = await ctx.store.listTree(ctx.repoArgs, head, { extension: '*' });
 					const kind = nonPageKind(cleaned, tree);
 					if (kind === 'file') return deleteFileWrite(ctx, head, { path: cleaned });
@@ -1189,7 +1203,7 @@ export function registerLibrarianTools(
 				const refusal = writeRefusal(path, config, 'deleted');
 				if (refusal) return fail(refusal);
 
-				const head = await store.getHead(repoArgs, config.defaultBranch);
+				const head = await writeBase(ctx);
 				const existing = await store.readFile(repoArgs, path, head.commitSha);
 				if (!existing) return fail(`"${path}" does not exist.`);
 
@@ -1197,7 +1211,7 @@ export function registerLibrarianTools(
 				// The reference count and the changelog are independent, so they run together.
 				const [refsRes, log] = await Promise.all([
 					inboundRefs(ctx, [path]),
-					store.readFile(repoArgs, logPathOf(config))
+					store.readFile(repoArgs, logPathOf(config), head.commitSha)
 				]);
 				const { refs, truncated } = refsRes;
 

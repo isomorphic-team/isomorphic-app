@@ -21,7 +21,10 @@ still requires the App.
 
 Permissions are declared in `src/manifest.ts`. `administration: write` is required to create
 repos and is **only granted on Organization installs**; the install callback refuses a personal
-account install with a friendly error. **Never add an `issues` (or any widening) permission to
+account install with a friendly error. The App is private, so it installs only on its owner:
+`GITHUB_APP_ORG=<org> pnpm bootstrap` registers it under that organization
+(`manifestRegistrationUrl`); unset, under the personal account. `pnpm test:manifest` pins the
+permissions exactly and the registration URL. **Never add an `issues` (or any widening) permission to
 the platform App**; feedback uses its own `FEEDBACK_TOKEN`.
 
 ## PKCS#1 vs PKCS#8 (don't break this)

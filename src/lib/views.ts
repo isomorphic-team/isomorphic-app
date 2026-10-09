@@ -50,6 +50,7 @@ import {
 	SNAPSHOT_BEGIN,
 	SNAPSHOT_END,
 	hasViews,
+	matchesCondition,
 	segmentViews
 } from './view-directives.ts';
 
@@ -62,6 +63,9 @@ export * from './view-directives.ts';
 export interface ViewContext {
 	resolved: ResolvedGraph;
 	fieldsFor: (paths: string[]) => Promise<Map<string, PageFields>>;
+	// The date comparison filters read as `today` (YYYY-MM-DD, UTC). Defaults to
+	// the current date; tests pin it.
+	today?: string;
 }
 
 export async function buildViewContext(
@@ -90,12 +94,12 @@ interface ViewRow {
 	fields: PageFields;
 }
 
-function matchesFilter(fields: PageFields, filter: Record<string, string[]>): boolean {
-	for (const [key, wanted] of Object.entries(filter)) {
+function matchesFilter(fields: PageFields, spec: ViewSpec, today: string): boolean {
+	for (const [key, wanted] of Object.entries(spec.filter)) {
 		const have = (fields.get(key) ?? []).map((v) => v.toLowerCase());
 		if (!wanted.some((w) => have.includes(w.toLowerCase()))) return false;
 	}
-	return true;
+	return spec.conditions.every((c) => matchesCondition(fields.get(c.key) ?? [], c, today));
 }
 
 function compareRows(a: ViewRow, b: ViewRow, sort: string): number {
@@ -185,6 +189,7 @@ async function resolveRows(spec: ViewSpec, pagePath: string, ctx: ViewContext): 
 	}
 	const needFields =
 		Object.keys(spec.filter).length > 0 ||
+		spec.conditions.length > 0 ||
 		spec.columns.some((c) => c !== 'title') ||
 		spec.sort !== 'title' ||
 		spec.describe !== undefined ||
@@ -192,13 +197,14 @@ async function resolveRows(spec: ViewSpec, pagePath: string, ctx: ViewContext): 
 	const fieldsByPath = needFields
 		? await ctx.fieldsFor(candidates.map((c) => c.path))
 		: new Map<string, PageFields>();
+	const today = ctx.today ?? new Date().toISOString().slice(0, 10);
 	const rows = candidates
 		.map((c) => ({
 			path: c.path,
 			title: c.title,
 			fields: fieldsByPath.get(c.path) ?? new Map<string, string[]>()
 		}))
-		.filter((r) => matchesFilter(r.fields, spec.filter));
+		.filter((r) => matchesFilter(r.fields, spec, today));
 	rows.sort((a, b) => compareRows(a, b, spec.sort));
 	if (spec.order === 'desc') rows.reverse();
 	return rows;
@@ -223,14 +229,66 @@ function linkTo(row: ViewRow, fromPath: string): string {
 	return `[${escapeCell(row.title)}](${dest})`;
 }
 
+// Display-only rendering options. `today` set means a human is reading: date
+// cells gain relative text. The snapshot is written to the file, so it passes no
+// options and stays the same from one day to the next.
+interface RenderOptions {
+	today?: string;
+}
+
+// A lowercase slug as a label: `next_step_due` -> "Next step due",
+// `qualified` -> "Qualified". Anything with a capital letter is kept as is.
+export function humanizeLabel(value: string): string {
+	if (value !== value.toLowerCase()) return value;
+	const words = value.replace(/[_-]+/g, ' ').trim();
+	return words ? words[0].toUpperCase() + words.slice(1) : value;
+}
+
+// A key that names a deadline: `due`, `*_due`, `*-due`, `*_due_date`, `*-due-date`.
+const DUE_KEY = /(^|[_-])due([_-]date)?$/i;
+
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+const ISO_DAY = /^(\d{4})-(\d{2})-(\d{2})$/;
+
+// `2026-10-16` read on `2026-10-04` -> "Oct 16 · in 12 days". The year shows
+// when it differs from today's. A past date under a deadline key reads
+// "N days overdue". Anything that is not a valid date is returned unchanged.
+export function formatDateCell(value: string, today: string, key = ''): string {
+	const m = ISO_DAY.exec(value);
+	const t = ISO_DAY.exec(today);
+	if (!m || !t) return value;
+	const d = new Date(Date.UTC(+m[1], +m[2] - 1, +m[3]));
+	if (d.getUTCMonth() !== +m[2] - 1 || d.getUTCDate() !== +m[3]) return value;
+	const n = Math.round((d.getTime() - Date.UTC(+t[1], +t[2] - 1, +t[3])) / 86_400_000);
+	let rel: string;
+	if (n === 0) rel = 'today';
+	else if (n > 0) rel = n === 1 ? 'tomorrow' : `in ${n} days`;
+	else if (DUE_KEY.test(key)) rel = n === -1 ? '1 day overdue' : `${-n} days overdue`;
+	else rel = n === -1 ? 'yesterday' : `${-n} days ago`;
+	const year = m[1] === t[1] ? '' : `, ${m[1]}`;
+	return `${MONTHS[d.getUTCMonth()]} ${d.getUTCDate()}${year} · ${rel}`;
+}
+
+function cellText(values: string[], key: string, opts: RenderOptions): string {
+	const shown = opts.today ? values.map((v) => formatDateCell(v, opts.today!, key)) : values;
+	return escapeCell(shown.join(', '));
+}
+
 // One flat run of rows as the chosen shape (grouping handled by the caller).
-function renderFlat(spec: ViewSpec, rows: ViewRow[], fromPath: string): string {
+function renderFlat(
+	spec: ViewSpec,
+	rows: ViewRow[],
+	fromPath: string,
+	opts: RenderOptions
+): string {
 	if (spec.as === 'table') {
-		const header = spec.columns.map((c) => (c === 'title' ? 'Title' : escapeCell(c)));
+		const header = spec.columns.map((c) =>
+			c === 'title' ? 'Title' : escapeCell(humanizeLabel(c))
+		);
 		const out = [`| ${header.join(' | ')} |`, `| ${header.map(() => '---').join(' | ')} |`];
 		for (const r of rows) {
 			const cells = spec.columns.map((c) =>
-				c === 'title' ? linkTo(r, fromPath) : escapeCell((r.fields.get(c) ?? []).join(', '))
+				c === 'title' ? linkTo(r, fromPath) : cellText(r.fields.get(c) ?? [], c, opts)
 			);
 			out.push(`| ${cells.join(' | ')} |`);
 		}
@@ -238,15 +296,19 @@ function renderFlat(spec: ViewSpec, rows: ViewRow[], fromPath: string): string {
 	}
 	return rows
 		.map((r) => {
-			const desc = spec.describe ? (r.fields.get(spec.describe) ?? []).join(', ') : '';
-			return desc ? `- ${linkTo(r, fromPath)} - ${escapeCell(desc)}` : `- ${linkTo(r, fromPath)}`;
+			const desc = spec.describe
+				? cellText(r.fields.get(spec.describe) ?? [], spec.describe, opts)
+				: '';
+			return desc ? `- ${linkTo(r, fromPath)} - ${desc}` : `- ${linkTo(r, fromPath)}`;
 		})
 		.join('\n');
 }
 
-// Order rows into group-by buckets: alphabetical by group value, pages missing
-// the key last under "(none)". A page with a LIST value appears in each group.
-function groupRows(rows: ViewRow[], key: string): [string, ViewRow[]][] {
+// Order rows into group-by buckets. When the group key is also an equality
+// filter, groups follow the filter's order (`stage: [lead, qualified]` puts
+// lead first); other values follow alphabetically, and pages missing the key
+// go last under "(none)". A page with a LIST value appears in each group.
+function groupRows(rows: ViewRow[], key: string, order: string[] = []): [string, ViewRow[]][] {
 	const groups = new Map<string, ViewRow[]>();
 	for (const r of rows) {
 		const values = r.fields.get(key) ?? [];
@@ -254,35 +316,57 @@ function groupRows(rows: ViewRow[], key: string): [string, ViewRow[]][] {
 			groups.set(g, [...(groups.get(g) ?? []), r]);
 		}
 	}
+	const rank = (g: string): number => {
+		const i = order.findIndex((o) => o.toLowerCase() === g.toLowerCase());
+		return i < 0 ? order.length : i;
+	};
 	return [...groups.entries()].sort(([a], [b]) =>
-		a === '(none)' ? 1 : b === '(none)' ? -1 : a.localeCompare(b)
+		a === '(none)' ? 1 : b === '(none)' ? -1 : rank(a) - rank(b) || a.localeCompare(b)
 	);
 }
 
-function renderRows(spec: ViewSpec, rows: ViewRow[], fromPath: string): string {
+function renderRows(
+	spec: ViewSpec,
+	rows: ViewRow[],
+	fromPath: string,
+	opts: RenderOptions
+): string {
+	const groups = () => groupRows(rows, spec.groupBy!, spec.filter[spec.groupBy!]);
 	if (spec.as === 'count') {
 		if (spec.groupBy) {
 			// Per-group tallies, e.g. orgs per sector.
-			return groupRows(rows, spec.groupBy)
-				.map(([g, rs]) => `- ${escapeCell(g)}: **${rs.length}**`)
+			return groups()
+				.map(([g, rs]) => `- ${escapeCell(humanizeLabel(g))}: **${rs.length}**`)
 				.join('\n');
 		}
 		return spec.label ? `**${rows.length}** ${spec.label}` : `**${rows.length}**`;
 	}
 	if (rows.length === 0) return '*No matching pages.*';
 	if (spec.groupBy) {
-		return groupRows(rows, spec.groupBy)
-			.map(([g, rs]) => `### ${g}\n\n${renderFlat(spec, rs, fromPath)}`)
+		return groups()
+			.map(([g, rs]) => `### ${humanizeLabel(g)}\n\n${renderFlat(spec, rs, fromPath, opts)}`)
 			.join('\n\n');
 	}
-	return renderFlat(spec, rows, fromPath);
+	return renderFlat(spec, rows, fromPath, opts);
 }
 
-function renderOne(view: ParsedView, pagePath: string, ctx: ViewContext): Promise<string> {
-	if (!view.spec) return Promise.resolve(`*This view could not be computed: ${view.error}.*`);
-	return resolveRows(view.spec, pagePath, ctx).then((rows) =>
-		renderRows(view.spec!, rows, pagePath)
-	);
+// One view, rendered twice from one resolution: for display (relative dates)
+// and for the file snapshot (raw values).
+async function renderOne(
+	view: ParsedView,
+	pagePath: string,
+	ctx: ViewContext
+): Promise<{ display: string; file: string }> {
+	if (!view.spec) {
+		const note = `*This view could not be computed: ${view.error}.*`;
+		return { display: note, file: note };
+	}
+	const rows = await resolveRows(view.spec, pagePath, ctx);
+	const today = ctx.today ?? new Date().toISOString().slice(0, 10);
+	return {
+		display: renderRows(view.spec, rows, pagePath, { today }),
+		file: renderRows(view.spec, rows, pagePath, {})
+	};
 }
 
 export interface RenderedViews {
@@ -324,9 +408,10 @@ export async function tryRenderViews(
 	}
 }
 
-// Compute every view on a page. Deterministic for a given index state, so
-// re-snapshotting an unchanged brain yields byte-identical content (idempotent
-// writes). Callers gate on hasViews() and MUST ensureFresh() first.
+// Compute every view on a page. Deterministic for a given index state and
+// date, so re-snapshotting an unchanged brain yields byte-identical content
+// (idempotent writes); a view with a date comparison can change day to day.
+// Relative date text goes in `display` only, never in the snapshot. Callers gate on hasViews() and MUST ensureFresh() first.
 export async function renderViews(
 	content: string,
 	pagePath: string,
@@ -344,8 +429,8 @@ export async function renderViews(
 		}
 		count++;
 		const rendered = await renderOne(s.view, pagePath, ctx);
-		display.push(rendered);
-		snapshotted.push(`${s.fence}\n\n${SNAPSHOT_BEGIN}\n${rendered}\n${SNAPSHOT_END}`);
+		display.push(rendered.display);
+		snapshotted.push(`${s.fence}\n\n${SNAPSHOT_BEGIN}\n${rendered.file}\n${SNAPSHOT_END}`);
 	}
 	return { display: display.join('\n'), snapshotted: snapshotted.join('\n'), count };
 }

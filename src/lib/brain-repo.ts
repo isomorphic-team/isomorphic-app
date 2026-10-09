@@ -11,6 +11,7 @@
 // moves, so there is no partial state.
 
 import type { Octokit } from 'octokit';
+import { coalescedPrText } from './change-record.ts';
 import { base64ToUtf8 } from './wiki.ts';
 
 // Type alias (not interface) so it picks up an implicit index signature and
@@ -24,6 +25,57 @@ export interface Head {
 	branch: string;
 	commitSha: string;
 	treeSha: string;
+	// Set only by writeHead: `branch` is this open pull request's branch, and a write
+	// based on this head is appended to it instead of opening another pull request.
+	pr?: PendingPr;
+}
+
+// The brain's open pull request that PR-mode writes accumulate on.
+export interface PendingPr {
+	number: number;
+	url: string;
+	nodeId: string;
+	title: string;
+	body: string;
+	// The default branch has moved past it. Under "require branches to be up to
+	// date" auto-merge waits on this forever, so an append also updates the branch.
+	behind: boolean;
+	autoMerge: boolean;
+}
+
+// What choosePendingPr needs from one entry of GitHub's open pull request list.
+export interface OpenPrSummary {
+	number: number;
+	baseRef: string;
+	headRef: string;
+	// The repository the head branch lives in; null when that fork was deleted.
+	headRepo: string | null;
+}
+
+// Branch prefixes Isomorphic opens pull requests from (`branchPrefix` callers).
+export const PR_BRANCH_PREFIX = 'isomorphic/';
+// configure_brain's pull request is reviewed on its own (findOpenConfigPr), so
+// content writes never join it.
+const CONFIG_PR_PREFIX = 'isomorphic/configure';
+
+// Which open pull requests content writes may join, newest first: Isomorphic's own
+// branches in this repository, against the default branch. Every write branches from
+// the default branch otherwise, so two writes inside one pull request's lifetime
+// produce two pull requests, the second built without the first's changes.
+export function pendingPrCandidates(
+	prs: readonly OpenPrSummary[],
+	opts: { defaultBranch: string; repoFullName: string }
+): OpenPrSummary[] {
+	const full = opts.repoFullName.toLowerCase();
+	return prs
+		.filter(
+			(p) =>
+				p.baseRef === opts.defaultBranch &&
+				p.headRepo?.toLowerCase() === full &&
+				p.headRef.startsWith(PR_BRANCH_PREFIX) &&
+				!p.headRef.startsWith(CONFIG_PR_PREFIX)
+		)
+		.sort((a, b) => b.number - a.number);
 }
 
 export interface TreeEntry {
@@ -123,7 +175,7 @@ const GRAPHQL_BLOB_BATCH = 100;
 
 // ---------- the storage seam ----------
 //
-// Everything the tools do to a brain, as eleven operations. The only interface between
+// Everything the tools do to a brain, as twelve operations. The only interface between
 // the tool layer and where a brain physically lives, so a brain can be a GitHub repo
 // or a git repo on disk. Implementations: githubStore below, and the fs/git adapter
 // in src/local/brain-store-fs.ts.
@@ -186,6 +238,14 @@ export interface BrainStore {
 		repo: RepoRef,
 		entries: TreeEntry[]
 	): Promise<{ pages: PageContent[]; truncated: boolean }>;
+	// The head a write is planned against and committed onto. Direct mode, or PR mode
+	// with no open Isomorphic pull request: the default branch. PR mode with one: that
+	// pull request's branch, with `pr` set, so the write builds on the changes still
+	// waiting there and commitOrPR appends to it.
+	writeHead(
+		repo: RepoRef,
+		opts: { defaultBranch: string; writeMode: 'direct' | 'pull-request' }
+	): Promise<Head>;
 	// `ref` pins the read to one branch/commit. Write paths normally capture HEAD
 	// first so every blob they derive a commit from belongs to that revision.
 	readFile(
@@ -193,8 +253,9 @@ export interface BrainStore {
 		path: string,
 		ref?: string
 	): Promise<{ content: string; sha: string } | null>;
-	// One file's raw bytes as base64. Backs read_media; null when absent.
-	readBinary(repo: RepoRef, path: string): Promise<BinaryContent | null>;
+	// One file's raw bytes as base64. Backs read_media; null when absent. `ref` as
+	// for readFile.
+	readBinary(repo: RepoRef, path: string, ref?: string): Promise<BinaryContent | null>;
 	findOpenConfigPr(repo: RepoRef): Promise<string | undefined>;
 	// Recent commits, newest first, optionally scoped to one path. Backs view_activity.
 	listCommits(repo: RepoRef, opts: { limit: number; path?: string }): Promise<CommitEntry[]>;
@@ -207,12 +268,13 @@ export interface BrainStore {
 export function githubStore(octokit: Octokit): BrainStore {
 	return {
 		getHead: (repo, branch) => getHead(octokit, repo, branch),
+		writeHead: (repo, opts) => writeHead(octokit, repo, opts),
 		branchCommitSha: (repo, branch) => branchCommitSha(octokit, repo, branch),
 		repoWritePolicy: (repo) => repoWritePolicy(octokit, repo),
 		listTree: (repo, head, opts) => listTree(octokit, repo, head, opts),
 		fetchPages: (repo, entries) => fetchPages(octokit, repo, entries),
 		readFile: (repo, path, ref) => readFile(octokit, repo, path, ref),
-		readBinary: (repo, path) => readBinary(octokit, repo, path),
+		readBinary: (repo, path, ref) => readBinary(octokit, repo, path, ref),
 		findOpenConfigPr: (repo) => findOpenConfigPr(octokit, repo),
 		listCommits: (repo, opts) => listCommits(octokit, repo, opts),
 		commitFiles: (repo, opts) => commitFiles(octokit, repo, opts),
@@ -245,6 +307,69 @@ async function getHead(octokit: Octokit, repo: RepoRef, branch?: string): Promis
 		commit_sha: ref.object.sha
 	});
 	return { branch: resolved, commitSha: ref.object.sha, treeSha: commit.tree.sha };
+}
+
+// See BrainStore.writeHead. A pull request GitHub reports as conflicting is skipped:
+// writes stacked on it could never merge. Any failure to list falls back to the
+// default branch, which is how every write behaved before pull requests were joined.
+async function writeHead(
+	octokit: Octokit,
+	repo: RepoRef,
+	opts: { defaultBranch: string; writeMode: 'direct' | 'pull-request' }
+): Promise<Head> {
+	if (opts.writeMode === 'pull-request') {
+		const pending = await findPendingPr(octokit, repo, opts.defaultBranch).catch(() => null);
+		if (pending) return pending;
+	}
+	return getHead(octokit, repo, opts.defaultBranch);
+}
+
+// How many candidates writeHead asks GitHub about before giving up on joining one.
+const MAX_PENDING_PR_PROBES = 3;
+
+async function findPendingPr(
+	octokit: Octokit,
+	repo: RepoRef,
+	defaultBranch: string
+): Promise<Head | null> {
+	const { data: open } = await octokit.rest.pulls.list({
+		...repo,
+		state: 'open',
+		base: defaultBranch,
+		per_page: 100
+	});
+	const candidates = pendingPrCandidates(
+		open.map((p) => ({
+			number: p.number,
+			baseRef: p.base.ref,
+			headRef: p.head.ref,
+			headRepo: p.head.repo?.full_name ?? null
+		})),
+		{ defaultBranch, repoFullName: `${repo.owner}/${repo.repo}` }
+	);
+	for (const c of candidates.slice(0, MAX_PENDING_PR_PROBES)) {
+		const { data: pr } = await octokit.rest.pulls.get({ ...repo, pull_number: c.number });
+		if (pr.state !== 'open' || pr.mergeable === false) continue;
+		const { data: commit } = await octokit.rest.git.getCommit({
+			...repo,
+			commit_sha: pr.head.sha
+		});
+		return {
+			branch: pr.head.ref,
+			commitSha: pr.head.sha,
+			treeSha: commit.tree.sha,
+			pr: {
+				number: pr.number,
+				url: pr.html_url,
+				nodeId: pr.node_id,
+				title: pr.title,
+				body: pr.body ?? '',
+				behind: pr.mergeable_state === 'behind',
+				autoMerge: Boolean(pr.auto_merge)
+			}
+		};
+	}
+	return null;
 }
 
 // The commit a named branch points at. getHead resolves the repo's DEFAULT branch;
@@ -417,12 +542,13 @@ async function readFile(
 async function readBinary(
 	octokit: Octokit,
 	repo: RepoRef,
-	path: string
+	path: string,
+	ref?: string
 ): Promise<BinaryContent | null> {
 	let sha: string;
 	let size: number;
 	try {
-		const { data } = await octokit.rest.repos.getContent({ ...repo, path });
+		const { data } = await octokit.rest.repos.getContent({ ...repo, path, ...(ref && { ref }) });
 		if (Array.isArray(data) || data.type !== 'file') return null;
 		sha = data.sha;
 		size = data.size;
@@ -525,6 +651,12 @@ export interface WriteOutcome {
 	// pending), and/or did we arm GitHub auto-merge (merges when checks go green)?
 	merged?: boolean;
 	autoMergeEnabled?: boolean;
+	// PR mode only: the change joined the brain's already-open pull request rather
+	// than opening one (see BrainStore.writeHead).
+	appended?: boolean;
+	// PR mode only: the commit this write added to the pull request's branch, so a
+	// caller can read back what it wrote there (the editor's next sha).
+	branchSha?: string;
 	// Direct mode only: the revision the branch now points at, in the SAME
 	// identifier space branchCommitSha reports (a commit sha on GitHub, the
 	// working-tree digest on the fs backend). The write-through index update
@@ -630,6 +762,8 @@ async function commitOrPR(
 		parents: [head.commitSha],
 		...(author && { author })
 	});
+	if (head.pr) return appendToPendingPr(octokit, repo, head, head.pr, commit.sha, opts);
+
 	// crypto.randomUUID keeps retries/concurrent edits from colliding on the branch.
 	const branch =
 		`${opts.branchPrefix ?? 'isomorphic/change'}-${crypto.randomUUID().slice(0, 8)}`.slice(0, 250);
@@ -651,5 +785,67 @@ async function commitOrPR(
 			opts.mergeMethod ?? 'MERGE'
 		);
 	}
-	return { prUrl: pr.html_url, prNumber: pr.number, ...autoMergeResult };
+	return { prUrl: pr.html_url, prNumber: pr.number, branchSha: commit.sha, ...autoMergeResult };
+}
+
+// Land `commitSha` (whose parent is the pull request's head) on the brain's open pull
+// request: fast-forward its branch, retitle it to cover every change it now holds,
+// bring it up to date with the default branch when it has fallen behind, and arm
+// auto-merge if it is not armed yet. Only the ref update can fail the write; the rest
+// is best effort, because the change has already landed on the pull request.
+async function appendToPendingPr(
+	octokit: Octokit,
+	repo: RepoRef,
+	head: Head,
+	pr: PendingPr,
+	commitSha: string,
+	opts: {
+		message: string;
+		prTitle?: string;
+		autoMerge?: boolean;
+		mergeMethod?: 'MERGE' | 'SQUASH' | 'REBASE';
+	}
+): Promise<WriteOutcome> {
+	try {
+		await octokit.rest.git.updateRef({
+			...repo,
+			ref: `heads/${head.branch}`,
+			sha: commitSha,
+			force: false
+		});
+	} catch (err) {
+		const status = (err as { status?: number })?.status;
+		if (status === 422 || status === 409)
+			throw new Error(
+				`Pull request #${pr.number} changed while this write was being prepared, so nothing was written. Retry the same call.`
+			);
+		throw err;
+	}
+	const text = coalescedPrText(pr, opts.prTitle ?? opts.message.split('\n')[0]);
+	await octokit.rest.pulls
+		.update({ ...repo, pull_number: pr.number, title: text.title, body: text.body })
+		.catch(() => {});
+	if (pr.behind) {
+		await octokit.rest.pulls
+			.updateBranch({ ...repo, pull_number: pr.number, expected_head_sha: commitSha })
+			.catch(() => {});
+	}
+	let autoMergeResult: { merged?: boolean; autoMergeEnabled?: boolean } = pr.autoMerge
+		? { autoMergeEnabled: true }
+		: {};
+	if (opts.autoMerge && !pr.autoMerge) {
+		autoMergeResult = await armAutoMerge(
+			octokit,
+			repo,
+			{ node_id: pr.nodeId, number: pr.number },
+			opts.mergeMethod ?? 'MERGE'
+		);
+	}
+	return {
+		prUrl: pr.url,
+		prNumber: pr.number,
+		appended: true,
+		branchSha: commitSha,
+		...autoMergeResult
+	};
 }

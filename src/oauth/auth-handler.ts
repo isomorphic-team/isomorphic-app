@@ -12,8 +12,7 @@
 //                      with a PRODUCT identity in props (not a GitHub one)
 
 import type { OAuthHelpers } from '@cloudflare/workers-oauth-provider';
-import { Auth } from '@auth/core';
-import { buildAuthConfig, getAuthSession, AUTH_BASE_PATH, type AuthEnv } from '../auth/config.ts';
+import { getAuthSession, handleAuthRequest, AUTH_BASE_PATH, type AuthEnv } from '../auth/config.ts';
 import { resolveProductIdentity } from '../lib/identity.ts';
 import { getAppUser, upsertAppUser, mergePersons } from '../lib/orgs.ts';
 import { claimPendingInvites } from '../lib/invites.ts';
@@ -38,7 +37,7 @@ export const authHandler = {
 		// 1. Auth.js owns everything under /auth/* (its signin form, the Resend
 		//    callback that verifies the magic link, /session, /csrf, …).
 		if (url.pathname === AUTH_BASE_PATH || url.pathname.startsWith(`${AUTH_BASE_PATH}/`)) {
-			return Auth(request, buildAuthConfig(env));
+			return handleAuthRequest(request, env);
 		}
 
 		// 2. OAuth authorize entry from the MCP client (Claude). Stash the parsed

@@ -58,6 +58,12 @@
 		// verified with your email provider (DKIM/SPF), or delivery is limited to
 		// the provider account's own address.
 		"AUTH_EMAIL_FROM": "__AUTH_EMAIL_FROM__",
+		// Reply-To on the magic-link email, so a reply reaches a monitored inbox
+		// rather than the send-only From address. Empty sends no Reply-To.
+		"AUTH_EMAIL_REPLY_TO": "__AUTH_EMAIL_REPLY_TO__",
+		// "email" sends the magic link. "open" signs anyone in as any address they
+		// type, with no email: for preview deployments only, never a real one.
+		"AUTH_SIGN_IN": "__AUTH_SIGN_IN__",
 		// Public origin of the deployed Worker. The connected-accounts tools build
 		// the /link/start identity-verification URL from it, and a tool has no
 		// request URL to infer it from.

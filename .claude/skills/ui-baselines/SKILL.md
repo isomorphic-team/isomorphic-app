@@ -5,9 +5,11 @@ description: Regenerate the Playwright visual baselines under tests/ui/__screens
 
 # Regenerate the visual baselines
 
-Baselines are the expected output of `pnpm test:ui`'s visual project, committed per platform.
-Regenerating accepts whatever the app renders now, so do it only for a change that is meant
-to look different. Full detail: `dev/README.md` §Visual baselines.
+Baselines are the expected output of `pnpm test:ui`'s visual project, committed per platform
+(`darwin/` and `linux/`). CI compares against `linux/` and fails without it (`UI_STRICT=1`), so
+a change that alters rendering regenerates BOTH. Regenerating accepts whatever the app renders
+now, so do it only for a change that is meant to look different. Full detail: `dev/README.md`
+§Visual baselines.
 
 ## 1. Confirm the diff is intended
 
@@ -23,9 +25,9 @@ pnpm ui:baselines
 
 Never a bare `--update-snapshots`: it silently keeps a changed baseline.
 
-Linux baselines (what CI's container compares against) come from that container. The exact
-`docker run` line is in `dev/README.md`; its image tag must match `@playwright/test`
-(`pnpm test:wiring` pins it).
+Then the Linux baselines, which CI's container compares against. They come from that same
+container image, never from a Linux host of another kind. The exact `docker run` line is in
+`dev/README.md`; its image tag must match `@playwright/test` (`pnpm test:wiring` pins it).
 
 ## 3. Verify
 
