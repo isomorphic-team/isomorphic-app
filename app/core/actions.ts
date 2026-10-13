@@ -10,7 +10,7 @@ import {
 	buildWikilinkIndex,
 	resolveWikilink as resolveWikilinkPath
 } from '../../src/lib/wiki.ts';
-import { mediaTypeOf } from '../../src/lib/media.ts';
+import { isEmbeddable, mediaTypeOf } from '../../src/lib/media.ts';
 import {
 	firstText,
 	structuredOf,
@@ -590,9 +590,13 @@ async function openAsset(path: string) {
 		subject: baseName(path)
 	});
 	try {
-		// include_data: the asset view IS the bytes. See app/core/media.ts on why the
-		// default is off.
-		const res = await callTool('read_media', { path, include_data: true, ...brainArgs() });
+		// include_data only for an image: the view shows its bytes. A document is
+		// opened from its signed link instead, so its bytes never cross the bridge.
+		const res = await callTool('read_media', {
+			path,
+			...(isEmbeddable(path) ? { include_data: true } : {}),
+			...brainArgs()
+		});
 		if (!live()) return;
 		show({ kind: 'asset', path, ...parseAsset(payloadOf(res)) });
 	} catch (e) {

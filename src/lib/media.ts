@@ -24,7 +24,11 @@ const MEDIA_TYPES: Readonly<Record<string, string>> = {
 	gif: 'image/gif',
 	webp: 'image/webp',
 	svg: 'image/svg+xml',
-	pdf: 'application/pdf'
+	pdf: 'application/pdf',
+	// Office Open XML documents and decks. The macro-enabled variants (.docm, .pptm)
+	// are not listed, so they are refused.
+	docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+	pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation'
 };
 
 // What Claude itself can ingest as an image, per the vision docs. SVG is absent on
@@ -74,6 +78,15 @@ export function isMediaPath(path: string): boolean {
 }
 
 // Can this be handed to the model as an `image` content block?
+// Documents read_media returns as text (src/lib/document-text.ts).
+export const PDF_TYPE = 'application/pdf';
+export const DOCX_TYPE = MEDIA_TYPES.docx;
+export const PPTX_TYPE = MEDIA_TYPES.pptx;
+
+export function isTextExtractable(mimeType: string): boolean {
+	return mimeType === PDF_TYPE || mimeType === DOCX_TYPE || mimeType === PPTX_TYPE;
+}
+
 export function isModelViewable(mimeType: string): boolean {
 	return MODEL_VIEWABLE.has(mimeType);
 }
@@ -454,7 +467,7 @@ export async function fetchRemoteAttachment(
 			hopRes = await doFetch(current, {
 				redirect: 'manual',
 				signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
-				headers: { accept: 'image/*,application/pdf' }
+				headers: { accept: [...new Set(Object.values(MEDIA_TYPES))].join(',') }
 			});
 		} catch (e) {
 			return { error: `Could not fetch ${current}: ${e instanceof Error ? e.message : String(e)}` };

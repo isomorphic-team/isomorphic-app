@@ -147,3 +147,23 @@ test('Back after saving an edit skips the editor and the pre-edit page', async (
 	await app.getByRole('button', { name: 'Back', exact: true }).click();
 	await expectView(app, 'browse');
 });
+
+test('a PDF opens through its signed link, and its bytes are never fetched', async ({ page }) => {
+	const app = await openApp(page, 'browse');
+	await app.getByRole('button', { name: 'Expand all' }).click();
+	await app.getByRole('button', { name: 'brief.pdf', exact: true }).click();
+	await expectView(app, 'asset');
+	await app.getByRole('button', { name: 'Open brief.pdf' }).click();
+	await expect
+		.poll(() =>
+			page.evaluate(() => (window as unknown as { __openedLinks: string[] }).__openedLinks)
+		)
+		.toContain('https://brain.example.com/files/token/brief.pdf');
+	const read = await page.evaluate(
+		() =>
+			(
+				window as unknown as { __toolArgs?: { name: string; args: Record<string, unknown> }[] }
+			).__toolArgs?.find((r) => r.name === 'read_media')?.args
+	);
+	expect(read?.include_data).toBeUndefined();
+});

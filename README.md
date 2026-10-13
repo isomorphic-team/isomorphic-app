@@ -124,8 +124,10 @@ merged pull request is never served stale. No webhook required.
   markdown and wikilink, in the same commit.
 - **`delete_page`**: delete a page or folder, and report what still links to it.
 - **`edit_page`**: open the page in [the editor](#the-editor).
-- **`attach_media`** / **`read_media`**: images and PDFs, fetched from a URL by the server or
-  uploaded from the app, stored in the repo and optionally embedded in a page.
+- **`attach_media`** / **`read_media`**: images, PDFs, Word documents and PowerPoint decks,
+  fetched from a URL by the server or uploaded from the app, stored in the repo and optionally
+  embedded in a page. Reading a document returns its text by page or slide, plus a signed
+  download link valid for 15 minutes.
 - **`configure_brain`**: tell an adopted repository where its content lives, for a repo whose
   markdown sits under `docs/` or elsewhere. Writes `.isomorphic.json`, which also holds the
   optional list of frontmatter keys to index.

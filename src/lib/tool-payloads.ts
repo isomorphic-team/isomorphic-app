@@ -380,6 +380,10 @@ export interface ReadMediaWire {
 	size: number;
 	/** Only when the call asked for the bytes (include_data). */
 	dataUri?: string;
+	/** A signed link to the file, when the deployment can issue one (src/lib/asset-link.ts). */
+	downloadUrl?: string;
+	/** ISO time the link stops working. */
+	expiresAt?: string;
 }
 
 // ---------- the result envelope ----------
@@ -522,12 +526,18 @@ export function parseReadPage(result: ToolResultLike): { markdown: string; sha: 
 	return { markdown: firstText(result), sha: str(w.sha) ?? '' };
 }
 
-export function parseAsset(sc: Payload): { mimeType: string; size: number; dataUri: string } {
+export function parseAsset(sc: Payload): {
+	mimeType: string;
+	size: number;
+	dataUri: string;
+	downloadUrl: string;
+} {
 	const w = wire<ReadMediaWire>(sc);
 	return {
 		mimeType: str(w.mimeType) ?? '',
 		size: typeof w.size === 'number' ? w.size : 0,
-		dataUri: str(w.dataUri) ?? ''
+		dataUri: str(w.dataUri) ?? '',
+		downloadUrl: str(w.downloadUrl) ?? ''
 	};
 }
 

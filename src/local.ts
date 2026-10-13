@@ -55,6 +55,7 @@ import { recordDetections } from './lib/policy-store.ts';
 import { localD1 } from './local/d1-sqlite.ts';
 import { WEB_ROUTE_PREFIX, checkWebMcpRequest, webPathFor } from './lib/web-app.ts';
 import { WEB_APP_HEADERS, webShell } from './lib/web-shell.ts';
+import { ASSET_ROUTE_PREFIX, assetLinkKey, serveAssetLink } from './lib/asset-link.ts';
 import { statSync } from 'node:fs';
 
 const args = process.argv.slice(2).filter((a) => !a.startsWith('-'));
@@ -165,6 +166,13 @@ async function getContext(opts?: { brain?: string }): Promise<BrainContext> {
 // the tool layer: the Worker rediscovers them per request, per brain.
 const custom = await loadCustomToolDefs(await getContext()).catch(() => ({ defs: [], errors: [] }));
 
+// Signed file links from read_media. A fresh secret per process, so a link from an
+// earlier run stops working, as it would after the hour anyway.
+const origin = `http://127.0.0.1:${port}`;
+const assetKey = assetLinkKey(
+	Buffer.from(crypto.getRandomValues(new Uint8Array(32))).toString('hex')
+);
+
 // One server per request, like the Worker. An McpServer binds to a single transport, so
 // a reused one answers the first call and 500s on every one after.
 function buildServer(): McpServer {
@@ -174,11 +182,13 @@ function buildServer(): McpServer {
 	);
 
 	registerCoreTools(server, getContext);
-	registerMediaTools(server, getContext);
+	registerMediaTools(server, getContext, {
+		assetLinks: async () => ({ base: origin, key: await assetKey })
+	});
 	registerLibrarianTools(server, getContext);
 	registerImportTools(server, getContext);
 	// This process IS the web host, so results carry links into it.
-	registerBrainApp(server, getContext, { webBaseUrl: `http://127.0.0.1:${port}` });
+	registerBrainApp(server, getContext, { webBaseUrl: origin });
 	registerCustomTools(server, getContext, custom.defs);
 	return server;
 }
@@ -207,6 +217,23 @@ app.post('/mcp', async (c) => {
 // Same 405 as the Worker: the stateless transport offers no server-to-client stream,
 // and answering GET makes compliant clients retry forever.
 app.all('/mcp', (c) => c.text('Method Not Allowed', 405, { Allow: 'POST' }));
+
+app.get(`${ASSET_ROUTE_PREFIX}*`, async (c) =>
+	serveAssetLink(
+		new URL(c.req.url).pathname,
+		await assetKey,
+		Math.floor(Date.now() / 1000),
+		async ({ brainId }) => {
+			const b = [...brains.values()].find((x) => x.brainId === brainId);
+			if (!b) return null;
+			return {
+				read: b.store.readBinary,
+				repoArgs: b.repoArgs,
+				config: await loadBrainConfig(b.store, b.repoArgs)
+			};
+		}
+	)
+);
 
 // ---------- the web app ----------
 

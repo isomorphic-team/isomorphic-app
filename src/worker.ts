@@ -88,6 +88,15 @@ import { dayKey, countedCall } from './lib/usage.ts';
 import { loadCustomToolDefs, registerCustomTools, type CustomToolLoad } from './tools/custom.ts';
 import { resolveInstallationOrg, connectCustomerOrg } from './lib/org-connect.ts';
 import { loadBrainConfig, type BrainConfig } from './lib/brain-config.ts';
+import {
+	ASSET_ROUTE_PREFIX,
+	assetLinkKey,
+	brainForClaim,
+	serveAssetLink,
+	type AssetClaim,
+	type AssetLinkIssuer,
+	type OpenedBrain
+} from './lib/asset-link.ts';
 import { oauthProviderForOrigin } from './lib/oauth-provider.ts';
 import { guardStore } from './lib/policy-guard.ts';
 import { recordDetections } from './lib/policy-store.ts';
@@ -206,6 +215,45 @@ function appCreds(env: Env): AppCreds {
 		appId: Number(env.GITHUB_APP_ID),
 		privateKeyBase64: env.GITHUB_APP_PRIVATE_KEY_BASE64
 	};
+}
+
+// ---------- signed file links (src/lib/asset-link.ts) ----------
+//
+// Keyed from the secret each auth mode already requires: AUTH_SECRET under oauth,
+// the bearer under static. Links need PUBLIC_BASE_URL too, since a tool handler has
+// no request URL to build one from. Missing either, read_media issues no link.
+let assetKeyMemo: { secret: string; key: Promise<CryptoKey> } | undefined;
+
+function assetKeyFor(env: Env): Promise<CryptoKey> | undefined {
+	const secret = (env.AUTH_MODE === 'oauth' ? env.AUTH_SECRET : env.MCP_BEARER_TOKEN)?.trim();
+	if (!secret) return undefined;
+	if (assetKeyMemo?.secret !== secret) assetKeyMemo = { secret, key: assetLinkKey(secret) };
+	return assetKeyMemo.key;
+}
+
+async function assetLinkIssuer(env: Env): Promise<AssetLinkIssuer | undefined> {
+	const base = env.PUBLIC_BASE_URL?.trim().replace(/\/+$/, '');
+	const key = assetKeyFor(env);
+	return base && key ? { base, key: await key } : undefined;
+}
+
+// The brain a signed link names, read with its own storage binding, but only while
+// the user it was issued to can still reach it: revoking access kills their links.
+async function openBrainForAssetLink(env: Env, claim: AssetClaim): Promise<OpenedBrain | null> {
+	if (!claim.userId) return null;
+	const target = brainForClaim(
+		claim,
+		await listAccessibleBrains(env.PLATFORM_DB, await linkedUserIds(env.PLATFORM_DB, claim.userId))
+	);
+	if (!target) return null;
+	const credential = credentialFor(target);
+	const octokit =
+		credential.kind === 'token'
+			? tokenOctokit(requireToken(env))
+			: await installationOctokit(appCreds(env), credential.installationId);
+	const store = githubStore(octokit);
+	const repoArgs = { owner: target.repo_owner, repo: target.repo_name };
+	return { read: store.readBinary, repoArgs, config: await loadBrainConfig(store, repoArgs) };
 }
 
 // Thrown by brain-scope resolution when the caller has an org but no brain yet
@@ -813,7 +861,9 @@ class McpSession {
 		// Defined in src/tools/core.ts so the local Node runtime registers the same
 		// two tools from the same source rather than a second copy.
 		registerCoreTools(server, (opts) => this.tenantContext(opts));
-		registerMediaTools(server, (opts) => this.tenantContext(opts));
+		registerMediaTools(server, (opts) => this.tenantContext(opts), {
+			assetLinks: () => assetLinkIssuer(this.env)
+		});
 
 		// ---------- librarian suite ----------
 		// write_page / move_page / delete_page / find_inbound_links / validate /
@@ -1294,6 +1344,22 @@ export default {
 				return handleOrgConnectCallback(url, state, installationId, env);
 			}
 			return installedPage(url);
+		}
+
+		// Signed file links from read_media. Both auth modes, ahead of the OAuth
+		// provider: the token in the path is the credential, not a session.
+		if (url.pathname.startsWith(ASSET_ROUTE_PREFIX)) {
+			const key = assetKeyFor(env);
+			if (!key || (request.method !== 'GET' && request.method !== 'HEAD')) {
+				return new Response('Not found', { status: 404 });
+			}
+			const res = await serveAssetLink(
+				url.pathname,
+				await key,
+				Math.floor(Date.now() / 1000),
+				(claim) => openBrainForAssetLink(env, claim)
+			);
+			return request.method === 'HEAD' ? new Response(null, res) : res;
 		}
 
 		// ---------- the web app ----------

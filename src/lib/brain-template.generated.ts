@@ -97,12 +97,12 @@ OKF lifecycle status is optional: absent means \`stable\` (ready for consumption
 - **Editing part of a page.** \`write_page\`'s \`content\` argument **replaces the whole body**, so it destroys anything you haven't read. To change part of a page, pass \`edits\` (a list of exact \`find\` / \`replace\` pairs) or \`append\` (text added at the end) instead: they touch only what you name, leave the rest byte-identical, and need no prior read. An anchor that matches zero times or more than once fails the whole call rather than guessing, so nothing is half-applied. Anchors match the body only; frontmatter is changed with \`fields\` or the \`title\` / \`type\` / \`description\` / \`status\` arguments. An anchor also cannot target the generated text inside an \`okf-view\` snapshot, which is recomputed on every save. Read the page first (\`read_page\`) only when you genuinely want a full rewrite via \`content\`.
 - **Setting fields.** \`write_page\`'s \`fields\` changes a page's metadata without touching its text. Reach for it instead of rewriting a page to change a \`done:\` or an \`owner:\`. Changing the same field across many pages is one call per page today.
 
-## Images and PDFs
+## Images, PDFs and documents
 
-Pictures and PDFs are stored in the brain next to the pages that use them (PNG, JPEG, GIF, WebP, SVG, PDF; 5 MB each).
+Pictures, PDFs, Word documents and PowerPoint decks are stored in the brain next to the pages that use them (PNG, JPEG, GIF, WebP, SVG, PDF, DOCX, PPTX; 5 MB each).
 
 - **Adding one.** \`attach_media\` with a public https \`url\`: the server downloads the file, so you never handle the bytes. Pass \`page\` and the file lands in an \`assets/\` folder beside that page, with an image link appended to it. A file with no public URL (an image attached to the chat, or one you made yourself) can't be passed through a tool call; ask the user to drop it into the Isomorphic panel.
-- **Looking at one.** \`read_media\` with the file's path returns the image itself, so you can see what it shows. \`read_page\` is for markdown only.
+- **Looking at one.** \`read_media\` with the file's path returns an image itself, so you can see what it shows, and a PDF, DOCX or PPTX as text by page, section or slide (\`pages\` picks which; a long one comes back in parts). Every read also returns a download link valid for 15 minutes, for the user to open the original. \`read_page\` is for markdown only.
 - Attachments are ordinary files in the repo, so \`move_page\` on a folder moves its \`assets/\` with it, and relative image links keep working in any markdown reader.
 
 ## Custom tools

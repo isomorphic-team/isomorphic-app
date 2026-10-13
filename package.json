@@ -94,10 +94,12 @@
 		"@modelcontextprotocol/core": "2.1.0",
 		"@modelcontextprotocol/ext-apps": "^2.0.3",
 		"@modelcontextprotocol/server": "2.1.0",
+		"fflate": "^0.8.3",
 		"hono": "^4.13.9",
 		"marked": "^18.0.14",
 		"octokit": "^5.0.5",
 		"open": "^11.0.4",
+		"unpdf": "^1.8.1",
 		"zod": "^4.6.5"
 	},
 	"devDependencies": {

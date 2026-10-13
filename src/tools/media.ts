@@ -18,7 +18,7 @@
 // rather than gaining media twins, to keep the tool surface small. Those two already
 // do the right thing for an attachment, since the index records links to files.
 
-import type { McpServer } from '@modelcontextprotocol/server';
+import type { CallToolResult, McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
 import type { BrainContext } from './librarian.ts';
 import { landed } from './librarian.ts';
@@ -34,12 +34,15 @@ import {
 	fetchRemoteAttachment,
 	formatBytes,
 	isModelViewable,
+	isTextExtractable,
 	mediaTypeOf,
 	uniqueAttachmentPath,
 	validateAttachment
 } from '../lib/media.ts';
 import { brainArg, fail } from './shared.ts';
 import type { ReadMediaWire } from '../lib/tool-payloads.ts';
+import { issueAssetLink, type AssetLinkIssuer } from '../lib/asset-link.ts';
+import { extractDocumentText, parsePartRange, sliceDocument } from '../lib/document-text.ts';
 import { toolAnnotations } from '../lib/tool-annotations.ts';
 
 // Strip a `data:` URL wrapper if a caller sends one. The app reads files with
@@ -55,10 +58,20 @@ function normalizePath(path: string): string {
 	return path.trim().replace(/^\/+/, '');
 }
 
+export interface MediaToolOptions {
+	// Where signed download links come from, or undefined when this deployment has no
+	// public origin or no secret to sign with. read_media still works without them.
+	assetLinks?: () => Promise<AssetLinkIssuer | undefined>;
+	// Unix seconds. Tests pin it.
+	now?: () => number;
+}
+
 export function registerMediaTools(
 	server: McpServer,
-	getContext: (opts?: TenantOpts) => Promise<BrainContext>
+	getContext: (opts?: TenantOpts) => Promise<BrainContext>,
+	options: MediaToolOptions = {}
 ) {
+	const nowSeconds = options.now ?? (() => Math.floor(Date.now() / 1000));
 	// ---------- attach_media ----------
 	server.registerTool(
 		'attach_media',
@@ -254,27 +267,37 @@ export function registerMediaTools(
 		'read_media',
 		{
 			...toolAnnotations('Read an attached file', 'read'),
+			// A full description, not a terse one: this is the tool an agent hunts for when
+			// a page links a PDF or a deck, and "images only" wording made it look useless.
 			description:
-				'read_media fetches a file stored in the brain (an image, a PDF) by its path. For an image type Claude can see (PNG, JPEG, GIF, WebP) it returns the picture itself, so you can look at it and describe or reason about it. The app also calls this to render images inside a page. Use it when a page references an image and the question depends on what the image actually shows.',
+				'read_media reads a file stored in the brain (an image, a PDF, a Word document, a PowerPoint deck) by its path. For an image type Claude can see (PNG, JPEG, GIF, WebP) it returns the picture itself. For a PDF, DOCX or PPTX it returns the text, by page, section or slide, with `pages` to choose which ("3", "2-5", "10-"); a long document comes back in parts and the reply says how to continue. It also returns a download link, valid for 15 minutes, that opens the original file in a browser or can be fetched into a workspace. Use it when a page references a file and the question depends on what the file says or shows.',
 			inputSchema: z.object({
-				path: z.string().describe('Path of the stored file, e.g. "wiki/vendors/assets/logo.png".'),
+				path: z
+					.string()
+					.describe('Path of the stored file, e.g. "wiki/vendors/assets/contract.pdf".'),
+				pages: z
+					.string()
+					.optional()
+					.describe(
+						'Documents only: which pages (PDF), slides (PPTX) or sections (DOCX) to return, 1-based: "3", "2-5", or "10-" for 10 to the end. Omit to start at the beginning.'
+					),
 				include_data: z
 					.boolean()
 					.optional()
 					.describe(
-						'Include the raw bytes as a data URI in the structured result. Set by the Isomorphic app, which needs them to render the image. Leave it off: you are handed the picture itself.'
+						'Include the raw bytes as a data URI in the structured result. Set by the Isomorphic app, which needs them to render the image. Leave it off: you are handed the picture or the text itself.'
 					),
 				brain: brainArg
 			})
 		},
-		async ({ path, include_data, brain }) => {
-			const { store, repoArgs, config } = await getContext({ brain });
+		async ({ path, pages, include_data, brain }) => {
+			const { store, repoArgs, config, brainId, actorUserId } = await getContext({ brain });
 			const target = normalizePath(path);
 
 			const mimeType = mediaTypeOf(target);
 			if (!mimeType) {
 				return fail(
-					`"${target}" is not a supported attachment. read_media serves images and PDFs; use read_page for markdown.`
+					`"${target}" is not a supported attachment. read_media serves images, PDFs, Word documents and PowerPoint decks; use read_page for markdown.`
 				);
 			}
 			if (!isContentPath(target, config)) {
@@ -293,43 +316,98 @@ export function registerMediaTools(
 				);
 			}
 
+			// A link is a convenience: a deployment with no public origin or secret, or a
+			// signing failure, still answers with the content.
+			const issuer = options.assetLinks
+				? await options.assetLinks().catch(() => undefined)
+				: undefined;
+			const link = issuer
+				? await issueAssetLink(
+						issuer,
+						{ brainId, path: target, ...(actorUserId ? { userId: actorUserId } : {}) },
+						nowSeconds()
+					).catch(() => undefined)
+				: undefined;
+
 			// structuredContent carries the data URI for the app, which renders it under
-			// the iframe's default CSP (img-src 'self' data:) with no external origin and
-			// no expiring signed URL. See docs/design/media-attachments.md §3.
+			// the iframe's default CSP (img-src 'self' data:) with no external origin. See
+			// docs/design/media-attachments.md §3.
 			//
 			// Only for the app, though, which is why it is opt-in. Hosts put
 			// structuredContent in front of the model alongside the content blocks, so
 			// sending it unconditionally would spend a second, larger copy of every image
 			// as base64 text the model cannot use, long enough to truncate the response.
+			// Document text stays out of it for the same reason: it rides in `content`.
 			const structuredContent = {
 				path: target,
 				mimeType,
 				size: file.size,
-				...(include_data ? { dataUri: `data:${mimeType};base64,${file.contentBase64}` } : {})
+				...(include_data ? { dataUri: `data:${mimeType};base64,${file.contentBase64}` } : {}),
+				...(link ? { downloadUrl: link.url, expiresAt: link.expiresAt } : {})
 			} satisfies ReadMediaWire;
 
-			if (!isModelViewable(mimeType)) {
-				// Stored and displayable, but not something to hand the model. Whether this
-				// host turns an embedded resource blob into a document block is unverified,
-				// and guessing would produce a silently empty read.
-				return {
-					content: [
-						{
-							type: 'text' as const,
-							text: `"${target}" is a ${mimeType} file of ${formatBytes(file.size)}. It is stored in the brain and the Isomorphic app can display it, but it is not an image type Claude can look at directly.`
-						}
-					],
-					structuredContent
-				};
+			const name = target.split('/').pop() ?? target;
+			const content: CallToolResult['content'] = [];
+			// The same shape a mail connector uses for an attachment: a resource_link the
+			// host can show as a file, then the content, then a line restating the link
+			// for hosts that drop resource_link blocks.
+			if (link) {
+				content.push({
+					type: 'resource_link',
+					uri: link.url,
+					name,
+					mimeType,
+					description: `${formatBytes(file.size)}. Signed download link, expires ${link.expiresAt}.`
+				});
+			}
+			const linkLine = link
+				? ` Download or open it: ${link.url} (works for anyone holding it while you keep access to this brain, expires ${link.expiresAt}).`
+				: '';
+
+			if (isModelViewable(mimeType)) {
+				content.push(
+					{ type: 'image', data: file.contentBase64, mimeType },
+					{ type: 'text', text: `${target} (${mimeType}, ${formatBytes(file.size)}).${linkLine}` }
+				);
+				return { content, structuredContent };
 			}
 
-			return {
-				content: [
-					{ type: 'image' as const, data: file.contentBase64, mimeType },
-					{ type: 'text' as const, text: `${target} (${mimeType}, ${formatBytes(file.size)})` }
-				],
-				structuredContent
-			};
+			// The app asks for bytes to display, never for text: skip the parse.
+			if (!isTextExtractable(mimeType) || include_data) {
+				content.push({
+					type: 'text',
+					text: `"${target}" is a ${mimeType} file of ${formatBytes(file.size)}. It is stored in the brain and the Isomorphic app can display it, but Claude cannot read its contents directly.${linkLine}`
+				});
+				return { content, structuredContent };
+			}
+
+			let text: string;
+			try {
+				const bytes = Uint8Array.from(atob(file.contentBase64), (c) => c.charCodeAt(0));
+				const doc = await extractDocumentText(bytes, mimeType);
+				const plural = `${doc.unit}s`;
+				if (doc.parts.length === 0) {
+					text = `${target} (${mimeType}, ${formatBytes(file.size)}) has no ${plural} with text.${linkLine}`;
+				} else {
+					const range = parsePartRange(pages, doc.parts.length);
+					if ('error' in range) return fail(`pages: ${range.error}`);
+					const slice = sliceDocument(doc, range);
+					const anyText = doc.parts.slice(range.start, slice.last).some((p) => p.trim());
+					const header = `${target} (${mimeType}, ${formatBytes(file.size)}): ${plural} ${slice.first}-${slice.last} of ${slice.total}.`;
+					const more = slice.next
+						? `\n\nStopped at the length limit. Continue with read_media pages: "${slice.next}".`
+						: '';
+					// A scanned PDF has pages but no text layer, and there is no OCR here.
+					const empty = anyText
+						? ''
+						: `\n\nNone of these ${plural} has a text layer (it is probably scanned). Open the file from the link to see it.`;
+					text = `${header}${linkLine}\n\n${slice.text}${more}${empty}`;
+				}
+			} catch (e) {
+				text = `${target} (${mimeType}, ${formatBytes(file.size)}) is stored in the brain, but its text could not be read: ${e instanceof Error ? e.message : String(e)}.${linkLine}`;
+			}
+			content.push({ type: 'text', text });
+			return { content, structuredContent };
 		}
 	);
 }
