@@ -276,8 +276,10 @@ each brain's owner can tune it. Run `pnpm gen:templates` after adding it.
 
 Do not reverse these without reading the reasoning above.
 
-1. **Everything the platform returns is computed, never generated.** No server-side
+1. **Everything the core returns is computed, never generated.** No server-side
    inference anywhere in this loop. Judgment costs tokens in the caller's session.
+   Model-powered consolidation lives in `ee/`, behind an entitlement and the model
+   gateway ([`consistency-checks.md`](./consistency-checks.md)).
 2. **`validate` reports the count, never the findings.**
 3. **Tension keys derive from kind plus paths, never from headline wording.**
 4. **Dismissals are durable, in the repo, and filter both queues.**
@@ -295,6 +297,9 @@ Do not reverse these without reading the reasoning above.
   copy-paste drift only. On the measured brain the highest pair scored 0.09, well under
   the 0.2 floor, and zero was the correct answer there. The conceptual case needs
   probe's competition signal (W5) or a model, not a better threshold.
+  [`consistency-checks.md`](./consistency-checks.md) proposes a template-aware
+  `near-duplicate`, an identifier-based duplicate check, and model-based contradiction
+  checking in `ee/`, through the model gateway.
 - **Thresholds are calibrated on synthetic pairs plus one real brain**, not a corpus:
   `MIN_FOLDER_PAGES_FOR_NOTE = 3`, `DUP_THRESHOLD = 0.2`, `CONTESTED_AT = 3`. Revisit
   once several brains have been measured.
