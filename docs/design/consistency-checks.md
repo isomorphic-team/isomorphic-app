@@ -1,12 +1,16 @@
 # Design: consistency checks
 
-Status: **proposed** (2026-09-24). Nothing below is built.
+Status: **proposed** (2026-10-13). Nothing below is built.
 
-- **Part 1** extends the consolidation engine in `src/lib/consolidate.ts`.
-- **Part 2** adds a checker that runs outside the platform.
-- **Part 3** adds the platform surfaces that read the checker's output.
+This is the consolidation half of the roadmap's "brain review" (steps 2 and 5).
+- **Part 1** adds two computed checks to the core consolidation engine in `src/lib/consolidate.ts`.
+- **Part 2** is model-powered consolidation in `ee/`, through the model gateway.
+- **Part 3** covers consolidation findings in the unified findings queue and the Review screen.
 
-Related: [`consolidation-loop.md`](./consolidation-loop.md) (tensions, `validate`, `resolve`, and the invariants this design keeps), [`brain-seams.md`](./brain-seams.md), and the companion [`privacy-checks.md`](./privacy-checks.md), which constrains what the checker may send to a model provider and write into findings.
+Related:
+- [`consolidation-loop.md`](./consolidation-loop.md): tensions, `validate`, `resolve`, and the invariants this design keeps.
+- [`open-source-boundary.md`](./open-source-boundary.md): what goes in `ee/`, and the rule for sending content to a model provider.
+- The companion [`privacy-checks.md`](./privacy-checks.md): the data-policy guard, and what consolidation may send to a model and write into a finding.
 
 ## The problem
 
@@ -93,9 +97,9 @@ Results:
 
 ## Decisions
 
-### Part 1: computed checks in `validate`
+### Part 1: two computed checks in the core
 
-These are pure, keep invariant 1 of the consolidation loop (computed, never generated), and report through the existing tension, finding and dismissal machinery.
+These are pure and stay in the AGPL core. They keep invariant 1 of the consolidation loop (computed, never generated) and report through the existing tension, finding and dismissal machinery.
 
 **1a. A template-aware `near-duplicate`.** The existing check is noise on any brain with templated pages.
 
@@ -108,7 +112,7 @@ These are pure, keep invariant 1 of the consolidation loop (computed, never gene
 
   `DUP_THRESHOLD` stays pinned in both directions.
 
-**1b. A `same-identifier` tension kind.** Two or more content pages whose frontmatter carries the same value for an identity field describe one entity. Cheap and exact where a brain records identifiers, silent where it does not.
+**1b. A `same-identifier` tension kind.** Two or more content pages whose frontmatter carries the same value for an identity field describe one entity. It is cheap and exact where a brain records identifiers, and silent where it does not.
 
 - **Identity fields** are `email` by default. A brain adds its own in `.isomorphic.json` with an optional list of frontmatter keys, for example a CRM record ID. The list is data; no field name is special-cased in code.
 - **Scope:** content pages under the brain's content roots only. Folder notes and tool-maintained pages are excluded.
@@ -124,17 +128,28 @@ These are pure, keep invariant 1 of the consolidation loop (computed, never gene
   - a field declared in config
   - a folder note or a page outside the content roots with the same email: no tension
 
-### Part 2: a consistency checker outside the platform
+### Part 2: model-powered consolidation in `ee/`
 
-Contradictions need a model. The platform does not run inference (consolidation-loop invariant 1), and per-tenant model keys are not a platform concern (roadmap). So the checker is a program the brain's operator runs with the operator's own key, locally or as a scheduled job in the brain repo. It ships in this repo and is open source like everything else. It reads a git checkout through `openFolderAsBrain` (`scripts/local-brain.ts`), so it uses the real content index and search.
+Contradictions need a model. Since 2026-09-30, model use has a home: `ee/`, behind the `review-models` entitlement, with every request through `ee/review/gateway.ts`.
+- **Zero retention:** `ZDR_PROVIDER` routes only to zero-data-retention endpoints.
+- **Entitled orgs only:** a brain whose org has no entitlement runs the core unchanged.
+- **Spend cap:** a monthly cap per org, counted from the cost each response reports.
 
-It uses two cheap models: a decision model for every yes/no judgment, and a small LLM wherever text must be written. Providers are configuration: an OpenAI-compatible chat endpoint and a decisions endpoint, each with a model name. Nothing assumes a vendor. A deployment that configures no decision model runs its questions on the LLM, at higher cost. The pipeline never calls a frontier model.
 
-1. **Candidates.** A full pass on request, otherwise pages changed since the last run. Pages that [`privacy-checks.md`](./privacy-checks.md) marks sensitive are skipped unless the operator opts in for the provider:
-   - Each page paired with its top five search hits.
+It uses two models, both of which the gateway already names:
+- **The decision model** (Jev) for every yes/no judgment.
+- **The small LLM** (Luna) wherever text must be written.
+
+No frontier model is called.
+
+1. **Candidates.** Per run:
+   - Pages changed since the last run, each paired with its top five search hits.
    - The Part 1 tensions.
-2. **Detect.** Both models judge each pair. A pair continues if either says so: the decision model's conflict probability is at least 0.2, or the LLM flags a conflict. This is tuned for recall, and precision is triage's job.
-3. **Triage, claim by claim.**
+
+   A full pass is admin-requested and budgeted.
+2. **Pre-scan.** Every candidate page is checked against the guard's detectors before anything reaches the gateway. A page with a high-severity detection (a private key, an API token, a card number) is never sent. Skipped pairs are counted in the run summary, so a gap never reads as clean ([`privacy-checks.md`](./privacy-checks.md)).
+3. **Detect.** Both models judge each pair. A pair continues if either says so: the decision model's conflict probability is at least 0.2, or the LLM flags a conflict. This is tuned for recall, and precision is triage's job.
+4. **Triage, claim by claim.**
    - The LLM lists every point where the pages, or one page against itself, disagree about the same thing. It quotes both sides and says whether dates, scope or an existing note explain the difference.
    - For each claim it names the version that stands, using generic authority rules derived from `type:` and date fields:
      - A dated record outranks a summary of it.
@@ -142,76 +157,90 @@ It uses two cheap models: a decision model for every yes/no judgment, and a smal
      - A dated record that was accurate on its date is annotated, never rewritten.
    - It proposes one action per claim: a patch in `write_page`'s patch vocabulary, a dated note, or "needs a person".
    - The decision model then scores each claim: would a reader of the current pages be misled? Claims below 0.4 are dropped.
-4. **Cluster.** Claims about the same fact are grouped across pairs, so a fact stale on five pages is one finding with five pages, not five findings. A cluster is the unit of review.
-5. **Verify.**
-   - The decision model answers verify questions written for the proposal's shape. For claim-by-claim patches, that means the three retargeted questions (misleading, keeps facts, supported), not the four above.
+5. **Cluster.** Claims about the same fact are grouped across pairs, so a fact stale on five pages is one finding with five pages, not five findings. A cluster is the unit of review.
+6. **Verify.**
+   - The decision model answers verify questions written for the proposal's shape. For claim-by-claim patches, that means the three retargeted questions (misleading, keeps facts, supported).
    - Mechanical checks confirm that each patch applies exactly once, and that the result still parses as the same markdown structure (no table split, no broken list or fence).
-6. **Tier.**
-   - **Auto:** patch actions whose verify answers all clear the auto gate and that pass the mechanical checks. The gate is set per proposal shape, from graded samples.
+7. **Tier.**
+   - **Auto:** off by default. An admin enables it per brain (roadmap step 5). When enabled, it covers patch actions that clear a gate graded for that proposal shape and pass the mechanical checks.
    - **Review:** everything else with a concrete proposal, including every annotation, merge and archive.
    - **Person:** claims the pages cannot settle.
    - **Dropped:** claims triage or the claim filter rejected.
 
-**Cost:** under $1 per 1,000 candidate pairs to detect, and about $0.40 per 100 flagged pairs to triage. A full pass over a 1,000-page brain costs a few dollars. An incremental run costs cents.
+**Writes.**
+- An approved or auto fix lands through the `write_page` path, so it passes through `guardStore` like any other write and through the brain's configured write mode.
+- Each carries a `log.md` entry naming the finding key. Consolidation-loop invariant 7 holds: every move is reversible and logged.
 
-**Output, written into the brain and nowhere else:**
+**Cost.**
+- Measured: under $1 per 1,000 candidate pairs to detect, and about $0.40 per 100 flagged pairs to triage.
+- A full pass over a 1,000-page brain costs a few dollars. An incremental run costs cents.
+- Both fit inside `DEFAULT_MONTHLY_CAP_USD`. The gateway refuses a call once the org's cap is spent, and the run records where it stopped so the next one resumes.
 
-- **`.isomorphic/findings.json`**, one entry per open finding:
-  - key, kind (`conflict` or `duplicate`) and paths
-  - headline and evidence (the quoted lines that disagree)
+**When it runs.**
+- **Incrementally:** on the push webhook (roadmap step 4), for pages changed since the last run.
+- **In full:** on an admin's request.
+
+The Worker has no Durable Object and no cron trigger, so a pass is a cursor in D1 that each invocation advances within its budget, under the whole-brain pass rule.
+
+### Part 3: consolidation findings in the unified queue
+
+Roadmap step 2 extends the `validate` / `resolve` pattern into one findings queue in D1, with a finding `kind` and visibility per kind. The queue lives in the core; this design adds the consolidation kinds to it.
+
+- **Kinds:** `conflict` and `duplicate`, beside the computed tensions.
+- **Visibility:** consolidation findings are visible to editors. Policy findings stay visible to the author and admins only.
+- **A row carries:**
+  - key, kind and paths
+  - headline and evidence (the quoted lines that disagree, scrubbed through the detectors before they are stored)
   - the proposal and the scores
   - the blob SHA of each page at check time
-  - the checker version
-
-  Keys follow invariant 3: kind plus sorted paths, never wording.
-- **Auto-tier changes** land through the brain's configured write mode, direct commit or pull request. Each carries a `log.md` entry naming the finding key. Invariant 7 holds: every move is reversible and logged.
-
-### Part 3: the platform reads the findings
-
-- **`validate`** reads `.isomorphic/findings.json` beside its computed findings. It counts them and drops dismissed ones through `filterDismissed`. A finding whose page SHAs no longer match is reported as stale, not as open.
-- **`resolve`** dismisses a checker finding by key, like any other. No new tool.
-- **The web app** gets a review queue. Each item shows:
+  - the run that produced it
+- **Keys** follow invariant 3: kind plus the sorted paths of the cluster, never wording.
+- **Dismissals stay in the brain** (`.isomorphic/review.json`, invariant 4), so they survive a redeploy or a move to another deployment. The queue is derived state; the dismissal is the decision.
+- **`validate`** counts open consolidation findings and drops dismissed ones through `filterDismissed`. A finding whose page SHAs no longer match is reported as stale, not as open.
+- **`resolve`** dismisses one by key, like any other. No new tool.
+- **The Review screen** gains a consolidation section for editors, beside the admin-only policy section. Each item shows:
   - the headline
   - the pages in the cluster, with the disagreeing lines marked
   - the proposed change per page
 
-  Approve applies the proposal through the `write_page` path. Dismiss goes through `resolve`. Review is where most of the value lands: in the measurements, review and person items outnumbered auto items by more than five to one.
+  Approve applies it through the `write_page` path, and dismiss goes through `resolve`. Review is where most of the value lands: in the measurements, review and person items outnumbered auto items by more than five to one.
 
 ## Invariants
 
-- **Unchanged:** the consolidation loop's invariants 1, 3, 4, 7 and 8.
-  - The platform still generates nothing. Model calls happen only in the operator-run checker, on the operator's key.
-  - Findings and dismissals live in the brain repo.
-  - Nothing is reported outward.
+- **Unchanged:** the consolidation loop's invariants 3, 4, 7 and 8.
+- **Invariant 1 is scoped to the core.**
+  - Everything the core returns stays computed.
+  - Model output comes only from `ee/`, through the gateway, for an entitled org, to zero-data-retention endpoints. That is processing on the operator's behalf ([`open-source-boundary.md`](./open-source-boundary.md)).
+  - [`consolidation-loop.md`](./consolidation-loop.md) states the scope.
 - **New:**
   - An auto-tier change requires a passing verify on the proposal itself, not a confident detection or the proposing model's own confidence.
   - Changing the proposal format means re-grading the verify gate.
+  - A page with a high-severity detection never reaches the gateway.
 
 ## Not in scope
 
 - **A generated-page marker.** Detecting pages that lag the records they summarize without a model needs a field saying a page is generated and from what. OKF does not have one. The checker finds the resulting contradictions claim by claim, which is the same pattern as a hand-written page that fell behind.
-- **Server-side inference, or a platform-held model key.** Either reverses consolidation-loop invariant 1. That is a one-way decision that needs its own design.
 - **Auto-applying merges, archives or annotations.** They always go to review.
+- **A frontier model in the pipeline.** One graded the measurements; the product runs on the two cheap models only.
 
 ## Work items
 
-| Item | What | Model | Surface |
+| Item | What | Where | Surface |
 |---|---|---|---|
-| W1 | Template-aware `near-duplicate`, scaling past `MAX_DUP_PAGES` | No | `consolidate.ts`, tests |
-| W2 | `same-identifier` tension | No | `consolidate.ts`, config field, tests |
-| W3 | Checker: candidates, detect, claim triage, verify, tier, as a local command | Yes, operator key | `scripts/`, tests with stubbed providers |
-| W4 | Claim clustering across pairs | Yes, operator key | checker, tests with stubbed providers |
-| W5 | `validate` and `resolve` read `.isomorphic/findings.json`, with staleness | No | `validate`, findings, tests |
-| W6 | Review queue in the web app | No | `/b/` app, browser tests |
-| W7 | Example scheduled workflow for a brain repo | Yes, operator key | docs, brain template |
+| C1 | Template-aware `near-duplicate`, scaling past `MAX_DUP_PAGES` | core | `consolidate.ts`, tests |
+| C2 | `same-identifier` tension | core | `consolidate.ts`, config field, tests |
+| C3 | Consolidation kinds in the unified findings queue, staleness, `validate` and `resolve` | core (roadmap step 2) | D1 migration, findings, tests |
+| C4 | Pipeline: candidates, pre-scan, detect, claim triage, verify, tier, through the gateway | `ee/` (roadmap step 5) | `ee/review/`, tests with a stubbed gateway |
+| C5 | Claim clustering across pairs | `ee/` | pipeline, tests with a stubbed gateway |
+| C6 | Runs: webhook-triggered incremental pass, admin full pass, D1 cursor | core trigger, `ee/` work | webhook (roadmap step 4), tests |
+| C7 | Consolidation section of the Review screen, approve and dismiss | core | `ReviewView.tsx`, browser tests |
 
-W1 and W2 stand alone and ship first; W1 matters on any templated brain, and W2 on a brain that records identifiers. W3 and W5 together make the checker useful. W4 is what keeps the queue short enough for people. W6 is where the value lands.
+C1 and C2 stand alone and ship first. C3 is shared with the guard's own findings and belongs to roadmap step 2. C4 and C5 are the model work. C7 is where the value lands for people, because the review tier carries most of the work.
 
 ## Open questions
 
-- **The gates** (0.2 to detect, 0.4 per claim, 0.8 to auto-apply) come from three brains graded by a model whose own first pass misses real issues. They need a person-labelled sample before any default is trusted.
-- **The auto gate for claim-by-claim patches is a hypothesis.** The three retargeted questions at 0.5 passed 22 of 52 graded edits, all good. The gate was chosen on those same edits, so it needs a held-out sample before the checker enables auto-apply for them. Until then, claim-by-claim patches go to review.
+- **The gates** (0.2 to detect, 0.4 per claim, the auto gate) come from three brains graded by a model whose own first pass misses real issues. They need a person-labelled sample before any default is trusted.
+- **The auto gate for claim-by-claim patches is a hypothesis.** The three retargeted questions at 0.5 passed 22 of 52 graded edits, all good. The gate was chosen on those same edits, so it needs a held-out sample before auto-apply is offered for them.
 - **How should claims be clustered?** Options: by the decision model on claim pairs, by a normalized subject key the LLM emits, or both. Clusters change as pages change. Is the finding key the sorted union of the cluster's paths, or one key per page pair, grouped only for display?
 - **Do contradictions inside one page need their own single-page pass,** or is the pairwise pass enough in practice?
-- Should auto-tier changes default to a pull request for every brain, whatever its write mode?
-- Findings go stale when a page changes. Should the checker re-verify stale findings on its next run, or drop them and re-detect?
+- **Is a D1 cursor enough** for a full pass on a large brain within Worker limits, or does a full pass need a queue?
