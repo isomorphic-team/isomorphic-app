@@ -30,7 +30,7 @@
 import { McpServer, type RegisteredTool } from '@modelcontextprotocol/server';
 import { registeredTools, wrapToolHandler } from './lib/registered-tools.ts';
 import { serveMcp, serverOptions } from './lib/mcp-serve.ts';
-import type { IdentityWire } from './lib/tool-payloads.ts';
+import type { IdentityWire, OrgMembershipWire } from './lib/tool-payloads.ts';
 import { z } from 'zod';
 import type { OAuthHelpers } from '@cloudflare/workers-oauth-provider';
 import { installationOctokit, tokenOctokit, staticAuth, type AppCreds } from './lib/github.ts';
@@ -45,6 +45,8 @@ import {
 	listAccessibleBrains,
 	linkedUserIds,
 	listAccessibleOrgs,
+	listOrgMemberships,
+	membershipNote,
 	resolveOrgForPerson,
 	chooseBrain,
 	isActiveBrain,
@@ -485,6 +487,19 @@ class McpSession {
 		}
 	}
 
+	// The caller's org memberships for whoami, or undefined when the lookup fails:
+	// whoami still answers, and an absent list is never mistaken for "no orgs".
+	private async callerOrgMemberships(): Promise<OrgMembershipWire[] | undefined> {
+		try {
+			const userId = await this.callerUserId();
+			if (!userId) return undefined;
+			return await listOrgMemberships(this.env.PLATFORM_DB, await this.personUserIds(userId));
+		} catch (err) {
+			console.warn(`[whoami] org memberships: ${err instanceof Error ? err.message : String(err)}`);
+			return undefined;
+		}
+	}
+
 	// The org holding the connection's active brain. Lets an org-scope action default
 	// to where the user is already working instead of to whichever org sorts first.
 	// Called lazily by resolveOrgForPerson, which skips it when it cannot matter.
@@ -770,7 +785,7 @@ class McpSession {
 			{
 				...toolAnnotations('Identify the current user', 'read'),
 				description:
-					'Identify the current user: whoami reports who is signed in to this connection. Returns their email and, when a brain resolves, their role on the active brain and which brain that is. On a single-user deployment, which has no sign-in, says so.',
+					'Identify the current user: whoami reports who is signed in to this connection. Returns their email, every organization they are a member of with their role in it (`orgs`; a guest grant on a single brain adds no organization), and, when a brain resolves, their role on the active brain and which brain that is. On a single-user deployment, which has no sign-in, says so.',
 				inputSchema: z.object({})
 			},
 			async () => {
@@ -790,8 +805,14 @@ class McpSession {
 					} catch {
 						// Resolution/provisioning not complete; still report the identity.
 					}
+					identity.orgs = await this.callerOrgMemberships();
 					return {
-						content: [{ type: 'text', text: `Authenticated as ${email}${roleNote}.` }],
+						content: [
+							{
+								type: 'text',
+								text: `Authenticated as ${email}${roleNote}.${membershipNote(identity.orgs)}`
+							}
+						],
 						structuredContent: identity
 					};
 				}
@@ -805,14 +826,15 @@ class McpSession {
 						const [b] = await this.listAccessibleBrainsForCaller();
 						if (b) {
 							const activeBrain = { id: b.id, label: brainLabel(b) };
+							const orgs = await this.callerOrgMemberships();
 							return {
 								content: [
 									{
 										type: 'text',
-										text: `Single-user deployment with no sign-in: you are its operator, ${b.role} of ${activeBrain.label}.`
+										text: `Single-user deployment with no sign-in: you are its operator, ${b.role} of ${activeBrain.label}.${membershipNote(orgs)}`
 									}
 								],
-								structuredContent: { role: b.role, activeBrain } satisfies IdentityWire
+								structuredContent: { role: b.role, activeBrain, orgs } satisfies IdentityWire
 							};
 						}
 					} catch (err) {

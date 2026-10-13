@@ -59,8 +59,9 @@ brain tools that add, move, remove or switch (`switch_brain`, `create_brain`, `c
 `disconnect_brain`); `USAGE_ANALYTICS` + `multiUser` gate `analytics`; `FEEDBACK_REPO` gates
 `submit_feedback`. Every deployment runs the org model, so this is the only mode difference a
 tool sees. `whoami` (in `worker.ts`) reports email, role and active brain when signed in, and
-the operator's role and brain in static mode; the app's settings card reads its
-`structuredContent`.
+the operator's role and brain in static mode, plus `orgs` (`listOrgMemberships`: memberships
+only, so a guest grant adds none) for OAuth clients that gate on membership; the app's
+settings card reads its `structuredContent`.
 
 The ui:// resource's host contract (`prefersBorder: false`, served at every bundle hash) is
 pinned by `pnpm test:app-resource`. `pnpm test:annotations` pins that every widget tool
