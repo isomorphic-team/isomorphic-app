@@ -223,7 +223,7 @@ app.get(`${ASSET_ROUTE_PREFIX}*`, async (c) =>
 		new URL(c.req.url).pathname,
 		await assetKey,
 		Math.floor(Date.now() / 1000),
-		async (brainId) => {
+		async ({ brainId }) => {
 			const b = [...brains.values()].find((x) => x.brainId === brainId);
 			if (!b) return null;
 			return {

@@ -89,7 +89,9 @@ import { loadBrainConfig, type BrainConfig } from './lib/brain-config.ts';
 import {
 	ASSET_ROUTE_PREFIX,
 	assetLinkKey,
+	brainForClaim,
 	serveAssetLink,
+	type AssetClaim,
 	type AssetLinkIssuer,
 	type OpenedBrain
 } from './lib/asset-link.ts';
@@ -233,30 +235,22 @@ async function assetLinkIssuer(env: Env): Promise<AssetLinkIssuer | undefined> {
 	return base && key ? { base, key: await key } : undefined;
 }
 
-// A brain by its row id, read with its own storage binding. No caller: the signed
-// token is the authorization, checked before this runs.
-async function openBrainForAssetLink(env: Env, brainId: string): Promise<OpenedBrain | null> {
-	const row = await env.PLATFORM_DB.prepare(
-		`SELECT b.repo_owner, b.repo_name, c.kind AS storage_kind,
-		        CAST(c.external_id AS INTEGER) AS installation_id
-		   FROM brains b JOIN storage_connections c ON c.connection_id = b.storage_connection_id
-		  WHERE b.brain_id = ?1 AND b.archived_at IS NULL`
-	)
-		.bind(brainId)
-		.first<{
-			repo_owner: string;
-			repo_name: string;
-			storage_kind: string;
-			installation_id: number;
-		}>();
-	if (!row) return null;
-	const credential = credentialFor(row);
+// The brain a signed link names, read with its own storage binding, but only while
+// the user it was issued to can still reach it: revoking access kills their links.
+async function openBrainForAssetLink(env: Env, claim: AssetClaim): Promise<OpenedBrain | null> {
+	if (!claim.userId) return null;
+	const target = brainForClaim(
+		claim,
+		await listAccessibleBrains(env.PLATFORM_DB, await linkedUserIds(env.PLATFORM_DB, claim.userId))
+	);
+	if (!target) return null;
+	const credential = credentialFor(target);
 	const octokit =
 		credential.kind === 'token'
 			? tokenOctokit(requireToken(env))
 			: await installationOctokit(appCreds(env), credential.installationId);
 	const store = githubStore(octokit);
-	const repoArgs = { owner: row.repo_owner, repo: row.repo_name };
+	const repoArgs = { owner: target.repo_owner, repo: target.repo_name };
 	return { read: store.readBinary, repoArgs, config: await loadBrainConfig(store, repoArgs) };
 }
 
@@ -1341,7 +1335,7 @@ export default {
 				url.pathname,
 				await key,
 				Math.floor(Date.now() / 1000),
-				(brainId) => openBrainForAssetLink(env, brainId)
+				(claim) => openBrainForAssetLink(env, claim)
 			);
 			return request.method === 'HEAD' ? new Response(null, res) : res;
 		}

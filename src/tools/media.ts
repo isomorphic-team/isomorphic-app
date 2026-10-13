@@ -270,7 +270,7 @@ export function registerMediaTools(
 			// A full description, not a terse one: this is the tool an agent hunts for when
 			// a page links a PDF or a deck, and "images only" wording made it look useless.
 			description:
-				'read_media reads a file stored in the brain (an image, a PDF, a Word document, a PowerPoint deck) by its path. For an image type Claude can see (PNG, JPEG, GIF, WebP) it returns the picture itself. For a PDF, DOCX or PPTX it returns the text, by page, section or slide, with `pages` to choose which ("3", "2-5", "10-"); a long document comes back in parts and the reply says how to continue. It also returns a download link, valid for one hour, that opens the original file in a browser or can be fetched into a workspace. Use it when a page references a file and the question depends on what the file says or shows.',
+				'read_media reads a file stored in the brain (an image, a PDF, a Word document, a PowerPoint deck) by its path. For an image type Claude can see (PNG, JPEG, GIF, WebP) it returns the picture itself. For a PDF, DOCX or PPTX it returns the text, by page, section or slide, with `pages` to choose which ("3", "2-5", "10-"); a long document comes back in parts and the reply says how to continue. It also returns a download link, valid for 15 minutes, that opens the original file in a browser or can be fetched into a workspace. Use it when a page references a file and the question depends on what the file says or shows.',
 			inputSchema: z.object({
 				path: z
 					.string()
@@ -291,7 +291,7 @@ export function registerMediaTools(
 			})
 		},
 		async ({ path, pages, include_data, brain }) => {
-			const { store, repoArgs, config, brainId } = await getContext({ brain });
+			const { store, repoArgs, config, brainId, actorUserId } = await getContext({ brain });
 			const target = normalizePath(path);
 
 			const mimeType = mediaTypeOf(target);
@@ -322,7 +322,11 @@ export function registerMediaTools(
 				? await options.assetLinks().catch(() => undefined)
 				: undefined;
 			const link = issuer
-				? await issueAssetLink(issuer, brainId, target, nowSeconds()).catch(() => undefined)
+				? await issueAssetLink(
+						issuer,
+						{ brainId, path: target, ...(actorUserId ? { userId: actorUserId } : {}) },
+						nowSeconds()
+					).catch(() => undefined)
 				: undefined;
 
 			// structuredContent carries the data URI for the app, which renders it under
@@ -357,7 +361,7 @@ export function registerMediaTools(
 				});
 			}
 			const linkLine = link
-				? ` Download or open it: ${link.url} (works for anyone holding it, expires ${link.expiresAt}).`
+				? ` Download or open it: ${link.url} (works for anyone holding it while you keep access to this brain, expires ${link.expiresAt}).`
 				: '';
 
 			if (isModelViewable(mimeType)) {

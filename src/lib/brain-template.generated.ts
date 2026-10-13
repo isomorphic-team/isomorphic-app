@@ -102,7 +102,7 @@ OKF lifecycle status is optional: absent means \`stable\` (ready for consumption
 Pictures, PDFs, Word documents and PowerPoint decks are stored in the brain next to the pages that use them (PNG, JPEG, GIF, WebP, SVG, PDF, DOCX, PPTX; 5 MB each).
 
 - **Adding one.** \`attach_media\` with a public https \`url\`: the server downloads the file, so you never handle the bytes. Pass \`page\` and the file lands in an \`assets/\` folder beside that page, with an image link appended to it. A file with no public URL (an image attached to the chat, or one you made yourself) can't be passed through a tool call; ask the user to drop it into the Isomorphic panel.
-- **Looking at one.** \`read_media\` with the file's path returns an image itself, so you can see what it shows, and a PDF, DOCX or PPTX as text by page, section or slide (\`pages\` picks which; a long one comes back in parts). Every read also returns a download link valid for one hour, for the user to open the original. \`read_page\` is for markdown only.
+- **Looking at one.** \`read_media\` with the file's path returns an image itself, so you can see what it shows, and a PDF, DOCX or PPTX as text by page, section or slide (\`pages\` picks which; a long one comes back in parts). Every read also returns a download link valid for 15 minutes, for the user to open the original. \`read_page\` is for markdown only.
 - Attachments are ordinary files in the repo, so \`move_page\` on a folder moves its \`assets/\` with it, and relative image links keep working in any markdown reader.
 
 ## Custom tools

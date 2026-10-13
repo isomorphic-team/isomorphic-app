@@ -403,11 +403,12 @@ workspace can fetch the file into it. The app's asset view opens the same link. 
 document viewer in the app, by decision: the iframe CSP blocks frames and external origins,
 so one would mean bundling pdf.js into the `ui://` resource.
 
-The link is `/files/<token>/<name>`, the token an HMAC over brain id, path and expiry, valid
-one hour. The filename segment is cosmetic. Anyone holding a live link can fetch that one
-file, and revoking access does not cancel a link already handed out; the expiry bounds both.
-The route reads the brain through its storage binding without a caller, and re-checks that
-the path is under the content roots and a known media type.
+The link is `/files/<token>/<name>`, the token an HMAC over brain id, path, the issuing user
+and expiry, valid 15 minutes. The filename segment is cosmetic. Every fetch re-runs
+`listAccessibleBrains` for the issuing user, so revoking their access kills their live links.
+Anyone holding a live link can fetch that one file while the issuer keeps access; the expiry
+bounds that. An agent cannot present a browser session from its sandbox, which is why the
+token, not a sign-in, is the credential.
 
 Costs: pdf.js adds about 0.5 MB gzipped to the Worker, and a large PDF can need more CPU time
 than the Workers free plan allows per request.

@@ -36,13 +36,14 @@ bundles), tools `src/tools/media.ts`, app side `app/core/media.ts` + `editor-med
   repos are usually private; with it set, no text is extracted. It reads through
   `BrainStore.readBinary`.
 - **Signed file links** (`src/lib/asset-link.ts`): every read leads with a `resource_link` to
-  `/files/<token>/<name>`, an HMAC over (brain id, path, expiry) valid for
-  `ASSET_LINK_TTL_SECONDS`, and restates the URL in text for hosts that drop that block. The
-  token is the credential, so the route sits ahead of the OAuth provider in both auth modes
-  and a revoked user's live link keeps working until it expires. Keyed from `AUTH_SECRET`
-  (oauth) or `MCP_BEARER_TOKEN` (static); issued only when `PUBLIC_BASE_URL` is set. PDFs and
-  raster images open inline with no sandbox CSP on PDF (Chrome's viewer refuses one);
-  everything else, SVG included, downloads under a sandbox CSP.
+  `/files/<token>/<name>`, an HMAC over (brain id, path, issuing user, expiry) valid for
+  `ASSET_LINK_TTL_SECONDS` (15 minutes), and restates the URL in text for hosts that drop
+  that block. The token is the credential, so the route sits ahead of the OAuth provider in
+  both auth modes, and each fetch re-checks the issuing user through `listAccessibleBrains`
+  (`brainForClaim`): revoking access kills their live links. Keyed from `AUTH_SECRET` (oauth)
+  or `MCP_BEARER_TOKEN` (static); issued only when `PUBLIC_BASE_URL` is set. PDFs and raster
+  images open inline with no sandbox CSP on PDF (Chrome's viewer refuses one); everything
+  else, SVG included, downloads under a sandbox CSP.
 - **No media twins of move and delete.** `move_page` and `delete_page` handle non-page files:
   the index records links to non-page content files (`fileEdges` via `src/lib/links.ts`), so a
   move repoints them and a delete warns about pages still linking. Do not grow the tool surface

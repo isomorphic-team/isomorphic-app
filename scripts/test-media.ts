@@ -49,7 +49,9 @@ import { zipSync, strToU8 } from 'fflate';
 import {
 	ASSET_LINK_TTL_SECONDS,
 	assetLinkKey,
+	brainForClaim,
 	issueAssetLink,
+	type AssetClaim,
 	mintAssetToken,
 	serveAssetLink,
 	verifyAssetToken
@@ -843,18 +845,23 @@ console.log('\nchoosing pages');
 console.log('\nsigned file links');
 const linkKey = await assetLinkKey('test-secret');
 {
-	const t = await mintAssetToken(linkKey, { brainId: 'b1', path: 'wiki/a.pdf', exp: 2000 });
+	const t = await mintAssetToken(linkKey, {
+		brainId: 'b1',
+		path: 'wiki/a.pdf',
+		userId: 'u1',
+		exp: 2000
+	});
 	const ok = await verifyAssetToken(linkKey, t, 1000);
 	check(
-		'a token round-trips',
-		ok.ok && ok.claim.path === 'wiki/a.pdf' && ok.claim.brainId === 'b1'
+		'a token round-trips, issuing user included',
+		ok.ok && ok.claim.path === 'wiki/a.pdf' && ok.claim.brainId === 'b1' && ok.claim.userId === 'u1'
 	);
 	const expired = await verifyAssetToken(linkKey, t, 2000);
 	check('an expired token says so', !expired.ok && expired.reason === 'expired');
 	const other = await verifyAssetToken(await assetLinkKey('other-secret'), t, 1000);
 	check('another secret does not verify it', !other.ok && other.reason === 'invalid');
 	const [body, sig] = t.split('.');
-	const forgedBody = btoa(JSON.stringify({ b: 'b1', p: 'wiki/secret.pdf', e: 2000 }))
+	const forgedBody = btoa(JSON.stringify({ b: 'b1', p: 'wiki/secret.pdf', u: 'u1', e: 2000 }))
 		.replace(/\+/g, '-')
 		.replace(/\//g, '_')
 		.replace(/=+$/, '');
@@ -865,8 +872,7 @@ const linkKey = await assetLinkKey('test-secret');
 	check('junk does not verify', !(await verifyAssetToken(linkKey, `${body}`, 1000)).ok);
 	const issued = await issueAssetLink(
 		{ base: 'https://brain.example.com/', key: linkKey },
-		'b1',
-		'wiki/assets/Q3 plan.pdf',
+		{ brainId: 'b1', path: 'wiki/assets/Q3 plan.pdf', userId: 'u1' },
 		1000
 	);
 	check(
@@ -875,6 +881,7 @@ const linkKey = await assetLinkKey('test-secret');
 			issued.url.endsWith('/Q3%20plan.pdf'),
 		issued.url
 	);
+	check('links last 15 minutes', ASSET_LINK_TTL_SECONDS === 15 * 60);
 	check(
 		'a link expires after the TTL',
 		issued.expiresAt === new Date((1000 + ASSET_LINK_TTL_SECONDS) * 1000).toISOString()
@@ -893,8 +900,11 @@ console.log('\nserving a signed link');
 	const config = {
 		paths: parsePaths({ contentRoots: ['wiki'], sourceRoots: ['raw'], logPath: '' })
 	};
-	const open = async (brainId: string) =>
-		brainId !== 'b1'
+	// Who can reach which brain right now, as listAccessibleBrains would answer it.
+	// Mutated below to revoke access after a link was issued.
+	const access: Record<string, { brain_id: string }[]> = { u1: [{ brain_id: 'b1' }] };
+	const open = async (claim: AssetClaim) =>
+		!brainForClaim(claim, access[claim.userId ?? ''] ?? [])
 			? null
 			: {
 					repoArgs: { owner: 'o', repo: 'r' },
@@ -904,8 +914,13 @@ console.log('\nserving a signed link');
 							? { contentBase64: base64FromBytes(files[path]), sha: 'x', size: files[path].length }
 							: null
 				};
-	const serve = async (path: string, now = 1000, brainId = 'b1') => {
-		const t = await mintAssetToken(linkKey, { brainId, path, exp: 1000 + ASSET_LINK_TTL_SECONDS });
+	const serve = async (path: string, now = 1000, brainId = 'b1', userId: string | null = 'u1') => {
+		const t = await mintAssetToken(linkKey, {
+			brainId,
+			path,
+			...(userId ? { userId } : {}),
+			exp: 1000 + ASSET_LINK_TTL_SECONDS
+		});
 		return serveAssetLink(`/files/${t}/${path.split('/').pop()}`, linkKey, now, open as never);
 	};
 
@@ -943,6 +958,17 @@ console.log('\nserving a signed link');
 	check('a missing file is 404', (await serve('wiki/assets/gone.pdf')).status === 404);
 	check('a removed brain is 404', (await serve('wiki/assets/plan.pdf', 1000, 'b2')).status === 404);
 	check(
+		'a link with no issuing user is 404',
+		(await serve('wiki/assets/plan.pdf', 1000, 'b1', null)).status === 404
+	);
+	check(
+		'another user who cannot reach the brain is 404',
+		(await serve('wiki/assets/plan.pdf', 1000, 'b1', 'u2')).status === 404
+	);
+	access.u1 = [];
+	check('revoking access kills a live link', (await serve('wiki/assets/plan.pdf')).status === 404);
+	access.u1 = [{ brain_id: 'b1' }];
+	check(
 		'a bad token is 404',
 		(await serveAssetLink('/files/abc.def/plan.pdf', linkKey, 1000, open as never)).status === 404
 	);
@@ -979,7 +1005,8 @@ console.log('\nread_media: documents and links');
 				? { contentBase64: base64FromBytes(files[path]), sha: 'x', size: files[path].length }
 				: null
 	};
-	const ctx = async () => ({ store, repoArgs: {}, config, brainId: 'b1' }) as never;
+	const ctx = async () =>
+		({ store, repoArgs: {}, config, brainId: 'b1', actorUserId: 'u1' }) as never;
 	registerMediaTools(server, ctx, {
 		assetLinks: async () => ({ base: 'https://brain.example.com', key: linkKey }),
 		now: () => 1000
@@ -995,9 +1022,13 @@ console.log('\nread_media: documents and links');
 		JSON.stringify(r.content[0])
 	);
 	check(
-		'the link verifies and names the file',
+		'the link verifies, names the file, and is bound to the caller',
 		link?.name === 'contract.pdf' &&
-			(await verifyAssetToken(linkKey, link!.uri!.split('/files/')[1].split('/')[0], 1000)).ok
+			(await verifyAssetToken(linkKey, link!.uri!.split('/files/')[1].split('/')[0], 1000)).ok ===
+				true &&
+			JSON.stringify(
+				await verifyAssetToken(linkKey, link!.uri!.split('/files/')[1].split('/')[0], 1000)
+			).includes('"userId":"u1"')
 	);
 	const stoppedAt = Number(/pages 1-(\d+) of 16\./.exec(text)?.[1] ?? 0);
 	check(
