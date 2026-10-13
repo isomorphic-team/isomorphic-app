@@ -136,11 +136,27 @@ Contradictions need a model. Since 2026-09-30, model use has a home: `ee/`, behi
 - **Spend cap:** a monthly cap per org, counted from the cost each response reports.
 
 
-It uses two models, both of which the gateway already names:
-- **The decision model** (Jev) for every yes/no judgment.
-- **The small LLM** (Luna) wherever text must be written.
+It uses two kinds of model:
+- **The decision model** (Jev, through OpenRouter) for every yes/no judgment. Every gate below is a calibrated probability from it, so it is not swapped.
+- **The small LLM** wherever text must be written. **Claude Haiku 5.5 comes first**, called on the Anthropic API with the operator's Anthropic key. Luna, through OpenRouter, is the fallback.
 
 No frontier model is called.
+
+**Why Haiku first.**
+- It costs the same per token as Luna ($0.10 / $0.50 per million for prompts up to 100K tokens), and an operator holding Anthropic API credits pays nothing for it until they run out.
+- It has a 1M-token context, so a pair of long pages never needs cutting.
+
+**How the gateway falls back.** The gateway gains an Anthropic adapter beside the OpenRouter one, and tries Haiku first. It moves a request to Luna when:
+- the deployment has no Anthropic key
+- the Anthropic org is not configured for zero data retention
+- Haiku returns `stop_reason: "refusal"` (it has no server-side fallback)
+- the Anthropic side reports a rate limit or exhausted credits
+
+The run summary records which model served each request.
+
+**Zero retention still holds on both paths.** OpenRouter requests keep `ZDR_PROVIDER`. An Anthropic request is allowed only when the operator declares that their Anthropic organization has a zero-data-retention arrangement. There is no per-request flag to send, so the declaration is configuration, and without it the gateway skips Haiku.
+
+**The measurements are Luna's.** Haiku's triage recall, proposal quality and verify behavior are unmeasured. Under the rule that changing the proposal format or model means re-grading the verify gate, the auto tier stays off for Haiku-written proposals until a graded sample exists.
 
 1. **Candidates.** Per run:
    - Pages changed since the last run, each paired with its top five search hits.
@@ -175,6 +191,7 @@ No frontier model is called.
 - Measured: under $1 per 1,000 candidate pairs to detect, and about $0.40 per 100 flagged pairs to triage.
 - A full pass over a 1,000-page brain costs a few dollars. An incremental run costs cents.
 - Both fit inside `DEFAULT_MONTHLY_CAP_USD`. The gateway refuses a call once the org's cap is spent, and the run records where it stopped so the next one resumes.
+- **Cost on the Anthropic path.** It is computed from the response's token usage and the model's list price, because the Anthropic API reports tokens, not dollars. Haiku 5.5's tokenizer counts about 30% more tokens than its predecessor for the same text, so estimates use its own counts. Spend paid from credits still counts toward the cap, so the cap means the same thing whichever provider served the call.
 
 **When it runs.**
 - **Incrementally:** on the push webhook (roadmap step 4), for pages changed since the last run.
@@ -231,6 +248,7 @@ Roadmap step 2 extends the `validate` / `resolve` pattern into one findings queu
 | C2 | `same-identifier` tension | core | `consolidate.ts`, config field, tests |
 | C3 | Consolidation kinds in the unified findings queue, staleness, `validate` and `resolve` | core (roadmap step 2) | D1 migration, findings, tests |
 | C4 | Pipeline: candidates, pre-scan, detect, claim triage, verify, tier, through the gateway | `ee/` (roadmap step 5) | `ee/review/`, tests with a stubbed gateway |
+| C4a | Anthropic adapter in the gateway: Haiku first, Luna fallback, zero-retention declaration, cost from tokens | `ee/` | `ee/review/gateway.ts`, tests pinning the fallback order and the refusal path |
 | C5 | Claim clustering across pairs | `ee/` | pipeline, tests with a stubbed gateway |
 | C6 | Runs: webhook-triggered incremental pass, admin full pass, D1 cursor | core trigger, `ee/` work | webhook (roadmap step 4), tests |
 | C7 | Consolidation section of the Review screen, approve and dismiss | core | `ReviewView.tsx`, browser tests |
@@ -239,6 +257,8 @@ C1 and C2 stand alone and ship first. C3 is shared with the guard's own findings
 
 ## Open questions
 
+- **Is Haiku as good a triager as Luna?** The claim-by-claim prompt, the claim filter and the verify gate were all measured with Luna. One graded run of Haiku on the same flagged sets settles it; until then the auto tier stays off for its proposals.
+- **Should credits count toward the cap?** Counting them keeps the cap's meaning stable. Not counting them lets an operator spend credits freely and keeps the cap for real money.
 - **The gates** (0.2 to detect, 0.4 per claim, the auto gate) come from three brains graded by a model whose own first pass misses real issues. They need a person-labelled sample before any default is trusted.
 - **The auto gate for claim-by-claim patches is a hypothesis.** The three retargeted questions at 0.5 passed 22 of 52 graded edits, all good. The gate was chosen on those same edits, so it needs a held-out sample before auto-apply is offered for them.
 - **How should claims be clustered?** Options: by the decision model on claim pairs, by a normalized subject key the LLM emits, or both. Clusters change as pages change. Is the finding key the sorted union of the cluster's paths, or one key per page pair, grouped only for display?

@@ -90,6 +90,7 @@ None of the following is built yet, which is why deciding it now is cheap.
 - **Publications** ([`brain-seams.md`](./brain-seams.md)): a declared-sensitive page does not cross into another brain.
 - **Consolidation:**
   - **Pre-scan.** A page with a high-severity detection never reaches the gateway. A declared-sensitive page reaches it only if the brain's policy allows model review of declared pages.
+  - **Every provider path is zero-retention.** OpenRouter requests carry `ZDR_PROVIDER`. The Anthropic path, which serves Haiku first, is used only when the operator declares a zero-data-retention arrangement for their Anthropic organization ([`consistency-checks.md`](./consistency-checks.md), Part 2).
   - **Evidence.** Quotes are scrubbed through the detectors before they are stored in the findings queue or shown on the Review screen ([`consistency-checks.md`](./consistency-checks.md), Parts 2 and 3).
 
 ### Part 5: what stays outside Isomorphic
