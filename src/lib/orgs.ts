@@ -17,6 +17,7 @@
 import type { D1Database } from '@cloudflare/workers-types';
 import type { Octokit } from 'octokit';
 import type { CommitAuthor } from './brain-repo.ts';
+import type { OrgMembershipWire } from './tool-payloads.ts';
 import { brainSlug, handleOfSlug, newBrainHandle } from './brain-slug.ts';
 import {
 	GITHUB_APP_KIND,
@@ -1318,6 +1319,27 @@ export async function listAccessibleOrgs(
 		else if (roleAtLeast(role as Role, seen.role)) seen.role = role as Role;
 	}
 	return [...byId.values()];
+}
+
+// The caller's org memberships, for a client that admits "members of org X". Read
+// from memberships only (listAccessibleOrgs), so a guest grant on one brain adds no
+// org, and an org with no reachable brain still counts.
+export async function listOrgMemberships(
+	db: D1Database,
+	userIds: string[]
+): Promise<OrgMembershipWire[]> {
+	return (await listAccessibleOrgs(db, userIds)).map((o) => ({
+		orgId: o.org.org_id,
+		orgLabel: orgLabel(o.org),
+		role: o.role
+	}));
+}
+
+// whoami's sentence for the same list, empty when the lookup failed.
+export function membershipNote(orgs: OrgMembershipWire[] | undefined): string {
+	if (!orgs) return '';
+	if (orgs.length === 0) return ' Not a member of any organization.';
+	return ` Member of ${orgs.map((o) => `${o.orgLabel} (${o.role})`).join(', ')}.`;
 }
 
 // Resolve a caller-supplied `org` handle against the orgs they belong to. Same shape
