@@ -186,25 +186,31 @@ a format change. Existing brains are unaffected until someone writes one.
 - **Frontmatter**, all set through `write_page`'s `type` and `fields`:
 
   ```yaml
-  type: handoff
-  status: open # open | taken | closed
+  type: Handoff
+  handoff: open # open | taken | closed
   from: Claude Code # the agent label from part 2, or a person
   for: any # an agent label, a person, or any
   about: ['[[Pricing model]]', '[[Q4 plan]]']
+  stale_after: 2026-10-27T00:00:00Z
   ```
 
+- **OKF fit.** `type` is free-form and unregistered in OKF (§4.1), so `Handoff` is a value, not
+  a reserved type, and the platform never branches on it: the view selects by folder. The
+  handoff's state is a producer-defined key, `handoff`, because OKF's own `status`
+  (`draft | stable | deprecated`, §5.4) is the page's lifecycle and `write_page` accepts only
+  those values for it. Expiry is OKF's `stale_after` (§5.5), set two weeks out by default.
 - **Body:** four short sections. _Done_, _Open_, _Next step_, _Read first_ (links to the pages a
   successor needs).
-- **Lifecycle** is a field write: the agent that picks one up sets `status: taken` and
-  `taken_by`; whoever finishes the work sets `status: closed`. Nothing is deleted, so the folder
-  is the history of who passed what to whom.
+- **Lifecycle** is a field write: the agent that picks one up sets `handoff: taken` and
+  `taken_by`; whoever finishes the work sets `handoff: closed`. Nothing is deleted, so the
+  folder is the history of who passed what to whom.
 - **The folder note** `handoffs/index.md` lists the open ones:
 
   ````
   ```okf-view
   kind: pages
   under: wiki/handoffs/
-  filter: { type: handoff, status: open }
+  filter: { handoff: open }
   as: table
   columns: title, from, for, created
   sort: created
@@ -256,5 +262,6 @@ parallel. PR 6 works without part 2 (`from` is free text) but reads better with 
 - **Should a person be able to name a connection** ("work laptop Claude Code")? That needs a
   connections list in Connected apps and is the natural home for revoking one grant without the
   others.
-- **Should `validate` flag stale open handoffs** (open for more than N days)? It overlaps with
-  consolidation's staleness findings, so it waits for the shared findings queue.
+- **Should `validate` flag open handoffs past their `stale_after`?** Any OKF page can carry
+  `stale_after`, so this is a general staleness finding rather than a handoff rule. It waits
+  for the shared findings queue.
