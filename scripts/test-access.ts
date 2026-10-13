@@ -242,6 +242,8 @@ import {
 import {
 	listAccessibleBrains,
 	listAccessibleOrgs,
+	listOrgMemberships,
+	membershipNote,
 	firstSuspendedOrg,
 	resolveOrgForPerson,
 	linkedUserIds,
@@ -361,6 +363,31 @@ sqlite.exec(`
 		bob.find((b) => repoOf(b) === 'northwind/bobp')?.org_role === 'editor'
 	);
 }
+
+// whoami reports these to an OAuth client that admits "members of org X", so a guest
+// must not read as a member and a viewer must not be dropped.
+console.log('\nlistOrgMemberships: what whoami reports as the caller\u2019s orgs');
+check(
+	'a guest grant adds no organization',
+	(await listOrgMemberships(db, ['gus'])).length === 0,
+	'a guest of one brain would pass a client-side membership gate'
+);
+check(
+	'an editor is a member, at editor',
+	JSON.stringify(await listOrgMemberships(db, ['bob'])) ===
+		JSON.stringify([{ orgId: 'org1', orgLabel: 'Northwind', role: 'editor' }]),
+	JSON.stringify(await listOrgMemberships(db, ['bob']))
+);
+check(
+	'a viewer is a member too, with no brain of their own needed',
+	(await listOrgMemberships(db, ['carol']))[0]?.role === 'viewer'
+);
+check(
+	'whoami says so in words',
+	membershipNote(await listOrgMemberships(db, ['bob'])) === ' Member of Northwind (editor).' &&
+		membershipNote([]) === ' Not a member of any organization.' &&
+		membershipNote(undefined) === ''
+);
 sqlite.exec(`DELETE FROM brain_memberships WHERE user_id = 'gus'`);
 
 console.log('\ngetDefaultBrainForUser: never lands someone in a brain they cannot open');
@@ -1256,6 +1283,12 @@ console.log('\nA single-user (static) deployment runs the org model (ensureStati
 			(b && repoOf(b)) === 'solo/notes' &&
 			b.role === 'owner' &&
 			b.org_role === 'owner'
+	);
+	check(
+		"whoami reports the operator's single org",
+		JSON.stringify(
+			(await listOrgMemberships(db, [STATIC_USER_ID])).map((o) => [o.orgId, o.role])
+		) === JSON.stringify([['static', 'owner']])
 	);
 	check(
 		'it is read through the token, not an installation',

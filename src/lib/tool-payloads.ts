@@ -324,6 +324,13 @@ export interface BrainAccessWire {
 	me: BrainAccessSelf;
 }
 
+/** One org the caller is a member of, as whoami reports it. */
+export interface OrgMembershipWire {
+	orgId: string;
+	orgLabel: string;
+	role: string;
+}
+
 /** whoami. Every field is optional: static-bearer mode has no identity at all. */
 export interface IdentityWire {
 	email?: string;
@@ -331,6 +338,9 @@ export interface IdentityWire {
 	role?: string;
 	org?: string;
 	activeBrain?: ActiveBrainRef;
+	// Every org the caller is a MEMBER of, at their org role. Guest grants add none.
+	// Absent when the lookup failed, so a client never reads a failure as "no orgs".
+	orgs?: OrgMembershipWire[];
 }
 
 /** connected_accounts' own view, and the `{accounts}` every unlink returns. */
