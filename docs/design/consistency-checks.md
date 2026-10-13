@@ -146,7 +146,9 @@ No frontier model is called.
 - It costs the same per token as Luna ($0.10 / $0.50 per million for prompts up to 100K tokens), and an operator holding Anthropic API credits pays nothing for it until they run out.
 - It has a 1M-token context, so a pair of long pages never needs cutting.
 
-**How the gateway falls back.** The gateway gains an Anthropic adapter beside the OpenRouter one, and tries Haiku first. It moves a request to Luna when:
+**Haiku first is a gateway rule, not a consolidation rule.** The same order serves the data-policy guard's model stages (roadmap step 3): its structured-output stage writes text, so it gets Haiku first too. Its typed-decision gate stays on Jev, as consolidation's does, because the guard's severity gates are calibrated probabilities as well.
+
+**How the gateway falls back.** The gateway gains an Anthropic adapter beside the OpenRouter one, and tries Haiku first for every text-writing request. It moves a request to Luna when:
 - the deployment has no Anthropic key
 - the Anthropic org is not configured for zero data retention
 - Haiku returns `stop_reason: "refusal"` (it has no server-side fallback)

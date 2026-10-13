@@ -48,8 +48,17 @@ An open-source scanner, okf-privacy-scan (MIT), ran in summary mode over the thr
 - **The severe items were already there.** Both of brain A's flagged files predate any guard, and a forward-only guard never sees them. On this brain it would report nothing while a private key sits in the working tree and in history.
 - **Patterns miss the common case.** Brains B and C are confidential under client agreements: prices, contract terms, headcounts, personnel notes. None of it has a pattern, and nothing in either brain declares anything, so every deterministic check reports them clean. The roadmap's model stages exist for this, and its own caveat applies: recall on well-edited prose is limited.
 - **Declarations are the only computed lever for business-confidential prose.**
+- **The guard's detectors would not have caught all of brain A.** They have no connection-string detector, and brain A's flagged files included connection strings with an inline password.
+- **The guard's card detector is looser than the scanner's.** It checks only the leading digit (3 to 6) plus Luhn, while the scanner requires a real network prefix range and a length that matches the network. Luhn alone passes one random digit string in ten, so the prefix check does most of the filtering.
 
 ## Decisions
+
+### Part 0: close two detector gaps
+
+Both changes are in the core, in `src/lib/policy-detectors.ts`, and keep its rule: precision first, and a negative case in the battery for every detector.
+
+- **A `connection-string` detector**, high severity: a URI whose authority carries a password (`scheme://user:password@host`). A URI with a user but no password, or with a password placeholder such as `<password>` or `${PASSWORD}`, is a negative case.
+- **Stricter card matching:** the issuer prefix ranges and per-network lengths for Visa, Mastercard (including 2221 to 2720), American Express, Discover, JCB and Diners, on top of Luhn. Negative cases: a Luhn-valid 16-digit number with no network prefix, and a valid prefix at the wrong length for its network.
 
 ### Part 1: say what the guard has not seen
 
@@ -123,6 +132,7 @@ Isomorphic's docs point to it for anyone running `pnpm try` or keeping a checkou
 
 | Item | What | Where | Surface |
 |---|---|---|---|
+| P0 | Connection-string detector; network-prefix card matching | core | `policy-detectors.ts`, `pnpm test:guard` negative cases |
 | P1 | Coverage line, and the admin-run deterministic baseline scan | core | guard, `validate`, Review screen, tests |
 | P2 | Declarations: frontmatter fields, sensitive globs, brain-wide default | core | `.isomorphic.json` policy block, tests |
 | P3 | Recognize git-crypt files through the store; local runtime reads git attributes | core | `BrainStore`, content index, `src/local/` |
@@ -130,7 +140,7 @@ Isomorphic's docs point to it for anyone running `pnpm try` or keeping a checkou
 | P5 | Consolidation pre-scan and evidence scrubbing | `ee/` and the findings queue | [`consistency-checks.md`](./consistency-checks.md) C3, C4 |
 | P6 | Enforcement on share links and publications, built with those features | core | link sharing, brain seams |
 
-P1 ships first: it would have surfaced brain A's two files. P2 and P4 together are the join. P5 is a precondition for model consolidation, not a follow-up to it.
+P0 and P1 ship first. Together they would have surfaced brain A's two files, connection strings included. P2 and P4 together are the join. P5 is a precondition for model consolidation, not a follow-up to it.
 
 ## Open questions
 
