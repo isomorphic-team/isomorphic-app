@@ -70,8 +70,9 @@ production's bindings:
   (`src/lib/oauth-provider.ts`), so the metadata above comes from that origin, not from the configured base URL, so all of it is correct
   on any hostname whatever the config says. `PUBLIC_BASE_URL` is read where there is no
   request to derive an origin from: `src/manifest.ts`, and the connected-accounts tools
-  building the `/link/start` URL. A deploy carrying the wrong value passes every check here
-  and then emails someone a link into the wrong deployment.
+  building the `/link/start` URL, and `read_media` building signed `/files/` links. A deploy
+  carrying the wrong value passes every check here and then emails someone a link into the
+  wrong deployment.
 - **Anything behind auth.** A real `initialize` plus `tools/list` needs a magic-link round
   trip. Not scripted, and not planned.
 - **Data correctness.** A version that boots, authenticates, and returns wrong page content

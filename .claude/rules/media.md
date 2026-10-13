@@ -1,6 +1,7 @@
 ---
 paths:
   - "src/lib/media.ts"
+  - "src/lib/{document-text,asset-link}.ts"
   - "src/tools/media.ts"
   - "app/core/{media,editor-media}.ts"
   - "app/views/AssetView.tsx"
@@ -27,9 +28,21 @@ bundles), tools `src/tools/media.ts`, app side `app/core/media.ts` + `editor-med
 - **Placement:** beside `page` in an `assets/` folder, with a markdown image link appended to
   the page; `path` overrides.
 - **`read_media`** returns the picture itself for types Claude can see (PNG, JPEG, GIF, WebP;
-  SVG and PDF are stored and shown, never returned as image content). `include_data` is for the
-  app, which renders images as data URIs because the iframe CSP allows only `'self'` and
-  `data:` and brain repos are usually private. It reads through `BrainStore.readBinary`.
+  SVG is stored and shown, never returned as image content). PDF, DOCX and PPTX come back as
+  text by page, section or slide (`src/lib/document-text.ts`, Worker-only, so pdf.js stays out
+  of the app bundle), capped at `DOCUMENT_TEXT_BUDGET` per reply with a `pages` continuation.
+  Text rides in `content`, never `structuredContent`. `include_data` is for the app, which
+  renders images as data URIs because the iframe CSP allows only `'self'` and `data:` and brain
+  repos are usually private; with it set, no text is extracted. It reads through
+  `BrainStore.readBinary`.
+- **Signed file links** (`src/lib/asset-link.ts`): every read leads with a `resource_link` to
+  `/files/<token>/<name>`, an HMAC over (brain id, path, expiry) valid for
+  `ASSET_LINK_TTL_SECONDS`, and restates the URL in text for hosts that drop that block. The
+  token is the credential, so the route sits ahead of the OAuth provider in both auth modes
+  and a revoked user's live link keeps working until it expires. Keyed from `AUTH_SECRET`
+  (oauth) or `MCP_BEARER_TOKEN` (static); issued only when `PUBLIC_BASE_URL` is set. PDFs and
+  raster images open inline with no sandbox CSP on PDF (Chrome's viewer refuses one);
+  everything else, SVG included, downloads under a sandbox CSP.
 - **No media twins of move and delete.** `move_page` and `delete_page` handle non-page files:
   the index records links to non-page content files (`fileEdges` via `src/lib/links.ts`), so a
   move repoints them and a delete warns about pages still linking. Do not grow the tool surface

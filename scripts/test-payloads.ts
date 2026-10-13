@@ -217,7 +217,13 @@ check(
 );
 check(
 	'parseAsset defaults',
-	JSON.stringify(parseAsset({ size: 'big' })) === '{"mimeType":"","size":0,"dataUri":""}'
+	JSON.stringify(parseAsset({ size: 'big' })) ===
+		'{"mimeType":"","size":0,"dataUri":"","downloadUrl":""}'
+);
+check(
+	'parseAsset reads the signed link',
+	parseAsset({ downloadUrl: 'https://x.example/files/t/a.pdf' }).downloadUrl ===
+		'https://x.example/files/t/a.pdf'
 );
 check(
 	'parseSearchHits: hits or nothing',

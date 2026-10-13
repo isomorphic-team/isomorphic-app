@@ -1,7 +1,12 @@
 import { useEffect, useState } from 'preact/hooks';
-import { formatBytes, isEmbeddable, isModelViewable } from '../../src/lib/media.ts';
+import {
+	formatBytes,
+	isEmbeddable,
+	isModelViewable,
+	isTextExtractable
+} from '../../src/lib/media.ts';
 import type { Backref } from '../core/types.ts';
-import { callTool } from '../core/host.ts';
+import { callTool, openLink } from '../core/host.ts';
 import { brainArgs } from '../core/store.ts';
 import { navigateTo } from '../core/actions.ts';
 import { defineView } from '../core/view-registry.ts';
@@ -88,12 +93,14 @@ function AssetView({
 	path,
 	mimeType,
 	size,
-	dataUri
+	dataUri,
+	downloadUrl
 }: {
 	path: string;
 	mimeType: string;
 	size: number;
 	dataUri: string;
+	downloadUrl: string;
 }) {
 	const name = path.split('/').pop() ?? path;
 	const folder = path.includes('/') ? path.slice(0, path.lastIndexOf('/')) : '';
@@ -115,8 +122,19 @@ function AssetView({
 				<div class="rounded-lg border border-dashed border-border px-4 py-6 text-center">
 					<p class="text-sm text-fg">{mimeType || 'Unknown type'}</p>
 					<p class="mt-1 text-xs text-muted">
-						Stored in the brain. This type can&rsquo;t be previewed here.
+						{downloadUrl
+							? 'Opens in a new tab: PDFs in the browser’s viewer, other files as a download.'
+							: 'Stored in the brain. This type can’t be previewed here.'}
 					</p>
+					{downloadUrl && (
+						<button
+							type="button"
+							onClick={() => openLink(downloadUrl)}
+							class="mt-3 cursor-pointer rounded-md border border-border bg-chip px-3 py-1.5 text-sm text-fg hover:bg-border"
+						>
+							Open {name}
+						</button>
+					)}
 				</div>
 			)}
 
@@ -136,7 +154,11 @@ function AssetView({
 				    says" working and quietly doing nothing, and the answer is not guessable
 				    from the file — a PDF and an SVG both look like documents here. */}
 				<dd class="text-fg">
-					{isModelViewable(mimeType) ? 'Yes' : 'No — stored and shown, but not readable by Claude'}
+					{isModelViewable(mimeType)
+						? 'Yes'
+						: isTextExtractable(mimeType)
+							? 'Its text, by page or slide'
+							: 'No: stored and shown, but not readable by Claude'}
 				</dd>
 			</dl>
 
@@ -149,10 +171,16 @@ export { AssetView, UsedOn };
 
 declare module '../core/view-registry.ts' {
 	interface ViewProps {
-		asset: { path: string; mimeType: string; size: number; dataUri: string };
+		asset: { path: string; mimeType: string; size: number; dataUri: string; downloadUrl: string };
 	}
 }
 
 export default defineView('asset', (v) => (
-	<AssetView path={v.path} mimeType={v.mimeType} size={v.size} dataUri={v.dataUri} />
+	<AssetView
+		path={v.path}
+		mimeType={v.mimeType}
+		size={v.size}
+		dataUri={v.dataUri}
+		downloadUrl={v.downloadUrl}
+	/>
 ));

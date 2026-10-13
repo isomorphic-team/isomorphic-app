@@ -412,6 +412,10 @@ Decisions worth not relitigating:
   point anywhere).
 - **`read_media`'s data URI is opt-in** (`include_data`, set by the app). Hosts put
   `structuredContent` in front of the model, so every image was being spent twice.
+- **Documents are read as text, opened by link** (issue #145). PDF, DOCX and PPTX come back
+  from `read_media` as text by page or slide, with a signed `/files/` link valid for an hour
+  as a `resource_link`. The browser's own viewer renders the PDF; there is no viewer in the
+  app.
 
 Not built, in rough priority order:
 

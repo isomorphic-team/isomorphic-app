@@ -2,7 +2,8 @@
 
 Status: built 2026-08-05 (`attach_media`, `read_media`, upload and viewing in the app,
 `src/lib/media.ts`, `pnpm test:media`). URL ingest (`attach_media` with `url`, the server
-fetching the file) followed on 2026-08-10. What is still open is tracked in
+fetching the file) followed on 2026-08-10. Document text and signed file links (§13, issue
+#145) followed on 2026-10-13. What is still open is tracked in
 [`docs/roadmap.md`](../roadmap.md). Written 2026-08-05; the body below is the design as
 proposed.
 
@@ -377,3 +378,36 @@ remains reaches nothing either deployment owns.
    dashboards argue for higher.
 3. **Should `validate` gain an advisory for orphaned assets** (an image no page references)?
    It fits the existing pattern of advisory-only structure notes.
+
+---
+
+## 13. Documents and signed file links (built 2026-10-13, issue #145)
+
+§8 left PDFs stored but unreadable, and that turned out to be the common case: contracts and
+reference packets. An agent got `{path, mimeType, size}` from `read_media`, or with
+`include_data` a base64 blob larger than the host's tool-result limit, and a client without
+a shell could not read the file at all. The viewer offered no way to open it.
+
+**The model gets text.** `read_media` extracts PDF text per page (pdf.js through `unpdf`), PPTX
+per slide in presentation order with speaker notes, and DOCX in paragraph-bounded sections
+(`fflate` plus the OOXML text runs). A reply carries up to `DOCUMENT_TEXT_BUDGET` characters
+and names the `pages` value that continues it. Text works on every host, which is why it is
+the primary path rather than an embedded `resource` blob, whose handling still varies by host
+(§8). A scanned PDF has no text layer and there is no OCR; the reply says so and points at
+the link.
+
+**People get the file, rendered by their own software.** Every read leads with a
+`resource_link` to a signed URL, the shape a mail connector uses for an attachment: in a
+browser the PDF opens in the built-in viewer, Office files download, and an agent with a
+workspace can fetch the file into it. The app's asset view opens the same link. There is no
+document viewer in the app, by decision: the iframe CSP blocks frames and external origins,
+so one would mean bundling pdf.js into the `ui://` resource.
+
+The link is `/files/<token>/<name>`, the token an HMAC over brain id, path and expiry, valid
+one hour. The filename segment is cosmetic. Anyone holding a live link can fetch that one
+file, and revoking access does not cancel a link already handed out; the expiry bounds both.
+The route reads the brain through its storage binding without a caller, and re-checks that
+the path is under the content roots and a known media type.
+
+Costs: pdf.js adds about 0.5 MB gzipped to the Worker, and a large PDF can need more CPU time
+than the Workers free plan allows per request.

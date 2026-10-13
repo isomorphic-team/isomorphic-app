@@ -45,6 +45,23 @@ import {
 	validateAttachment
 } from '../src/lib/media.ts';
 
+import { zipSync, strToU8 } from 'fflate';
+import {
+	ASSET_LINK_TTL_SECONDS,
+	assetLinkKey,
+	issueAssetLink,
+	mintAssetToken,
+	serveAssetLink,
+	verifyAssetToken
+} from '../src/lib/asset-link.ts';
+import {
+	decodeXmlEntities,
+	extractDocumentText,
+	parsePartRange,
+	sliceDocument
+} from '../src/lib/document-text.ts';
+import { DOCX_TYPE, PPTX_TYPE, isTextExtractable } from '../src/lib/media.ts';
+
 import { checker } from './check.ts';
 
 const { check, done } = checker('media checks');
@@ -594,6 +611,463 @@ console.log('\nread_media: paths it refuses without reading the store');
 		'a media path under content reaches the store',
 		reads.join() === 'wiki/vendors/assets/logo.png',
 		inside.text
+	);
+}
+
+// ---------- documents: text out of PDF, DOCX, PPTX ----------
+
+// A real, minimal PDF: one Helvetica text line per page, uncompressed, with a correct
+// xref, so pdf.js parses it the way it parses a file from a real exporter.
+function makePdf(pages: string[]): Uint8Array {
+	const objs: string[] = [
+		'<< /Type /Catalog /Pages 2 0 R >>',
+		`<< /Type /Pages /Kids [${pages.map((_, i) => `${4 + i * 2} 0 R`).join(' ')}] /Count ${pages.length} >>`,
+		'<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>'
+	];
+	pages.forEach((t, i) => {
+		// One Tj per line, stepping down the page: pdf.js drops glyphs that fall off
+		// the page, so one long line would not survive extraction.
+		const lines = t
+			.split('\n')
+			.map((l) => `(${l}) Tj 0 -14 Td`)
+			.join(' ');
+		const stream = t ? `BT /F1 10 Tf 40 760 Td ${lines} ET` : '';
+		objs.push(
+			`<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 3 0 R >> >> /Contents ${5 + i * 2} 0 R >>`,
+			`<< /Length ${stream.length} >>\nstream\n${stream}\nendstream`
+		);
+	});
+	let out = '%PDF-1.4\n';
+	const offsets: number[] = [];
+	objs.forEach((o, i) => {
+		offsets.push(out.length);
+		out += `${i + 1} 0 obj\n${o}\nendobj\n`;
+	});
+	const xref = out.length;
+	out += `xref\n0 ${objs.length + 1}\n0000000000 65535 f \n`;
+	out += offsets.map((o) => `${String(o).padStart(10, '0')} 00000 n \n`).join('');
+	out += `trailer\n<< /Size ${objs.length + 1} /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF\n`;
+	return strToU8(out);
+}
+
+const W_NS = 'xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"';
+function makeDocx(paragraphs: string[]): Uint8Array {
+	const body = paragraphs
+		.map((p) => `<w:p><w:r><w:t xml:space="preserve">${p}</w:t></w:r></w:p>`)
+		.join('');
+	return zipSync({
+		'word/document.xml': strToU8(`<w:document ${W_NS}><w:body>${body}</w:body></w:document>`)
+	});
+}
+
+const REL = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships';
+// `order` lists slide FILE numbers in presentation order, so a test can make the
+// deck's order disagree with the file numbering, as it does after a slide is moved.
+function makePptx(
+	slides: Record<number, { text: string; notes?: string }>,
+	order: number[]
+): Uint8Array {
+	const files: Record<string, Uint8Array> = {};
+	const ids = order.map((n, i) => `<p:sldId id="${256 + i}" r:id="rId${n}"/>`).join('');
+	files['ppt/presentation.xml'] = strToU8(
+		`<p:presentation xmlns:p="p" xmlns:r="r"><p:sldIdLst>${ids}</p:sldIdLst></p:presentation>`
+	);
+	files['ppt/_rels/presentation.xml.rels'] = strToU8(
+		`<Relationships>${order.map((n) => `<Relationship Id="rId${n}" Type="${REL}/slide" Target="slides/slide${n}.xml"/>`).join('')}</Relationships>`
+	);
+	for (const [n, s] of Object.entries(slides)) {
+		const paras = s.text
+			.split('\n')
+			.map((line) => `<a:p><a:r><a:t>${line}</a:t></a:r></a:p>`)
+			.join('');
+		files[`ppt/slides/slide${n}.xml`] = strToU8(
+			`<p:sld><p:sp><p:txBody>${paras}</p:txBody></p:sp></p:sld>`
+		);
+		if (s.notes) {
+			files[`ppt/slides/_rels/slide${n}.xml.rels`] = strToU8(
+				`<Relationships><Relationship Id="rId9" Type="${REL}/notesSlide" Target="../notesSlides/notesSlide${n}.xml"/></Relationships>`
+			);
+			files[`ppt/notesSlides/notesSlide${n}.xml`] = strToU8(
+				`<p:notes><p:sp><p:nvSpPr><p:ph type="sldImg"/></p:nvSpPr></p:sp>` +
+					`<p:sp><p:nvSpPr><p:nvPr><p:ph type="body" idx="1"/></p:nvPr></p:nvSpPr><p:txBody><a:p><a:r><a:t>${s.notes}</a:t></a:r></a:p></p:txBody></p:sp>` +
+					`<p:sp><p:nvSpPr><p:ph type="sldNum"/></p:nvSpPr><p:txBody><a:p><a:r><a:t>99</a:t></a:r></a:p></p:txBody></p:sp></p:notes>`
+			);
+		}
+	}
+	return zipSync(files);
+}
+
+console.log('\ndocument types');
+{
+	check('docx is media', mediaTypeOf('a/brief.docx') === DOCX_TYPE);
+	check('pptx is media', mediaTypeOf('a/deck.pptx') === PPTX_TYPE);
+	check('macro-enabled decks are refused', mediaTypeOf('a/deck.pptm') === undefined);
+	check(
+		'pdf, docx, pptx are text-extractable',
+		['application/pdf', DOCX_TYPE, PPTX_TYPE].every(isTextExtractable)
+	);
+	check('images are not text-extractable', !isTextExtractable('image/png'));
+	check(
+		'documents are not embeddable',
+		!isEmbeddable('a/deck.pptx') && !isEmbeddable('a/brief.docx')
+	);
+}
+
+console.log('\ndocument text: pdf');
+{
+	const doc = await extractDocumentText(
+		makePdf(['Hello page one', '', 'Third page here']),
+		'application/pdf'
+	);
+	check(
+		'pdf: one part per page',
+		doc.unit === 'page' && doc.parts.length === 3,
+		JSON.stringify(doc)
+	);
+	check(
+		'pdf: page text in order',
+		doc.parts[0] === 'Hello page one' && doc.parts[2] === 'Third page here'
+	);
+	check('pdf: an empty page stays a page', doc.parts[1] === '');
+	let threw = '';
+	await extractDocumentText(strToU8('not a pdf'), 'application/pdf').catch(
+		(e) => (threw = String(e))
+	);
+	check('pdf: garbage throws rather than returning nothing', threw !== '');
+}
+
+console.log('\ndocument text: docx');
+{
+	const doc = await extractDocumentText(makeDocx(['First &amp; foremost', 'Second']), DOCX_TYPE);
+	check(
+		'docx: paragraphs, entities decoded',
+		doc.unit === 'section' && doc.parts[0] === 'First & foremost\n\nSecond',
+		JSON.stringify(doc)
+	);
+	const long = await extractDocumentText(
+		makeDocx(Array.from({ length: 30 }, (_, i) => `P${i} ${'x'.repeat(300)}`)),
+		DOCX_TYPE
+	);
+	check(
+		'docx: long text cut into sections at paragraph boundaries',
+		long.parts.length > 1 && long.parts.every((p) => p.startsWith('P'))
+	);
+	let threw = '';
+	await extractDocumentText(zipSync({ 'other.xml': strToU8('<x/>') }), DOCX_TYPE).catch(
+		(e) => (threw = String(e))
+	);
+	check('docx: a zip that is not a Word file says so', threw.includes('word/document.xml'), threw);
+	// A zip bomb: 20 MiB of zeros compresses to a few KB.
+	const bomb = zipSync({ 'word/document.xml': new Uint8Array(20 * 1024 * 1024) });
+	threw = '';
+	await extractDocumentText(bomb, DOCX_TYPE).catch((e) => (threw = String(e)));
+	check(
+		'docx: an entry that inflates past the cap is refused before inflating',
+		bomb.length < 100_000 && threw.includes('too large'),
+		threw
+	);
+}
+
+console.log('\ndocument text: pptx');
+{
+	const deck = makePptx(
+		{
+			1: { text: 'Title slide' },
+			2: { text: 'Moved slide\nSecond line', notes: 'Say this out loud' },
+			3: { text: 'Closing' }
+		},
+		[1, 3, 2]
+	);
+	const doc = await extractDocumentText(deck, PPTX_TYPE);
+	check(
+		'pptx: one part per slide',
+		doc.unit === 'slide' && doc.parts.length === 3,
+		JSON.stringify(doc)
+	);
+	check(
+		'pptx: presentation order, not file numbering',
+		doc.parts[1] === 'Closing' && doc.parts[2].startsWith('Moved slide\nSecond line')
+	);
+	check(
+		'pptx: speaker notes body included',
+		doc.parts[2].includes('Speaker notes:\nSay this out loud')
+	);
+	check('pptx: notes placeholders (slide number) excluded', !doc.parts[2].includes('99'));
+	check('entities: numeric and named', decodeXmlEntities('&#65;&#x42;&lt;&apos;') === "AB<'");
+}
+
+console.log('\nchoosing pages');
+{
+	const r = (spec: string | undefined, total: number) =>
+		JSON.stringify(parsePartRange(spec, total));
+	check('omitted means all', r(undefined, 5) === '{"start":0,"end":5}');
+	check('a single page', r('3', 5) === '{"start":2,"end":3}');
+	check('a range', r('2-4', 5) === '{"start":1,"end":4}');
+	check('open-ended', r('4-', 5) === '{"start":3,"end":5}');
+	check('clamped to the end', r('4-99', 5) === '{"start":3,"end":5}');
+	check('zero refused', 'error' in parsePartRange('0', 5));
+	check('backwards refused', 'error' in parsePartRange('4-2', 5));
+	check('past the end refused', 'error' in parsePartRange('6', 5));
+	check('words refused', 'error' in parsePartRange('first', 5));
+
+	const doc = { unit: 'page' as const, parts: ['a'.repeat(60), 'b'.repeat(60), 'c'.repeat(60)] };
+	const s = sliceDocument(doc, { start: 0, end: 3 }, 160);
+	check(
+		'slice: stops at the budget and says where to continue',
+		s.first === 1 && s.last === 2 && s.next === '3-',
+		JSON.stringify(s)
+	);
+	check(
+		'slice: parts are numbered',
+		s.text.includes('--- Page 1 ---') && s.text.includes('--- Page 2 ---')
+	);
+	const bounded = sliceDocument(doc, { start: 0, end: 2 }, 100);
+	check(
+		'slice: continuation keeps the requested end',
+		bounded.next === '2-2',
+		JSON.stringify(bounded)
+	);
+	const huge = sliceDocument(
+		{ unit: 'slide', parts: ['z'.repeat(500)] },
+		{ start: 0, end: 1 },
+		100
+	);
+	check(
+		'slice: one oversized part is cut, never skipped',
+		huge.last === 1 && huge.text.includes('[cut') && !huge.next
+	);
+}
+
+// ---------- signed links ----------
+
+console.log('\nsigned file links');
+const linkKey = await assetLinkKey('test-secret');
+{
+	const t = await mintAssetToken(linkKey, { brainId: 'b1', path: 'wiki/a.pdf', exp: 2000 });
+	const ok = await verifyAssetToken(linkKey, t, 1000);
+	check(
+		'a token round-trips',
+		ok.ok && ok.claim.path === 'wiki/a.pdf' && ok.claim.brainId === 'b1'
+	);
+	const expired = await verifyAssetToken(linkKey, t, 2000);
+	check('an expired token says so', !expired.ok && expired.reason === 'expired');
+	const other = await verifyAssetToken(await assetLinkKey('other-secret'), t, 1000);
+	check('another secret does not verify it', !other.ok && other.reason === 'invalid');
+	const [body, sig] = t.split('.');
+	const forgedBody = btoa(JSON.stringify({ b: 'b1', p: 'wiki/secret.pdf', e: 2000 }))
+		.replace(/\+/g, '-')
+		.replace(/\//g, '_')
+		.replace(/=+$/, '');
+	check(
+		'a changed path does not verify',
+		!(await verifyAssetToken(linkKey, `${forgedBody}.${sig}`, 1000)).ok
+	);
+	check('junk does not verify', !(await verifyAssetToken(linkKey, `${body}`, 1000)).ok);
+	const issued = await issueAssetLink(
+		{ base: 'https://brain.example.com/', key: linkKey },
+		'b1',
+		'wiki/assets/Q3 plan.pdf',
+		1000
+	);
+	check(
+		'a link is origin + /files/ + token + readable name',
+		issued.url.startsWith('https://brain.example.com/files/') &&
+			issued.url.endsWith('/Q3%20plan.pdf'),
+		issued.url
+	);
+	check(
+		'a link expires after the TTL',
+		issued.expiresAt === new Date((1000 + ASSET_LINK_TTL_SECONDS) * 1000).toISOString()
+	);
+}
+
+console.log('\nserving a signed link');
+{
+	const pdf = makePdf(['Signed']);
+	const files: Record<string, Uint8Array> = {
+		'wiki/assets/plan.pdf': pdf,
+		'wiki/assets/deck.pptx': strToU8('PK'),
+		'wiki/assets/logo.svg': strToU8('<svg/>'),
+		'raw/secret.pdf': pdf
+	};
+	const config = {
+		paths: parsePaths({ contentRoots: ['wiki'], sourceRoots: ['raw'], logPath: '' })
+	};
+	const open = async (brainId: string) =>
+		brainId !== 'b1'
+			? null
+			: {
+					repoArgs: { owner: 'o', repo: 'r' },
+					config,
+					read: async (_r: unknown, path: string) =>
+						files[path]
+							? { contentBase64: base64FromBytes(files[path]), sha: 'x', size: files[path].length }
+							: null
+				};
+	const serve = async (path: string, now = 1000, brainId = 'b1') => {
+		const t = await mintAssetToken(linkKey, { brainId, path, exp: 1000 + ASSET_LINK_TTL_SECONDS });
+		return serveAssetLink(`/files/${t}/${path.split('/').pop()}`, linkKey, now, open as never);
+	};
+
+	const res = await serve('wiki/assets/plan.pdf');
+	const bytes = new Uint8Array(await res.arrayBuffer());
+	check('a live link serves the bytes', res.status === 200 && bytes.length === pdf.length);
+	check(
+		'a pdf opens inline in the browser',
+		res.headers.get('content-disposition')?.startsWith('inline;') === true
+	);
+	check(
+		'a pdf carries no sandbox CSP (it would block the viewer)',
+		!res.headers.has('content-security-policy')
+	);
+	check('nosniff on everything', res.headers.get('x-content-type-options') === 'nosniff');
+	const deck = await serve('wiki/assets/deck.pptx');
+	check(
+		'a deck downloads',
+		deck.headers.get('content-disposition')?.startsWith('attachment;') === true
+	);
+	const svg = await serve('wiki/assets/logo.svg');
+	check(
+		'an svg downloads and is sandboxed',
+		svg.headers.get('content-disposition')?.startsWith('attachment;') === true &&
+			(svg.headers.get('content-security-policy') ?? '').startsWith('sandbox')
+	);
+	check(
+		'expired is 410',
+		(await serve('wiki/assets/plan.pdf', 1000 + ASSET_LINK_TTL_SECONDS)).status === 410
+	);
+	check(
+		'outside the content roots is 404, even signed',
+		(await serve('raw/secret.pdf')).status === 404
+	);
+	check('a missing file is 404', (await serve('wiki/assets/gone.pdf')).status === 404);
+	check('a removed brain is 404', (await serve('wiki/assets/plan.pdf', 1000, 'b2')).status === 404);
+	check(
+		'a bad token is 404',
+		(await serveAssetLink('/files/abc.def/plan.pdf', linkKey, 1000, open as never)).status === 404
+	);
+}
+
+console.log('\nread_media: documents and links');
+{
+	type Block = { type: string; text?: string; uri?: string; name?: string };
+	type Result = {
+		isError?: boolean;
+		content: Block[];
+		structuredContent?: Record<string, unknown>;
+	};
+	const handlers = new Map<string, (args: Record<string, unknown>) => Promise<Result>>();
+	const server = {
+		registerTool: (name: string, _cfg: unknown, handler: never) => handlers.set(name, handler)
+	} as never;
+	const config = {
+		paths: parsePaths({ contentRoots: ['wiki'], sourceRoots: ['raw'], logPath: '' })
+	};
+	// 16 pages of 50 short lines, about 48k characters: over the 40k reply budget.
+	const pages = Array.from({ length: 16 }, (_, i) =>
+		Array.from({ length: 50 }, (_, k) => `Page ${i + 1} line ${k + 1} ${'a'.repeat(45)}`).join('\n')
+	);
+	const files: Record<string, Uint8Array> = {
+		'wiki/assets/contract.pdf': makePdf(pages),
+		'wiki/assets/deck.pptx': makePptx({ 1: { text: 'Hello deck', notes: 'n' } }, [1]),
+		'wiki/assets/scan.pdf': makePdf(['', '']),
+		'wiki/assets/logo.png': Uint8Array.from(atob(PNG_1PX), (c) => c.charCodeAt(0))
+	};
+	const store = {
+		readBinary: async (_r: unknown, path: string) =>
+			files[path]
+				? { contentBase64: base64FromBytes(files[path]), sha: 'x', size: files[path].length }
+				: null
+	};
+	const ctx = async () => ({ store, repoArgs: {}, config, brainId: 'b1' }) as never;
+	registerMediaTools(server, ctx, {
+		assetLinks: async () => ({ base: 'https://brain.example.com', key: linkKey }),
+		now: () => 1000
+	});
+	const read = handlers.get('read_media')!;
+
+	const r = await read({ path: 'wiki/assets/contract.pdf' });
+	const link = r.content.find((b) => b.type === 'resource_link');
+	const text = r.content.find((b) => b.type === 'text')?.text ?? '';
+	check(
+		'a pdf read leads with a resource_link to the signed URL',
+		r.content[0]?.type === 'resource_link' && !!link?.uri?.includes('/files/'),
+		JSON.stringify(r.content[0])
+	);
+	check(
+		'the link verifies and names the file',
+		link?.name === 'contract.pdf' &&
+			(await verifyAssetToken(linkKey, link!.uri!.split('/files/')[1].split('/')[0], 1000)).ok
+	);
+	const stoppedAt = Number(/pages 1-(\d+) of 16\./.exec(text)?.[1] ?? 0);
+	check(
+		'the text says where it starts and the total',
+		stoppedAt > 1 && stoppedAt < 16,
+		text.slice(0, 200)
+	);
+	check('the text carries page content', text.includes('--- Page 1 ---\nPage 1 line 1 aaa'));
+	check('a long pdf says how to continue', text.includes(`pages: "${stoppedAt + 1}-"`));
+	check(
+		'the URL is restated in text for hosts that drop resource_link',
+		text.includes(link?.uri ?? '-')
+	);
+	check(
+		'structuredContent carries the link, not the text',
+		r.structuredContent?.downloadUrl === link?.uri &&
+			!JSON.stringify(r.structuredContent).includes('Page 1 line')
+	);
+
+	const rest = await read({ path: 'wiki/assets/contract.pdf', pages: `${stoppedAt + 1}-` });
+	const rt = rest.content.find((b) => b.type === 'text')?.text ?? '';
+	check(
+		'pages picks up where it stopped',
+		rt.includes(`pages ${stoppedAt + 1}-16 of 16`) &&
+			rt.includes('--- Page 16 ---') &&
+			!rt.includes('Continue with'),
+		rt.slice(0, 200)
+	);
+	const bad = await read({ path: 'wiki/assets/contract.pdf', pages: '17' });
+	check('pages past the end is an error', bad.isError === true);
+
+	const deck = await read({ path: 'wiki/assets/deck.pptx' });
+	const dt = deck.content.find((b) => b.type === 'text')?.text ?? '';
+	check(
+		'a deck reads by slide',
+		dt.includes('slides 1-1 of 1') && dt.includes('--- Slide 1 ---\nHello deck'),
+		dt
+	);
+
+	const scan = await read({ path: 'wiki/assets/scan.pdf' });
+	const st = scan.content.find((b) => b.type === 'text')?.text ?? '';
+	check(
+		'a scanned pdf says it has no text layer',
+		st.includes('has a text layer (it is probably scanned)'),
+		st
+	);
+
+	const app = await read({ path: 'wiki/assets/contract.pdf', include_data: true });
+	const at = app.content.find((b) => b.type === 'text')?.text ?? '';
+	check(
+		'the app call skips extraction',
+		!at.includes('--- Page') && typeof app.structuredContent?.dataUri === 'string'
+	);
+
+	const img = await read({ path: 'wiki/assets/logo.png' });
+	check(
+		'an image still returns the picture, plus the link',
+		img.content.some((b) => b.type === 'image') && img.content[0].type === 'resource_link'
+	);
+
+	const plainHandlers = new Map<string, (args: Record<string, unknown>) => Promise<Result>>();
+	registerMediaTools(
+		{ registerTool: (n: string, _c: unknown, h: never) => plainHandlers.set(n, h) } as never,
+		ctx
+	);
+	const nolink = await plainHandlers.get('read_media')!({ path: 'wiki/assets/contract.pdf' });
+	check(
+		'without an issuer: no link, the text still comes back',
+		!nolink.content.some((b) => b.type === 'resource_link') &&
+			(nolink.content[0].text ?? '').includes('--- Page 1 ---')
 	);
 }
 

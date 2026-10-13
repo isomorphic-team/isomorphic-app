@@ -102,7 +102,9 @@ const brainAssets: Record<string, Record<string, { data: string; mimeType: strin
 	// shows an image immediately; Acme gets one so switching brains proves attachments
 	// are per-brain rather than global.
 	'personal-wiki-0a1b2c': {
-		[PERSONAL_ASSET_PATH]: { data: SAMPLE_PNG, mimeType: 'image/png' }
+		[PERSONAL_ASSET_PATH]: { data: SAMPLE_PNG, mimeType: 'image/png' },
+		// Not a parseable PDF: the harness never extracts text, it only lists and serves.
+		'wiki/concepts/assets/brief.pdf': { data: btoa('%PDF-1.4 sample'), mimeType: 'application/pdf' }
 	},
 	'acme-wiki-1b2c3d': {
 		'wiki/programs/assets/onboarding-flow.png': { data: SAMPLE_PNG, mimeType: 'image/png' }
@@ -701,7 +703,9 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
 					path,
 					mimeType: asset.mimeType,
 					size: Math.floor((asset.data.length * 3) / 4),
-					...(includeData ? { dataUri: `data:${asset.mimeType};base64,${asset.data}` } : {})
+					...(includeData ? { dataUri: `data:${asset.mimeType};base64,${asset.data}` } : {}),
+					// The server's signed link (src/lib/asset-link.ts), issued on every read.
+					downloadUrl: `https://brain.example.com/files/token/${path.split('/').pop()}`
 				}
 			};
 		}
