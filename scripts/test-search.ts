@@ -610,15 +610,31 @@ function seed(pages: { path: string; title: string | null; content: string }[]) 
 		...CORPUS,
 		{ path: 'wiki/shouting.md', title: null, content: 'REFERRAL FEE schedule, in CAPITALS.' },
 		{ path: 'wiki/literal.md', title: 'Discount', content: 'The discount is 50% for source_key.' },
-		{ path: 'wiki/other.md', title: 'Discount notes', content: 'The discount is 50 percent.' }
+		{ path: 'wiki/other.md', title: 'Discount notes', content: 'The discount is 50 percent.' },
+		{
+			path: 'wiki/commitments.md',
+			title: 'Commitments',
+			content: 'What did we commit to this month that has not moved? The REFERRAL launch.'
+		},
+		{
+			path: 'wiki/ids.md',
+			title: null,
+			content:
+				'Key: abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyz0123. 了了了了了了了了了了了了了了了了了了'
+		}
 	];
 	seed(pages);
+	// The last three build patterns past D1's 50-byte LIKE limit: the whole question as
+	// the phrase, a term longer than the limit, and a fallback phrase of multibyte text.
 	for (const query of [
 		'referral fee',
 		'what is our referral fee',
 		'parking fee',
 		'50%',
-		'source_key'
+		'source_key',
+		'What did we commit to this month that has not moved?',
+		'abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyz0123',
+		'了了了了了了了了了了了了了了了了了了'
 	]) {
 		const q = tokenizeQuery(query);
 		const fromSql = await indexSignals(db, BRAIN, q, undefined);
@@ -634,6 +650,16 @@ function seed(pages: { path: string; title: string | null; content: string }[]) 
 			`sql ${sql.join(' ')} | content ${content.join(' ')}`
 		);
 	}
+
+	const long = tokenizeQuery('What did we commit to this month that has not moved?');
+	const scoped = await indexSignals(db, BRAIN, long, 'wiki/');
+	check(
+		'a long question finds its exact page, phrase included',
+		scoped.some((sig) => sig.path === 'wiki/commitments.md' && sig.phrase),
+		JSON.stringify(scoped)
+	);
+	const deep = await indexSignals(db, BRAIN, long, 'wiki/' + 'a-very-long-folder-name/'.repeat(3));
+	check('a folder prefix past the LIKE limit narrows instead of failing', deep.length === 0);
 }
 
 // ------------------------------------------------------------ across brains ----
