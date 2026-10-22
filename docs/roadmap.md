@@ -80,6 +80,13 @@ Order:
 The deterministic detectors, the findings queue and `resolve` stay in the AGPL core; the
 model stages, consolidation and the gateway are in `ee/`.
 
+# TODO: many agents, many brains
+
+[`design/multi-agent-surface.md`](design/multi-agent-surface.md). Four parts, each shippable
+alone: a default brain per connection instead of per user (today one agent's `switch_brain`
+moves every other agent's default), agent attribution in commits and `view_activity`, a
+`view_activity` feed across all of a person's brains, and handoff notes as a brain convention.
+
 # TODO: honor hostContext.safeAreaInsets in the app
 
 The `ui://` resource now declares `_meta.ui.prefersBorder: false`, because the app draws
