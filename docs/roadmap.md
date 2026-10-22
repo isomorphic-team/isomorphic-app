@@ -25,7 +25,9 @@ One review subsystem with two consumers. The **guard** checks every write before
 against the brain's data policy. **Consolidation** sweeps a brain after content lands for
 duplicates, contradictions and stale derived pages. They share a model gateway, one findings
 queue, rulebooks written as brain pages, and an audit log, so a user resolves a flagged write
-and a proposed merge in the same place.
+and a proposed merge in the same place. Designs: [`design/consistency-checks.md`](design/consistency-checks.md)
+(consolidation) and [`design/privacy-checks.md`](design/privacy-checks.md) (what the guard
+leaves open).
 
 Settled so far:
 
