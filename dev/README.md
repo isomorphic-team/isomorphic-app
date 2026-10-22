@@ -288,7 +288,7 @@ For Linux baselines from a Mac, run it in the image CI itself runs the UI job in
 the fonts and the browser build are the same ones that will compare them:
 
 ```sh
-docker run --rm -v "$PWD":/w -v /w/node_modules -w /w mcr.microsoft.com/playwright:v1.63.0-noble \
+docker run --rm -v "$PWD":/w -v /w/node_modules -w /w mcr.microsoft.com/playwright:v1.64.1-noble \
   sh -c "corepack enable && pnpm install --frozen-lockfile --store-dir /tmp/pnpm-store && pnpm ui:baselines"
 ```
 
