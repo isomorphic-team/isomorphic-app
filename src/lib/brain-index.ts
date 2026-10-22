@@ -909,27 +909,22 @@ export async function indexSignals(
 	prefix: string | undefined
 ): Promise<PageSignal[]> {
 	// One bound parameter per term, reused between the SELECT list and the WHERE, so a
-	// term is escaped exactly once. escapeLike keeps a query's own % or _ literal.
+	// term is escaped exactly once.
 	const binds: unknown[] = [brainId];
 	const selects: string[] = [];
 	const conds: string[] = [];
 	for (const term of q.terms) {
-		binds.push(`%${escapeLike(term)}%`);
-		const p = `?${binds.length}`;
-		selects.push(`(content LIKE ${p} ESCAPE '\\') AS t${selects.length}`);
-		conds.push(`content LIKE ${p} ESCAPE '\\'`);
+		const has = containsSql('content', term, binds);
+		selects.push(`(${has}) AS t${selects.length}`);
+		conds.push(has);
 	}
-	binds.push(`%${escapeLike(q.phrase)}%`);
-	selects.push(`(content LIKE ?${binds.length} ESCAPE '\\') AS ph`);
+	selects.push(`(${containsSql('content', q.phrase, binds)}) AS ph`);
 
 	// OR, not AND: a page holding some of the terms is a worse match, not a non-match,
 	// and the scorer is what decides how much worse. ANDing here would reintroduce the
 	// defect this replaces — an empty result for a query the brain can nearly answer.
 	let where = `brain_id = ?1 AND (${conds.join(' OR ')})`;
-	if (prefix) {
-		binds.push(`${escapeLike(prefix)}%`);
-		where += ` AND path LIKE ?${binds.length} ESCAPE '\\'`;
-	}
+	if (prefix) where += ` AND ${startsWithSql('path', prefix, binds)}`;
 
 	const rows = await db
 		.prepare(`SELECT path, title, ${selects.join(', ')} FROM brain_pages WHERE ${where}`)
@@ -1034,6 +1029,37 @@ export async function searchBrains(
 		terms: results[0]?.result.terms ?? tokenizeQuery(query).terms,
 		perBrain: new Map(results.map((r) => [r.brainId, r.result]))
 	};
+}
+
+// D1 rejects a LIKE pattern longer than this many bytes ("LIKE or GLOB pattern too
+// complex"), whatever the query. The local shim sets the same limit.
+export const D1_LIKE_PATTERN_LIMIT = 50;
+
+const fitsLike = (pattern: string) =>
+	new TextEncoder().encode(pattern).length <= D1_LIKE_PATTERN_LIMIT;
+
+// SQL that is true when `column` contains `needle`, binding the needle onto `binds`.
+// LIKE where the pattern fits D1's limit; otherwise instr over lower(), which has no
+// limit and folds case the same way LIKE does (ASCII only).
+function containsSql(column: string, needle: string, binds: unknown[]): string {
+	const pattern = `%${escapeLike(needle)}%`;
+	if (fitsLike(pattern)) {
+		binds.push(pattern);
+		return `${column} LIKE ?${binds.length} ESCAPE '\\'`;
+	}
+	binds.push(needle);
+	return `instr(lower(${column}), lower(?${binds.length})) > 0`;
+}
+
+// SQL that is true when `column` starts with `prefix`, under the same limit.
+function startsWithSql(column: string, prefix: string, binds: unknown[]): string {
+	const pattern = `${escapeLike(prefix)}%`;
+	if (fitsLike(pattern)) {
+		binds.push(pattern);
+		return `${column} LIKE ?${binds.length} ESCAPE '\\'`;
+	}
+	binds.push(prefix);
+	return `instr(lower(${column}), lower(?${binds.length})) = 1`;
 }
 
 // Escape LIKE wildcards so a query containing % or _ is matched literally.

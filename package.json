@@ -88,19 +88,19 @@
 	"dependencies": {
 		"@auth/core": "^0.41.3",
 		"@auth/d1-adapter": "^1.11.3",
-		"@cloudflare/workers-oauth-provider": "^1.1.0",
-		"@hono/node-server": "^2.1.1",
-		"@modelcontextprotocol/client": "2.1.0",
-		"@modelcontextprotocol/core": "2.1.0",
+		"@cloudflare/workers-oauth-provider": "^1.2.3",
+		"@hono/node-server": "^2.1.5",
+		"@modelcontextprotocol/client": "2.3.1",
+		"@modelcontextprotocol/core": "2.3.1",
 		"@modelcontextprotocol/ext-apps": "^2.0.3",
-		"@modelcontextprotocol/server": "2.1.0",
+		"@modelcontextprotocol/server": "2.3.1",
 		"fflate": "^0.8.3",
-		"hono": "^4.13.9",
-		"marked": "^18.0.14",
+		"hono": "^4.13.13",
+		"marked": "^18.1.1",
 		"octokit": "^5.0.5",
 		"open": "^11.0.4",
-		"unpdf": "^1.8.1",
-		"zod": "^4.6.5"
+		"unpdf": "^1.9.0",
+		"zod": "^4.6.7"
 	},
 	"devDependencies": {
 		"@cloudflare/workers-types": "^5.20261016.1",
