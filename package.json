@@ -103,19 +103,19 @@
 		"zod": "^4.6.7"
 	},
 	"devDependencies": {
-		"@cloudflare/workers-types": "^5.20260927.1",
-		"@playwright/test": "^1.63.0",
+		"@cloudflare/workers-types": "^5.20261016.1",
+		"@playwright/test": "^1.64.1",
 		"@tailwindcss/cli": "^4.3.3",
-		"@types/node": "^26.6.3",
+		"@types/node": "^26.6.5",
 		"class-variance-authority": "^0.7.1",
 		"clsx": "^2.1.1",
 		"esbuild": "^0.28.2",
-		"lucide-preact": "^1.48.0",
-		"markdown-it": "^15.0.2",
+		"lucide-preact": "^1.58.0",
+		"markdown-it": "^15.0.3",
 		"preact": "^10.29.8",
-		"prettier": "^3.9.9",
+		"prettier": "^3.9.10",
 		"prosemirror-commands": "^1.7.2",
-		"prosemirror-history": "^1.5.0",
+		"prosemirror-history": "^1.5.1",
 		"prosemirror-inputrules": "^1.5.1",
 		"prosemirror-keymap": "^1.2.3",
 		"prosemirror-markdown": "^1.13.8",
@@ -128,11 +128,11 @@
 		"tailwindcss": "^4.3.3",
 		"tsx": "^4.23.15",
 		"typescript": "^7.0.2",
-		"wrangler": "^4.142.0"
+		"wrangler": "^4.151.0"
 	},
 	"pnpm": {
 		"overrides": {
-			"markdown-it": "^15.0.2"
+			"markdown-it": "^15.0.3"
 		},
 		"onlyBuiltDependencies": [
 			"esbuild",
