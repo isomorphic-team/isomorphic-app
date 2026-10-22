@@ -26,6 +26,9 @@ ORDERS or DROPS a result is in the pure `src/lib/search.ts` (`pnpm test:search`)
 - **`%` and `_` stay inside the token** and never act as LIKE wildcards at either layer; a lone
   one survives the minimum length (`isUsableTerm`). `-` splits, so "fine grained" answers
   `fine-grained`.
+- **D1 rejects a LIKE pattern over 50 bytes** (`D1_LIKE_PATTERN_LIMIT`). Phase 1 builds every
+  pattern through `containsSql` / `startsWithSql`, which fall back to `instr(lower(...))` past
+  the limit; the local D1 shim enforces the same limit so `test:search` sees it.
 - **The response says what it left out** (`elisionNote`) and which terms it searched.
 - **FTS5 is available in D1 and deliberately not used:** a virtual table disables
   `wrangler d1 export` for the whole database (which holds org and user rows), and BM25 cannot

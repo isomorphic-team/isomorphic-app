@@ -11,6 +11,7 @@
 import { DatabaseSync } from 'node:sqlite';
 import { readFileSync, readdirSync } from 'node:fs';
 import type { D1Database } from '@cloudflare/workers-types';
+import { D1_LIKE_PATTERN_LIMIT } from '../lib/brain-index.ts';
 
 const MIGRATIONS_DIR = new URL('../../migrations/', import.meta.url);
 
@@ -83,6 +84,8 @@ export interface LocalDb {
 // across restarts, which is what the local runtime does.
 export function localD1(path = ':memory:'): LocalDb {
 	const sqlite = new DatabaseSync(path);
+	// D1's cap, so a query that D1 rejects fails here too.
+	sqlite.limits.likePatternLength = D1_LIKE_PATTERN_LIMIT;
 	applyMigrations(sqlite);
 
 	function statement(sql: string, params: unknown[] = []) {
