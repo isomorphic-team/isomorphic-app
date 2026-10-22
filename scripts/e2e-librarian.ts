@@ -445,6 +445,7 @@ try {
 		(t) => !!t && /type:/.test(t)
 	);
 	check('type: lands in frontmatter', /^type:\s*Vendor$/m.test(swoogo ?? ''), swoogo ?? '');
+	await assertOneCommit('write_page with a type', before);
 
 	// A type set on a later update must merge, not duplicate the key.
 	r = await call('write_page', { path: 'wiki/vendors/swoogo.md', type: 'Event Platform' });

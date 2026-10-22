@@ -213,7 +213,7 @@ async function resolveRows(spec: ViewSpec, pagePath: string, ctx: ViewContext): 
 // ---------- rendering ----------
 
 function escapeCell(s: string): string {
-	return s.replace(/\|/g, '\\|').replace(/\r?\n/g, ' ');
+	return s.replace(/\\/g, '\\\\').replace(/\|/g, '\\|').replace(/\r?\n/g, ' ');
 }
 
 // A markdown link to a row's page. CommonMark ends a bare link destination at

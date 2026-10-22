@@ -315,6 +315,39 @@ Body text.
 	check('block scalar: lines preserved', round.includes('  line two'), round);
 }
 
+{
+	// A double-quoted YAML scalar treats `\` as an escape, so any other reader turns
+	// `C:\temp` into a tab and a trailing `\` into an unterminated string.
+	const fm = {
+		title: 'Notes: C:\\temp',
+		trail: 'ends with: \\',
+		said: 'she said "hi": \\o/',
+		tags: ['a: \\b']
+	};
+	const md = withFrontmatter(fm, 'Body.');
+	check('backslash fm: escaped in a quoted scalar', md.includes('title: "Notes: C:\\\\temp"'), md);
+	check('backslash fm: trailing backslash escaped', md.includes('trail: "ends with: \\\\"'), md);
+	check(
+		'backslash fm: quote and backslash both escaped',
+		md.includes('said: "she said \\"hi\\": \\\\o/"'),
+		md
+	);
+	check('backslash fm: list item escaped', md.includes('  - "a: \\\\b"'), md);
+	const { frontmatter } = parseFrontmatter(md);
+	check(
+		'backslash fm: round-trips',
+		JSON.stringify(frontmatter) === JSON.stringify(fm),
+		JSON.stringify(frontmatter)
+	);
+	// A file written before backslashes were escaped still reads as written.
+	const legacy = parseFrontmatter('---\ntitle: "Notes: C:\\temp"\n---\n\nBody.\n');
+	check(
+		'backslash fm: legacy unescaped value unchanged',
+		legacy.frontmatter?.title === 'Notes: C:\\temp',
+		String(legacy.frontmatter?.title)
+	);
+}
+
 // ---------- page title: ONE resolver, H1 included ----------
 //
 // Redundancy #1: a page states its name three ways (frontmatter, body H1, filename)
