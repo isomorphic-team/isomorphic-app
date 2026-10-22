@@ -3,11 +3,13 @@
 Status: **proposed** (2026-10-13). Nothing below is built.
 
 This is the consolidation half of the roadmap's "brain review" (steps 2 and 5).
+
 - **Part 1** adds two computed checks to the core consolidation engine in `src/lib/consolidate.ts`.
 - **Part 2** is model-powered consolidation in `ee/`, through the model gateway.
 - **Part 3** covers consolidation findings in the unified findings queue and the Review screen.
 
 Related:
+
 - [`consolidation-loop.md`](./consolidation-loop.md): tensions, `validate`, `resolve`, and the invariants this design keeps.
 - [`open-source-boundary.md`](./open-source-boundary.md): what goes in `ee/`, and the rule for sending content to a model provider.
 - The companion [`privacy-checks.md`](./privacy-checks.md): the data-policy guard, and what consolidation may send to a model and write into a finding.
@@ -25,13 +27,13 @@ Contradictions are the common problem and the one this design is mostly about. D
 
 Three private team brains, each from a local snapshot. Nothing was written to any of them.
 
-| | Brain A | Brain B | Brain C |
-|---|---|---|---|
-| Shape | 1,100 pages, adopted from a pre-existing knowledge base | 173 pages, event operations | 82 pages, a consulting engagement |
-| Candidate pairs | 3,212 | 752 | 306 |
-| `near-duplicate` hits | 14,725 in one folder, all template noise | 6, all template | 1, a meeting note and its profile |
-| Entity duplicates | 3 | 0 | 0 |
-| Contradictions | ~300 (9%, weighted sample) | at least 44 (6%) | at least 35 (11%) |
+|                       | Brain A                                                 | Brain B                     | Brain C                           |
+| --------------------- | ------------------------------------------------------- | --------------------------- | --------------------------------- |
+| Shape                 | 1,100 pages, adopted from a pre-existing knowledge base | 173 pages, event operations | 82 pages, a consulting engagement |
+| Candidate pairs       | 3,212                                                   | 752                         | 306                               |
+| `near-duplicate` hits | 14,725 in one folder, all template noise                | 6, all template             | 1, a meeting note and its profile |
+| Entity duplicates     | 3                                                       | 0                           | 0                                 |
+| Contradictions        | ~300 (9%, weighted sample)                              | at least 44 (6%)            | at least 35 (11%)                 |
 
 **Method.**
 
@@ -52,10 +54,10 @@ Three private team brains, each from a local snapshot. Nothing was written to an
 
 **Detection.** Precision and recall against the reference pair labels:
 
-| Detector | B | C |
-|---|---|---|
-| Decision model `conflict` ≥ 0.3 | 40% / 59% | 55% / 66% |
-| Small LLM conflict flag | 67% / 59% | 53% / 26% |
+| Detector                                   | B         | C         |
+| ------------------------------------------ | --------- | --------- |
+| Decision model `conflict` ≥ 0.3            | 40% / 59% | 55% / 66% |
+| Small LLM conflict flag                    | 67% / 59% | 53% / 26% |
 | **Decision model ≥ 0.2 OR small LLM flag** | 29% / 84% | 35% / 91% |
 
 - **Asking the decision model extra questions did not help.** "Is one page stale against the other" and "do they give different values for the same thing" both scored lower than the plain conflict question, alone or combined.
@@ -63,10 +65,10 @@ Three private team brains, each from a local snapshot. Nothing was written to an
 
 **Triage.** Scored against the frontier model's grades, on the pairs it graded.
 
-| Triage | B | C |
-|---|---|---|
-| Small LLM, one issue per pair | 82% / 78% | 91% / 68% |
-| Small LLM, every disagreement listed, then each decided | 70% / 98% | 74% / 90% |
+| Triage                                                                                  | B         | C         |
+| --------------------------------------------------------------------------------------- | --------- | --------- |
+| Small LLM, one issue per pair                                                           | 82% / 78% | 91% / 68% |
+| Small LLM, every disagreement listed, then each decided                                 | 70% / 98% | 74% / 90% |
 | The same, keeping claims the decision model scores ≥ 0.4 on "would a reader be misled?" | 71% / 93% | 79% / 84% |
 
 - **One issue per pair was the main source of misses.** The LLM checked one candidate difference, found it explained, and dismissed the pair while a second contradiction sat elsewhere on the pages.
@@ -90,6 +92,7 @@ Results:
   - Is every new fact on the pages?
 
   That gate was chosen on the sample it was scored on, so it still needs a held-out check.
+
 - **Claim-by-claim annotations were poor** (3 of 8 graded good).
 - **Mechanical failures seen:**
   - Edits that name text not occurring exactly once on the page (a quarter of edits in brain A, near zero in B and C).
@@ -131,24 +134,27 @@ These are pure and stay in the AGPL core. They keep invariant 1 of the consolida
 ### Part 2: model-powered consolidation in `ee/`
 
 Contradictions need a model. Since 2026-09-30, model use has a home: `ee/`, behind the `review-models` entitlement, with every request through `ee/review/gateway.ts`.
+
 - **Zero retention:** `ZDR_PROVIDER` routes only to zero-data-retention endpoints.
 - **Entitled orgs only:** a brain whose org has no entitlement runs the core unchanged.
 - **Spend cap:** a monthly cap per org, counted from the cost each response reports.
 
-
 It uses two kinds of model:
+
 - **The decision model** (Jev, through OpenRouter) for every yes/no judgment. Every gate below is a calibrated probability from it, so it is not swapped.
 - **The small LLM** wherever text must be written. **Claude Haiku 5.5 comes first**, called on the Anthropic API with the operator's Anthropic key. Luna, through OpenRouter, is the fallback.
 
 No frontier model is called.
 
 **Why Haiku first.**
+
 - It costs the same per token as Luna ($0.10 / $0.50 per million for prompts up to 100K tokens), and an operator holding Anthropic API credits pays nothing for it until they run out.
 - It has a 1M-token context, so a pair of long pages never needs cutting.
 
 **Haiku first is a gateway rule, not a consolidation rule.** The same order serves the data-policy guard's model stages (roadmap step 3): its structured-output stage writes text, so it gets Haiku first too. Its typed-decision gate stays on Jev, as consolidation's does, because the guard's severity gates are calibrated probabilities as well.
 
 **How the gateway falls back.** The gateway gains an Anthropic adapter beside the OpenRouter one, and tries Haiku first for every text-writing request. It moves a request to Luna when:
+
 - the deployment has no Anthropic key
 - the Anthropic org is not configured for zero data retention
 - Haiku returns `stop_reason: "refusal"` (it has no server-side fallback)
@@ -165,6 +171,7 @@ The run summary records which model served each request.
    - The Part 1 tensions.
 
    A full pass is admin-requested and budgeted.
+
 2. **Pre-scan.** Every candidate page is checked against the guard's detectors before anything reaches the gateway. A page with a high-severity detection (a private key, an API token, a card number) is never sent. Skipped pairs are counted in the run summary, so a gap never reads as clean ([`privacy-checks.md`](./privacy-checks.md)).
 3. **Detect.** Both models judge each pair. A pair continues if either says so: the decision model's conflict probability is at least 0.2, or the LLM flags a conflict. This is tuned for recall, and precision is triage's job.
 4. **Triage, claim by claim.**
@@ -186,16 +193,19 @@ The run summary records which model served each request.
    - **Dropped:** claims triage or the claim filter rejected.
 
 **Writes.**
+
 - An approved or auto fix lands through the `write_page` path, so it passes through `guardStore` like any other write and through the brain's configured write mode.
 - Each carries a `log.md` entry naming the finding key. Consolidation-loop invariant 7 holds: every move is reversible and logged.
 
 **Cost.**
+
 - Measured: under $1 per 1,000 candidate pairs to detect, and about $0.40 per 100 flagged pairs to triage.
 - A full pass over a 1,000-page brain costs a few dollars. An incremental run costs cents.
 - Both fit inside `DEFAULT_MONTHLY_CAP_USD`. The gateway refuses a call once the org's cap is spent, and the run records where it stopped so the next one resumes.
 - **Cost on the Anthropic path.** It is computed from the response's token usage and the model's list price, because the Anthropic API reports tokens, not dollars. Haiku 5.5's tokenizer counts about 30% more tokens than its predecessor for the same text, so estimates use its own counts. Spend paid from credits still counts toward the cap, so the cap means the same thing whichever provider served the call.
 
 **When it runs.**
+
 - **Incrementally:** on the push webhook (roadmap step 4), for pages changed since the last run.
 - **In full:** on an admin's request.
 
@@ -244,16 +254,16 @@ Roadmap step 2 extends the `validate` / `resolve` pattern into one findings queu
 
 ## Work items
 
-| Item | What | Where | Surface |
-|---|---|---|---|
-| C1 | Template-aware `near-duplicate`, scaling past `MAX_DUP_PAGES` | core | `consolidate.ts`, tests |
-| C2 | `same-identifier` tension | core | `consolidate.ts`, config field, tests |
-| C3 | Consolidation kinds in the unified findings queue, staleness, `validate` and `resolve` | core (roadmap step 2) | D1 migration, findings, tests |
-| C4 | Pipeline: candidates, pre-scan, detect, claim triage, verify, tier, through the gateway | `ee/` (roadmap step 5) | `ee/review/`, tests with a stubbed gateway |
-| C4a | Anthropic adapter in the gateway: Haiku first, Luna fallback, zero-retention declaration, cost from tokens | `ee/` | `ee/review/gateway.ts`, tests pinning the fallback order and the refusal path |
-| C5 | Claim clustering across pairs | `ee/` | pipeline, tests with a stubbed gateway |
-| C6 | Runs: webhook-triggered incremental pass, admin full pass, D1 cursor | core trigger, `ee/` work | webhook (roadmap step 4), tests |
-| C7 | Consolidation section of the Review screen, approve and dismiss | core | `ReviewView.tsx`, browser tests |
+| Item | What                                                                                                       | Where                    | Surface                                                                       |
+| ---- | ---------------------------------------------------------------------------------------------------------- | ------------------------ | ----------------------------------------------------------------------------- |
+| C1   | Template-aware `near-duplicate`, scaling past `MAX_DUP_PAGES`                                              | core                     | `consolidate.ts`, tests                                                       |
+| C2   | `same-identifier` tension                                                                                  | core                     | `consolidate.ts`, config field, tests                                         |
+| C3   | Consolidation kinds in the unified findings queue, staleness, `validate` and `resolve`                     | core (roadmap step 2)    | D1 migration, findings, tests                                                 |
+| C4   | Pipeline: candidates, pre-scan, detect, claim triage, verify, tier, through the gateway                    | `ee/` (roadmap step 5)   | `ee/review/`, tests with a stubbed gateway                                    |
+| C4a  | Anthropic adapter in the gateway: Haiku first, Luna fallback, zero-retention declaration, cost from tokens | `ee/`                    | `ee/review/gateway.ts`, tests pinning the fallback order and the refusal path |
+| C5   | Claim clustering across pairs                                                                              | `ee/`                    | pipeline, tests with a stubbed gateway                                        |
+| C6   | Runs: webhook-triggered incremental pass, admin full pass, D1 cursor                                       | core trigger, `ee/` work | webhook (roadmap step 4), tests                                               |
+| C7   | Consolidation section of the Review screen, approve and dismiss                                            | core                     | `ReviewView.tsx`, browser tests                                               |
 
 C1 and C2 stand alone and ship first. C3 is shared with the guard's own findings and belongs to roadmap step 2. C4 and C5 are the model work. C7 is where the value lands for people, because the review tier carries most of the work.
 
