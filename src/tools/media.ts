@@ -76,7 +76,7 @@ export function registerMediaTools(
 	server.registerTool(
 		'attach_media',
 		{
-			...toolAnnotations('Attach a file to the brain', 'additive'),
+			...toolAnnotations('Attach a file to the brain', 'additive', { openWorld: true }),
 			description:
 				// Self-naming and explicit about which argument belongs to whom, for the
 				// same reason read_page's description is verbose: an agent that goes
