@@ -1541,8 +1541,8 @@ const OTHER_BRAIN_PAGE = 'wiki/facilities/headquarters.md';
 const staleMode = hashMode === 'stale';
 function editPageBehindTheWidget() {
 	const pages = activePages();
+	if (!Object.hasOwn(pages, openPath)) return;
 	const md = pages[openPath];
-	if (md === undefined) return;
 	pages[openPath] = `${md}\n\nAdded by somebody else while you were reading.\n`;
 }
 if (noBrainsMode) {
