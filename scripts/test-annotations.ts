@@ -8,7 +8,7 @@
 //
 // This battery exists to catch:
 //   1. A tool listed without `annotations.title`, with one that differs from its
-//      `title`, or a write with no explicit `destructiveHint`. Checked on what a
+//      `title`, or without any of the four hints set to a boolean. Checked on what a
 //      real client receives over an in-memory transport, so the spread in
 //      `toolAnnotations` has to survive `registerAppTool` and the SDK's shaping.
 //   2. A registration site that sets a bare `title:` instead of spreading
@@ -18,7 +18,8 @@
 //      that the Node test tsconfig does not load.
 //   3. A new suite joining the scan-only set silently instead of being registered
 //      here.
-//   4. A change to the hint on the tools where it was a judgement call.
+//   4. A change to the hint on the tools where it was a judgement call, and any
+//      tool joining or leaving the open-world set.
 //   5. A widget tool (every `registerAppTool` site, in every suite) without
 //      `_meta.ui.resourceUri` naming the served app, or a plain tool carrying one.
 //      Without it a host renders nothing; with one on a plain tool, every call
@@ -76,6 +77,12 @@ console.log('\nthe rule itself');
 	check('a read carries its title in annotations', read.annotations.title === 'Read a thing');
 	check('...and the top-level title is the same string', read.title === read.annotations.title);
 	check('...and is readOnly', read.annotations.readOnlyHint === true);
+	check(
+		'...non-destructive, idempotent and closed-world, explicitly',
+		read.annotations.destructiveHint === false &&
+			read.annotations.idempotentHint === true &&
+			read.annotations.openWorldHint === false
+	);
 	check('...and passes', annotationProblems(read).length === 0);
 
 	const write = toolAnnotations('Delete a thing', 'destructive');
@@ -89,14 +96,38 @@ console.log('\nthe rule itself');
 		add.annotations.readOnlyHint === false && add.annotations.destructiveHint === false
 	);
 	check('both pass', annotationProblems(write).length + annotationProblems(add).length === 0);
+	check(
+		'no write claims to be idempotent',
+		write.annotations.idempotentHint === false && add.annotations.idempotentHint === false
+	);
+	check(
+		'open world only when asked',
+		add.annotations.openWorldHint === false &&
+			toolAnnotations('Fetch a URL', 'additive', { openWorld: true }).annotations.openWorldHint ===
+				true
+	);
 
 	// The shape this repo had before: a top-level title and a bare readOnlyHint.
 	const before = annotationProblems({ title: 'X', annotations: { readOnlyHint: true } });
 	check('a title with no annotations.title is refused', before.includes('no annotations.title'));
 	// And the shape every write tool had: a title and no hint at all.
 	const unhinted = annotationProblems({ title: 'X', annotations: { title: 'X' } });
-	check('a write with no hint is refused', unhinted.length === 1, unhinted.join(', '));
-	const drift = { title: 'X', annotations: { title: 'Y', readOnlyHint: true } };
+	check(
+		'a tool with no hints is refused once per hint',
+		unhinted.length === 4,
+		unhinted.join(', ')
+	);
+	// The shape #125 shipped: the directory's two hints, and the MCP defaults for the rest.
+	const twoHints = annotationProblems({
+		title: 'X',
+		annotations: { title: 'X', readOnlyHint: true, destructiveHint: false }
+	});
+	check(
+		'a tool without openWorldHint and idempotentHint is refused',
+		twoHints.join() === 'no explicit idempotentHint,no explicit openWorldHint',
+		twoHints.join(', ')
+	);
+	const drift = { ...read, annotations: { ...read.annotations, title: 'Y' } };
 	const drifted = annotationProblems(drift);
 	check('titles that disagree are refused', drifted.length === 1, drifted.join(', '));
 }
@@ -154,7 +185,14 @@ const listed = new Set<string>();
 		const problems = annotationProblems(t as never);
 		if (problems.length) bad.push(`${t.name}: ${problems.join(', ')}`);
 	}
-	check('every tool carries a title and its hint', bad.length === 0, bad.join('; '));
+	check('every tool carries a title and all four hints', bad.length === 0, bad.join('; '));
+	// submit_feedback is the other open-world tool; it is scan-only, pinned below.
+	const openWorld = tools.filter((t) => t.annotations?.openWorldHint === true).map((t) => t.name);
+	check(
+		'attach_media is the only listed open-world tool',
+		openWorld.join() === 'attach_media',
+		openWorld.join(', ')
+	);
 	const writes = custom.filter((t) => t.annotations?.readOnlyHint !== true);
 	check('no brain-authored tool is advertised as a write', writes.length === 0);
 	// The ones whose hint was a judgement call, pinned so a change is deliberate.
@@ -235,6 +273,24 @@ console.log('\nregistration sites: nothing registers around the helper');
 	const spreads = 'every site spreads toolAnnotations before its description';
 	check(spreads, bare.length === 0, bare.join(', '));
 	const unlisted = [...scanned].filter((n) => !listed.has(n)).sort();
+	// The scan-only tools' hints, read off the spread at each site.
+	const spreadOf = (n: string) =>
+		SOURCES.map(({ src }) =>
+			new RegExp(`'${n}',\\s*\\{[\\s\\S]*?(\\.\\.\\.toolAnnotations\\([^)]*\\))`).exec(src)
+		).find((m) => m)?.[1] ?? '';
+	check(
+		'submit_feedback is open world (it files a public issue)',
+		spreadOf('submit_feedback').includes('openWorld: true'),
+		spreadOf('submit_feedback')
+	);
+	const scanOnlyOpen = unlisted.filter(
+		(n) => n !== 'submit_feedback' && spreadOf(n).includes('openWorld')
+	);
+	check(
+		'no other scan-only tool is open world',
+		scanOnlyOpen.length === 0,
+		scanOnlyOpen.join(', ')
+	);
 	// Pinned, so a NEW suite has to be registered above rather than quietly joining
 	// the scan-only set.
 	const SCAN_ONLY = ['connected_accounts', 'link_identity', 'submit_feedback', 'unlink_identity'];
