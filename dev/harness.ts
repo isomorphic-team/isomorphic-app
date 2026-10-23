@@ -1549,7 +1549,7 @@ if (noBrainsMode) {
 	brainsFixture = [];
 	activeBrainId = '';
 }
-if (hashPath && activePages()[decodeURIComponent(hashPath)])
+if (hashPath && Object.hasOwn(activePages(), decodeURIComponent(hashPath)))
 	openPath = decodeURIComponent(hashPath);
 bridge.oninitialized = async () => {
 	// Present inline (or the forced mode) up front so the card content-fits from the

@@ -76,10 +76,10 @@ const SIMPLE_ITEM_RE = /^\s+-\s+(?![A-Za-z0-9_-]+:\s)/;
 
 function stripQuotes(v: string): string {
 	const t = v.trim();
-	if (
-		t.length >= 2 &&
-		((t.startsWith('"') && t.endsWith('"')) || (t.startsWith("'") && t.endsWith("'")))
-	) {
+	if (t.length >= 2 && t.startsWith('"') && t.endsWith('"')) {
+		return t.slice(1, -1).replace(/\\(["\\])/g, '$1');
+	}
+	if (t.length >= 2 && t.startsWith("'") && t.endsWith("'")) {
 		return t.slice(1, -1).replace(/\\"/g, '"');
 	}
 	return t;
@@ -152,7 +152,8 @@ function needsQuoting(v: string): boolean {
 
 function scalar(v: string): string {
 	const flat = v.replace(/\r?\n/g, ' ').trim();
-	return needsQuoting(flat) ? `"${flat.replace(/"/g, '\\"')}"` : flat;
+	// Backslash first: YAML reads `\` inside double quotes as an escape.
+	return needsQuoting(flat) ? `"${flat.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"` : flat;
 }
 
 export function serializeFrontmatter(fm: Frontmatter): string {

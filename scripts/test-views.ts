@@ -157,6 +157,23 @@ async function main() {
 	);
 	check('unlinked page not included', !r1.display.includes('Unlinked'));
 
+	// A title holding `\|` stays one cell: unescaped, the backslash eats the escape
+	// and the pipe splits the row.
+	const pipeCtx: ViewContext = {
+		...ctx,
+		resolved: { ...ctx.resolved, pages: [{ path: 'misc/either.md', title: 'Either \\| Or' }] }
+	};
+	const pipeTable = await renderViews(
+		'```okf-view\nkind: pages\nunder: misc/\nas: table\ncolumns: [title]\n```',
+		'misc/index.md',
+		pipeCtx
+	);
+	check(
+		'table cell escapes a backslash before a pipe',
+		pipeTable.display.includes('[Either \\\\\\| Or](either.md)'),
+		pipeTable.display
+	);
+
 	// filtered view: only Contacts
 	const filtered = await renderViews(
 		'```okf-view\nkind: backlinks\nfilter: { type: Contact }\n```',
