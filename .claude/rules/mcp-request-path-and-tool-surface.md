@@ -77,7 +77,12 @@ same hints to decide what runs without asking. **Every registration spreads
 `...toolAnnotations(title, effect)` in place of a bare `title:`**, so the top-level title and
 `annotations.title` are one string. `effect` is `read`, `additive` (creates, or moves a
 pointer; overwrites nothing that exists) or `destructive` (can overwrite, move, revoke or
-delete); when unsure, `destructive`. `pnpm test:annotations` lists every tool through a real
+delete); when unsure, `destructive`. The helper sets all four hints to a boolean, because an
+omitted hint takes the MCP default (open world, not idempotent) and ChatGPT's app review asks
+for every hint explicitly. Reads are idempotent, writes are not. Pass `{ openWorld: true }` only
+for a tool that downloads from an arbitrary URL or publishes somewhere public (`attach_media`,
+`submit_feedback`); committing to the brain's repository is not open world.
+`pnpm test:annotations` lists every tool through a real
 client and scans every registration site, so a tool that skips the helper fails CI. This is
 not the `TOOL_KINDS` axis: `edit_page` is read-only here (it opens the editor; the save is
 `write_page`) and counted as a write there.
