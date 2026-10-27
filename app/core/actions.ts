@@ -57,6 +57,7 @@ import {
 	setFeatures,
 	applyPolicy,
 	applyBrainContext,
+	setBrainClosed,
 	editDirty,
 	setEditDirty,
 	bump
@@ -141,6 +142,10 @@ function handleToolResult(result: CallToolResult) {
 			show({ kind, ...edit, fetchedAt: Date.now() }, { push: false });
 			return;
 		}
+		case 'brain-access':
+			setBrainClosed(v.brainId, !v.me.role);
+			show(v, { push: false });
+			return;
 		case 'brains': {
 			const bv = brainsViewFromSc(sc);
 			// Zero brains (the Manage brains screen on a fresh account) opens the
@@ -395,7 +400,9 @@ function membersViewFromSc(sc: Payload): View {
 
 // The sharing panel as a View (brain_access, and every share_brain mutation).
 function brainAccessViewFromSc(sc: Payload): View {
-	return { kind: 'brain-access', ...parseBrainAccess(sc) };
+	const p = parseBrainAccess(sc);
+	setBrainClosed(p.brainId, !p.me.role);
+	return { kind: 'brain-access', ...p };
 }
 
 // Open the sharing panel for a brain: who can reach it, and at what level.

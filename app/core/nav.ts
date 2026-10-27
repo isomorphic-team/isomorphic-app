@@ -101,6 +101,12 @@ export type NavCaps = {
 	 */
 	brainAdmin: boolean;
 	/**
+	 * The shown brain is one the caller can open. An org admin on a private brain
+	 * they steward reaches its Sharing and nothing else: every other brain view
+	 * would be refused.
+	 */
+	brainOpen: boolean;
+	/**
 	 * Anyone besides the operator can sign in (`features.people`). A single-user
 	 * deployment registers none of the people, sharing or brain-management tools, so
 	 * Sharing, Members, Analytics and Manage brains would all come back "unknown tool".
@@ -115,6 +121,7 @@ export type NavCaps = {
 export function destinationsIn(scope: Scope, caps: NavCaps): DestKey[] {
 	return (Object.keys(DEST_META) as DestKey[]).filter((k) => {
 		if (DEST_META[k].scope !== scope) return false;
+		if (scope === 'brain' && !caps.brainOpen && k !== 'sharing') return false;
 		if (k === 'sharing' || k === 'members') return caps.people;
 		if (k === 'analytics') return caps.people && caps.analytics;
 		if (k === 'brains') return caps.people && caps.canManageBrains;

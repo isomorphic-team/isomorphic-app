@@ -28,7 +28,7 @@ import {
 	openSearch,
 	openSettings
 } from '../core/actions.ts';
-import { activeBrainIsAdmin, brainList, features } from '../core/store.ts';
+import { activeBrainIsAdmin, brainList, features, shownBrainClosed } from '../core/store.ts';
 import { DEST_META, destinationsIn, type DestKey, type Scope } from '../core/nav.ts';
 
 const DEST_ICON: Record<DestKey, VNode> = {
@@ -74,6 +74,7 @@ export function destinations(scope: Scope): Destination[] {
 		analytics: features.analytics,
 		canManageBrains: !!brainList?.some((b) => b.canManage),
 		brainAdmin: activeBrainIsAdmin(),
+		brainOpen: !shownBrainClosed(),
 		people: features.people
 	};
 	return destinationsIn(scope, caps).map((key) => ({

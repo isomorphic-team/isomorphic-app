@@ -42,6 +42,17 @@ function setBrowseCache(v: BrowseData | null): void {
 // manage/share gates, search's widen-to-all offer, and the first-brain create state.
 let activeBrain: { id: string; label: string } | null = null;
 let brainList: BrainRow[] | null = null;
+// A brain whose sharing panel gave the caller no role: an org admin stewarding a
+// private brain they cannot open. It is never in the brain list, so the widget learns
+// it from brain_access, keeps it on screen (pickShownBrain), and offers only Sharing.
+let closedBrainId: string | null = null;
+function setBrainClosed(id: string, closed: boolean): void {
+	if (closed) closedBrainId = id;
+	else if (closedBrainId === id) closedBrainId = null;
+}
+function shownBrainClosed(): boolean {
+	return !!activeBrain && activeBrain.id === closedBrainId;
+}
 // The orgs the caller can add a brain to, as the SERVER reports them. Derived from
 // the brains list this could never include an org holding no brains yet, which is
 // exactly the org someone is trying to put a first repo into.
@@ -80,6 +91,7 @@ function pickShownBrain(
 	payloadActive: string | undefined,
 	deliberate: boolean
 ): { id: string; label: string } | null {
+	if (!deliberate && activeBrain && shownBrainClosed()) return activeBrain;
 	const wanted = deliberate ? [payloadActive] : [activeBrain?.id, payloadActive];
 	for (const id of wanted) {
 		const row = id ? rows.find((b) => b.id === id) : undefined;
@@ -484,6 +496,8 @@ export {
 	setFeatures,
 	activeBrainCanManage,
 	activeBrainIsAdmin,
+	setBrainClosed,
+	shownBrainClosed,
 	brainArgs,
 	brainPolicy,
 	normRoot,

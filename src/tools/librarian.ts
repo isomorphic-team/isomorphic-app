@@ -150,8 +150,8 @@ export interface BrainContext {
 	octokit?: Octokit;
 	repoArgs: RepoRef;
 	// The caller's role ON THIS BRAIN (viewer < editor < admin), resolved by
-	// effectiveBrainRole from an explicit share, the brain's org visibility, or the
-	// org-admin floor. Read tools ignore it; write/configure/share tools gate on it.
+	// effectiveBrainRole from an explicit share or the brain's org visibility. Read
+	// tools ignore it; write/configure/share tools gate on it.
 	// The single-tenant paths (github identity, static) report 'owner'.
 	role: Role;
 	// The caller's role in this brain's ORG (viewer < editor < admin < owner).

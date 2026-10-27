@@ -26,8 +26,15 @@ import { MAX_FIELD_KEYS_PER_PAGE } from '../src/lib/brain-index.ts';
 import { uniqueAttachmentPath } from '../src/lib/media.ts';
 import { renderViews, stripSnapshots, hasViews, type ViewContext } from '../src/lib/views.ts';
 // The REAL per-brain access rule (pure, no D1) so the sharing preview resolves
-// exactly like prod: org visibility + explicit grants + the org-admin floor.
-import { effectiveBrainRole, roleLabel, roleAtLeast, type Role } from '../src/lib/orgs.ts';
+// exactly like prod: org visibility + explicit grants, and org admins as stewards.
+import {
+	effectiveBrainRole,
+	sharingAuthority,
+	stewardsBrain,
+	roleLabel,
+	roleAtLeast,
+	type Role
+} from '../src/lib/orgs.ts';
 import {
 	dayKey,
 	shiftDay,
@@ -351,10 +358,9 @@ let brainsFixture = [
 		role: 'Editor',
 		orgId: 'org-acme',
 		orgLabel: 'Acme',
-		// Org-visible like its sibling. It cannot preview as Editor any more: role is
-		// DERIVED now, and the org-admin floor lifts an org admin to admin on every
-		// brain in the org, so an admin holding editor on one of them is not a state
-		// the rule can produce.
+		// Org-visible like its sibling. It cannot preview as Editor: role is DERIVED,
+		// and org visibility gives an org admin their org role on it, so an admin
+		// holding editor here is not a state the rule can produce.
 		orgRole: 'admin' as PreviewRole,
 		visibility: 'org'
 	},
@@ -368,19 +374,51 @@ let brainsFixture = [
 		visibility: 'private'
 	}
 ];
+// Private brains in an org I administer that nobody shared with me (the server's
+// listStewardedBrains). Not in `brainsFixture`: they are not brains I can open, so
+// `brains` names them only in its text, and only brain_access and share_brain reach
+// them (`#access-steward`). Sharing one with myself moves it into `brainsFixture`.
+let stewardedFixture: (typeof brainsFixture)[number][] = [
+	{
+		id: 'acme-research-4e5f6a',
+		label: 'Acme research',
+		role: '',
+		orgId: 'org-acme',
+		orgLabel: 'Acme',
+		orgRole: 'admin' as PreviewRole,
+		visibility: 'private'
+	}
+];
+// brains.created_by, for `self_granted`.
+const brainCreators: Record<string, string> = {
+	'personal-wiki-0a1b2c': 'u-me',
+	'acme-research-4e5f6a': 'u-cael'
+};
 // Explicit per-brain grants (`brain_memberships`), keyed brain id -> user id.
 // The brains together cover every path through effectiveBrainRole:
 //   Personal   private, mine. Katherine (an org EDITOR) is shared in read-only,
-//              which is the case per-brain roles exist for; Grace appears with no
-//              grant at all, via the org-admin floor; Devon cannot see it.
+//              which is the case per-brain roles exist for; Grace, an org admin,
+//              shared it with herself, and the panel says so; Devon cannot see it.
 //   Acme       org-visible, so every member is in at their own org role.
 //   Northwind  a client brain someone shared with ME read-only: the Share control
 //              disappears, because sharing needs admin ON THE BRAIN and my org
 //              role there is only viewer.
 let brainGrants: Record<string, Record<string, PreviewRole>> = {
-	'personal-wiki-0a1b2c': { 'u-me': 'admin', 'u-mira': 'viewer', 'u-tomas': 'editor' },
+	'personal-wiki-0a1b2c': {
+		'u-me': 'admin',
+		'u-mira': 'viewer',
+		'u-tomas': 'editor',
+		'u-cael': 'viewer'
+	},
 	'acme-wiki-1b2c3d': {},
-	'northwind-wiki-3d4e5f': { 'u-me': 'viewer' }
+	'northwind-wiki-3d4e5f': { 'u-me': 'viewer' },
+	// Grace's own research brain, shared with Katherine. I steward it as Acme's admin.
+	'acme-research-4e5f6a': { 'u-cael': 'admin', 'u-mira': 'editor' }
+};
+// Who wrote each grant (brain_memberships.granted_by), where it matters: a grant its
+// holder wrote on a brain someone else created is `self_granted` (listBrainAccess).
+const grantedBy: Record<string, Record<string, string>> = {
+	'personal-wiki-0a1b2c': { 'u-cael': 'u-cael' }
 };
 // Accounts that belong to NO org here. A grant to one of them is a GUEST of that
 // brain (docs/design/guest-access.md): Tomás is a client's person shown my wiki.
@@ -454,7 +492,7 @@ function brainRows() {
 			active: b.id === activeBrainId,
 			// Org scope disconnects; brain scope shares. Deliberately different tests.
 			canManage: b.orgRole === 'owner' || b.orgRole === 'admin',
-			canShare: role === 'admin' || role === 'owner',
+			canShare: roleAtLeast(sharingAuthority({ role, orgRole: b.orgRole }) ?? 'viewer', 'admin'),
 			// One row, not the whole Acme group — this previews the not-configured state,
 			// and every row wearing it would read as an org-level problem.
 			needsConfig: b.id === 'acme-wiki-1b2c3d',
@@ -466,7 +504,7 @@ function brainRows() {
 // The sharing panel's payload for one brain: every org member the rule admits,
 // labelled with HOW they got in. Mirrors listBrainAccess in src/lib/orgs.ts.
 function accessResult(brainId: string, msg: string): CallToolResult {
-	const b = brainsFixture.find((x) => x.id === brainId) ?? brainsFixture[0];
+	const b = findBrain(brainId) ?? brainsFixture[0];
 	const grants = brainGrants[b.id] ?? {};
 	const access = orgMembers
 		.map((m) => {
@@ -478,8 +516,11 @@ function accessResult(brainId: string, msg: string): CallToolResult {
 				email: m.email,
 				name: m.name,
 				role,
-				via: grant ? 'grant' : b.visibility !== 'private' ? 'org' : 'org-admin',
-				granted_at: grant ? '2026-06-01T00:00:00Z' : undefined
+				via: grant ? 'grant' : 'org',
+				granted_at: grant ? '2026-06-01T00:00:00Z' : undefined,
+				...(grant && grantedBy[b.id]?.[m.user_id] === m.user_id && brainCreators[b.id] !== m.user_id
+					? { self_granted: true }
+					: {})
 			};
 		})
 		.filter(Boolean);
@@ -498,19 +539,44 @@ function accessResult(brainId: string, msg: string): CallToolResult {
 			invites: brainInvites[b.id] ?? [],
 			visibility: b.visibility,
 			activeBrain: brainMeta(b.id),
-			me: { user_id: ME.user_id, role: myBrainRole(b) ?? 'viewer', orgRole: b.orgRole }
+			me: {
+				user_id: ME.user_id,
+				role: myBrainRole(b),
+				orgRole: b.orgRole,
+				canShare: roleAtLeast(
+					sharingAuthority({ role: myBrainRole(b), orgRole: b.orgRole }) ?? 'viewer',
+					'admin'
+				)
+			}
 		}
 	};
 }
 // Resolve a `brain` arg the way the server's matchBrain does (id, then label
 // substring), so the Share control can target a non-active brain from the list.
+// Over open AND stewarded brains, like the Worker's accessContext: only the two
+// sharing tools call it.
 function resolveBrainArg(arg: unknown): string | undefined {
 	const q = String(arg ?? '')
 		.trim()
 		.toLowerCase();
 	if (!q) return undefined;
-	return brainsFixture.find((b) => b.id.toLowerCase() === q || b.label.toLowerCase().includes(q))
-		?.id;
+	return [...brainsFixture, ...stewardedFixture].find(
+		(b) => b.id.toLowerCase() === q || b.label.toLowerCase().includes(q)
+	)?.id;
+}
+const findBrain = (id: string) => [...brainsFixture, ...stewardedFixture].find((x) => x.id === id);
+// After a share: a stewarded brain I now hold a grant on becomes a brain I can open,
+// and one I just revoked myself from goes back. Mirrors listStewardedBrains' rule.
+function settleStewarded() {
+	const all = [...brainsFixture, ...stewardedFixture];
+	const closed = (b: (typeof all)[number]) => !myBrainRole(b) && stewardsBrain(b.orgRole);
+	brainsFixture = all.filter((b) => !closed(b));
+	stewardedFixture = all.filter(closed);
+}
+// The closed section of `brains`' text, as src/tools/brains.ts writes it.
+function closedText(): string {
+	if (!stewardedFixture.length) return '';
+	return `\n\nPrivate brains in organizations you administer, not shared with you (${stewardedFixture.length}). You can see who has access with brain_access; opening one means sharing it with yourself through share_brain, which everyone with access sees:\n${stewardedFixture.map((b) => `- ${b.label} (${b.orgLabel})`).join('\n')}`;
 }
 // `switched` marks a result that CHANGED the active brain, exactly as switch_brain and
 // create_brain do server-side. The app treats the brain a result names as authoritative
@@ -541,7 +607,7 @@ function brainsResult(msg: string, withView: boolean, switched = false): CallToo
 // {id,label} for a brain: the `activeBrain` shape every app-tool result carries so the
 // app's trail and caches track the resolved brain.
 function brainMeta(id: string): { id: string; label: string } {
-	const b = brainsFixture.find((x) => x.id === id);
+	const b = findBrain(id);
 	return { id, label: b?.label ?? id };
 }
 
@@ -1107,9 +1173,14 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
 		}
 		case 'share_brain': {
 			const id = resolveBrainArg(args?.brain) ?? activeBrainId;
-			const b = brainsFixture.find((x) => x.id === id);
+			const b = findBrain(id);
 			if (!b) return errText(`No brain matching "${args?.brain}".`);
-			if (!(myBrainRole(b) === 'admin' || myBrainRole(b) === 'owner'))
+			if (
+				!roleAtLeast(
+					sharingAuthority({ role: myBrainRole(b), orgRole: b.orgRole }) ?? 'viewer',
+					'admin'
+				)
+			)
 				return errText(`You need admin access on ${b.label} to change who can reach it.`);
 			const notes: string[] = [];
 			const visibility = args?.visibility ? String(args.visibility) : undefined;
@@ -1154,20 +1225,27 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
 				const guest = !('role' in m);
 				brainGrants[b.id] ??= {};
 				if (access === 'none') {
-					if (m.user_id === ME.user_id) return errText("You can't revoke your own access.");
+					if (m.user_id === ME.user_id && !stewardsBrain(b.orgRole))
+						return errText("You can't revoke your own access.");
 					delete brainGrants[b.id][m.user_id];
+					delete grantedBy[b.id]?.[m.user_id];
 					notes.push(`Removed ${m.email} from "${b.label}".`);
 				} else {
 					if (guest && access === 'admin')
 						return errText('Someone outside the organization can be a guest editor at most.');
+					const opening = m.user_id === ME.user_id && !myBrainRole(b);
 					brainGrants[b.id][m.user_id] = access as PreviewRole;
+					(grantedBy[b.id] ??= {})[m.user_id] ??= ME.user_id;
 					notes.push(`${m.email} is now ${roleLabel(access as Role)} on "${b.label}".`);
+					if (opening && b.visibility === 'private')
+						notes.push('Everyone with access will see you added yourself.');
 				}
+				settleStewarded();
 			}
 			return accessResult(b.id, notes.join(' ') || 'Nothing changed.');
 		}
 		case 'brains':
-			return brainsResult(`${brainsFixture.length} brains.`, true);
+			return brainsResult(`${brainsFixture.length} brains.${closedText()}`, true);
 		case 'switch_brain': {
 			const q = String(args?.brain ?? '').toLowerCase();
 			const hit = brainsFixture.find(
@@ -1484,6 +1562,8 @@ const settingsMode = hashMode === 'settings';
 const connectedMode = hashMode === 'connected';
 // `#access` previews the per-brain sharing panel for the active brain.
 const accessMode = hashMode === 'access';
+// `#access-steward`: the sharing panel of a private brain I administer but cannot open.
+const stewardMode = hashMode === 'access-steward';
 const browseEmptyMode = hashMode === 'browse-empty';
 // `#nobrains` previews the first-touch "create your first brain" state: start with an
 // empty brain set so the brains lookup routes the app to the create form.
@@ -1593,7 +1673,7 @@ bridge.oninitialized = async () => {
 	// announce the input, then deliver the result (sendToolInput once, then sendToolResult).
 	const mode = brainsMode
 		? 'brains'
-		: accessMode
+		: accessMode || stewardMode
 			? 'access'
 			: analyticsMode
 				? 'analytics'
@@ -1620,6 +1700,7 @@ bridge.oninitialized = async () => {
 			analyticsMode ||
 			brainsMode ||
 			accessMode ||
+			stewardMode ||
 			settingsMode ||
 			connectedMode ||
 			browseEmptyMode ||
@@ -1677,6 +1758,8 @@ bridge.oninitialized = async () => {
 		bridge.sendToolResult(await handleTool('analytics', { days: Number(hashPath) || 30 }));
 	} else if (accessMode) {
 		bridge.sendToolResult(await handleTool('brain_access', {}));
+	} else if (stewardMode) {
+		bridge.sendToolResult(await handleTool('brain_access', { brain: 'Acme research' }));
 	} else if (graphMode) {
 		bridge.sendToolResult(await handleTool('view_graph', {}));
 	} else if (activityMode) {

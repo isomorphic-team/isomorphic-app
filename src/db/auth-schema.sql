@@ -86,8 +86,9 @@ CREATE TABLE IF NOT EXISTS brains (
 -- additive override on an 'org' one. Separate from `memberships`: that is the
 -- ORG role (manage members, create/connect brains), this is the BRAIN role
 -- (read, write, configure, share). effectiveBrainRole() in src/lib/orgs.ts is
--- the single resolution rule. 'owner' is not a brain role: an org owner/admin
--- floors to admin on every brain in the org instead.
+-- the single resolution rule. 'owner' is not a brain role. An org owner/admin
+-- STEWARDS every brain in the org (sees it, shares it) but opens a private one
+-- only through a grant here, which they may write for themselves.
 CREATE TABLE IF NOT EXISTS brain_memberships (
   brain_id   TEXT NOT NULL REFERENCES brains(brain_id),
   user_id    TEXT NOT NULL REFERENCES app_users(user_id),

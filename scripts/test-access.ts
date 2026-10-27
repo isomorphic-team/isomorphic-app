@@ -26,6 +26,8 @@
 
 import {
 	effectiveBrainRole,
+	stewardsBrain,
+	sharingAuthority,
 	roleAtLeast,
 	ASSIGNABLE_BRAIN_ROLES,
 	type Role
@@ -50,7 +52,7 @@ for (const orgRole of ORG_ROLES) {
 }
 
 // ---------------------------------------------------------------------------
-console.log('\nPrivate brain: invisible without a grant, unless you are an org admin');
+console.log('\nPrivate brain: closed without a grant, to org admins too');
 // ---------------------------------------------------------------------------
 check(
 	'viewer, no grant → NO ACCESS',
@@ -60,16 +62,59 @@ check(
 	'editor, no grant → NO ACCESS',
 	effectiveBrainRole({ visibility: 'private', orgRole: 'editor' }) === null
 );
-// The admin override, decided deliberately: an org owner controls the GitHub org
-// that holds the repo, so hiding it in-product would be theater, and it stops a
-// brain orphaning when the one person it was shared with leaves.
+// People expect a private brain to be private from the org's admins too. An admin
+// STEWARDS it (below) and opens it only by sharing it with themselves.
 check(
-	'org admin, no grant → admin (the override)',
-	effectiveBrainRole({ visibility: 'private', orgRole: 'admin' }) === 'admin'
+	'org admin, no grant → NO ACCESS',
+	effectiveBrainRole({ visibility: 'private', orgRole: 'admin' }) === null
 );
 check(
-	'org owner, no grant → owner (the override)',
-	effectiveBrainRole({ visibility: 'private', orgRole: 'owner' }) === 'owner'
+	'org owner, no grant → NO ACCESS',
+	effectiveBrainRole({ visibility: 'private', orgRole: 'owner' }) === null
+);
+check(
+	'org owner with a viewer grant → viewer (no floor lifts it)',
+	effectiveBrainRole({ visibility: 'private', orgRole: 'owner', grant: 'viewer' }) === 'viewer'
+);
+
+// ---------------------------------------------------------------------------
+console.log('\nStewardship: org admins administer access without reading content');
+// ---------------------------------------------------------------------------
+for (const orgRole of ORG_ROLES) {
+	const steward = orgRole === 'admin' || orgRole === 'owner';
+	check(
+		`${orgRole} ${steward ? 'stewards' : 'does not steward'} the org's brains`,
+		stewardsBrain(orgRole) === steward
+	);
+}
+check('a guest stewards nothing', stewardsBrain(null) === false);
+check(
+	'a steward with no brain role may share up to admin',
+	sharingAuthority({ role: null, orgRole: 'owner' }) === 'admin'
+);
+check(
+	'a steward holding viewer may still share up to admin',
+	sharingAuthority({ role: 'viewer', orgRole: 'admin' }) === 'admin'
+);
+check(
+	'a brain admin who is an org viewer shares at admin',
+	sharingAuthority({ role: 'admin', orgRole: 'viewer' }) === 'admin'
+);
+check(
+	'an org owner on an org-visible brain keeps owner as their ceiling',
+	sharingAuthority({ role: 'owner', orgRole: 'owner' }) === 'owner'
+);
+check(
+	'a brain editor in the org shares at editor (below the admin share_brain needs)',
+	sharingAuthority({ role: 'editor', orgRole: 'editor' }) === 'editor'
+);
+check(
+	'a guest editor shares at editor',
+	sharingAuthority({ role: 'editor', orgRole: null }) === 'editor'
+);
+check(
+	'no role anywhere → no sharing authority',
+	sharingAuthority({ role: null, orgRole: 'viewer' }) === null
 );
 
 // ---------------------------------------------------------------------------
@@ -146,9 +191,8 @@ check(
 // ---------------------------------------------------------------------------
 console.log('\nNo org role at all: the sources that need a membership are skipped');
 // ---------------------------------------------------------------------------
-// A caller who holds no membership in the organization that owns a brain. Sources (1)
-// org-visibility and (3) the org-admin floor have nobody to apply to, so they
-// contribute nothing. Before this was explicit the function returned `undefined` for
+// A caller who holds no membership in the organization that owns a brain. Source (1),
+// org visibility, has nobody to apply to, so it contributes nothing. Before this was explicit the function returned `undefined` for
 // an org-visible brain with a null org role: neither a role nor null, and it only
 // failed closed because the caller happened to test `if (!role)`.
 for (const visibility of ['org', 'private', 'team-only', '']) {
@@ -241,6 +285,8 @@ import {
 } from '../src/lib/storage-connections.ts';
 import {
 	listAccessibleBrains,
+	listStewardedBrains,
+	closedBrainMessage,
 	listAccessibleOrgs,
 	listOrgMemberships,
 	membershipNote,
@@ -307,10 +353,36 @@ const roleOn = async (user: string, id: string) =>
 
 console.log('\nlistAccessibleBrains: the real query');
 check(
-	'org owner sees all three (admin floor reaches both private brains)',
-	JSON.stringify(await ids('alice')) ===
-		JSON.stringify(['northwind/alicep', 'northwind/bobp', 'northwind/legacy'])
+	"org owner sees the org brain + their own, NOT another member's private brain",
+	JSON.stringify(await ids('alice')) === JSON.stringify(['northwind/alicep', 'northwind/legacy'])
 );
+
+console.log('\nlistStewardedBrains: what an org admin administers but cannot open');
+const stewardedIds = async (user: string) =>
+	(await listStewardedBrains(db, [user])).map((b) => repoOf(b)).sort();
+check(
+	"the org owner stewards the other member's private brain",
+	JSON.stringify(await stewardedIds('alice')) === JSON.stringify(['northwind/bobp'])
+);
+check(
+	'a stewarded brain carries no brain role, only the org role',
+	(await listStewardedBrains(db, ['alice'])).every((b) => b.role === null && b.org_role === 'owner')
+);
+check('an org editor stewards nothing', (await stewardedIds('bob')).length === 0);
+check('an org viewer stewards nothing', (await stewardedIds('carol')).length === 0);
+{
+	const closed = await listStewardedBrains(db, ['alice']);
+	const msg = closedBrainMessage(closed, 'bob notes');
+	check(
+		'naming a stewarded brain says it is private and how to open it',
+		!!msg && msg.includes('"Bob Notes" is private') && msg.includes('share_brain'),
+		String(msg)
+	);
+	check(
+		'naming a brain that is not stewarded is no closed-brain message',
+		closedBrainMessage(closed, 'legacy') === null
+	);
+}
 check(
 	"org editor sees the org brain + their own, NOT the other person's private brain",
 	JSON.stringify(await ids('bob')) === JSON.stringify(['northwind/bobp', 'northwind/legacy'])
@@ -465,7 +537,7 @@ check('after revoking, the brain disappears again', (await ids('carol')).length 
 console.log('\nlistBrainAccess: the sharing panel');
 const aliceAccess = await listBrainAccess(db, 'b-alice', 'org1', 'private');
 check(
-	'a private brain lists only its grantees (plus org admins)',
+	'a private brain lists only its grantees, not the org admins who steward it',
 	aliceAccess.length === 1 && aliceAccess[0].user_id === 'alice'
 );
 check('...and says HOW they got in', aliceAccess[0].via === 'grant');
@@ -507,6 +579,41 @@ await setBrainGrant(db, {
 	);
 }
 sqlite.exec(`DELETE FROM brain_memberships WHERE user_id = 'gus'`);
+
+// Opening someone else's private brain is a grant the steward writes for themselves,
+// and the panel says so to everyone on it. A creator's own grant is not that.
+console.log('\nlistBrainAccess: a steward sharing a brain with themselves is marked');
+sqlite.exec(`UPDATE brains SET created_by = 'bob' WHERE brain_id = 'b-bob'`);
+sqlite.exec(
+	`UPDATE brain_memberships SET granted_by = 'bob' WHERE brain_id = 'b-bob' AND user_id = 'bob'`
+);
+await setBrainGrant(db, {
+	brain_id: 'b-bob',
+	user_id: 'alice',
+	role: 'viewer',
+	granted_by: 'alice'
+});
+{
+	const panel = await listBrainAccess(db, 'b-bob', 'org1', 'private');
+	check(
+		'the org owner who shared it with themselves is marked self_granted',
+		panel.find((e) => e.user_id === 'alice')?.self_granted === true
+	);
+	check(
+		"the creator's own grant is not",
+		panel.find((e) => e.user_id === 'bob')?.self_granted === undefined
+	);
+	check(
+		'...and once self-granted, the owner opens it at the granted role',
+		(await roleOn('alice', 'northwind/bobp')) === 'viewer'
+	);
+	check(
+		'...and it leaves the stewarded list',
+		!(await listStewardedBrains(db, ['alice'])).some((b) => b.brain_id === 'b-bob')
+	);
+}
+await removeBrainGrant(db, 'b-bob', 'alice');
+sqlite.exec(`UPDATE brains SET created_by = NULL WHERE brain_id = 'b-bob'`);
 
 // A brain invite carries the brain's org_id, so the two pending lists have to
 // tell them apart: the roster must not show a member who was never invited to
@@ -736,9 +843,8 @@ console.log('\nchooseBrain: which brain a read or a write actually lands on');
 	// Alice reaches the org-visible brain and her own private one, oldest first.
 	const aliceBrains = await listAccessibleBrains(db, ['alice']);
 	const ids = aliceBrains.map((b) => b.id);
-	// Three, not two: the org-visible one, her own private one, and Bob's private one,
-	// which she reaches through the org-admin floor rather than a grant.
-	check('the fixture gives this caller three brains', aliceBrains.length === 3, ids.join(', '));
+	// Two, not three: Bob's private brain is closed to her even as org owner.
+	check('the fixture gives this caller two brains', aliceBrains.length === 2, ids.join(', '));
 
 	check(
 		'a named handle wins',
@@ -1064,6 +1170,56 @@ console.log('\nOrgs name their storage: the 0013 backfill');
 	);
 }
 
+console.log('\n0017: private brains keep someone who can open them');
+{
+	const pre = new DatabaseSync(':memory:');
+	replayMigrations(pre, { to: '0017' });
+	pre.exec(`
+	  INSERT INTO orgs (org_id, name, model, installation_id, brain_owner, created_by, created_at)
+	    VALUES ('o', 'Acme', 'customer', 1, 'acme', 'own', '2026-01-01');
+	  INSERT INTO app_users (user_id, email) VALUES
+	    ('own', 'own@example.com'), ('mem', 'mem@example.com'), ('gone', 'gone@example.com');
+	  INSERT INTO memberships (org_id, user_id, role) VALUES ('o', 'own', 'owner'), ('o', 'mem', 'editor');
+	  INSERT INTO brains (brain_id, org_id, repo_owner, repo_name, visibility, created_by) VALUES
+	    ('b-made',    'o', 'acme', 'made',    'private', 'mem'),
+	    ('b-left',    'o', 'acme', 'left',    'private', 'gone'),
+	    ('b-seeded',  'o', 'acme', 'seeded',  'private', NULL),
+	    ('b-shared',  'o', 'acme', 'shared',  'private', NULL),
+	    ('b-open',    'o', 'acme', 'open',    'org',     NULL);
+	  INSERT INTO brain_memberships (brain_id, user_id, role) VALUES ('b-shared', 'mem', 'viewer');
+	`);
+	replayMigrations(pre, { from: '0017', to: '0018' });
+	const grants = (brainId: string) =>
+		(
+			pre
+				.prepare('SELECT user_id, role FROM brain_memberships WHERE brain_id = ? ORDER BY user_id')
+				.all(brainId) as { user_id: string; role: string }[]
+		)
+			.map((g) => `${g.user_id}:${g.role}`)
+			.join(',');
+	check(
+		'a member who created a private brain gets admin on it',
+		grants('b-made') === 'mem:admin',
+		grants('b-made')
+	);
+	check(
+		'a creator who left the org gets nothing, and the owner is not added',
+		grants('b-left') === '',
+		grants('b-left')
+	);
+	check(
+		'a private brain with no creator and no grant goes to the org owners',
+		grants('b-seeded') === 'own:admin',
+		grants('b-seeded')
+	);
+	check(
+		'one that already has a grant is left private from the owners',
+		grants('b-shared') === 'mem:viewer',
+		grants('b-shared')
+	);
+	check('an org-visible brain gets no grants', grants('b-open') === '', grants('b-open'));
+}
+
 console.log('\nStorage bindings: which credential reads a brain');
 {
 	const { db, sqlite } = localD1();
@@ -1084,7 +1240,7 @@ console.log('\nStorage bindings: which credential reads a brain');
 	    ('b-bound',   'lab', 'lab-gh', 'client-wiki', 'Client Wiki', 'private', '2026-02-01', 'github-app:1'),
 	    ('b-unbound', 'lab', 'lab-gh', 'client-desk', 'Client Desk', 'org',     '2026-02-02', NULL);
 	  INSERT INTO brain_memberships (brain_id, user_id, role) VALUES
-	    ('b-bound', 'max', 'admin'), ('b-bound', 'ed', 'viewer');
+	    ('b-bound', 'jo', 'admin'), ('b-bound', 'max', 'admin'), ('b-bound', 'ed', 'viewer');
 	  INSERT INTO invitations (invite_id, org_id, email, role, invited_by, token_hash, expires_at,
 	                           brain_id, accepted_at) VALUES
 	    ('i-open', 'lab', 'new@example.com', 'viewer', 'jo', '', '2099-01-01', 'b-bound', NULL),
@@ -1110,8 +1266,8 @@ console.log('\nStorage bindings: which credential reads a brain');
 	const plan = planBrainMove({ visibility: 'private', readOnly: false, people });
 	const of = (u: string) => plan.find((c) => c.user_id === u);
 	check(
-		'an admin of the org it leaves, with no grant and no place in the new org, loses it',
-		of('li')?.outcome === 'loses' && of('li')?.before === 'admin' && of('li')?.after === null
+		'an admin of the org it leaves, with no grant, never reached the private brain: not listed',
+		of('li') === undefined
 	);
 	check(
 		'a grant holder who is not in the new org becomes a guest, capped at editor',
@@ -1121,15 +1277,16 @@ console.log('\nStorage bindings: which credential reads a brain');
 			of('max')?.afterVia === 'guest'
 	);
 	check(
-		'the caller, admin in both orgs, keeps admin through the org-admin floor',
-		of('jo')?.after === 'admin' && of('jo')?.afterVia === 'org-admin'
+		'the caller keeps admin through their grant, which moves with the brain',
+		of('jo')?.outcome === 'unchanged' &&
+			of('jo')?.after === 'admin' &&
+			of('jo')?.afterVia === 'grant'
 	);
 	check('a member of the new org does NOT gain a private brain', of('cy') === undefined);
 	check(
 		'a guest with a viewer grant is a guest on both sides: unchanged',
 		of('ed')?.outcome === 'unchanged' && of('ed')?.after === 'viewer'
 	);
-	check('losses sort first, so the preview leads with them', plan[0].outcome === 'loses');
 	const orgVisible = planBrainMove({
 		visibility: 'org',
 		readOnly: false,
@@ -1144,6 +1301,7 @@ console.log('\nStorage bindings: which credential reads a brain');
 		'...and a member of the old org who is not in the new one loses it',
 		orgVisible.find((c) => c.user_id === 'max')?.outcome === 'loses'
 	);
+	check('losses sort first, so the preview leads with them', orgVisible[0].outcome === 'loses');
 	check(
 		'a read-only brain stays capped at viewer on both sides',
 		planBrainMove({ visibility: 'org', readOnly: true, people }).every(
@@ -1165,7 +1323,17 @@ console.log('\nStorage bindings: which credential reads a brain');
 		text.includes('Storage stays where it is: lab-gh on GitHub')
 	);
 	check('names the guest cap', text.includes('max@example.com: Admin → Editor (guest'));
-	check('names the loss', text.includes('li@example.com: Admin → no access'));
+	check(
+		'names the loss',
+		describeMove({
+			brain: 'Client Desk',
+			from: 'The Lab',
+			to: 'Client Co',
+			storageAccount: 'lab-gh on GitHub',
+			changes: orgVisible,
+			pendingInvites: 0
+		}).includes('li@example.com: Admin → no access')
+	);
 	check('says the pending invitation moves', text.includes('1 pending invitation moves with it'));
 	check(
 		'ends by saying nothing has changed yet',

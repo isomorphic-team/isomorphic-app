@@ -172,14 +172,17 @@ export interface BrainAccessEntry {
 	name: string | null;
 	role: MemberRole;
 	// 'guest' is a grant held by someone outside the organization.
-	via: 'grant' | 'org' | 'org-admin' | 'guest';
+	via: 'grant' | 'org' | 'guest';
 	granted_at?: string;
+	// An organization admin shared a brain they did not create with themselves.
+	self_granted?: boolean;
 }
-/** The caller in both scopes at once. `orgRole` is null for a guest. */
+/** The caller in both scopes at once. `role` is null for an organization admin who stewards a private brain without opening it; `orgRole` is null for a guest. `canShare` is sharingAuthority's answer. */
 export interface BrainAccessSelf {
 	user_id: string;
-	role: MemberRole;
+	role: MemberRole | null;
 	orgRole: MemberRole | null;
+	canShare: boolean;
 }
 
 /** One entry in the "Connected accounts" roster (src/tools/connected-accounts.ts). */
@@ -628,9 +631,10 @@ export function parseBrainAccess(sc: Payload): {
 		brainLabel: str(active.label) ?? 'this brain',
 		me: {
 			user_id: str(me.user_id) ?? '',
-			role: (str(me.role) as MemberRole) ?? 'viewer',
-			// Null for a guest: the server sends it as null, and 'viewer' would be a lie.
-			orgRole: me.orgRole ? (str(me.orgRole) as MemberRole) : null
+			// Null for a steward who has not opened the brain, as orgRole is for a guest.
+			role: me.role ? (str(me.role) as MemberRole) : null,
+			orgRole: me.orgRole ? (str(me.orgRole) as MemberRole) : null,
+			canShare: me.canShare === true
 		}
 	};
 }

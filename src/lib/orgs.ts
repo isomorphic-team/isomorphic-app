@@ -84,35 +84,33 @@ function minRole(a: Role, b: Role): Role {
 //   • BRAIN role: read, write, move/delete pages, configure, share.
 //                  (`brain_memberships` + the brain's own `visibility`)
 //
-// THIS is the single rule deciding whether a caller can reach a brain at all and
-// at what role. It is pure so `pnpm test:access` can pin every case; every query
-// below resolves rows in SQL and then runs them through here, rather than
+// THIS is the single rule deciding whether a caller can reach a brain's CONTENT at
+// all and at what role. It is pure so `pnpm test:access` can pin every case; every
+// query below resolves rows in SQL and then runs them through here, rather than
 // spreading the policy across a WHERE clause.
 //
-// Three independent sources of access, and the effective role is the HIGHEST any
-// of them grants (never the lowest: a share must not be able to demote you):
+// Two independent sources of access, and the effective role is the HIGHER of them
+// (never the lower: a share must not be able to demote you):
 //
 //   1. visibility='org'          → your org role, for every member of the org.
 //   2. an explicit grant         → that grant's role, whatever the visibility.
-//   3. org admin/owner           → your org role, floored at admin, ALWAYS.
 //
-// (3) is the deliberate admin override. It is honest rather than generous: an org
-// owner controls the GitHub org that physically holds the repo and can read it
-// directly, so hiding a brain from them in our UI would be theater. It also stops
-// a brain orphaning when the only person granted access leaves.
+// An org admin or owner gets nothing extra here. On an org-visible brain (1) already
+// gives them their role; a PRIVATE brain is closed to them until it is shared with
+// them, by its admins or by themselves. They STEWARD it instead (stewardsBrain): they
+// see that it exists, who can reach it, and can change that, so a brain never orphans.
+// Reading it takes a grant, which shows on its access list.
 //
 // `orgRole` is NULLABLE, and a null means "not a member of the organization holding
-// this brain". Sources (1) and (3) are both about membership, so for a non-member they
-// are skipped and only an explicit grant can admit them. That is the shape any access
-// from outside an organization takes, and it lets the gates downstream tell "not a
-// member" from "a member with few powers".
+// this brain". Source (1) is about membership, so for a non-member it is skipped and
+// only an explicit grant can admit them. That is the shape any access from outside an
+// organization takes, and it lets the gates downstream tell "not a member" from "a
+// member with few powers".
 //
 // `readOnly` is the one thing that lowers the result rather than raising it. It is a
 // CEILING on the whole computation, applied last, because a read-only brain has to be
-// inert to everyone including the admins of the organization holding it: source (3)
-// would otherwise hand them their own role straight back, and an org-visible brain
-// would hand every member theirs. This is why a viewer grant cannot make a brain
-// read-only and a column on the brain can.
+// inert to everyone including the admins of the organization holding it. This is why
+// a viewer grant cannot make a brain read-only and a column on the brain can.
 //
 // A non-member is a GUEST of the brain, and a guest is capped at editor. Deciding who
 // reaches a brain is the organization's decision, and `admin` on a brain is exactly that
@@ -120,8 +118,8 @@ function minRole(a: Role, b: Role): Role {
 // write an admin grant for a non-member; this cap is what makes the refusal an
 // invariant rather than a courtesy, since a row can be written by more than one path.
 //
-// Returns null when none of the sources applies: the caller cannot see this brain and
-// it must not appear in any listing.
+// Returns null when neither source applies: the caller cannot open this brain and it
+// must not appear in any listing of brains they can open.
 export const GUEST_ROLE_CAP: Role = 'editor';
 
 export function effectiveBrainRole(input: {
@@ -138,13 +136,28 @@ export function effectiveBrainRole(input: {
 	if (orgRole && visibility !== 'private') role = orgRole;
 	// (2) An explicit per-brain grant.
 	if (grant) role = role ? maxRole(role, grant) : grant;
-	// (3) Org admin/owner floor. Also needs a membership to be a member of.
-	if (orgRole && roleAtLeast(orgRole, 'admin')) role = role ? maxRole(role, orgRole) : orgRole;
 	// A guest (no membership) never exceeds the guest cap.
 	if (role && !orgRole) role = minRole(role, GUEST_ROLE_CAP);
 	// A read-only brain caps whatever the sources produced.
 	if (role && readOnly) role = minRole(role, 'viewer');
 	return role;
+}
+
+// Whether someone STEWARDS a brain: an admin or owner of the organization that holds
+// it. A steward sees that the brain exists, sees who can reach it, and can share it,
+// including with themselves, whether or not they can open it. Ownership is the org's
+// anti-lockout anchor, and this is the whole of it: no content access comes with it.
+export function stewardsBrain(orgRole: Role | null): boolean {
+	return !!orgRole && roleAtLeast(orgRole, 'admin');
+}
+
+// The most access a caller may hand out on a brain, or null when they may not share
+// it at all: their own brain role, raised to admin when they steward it. share_brain
+// needs admin here, and no grant it writes may exceed it.
+export function sharingAuthority(input: { role: Role | null; orgRole: Role | null }): Role | null {
+	const steward: Role | null = stewardsBrain(input.orgRole) ? 'admin' : null;
+	if (input.role && steward) return maxRole(input.role, steward);
+	return input.role ?? steward;
 }
 
 // Which of effectiveBrainRole's sources admits someone, for the surfaces that tell a
@@ -154,10 +167,10 @@ export function accessVia(input: {
 	visibility: string;
 	orgRole: Role | null;
 	grant?: Role | null;
-}): 'grant' | 'org' | 'org-admin' | 'guest' {
+}): 'grant' | 'org' | 'guest' {
 	if (!input.orgRole) return 'guest';
 	if (input.grant) return 'grant';
-	return input.visibility !== 'private' ? 'org' : 'org-admin';
+	return 'org';
 }
 
 // The roles assignable through the brain-sharing surface. 'owner' is excluded on
@@ -842,17 +855,21 @@ export async function revokeInvite(db: D1Database, orgId: string, inviteId: stri
 // `brain_memberships` (the BRAIN role).
 
 // One row on a brain's access list: the person, plus how they get in. `via`
-// distinguishes an explicit grant from access inherited via org visibility or the
-// org-admin floor, so the UI can show "everyone in the org" without pretending
-// those people were individually shared with, and so it can hide a Remove button
-// that would do nothing.
+// distinguishes an explicit grant from access inherited via org visibility, so the UI
+// can show "everyone in the org" without pretending those people were individually
+// shared with, and so it can hide a Remove button that would do nothing.
+//
+// `self_granted` marks a grant its holder wrote for themselves on a brain they did not
+// create: a steward opening a private brain. It is shown to everyone with access, so
+// opening someone else's private brain is never silent.
 export interface BrainAccessEntry {
 	user_id: string;
 	email: string;
 	name: string | null;
 	role: Role;
-	via: 'grant' | 'org' | 'org-admin' | 'guest';
+	via: 'grant' | 'org' | 'guest';
 	granted_at?: string;
+	self_granted?: boolean;
 }
 
 // Everyone who can reach a brain, and at what role. Two candidate pools, each
@@ -869,7 +886,8 @@ export async function listBrainAccess(
 	const { results } = await db
 		.prepare(
 			`SELECT u.user_id AS user_id, u.email AS email, u.name AS name,
-			        m.role AS org_role, bm.role AS grant_role, bm.granted_at AS granted_at
+			        m.role AS org_role, bm.role AS grant_role, bm.granted_at AS granted_at,
+			        bm.granted_by AS granted_by
 			   FROM memberships m
 			   JOIN app_users u ON u.user_id = m.user_id
 			   LEFT JOIN brain_memberships bm
@@ -888,11 +906,13 @@ export async function listBrainAccess(
 			org_role: string | null;
 			grant_role: string | null;
 			granted_at: string | null;
+			granted_by: string | null;
 		}>();
 	const { results: guests } = await db
 		.prepare(
 			`SELECT u.user_id AS user_id, u.email AS email, u.name AS name,
-			        NULL AS org_role, bm.role AS grant_role, bm.granted_at AS granted_at
+			        NULL AS org_role, bm.role AS grant_role, bm.granted_at AS granted_at,
+			        bm.granted_by AS granted_by
 			   FROM brain_memberships bm
 			   JOIN app_users u ON u.user_id = bm.user_id
 			   LEFT JOIN memberships m ON m.org_id = ?2 AND m.user_id = bm.user_id
@@ -907,7 +927,12 @@ export async function listBrainAccess(
 			org_role: null;
 			grant_role: string;
 			granted_at: string | null;
+			granted_by: string | null;
 		}>();
+	const creator = await db
+		.prepare(`SELECT created_by FROM brains WHERE brain_id = ?1`)
+		.bind(brainId)
+		.first<{ created_by: string | null }>();
 	const out: BrainAccessEntry[] = [];
 	for (const r of [...(results ?? []), ...(guests ?? [])]) {
 		const orgRole = r.org_role as Role | null;
@@ -921,7 +946,10 @@ export async function listBrainAccess(
 			name: r.name,
 			role,
 			via,
-			granted_at: r.granted_at ?? undefined
+			granted_at: r.granted_at ?? undefined,
+			...(grant && r.granted_by === r.user_id && creator?.created_by !== r.user_id
+				? { self_granted: true }
+				: {})
 		});
 	}
 	return out;
@@ -971,8 +999,8 @@ export async function removeBrainGrant(
 		.run();
 }
 
-// Flip a brain between 'private' (grants + org admins only) and 'org' (every
-// member of the owning org). Existing grants are LEFT IN PLACE: going org-visible
+// Flip a brain between 'private' (grants only) and 'org' (every member of the
+// owning org). Existing grants are LEFT IN PLACE: going org-visible
 // and back must not silently drop who you had shared it with.
 // A brain's display name. NULL clears it, so the label falls back to the repo.
 export async function setBrainName(
@@ -1071,6 +1099,10 @@ export interface AccessibleBrain {
 	read_only?: boolean;
 }
 
+// What naming and matching a brain read: everything but the caller's role on it, so a
+// stewarded brain (role null) goes through the same helpers as an accessible one.
+export type BrainRef = Omit<AccessibleBrain, 'role'>;
+
 // A human label for a brain: what the switcher shows and what fuzzy `brain` matches
 // against. ONE RULE: a brain is called what it is named (brains.name), and an unnamed
 // one is called after its repo (minus a `brain-` prefix). No org prefix and no
@@ -1094,7 +1126,7 @@ export function brainLabel(b: { name?: string | null; repo_name: string }): stri
 
 // How an org is named to a human. Lived in tools/brains.ts, where only the switcher
 // rows could reach it; both consumers of a qualified label need it.
-export function orgDisplay(b: AccessibleBrain): string {
+export function orgDisplay(b: BrainRef): string {
 	if (b.org_model === 'platform') return 'Personal';
 	return b.org_name?.trim() || b.repo_owner;
 }
@@ -1112,7 +1144,7 @@ export function orgLabel(org: Org): string {
 // brain's own name, so two orgs can hold a "wiki" — and a disambiguation list reading
 // "wiki, wiki" is worse than no list at all. Everywhere else the org is a heading
 // (groupBrainsByOrg) or context the user already has.
-export function brainLabelQualified(b: AccessibleBrain): string {
+export function brainLabelQualified(b: BrainRef): string {
 	return `${brainLabel(b)} (${orgDisplay(b)})`;
 }
 
@@ -1163,10 +1195,28 @@ export async function assignBrainHandle(db: D1Database, brainId: string): Promis
 	}
 }
 
-async function queryAccessibleBrains(
-	db: D1Database,
-	userIds: string[]
-): Promise<AccessibleBrain[]> {
+interface BrainAccessRow {
+	brain_id: string;
+	handle: string | null;
+	repo_owner: string;
+	repo_name: string;
+	name: string | null;
+	visibility: string;
+	org_id: string;
+	org_name: string;
+	org_model: string;
+	installation_id: number;
+	storage_account: string | null;
+	storage_connection_id: string;
+	storage_kind: string | null;
+	org_role: string | null;
+	grant_role: string | null;
+	read_only: number | null;
+}
+
+// Every brain row the person might reach, one per (brain, way in): see the two legs
+// described above listAccessibleBrains. Decides nothing.
+async function queryBrainRows(db: D1Database, userIds: string[]): Promise<BrainAccessRow[]> {
 	if (userIds.length === 0) return [];
 	const placeholders = userIds.map((_, i) => `?${i + 1}`).join(', ');
 	const columns = `b.brain_id AS brain_id, b.handle AS handle,
@@ -1205,27 +1255,16 @@ async function queryAccessibleBrains(
 			  ORDER BY created_at ASC, brain_id ASC`
 		)
 		.bind(...userIds)
-		.all<{
-			brain_id: string;
-			handle: string | null;
-			repo_owner: string;
-			repo_name: string;
-			name: string | null;
-			visibility: string;
-			org_id: string;
-			org_name: string;
-			org_model: string;
-			installation_id: number;
-			storage_account: string | null;
-			storage_connection_id: string;
-			storage_kind: string | null;
-			org_role: string | null;
-			grant_role: string | null;
-			read_only: number | null;
-		}>();
+		.all<BrainAccessRow>();
+	return results ?? [];
+}
 
+async function queryAccessibleBrains(
+	db: D1Database,
+	userIds: string[]
+): Promise<AccessibleBrain[]> {
 	const byId = new Map<string, AccessibleBrain>();
-	for (const r of results ?? []) {
+	for (const r of await queryBrainRows(db, userIds)) {
 		const orgRole = r.org_role as Role | null;
 		const role = effectiveBrainRole({
 			visibility: r.visibility,
@@ -1266,6 +1305,74 @@ async function queryAccessibleBrains(
 		});
 	}
 	return [...byId.values()];
+}
+
+// A brain the caller stewards (stewardsBrain) and cannot open: private, in an org they
+// administer, not shared with them. Shaped like an AccessibleBrain so the same
+// matching and labels apply, with `role` null so it cannot be mistaken for one.
+export type StewardedBrain = Omit<AccessibleBrain, 'role'> & { role: null };
+
+// The private brains a person stewards but cannot open. Same rows as
+// listAccessibleBrains, through the same rule: a brain is listed here only when
+// effectiveBrainRole admits it by NO row, so a brain never appears in both lists.
+// These resolve for the sharing tools alone (brain_access, share_brain), which touch
+// no storage, so a steward never holds a credential for a brain they cannot open.
+export async function listStewardedBrains(
+	db: D1Database,
+	userIds: string[]
+): Promise<StewardedBrain[]> {
+	const rows = await queryBrainRows(db, userIds);
+	const opened = new Set<string>();
+	const byId = new Map<string, StewardedBrain>();
+	for (const r of rows) {
+		const orgRole = r.org_role as Role | null;
+		const role = effectiveBrainRole({
+			visibility: r.visibility,
+			orgRole,
+			grant: r.grant_role as Role | null,
+			readOnly: !!r.read_only
+		});
+		if (role) {
+			opened.add(r.brain_id);
+			continue;
+		}
+		if (!stewardsBrain(orgRole)) continue;
+		const existing = byId.get(r.brain_id);
+		if (existing) {
+			if (orgRole && (!existing.org_role || roleAtLeast(orgRole, existing.org_role)))
+				existing.org_role = orgRole;
+			continue;
+		}
+		byId.set(r.brain_id, {
+			id: r.handle ? brainSlug(brainLabel(r), r.handle) : r.brain_id,
+			brain_id: r.brain_id,
+			handle: r.handle ?? '',
+			org_id: r.org_id,
+			org_name: r.org_name,
+			org_model: r.org_model,
+			installation_id: r.installation_id,
+			storage_account: r.storage_account ?? r.repo_owner,
+			storage_connection_id: r.storage_connection_id,
+			storage_kind: r.storage_kind,
+			repo_owner: r.repo_owner,
+			repo_name: r.repo_name,
+			name: r.name,
+			role: null,
+			org_role: orgRole,
+			visibility: r.visibility,
+			read_only: !!r.read_only
+		});
+	}
+	return [...byId.values()].filter((b) => !opened.has(b.brain_id));
+}
+
+// What to tell a caller who named a brain they steward but cannot open, or null when
+// `query` names none of them. Without it they would read "no brain matching", which
+// is false: the brain exists, it is private, and they can choose to open it.
+export function closedBrainMessage(stewarded: StewardedBrain[], query: string): string | null {
+	const { brain } = matchBrain(stewarded, query);
+	if (!brain) return null;
+	return `"${brainLabel(brain)}" is private and not shared with you. As an admin of ${orgDisplay(brain)} you can see who has access with brain_access, and open it by sharing it with yourself through share_brain; everyone with access sees that grant.`;
 }
 
 // Every org a PERSON belongs to, with their role in it, INCLUDING orgs that hold no
@@ -1436,10 +1543,10 @@ export function chooseOrg(
 // name. A BLANK handle throws too: a caller who passed `brain` asked for a specific
 // one, and falling back to a different brain is the same failure. Callers resolve the empty-list case before reaching here (it means
 // provision, not fail), but throwing is still the right answer if one does not.
-export function chooseBrain(
-	brains: AccessibleBrain[],
+export function chooseBrain<B extends BrainRef>(
+	brains: B[],
 	opts: { brain?: string; activeBrainId?: string } = {}
-): AccessibleBrain {
+): B {
 	if (brains.length === 0) throw new Error('You do not have access to any brain yet.');
 	if (opts.brain) {
 		const m = matchBrain(brains, opts.brain);
@@ -1458,7 +1565,7 @@ export function chooseBrain(
 // state (the content index, the write-retry ledger, usage); `activeBrain.id` is the
 // handle tools and the app pass around. Separate so that changing how a brain is
 // addressed never orphans its index.
-export function brainRefs(b: AccessibleBrain): {
+export function brainRefs(b: BrainRef): {
 	brainId: string;
 	activeBrain: { id: string; label: string };
 } {
@@ -1468,7 +1575,7 @@ export function brainRefs(b: AccessibleBrain): {
 // Whether the caller's active-brain pointer names this brain. The pointer holds a
 // `brain_id`; one written before brains were keyed by id holds "owner/repo", which
 // still matches until the caller next switches.
-export function isActiveBrain(b: AccessibleBrain, pointer: string | undefined): boolean {
+export function isActiveBrain(b: BrainRef, pointer: string | undefined): boolean {
 	if (!pointer) return false;
 	return pointer === b.brain_id || pointer === `${b.repo_owner}/${b.repo_name}`;
 }
@@ -1503,10 +1610,10 @@ export async function resolveOrgForPerson(
 // priority order) exact canonical id, exact repo name, then a case-insensitive
 // substring of id / repo / label. Returns { brain } on a unique hit, { candidates }
 // when ambiguous (so the tool can ask), or {} when nothing matches.
-export function matchBrain(
-	brains: AccessibleBrain[],
+export function matchBrain<B extends BrainRef>(
+	brains: B[],
 	query: string
-): { brain?: AccessibleBrain; candidates?: AccessibleBrain[] } {
+): { brain?: B; candidates?: B[] } {
 	const q = query.trim().toLowerCase();
 	if (!q) return {};
 	// Exact names first, in the order that cannot mislead: the full slug, the primary
