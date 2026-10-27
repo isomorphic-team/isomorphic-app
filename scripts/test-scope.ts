@@ -30,7 +30,13 @@ import { readFileSync, readdirSync } from 'node:fs';
 import { localD1 } from '../src/local/d1-sqlite.ts';
 import { bindFixtureStorage } from './fixture-storage.ts';
 import { orgStorage } from '../src/lib/storage-connections.ts';
-import { assertRole, type Role, type TenantOpts, type AccessibleBrain } from '../src/lib/orgs.ts';
+import {
+	assertRole,
+	listStewardedBrains,
+	type Role,
+	type TenantOpts,
+	type AccessibleBrain
+} from '../src/lib/orgs.ts';
 import { registerMemberTools } from '../src/tools/members.ts';
 import { registerBrainAccessTools } from '../src/tools/brain-access.ts';
 import { registerMediaTools } from '../src/tools/media.ts';
@@ -63,13 +69,15 @@ sqlite.exec(`
     ('u-writer',  'writer@example.com',  'Writer'),
     ('u-lurker',  'lurker@example.com',  'Lurker'),
     ('u-spare',   'spare@example.com',   'Spare'),
-    ('u-outside', 'outside@example.com', 'Outside');
+    ('u-outside', 'outside@example.com', 'Outside'),
+    ('u-steward', 'steward@example.com', 'Steward');
   INSERT INTO memberships (org_id, user_id, role) VALUES
     ('org1', 'u-boss',   'owner'),
     ('org1', 'u-shared', 'viewer'),
     ('org1', 'u-writer', 'editor'),
     ('org1', 'u-lurker', 'viewer'),
-    ('org1', 'u-spare',  'viewer');
+    ('org1', 'u-spare',  'viewer'),
+    ('org1', 'u-steward', 'admin');
   INSERT INTO brains (brain_id, org_id, repo_owner, repo_name, name, visibility, created_at) VALUES
     ('b-main',  'org1', 'northwind', 'main',  'Main',  'private', '2026-01-01'),
     ('b-other', 'org1', 'northwind', 'other', 'Other', 'org',     '2026-02-01');
@@ -91,11 +99,9 @@ bindFixtureStorage(sqlite);
 // Personas: the two roles as an explicit pair.
 // ---------------------------------------------------------------------------
 // Each is (org role, brain role). `sharedAdmin` is the escalation vector. `orgBoss`
-// is its mirror: an org owner holding only VIEWER on this brain is not reachable
-// through effectiveBrainRole (the org-admin floor would lift them to admin), and
-// that is exactly why it belongs here. It is the only way to prove an org-scope gate
-// reads orgRole rather than role, since for every REACHABLE persona an org admin is
-// also a brain admin and the two fields agree.
+// is its mirror: an org owner holding only VIEWER on this brain, which proves an
+// org-scope gate reads orgRole rather than role. `steward` is an org admin with NO
+// role on this private brain: it reaches the sharing tools only (stewardsBrain).
 interface Persona {
 	label: string;
 	userId: string;
@@ -105,7 +111,8 @@ interface Persona {
 	// analytics table are precisely what someone from outside must never see, and
 	// "not a member" has to be a different answer from "a member with few powers".
 	orgRole: Role | null;
-	role: Role;
+	// NULL only for a steward, who resolves for the sharing tools and nothing else.
+	role: Role | null;
 	// A different role in a NAMED org, for the one tool that acts in two orgs at once
 	// (connect_brain's move). Absent: the persona holds `orgRole` wherever they look.
 	orgRoleIn?: Record<string, Role>;
@@ -121,6 +128,12 @@ const orgBoss: Persona = {
 	userId: 'u-boss',
 	orgRole: 'owner',
 	role: 'viewer'
+};
+const steward: Persona = {
+	label: 'org ADMIN with no role on this private brain (a steward)',
+	userId: 'u-steward',
+	orgRole: 'admin',
+	role: null
 };
 const writer: Persona = {
 	label: 'org editor holding brain editor',
@@ -342,6 +355,8 @@ function toolsFor(
 				role: p.role,
 				org_role: p.orgRole
 			})) as AccessibleBrain[],
+		// The real query over this fixture: what the persona stewards and cannot open.
+		listStewarded: () => listStewardedBrains(db, [p.userId]),
 		listOrgs,
 		activeBrainId: () => 'northwind/main',
 		setActiveBrain: async (id) => {
@@ -457,6 +472,19 @@ check(
 
 // The brains payload's `orgs` feeds the widget's org picker; e2e-librarian asserts what
 // it carries for an admin. It must offer nothing an org viewer could not use.
+{
+	const stewardList = await attempt(steward, 'brains');
+	check(
+		'brains names the private brains a steward administers but cannot open',
+		stewardList.text.includes('not shared with you (1)') &&
+			stewardList.text.includes('- Main (Northwind)'),
+		stewardList.text
+	);
+	check(
+		'...and names none to a member who stewards nothing',
+		!(await attempt(lurker, 'brains')).text.includes('not shared with you')
+	);
+}
 const brainsPayload = (await toolsFor(orgBoss).get('brains')!({})) as {
 	structuredContent?: { orgs?: { orgId: string }[] };
 };
@@ -532,10 +560,62 @@ check(
 	'share_brain refuses an org editor who is only a brain editor',
 	await denies(writer, 'share_brain', { email: 'lurker@example.com', access: 'viewer' })
 );
+// Stewardship: an org admin shares a brain whatever their role on it, since they
+// could share it with themselves anyway.
 check(
-	'share_brain refuses an org OWNER who holds only viewer on this brain',
-	await denies(orgBoss, 'share_brain', { email: 'lurker@example.com', access: 'viewer' })
+	'share_brain admits an org OWNER who holds only viewer on this brain (a steward)',
+	await allows(orgBoss, 'share_brain', { email: 'lurker@example.com', access: 'viewer' })
 );
+await attempt(orgBoss, 'share_brain', { email: 'lurker@example.com', access: 'none' });
+
+// ===========================================================================
+console.log('\nStewards: org admins manage a private brain they cannot open');
+// ===========================================================================
+{
+	const opened = await attempt(steward, 'brain_access', {});
+	const me = (opened.sc as { me?: { role?: unknown; canShare?: unknown } }).me;
+	check('brain_access admits a steward with no role on the brain', opened.outcome === 'allowed');
+	check(
+		'...and tells the panel they may share but hold no role',
+		me?.role === null && me?.canShare === true,
+		JSON.stringify(me)
+	);
+	check(
+		'...and does not list them among the people who can open it',
+		!((opened.sc as { access?: { user_id: string }[] }).access ?? []).some(
+			(e) => e.user_id === 'u-steward'
+		)
+	);
+	const self = await attempt(steward, 'share_brain', {
+		email: 'steward@example.com',
+		access: 'viewer'
+	});
+	check('a steward can share the brain with themselves', self.outcome === 'allowed', self.detail);
+	check(
+		'...and is told everyone with access sees that',
+		self.text.includes('Everyone with access will see you added yourself.'),
+		self.text
+	);
+	check(
+		'...and the panel marks the grant as self-granted',
+		((self.sc as { access?: { user_id: string; self_granted?: boolean }[] }).access ?? []).some(
+			(e) => e.user_id === 'u-steward' && e.self_granted === true
+		)
+	);
+	check(
+		'a steward can close it again by revoking their own grant',
+		await allows(steward, 'share_brain', { email: 'steward@example.com', access: 'none' })
+	);
+	check(
+		'a steward may grant admin',
+		await allows(steward, 'share_brain', { email: 'lurker@example.com', access: 'admin' })
+	);
+	await attempt(steward, 'share_brain', { email: 'lurker@example.com', access: 'none' });
+	check(
+		'a steward cannot write a page: content gates on the brain role',
+		await denies(steward, 'write_page', { path: 'wiki/x.md', content: 'x' })
+	);
+}
 
 // ===========================================================================
 console.log('\nContent writes gate on the BRAIN role, at editor');

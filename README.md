@@ -254,28 +254,30 @@ different questions:
 
 - **Org role** comes from membership in the organization. It governs people and which brains
   exist.
-- **Brain role** is what you can do inside one brain. It is the highest of three sources: your
-  org role if the brain is org-visible, an explicit share, and an admin floor (an org admin or
-  owner is at least admin on every brain in the org, since deciding who reaches the org's brains
-  is already theirs, and so a brain never ends up with nobody able to manage it). A share can
-  only raise access, never lower it.
+- **Brain role** is what you can do inside one brain. It is the higher of two sources: your org
+  role if the brain is org-visible, and an explicit share. A share can only raise access, never
+  lower it. A private brain stays closed to the org's admins and owners until it is shared with
+  them. They **steward** it instead: they see that it exists and who can open it, and can change
+  that, including sharing it with themselves, which everyone with access sees. So a brain never
+  ends up with nobody able to manage it, and opening someone's private brain is never silent.
 
-| Action                                                                | Needs                 |
-| --------------------------------------------------------------------- | --------------------- |
-| Read, search, browse, graph, activity, validate, brain-authored tools | brain **viewer**      |
-| Write, move, delete pages; attach media; import; resolve findings     | brain **editor**      |
-| Configure the brain; share it; make it private or org-visible         | brain **admin**       |
-| Create a brain                                                        | org **editor**        |
-| Connect or disconnect a repository; move a brain to another org       | org **admin**         |
-| Create an organization                                                | any signed-in account |
-| Invite, change roles, remove members                                  | org **admin**         |
-| Analytics totals and the per-brain table                              | org **viewer**        |
-| Analytics per-person table                                            | org **admin**         |
+| Action                                                                | Needs                  |
+| --------------------------------------------------------------------- | ---------------------- |
+| Read, search, browse, graph, activity, validate, brain-authored tools | brain **viewer**       |
+| Write, move, delete pages; attach media; import; resolve findings     | brain **editor**       |
+| Configure the brain                                                   | brain **admin**        |
+| Share a brain; make it private or org-visible                         | brain or org **admin** |
+| Create a brain                                                        | org **editor**         |
+| Connect or disconnect a repository; move a brain to another org       | org **admin**          |
+| Create an organization                                                | any signed-in account  |
+| Invite, change roles, remove members                                  | org **admin**          |
+| Analytics totals and the per-brain table                              | org **viewer**         |
+| Analytics per-person table                                            | org **admin**          |
 
 A brain is **private** to whoever created or adopted it by default, whether it came from
 `create_brain` or `connect_brain`; widening it to the org is one `share_brain` call, and the
-response says which it is. Sharing never grants above your own brain role and never lets you
-revoke yourself. It can reach outside the brain's org: a guest holds a share on that one brain
+response says which it is. Sharing never grants above your own brain role (admin, for an org
+admin) and never lets you revoke yourself, except an org admin closing a brain they opened. It can reach outside the brain's org: a guest holds a share on that one brain
 and nothing else, and is capped at editor, since deciding who reaches a brain stays with the
 org's own people. An address with no account yet gets an invitation that becomes the share at
 their first sign-in. `owner` is the org's anti-lockout anchor: it is never

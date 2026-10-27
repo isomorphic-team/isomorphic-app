@@ -29,25 +29,54 @@ either (`requires` = brain, `requiresOrg` = org). That split fixed a latent bug:
 gated org roster management on `ctx.role`, which is now the brain role. Without the split, being
 shared a brain as admin would have conferred the power to edit the whole org roster.
 
-`owner` is **not a brain role**. Ownership is the org's anti-lockout anchor; an org owner/admin
-floors to admin on every brain instead.
+`owner` is **not a brain role**. Ownership is the org's anti-lockout anchor, and org admins and
+owners carry it as **stewardship** of the org's brains (below), not as a role inside them.
 
 ## The rule
 
-One pure function, `effectiveBrainRole` in `src/lib/orgs.ts`, is the single authority. Three
-independent sources of access, and the effective role is the **highest** any of them grants:
+One pure function, `effectiveBrainRole` in `src/lib/orgs.ts`, is the single authority on who
+opens a brain. Two independent sources of access, and the effective role is the **higher** of
+them:
 
 1. `visibility='org'` → your org role, for every member of the org.
 2. An explicit `brain_memberships` grant → that grant's role, whatever the visibility.
-3. Org admin/owner → your org role, floored at admin, always.
 
 Resolution is **additive on purpose**: a share may only ever raise what another source already
 gave you. If a grant could lower an effective role, "sharing" would become a way to strip
-someone's access, and an org admin could be demoted on a brain and lose the recovery path.
+someone's access.
 
-Why (3), the admin override: an org owner controls the GitHub org that physically holds the repo
-and can read it directly, so hiding a brain from them in-product would be theater. It also stops a
-brain orphaning when the only person it was shared with leaves.
+## Stewardship: org admins administer a private brain without opening it
+
+Org admins and owners get nothing from `effectiveBrainRole` on a private brain they hold no grant
+on. People who keep a private brain in a team org expect it to be private from the people who run
+that org, and "private" read that way to them.
+
+They **steward** it instead (`stewardsBrain`):
+
+- **They see that it exists.** `listStewardedBrains` returns the private brains in orgs they
+  administer that no row admits them to, and `brains` names them in a separate section.
+- **They see who can open it** (`brain_access`) and **change that** (`share_brain`), up to admin
+  (`sharingAuthority`). A brain whose only grant holder left is therefore never orphaned.
+- **Opening it is a grant they write for themselves**, and it is not silent: the sharing panel
+  marks a grant whose holder wrote it on a brain they did not create as `self_granted`, for
+  everyone with access, and `share_brain`'s reply says so. Revoking it closes the brain again,
+  which only a steward may do to their own grant.
+- **Stewarding never touches storage.** The two sharing tools resolve through the Worker's
+  `accessContext`, which lists open and stewarded brains and mints no credential. Every other
+  tool resolves through `tenantContext`, which lists only brains the caller can open; naming a
+  stewarded brain there fails with `closedBrainMessage`, which says how to open it.
+
+What this does not change: an org owner who controls the GitHub org holding a repo can read it
+there. Stewardship makes reading through Isomorphic a deliberate, visible act; it does not make a
+repository the org owns secret from the org. Content that must be private from an org belongs in
+a brain stored outside it, such as the person's own personal org.
+
+This replaced an org-admin floor (until 2026-10-26): org admins and owners reached every brain in
+the org at their org role, on the reasoning that hiding a brain from someone who can read its repo
+would be theater. It made every private brain silently readable by the org's admins, which is not
+what its creator was told. Migration 0017 gave an explicit grant to each private brain's creator
+and, for a private brain with no grant and no recorded creator, to its org's owners, so no brain
+lost everyone who could open it.
 
 Unknown `visibility` values **fail open** to org-visible. Only the exact string `'private'`
 restricts. An over-restrictive default here means a brain nobody, including its owner, can
@@ -78,15 +107,17 @@ eventually disagree with itself. `pnpm test:access` walks the rule's whole input
 
 Two tools, mirroring `members.ts` one scope down:
 
-- **`brain_access`** (any access to the brain): who can reach it and at what level, as the inline
-  sharing panel _and_ as data. Knowing who else is in a room you are already in is not privileged.
-- **`share_brain`** (brain admin+): every mutation in one verb: share with a person, change their
+- **`brain_access`** (any access to the brain, or stewardship): who can reach it and at what
+  level, as the inline sharing panel _and_ as data. Knowing who else is in a room you are already
+  in, or that you administer, is not privileged.
+- **`share_brain`** (brain admin+, or a steward): every mutation in one verb: share with a person, change their
   level, revoke (`access: 'none'`), and flip `visibility` between `private` and `org`. Revoke and
   re-share are the same verb from the user's side; a separate `unshare_brain` would be a third
   name for it.
 
-Guardrails, enforced in `src/tools/brain-access.ts`: you can't grant above your own brain role;
-you can't revoke your own access; someone outside the org can be a guest viewer or editor, never
+Guardrails, enforced in `src/tools/brain-access.ts`: you can't grant above your
+`sharingAuthority` (your brain role, or admin for a steward); you can't revoke your own access
+unless you steward the brain; someone outside the org can be a guest viewer or editor, never
 admin. (Until 2026-09-14 you could only share with people already in the brain's org, because
 resolution started from `memberships` and a grant to anyone else was unreachable. See
 [`guest-access.md`](./guest-access.md).)
@@ -136,12 +167,16 @@ be wrong:
 
 - `pnpm test:access` pins the RULE and the queries that apply it: `effectiveBrainRole` over its
   whole input space, then the real exported functions against the real schema in an in-memory
-  SQLite. It answers "who can reach this brain, at what role".
+  SQLite. It answers "who can reach this brain, at what role", and which private brains an org
+  admin stewards without opening (`listStewardedBrains`, the `self_granted` marker, and the 0017
+  backfill replayed over a fixture).
 - `pnpm test:scope` pins WHICH ROLE EACH TOOL GATES ON, which the first cannot see. The real
   handlers are registered against a stub server with a fake `getContext` that reproduces
   worker.ts's two assertions, and both directions are asserted: an org viewer holding brain
   admin is refused by every org-scope tool and admitted by `share_brain`, while an org owner
-  holding only brain viewer is the reverse. It also covers the guardrails that live in the tool
+  holding only brain viewer is admitted by the org-scope tools, and by `share_brain` only as a
+  steward. A steward with no brain role reaches `brain_access` and `share_brain`, can open and
+  close the brain with a self-grant, and is refused every content write. It also covers the guardrails that live in the tool
   rather than in `orgs.ts` (share with a non-member, which is a guest now; share with a strange
   email; revoking yourself; the member-management lockout rules).
 
@@ -152,7 +187,9 @@ two. A scope test that stays green under those edits is not testing anything.
 ## Known gaps
 
 - **No audit trail on access changes.** `brain_memberships` records `granted_by`/`granted_at`, but
-  a revoke deletes the row, so there is no history of who removed whom.
+  a revoke deletes the row, so there is no history of who removed whom. That includes a steward
+  who opens a private brain and closes it again: while the grant exists everyone sees it, and
+  afterwards nothing records that it did. Access changes do not appear in `view_activity`.
 - ~~**Invited-user landing.**~~ ~~**No per-brain invite.**~~ Both closed by
   [`guest-access.md`](./guest-access.md): `share_brain` takes any email, and an address with no
   account gets an invite that names the brain.

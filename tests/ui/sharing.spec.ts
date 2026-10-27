@@ -15,12 +15,12 @@ test('the panel lists everyone the access rule admits, labelled by how', async (
 	// Personal is private and mine. All three admission paths must be visible at once,
 	// because "who can see this" is wrong in a different way for each:
 	//   Ada        me, via my own grant
-	//   Grace      no grant at all, admitted by the ORG-ADMIN FLOOR
+	//   Grace      an org admin who shared it with herself, marked so for everyone
 	//   Katherine  an org Editor explicitly shared in read-only, the case per-brain
 	//              roles exist for (her brain role is BELOW her org role)
 	await expect(main.getByText('Ada Lovelace')).toBeVisible();
 	await expect(main.getByText('Grace Hopper')).toBeVisible();
-	await expect(main.getByText('Organization admin')).toBeVisible();
+	await expect(main.getByText('Organization admin · shared with themselves')).toBeVisible();
 	await expect(main.getByText('Katherine Johnson')).toBeVisible();
 
 	// Devon is an org viewer with no grant on a private brain: the rule excludes them,
@@ -64,8 +64,8 @@ test('revoking removes the row', async ({ page }) => {
 	const main = app.locator('main[data-view="brain-access"]');
 	await expect(main.getByText('Katherine Johnson')).toBeVisible();
 	await main
+		.locator('li', { hasText: 'Katherine Johnson' })
 		.getByRole('button', { name: /Remove .*access/ })
-		.first()
 		.click();
 	// Revocation has to actually revoke. Katherine holds a grant on a PRIVATE brain
 	// and is not an org admin, so with the grant gone the rule admits her nowhere and
@@ -87,7 +87,7 @@ test('sharing is gated on the brain role, not the org role', async ({ page }) =>
 
 	// And the control does appear where the brain role is admin, so the assertion
 	// above is testing the gate rather than a Share button that renders nowhere.
-	const personal = rows.filter({ hasText: 'Owner' });
+	const personal = rows.filter({ hasText: 'Personal' }).filter({ hasText: 'Admin' });
 	await expect(personal.getByRole('button', { name: 'Share' }).first()).toBeVisible();
 });
 
@@ -115,4 +115,37 @@ test('a share to an address with no account shows up as an invite, and can be ca
 	await row.getByRole('button', { name: 'Cancel invite for newperson@client.example' }).click();
 	await expect(main.locator('li', { hasText: 'newperson@client.example' })).toHaveCount(0);
 	await expect(main.getByText('Invited', { exact: true })).toHaveCount(0);
+});
+
+test('an org admin manages a private brain they cannot open, and opening it shows', async ({
+	page
+}) => {
+	// Acme research is Grace's private brain, shared with Katherine. I administer Acme
+	// and hold no grant: I steward it. The panel must still give me the controls, and
+	// keep me off the list until I add myself.
+	const app = await openApp(page, 'access-steward');
+	await expectView(app, 'brain-access');
+	const main = app.locator('main[data-view="brain-access"]');
+	await expect(main.getByText('Grace Hopper')).toBeVisible();
+	await expect(main.getByText('Katherine Johnson')).toBeVisible();
+	await expect(main.getByText('Ada Lovelace')).toHaveCount(0);
+	await expect(
+		main.locator('li', { hasText: 'Katherine Johnson' }).getByRole('combobox', { name: 'Role' })
+	).toBeVisible();
+
+	// Opening it is a share to myself, through the same flow as any other share.
+	await app.getByRole('banner').getByRole('button', { name: 'Share' }).click();
+	await expectView(app, 'share-brain');
+	await app.getByRole('textbox').first().fill('owner@example.com');
+	await app.getByRole('button', { name: 'Share', exact: true }).last().click();
+	await expectView(app, 'brain-access');
+
+	// Now listed, and marked for everyone.
+	const mine = main.locator('li', { hasText: 'Ada Lovelace' });
+	await expect(mine).toContainText('Organization admin · shared with themselves');
+
+	// My own row is removable because I wrote it as a steward; removing it closes the
+	// brain again.
+	await mine.getByRole('button', { name: /Remove .*access/ }).click();
+	await expect(main.getByText('Ada Lovelace')).toHaveCount(0, { timeout: 10_000 });
 });

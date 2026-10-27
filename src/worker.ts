@@ -49,10 +49,13 @@ import {
 	membershipNote,
 	resolveOrgForPerson,
 	chooseBrain,
+	closedBrainMessage,
+	listStewardedBrains,
 	isActiveBrain,
 	brainRefs,
 	brainLabel,
 	type AccessibleBrain,
+	type StewardedBrain,
 	type Org,
 	type OrgScope,
 	type Role,
@@ -77,7 +80,7 @@ import { SERVER_INSTRUCTIONS } from './lib/server-instructions.ts';
 import { registerCoreTools } from './tools/core.ts';
 import { registerMediaTools } from './tools/media.ts';
 import { registerMemberTools } from './tools/members.ts';
-import { registerBrainAccessTools } from './tools/brain-access.ts';
+import { registerBrainAccessTools, type AccessContext } from './tools/brain-access.ts';
 import { registerConnectedAccountTools } from './tools/connected-accounts.ts';
 import { registerBrainTools } from './tools/brains.ts';
 import { registerOrgOnboardingTools } from './tools/org-onboarding.ts';
@@ -277,7 +280,7 @@ interface TenantContext {
 	store: BrainStore;
 	repoArgs: { owner: string; repo: string };
 	// The caller's role ON THE RESOLVED BRAIN (effectiveBrainRole: an explicit
-	// grant, org visibility, or the org-admin floor: whichever is highest). Read
+	// grant or org visibility, whichever is higher). Read
 	// tools ignore it; write/configure/share tools gate on it. The single-tenant
 	// paths (github tenant row, static) report 'owner' (full access).
 	role: Role;
@@ -517,6 +520,13 @@ class McpSession {
 		return listAccessibleBrains(this.env.PLATFORM_DB, await this.personUserIds(userId));
 	}
 
+	// The private brains the caller stewards as an org admin and cannot open.
+	private async listStewardedBrainsForCaller(): Promise<StewardedBrain[]> {
+		const userId = await this.callerUserId();
+		if (!userId) return [];
+		return listStewardedBrains(this.env.PLATFORM_DB, await this.personUserIds(userId));
+	}
+
 	// Where the web app is served, or undefined on a deployment without one.
 	private webBase(): string | undefined {
 		return webBaseUrl({
@@ -602,7 +612,19 @@ class McpSession {
 			target = found;
 		} else {
 			// Named brain, else the one the caller is working in, else the oldest.
-			target = chooseBrain(brains, { brain: brainArg, activeBrainId: this.activeBrainId });
+			try {
+				target = chooseBrain(brains, { brain: brainArg, activeBrainId: this.activeBrainId });
+			} catch (err) {
+				// A private brain the caller administers but cannot open: say so, rather
+				// than "no brain matching", and say how to open it.
+				const closed = brainArg
+					? closedBrainMessage(
+							await listStewardedBrains(env.PLATFORM_DB, await this.personUserIds(userId)),
+							brainArg
+						)
+					: null;
+				throw closed ? new Error(closed) : err;
+			}
 		}
 
 		const credential = credentialFor(target);
@@ -650,6 +672,33 @@ class McpSession {
 			config,
 			author,
 			db: env.PLATFORM_DB,
+			...brainRefs(target)
+		};
+	}
+
+	// What the sharing tools act on: a brain the caller can open, or a private one they
+	// steward as an org admin. No credential is minted and no config read: sharing is
+	// rows in the platform database, so stewarding a brain never touches its storage.
+	private async accessContext(brainArg?: string): Promise<AccessContext> {
+		const userId = await this.callerUserId();
+		if (!userId) {
+			throw new Error('No signed-in identity on this connection: sign in again and retry.');
+		}
+		const ids = await this.personUserIds(userId);
+		const [open, stewarded] = await Promise.all([
+			listAccessibleBrains(this.env.PLATFORM_DB, ids),
+			listStewardedBrains(this.env.PLATFORM_DB, ids)
+		]);
+		const all: (AccessibleBrain | StewardedBrain)[] = [...open, ...stewarded];
+		if (all.length === 0) throw new NoBrainError();
+		const target = chooseBrain(all, { brain: brainArg, activeBrainId: this.activeBrainId });
+		this.noteScope(target.org_id, target.brain_id);
+		return {
+			db: this.env.PLATFORM_DB,
+			role: target.role,
+			orgRole: target.org_role,
+			orgId: target.org_id,
+			actorUserId: userId,
 			...brainRefs(target)
 		};
 	}
@@ -927,7 +976,7 @@ class McpSession {
 		// carries `activeBrain`, so the Share control in the brains list opens the panel
 		// under the named brain's crumb without moving the pointer (see registerBrainApp).
 		if (multiUser)
-			registerBrainAccessTools(server, (opts) => this.tenantContext(opts), {
+			registerBrainAccessTools(server, (opts) => this.accessContext(opts?.brain), {
 				webBaseUrl: this.webBase()
 			});
 
@@ -1005,6 +1054,7 @@ class McpSession {
 					? listAccessibleOrgs(this.env.PLATFORM_DB, await this.personUserIds(this.props.user_id))
 					: [],
 			listBrains: () => this.listAccessibleBrainsForCaller(),
+			listStewarded: multiUser ? () => this.listStewardedBrainsForCaller() : undefined,
 			activeBrainId: () => this.activeBrainId,
 			setActiveBrain: (id) => this.setActiveBrain(id),
 			invalidateConfig: (owner, repo) => this.invalidateConfig(owner, repo),

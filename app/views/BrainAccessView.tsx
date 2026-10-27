@@ -39,9 +39,9 @@ function BrainAccessView({
 	brainLabel: string;
 	me: BrainAccessSelf;
 }) {
-	// Gated on the BRAIN role, not the org role: an org admin has it via the floor, a
-	// creator via their own grant, and someone shared in as editor deliberately does not.
-	const canManage = me.role === 'admin' || me.role === 'owner';
+	// The server's sharingAuthority: admin on the brain (a creator via their own grant),
+	// or admin of its organization, who stewards it. Someone shared in as editor does not.
+	const canManage = me.canShare;
 	const isPrivate = visibility === 'private';
 	const [busy, setBusy] = useState(false);
 
@@ -87,9 +87,11 @@ function BrainAccessView({
 				{access.map((a) => {
 					const isSelf = a.user_id === me.user_id;
 					// Only an explicit share can be edited or revoked. Access inherited from
-					// org visibility or the org-admin floor has no row to change; offering a
-					// control that silently does nothing is worse than none.
-					const editable = canManage && !isSelf && (a.via === 'grant' || a.via === 'guest');
+					// org visibility has no row to change; offering a control that silently
+					// does nothing is worse than none. Your own row only when you shared it
+					// with yourself as a steward: removing it closes the brain again.
+					const editable =
+						canManage && (!isSelf || !!a.self_granted) && (a.via === 'grant' || a.via === 'guest');
 					return (
 						<ListRow key={a.user_id}>
 							<InitialsAvatar name={a.name || a.email} />
@@ -101,17 +103,17 @@ function BrainAccessView({
 									{isSelf && <span class="shrink-0 text-xs text-muted">You</span>}
 								</div>
 								<div class="truncate text-xs text-muted">
-									{a.via === 'grant'
-										? a.name
-											? a.email
-											: 'Shared directly'
-										: a.via === 'guest'
+									{a.self_granted
+										? 'Organization admin · shared with themselves'
+										: a.via === 'grant'
 											? a.name
-												? `Guest · ${a.email}`
-												: 'Guest · not in the organization'
-											: a.via === 'org'
-												? 'Via organization'
-												: 'Organization admin'}
+												? a.email
+												: 'Shared directly'
+											: a.via === 'guest'
+												? a.name
+													? `Guest · ${a.email}`
+													: 'Guest · not in the organization'
+												: 'Via organization'}
 								</div>
 							</div>
 							{editable ? (
@@ -218,10 +220,10 @@ export default defineView(
 		/>
 	),
 	{
-		// Gated on the BRAIN role, same as the in-view controls: someone who can only
-		// read the brain never sees a Share they cannot use.
+		// Gated like the in-view controls (sharingAuthority): someone who can only read
+		// the brain never sees a Share they cannot use, and a steward does.
 		actions: (v) =>
-			v.me.role === 'admin' || v.me.role === 'owner'
+			v.me.canShare
 				? [
 						{
 							key: 'share-brain',

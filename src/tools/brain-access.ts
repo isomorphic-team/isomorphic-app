@@ -10,24 +10,28 @@
 //   BRAIN role: read, write, move/delete pages, configure, share.
 //
 // Authorization (enforced here, not in the lib):
-//   • Reading a brain's access list needs only access to that brain (any role):
-//     knowing who else is in a room you are already in is not privileged.
-//   • Mutations require ADMIN ON THE BRAIN (`requires: 'admin'`), which an org
-//     admin always has via the floor, and a creator has via their own grant.
-//   • Guardrails: you can't grant above your own brain role, someone outside the
-//     brain's org is a GUEST capped at editor (GUEST_ROLE_CAP), and you can't
-//     revoke your own access (an org admin can always fix a mistake, and this
-//     stops someone locking themselves out of their own brain).
+//   • Both tools resolve through an AccessContext, which reaches the brains you can
+//     open AND the private ones you steward as an org admin (stewardsBrain). It
+//     carries no storage, so stewarding never reads a page.
+//   • Reading a brain's access list needs only that: knowing who else is in a room
+//     you are already in, or that you administer, is not privileged.
+//   • Mutations require sharingAuthority >= admin: admin on the brain (a creator has
+//     it via their own grant), or stewardship.
+//   • Guardrails: you can't grant above your sharing authority, someone outside the
+//     brain's org is a GUEST capped at editor (GUEST_ROLE_CAP), and only a steward
+//     can revoke their own access (anyone else would lock themselves out).
+//   • A steward who shares a private brain with themselves is told the grant is
+//     visible, and the access list marks it `self_granted` for everyone.
 //
 // Two tools, not four: `brain_access` reads (widget + data), `share_brain` writes
 // every mutation: grant, change role, revoke (`access: 'none'`), and the
 // org-wide visibility flip. Revoke and re-share are the same verb from the user's
 // side, and a separate unshare_brain would be a third name for it.
 
+import type { D1Database } from '@cloudflare/workers-types';
 import type { McpServer } from '@modelcontextprotocol/server';
 import { registerAppTool } from '@modelcontextprotocol/ext-apps/server';
 import { z } from 'zod';
-import type { BrainContext } from './librarian.ts';
 import { BRAIN_APP_URI } from './apps.ts';
 import {
 	type TenantOpts,
@@ -47,6 +51,8 @@ import {
 	roleAtLeast,
 	roleLabel,
 	parseRole,
+	sharingAuthority,
+	stewardsBrain,
 	GUEST_ROLE_CAP
 } from '../lib/orgs.ts';
 import { webPathFor } from '../lib/web-app.ts';
@@ -58,10 +64,22 @@ const brainArg = brainArgFor(
 	"Which brain's sharing to act on (name/handle). Defaults to the active brain."
 );
 
+// What the sharing tools resolve: a brain the caller can open, or a private one they
+// steward, with no storage attached. `role` is null for the second kind.
+export interface AccessContext {
+	db: D1Database;
+	brainId: string;
+	activeBrain: { id: string; label: string };
+	role: Role | null;
+	orgRole: Role | null;
+	orgId?: string;
+	actorUserId?: string;
+}
+
 // The brain a tool call resolved to, as the access tools need it: the PK to write
 // grants against plus its current visibility.
 async function resolveBrainRow(
-	ctx: BrainContext
+	ctx: AccessContext
 ): Promise<{ brain_id: string; visibility: string; org_id: string } | null> {
 	return await ctx.db
 		.prepare(`SELECT brain_id, visibility, org_id FROM brains WHERE brain_id = ?1`)
@@ -73,7 +91,7 @@ async function resolveBrainRow(
 // it was opened (brain_access) or refreshed after a mutation. `me` lets the UI
 // gate affordances (admin+ shares; you can't revoke yourself) in one round-trip.
 async function accessPayload(
-	ctx: BrainContext,
+	ctx: AccessContext,
 	row: { brain_id: string; visibility: string; org_id: string }
 ): Promise<BrainAccessWire> {
 	const [entries, invites] = await Promise.all([
@@ -87,7 +105,12 @@ async function accessPayload(
 		invites,
 		visibility: row.visibility,
 		activeBrain: ctx.activeBrain,
-		me: { user_id: ctx.actorUserId ?? '', role: ctx.role, orgRole: ctx.orgRole }
+		me: {
+			user_id: ctx.actorUserId ?? '',
+			role: ctx.role,
+			orgRole: ctx.orgRole,
+			canShare: roleAtLeast(sharingAuthority(ctx) ?? 'viewer', 'admin')
+		}
 	};
 }
 
@@ -106,14 +129,13 @@ function accessText(
 	if (entries.length === 0) return head;
 	const lines = entries.map((e) => {
 		const who = e.name ? `${e.name} <${e.email}>` : e.email;
-		const how =
-			e.via === 'grant'
+		const how = e.self_granted
+			? 'shared with themselves as an organization admin'
+			: e.via === 'grant'
 				? 'shared directly'
 				: e.via === 'guest'
 					? 'guest, not in the organization'
-					: e.via === 'org'
-						? 'via organization'
-						: 'via organization admin';
+					: 'via organization';
 		return `- ${who}: ${roleLabel(e.role)} (${how})`;
 	});
 	const pending = invites.map(
@@ -138,7 +160,7 @@ function guestRefusal(actorRole: Role, target: Role): string | null {
 
 export function registerBrainAccessTools(
 	server: McpServer,
-	getContext: (opts?: TenantOpts) => Promise<BrainContext>,
+	getContext: (opts?: Pick<TenantOpts, 'brain'>) => Promise<AccessContext>,
 	opts: { webBaseUrl?: string } = {}
 ) {
 	// Where a guest who has never signed in goes. The web app's URL for the brain
@@ -184,7 +206,7 @@ export function registerBrainAccessTools(
 		{
 			...toolAnnotations('Share a brain / change who can access it', 'destructive'),
 			description:
-				"Change who can access a brain. Either share it with ONE person by email at a given level (`email` + `access`: viewer | editor | admin, or `none` to revoke), or change the brain's overall `visibility` ('private' = only people it's shared with, 'org' = everyone in the organization). Use when the user wants to share / unshare a brain, give someone access, change what someone can do in a brain, or make a brain private or organization-wide. Requires admin on that brain. The person does NOT need to be in the organization: someone outside it becomes a GUEST of this one brain (viewer or editor, never admin) and reaches nothing else, and an address with no account yet is invited and joins as a guest when they first sign in. share_brain changes access to this one brain only, never anyone's organization membership or role.",
+				"Change who can access a brain. Either share it with ONE person by email at a given level (`email` + `access`: viewer | editor | admin, or `none` to revoke), or change the brain's overall `visibility` ('private' = only people it's shared with, 'org' = everyone in the organization). Use when the user wants to share / unshare a brain, give someone access, change what someone can do in a brain, or make a brain private or organization-wide. Requires admin on that brain, or admin of its organization: an organization admin can open a private brain only by sharing it with themselves here, which everyone with access sees. The person does NOT need to be in the organization: someone outside it becomes a GUEST of this one brain (viewer or editor, never admin) and reaches nothing else, and an address with no account yet is invited and joins as a guest when they first sign in. share_brain changes access to this one brain only, never anyone's organization membership or role.",
 			inputSchema: z.object({
 				email: z
 					.string()
@@ -202,14 +224,20 @@ export function registerBrainAccessTools(
 					.enum(['private', 'org'])
 					.optional()
 					.describe(
-						"'private' = only people the brain is shared with (plus organization admins); 'org' = every member of the organization."
+						"'private' = only people the brain is shared with; 'org' = every member of the organization."
 					),
 				brain: brainArg
 			})
 		},
 		async ({ email, access, visibility, brain }) => {
-			// BRAIN-scope admin: sharing changes who reaches this brain's content.
-			const ctx = await getContext({ requires: 'admin', brain });
+			// Brain admin, or a steward: sharing changes who reaches this brain's content.
+			const ctx = await getContext({ brain });
+			const authority = sharingAuthority(ctx);
+			if (!authority || !roleAtLeast(authority, 'admin')) {
+				return fail(
+					`Changing who can access this brain requires admin on it, or admin of its organization, but your role is ${ctx.role ?? 'none'}.`
+				);
+			}
 			const row = await resolveBrainRow(ctx);
 			if (!row) return fail('Brain sharing is only available for organization accounts.');
 			if (!ctx.orgId || !ctx.actorUserId) {
@@ -230,7 +258,7 @@ export function registerBrainAccessTools(
 				notes.push(
 					visibility === 'org'
 						? `"${ctx.activeBrain.label}" is now visible to everyone in the organization.`
-						: `"${ctx.activeBrain.label}" is now private: only people it's shared with (and organization admins) can reach it.`
+						: `"${ctx.activeBrain.label}" is now private: only people it's shared with can open it.`
 				);
 			} else if (visibility) {
 				notes.push(
@@ -259,7 +287,7 @@ export function registerBrainAccessTools(
 						}
 					} else {
 						const target: Role = access ? (parseRole(access) ?? 'editor') : 'editor';
-						const refused = guestRefusal(ctx.role, target);
+						const refused = guestRefusal(authority, target);
 						if (refused) return fail(refused);
 						if (pending) await cancelBrainInvites(ctx.db, row.brain_id, emailTrim);
 						await createInvitation(ctx.db, {
@@ -289,7 +317,8 @@ export function registerBrainAccessTools(
 
 				if (access === 'none') {
 					await cancelBrainInvites(ctx.db, row.brain_id, user.email);
-					if (user.user_id === ctx.actorUserId) {
+					// A steward keeps stewardship, so closing their own grant locks nobody out.
+					if (user.user_id === ctx.actorUserId && !stewardsBrain(ctx.orgRole)) {
 						return fail(
 							"You can't revoke your own access to a brain. Ask another admin to remove you."
 						);
@@ -311,13 +340,13 @@ export function registerBrainAccessTools(
 					}
 				} else {
 					const target: Role = access ? (parseRole(access) ?? 'editor') : 'editor';
-					if (!roleAtLeast(ctx.role, target)) {
+					if (!roleAtLeast(authority, target)) {
 						return fail(
-							`You can't grant more access than you have on this brain (${roleLabel(ctx.role)}).`
+							`You can't grant more access than you have on this brain (${roleLabel(authority)}).`
 						);
 					}
 					if (guest) {
-						const refused = guestRefusal(ctx.role, target);
+						const refused = guestRefusal(authority, target);
 						if (refused) return fail(refused);
 					}
 					const existing = await getBrainGrant(ctx.db, row.brain_id, user.user_id);
@@ -334,6 +363,9 @@ export function registerBrainAccessTools(
 							: `Shared "${ctx.activeBrain.label}" with ${user.email} as ${asWhat}.`
 					);
 					if (guest && !existing) notes.push(signInHint(ctx.activeBrain.id));
+					if (user.user_id === ctx.actorUserId && row.visibility === 'private') {
+						notes.push('Everyone with access will see you added yourself.');
+					}
 				}
 			}
 

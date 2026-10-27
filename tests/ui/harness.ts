@@ -26,6 +26,8 @@ export const ROUTES = {
 	analytics: 'analytics',
 	brains: 'brains',
 	access: 'brain-access',
+	// The sharing panel of a private brain I administer but cannot open.
+	'access-steward': 'brain-access',
 	graph: 'graph',
 	activity: 'activity',
 	review: 'review',

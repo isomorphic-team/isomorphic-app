@@ -146,9 +146,9 @@ With `confirm: true` it runs one D1 batch:
 
 Grants, visibility, read-only, the name, `brain_id`, the index and the web URL are all
 untouched. The caller must be admin in **both** orgs: taking a brain out of an org is a
-disconnect, and putting one into an org adds data to someone else's organization. Being
-admin in the destination also means the caller keeps access through the org-admin
-floor, so a move cannot lock out the person making it.
+disconnect, and putting one into an org adds data to someone else's organization. A move
+cannot lock out the person making it: they named a brain they can open, so they hold a grant,
+which moves with it, or it is org-visible and they are a member of the destination.
 
 What a move deliberately does not do: change where the brain is stored. A brain moved
 from a consultancy's org to a client's hosted org stays in the consultancy's GitHub

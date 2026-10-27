@@ -312,6 +312,18 @@ check(
 	'parseBrainAccess: an org role as sent',
 	parseBrainAccess({ me: { orgRole: 'owner' } }).me.orgRole === 'owner'
 );
+check(
+	'parseBrainAccess: a steward who has not opened the brain has a null role, not viewer',
+	parseBrainAccess({ me: { role: null, orgRole: 'admin', canShare: true } }).me.role === null
+);
+check(
+	'parseBrainAccess: canShare as sent',
+	parseBrainAccess({ me: { role: null, orgRole: 'admin', canShare: true } }).me.canShare === true
+);
+check(
+	'parseBrainAccess: canShare missing is false, never a control the server would refuse',
+	parseBrainAccess({ me: { role: 'admin' } }).me.canShare === false
+);
 
 const analytics = parseAnalytics({});
 check('parseAnalytics: the org name defaults', analytics.orgName === 'your organization');

@@ -91,8 +91,16 @@ configure, share. Gating an org action on `role` would let one shared brain conf
 org roster.
 
 - **`effectiveBrainRole` (`src/lib/orgs.ts`) is the single authority** on whether a caller
-  reaches a brain and at what role: three additive sources (org visibility, an explicit grant,
-  the org-admin floor), highest wins, never demotes, unknown `visibility` fails OPEN.
+  opens a brain and at what role: two additive sources (org visibility, an explicit grant),
+  highest wins, never demotes, unknown `visibility` fails OPEN. **Org admins get no floor**: a
+  private brain is closed to them without a grant.
+- **Org admins and owners STEWARD their org's brains** (`stewardsBrain`): they see a private
+  brain they cannot open (`listStewardedBrains`, listed in `brains`' text), see its access
+  list, and share it, including with themselves (`sharingAuthority`). A steward never gets
+  a storage credential: `brain_access` and `share_brain` resolve through the Worker's
+  `accessContext`, which mints none. A self-grant on a brain you did not create shows as
+  `self_granted` on the sharing panel for everyone. Naming a stewarded brain in any other tool
+  fails with `closedBrainMessage`.
   `pnpm test:access` walks its input space; `pnpm test:scope` pins which role each tool gates
   on. Consumers (`listAccessibleBrains`, `getDefaultBrainForUser`, `listBrainAccess`) fetch rows
   in SQL and admit them through this function: **never re-express the policy in a WHERE clause.**
@@ -105,11 +113,11 @@ org roster.
 
 ## Sharing and guests
 
-`brain_access` (anyone with access) opens the sharing panel and returns the list;
-`share_brain` (brain admin+) grants, changes, revokes (`access: 'none'`) and flips
-`private`/`org`. Guardrails: never above your own brain role, never revoke yourself, never
-`admin` for a guest. Share is gated on `canShare` (brain role), deliberately not `canManage`
-(org role). Role names are shared across scopes, descriptions are not (`ROLE_BLURB` vs
+`brain_access` (anyone with access, or a steward) opens the sharing panel and returns the list;
+`share_brain` (brain admin+, or a steward) grants, changes, revokes (`access: 'none'`) and
+flips `private`/`org`. Guardrails: never above your `sharingAuthority`, never revoke yourself
+unless you steward the brain, never `admin` for a guest. Share is gated on `canShare`
+(`sharingAuthority`), deliberately not `canManage` (org role, which gates disconnect). Role names are shared across scopes, descriptions are not (`ROLE_BLURB` vs
 `BRAIN_ROLE_BLURB` in `app/components/RoleSelect.tsx`).
 
 **A guest** holds a grant on a brain in an org they are not a member of. `via: 'guest'` is

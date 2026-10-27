@@ -21,6 +21,8 @@ import type { BrainContext } from './librarian.ts';
 import {
 	type TenantOpts,
 	type AccessibleBrain,
+	type StewardedBrain,
+	sharingAuthority,
 	type AccessibleOrg,
 	type OrgScope,
 	type Role,
@@ -107,7 +109,10 @@ function brainRows(brains: AccessibleBrain[], activeId: string | undefined): Bra
 		// it from the ORG (org admin), sharing it changes who reaches its content
 		// (brain admin). Someone can hold either without the other.
 		canManage: !!b.org_role && roleAtLeast(b.org_role, 'admin'),
-		canShare: roleAtLeast(b.role, 'admin'),
+		canShare: roleAtLeast(
+			sharingAuthority({ role: b.role, orgRole: b.org_role }) ?? 'viewer',
+			'admin'
+		),
 		visibility: b.visibility,
 		orgId: b.org_id,
 		orgLabel: orgDisplay(b),
@@ -127,6 +132,15 @@ function rowsText(rows: BrainRow[]): string {
 	if (rows.length === 0) return 'No brains available.';
 	return `Your brains (${rows.length}):\n${rows
 		.map((r) => `- ${r.label} — ${r.role}${r.active ? ' (active)' : ''}`)
+		.join('\n')}`;
+}
+
+// The private brains an org admin administers but cannot open, as a section after the
+// list, or nothing when there are none.
+function closedText(closed: StewardedBrain[]): string {
+	if (closed.length === 0) return '';
+	return `\n\nPrivate brains in organizations you administer, not shared with you (${closed.length}). You can see who has access with brain_access; opening one means sharing it with yourself through share_brain, which everyone with access sees:\n${closed
+		.map((b) => `- ${brainLabel(b)} (${orgDisplay(b)})`)
 		.join('\n')}`;
 }
 
@@ -177,6 +191,11 @@ export function registerBrainTools(
 		// listBrains because that cannot represent an org with nothing in it yet.
 		listOrgs: () => Promise<AccessibleOrg[]>;
 		listBrains: () => Promise<AccessibleBrain[]>;
+		// Private brains the caller stewards as an org admin and cannot open
+		// (listStewardedBrains). Named in `brains`' text so their existence is never
+		// hidden from the people who administer the org; absent on a single-user
+		// deployment, which has no one else's brains.
+		listStewarded?: () => Promise<StewardedBrain[]>;
 		// The caller's active-brain pointer, a `brain_id` (see isActiveBrain).
 		activeBrainId: () => string | undefined;
 		// Awaited: the pointer is read back by the caller's NEXT request (the app fetches
@@ -208,6 +227,7 @@ export function registerBrainTools(
 		getContext,
 		orgContext,
 		listBrains,
+		listStewarded,
 		listOrgs,
 		activeBrainId,
 		setActiveBrain,
@@ -332,8 +352,9 @@ export function registerBrainTools(
 					r.configPrUrl = s.configPrUrl;
 				})
 			);
+			const closed = (await listStewarded?.().catch(() => [])) ?? [];
 			return {
-				content: [{ type: 'text' as const, text: rowsText(rows) }],
+				content: [{ type: 'text' as const, text: rowsText(rows) + closedText(closed) }],
 				structuredContent: {
 					view: 'brains',
 					brains: rows,
@@ -413,9 +434,8 @@ export function registerBrainTools(
 				// PRIVATE BY DEFAULT. A brain you just made is yours until you share it; in a
 				// shared org, an org-visible default would publish everyone's drafts to the
 				// whole team the moment they were created. The creator gets an explicit
-				// admin grant in the same breath, because in a personal org they are the
-				// only member and would otherwise be relying on the org-admin floor alone;
-				// the explicit row is also what makes them show on the brain's Share list.
+				// admin grant in the same breath: on a private brain a grant is the only way
+				// in, for org admins as well.
 				const newBrainId = brainIdFor(created.owner, created.name);
 				await createBrain(ctx.db, {
 					brain_id: newBrainId,
@@ -611,8 +631,7 @@ export function registerBrainTools(
 				// is an admin act on a repo the org owns: the adopted repo is often a private
 				// GitHub repo, and widening on request costs a share_brain call while widening
 				// silently is a disclosure. The adopter gets the same explicit admin grant the
-				// creator does, so they show on the brain's Share list rather than relying on
-				// the org-admin floor alone.
+				// creator does, which on a private brain is the only way in.
 				const newBrainId = brainIdFor(owner, name);
 				await createBrain(ctx.db, {
 					brain_id: newBrainId,
@@ -672,8 +691,8 @@ export function registerBrainTools(
 	// connect_brain's MOVE: an existing brain into `dest`, which the caller already
 	// holds admin in (orgContext checked it). Taking a brain out of its current org is
 	// that org's admin's call, like disconnect_brain, so it needs admin there too.
-	// Admin in the destination also means the caller keeps access afterwards, through
-	// the org-admin floor.
+	// The caller keeps access afterwards: their grant moves with the brain, and an
+	// org-visible brain admits them as a member of the destination.
 	async function moveInto(
 		dest: OrgScope,
 		target: AccessibleBrain,

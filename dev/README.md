@@ -64,6 +64,7 @@ for everything. Right tool for behaviour, wrong tool for access. Loopback only.
 | `/#members`                                           | the org roster                             |
 | `/#analytics` (or `#analytics=7`)                     | the org Analytics tab (window in days)     |
 | `/#access`                                            | the per-brain sharing panel                |
+| `/#access-steward`                                    | sharing panel of a brain you only steward  |
 | `/#settings`, `/#connected`                           | Your settings, with the connected accounts |
 | `/#browse-empty`                                      | an adopted repo with no content configured |
 | `/#cold`                                              | no opening tool result (below)             |
@@ -170,8 +171,8 @@ rule (`effectiveBrainRole` from `src/lib/orgs.ts`) over its fixtures, so what yo
 see resolves exactly like prod. The three fixture brains cover the whole rule:
 
 - **Personal** is private and mine. Katherine is an org **Editor** shared in
-  **read-only**, which is the case per-brain roles exist for; Grace holds no grant
-  at all and is there via the **org-admin floor**; Devon cannot see the brain.
+  **read-only**, which is the case per-brain roles exist for; Grace, an org admin,
+  **shared it with herself**, and her row says so; Devon cannot see the brain.
   Change a level or revoke and the panel refreshes in place; the header's **Share**
   action opens the add flow (`ShareBrainView`), the brain-scope twin of Invite.
 - **Acme** is org-visible, so every member is listed at their own org role and no
@@ -180,9 +181,14 @@ see resolves exactly like prod. The three fixture brains cover the whole rule:
 - **Northwind** is a client brain shared with me **read-only**. Its Share control
   is absent, because sharing needs admin ON THE BRAIN and my role there is viewer:
   the brain-vs-org role split, visible.
+- **Acme research** (`/#access-steward`) is Grace's private brain, shared with
+  Katherine. I administer Acme and hold no grant, so I **steward** it: it is not in
+  my brain list, `brains` names it only in its text, and its panel lists everyone
+  but me while still giving me the controls. Sharing it with myself opens it, and
+  my row reads "shared with themselves"; removing that row closes it again.
 
-Note `via`: a row can be admitted by a grant, by org visibility, or by the
-org-admin floor, and only a `grant` row is editable.
+Note `via`: a row is admitted by a grant or by org visibility, and only a `grant`
+row is editable.
 
 ## What's real vs. faked
 

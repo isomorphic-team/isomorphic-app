@@ -5,9 +5,9 @@
 // move as before. Grants, visibility, read-only, name, brain_id, the content index
 // and the web URL are untouched. docs/design/storage-and-tenancy.md §5.
 //
-// What a move does change is who reaches the brain, since two of
-// effectiveBrainRole's three sources (org visibility, the org-admin floor) are
-// about membership in the owning org. `planBrainMove` computes that change for
+// What a move does change is who reaches the brain, since one of
+// effectiveBrainRole's two sources (org visibility) is about membership in the
+// owning org. `planBrainMove` computes that change for
 // every affected person by running the rule twice, once per org, so the preview is
 // the rule's own answer rather than a second copy of it.
 
@@ -152,7 +152,6 @@ export function describeMove(input: {
 		if (c.outcome === 'loses') return ` (not a member of ${input.to} and holds no grant)`;
 		if (c.afterVia === 'guest') return ` (guest: not a member of ${input.to}, capped at Editor)`;
 		if (c.outcome === 'gains' && c.afterVia === 'org') return ` (member of ${input.to})`;
-		if (c.afterVia === 'org-admin') return ` (${input.to} admin)`;
 		return '';
 	};
 	const moved = input.changes.filter((c) => c.outcome !== 'unchanged');
