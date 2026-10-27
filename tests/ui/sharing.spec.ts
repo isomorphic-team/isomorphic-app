@@ -126,6 +126,12 @@ test('an org admin manages a private brain they cannot open, and opening it show
 	const app = await openApp(page, 'access-steward');
 	await expectView(app, 'brain-access');
 	const main = app.locator('main[data-view="brain-access"]');
+	// The crumb names the brain the panel is about, not my default brain, and the
+	// rail offers only Sharing: every other view of a brain I cannot open is refused.
+	const header = app.getByRole('banner');
+	await expect(header.getByText('Acme research')).toBeVisible();
+	await expect(header.getByText('Personal')).toHaveCount(0);
+	await expect(app.getByRole('button', { name: 'Files' })).toHaveCount(0);
 	await expect(main.getByText('Grace Hopper')).toBeVisible();
 	await expect(main.getByText('Katherine Johnson')).toBeVisible();
 	await expect(main.getByText('Ada Lovelace')).toHaveCount(0);

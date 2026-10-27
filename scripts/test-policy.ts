@@ -44,6 +44,7 @@ import {
 	setBrowseCache,
 	setActiveBrain,
 	pickShownBrain,
+	setBrainClosed,
 	recordStep,
 	HISTORY_LIMIT,
 	show,
@@ -284,6 +285,24 @@ console.log('\nthe connection’s pointer never overrides the brain on screen');
 		pickShownBrain([rows[0]], A.id, false)?.id === A.id
 	);
 	check('a list naming neither leaves the widget alone', pickShownBrain([], A.id, false) === null);
+
+	// A private brain the caller stewards but cannot open is never in the list. Its
+	// sharing panel said so (setBrainClosed), so the list must not swap it out for the
+	// pointer's brain: the crumb would name one brain over another's sharing list.
+	const C = { id: 'acme-research', label: 'Acme research' };
+	setActiveBrain(C);
+	setBrainClosed(C.id, true);
+	check(
+		'a stewarded brain on screen survives a list that does not name it',
+		pickShownBrain(rows, A.id, false)?.id === C.id
+	);
+	check('…but a deliberate switch still leaves it', pickShownBrain(rows, A.id, true)?.id === A.id);
+	setBrainClosed(C.id, false);
+	check(
+		'once opened (a self-grant), it is an ordinary brain again',
+		pickShownBrain(rows, A.id, false)?.id === A.id
+	);
+	setActiveBrain(null);
 }
 
 // ---------------------------------------------------------------------------
@@ -401,12 +420,30 @@ console.log('\nbrowse_brain fits in a tool result');
 // are somewhere they are not.
 console.log('\nnav destinations');
 {
-	const full = { analytics: true, canManageBrains: true, people: true, brainAdmin: true };
-	const bare = { analytics: false, canManageBrains: false, people: true, brainAdmin: false };
+	const full = {
+		analytics: true,
+		canManageBrains: true,
+		people: true,
+		brainAdmin: true,
+		brainOpen: true
+	};
+	const bare = {
+		analytics: false,
+		canManageBrains: false,
+		people: true,
+		brainAdmin: false,
+		brainOpen: true
+	};
 	// A single-user deployment: nobody else signs in, so none of the people, sharing
 	// or brain-management tools exist, whatever the caller's role. Its operator owns
 	// every brain, so Review stays.
-	const solo = { analytics: true, canManageBrains: true, people: false, brainAdmin: true };
+	const solo = {
+		analytics: true,
+		canManageBrains: true,
+		people: false,
+		brainAdmin: true,
+		brainOpen: true
+	};
 
 	check(
 		'the brain scope is its six views, in order',
@@ -428,6 +465,10 @@ console.log('\nnav destinations');
 		'Review follows the brain role alone, not org admin or the deployment',
 		destinationsIn('brain', { ...bare, brainAdmin: true }).includes('review') &&
 			!destinationsIn('brain', { ...full, brainAdmin: false }).includes('review')
+	);
+	check(
+		'a stewarded brain the caller cannot open offers Sharing and nothing else',
+		destinationsIn('brain', { ...full, brainOpen: false }).join() === 'sharing'
 	);
 	check(
 		'a single-user deployment offers no Sharing, Members, Analytics or Manage brains',

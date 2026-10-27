@@ -65,6 +65,9 @@ They **steward** it instead (`stewardsBrain`):
   `accessContext`, which lists open and stewarded brains and mints no credential. Every other
   tool resolves through `tenantContext`, which lists only brains the caller can open; naming a
   stewarded brain there fails with `closedBrainMessage`, which says how to open it.
+- **The widget shows only its Sharing.** A sharing panel that gives the caller no role marks the
+  brain closed (`setBrainClosed` in `app/core/store.ts`): the crumb keeps naming it although the
+  brain list does not, and the rail offers Sharing alone (`brainOpen` in `app/core/nav.ts`).
 
 What this does not change: an org owner who controls the GitHub org holding a repo can read it
 there. Stewardship makes reading through Isomorphic a deliberate, visible act; it does not make a
