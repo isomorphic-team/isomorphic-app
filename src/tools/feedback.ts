@@ -144,7 +144,9 @@ export function registerFeedbackTools(
 	server.registerTool(
 		'submit_feedback',
 		{
-			...toolAnnotations('Send feedback to the Isomorphic maintainers', 'additive'),
+			...toolAnnotations('Send feedback to the Isomorphic maintainers', 'additive', {
+				openWorld: true
+			}),
 			// Stands alone and names itself, because a host tool-search for "submit_feedback"
 			// or "report a bug" has to land here (see read_page in src/tools/core.ts).
 			description:
