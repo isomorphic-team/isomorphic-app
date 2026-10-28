@@ -112,7 +112,7 @@
 		"esbuild": "^0.28.2",
 		"lucide-preact": "^1.58.0",
 		"markdown-it": "^15.0.3",
-		"preact": "^10.29.8",
+		"preact": "^11.0.1",
 		"prettier": "^3.9.10",
 		"prosemirror-commands": "^1.7.2",
 		"prosemirror-history": "^1.5.1",
