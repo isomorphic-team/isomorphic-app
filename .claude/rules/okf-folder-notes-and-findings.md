@@ -82,6 +82,12 @@ carries no keys yet and is not answerable with `resolve`.
   report says so), and `same-identifier` (pages sharing a value in `identityFields`: `email`
   plus `"review": {"identityFields": [...]}`). Computed, never generated: deciding costs tokens
   in the caller's session. `pnpm consolidate:report <folder>` runs it offline.
+- **`src/lib/review-queue.ts`** (`pnpm test:consolidate`) is the findings queue: D1
+  `review_findings` (migration 0019), for findings that take work to produce. It is derived
+  state, and a decision stays a dismissal in the ledger. Visibility is per kind
+  (`canSeeFinding`), a row whose page shas no longer match is stale and only counted, and
+  `upsertFindings` scrubs every row through the detectors. A conflict's key is the page pair
+  plus a fingerprint of the disputed values (`conflictKey`), never the cluster.
 - `resolve` actions: `dismiss` / `undismiss` for structure and consolidation findings;
   `delete` / `alias` / `suppress` / `recreate` for import findings.
 - Design: `docs/design/consolidation-loop.md`, `docs/design/folder-notes-and-okf-conformance.md`.

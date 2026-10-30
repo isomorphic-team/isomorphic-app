@@ -66,9 +66,10 @@ Order:
      (`org_entitlements`, `hasFeature`, `pnpm entitle`) gate its features.
    - Built: the model gateway (`ee/review/gateway.ts`): zero-data-retention routing on every
      request, entitled orgs only, a monthly spend cap per org. Nothing calls it yet.
-   - Left: the unified findings queue in D1, extending the `validate` / `resolve` pattern with a
-     finding `kind` and per-kind visibility. Policy findings are visible to the author and
-     admins only. Consolidation findings are visible to editors.
+   - Built: the unified findings queue in D1 (`src/lib/review-queue.ts`), extending the
+     `validate` / `resolve` pattern with a finding `kind` and per-kind visibility. Policy findings
+     are visible to the author and admins only. Consolidation findings are visible to editors.
+     Nothing writes to it yet: step 3 and step 5 are its producers.
 3. **Guard enforcement.** The rulebook page, both model stages, the tiers, quarantine,
    self-release and the audit log.
 4. **Push webhook.** The after-the-fact scan for the guard, and the incremental trigger for

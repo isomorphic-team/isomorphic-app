@@ -30,6 +30,21 @@ import {
 	isImportKey
 } from '../src/lib/findings.ts';
 
+import {
+	canSeeFinding,
+	conflictKey,
+	isStale,
+	queueReport,
+	readFindings,
+	scrubSensitive,
+	staleNote,
+	upsertFindings,
+	valuesOnPages,
+	type QueueFinding
+} from '../src/lib/review-queue.ts';
+import { localD1 } from '../src/local/d1-sqlite.ts';
+import type { D1Database } from '@cloudflare/workers-types';
+import type { Role } from '../src/lib/orgs.ts';
 import { checker } from './check.ts';
 
 const { check, done } = checker('consolidate checks');
@@ -463,6 +478,191 @@ const of = (ts: Tension[], kind: string) => ts.filter((t) => t.kind === kind);
 		'config: no declaration is email alone',
 		JSON.stringify(parseIdentityFields({})) === JSON.stringify(['email'])
 	);
+}
+
+// ---------- the findings queue ----------
+{
+	const a = 'wiki/a.md';
+	const b = 'wiki/b.md';
+	const rate = await conflictKey([a, b], ['$95', '$120']);
+	check(
+		'queue key: the pair is sorted and the values order does not matter',
+		rate === (await conflictKey([b, a], ['$120', '$95'])) && rate.startsWith(`conflict:${a}|${b}:`),
+		rate
+	);
+	check(
+		'queue key: a second fact on the same pair gets its own key',
+		rate !== (await conflictKey([a, b], ['2026-01-01', '2026-02-01']))
+	);
+	check(
+		'queue key: a changed value is a new disagreement',
+		rate !== (await conflictKey([a, b], ['$95', '$130']))
+	);
+	check(
+		'queue key: case, spacing and edge punctuation do not change it',
+		(await conflictKey([a, b], ['Acme  Teams', 'slack'])) ===
+			(await conflictKey([a, b], ['acme teams.', '"Slack"']))
+	);
+	check(
+		'queue key: another pair with the same values is its own finding',
+		rate !== (await conflictKey([a, 'wiki/c.md'], ['$95', '$120']))
+	);
+	check(
+		'queue key: a page against itself has one path',
+		(await conflictKey([a, a], ['$95', '$120'])).startsWith(`conflict:${a}:`)
+	);
+
+	const pages = new Map([
+		[a, 'The rate is $95.'],
+		[b, 'The rate is $120.']
+	]);
+	check(
+		'queue key: values quoted from their pages pass',
+		valuesOnPages(
+			[
+				{ path: a, value: '$95' },
+				{ path: b, value: '$120' }
+			],
+			pages
+		)
+	);
+	check(
+		'queue key: a value not on its page fails',
+		!valuesOnPages([{ path: a, value: '$120' }], pages)
+	);
+	check('queue key: a missing page fails', !valuesOnPages([{ path: 'x', value: '$1' }], pages));
+
+	const can = (kind: string, role: Role, isAuthor = false) =>
+		canSeeFinding(kind, { role, isAuthor });
+	check(
+		'queue visibility: consolidation findings reach editors, not viewers',
+		can('conflict', 'editor') && can('duplicate', 'editor') && !can('conflict', 'viewer')
+	);
+	check(
+		'queue visibility: policy findings reach admins and the author only',
+		can('policy', 'admin') &&
+			can('policy', 'owner') &&
+			can('policy', 'viewer', true) &&
+			!can('policy', 'editor')
+	);
+	check(
+		'queue visibility: an unknown kind gets the narrowest answer',
+		can('later', 'admin') && !can('later', 'editor') && !can('later', 'editor', true)
+	);
+
+	const row = (over: Partial<QueueFinding> = {}): QueueFinding => ({
+		key: rate,
+		kind: 'conflict',
+		paths: [a, b],
+		headline: 'The rate differs.',
+		evidence: ['a: $95', 'b: $120'],
+		proposal: null,
+		scores: null,
+		pageShas: { [a]: 'sa', [b]: 'sb' },
+		runId: 'r1',
+		clusterId: 'c1',
+		authorUserId: null,
+		...over
+	});
+	const shas = new Map([
+		[a, 'sa'],
+		[b, 'sb']
+	]);
+	check('queue staleness: unchanged pages are open', !isStale(row(), shas));
+	check(
+		'queue staleness: a changed page is stale',
+		isStale(
+			row(),
+			new Map([
+				[a, 'sa'],
+				[b, 'other']
+			])
+		)
+	);
+	check('queue staleness: a deleted page is stale', isStale(row(), new Map([[a, 'sa']])));
+
+	const editor = queueReport([row()], shas, { role: 'editor' });
+	check(
+		'queue report: an open finding carries its key and evidence',
+		editor.open.length === 1 &&
+			editor.open[0].key === rate &&
+			editor.open[0].headline.includes('a: $95') &&
+			editor.stale.length === 0
+	);
+	check(
+		'queue report: a viewer gets nothing',
+		queueReport([row()], shas, { role: 'viewer' }).open.length === 0
+	);
+	const stale = queueReport([row()], new Map(), { role: 'editor' });
+	check(
+		'queue report: a stale finding is not open',
+		!stale.open.length && stale.stale.length === 1
+	);
+	check(
+		'queue report: stale findings are counted, and none is no line',
+		staleNote(2).includes('2 earlier finding(s) are stale') && staleNote(0) === ''
+	);
+	const policy = row({ key: 'policy:x', kind: 'policy', authorUserId: 'u1' });
+	check(
+		'queue report: the author of a policy finding sees it, another editor does not',
+		queueReport([policy], shas, { role: 'editor', userId: 'u1' }).open.length === 1 &&
+			queueReport([policy], shas, { role: 'editor', userId: 'u2' }).open.length === 0 &&
+			queueReport([policy], shas, { role: 'editor' }).open.length === 0
+	);
+
+	const ssn = 'SSN 123-45-6789';
+	check(
+		'queue scrub: a flagged span goes',
+		scrubSensitive(`on file: ${ssn}.`) === 'on file: SSN [redacted].'
+	);
+	check(
+		'queue scrub: clean text is unchanged',
+		scrubSensitive('the rate is $95') === 'the rate is $95'
+	);
+
+	const db = localD1(':memory:').db as unknown as D1Database;
+	await upsertFindings(
+		db,
+		'b1',
+		[
+			row({
+				headline: `Differs: ${ssn}`,
+				evidence: [ssn],
+				proposal: { edit: ssn },
+				scores: { conflict: 0.8 }
+			})
+		],
+		1000
+	);
+	await upsertFindings(db, 'b2', [row()], 1000);
+	const [stored] = await readFindings(db, 'b1');
+	check('queue store: this brain only', (await readFindings(db, 'b1')).length === 1);
+	check(
+		'queue store: a row round-trips',
+		stored.clusterId === 'c1' && stored.scores?.conflict === 0.8 && stored.paths.length === 2,
+		JSON.stringify(stored)
+	);
+	const raw = JSON.stringify(
+		(await db.prepare("SELECT * FROM review_findings WHERE brain_id = 'b1'").all()).results
+	);
+	check('queue store: no flagged value reaches the table', !raw.includes('6789'), raw);
+
+	await upsertFindings(db, 'b1', [row({ headline: 'Reworded.', runId: 'r2' })], 2000);
+	const refreshed = await readFindings(db, 'b1');
+	const times = await db
+		.prepare("SELECT created_at, updated_at FROM review_findings WHERE brain_id = 'b1'")
+		.first<{ created_at: number; updated_at: number }>();
+	check(
+		'queue store: the same key refreshes the row and keeps its first date',
+		refreshed.length === 1 &&
+			refreshed[0].headline === 'Reworded.' &&
+			times?.created_at === 1000 &&
+			times?.updated_at === 2000,
+		JSON.stringify({ refreshed, times })
+	);
+
+	await db.prepare("UPDATE review_findings SET paths = 'not json' WHERE brain_id = 'b2'").run();
+	check('queue store: an unreadable row is dropped', (await readFindings(db, 'b2')).length === 0);
 }
 
 // ---------- tool-maintained pages are never candidates ----------

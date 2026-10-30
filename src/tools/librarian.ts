@@ -94,6 +94,7 @@ import { dedupeWrite, writeFingerprint, secondsSince } from '../lib/write-dedupe
 import { d1WriteLedger } from '../lib/write-dedupe-store.ts';
 import { detectionSection, REPORT_WINDOW_DAYS } from '../lib/policy-guard.ts';
 import { readCoverage, readDetectionCounts } from '../lib/policy-store.ts';
+import { queueReport, readFindings, readPageShas, staleNote } from '../lib/review-queue.ts';
 import { brainLabel, type TenantOpts, type Role, type AccessibleBrain } from '../lib/orgs.ts';
 import { brainArg, fail, ok } from './shared.ts';
 import { checkPageWrite, planPageWrite, composeCreate, composeUpdate } from '../lib/page-write.ts';
@@ -1311,7 +1312,9 @@ export function registerLibrarianTools(
 			inputSchema: z.object({ brain: brainArg })
 		},
 		async ({ brain }) => {
-			const { store, repoArgs, config, db, brainId, role } = await getContext({ brain });
+			const { store, repoArgs, config, db, brainId, role, actorUserId } = await getContext({
+				brain
+			});
 			const { truncated } = await ensureFresh(db, store, repoArgs, brainId, config);
 			const resolved = await loadResolvedGraph(db, brainId, config);
 
@@ -1415,8 +1418,19 @@ export function registerLibrarianTools(
 							)
 						: undefined;
 
+				// Stored findings. An unreadable queue costs this block, not the report.
+				let queued: { open: Finding[]; stale: Finding[] } = { open: [], stale: [] };
+				const rows = await readFindings(db, brainId).catch(() => []);
+				if (rows.length) {
+					queued = queueReport(rows, await readPageShas(db, brainId), {
+						role,
+						userId: actorUserId
+					});
+				}
+
 				const all: Finding[] = [
 					...importFindingsList,
+					...queued.open,
 					...inlinedConceptSuggestions(
 						[...noteContents].map(([path, content]) => ({ path, content })),
 						resolved.pages
@@ -1442,9 +1456,12 @@ export function registerLibrarianTools(
 				// a corrupt or unreadable ledger must not cost the caller their report,
 				// it just means nothing is filtered this run.
 				let kept = all;
+				let keptStale = queued.stale;
 				try {
 					const raw = await store.readFile(repoArgs, REVIEW_LEDGER_PATH);
-					kept = filterDismissed(all, parseReviewLedger(raw?.content ?? null));
+					const ledger = parseReviewLedger(raw?.content ?? null);
+					kept = filterDismissed(all, ledger);
+					keptStale = filterDismissed(queued.stale, ledger);
 				} catch {
 					// An unparseable ledger filters nothing rather than failing the read.
 				}
@@ -1457,6 +1474,7 @@ export function registerLibrarianTools(
 						`\n\n${kept.length} finding(s) need a decision — advisory, nothing here is broken,` +
 						` and each can be answered or silenced with resolve.${note}\n${text}`;
 				}
+				findingsText += staleNote(keptStale.length);
 			} catch {
 				// Advisory only; link validation stands alone.
 			}

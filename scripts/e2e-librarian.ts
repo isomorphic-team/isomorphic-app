@@ -56,6 +56,12 @@ import { loadCustomToolDefs, registerCustomTools } from '../src/tools/custom.ts'
 import { loadBrainConfig } from '../src/lib/brain-config.ts';
 import type { BrainStore } from '../src/lib/brain-repo.ts';
 import { localD1 } from '../src/local/d1-sqlite.ts';
+import {
+	conflictKey,
+	readPageShas,
+	upsertFindings,
+	type QueueFinding
+} from '../src/lib/review-queue.ts';
 import { webUrlFor } from '../src/lib/web-app.ts';
 import { checker } from './check.ts';
 import { BIND_FIXTURE_STORAGE } from './fixture-storage.ts';
@@ -1874,6 +1880,67 @@ try {
 			validated.text
 		);
 
+		// The findings queue through the real tools: a stored finding reaches validate,
+		// resolve answers it by key, and a changed page makes it stale.
+		const left = 'wiki/queue-a.md';
+		const right = 'wiki/queue-b.md';
+		await call('write_page', { path: left, content: 'The rate is $95.\n' });
+		await call('write_page', { path: right, content: 'The rate is $120.\n' });
+		await call('validate', {});
+		const located = await db
+			.prepare('SELECT brain_id FROM brain_pages WHERE path = ?1')
+			.bind(left)
+			.first<{ brain_id: string }>();
+		const brainId = located?.brain_id ?? '';
+		const queuedShas = await readPageShas(db as never, brainId);
+		const finding = (key: string, values: [string, string], runId: string): QueueFinding => ({
+			key,
+			kind: 'conflict',
+			paths: [left, right],
+			headline: `The rate differs: ${values.join(' against ')}.`,
+			evidence: [`${left}: ${values[0]}`, `${right}: ${values[1]}`],
+			proposal: null,
+			scores: null,
+			pageShas: {
+				[left]: queuedShas.get(left) ?? '',
+				[right]: queuedShas.get(right) ?? ''
+			},
+			runId,
+			clusterId: null,
+			authorUserId: null
+		});
+		const rateKey = await conflictKey([left, right], ['$95', '$120']);
+		const dateKey = await conflictKey([left, right], ['March', 'April']);
+		await upsertFindings(db as never, brainId, [
+			finding(rateKey, ['$95', '$120'], 'r1'),
+			finding(dateKey, ['March', 'April'], 'r1')
+		]);
+		let report = await call('validate', {});
+		check(
+			'validate lists a stored finding with its key',
+			report.text.includes(`[${rateKey}]`) && report.text.includes(`[${dateKey}]`),
+			report.text
+		);
+		const dismissal = await call('resolve', {
+			decisions: [{ finding: rateKey, action: 'dismiss', why: 'different contracts' }]
+		});
+		check('resolve dismisses a queue finding by key', !dismissal.isError, dismissal.text);
+		report = await call('validate', {});
+		check(
+			'the dismissal silences that fact and not the other on the same pages',
+			!report.text.includes(`[${rateKey}]`) && report.text.includes(`[${dateKey}]`),
+			report.text
+		);
+		await call('write_page', { path: left, append: '\nUpdated.\n' });
+		report = await call('validate', {});
+		check(
+			'a changed page makes the finding stale, and a dismissed one stays silent',
+			!report.text.includes(`[${dateKey}]`) &&
+				report.text.includes('1 earlier finding(s) are stale'),
+			report.text
+		);
+
+		before = await commitCount();
 		br = await callBrain('configure_brain', {});
 		check('configure_brain refuses when a config already exists', br.isError, br.text);
 		check(

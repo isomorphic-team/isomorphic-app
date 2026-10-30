@@ -1,6 +1,6 @@
 # Design: consistency checks
 
-Status: **proposed** (2026-10-13). C1 and C2 are built; the rest is not.
+Status: **proposed** (2026-10-13). C1, C2 and C3 are built; the rest is not.
 
 This is the consolidation half of the roadmap's "brain review" (steps 2 and 5).
 
@@ -225,7 +225,7 @@ Roadmap step 2 extends the `validate` / `resolve` pattern into one findings queu
   - the proposal and the scores
   - the blob SHA of each page at check time
   - the run that produced it
-- **Keys** follow invariant 3: kind plus the sorted paths of the cluster, never wording.
+- **Keys** follow invariant 3: never wording, and never the cluster. A conflict's key is `conflict:<sorted page pair>:<fingerprint of the disputed values>` (`conflictKey`), with one path for a page against itself. A dismissal has to outlive pages joining or leaving a cluster, so a cluster cannot be the key; a pair alone would let dismissing one fact silence another on the same pages. Triage names the disputed values, and `valuesOnPages` checks each appears word for word on its page. A changed value is a new disagreement, so an old dismissal does not cover it. Clusters are a `cluster_id` column for display, and dismissing a cluster writes one ledger entry per key.
 - **Dismissals stay in the brain** (`.isomorphic/review.json`, invariant 4), so they survive a redeploy or a move to another deployment. The queue is derived state; the dismissal is the decision.
 - **`validate`** counts open consolidation findings and drops dismissed ones through `filterDismissed`. A finding whose page SHAs no longer match is reported as stale, not as open.
 - **`resolve`** dismisses one by key, like any other. No new tool.
@@ -260,7 +260,7 @@ Roadmap step 2 extends the `validate` / `resolve` pattern into one findings queu
 | ---- | ---------------------------------------------------------------------------------------------------------- | ------------------------ | ----------------------------------------------------------------------------- |
 | C1   | Built: template-aware `near-duplicate`, scaling to `MAX_DUP_PAGES`                                         | core                     | `consolidate.ts`, tests                                                       |
 | C2   | Built: `same-identifier` tension                                                                           | core                     | `consolidate.ts`, config field, tests                                         |
-| C3   | Consolidation kinds in the unified findings queue, staleness, `validate` and `resolve`                     | core (roadmap step 2)    | D1 migration, findings, tests                                                 |
+| C3   | Built: consolidation kinds in the unified findings queue, staleness, `validate` and `resolve`              | core (roadmap step 2)    | D1 migration, findings, tests                                                 |
 | C4   | Pipeline: candidates, pre-scan, detect, claim triage, verify, tier, through the gateway                    | `ee/` (roadmap step 5)   | `ee/review/`, tests with a stubbed gateway                                    |
 | C4a  | Anthropic adapter in the gateway: Haiku first, Luna fallback, zero-retention declaration, cost from tokens | `ee/`                    | `ee/review/gateway.ts`, tests pinning the fallback order and the refusal path |
 | C5   | Claim clustering across pairs                                                                              | `ee/`                    | pipeline, tests with a stubbed gateway                                        |
@@ -275,6 +275,7 @@ C1 and C2 stand alone and ship first. C3 is shared with the guard's own findings
 - **Should credits count toward the cap?** Counting them keeps the cap's meaning stable. Not counting them lets an operator spend credits freely and keeps the cap for real money.
 - **The gates** (0.2 to detect, 0.4 per claim, the auto gate) come from three brains graded by a model whose own first pass misses real issues. They need a person-labelled sample before any default is trusted.
 - **The auto gate for claim-by-claim patches is a hypothesis.** The three retargeted questions at 0.5 passed 22 of 52 graded edits, all good. The gate was chosen on those same edits, so it needs a held-out sample before auto-apply is offered for them.
-- **How should claims be clustered?** Options: by the decision model on claim pairs, by a normalized subject key the LLM emits, or both. Clusters change as pages change. Is the finding key the sorted union of the cluster's paths, or one key per page pair, grouped only for display?
+- **How should claims be clustered?** Options: by the decision model on claim pairs, by a normalized subject key the LLM emits, or both.
+- **Are conflict keys stable across runs?** The fingerprint is only as stable as the values triage names: `$95/hr` one run and `$95` the next is a different key. Run triage twice over the flagged sets and measure how many keys match, and how much a cluster's entries grow `.isomorphic/review.json`, before C4 fixes the format.
 - **Do contradictions inside one page need their own single-page pass,** or is the pairwise pass enough in practice?
 - **Is a D1 cursor enough** for a full pass on a large brain within Worker limits, or does a full pass need a queue?
