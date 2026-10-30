@@ -56,8 +56,11 @@ import { loadCustomToolDefs, registerCustomTools } from '../src/tools/custom.ts'
 import { loadBrainConfig } from '../src/lib/brain-config.ts';
 import type { BrainStore } from '../src/lib/brain-repo.ts';
 import { localD1 } from '../src/local/d1-sqlite.ts';
+import { guardStore } from '../src/lib/policy-guard.ts';
+import { recordDetections } from '../src/lib/policy-store.ts';
 import {
 	conflictKey,
+	policyKey,
 	readPageShas,
 	upsertFindings,
 	type QueueFinding
@@ -133,23 +136,38 @@ const server = new McpServer({ name: 'librarian-e2e', version: '0.0.0' });
 // Counts writeHead calls: in PR mode it is what puts a write on the brain's open pull
 // request, and a write tool that skips it plans against the default branch instead.
 let writeHeadCalls = 0;
-const getContext = async () => ({
-	store: {
-		...store,
-		writeHead: (...a: Parameters<BrainStore['writeHead']>) => {
-			writeHeadCalls++;
-			return store.writeHead(...a);
-		}
-	},
-	repoArgs,
-	role: 'owner' as const,
-	orgRole: 'owner' as const,
-	config: await loadBrainConfig(store, repoArgs),
-	author: undefined,
-	db,
-	brainId,
-	activeBrain: { id: name, label: name }
-});
+// The brain role every tool sees; flipped to prove a gate through the tool itself.
+let callerRole: 'owner' | 'editor' = 'owner';
+// Wrapped in the guard as the Worker and the local runtime wrap it, so writes here raise
+// the same policy findings.
+const getContext = async () => {
+	const config = await loadBrainConfig(store, repoArgs);
+	return {
+		store: guardStore(
+			{
+				...store,
+				writeHead: (...a: Parameters<BrainStore['writeHead']>) => {
+					writeHeadCalls++;
+					return store.writeHead(...a);
+				}
+			},
+			{
+				mode: config.policyMode,
+				record: (detections) =>
+					recordDetections(db, { brainId, mode: config.policyMode }, detections)
+			}
+		),
+		repoArgs,
+		role: callerRole,
+		orgRole: 'owner' as const,
+		config,
+		author: undefined,
+		db,
+		brainId,
+		policySecret: 'e2e-secret',
+		activeBrain: { id: name, label: name }
+	};
+};
 registerLibrarianTools(server, getContext);
 registerImportTools(server, getContext);
 registerMediaTools(server, getContext);
@@ -1939,6 +1957,78 @@ try {
 				report.text.includes('1 earlier finding(s) are stale'),
 			report.text
 		);
+
+		// The guard as a producer: a write raises a finding through the real tools, an
+		// unrelated edit keeps it, a dismissal clears both surfaces, and fixing closes it.
+		const flagged = 'wiki/queue-flagged.md';
+		const flaggedKey = policyKey(flagged, 'us-ssn');
+		await call('write_page', { path: flagged, content: 'SSN 123-45-6789\n' });
+		report = await call('validate', {});
+		check(
+			'a write with sensitive data raises a keyed finding',
+			report.text.includes(`[${flaggedKey}]`) && !report.text.includes('6789'),
+			report.text
+		);
+		await call('write_page', { path: flagged, append: '\nAn unrelated line.\n' });
+		report = await call('validate', {});
+		check('an unrelated edit keeps it open', report.text.includes(`[${flaggedKey}]`), report.text);
+		const review = await call('view_review', {});
+		check('the Review screen shows it', review.text.includes(flagged), review.text);
+		await call('write_page', { path: flagged, content: 'Removed.\n', mode: 'update' });
+		report = await call('validate', {});
+		check(
+			'removing the data closes it',
+			!report.text.includes(`[${flaggedKey}]`) &&
+				!(await call('view_review', {})).text.includes(flagged),
+			report.text
+		);
+		await call('write_page', { path: flagged, content: 'SSN 123-45-6789\n', mode: 'update' });
+		const dismissFlagged = {
+			decisions: [{ finding: flaggedKey, action: 'dismiss', why: 'test fixture' }]
+		};
+		callerRole = 'editor';
+		const refused = await call('resolve', dismissFlagged);
+		callerRole = 'owner';
+		check('an editor cannot silence a policy finding', refused.isError, refused.text);
+		await call('resolve', dismissFlagged);
+		report = await call('validate', {});
+		check(
+			'a dismissal clears validate and the Review screen',
+			!report.text.includes(`[${flaggedKey}]`) &&
+				!(await call('view_review', {})).text.includes(flagged),
+			report.text
+		);
+
+		// A dismissal covers the values reviewed, and leaves the repository alone.
+		const ledgerText = (await fileText('.isomorphic/review.json')) ?? '';
+		check('a policy dismissal stays out of the repository', !ledgerText.includes('policy:'));
+		await call('write_page', { path: flagged, append: '\nAnother unrelated line.\n' });
+		report = await call('validate', {});
+		check(
+			'an unrelated edit keeps it dismissed',
+			!report.text.includes(`[${flaggedKey}]`),
+			report.text
+		);
+		await call('write_page', { path: flagged, append: '\nSSN 234-56-7890\n' });
+		report = await call('validate', {});
+		check(
+			'a new value reopens it, saying why',
+			report.text.includes(`[${flaggedKey}]`) && report.text.includes('new value appeared'),
+			report.text
+		);
+		const outdated = await call('resolve', {
+			decisions: [{ finding: flaggedKey, action: 'dismiss', seen_detections: 1 }]
+		});
+		check('a dismissal based on an old count is refused', outdated.isError, outdated.text);
+		const current = await call('resolve', {
+			decisions: [{ finding: flaggedKey, action: 'dismiss', seen_detections: 2 }]
+		});
+		check('the current count is accepted', !current.isError, current.text);
+		report = await call('validate', {});
+		check('...and covers both', !report.text.includes(`[${flaggedKey}]`), report.text);
+		await call('resolve', { decisions: [{ finding: flaggedKey, action: 'undismiss' }] });
+		report = await call('validate', {});
+		check('undismiss brings it back', report.text.includes(`[${flaggedKey}]`), report.text);
 
 		before = await commitCount();
 		br = await callBrain('configure_brain', {});

@@ -275,7 +275,6 @@ export interface ReviewViewWire extends InBrain {
 	webUrl?: string;
 	policy: {
 		mode: 'off' | 'shadow';
-		windowDays: number;
 		total: number;
 		pages: ReviewPolicyPage[];
 		coverage: { baseline: 'none' | 'running' | 'done'; text: string };
@@ -569,7 +568,6 @@ export function parseActivity(sc: Payload): { entries: ActivityEntry[]; scopePat
 
 export interface ReviewPolicy {
 	mode: 'off' | 'shadow';
-	windowDays: number;
 	total: number;
 	pages: ReviewPolicyPage[];
 	coverage: { baseline: 'none' | 'running' | 'done'; text: string };
@@ -582,7 +580,6 @@ export function parseReview(sc: Payload): { policy: ReviewPolicy } {
 	return {
 		policy: {
 			mode: p.mode === 'off' ? 'off' : 'shadow',
-			windowDays: typeof p.windowDays === 'number' ? p.windowDays : 30,
 			total: typeof p.total === 'number' ? p.total : 0,
 			pages: pages.map((x) => ({
 				path: x.path,

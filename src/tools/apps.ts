@@ -49,8 +49,9 @@ import {
 	pathPolicyOf
 } from '../lib/brain-config.ts';
 import { roleAtLeast, type TenantOpts } from '../lib/orgs.ts';
-import { groupDetections, reviewSummary, REPORT_WINDOW_DAYS } from '../lib/policy-guard.ts';
-import { readCoverage, readDetectionCounts } from '../lib/policy-store.ts';
+import { groupDetections, reviewSummary } from '../lib/policy-guard.ts';
+import { readCoverage } from '../lib/policy-store.ts';
+import { policyCounts, readReconciledFindings } from '../lib/review-queue.ts';
 import { brainArgFor, fail } from './shared.ts';
 import type {
 	PageViewWire,
@@ -408,27 +409,36 @@ export function registerBrainApp(
 
 	// ---------- view_review ----------
 	// A tool of its own rather than a mode of `validate`: validate is the agent's
-	// whole-brain check and costs a full index pass, while this is one grouped D1 read
-	// the app opens as a screen. Admin-only for the reason in detectionSection.
+	// whole-brain check and costs a full index pass, while this reads the findings queue
+	// and the app opens it as a screen. Admin-only: a path and a kind say where sensitive
+	// data sits.
 	registerAppTool(
 		server,
 		'view_review',
 		{
 			...toolAnnotations('Open the review screen', 'read'),
 			description:
-				"view_review: open a brain's Review screen in Isomorphic, for brain admins. It shows what the data-policy guard recorded: which pages hold sensitive data (API tokens, connection strings, private keys, card numbers, Social Security numbers, medical record numbers, dates of birth) and how many of each kind, from writes over the last 30 days and from the latest baseline scan of existing content, and it states what the checks have and have not covered. Values are never shown or stored. Use when an admin asks whether sensitive or confidential data has landed in the brain, or wants to review data-policy activity.",
+				"view_review: open a brain's Review screen in Isomorphic, for brain admins. It shows what the data-policy guard recorded: which pages hold sensitive data (API tokens, connection strings, private keys, card numbers, Social Security numbers, medical record numbers, dates of birth) and how many of each kind, from writes and from the latest baseline scan of existing content, leaving out what has been fixed or dismissed, and it states what the checks have and have not covered. Values are never shown or stored. Use when an admin asks whether sensitive or confidential data has landed in the brain, or wants to review data-policy activity.",
 			inputSchema: { brain: brainArg },
 			_meta: { ui: { resourceUri: BRAIN_APP_URI } }
 		},
 		async ({ brain }) => {
-			const { config, db, brainId, role, activeBrain } = await getContext({ brain });
+			const { config, db, brainId, role, activeBrain, store, repoArgs, policySecret } =
+				await getContext({ brain });
 			if (!roleAtLeast(role, 'admin')) {
 				return fail(
 					'Review is for admins of this brain: it says where sensitive data sits. Ask a brain admin.'
 				);
 			}
-			const since = Date.now() - REPORT_WINDOW_DAYS * 24 * 60 * 60 * 1000;
-			const grouped = groupDetections(await readDetectionCounts(db, brainId, since));
+			const rows = await readReconciledFindings({
+				db,
+				store,
+				repo: repoArgs,
+				defaultBranch: config.defaultBranch,
+				brainId,
+				secret: policySecret
+			});
+			const grouped = groupDetections(policyCounts(rows));
 			const coverage = await readCoverage(db, brainId, config.policyMode);
 			return {
 				content: [
@@ -446,7 +456,6 @@ export function registerBrainApp(
 					...webUrl('view_review', activeBrain.id),
 					policy: {
 						mode: config.policyMode,
-						windowDays: REPORT_WINDOW_DAYS,
 						total: grouped.total,
 						pages: grouped.pages,
 						coverage: { baseline: coverage.baseline, text: coverage.text }

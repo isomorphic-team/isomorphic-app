@@ -92,9 +92,15 @@ import { elisionNote } from '../lib/search.ts';
 import { parseLedger } from '../lib/brain-import.ts';
 import { dedupeWrite, writeFingerprint, secondsSince } from '../lib/write-dedupe.ts';
 import { d1WriteLedger } from '../lib/write-dedupe-store.ts';
-import { detectionSection, REPORT_WINDOW_DAYS } from '../lib/policy-guard.ts';
-import { readCoverage, readDetectionCounts } from '../lib/policy-store.ts';
-import { queueReport, readFindings, readPageShas, staleNote } from '../lib/review-queue.ts';
+import { detectionSection } from '../lib/policy-guard.ts';
+import { readCoverage } from '../lib/policy-store.ts';
+import {
+	isPolicyKey,
+	queueReport,
+	readPageShas,
+	readReconciledFindings,
+	staleNote
+} from '../lib/review-queue.ts';
 import { brainLabel, type TenantOpts, type Role, type AccessibleBrain } from '../lib/orgs.ts';
 import { brainArg, fail, ok } from './shared.ts';
 import { checkPageWrite, planPageWrite, composeCreate, composeUpdate } from '../lib/page-write.ts';
@@ -168,6 +174,8 @@ export interface BrainContext {
 	// org table row (those tools error with a clear "org accounts only" message).
 	orgId?: string;
 	actorUserId?: string;
+	// Keys policy dismissals: the secret this auth mode already requires.
+	policySecret?: string;
 	// The brain's content-shape config — which paths are editable content,
 	// immutable source, or the tool-maintained changelog. Read from .isomorphic.json
 	// (or defaults). Every write-policy decision below reads from it.
@@ -1312,9 +1320,8 @@ export function registerLibrarianTools(
 			inputSchema: z.object({ brain: brainArg })
 		},
 		async ({ brain }) => {
-			const { store, repoArgs, config, db, brainId, role, actorUserId } = await getContext({
-				brain
-			});
+			const { store, repoArgs, config, db, brainId, role, actorUserId, policySecret } =
+				await getContext({ brain });
 			const { truncated } = await ensureFresh(db, store, repoArgs, brainId, config);
 			const resolved = await loadResolvedGraph(db, brainId, config);
 
@@ -1394,6 +1401,7 @@ export function registerLibrarianTools(
 			// getting their own file, and pages missing the `type:` the format requires.
 			// Soft and best-effort — a failure here must never take link validation with it.
 			let findingsText = '';
+			let openPolicy: number | null = null;
 			try {
 				const notePaths = resolved.pages
 					.filter((p) => isFolderNoteName(p.path.slice(p.path.lastIndexOf('/') + 1)))
@@ -1420,7 +1428,14 @@ export function registerLibrarianTools(
 
 				// Stored findings. An unreadable queue costs this block, not the report.
 				let queued: { open: Finding[]; stale: Finding[] } = { open: [], stale: [] };
-				const rows = await readFindings(db, brainId).catch(() => []);
+				const rows = await readReconciledFindings({
+					db,
+					store,
+					repo: repoArgs,
+					defaultBranch: config.defaultBranch,
+					brainId,
+					secret: policySecret
+				}).catch(() => []);
 				if (rows.length) {
 					queued = queueReport(rows, await readPageShas(db, brainId), {
 						role,
@@ -1475,6 +1490,7 @@ export function registerLibrarianTools(
 						` and each can be answered or silenced with resolve.${note}\n${text}`;
 				}
 				findingsText += staleNote(keptStale.length);
+				openPolicy = kept.filter((f) => isPolicyKey(f.key)).length;
 			} catch {
 				// Advisory only; link validation stands alone.
 			}
@@ -1483,10 +1499,9 @@ export function registerLibrarianTools(
 			// rest: an unreadable table costs the caller this section, not the report.
 			let policyText = '';
 			try {
-				const since = Date.now() - REPORT_WINDOW_DAYS * 24 * 60 * 60 * 1000;
 				policyText = detectionSection(
 					role,
-					await readDetectionCounts(db, brainId, since),
+					openPolicy,
 					await readCoverage(db, brainId, config.policyMode)
 				);
 			} catch {

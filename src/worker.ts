@@ -227,8 +227,12 @@ function appCreds(env: Env): AppCreds {
 // no request URL to build one from. Missing either, read_media issues no link.
 let assetKeyMemo: { secret: string; key: Promise<CryptoKey> } | undefined;
 
+function deploymentSecret(env: Env): string | undefined {
+	return (env.AUTH_MODE === 'oauth' ? env.AUTH_SECRET : env.MCP_BEARER_TOKEN)?.trim() || undefined;
+}
+
 function assetKeyFor(env: Env): Promise<CryptoKey> | undefined {
-	const secret = (env.AUTH_MODE === 'oauth' ? env.AUTH_SECRET : env.MCP_BEARER_TOKEN)?.trim();
+	const secret = deploymentSecret(env);
 	if (!secret) return undefined;
 	if (assetKeyMemo?.secret !== secret) assetKeyMemo = { secret, key: assetLinkKey(secret) };
 	return assetKeyMemo.key;
@@ -291,6 +295,7 @@ interface TenantContext {
 	// Null when the caller holds no membership in the org that owns the resolved brain.
 	// Every gate reading this treats null as "not a member", never as "no gate".
 	orgRole: Role | null;
+	policySecret?: string;
 	// The resolved org's id + the acting user's id. The member-management tools need
 	// them to scope the roster and enforce self-guards.
 	orgId?: string;
@@ -669,6 +674,7 @@ class McpSession {
 			orgRole: target.org_role,
 			orgId: target.org_id,
 			actorUserId: userId,
+			policySecret: deploymentSecret(env),
 			config,
 			author,
 			db: env.PLATFORM_DB,

@@ -61,9 +61,9 @@ would go stale on `switch_brain`.
 `validate` reports two things. **Defects** (broken links, `brokenLinkReport`) have one right
 answer, carry no key, and cannot be silenced. **Findings** are advisory, carry a stable
 `[key]`, and can be answered with `resolve` (editor+, in `src/tools/importer.ts`). Nothing
-advisory blocks a save. A third section, shown to brain admins only, lists what the
-data-policy guard recorded and states its coverage (`detectionSection`, see `write-path.md`); it
-carries no keys yet and is not answerable with `resolve`.
+advisory blocks a save. A third section, shown to brain admins only, counts open policy findings and
+states the guard's coverage (`detectionSection`, see `write-path.md`); the findings themselves
+are in the list, with keys.
 
 - **`src/lib/findings.ts`** owns the `Finding` type, keys, and the dismissal ledger at
   `.isomorphic/review.json` in the brain. **Keys are an interface:** derived from kind plus
@@ -88,6 +88,7 @@ carries no keys yet and is not answerable with `resolve`.
   (`canSeeFinding`), a row whose page shas no longer match is stale and only counted, and
   `upsertFindings` scrubs every row through the detectors. A conflict's key is the page pair
   plus a fingerprint of the disputed values (`conflictKey`), never the cluster.
-- `resolve` actions: `dismiss` / `undismiss` for structure and consolidation findings;
+- `resolve` actions: `dismiss` / `undismiss` for structure, consolidation and policy findings
+  (policy dismissals go to D1, see `write-path.md`);
   `delete` / `alias` / `suppress` / `recreate` for import findings.
 - Design: `docs/design/consolidation-loop.md`, `docs/design/folder-notes-and-okf-conformance.md`.

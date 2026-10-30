@@ -28,7 +28,12 @@ The data-policy guard, roadmap "brain review" step 1:
   Emails and phone numbers are deliberately not detected.
 
 - **Shadow mode on every brain.** A write is never blocked. Detections are recorded in D1 `policy_detections` as offsets, and the table has no column that could hold the matched text.
-- **Admins see detections.** `validate` lists them for brain admins (`detectionSection`), and the Review screen (`view_review`) shows the same rows, grouped by page and kind, over `REPORT_WINDOW_DAYS`.
+- **Detections are policy findings.** A write or a baseline scan raises one finding per file and kind in the findings queue, keyed `policy:<path>:<kind>`. `validate` lists them for brain admins and the content's author, and the Review screen (`view_review`) shows them grouped by page. An admin dismisses a false positive with `resolve`.
+- **A finding stays open until the data is gone.** Each report rechecks files that changed, through the detectors: an unrelated edit keeps the finding, and removing the data or the file closes it. There is no time window. `policy_detections` stays the raw log.
+- **A dismissal covers values, not a path and kind.** A brain admin dismisses what is in the file now, recorded as one HMAC per value in D1 `policy_dismissals`. A new or swapped value reopens the finding, the same value reformatted or moved does not, and fixing the file forgets the dismissal. `resolve` takes the count the admin saw and refuses if it has changed.
+  - **Keyed,** because a plain hash of a Social Security number falls to trying every number. The key derives from the secret the auth mode already requires (`AUTH_SECRET` or the bearer) under its own label, and the brain id is in the message, so fingerprints cannot be compared across brains. Rotating that secret re-raises dismissed findings, which is the safe direction.
+  - **In D1, not `.isomorphic/review.json`,** because a path plus a kind says where sensitive data sits and repository readers are not the audience. A brain moved to another deployment has its policy dismissals re-raised.
+  - **The trade-off:** someone holding both the database and the secret could recover a low-entropy value by brute force. A fingerprint is not the value, but it is derived from it.
 - **Model stages are forward-only by decision.** Existing content gets only the deterministic baseline scan (Part 1).
 
 Steps 3 and 4 of the roadmap add the rest of the guard:
@@ -70,7 +75,7 @@ A detective control that reports clean on partial coverage is worse than one tha
 
 - **What the guard covers.** The Review screen and `validate`'s admin section state it, also when nothing was found: writes made through Isomorphic since a date, that pushes to the repository are unseen, and whether existing content was scanned. The date is the later of the brain's creation and `GUARD_FIRST_RELEASED`. The earliest row would not do: rows are pruned, and a brain older than the guard would otherwise claim coverage it never had.
 - **The baseline scan.** An admin runs it with `configure_brain` and `baseline_scan: true`, or from the Review screen. That tool already requires brain admin and is annotated as a write; `view_review` stays a read. Each call handles `BASELINE_FILE_BUDGET` paths from a cursor in D1 (`policy_baseline`) and the Review screen repeats it to the end. It reads every text file in the repository through the `BrainStore`, not only the indexed pages, and counts the binaries it skips.
-- **Its rows are `mode = 'baseline'`** in `policy_detections`. They are exempt from the report window and the retention prune, because the content they point at does not age out, and the next scan replaces them.
+- **It raises policy findings** like a write does, so what it finds stays open until the data is gone. Its log rows are `mode = 'baseline'` in `policy_detections`, and the next scan replaces them.
 - **The roadmap trade-off.** This narrows the roadmap's "forward-only" decision rather than reversing it:
   - The baseline uses no model, so it costs nothing per page.
   - It runs only when an admin asks.
@@ -123,7 +128,7 @@ Isomorphic's docs point to it for anyone running `pnpm try` or keeping a checkou
 ## Invariants
 
 - **Unchanged from the guard:**
-  - Detections carry offsets, never the matched text.
+  - Detections and findings carry offsets and counts, never the matched text. The one derived form stored is a keyed fingerprint of a value someone dismissed.
   - Policy findings are visible to admins only.
   - Nothing advisory blocks a write.
 - **New:**
