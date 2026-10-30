@@ -1,6 +1,6 @@
 # Design: privacy checks
 
-Status: **proposed** (2026-10-13). Nothing below is built. What it builds on, the data-policy guard, is.
+Status: **proposed** (2026-10-13). P0 and P1 are built; the rest is not. What it builds on, the data-policy guard, is built too.
 
 This is the companion to [`consistency-checks.md`](./consistency-checks.md), and the privacy half of the roadmap's "brain review". The guard answers one question: did a write put sensitive data into a brain? This doc covers what the guard leaves open:
 
@@ -29,7 +29,7 @@ The data-policy guard, roadmap "brain review" step 1:
 
 - **Shadow mode on every brain.** A write is never blocked. Detections are recorded in D1 `policy_detections` as offsets, and the table has no column that could hold the matched text.
 - **Admins see detections.** `validate` lists them for brain admins (`detectionSection`), and the Review screen (`view_review`) shows the same rows, grouped by page and kind, over `REPORT_WINDOW_DAYS`.
-- **Forward-only by decision.** No backfill scan of existing content.
+- **Model stages are forward-only by decision.** Existing content gets only the deterministic baseline scan (Part 1).
 
 Steps 3 and 4 of the roadmap add the rest of the guard:
 
@@ -68,8 +68,9 @@ Both changes are in the core, in `src/lib/policy-detectors.ts`, and keep its rul
 
 A detective control that reports clean on partial coverage is worse than one that says nothing.
 
-- **What the guard covers.** The Review screen and `validate`'s admin section state it: "writes since \<date the guard first ran on this brain\>". That date is the earliest row, or the brain's connection date.
-- **The baseline scan.** An admin can run a deterministic scan of the brain as it stands, once. It uses the same detectors, records to the same table, and is budgeted and resumable under the whole-brain pass rule.
+- **What the guard covers.** The Review screen and `validate`'s admin section state it, also when nothing was found: writes made through Isomorphic since a date, that pushes to the repository are unseen, and whether existing content was scanned. The date is the later of the brain's creation and `GUARD_FIRST_RELEASED`. The earliest row would not do: rows are pruned, and a brain older than the guard would otherwise claim coverage it never had.
+- **The baseline scan.** An admin runs it with `configure_brain` and `baseline_scan: true`, or from the Review screen. That tool already requires brain admin and is annotated as a write; `view_review` stays a read. Each call handles `BASELINE_FILE_BUDGET` paths from a cursor in D1 (`policy_baseline`) and the Review screen repeats it to the end. It reads every text file in the repository through the `BrainStore`, not only the indexed pages, and counts the binaries it skips.
+- **Its rows are `mode = 'baseline'`** in `policy_detections`. They are exempt from the report window and the retention prune, because the content they point at does not age out, and the next scan replaces them.
 - **The roadmap trade-off.** This narrows the roadmap's "forward-only" decision rather than reversing it:
   - The baseline uses no model, so it costs nothing per page.
   - It runs only when an admin asks.
@@ -140,8 +141,8 @@ Isomorphic's docs point to it for anyone running `pnpm try` or keeping a checkou
 
 | Item | What                                                                            | Where                        | Surface                                                   |
 | ---- | ------------------------------------------------------------------------------- | ---------------------------- | --------------------------------------------------------- |
-| P0   | Connection-string detector; network-prefix card matching                        | core                         | `policy-detectors.ts`, `pnpm test:guard` negative cases   |
-| P1   | Coverage line, and the admin-run deterministic baseline scan                    | core                         | guard, `validate`, Review screen, tests                   |
+| P0   | Built: connection-string detector; network-prefix card matching                 | core                         | `policy-detectors.ts`, `pnpm test:guard` negative cases   |
+| P1   | Built: coverage line, and the admin-run deterministic baseline scan             | core                         | guard, `validate`, Review screen, tests                   |
 | P2   | Declarations: frontmatter fields, sensitive globs, brain-wide default           | core                         | `.isomorphic.json` policy block, tests                    |
 | P3   | Recognize git-crypt files through the store; local runtime reads git attributes | core                         | `BrainStore`, content index, `src/local/`                 |
 | P4   | Reach summary; sensitive counts in `share_brain` replies                        | core                         | `validate`, Review screen, `share_brain`                  |

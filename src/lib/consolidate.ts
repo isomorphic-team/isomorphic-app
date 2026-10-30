@@ -22,7 +22,8 @@ export type TensionKind =
 	| 'hollow-folder-note'
 	| 'folder-note-convention'
 	| 'folder-echo-page'
-	| 'near-duplicate';
+	| 'near-duplicate'
+	| 'same-identifier';
 
 export interface Tension {
 	// Stable across runs and across content edits, so a dismissal sticks. Derived
@@ -48,9 +49,25 @@ const MIN_FOLDER_PAGES_FOR_NOTE = 3;
 const DUP_THRESHOLD = 0.2;
 
 // Near-duplicate detection is the only check that needs page BODIES. Above this many
-// pages the pairwise pass is skipped rather than run slowly, and the report says so
-// instead of quietly covering less than it claims.
-export const MAX_DUP_PAGES = 400;
+// pages the pass is skipped rather than run slowly, and the report says so instead of
+// quietly covering less than it claims.
+export const MAX_DUP_PAGES = 2000;
+
+// A bigram on this share of a folder's pages is a template, not what a page says. Well
+// under half, because a folder often mixes stubs built from a template with full pages.
+const TEMPLATE_SHARE = 0.25;
+
+// However small the folder, a bigram needs this many holders to be a template, so a few
+// pages telling one story never have it removed.
+const MIN_TEMPLATE_HOLDERS = 4;
+
+// A templated page with this little left says too little to compare: a shared phrase
+// or two would read as a high overlap.
+const MIN_SHINGLES_AFTER_TEMPLATE = 10;
+
+// Pairs are blocked on shared bigrams held by at most this many pages. A bigram held
+// by more is common vocabulary, and pairing its holders is the all-pairs pass again.
+const MAX_BLOCKING_PAGES = 20;
 
 const STOPWORDS = new Set([
 	'the',
@@ -156,6 +173,62 @@ function jaccard(a: Set<string>, b: Set<string>): number {
 	return shared / (a.size + b.size - shared);
 }
 
+// Each page's shingles with its folder's template removed. Pages left with too little
+// to compare are dropped.
+function withoutTemplates(sets: Map<string, Set<string>>): Map<string, Set<string>> {
+	const byFolder = new Map<string, string[]>();
+	for (const path of sets.keys()) {
+		const f = folderOf(path);
+		byFolder.set(f, [...(byFolder.get(f) ?? []), path]);
+	}
+	const out = new Map(sets);
+	for (const paths of byFolder.values()) {
+		const held = new Map<string, number>();
+		for (const p of paths) for (const s of sets.get(p)!) held.set(s, (held.get(s) ?? 0) + 1);
+		const holders = Math.max(MIN_TEMPLATE_HOLDERS, Math.ceil(paths.length * TEMPLATE_SHARE));
+		const template = new Set([...held].filter(([, n]) => n >= holders).map(([s]) => s));
+		if (!template.size) continue;
+		for (const p of paths) {
+			const kept = new Set([...sets.get(p)!].filter((s) => !template.has(s)));
+			if (kept.size === sets.get(p)!.size) continue;
+			if (kept.size < MIN_SHINGLES_AFTER_TEMPLATE) out.delete(p);
+			else out.set(p, kept);
+		}
+	}
+	return out;
+}
+
+// Path pairs (first path sorts lower) sharing at least one rare bigram.
+function candidatePairs(sets: Map<string, Set<string>>): [string, string][] {
+	const holders = new Map<string, string[]>();
+	for (const [path, set] of sets) {
+		for (const s of set) {
+			const list = holders.get(s);
+			if (list) list.push(path);
+			else holders.set(s, [path]);
+		}
+	}
+	const seen = new Map<string, [string, string]>();
+	for (const list of holders.values()) {
+		if (list.length < 2 || list.length > MAX_BLOCKING_PAGES) continue;
+		for (let i = 0; i < list.length; i++) {
+			for (let j = i + 1; j < list.length; j++) {
+				const [a, b] = list[i] < list[j] ? [list[i], list[j]] : [list[j], list[i]];
+				const id = `${a}\0${b}`;
+				if (!seen.has(id)) seen.set(id, [a, b]);
+			}
+		}
+	}
+	return [...seen.values()];
+}
+
+// ---------- same-identifier ----------
+
+function normalizeIdentifier(field: string, value: string): string {
+	const v = value.trim();
+	return field === 'email' ? v.toLowerCase() : v;
+}
+
 export interface TensionInput {
 	pages: { path: string; title: string }[];
 	edges: { source: string; target: string }[];
@@ -163,6 +236,12 @@ export interface TensionInput {
 	contents?: Map<string, string>;
 	// Paths the tools own (log.md and friends) — never a consolidation candidate.
 	toolMaintained?: (path: string) => boolean;
+	// Indexed frontmatter per path, for same-identifier. Omit to skip that check.
+	fields?: ReadonlyMap<string, ReadonlyMap<string, readonly string[]>>;
+	// The frontmatter keys that identify an entity (BrainConfig.identityFields).
+	identityFields?: readonly string[];
+	// Whether a path is under the brain's content roots.
+	isContent?: (path: string) => boolean;
 }
 
 export function computeTensions(input: TensionInput): Tension[] {
@@ -310,28 +389,67 @@ export function computeTensions(input: TensionInput): Tension[] {
 
 	// ---- near-duplicate ----
 	if (input.contents && content.length <= MAX_DUP_PAGES) {
-		const sets = new Map<string, Set<string>>();
+		const all = new Map<string, Set<string>>();
 		for (const p of content) {
 			const c = input.contents.get(p.path);
-			if (c) sets.set(p.path, shingles(c));
+			if (c) all.set(p.path, shingles(c));
 		}
-		const paths = [...sets.keys()].sort();
-		for (let i = 0; i < paths.length; i++) {
-			for (let j = i + 1; j < paths.length; j++) {
-				const score = jaccard(sets.get(paths[i])!, sets.get(paths[j])!);
-				if (score < DUP_THRESHOLD) continue;
-				const a = content.find((p) => p.path === paths[i])!;
-				const b = content.find((p) => p.path === paths[j])!;
-				out.push({
-					key: tensionKey('near-duplicate', [a.path, b.path]),
-					kind: 'near-duplicate',
-					paths: [a.path, b.path],
-					headline: `"${a.title}" and "${b.title}" say ${Math.round(score * 100)}% of the same thing.`,
-					evidence: [a.path, b.path, `bigram overlap ${score.toFixed(2)}`],
-					move: 'Read both. If one concept: merge into the better page and move_page the other onto it so inbound links follow. If two: sharpen the titles and descriptions until the difference is visible without reading.',
-					weight: 2 + score * 4
-				});
+		const sets = withoutTemplates(all);
+		const titles = new Map(content.map((p) => [p.path, p.title]));
+		for (const [a, b] of candidatePairs(sets)) {
+			const score = jaccard(sets.get(a)!, sets.get(b)!);
+			if (score < DUP_THRESHOLD) continue;
+			out.push({
+				key: tensionKey('near-duplicate', [a, b]),
+				kind: 'near-duplicate',
+				paths: [a, b],
+				headline: `"${titles.get(a)}" and "${titles.get(b)}" say ${Math.round(score * 100)}% of the same thing.`,
+				evidence: [a, b, `bigram overlap ${score.toFixed(2)}`],
+				move: 'Read both. If one concept: merge into the better page and move_page the other onto it so inbound links follow. If two: sharpen the titles and descriptions until the difference is visible without reading.',
+				weight: 2 + score * 4
+			});
+		}
+	}
+
+	// ---- same-identifier ----
+	if (input.fields) {
+		const inContent = input.isContent ?? (() => true);
+		const holders = new Map<string, { label: string; paths: Set<string> }>();
+		for (const p of content) {
+			if (isFolderNoteName(baseOf(p.path)) || !inContent(p.path)) continue;
+			const fields = input.fields.get(p.path);
+			if (!fields) continue;
+			for (const field of input.identityFields ?? []) {
+				for (const raw of fields.get(field) ?? []) {
+					const value = normalizeIdentifier(field, raw);
+					if (!value) continue;
+					const id = `${field}\0${value}`;
+					const entry = holders.get(id) ?? { label: `${field}: ${value}`, paths: new Set() };
+					entry.paths.add(p.path);
+					holders.set(id, entry);
+				}
 			}
+		}
+		// One tension per group of pages, however many identifiers that group shares.
+		const groups = new Map<string, { paths: string[]; labels: string[] }>();
+		for (const { label, paths } of holders.values()) {
+			if (paths.size < 2) continue;
+			const sorted = [...paths].sort();
+			const id = sorted.join('\0');
+			const group = groups.get(id) ?? { paths: sorted, labels: [] };
+			group.labels.push(label);
+			groups.set(id, group);
+		}
+		for (const { paths, labels } of groups.values()) {
+			out.push({
+				key: tensionKey('same-identifier', paths),
+				kind: 'same-identifier',
+				paths,
+				headline: `${paths.length} pages carry the same identifier, so they may describe one entity.`,
+				evidence: [...labels, ...paths],
+				move: 'Read them. If one entity: merge into the fuller page and move_page the others onto it so inbound links follow. If the identifier is genuinely shared, dismiss this.',
+				weight: 4.5
+			});
 		}
 	}
 

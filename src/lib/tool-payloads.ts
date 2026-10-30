@@ -278,6 +278,17 @@ export interface ReviewViewWire extends InBrain {
 		windowDays: number;
 		total: number;
 		pages: ReviewPolicyPage[];
+		coverage: { baseline: 'none' | 'running' | 'done'; text: string };
+	};
+}
+
+/** One step of the baseline scan (configure_brain with baseline_scan). */
+export interface BaselineStepWire {
+	baseline: {
+		status: 'running' | 'done';
+		filesScanned: number;
+		filesSkipped: number;
+		detections: number;
 	};
 }
 
@@ -561,11 +572,13 @@ export interface ReviewPolicy {
 	windowDays: number;
 	total: number;
 	pages: ReviewPolicyPage[];
+	coverage: { baseline: 'none' | 'running' | 'done'; text: string };
 }
 
 export function parseReview(sc: Payload): { policy: ReviewPolicy } {
 	const p = obj(wire<ReviewViewWire>(sc).policy);
 	const pages = list<ReviewPolicyPage>(p.pages).filter((x) => typeof x?.path === 'string');
+	const cov = obj(p.coverage);
 	return {
 		policy: {
 			mode: p.mode === 'off' ? 'off' : 'shadow',
@@ -575,8 +588,22 @@ export function parseReview(sc: Payload): { policy: ReviewPolicy } {
 				path: x.path,
 				count: typeof x.count === 'number' ? x.count : 0,
 				kinds: list<{ kind: string; count: number }>(x.kinds)
-			}))
+			})),
+			coverage: {
+				baseline: cov.baseline === 'running' || cov.baseline === 'done' ? cov.baseline : 'none',
+				text: str(cov.text) ?? ''
+			}
 		}
+	};
+}
+
+// A step whose payload carries no status reads as unfinished, so a caller looping on
+// `done` stops at the failure instead of reporting a finished scan.
+export function parseBaselineStep(sc: Payload): { done: boolean; filesScanned: number } {
+	const b = obj(wire<BaselineStepWire>(sc).baseline);
+	return {
+		done: b.status === 'done',
+		filesScanned: typeof b.filesScanned === 'number' ? b.filesScanned : 0
 	};
 }
 

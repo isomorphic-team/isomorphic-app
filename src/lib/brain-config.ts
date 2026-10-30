@@ -87,7 +87,7 @@ interface ConfigFile extends LegacyConfigFile {
 	sourceOfTruth?: unknown;
 	writes?: { mode?: unknown; autoMerge?: unknown };
 	index?: { fields?: unknown };
-	review?: { policy?: { mode?: unknown } };
+	review?: { policy?: { mode?: unknown }; identityFields?: unknown };
 }
 
 // Parse the path→role map from either file shape. New shape: a `paths` record
@@ -170,8 +170,18 @@ export async function loadBrainConfig(store: BrainStore, repo: RepoRef): Promise
 		// Distinguish "absent" (null → index all keys) from an explicit list.
 		indexedFields: Array.isArray(rawFields) ? stringList(rawFields, []) : null,
 		sourceOfTruth: raw.sourceOfTruth === 'source' ? 'source' : 'app',
-		policyMode: parsePolicyMode(raw)
+		policyMode: parsePolicyMode(raw),
+		identityFields: parseIdentityFields(raw)
 	};
+}
+
+// `email` always counts; a brain's declared keys add to it, and anything that is not a
+// non-empty string is ignored.
+export function parseIdentityFields(raw: ConfigFile): string[] {
+	const declared = stringList(raw.review?.identityFields, [])
+		.map((f) => f.trim())
+		.filter(Boolean);
+	return [...new Set([...DEFAULT_BRAIN_CONFIG.identityFields, ...declared])];
 }
 
 // Only an explicit "off" turns the guard off. Anything else, including a typo, keeps the

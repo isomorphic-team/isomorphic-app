@@ -93,7 +93,7 @@ import { parseLedger } from '../lib/brain-import.ts';
 import { dedupeWrite, writeFingerprint, secondsSince } from '../lib/write-dedupe.ts';
 import { d1WriteLedger } from '../lib/write-dedupe-store.ts';
 import { detectionSection, REPORT_WINDOW_DAYS } from '../lib/policy-guard.ts';
-import { readDetectionCounts } from '../lib/policy-store.ts';
+import { readCoverage, readDetectionCounts } from '../lib/policy-store.ts';
 import { brainLabel, type TenantOpts, type Role, type AccessibleBrain } from '../lib/orgs.ts';
 import { brainArg, fail, ok } from './shared.ts';
 import { checkPageWrite, planPageWrite, composeCreate, composeUpdate } from '../lib/page-write.ts';
@@ -1430,7 +1430,10 @@ export function registerLibrarianTools(
 							pages: resolved.pages,
 							edges: resolved.edges,
 							contents,
-							toolMaintained: (p) => isToolMaintained(p, config)
+							toolMaintained: (p) => isToolMaintained(p, config),
+							fields: fieldsByPath,
+							identityFields: config.identityFields,
+							isContent: (p) => isContentPath(p, config)
 						})
 					)
 				];
@@ -1463,7 +1466,11 @@ export function registerLibrarianTools(
 			let policyText = '';
 			try {
 				const since = Date.now() - REPORT_WINDOW_DAYS * 24 * 60 * 60 * 1000;
-				policyText = detectionSection(role, await readDetectionCounts(db, brainId, since));
+				policyText = detectionSection(
+					role,
+					await readDetectionCounts(db, brainId, since),
+					await readCoverage(db, brainId, config.policyMode)
+				);
 			} catch {
 				// Advisory only; link validation stands alone.
 			}

@@ -1066,6 +1066,14 @@ console.log('\nconfigure_brain renames at BRAIN scope; connect_brain moves at OR
 		'an org OWNER holding only brain viewer cannot rename either: the name is the brain’s',
 		await denies(orgBoss, 'configure_brain', rename)
 	);
+	check(
+		'a brain viewer cannot run the baseline scan',
+		await denies(lurker, 'configure_brain', { baseline_scan: true })
+	);
+	check(
+		'an org OWNER holding only brain viewer cannot run it either',
+		await denies(orgBoss, 'configure_brain', { baseline_scan: true })
+	);
 	const renamed = await attempt(sharedAdmin, 'configure_brain', rename);
 	check(
 		'a brain admin with no org power can rename, without touching the repository',

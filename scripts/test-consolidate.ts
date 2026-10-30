@@ -8,7 +8,14 @@
 // worth reading: a brain consistently on README.md is consistent, a two-page folder
 // with no note is a shape rather than a gap, and two pages sharing a vocabulary are
 // not two pages sharing a story.
-import { computeTensions, tensionFindings, type Tension } from '../src/lib/consolidate.ts';
+import {
+	computeTensions,
+	tensionFindings,
+	MAX_DUP_PAGES,
+	type Tension,
+	type TensionInput
+} from '../src/lib/consolidate.ts';
+import { parseIdentityFields } from '../src/lib/brain-config.ts';
 import {
 	parseReviewLedger,
 	serializeReviewLedger,
@@ -249,6 +256,212 @@ const of = (ts: Tension[], kind: string) => ts.filter((t) => t.kind === kind);
 	check(
 		'near-duplicate: skipped entirely when no contents are supplied',
 		of(noContents, 'near-duplicate').length === 0
+	);
+}
+
+// ---------- near-duplicate: templated folders ----------
+// Pages built from one template share most of their bigrams and say different things.
+{
+	const template =
+		'## Background summary\n\nEngagement history reviewed quarterly against contract terms, ' +
+		'renewal dates tracked inside account planning, primary stakeholders listed below alongside ' +
+		'preferred meeting cadence, escalation contacts recorded separately, invoices reconciled monthly.';
+	const unique = (n: number) =>
+		Array.from({ length: 16 }, (_, i) => `topic${n}x${i} detail${n}y${i}`).join(' ');
+	const pathsFor = (n: number) => Array.from({ length: n }, (_, i) => `wiki/people/p${i}.md`);
+	const paths = pathsFor(8);
+	const contents = new Map(paths.map((p, i) => [p, `${template}\n\n${unique(i)}`]));
+	const templated = computeTensions({ pages: paths.map((p) => page(p)), edges: [], contents });
+	check(
+		'near-duplicate: a folder of templated pages about different entities is silent',
+		of(templated, 'near-duplicate').length === 0
+	);
+
+	const story = unique(100);
+	const twins = new Map(contents);
+	twins.set(paths[2], `${template}\n\n${story}\nFirst closing line here.`);
+	twins.set(paths[5], `${template}\n\n${story}\nAnother different ending.`);
+	const both = of(
+		computeTensions({ pages: paths.map((p) => page(p)), edges: [], contents: twins }),
+		'near-duplicate'
+	);
+	check(
+		'near-duplicate: two pages telling one story inside that folder still fire',
+		both.length === 1 && both[0].paths.join() === [paths[2], paths[5]].join(),
+		JSON.stringify(both)
+	);
+
+	const stubs = pathsFor(40);
+	const stubContents = new Map(
+		stubs.map((p, i) => [p, `${i < 12 ? template : ''}\n\n${unique(i)}`])
+	);
+	check(
+		'near-duplicate: a template on a minority of the folder is still a template',
+		of(
+			computeTensions({ pages: stubs.map((p) => page(p)), edges: [], contents: stubContents }),
+			'near-duplicate'
+		).length === 0
+	);
+
+	const small = pathsFor(5);
+	const smallFolder = of(
+		computeTensions({
+			pages: small.map((p) => page(p)),
+			edges: [],
+			contents: new Map(small.map((p, i) => [p, i < 2 ? `# t\n\n${story}` : unique(i)]))
+		}),
+		'near-duplicate'
+	);
+	check(
+		'near-duplicate: a few pages telling one story are not a template',
+		smallFolder.length === 1,
+		JSON.stringify(smallFolder)
+	);
+
+	const thin = pathsFor(8);
+	const thinTensions = computeTensions({
+		pages: thin.map((p) => page(p)),
+		edges: [],
+		contents: new Map(
+			thin.map((p, i) => [
+				p,
+				`${template}\n\n${i < 2 ? 'Shared closing words only.' : `Sign off ${i} here.`}`
+			])
+		)
+	});
+	check(
+		'near-duplicate: pages with next to nothing past the template are not compared',
+		of(thinTensions, 'near-duplicate').length === 0
+	);
+
+	const huge = Array.from({ length: 1500 }, (_, i) => `wiki/big/p${i}.md`);
+	const hugeContents = new Map(huge.map((p, i) => [p, `${template}\n\n${unique(i)}`]));
+	hugeContents.set(huge[100], `${template}\n\n${story}\nFirst closing line here.`);
+	hugeContents.set(huge[1400], `${template}\n\n${story}\nAnother different ending.`);
+	const started = Date.now();
+	const hugeDup = of(
+		computeTensions({ pages: huge.map((p) => page(p)), edges: [], contents: hugeContents }),
+		'near-duplicate'
+	);
+	check(
+		'near-duplicate: past the old 400-page cap, the planted pair and nothing else',
+		hugeDup.length === 1 && MAX_DUP_PAGES >= huge.length,
+		JSON.stringify(hugeDup.slice(0, 3))
+	);
+	check('near-duplicate: that pass stays quick', Date.now() - started < 5000);
+}
+
+// ---------- same-identifier ----------
+{
+	const fields = (rows: Record<string, Record<string, string[]>>) =>
+		new Map(Object.entries(rows).map(([p, f]) => [p, new Map(Object.entries(f))]));
+	const pages = ['wiki/a.md', 'wiki/b.md', 'wiki/c.md'].map((p) => page(p));
+	const run = (
+		f: Record<string, Record<string, string[]>>,
+		extra: Partial<TensionInput> = {},
+		ps = pages
+	) =>
+		of(
+			computeTensions({
+				pages: ps,
+				edges: [],
+				fields: fields(f),
+				identityFields: ['email'],
+				...extra
+			}),
+			'same-identifier'
+		);
+
+	const two = run({ 'wiki/a.md': { email: ['x@e.co'] }, 'wiki/b.md': { email: ['x@e.co'] } });
+	check('same-identifier: two pages sharing an email, one tension', two.length === 1);
+	check(
+		'same-identifier: the key is kind plus sorted paths',
+		two[0]?.key === findingKey('same-identifier', ['wiki/b.md', 'wiki/a.md'])
+	);
+	check('same-identifier: the value is the evidence', two[0]?.evidence[0] === 'email: x@e.co');
+
+	const three = run({
+		'wiki/a.md': { email: ['x@e.co'] },
+		'wiki/b.md': { email: ['x@e.co'] },
+		'wiki/c.md': { email: ['x@e.co'] }
+	});
+	check(
+		'same-identifier: three pages sharing one, one tension',
+		three.length === 1 && three[0].paths.length === 3
+	);
+	check(
+		'same-identifier: a list-valued field matches on any element',
+		run({
+			'wiki/a.md': { email: ['old@e.co', 'x@e.co'] },
+			'wiki/b.md': { email: ['x@e.co'] }
+		}).length === 1
+	);
+	check(
+		'same-identifier: case and whitespace do not hide an email',
+		run({ 'wiki/a.md': { email: [' X@E.co '] }, 'wiki/b.md': { email: ['x@e.co'] } }).length === 1
+	);
+	check(
+		'same-identifier: different values are silent',
+		run({ 'wiki/a.md': { email: ['x@e.co'] }, 'wiki/b.md': { email: ['y@e.co'] } }).length === 0
+	);
+	check(
+		'same-identifier: an empty value is not an identifier',
+		run({ 'wiki/a.md': { email: [' '] }, 'wiki/b.md': { email: [' '] } }).length === 0
+	);
+
+	const crm = { 'wiki/a.md': { crm_id: ['AbC'] }, 'wiki/b.md': { crm_id: ['AbC'] } };
+	check(
+		'same-identifier: a field declared in config fires',
+		run(crm, { identityFields: ['email', 'crm_id'] }).length === 1
+	);
+	check('same-identifier: an undeclared field does not', run(crm).length === 0);
+	check(
+		'same-identifier: a declared field compares exactly',
+		run(
+			{ 'wiki/a.md': { crm_id: ['AbC'] }, 'wiki/b.md': { crm_id: ['abc'] } },
+			{ identityFields: ['crm_id'] }
+		).length === 0
+	);
+	check(
+		'same-identifier: two fields shared by one pair are one tension',
+		run(
+			{
+				'wiki/a.md': { email: ['x@e.co'], crm_id: ['1'] },
+				'wiki/b.md': { email: ['x@e.co'], crm_id: ['1'] }
+			},
+			{ identityFields: ['email', 'crm_id'] }
+		).length === 1
+	);
+
+	const noteAndOutside = [page('wiki/a.md'), page('wiki/index.md'), page('ops/team.md')];
+	check(
+		'same-identifier: a folder note or a page outside the content roots does not count',
+		run(
+			{
+				'wiki/a.md': { email: ['x@e.co'] },
+				'wiki/index.md': { email: ['x@e.co'] },
+				'ops/team.md': { email: ['x@e.co'] }
+			},
+			{ isContent: (p) => p.startsWith('wiki/') },
+			noteAndOutside
+		).length === 0
+	);
+	check(
+		'same-identifier: a tool-maintained page does not count',
+		run(
+			{ 'wiki/a.md': { email: ['x@e.co'] }, 'wiki/b.md': { email: ['x@e.co'] } },
+			{ toolMaintained: (p) => p === 'wiki/b.md' }
+		).length === 0
+	);
+
+	check(
+		'config: email always counts, declared keys add to it',
+		JSON.stringify(parseIdentityFields({ review: { identityFields: [' crm_id ', 7, ''] } })) ===
+			JSON.stringify(['email', 'crm_id'])
+	);
+	check(
+		'config: no declaration is email alone',
+		JSON.stringify(parseIdentityFields({})) === JSON.stringify(['email'])
 	);
 }
 

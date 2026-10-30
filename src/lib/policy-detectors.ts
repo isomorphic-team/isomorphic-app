@@ -14,6 +14,7 @@
 export type DetectionKind =
 	| 'private-key'
 	| 'api-token'
+	| 'connection-string'
 	| 'card-number'
 	| 'us-ssn'
 	| 'medical-record-number'
@@ -26,6 +27,7 @@ export type Severity = 'low' | 'medium' | 'high';
 export const DETECTION_LABELS: Record<DetectionKind, string> = {
 	'private-key': 'Private key',
 	'api-token': 'API token',
+	'connection-string': 'Connection string',
 	'card-number': 'Card number',
 	'us-ssn': 'SSN',
 	'medical-record-number': 'Medical record number',
@@ -61,6 +63,28 @@ const TOKEN_PATTERNS = [
 	/\bAIza[0-9A-Za-z_-]{35}\b/ // Google API key
 ];
 
+// A password slot that names a password instead of holding one, as docs and config
+// templates write it: ${DB_PASSWORD}, {{password}}, [password], %s, ***, your_password.
+const PLACEHOLDER_PASSWORD =
+	/^(?:\$\{?\w+\}?|\{\{?[^{}]*\}?\}|\[[^\]]*\]|%\(?\w*\)?[sv]|\*+|x+|\.+|…|(?:your[-_]?|my[-_]?)?(?:pass(?:word|wd)?|pwd|secret)|changeme)$/i;
+
+// Issuer prefix ranges and the lengths each network issues. Luhn alone passes one
+// random digit string in ten, so these do most of the filtering.
+function isCardNetworkNumber(digits: string): boolean {
+	const n = digits.length;
+	const p2 = Number(digits.slice(0, 2));
+	const p3 = Number(digits.slice(0, 3));
+	const p4 = Number(digits.slice(0, 4));
+	const visa = digits[0] === '4' && (n === 13 || n === 16 || n === 19);
+	const mastercard = n === 16 && ((p2 >= 51 && p2 <= 55) || (p4 >= 2221 && p4 <= 2720));
+	const amex = n === 15 && (p2 === 34 || p2 === 37);
+	const discover = (n === 16 || n === 19) && (p4 === 6011 || p2 === 65 || (p3 >= 644 && p3 <= 649));
+	const jcb = n >= 16 && n <= 19 && p4 >= 3528 && p4 <= 3589;
+	const diners =
+		n === 14 && ((p3 >= 300 && p3 <= 305) || p3 === 309 || p2 === 36 || p2 === 38 || p2 === 39);
+	return visa || mastercard || amex || discover || jcb || diners;
+}
+
 const DETECTORS: Detector[] = [
 	{
 		kind: 'private-key',
@@ -73,17 +97,23 @@ const DETECTORS: Detector[] = [
 		pattern: new RegExp(TOKEN_PATTERNS.map((p) => p.source).join('|'), 'g')
 	},
 	{
+		kind: 'connection-string',
+		severity: 'high',
+		// scheme://user:password@host. The user may be empty (redis://:secret@host). A
+		// password slot needs its own colon, so user@host and host:port shapes pass.
+		pattern:
+			/\b[a-z][a-z0-9+.-]{1,30}:\/\/[^\s:@/'"`<>]{0,128}:([^\s@/'"`<>]{1,256})@[^\s/'"`<>@]+/gi,
+		accept: (m) => !PLACEHOLDER_PASSWORD.test(m[1])
+	},
+	{
 		kind: 'card-number',
 		severity: 'high',
-		// 13 to 19 digits, optionally grouped by single spaces or hyphens, starting
-		// with a real network's leading digit (3 Amex/Diners, 4 Visa, 5 Mastercard,
-		// 6 Discover).
-		pattern: /(?<![\w-])[3-6]\d{3}(?:[ -]?\d){9,15}(?![\w-])/g,
+		// 13 to 19 digits, optionally grouped by single spaces or hyphens; the leading
+		// digit is a network's (2 and 5 Mastercard, 3 Amex/Diners/JCB, 4 Visa, 6 Discover).
+		pattern: /(?<![\w-])[2-6]\d{3}(?:[ -]?\d){9,15}(?![\w-])/g,
 		accept: (m) => {
 			const digits = m[0].replace(/\D/g, '');
-			return (
-				digits.length >= 13 && digits.length <= 19 && luhn(digits) && !/^(\d)\1+$/.test(digits)
-			);
+			return isCardNetworkNumber(digits) && luhn(digits) && !/^(\d)\1+$/.test(digits);
 		}
 	},
 	{

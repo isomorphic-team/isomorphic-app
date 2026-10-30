@@ -4,7 +4,7 @@
 // of it into the Worker.
 //
 //   pnpm exec tsx scripts/consolidate-report.ts <folder> [--root <name>] [--json]
-import { loadResolvedGraph, loadPageContents } from '../src/lib/brain-index.ts';
+import { loadAllFields, loadResolvedGraph, loadPageContents } from '../src/lib/brain-index.ts';
 import { computeTensions, MAX_DUP_PAGES, type Tension } from '../src/lib/consolidate.ts';
 import { openFolderAsBrain } from './local-brain.ts';
 
@@ -33,7 +33,13 @@ try {
 				)
 			: undefined;
 
-	const tensions = computeTensions({ pages: graph.pages, edges: graph.edges, contents });
+	const tensions = computeTensions({
+		pages: graph.pages,
+		edges: graph.edges,
+		contents,
+		fields: await loadAllFields(brain.db, brain.brainId),
+		identityFields: brain.config.identityFields
+	});
 
 	if (asJson) {
 		console.log(

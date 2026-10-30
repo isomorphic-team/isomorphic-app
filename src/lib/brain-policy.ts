@@ -76,6 +76,10 @@ export interface BrainConfig extends PathPolicy {
 	// The data-policy guard's mode, from `"review": {"policy": {"mode": ...}}`.
 	// Defaults to shadow: it never blocks, so there is nothing to opt into.
 	policyMode: PolicyMode;
+	// Frontmatter keys whose shared value marks two pages as one entity (the
+	// `same-identifier` consolidation check). `email`, plus whatever
+	// `"review": {"identityFields": [...]}` adds.
+	identityFields: string[];
 }
 
 // The per-repo config file, read from the repo root.
@@ -91,7 +95,8 @@ export const DEFAULT_BRAIN_CONFIG: BrainConfig = {
 	mergeMethod: 'MERGE',
 	indexedFields: null,
 	sourceOfTruth: 'app',
-	policyMode: 'shadow'
+	policyMode: 'shadow',
+	identityFields: ['email']
 };
 
 // Normalize a root/prefix so prefix checks are unambiguous:

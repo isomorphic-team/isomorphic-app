@@ -49,7 +49,8 @@ Settled so far:
 - **Content goes only to zero-data-retention model endpoints.**
 - **Writes made outside Isomorphic are scanned after the fact** (push webhook), not blocked.
   Branch lockdown is left to the brain owner.
-- **Forward-only.** No backfill scan of existing content.
+- **Model stages are forward-only.** Existing content gets only the deterministic detectors,
+  through the baseline scan an admin runs (`configure_brain` with `baseline_scan`).
 - **A classifier is a guardrail, not a guarantee.** Recall on well-edited prose is limited, and
   the docs and UI say so.
 

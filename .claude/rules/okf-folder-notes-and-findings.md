@@ -62,8 +62,8 @@ would go stale on `switch_brain`.
 answer, carry no key, and cannot be silenced. **Findings** are advisory, carry a stable
 `[key]`, and can be answered with `resolve` (editor+, in `src/tools/importer.ts`). Nothing
 advisory blocks a save. A third section, shown to brain admins only, lists what the
-data-policy guard recorded (`detectionSection`, see `write-path.md`); it carries
-no keys yet and is not answerable with `resolve`.
+data-policy guard recorded and states its coverage (`detectionSection`, see `write-path.md`); it
+carries no keys yet and is not answerable with `resolve`.
 
 - **`src/lib/findings.ts`** owns the `Finding` type, keys, and the dismissal ledger at
   `.isomorphic/review.json` in the brain. **Keys are an interface:** derived from kind plus
@@ -77,8 +77,10 @@ no keys yet and is not answerable with `resolve`.
   needing a `BrainContext` belongs back in the tool.
 - **`src/lib/consolidate.ts`** (pure, `pnpm test:consolidate`) detects where a brain's cheap
   surface disagrees with its content: islands, orphans, note-less and hollow folder notes,
-  mixed conventions, folder-echo pages, near-duplicates (bigram Jaccard, skipped above
-  `MAX_DUP_PAGES`, and the report says so). Computed, never generated: deciding costs tokens
+  mixed conventions, folder-echo pages, near-duplicates (bigram Jaccard with each folder's
+  template removed, paired through an inverted index, skipped above `MAX_DUP_PAGES`, and the
+  report says so), and `same-identifier` (pages sharing a value in `identityFields`: `email`
+  plus `"review": {"identityFields": [...]}`). Computed, never generated: deciding costs tokens
   in the caller's session. `pnpm consolidate:report <folder>` runs it offline.
 - `resolve` actions: `dismiss` / `undismiss` for structure and consolidation findings;
   `delete` / `alias` / `suppress` / `recreate` for import findings.
