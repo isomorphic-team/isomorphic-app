@@ -88,6 +88,7 @@ are in the list, with keys.
   (`canSeeFinding`), a row whose page shas no longer match is stale and only counted, and
   `upsertFindings` scrubs every row through the detectors. A conflict's key is the page pair
   plus a fingerprint of the disputed values (`conflictKey`), never the cluster.
-- `resolve` actions: `dismiss` / `undismiss` for structure and consolidation findings;
+- `resolve` actions: `dismiss` / `undismiss` for structure, consolidation and policy findings
+  (policy dismissals go to D1, see `write-path.md`);
   `delete` / `alias` / `suppress` / `recreate` for import findings.
 - Design: `docs/design/consolidation-loop.md`, `docs/design/folder-notes-and-okf-conformance.md`.

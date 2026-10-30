@@ -174,6 +174,8 @@ export interface BrainContext {
 	// org table row (those tools error with a clear "org accounts only" message).
 	orgId?: string;
 	actorUserId?: string;
+	// Keys policy dismissals: the secret this auth mode already requires.
+	policySecret?: string;
 	// The brain's content-shape config — which paths are editable content,
 	// immutable source, or the tool-maintained changelog. Read from .isomorphic.json
 	// (or defaults). Every write-policy decision below reads from it.
@@ -1318,9 +1320,8 @@ export function registerLibrarianTools(
 			inputSchema: z.object({ brain: brainArg })
 		},
 		async ({ brain }) => {
-			const { store, repoArgs, config, db, brainId, role, actorUserId } = await getContext({
-				brain
-			});
+			const { store, repoArgs, config, db, brainId, role, actorUserId, policySecret } =
+				await getContext({ brain });
 			const { truncated } = await ensureFresh(db, store, repoArgs, brainId, config);
 			const resolved = await loadResolvedGraph(db, brainId, config);
 
@@ -1432,7 +1433,8 @@ export function registerLibrarianTools(
 					store,
 					repo: repoArgs,
 					defaultBranch: config.defaultBranch,
-					brainId
+					brainId,
+					secret: policySecret
 				}).catch(() => []);
 				if (rows.length) {
 					queued = queueReport(rows, await readPageShas(db, brainId), {

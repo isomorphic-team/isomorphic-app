@@ -147,6 +147,142 @@ export function decidePolicyRescan(
 	return { close, refresh };
 }
 
+// ---------- dismissing a policy finding ----------
+
+// A dismissal covers specific values, so that a real value added to a page whose test
+// value was dismissed still raises the finding. Each value is kept as an HMAC under a
+// key derived from a deployment secret, under its own label; the brain id is in the
+// message, so fingerprints cannot be compared across brains. Unkeyed, a Social Security
+// number's hash falls to trying every number. Worker-safe: Web Crypto only.
+export async function policyFingerprintKey(secret: string): Promise<CryptoKey> {
+	const enc = new TextEncoder();
+	const root = await crypto.subtle.importKey(
+		'raw',
+		enc.encode(secret),
+		{ name: 'HMAC', hash: 'SHA-256' },
+		false,
+		['sign']
+	);
+	const derived = await crypto.subtle.sign(
+		'HMAC',
+		root,
+		enc.encode('isomorphic/policy-fingerprint/v1')
+	);
+	return crypto.subtle.importKey('raw', derived, { name: 'HMAC', hash: 'SHA-256' }, false, [
+		'sign'
+	]);
+}
+
+// Formatting is not a new value: 123-45-6789 and 123 45 6789 are one number.
+function canonicalValue(kind: string, value: string): string {
+	return kind === 'us-ssn' || kind === 'card-number' ? value.replace(/\D/g, '') : value;
+}
+
+// Sorted, distinct fingerprints of every value of `kind` in `text`.
+export async function valueFingerprints(
+	key: CryptoKey,
+	brainId: string,
+	kind: string,
+	text: string
+): Promise<string[]> {
+	const enc = new TextEncoder();
+	const out = new Set<string>();
+	for (const d of detectSensitive(text)) {
+		if (d.kind !== kind) continue;
+		const value = canonicalValue(kind, text.slice(d.start, d.end));
+		const mac = await crypto.subtle.sign('HMAC', key, enc.encode(`${brainId}\0${kind}\0${value}`));
+		out.add([...new Uint8Array(mac)].map((b) => b.toString(16).padStart(2, '0')).join(''));
+	}
+	return [...out].sort();
+}
+
+// Whether a dismissal still answers the file: every value in it was looked at.
+export function coveredByDismissal(current: readonly string[], dismissed: readonly string[]) {
+	const known = new Set(dismissed);
+	return current.every((f) => known.has(f));
+}
+
+interface PolicyDismissal {
+	key: string;
+	fingerprints: string[];
+	fileSha: string;
+}
+
+async function readPolicyDismissals(
+	db: D1Database,
+	brainId: string
+): Promise<Map<string, PolicyDismissal>> {
+	const { results } = await db
+		.prepare('SELECT key, fingerprints, file_sha FROM policy_dismissals WHERE brain_id = ?1')
+		.bind(brainId)
+		.all<{ key: string; fingerprints: string; file_sha: string }>();
+	return new Map(
+		results.map((r) => [
+			r.key,
+			{ key: r.key, fingerprints: JSON.parse(r.fingerprints) as string[], fileSha: r.file_sha }
+		])
+	);
+}
+
+export async function deletePolicyDismissals(
+	db: D1Database,
+	brainId: string,
+	keys: readonly string[]
+): Promise<void> {
+	const stmt = db.prepare('DELETE FROM policy_dismissals WHERE brain_id = ?1 AND key = ?2');
+	for (let i = 0; i < keys.length; i += WRITE_BATCH) {
+		await db.batch(keys.slice(i, i + WRITE_BATCH).map((k) => stmt.bind(brainId, k)));
+	}
+}
+
+export interface PolicyTarget {
+	db: D1Database;
+	store: BrainStore;
+	repo: RepoRef;
+	defaultBranch: string;
+	brainId: string;
+	secret?: string;
+}
+
+// Record a dismissal of the file as it stands. `seen` is the count the admin was shown:
+// a mismatch means a value arrived that they never looked at, so it refuses rather than
+// covering it. Returns why it refused, or null.
+export async function dismissPolicyFinding(
+	t: PolicyTarget,
+	key: string,
+	d: { why: string; by?: string; seen?: number },
+	now = Date.now()
+): Promise<string | null> {
+	if (!t.secret) return 'This deployment has no secret to key a policy dismissal with.';
+	const finding = (await readFindings(t.db, t.brainId)).find((f) => f.key === key);
+	if (!finding) return `"${key}" is not an open finding.`;
+	const path = finding.paths[0];
+	const file = await t.store.readFile(t.repo, path);
+	if (!file) return `${path} no longer exists, so there is nothing to dismiss.`;
+	const kind = policyKindOf(key);
+	const count = detectSensitive(file.content).filter((x) => x.kind === kind).length;
+	if (d.seen !== undefined && d.seen !== count) {
+		return `${path} now has ${count} detection(s), not the ${d.seen} you reviewed. Review it again before dismissing.`;
+	}
+	const fingerprints = await valueFingerprints(
+		await policyFingerprintKey(t.secret),
+		t.brainId,
+		kind,
+		file.content
+	);
+	await t.db
+		.prepare(
+			`INSERT INTO policy_dismissals
+			   (brain_id, key, fingerprints, file_sha, why, dismissed_by, dismissed_at)
+			 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+			 ON CONFLICT (brain_id, key) DO UPDATE SET
+			   fingerprints = ?3, file_sha = ?4, why = ?5, dismissed_by = ?6, dismissed_at = ?7`
+		)
+		.bind(t.brainId, key, JSON.stringify(fingerprints), file.sha, d.why, d.by ?? null, now)
+		.run();
+	return null;
+}
+
 // Per (path, kind) counts of the policy findings, for groupDetections.
 export function policyCounts(
 	findings: readonly QueueFinding[]
@@ -187,10 +323,11 @@ export function isStale(f: QueueFinding, current: ReadonlyMap<string, string>): 
 }
 
 function toFinding(f: QueueFinding): Finding {
+	const count = f.kind === 'policy' ? [`${f.scores?.detections ?? 1} detection(s).`] : [];
 	return {
 		key: f.key,
 		weight: f.kind === 'policy' ? POLICY_WEIGHT : FINDING_WEIGHT,
-		headline: [`- ${f.headline}`, ...f.evidence.map((e) => `    ${e}`)].join('\n')
+		headline: [`- ${f.headline}`, ...[...count, ...f.evidence].map((e) => `    ${e}`)].join('\n')
 	};
 }
 
@@ -338,16 +475,10 @@ export async function deleteFindings(
 	}
 }
 
-// The queue as it stands now, policy findings checked against the repository. It reads
-// the tree (every file, since a scan covers more than pages) only when policy rows
-// exist, so a brain without any pays nothing.
-export async function readReconciledFindings(t: {
-	db: D1Database;
-	store: BrainStore;
-	repo: RepoRef;
-	defaultBranch: string;
-	brainId: string;
-}): Promise<QueueFinding[]> {
+// The queue as it stands now: policy findings checked against the repository, without
+// the dismissed ones. It reads the tree (every file, since a scan covers more than
+// pages) only when policy rows exist, so a brain without any pays nothing.
+export async function readReconciledFindings(t: PolicyTarget): Promise<QueueFinding[]> {
 	const rows = await readFindings(t.db, t.brainId);
 	const policy = rows.filter((f) => f.kind === 'policy');
 	if (!policy.length) return rows;
@@ -355,26 +486,62 @@ export async function readReconciledFindings(t: {
 	const head = await t.store.getHead(t.repo, t.defaultBranch);
 	const entries = await t.store.listTree(t.repo, head, { extension: '*' });
 	const tree = new Map(entries.map((e) => [e.path, e.sha]));
+	const dismissals = await readPolicyDismissals(t.db, t.brainId);
 	const changed: TreeEntry[] = [];
 	for (const path of new Set(policy.map((f) => f.paths[0]))) {
 		const sha = tree.get(path);
-		if (sha && policy.some((f) => f.paths[0] === path && f.pageShas[path] !== sha)) {
-			changed.push({ path, sha });
-		}
+		if (!sha) continue;
+		const here = policy.filter((f) => f.paths[0] === path);
+		const moved = here.some(
+			(f) =>
+				f.pageShas[path] !== sha ||
+				(dismissals.has(f.key) && dismissals.get(f.key)?.fileSha !== sha)
+		);
+		if (moved) changed.push({ path, sha });
 	}
 	const { pages } = changed.length
 		? await t.store.fetchPages(t.repo, changed.slice(0, POLICY_RESCAN_BUDGET))
 		: { pages: [] as { path: string; content: string }[] };
-	const { close, refresh } = decidePolicyRescan(
-		policy,
-		tree,
-		new Map(pages.map((p) => [p.path, p.content]))
-	);
+	const contents = new Map(pages.map((p) => [p.path, p.content]));
+	const { close, refresh } = decidePolicyRescan(policy, tree, contents);
 	await deleteFindings(t.db, t.brainId, close);
+	await deletePolicyDismissals(t.db, t.brainId, close);
 	await upsertFindings(t.db, t.brainId, refresh);
+
 	const closed = new Set(close);
 	const refreshed = new Map(refresh.map((f) => [f.key, f]));
-	return rows.filter((f) => !closed.has(f.key)).map((f) => refreshed.get(f.key) ?? f);
+	const fingerprintKey = t.secret ? await policyFingerprintKey(t.secret) : null;
+	const silenced = new Set<string>();
+	const reopened = new Set<string>();
+	for (const f of policy) {
+		const dismissal = dismissals.get(f.key);
+		if (!dismissal || closed.has(f.key)) continue;
+		const path = f.paths[0];
+		const sha = tree.get(path);
+		const text = contents.get(path);
+		if (sha === dismissal.fileSha || text === undefined || !fingerprintKey) {
+			silenced.add(f.key);
+			continue;
+		}
+		const current = await valueFingerprints(fingerprintKey, t.brainId, policyKindOf(f.key), text);
+		if (coveredByDismissal(current, dismissal.fingerprints)) {
+			silenced.add(f.key);
+			await t.db
+				.prepare('UPDATE policy_dismissals SET file_sha = ?3 WHERE brain_id = ?1 AND key = ?2')
+				.bind(t.brainId, f.key, sha ?? dismissal.fileSha)
+				.run();
+		} else {
+			reopened.add(f.key);
+		}
+	}
+	return rows
+		.filter((f) => !closed.has(f.key) && !silenced.has(f.key))
+		.map((f) => refreshed.get(f.key) ?? f)
+		.map((f) =>
+			reopened.has(f.key)
+				? { ...f, evidence: ['A new value appeared since this was dismissed.', ...f.evidence] }
+				: f
+		);
 }
 
 // The index's blob sha per page, to compare findings against. Only called with rows in

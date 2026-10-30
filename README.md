@@ -130,7 +130,8 @@ merged pull request is never served stale. No webhook required.
   download link valid for 15 minutes.
 - **`configure_brain`**: tell an adopted repository where its content lives, for a repo whose
   markdown sits under `docs/` or elsewhere. Writes `.isomorphic.json`, which also holds the
-  optional list of frontmatter keys to index.
+  optional list of frontmatter keys to index. Also renames a brain and runs the
+  [baseline scan](#guardrails).
 
 Every write is one atomic commit, or a pull request when the default branch is protected,
 detected automatically. An identical retry inside ten minutes, the kind a client
@@ -225,6 +226,35 @@ would make every diff unreadable.
   so instead of claiming the change is live.
 
 ![The editor: a formatting toolbar, the page's properties, and the body as rich text, saved back as plain markdown](docs/images/editor.png)
+
+### Guardrails
+
+Sensitive data ends up in knowledge bases, usually by accident. Isomorphic checks for it on
+the server, with deterministic detectors and no model, so nothing leaves your deployment.
+
+- **Every write is checked,** whichever tool made it: pages, moves, uploads, imports, config.
+  The detectors look for private keys, API tokens, connection strings with a password, card
+  numbers, US Social Security numbers, and labelled medical record numbers and dates of
+  birth. They favor precision, so ordinary emails and phone numbers are not flagged.
+- **What is already there is checked too.** `configure_brain` with `baseline_scan: true`, or
+  a button on the Review screen, scans every text file in the repository once.
+- **A finding stays open until the data is gone.** An unrelated edit does not clear it, and
+  removing the data closes it.
+- **Dismissing a false positive is precise.** A brain admin dismisses the values they
+  reviewed, not the page, so a real number added later to a page with a dismissed test
+  number raises the finding again.
+- **Findings do not spread what they found.** Only offsets, kinds and keyed fingerprints are
+  stored, never the value. Findings reach brain admins and the content's author, and policy
+  dismissals stay in the deployment's database rather than the repository.
+- **Reports say what they have seen.** `validate` and the Review screen (`view_review`) state
+  their coverage, so an empty report never reads as a clean brain.
+
+`validate` also finds where pages have drifted: near-duplicates with each folder's template
+ignored, and pages sharing an `email` or another identifier, which may describe one person.
+
+These are guardrails, not a guarantee. Detection never blocks a write. A pattern cannot see
+confidential prose, such as a price or a contract term. Data pushed straight to the repository
+is found by the next baseline scan, not at the moment it lands.
 
 ### Organization
 

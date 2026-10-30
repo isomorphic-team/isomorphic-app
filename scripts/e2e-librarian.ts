@@ -164,6 +164,7 @@ const getContext = async () => {
 		author: undefined,
 		db,
 		brainId,
+		policySecret: 'e2e-secret',
 		activeBrain: { id: name, label: name }
 	};
 };
@@ -1997,6 +1998,37 @@ try {
 				!(await call('view_review', {})).text.includes(flagged),
 			report.text
 		);
+
+		// A dismissal covers the values reviewed, and leaves the repository alone.
+		const ledgerText = (await fileText('.isomorphic/review.json')) ?? '';
+		check('a policy dismissal stays out of the repository', !ledgerText.includes('policy:'));
+		await call('write_page', { path: flagged, append: '\nAnother unrelated line.\n' });
+		report = await call('validate', {});
+		check(
+			'an unrelated edit keeps it dismissed',
+			!report.text.includes(`[${flaggedKey}]`),
+			report.text
+		);
+		await call('write_page', { path: flagged, append: '\nSSN 234-56-7890\n' });
+		report = await call('validate', {});
+		check(
+			'a new value reopens it, saying why',
+			report.text.includes(`[${flaggedKey}]`) && report.text.includes('new value appeared'),
+			report.text
+		);
+		const outdated = await call('resolve', {
+			decisions: [{ finding: flaggedKey, action: 'dismiss', seen_detections: 1 }]
+		});
+		check('a dismissal based on an old count is refused', outdated.isError, outdated.text);
+		const current = await call('resolve', {
+			decisions: [{ finding: flaggedKey, action: 'dismiss', seen_detections: 2 }]
+		});
+		check('the current count is accepted', !current.isError, current.text);
+		report = await call('validate', {});
+		check('...and covers both', !report.text.includes(`[${flaggedKey}]`), report.text);
+		await call('resolve', { decisions: [{ finding: flaggedKey, action: 'undismiss' }] });
+		report = await call('validate', {});
+		check('undismiss brings it back', report.text.includes(`[${flaggedKey}]`), report.text);
 
 		before = await commitCount();
 		br = await callBrain('configure_brain', {});

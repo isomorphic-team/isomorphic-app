@@ -322,6 +322,9 @@ pnpm exec wrangler secret put AUTH_SECRET        # openssl rand -hex 32
 pnpm exec wrangler secret put AUTH_RESEND_KEY    # from resend.com
 ```
 
+Rotating `AUTH_SECRET` re-raises dismissed policy findings, because their fingerprints are
+keyed from it. Admins review and dismiss them again.
+
 The From domain must be verified (DKIM and SPF) with your email provider, or delivery is
 limited to your own address. `AUTH_EMAIL_REPLY_TO` is optional: set it to an inbox someone
 reads, since the From address usually receives nothing. Magic-link sending stays inert until `AUTH_RESEND_KEY` is set,

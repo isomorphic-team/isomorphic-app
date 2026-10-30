@@ -52,7 +52,6 @@ import { roleAtLeast, type TenantOpts } from '../lib/orgs.ts';
 import { groupDetections, reviewSummary } from '../lib/policy-guard.ts';
 import { readCoverage } from '../lib/policy-store.ts';
 import { policyCounts, readReconciledFindings } from '../lib/review-queue.ts';
-import { parseReviewLedger, REVIEW_LEDGER_PATH } from '../lib/findings.ts';
 import { brainArgFor, fail } from './shared.ts';
 import type {
 	PageViewWire,
@@ -424,9 +423,8 @@ export function registerBrainApp(
 			_meta: { ui: { resourceUri: BRAIN_APP_URI } }
 		},
 		async ({ brain }) => {
-			const { config, db, brainId, role, activeBrain, store, repoArgs } = await getContext({
-				brain
-			});
+			const { config, db, brainId, role, activeBrain, store, repoArgs, policySecret } =
+				await getContext({ brain });
 			if (!roleAtLeast(role, 'admin')) {
 				return fail(
 					'Review is for admins of this brain: it says where sensitive data sits. Ask a brain admin.'
@@ -437,17 +435,10 @@ export function registerBrainApp(
 				store,
 				repo: repoArgs,
 				defaultBranch: config.defaultBranch,
-				brainId
+				brainId,
+				secret: policySecret
 			});
-			// An unreadable ledger filters nothing, as it does in `validate`.
-			let dismissed = new Set<string>();
-			try {
-				const raw = await store.readFile(repoArgs, REVIEW_LEDGER_PATH);
-				dismissed = new Set(parseReviewLedger(raw?.content ?? null).dismissed.map((d) => d.key));
-			} catch {
-				// Shown unfiltered.
-			}
-			const grouped = groupDetections(policyCounts(rows.filter((f) => !dismissed.has(f.key))));
+			const grouped = groupDetections(policyCounts(rows));
 			const coverage = await readCoverage(db, brainId, config.policyMode);
 			return {
 				content: [

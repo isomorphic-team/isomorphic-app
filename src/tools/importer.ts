@@ -12,7 +12,12 @@
 // carrying the manifest. Every call is independently safe and idempotent.
 
 import type { McpServer } from '@modelcontextprotocol/server';
-import { canDecideFinding } from '../lib/review-queue.ts';
+import {
+	canDecideFinding,
+	deletePolicyDismissals,
+	dismissPolicyFinding,
+	isPolicyKey
+} from '../lib/review-queue.ts';
 import { z } from 'zod';
 import {
 	plan,
@@ -301,7 +306,7 @@ export function registerImportTools(
 		{
 			...toolAnnotations('Record a decision about a finding', 'destructive'),
 			description:
-				'`resolve` answers the findings `validate` reports, durably, so they stop being re-raised. Every finding validate prints carries a `[key]`; pass that key here with what you decided. For a CONSOLIDATION or STRUCTURE finding (a page nothing links to, a mixed folder-note convention, wikilink portability, a missing `type:`): "dismiss" records that the shape is deliberate and validate stops reporting it, and "undismiss" reverses that. For an IMPORT finding (a key a sync_records run could not decide alone): "delete" removes the page a proposed deletion pointed at, "alias" binds the key onto a surviving page (how a consolidation claims a duplicate\'s identity), "suppress" never imports the key again, and "recreate" forgets it so the next sync makes its page fresh. For a POLICY finding (sensitive data detected in a file): an admin can "dismiss" a false positive; removing the data closes it without a decision. Dismissing is not a fix and never edits a page — it records that a human looked and chose this. Broken links have no key and cannot be resolved; fix them instead.',
+				'`resolve` answers the findings `validate` reports, durably, so they stop being re-raised. Every finding validate prints carries a `[key]`; pass that key here with what you decided. For a CONSOLIDATION or STRUCTURE finding (a page nothing links to, a mixed folder-note convention, wikilink portability, a missing `type:`): "dismiss" records that the shape is deliberate and validate stops reporting it, and "undismiss" reverses that. For an IMPORT finding (a key a sync_records run could not decide alone): "delete" removes the page a proposed deletion pointed at, "alias" binds the key onto a surviving page (how a consolidation claims a duplicate\'s identity), "suppress" never imports the key again, and "recreate" forgets it so the next sync makes its page fresh. For a POLICY finding (sensitive data detected in a file): an admin can "dismiss" a false positive, which covers the values in the file now, so a new or changed value raises it again; removing the data closes it without a decision. Dismissing is not a fix and never edits a page — it records that a human looked and chose this. Broken links have no key and cannot be resolved; fix them instead.',
 			inputSchema: z.object({
 				brain: brainArg,
 				decisions: z
@@ -316,6 +321,13 @@ export function registerImportTools(
 								.optional()
 								.describe(
 									'For "dismiss": why this shape is deliberate. Recorded in the brain so the next reader knows it was a decision rather than an oversight.'
+								),
+							seen_detections: z
+								.number()
+								.int()
+								.optional()
+								.describe(
+									'For dismissing a policy finding: the detection count validate showed. The dismissal is refused if the file has changed since, so it cannot cover a value nobody reviewed.'
 								),
 							alias_to: z
 								.string()
@@ -354,6 +366,36 @@ export function registerImportTools(
 				return fail(
 					`"${importMisrouted.finding}" is an import finding: answer it with delete / alias / suppress / recreate rather than dismissing it, so the next sync knows what to do.`
 				);
+
+			// Policy decisions live in D1, not in a ledger: see migration 0021.
+			const policyDecisions = allDecisions.filter((d) => isPolicyKey(d.finding));
+			if (policyDecisions.length) {
+				if (policyDecisions.length < allDecisions.length)
+					return fail('Policy findings are recorded separately. Send them as their own call.');
+				const target = {
+					db,
+					store,
+					repo: repoArgs,
+					defaultBranch: config.defaultBranch,
+					brainId,
+					secret: ctx.policySecret
+				};
+				for (const d of policyDecisions) {
+					if (d.action === 'undismiss') {
+						await deletePolicyDismissals(db, brainId, [d.finding]);
+						continue;
+					}
+					const refused = await dismissPolicyFinding(target, d.finding, {
+						why: d.why?.trim() ?? '',
+						by: ctx.actorUserId,
+						seen: d.seen_detections
+					});
+					if (refused) return fail(refused);
+				}
+				return ok(
+					`Recorded ${policyDecisions.length} policy decision(s). A dismissal covers the values in the file now: a new or changed value raises the finding again.`
+				);
+			}
 
 			// One ledger per call. Import decisions land in the importer's per-source
 			// ledger and dismissals in the review ledger, which are different files and

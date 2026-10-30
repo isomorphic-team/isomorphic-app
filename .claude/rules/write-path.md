@@ -99,12 +99,19 @@ runtime hand to every tool, so it sees every write that reaches `commitOrPR` or 
   write land, then records detections through `policy-store.ts` (D1 `policy_detections`,
   migration 0015). A failing recorder is swallowed; a failed write records nothing.
 - **Detections carry offsets, never the matched text,** and the table has no column that could
-  hold it. Keep it that way: copying a leaked secret into D1 makes the leak worse.
+  hold it. Keep it that way: copying a leaked secret into D1 makes the leak worse. The one
+  derived form stored is the keyed fingerprint below; never an unkeyed hash, which an SSN does
+  not survive.
 - **Detections become policy findings** in the findings queue (`policyFindings`), one per file
   and kind, so reports read `review_findings` and `policy_detections` stays the raw log. Each
   report rechecks changed files through the detectors (`readReconciledFindings`,
   `decidePolicyRescan`): an unrelated edit keeps a finding, and removing the data closes it. A
   policy finding is never just stale. Only a brain admin may answer one (`canDecideFinding`).
+- **A policy dismissal covers values** (`dismissPolicyFinding`, D1 `policy_dismissals`,
+  migration 0021), as HMACs keyed from `policySecret` (`AUTH_SECRET` or the bearer) and bound to
+  the brain, so a new or swapped value reopens the finding. They stay out of
+  `.isomorphic/review.json`, since a path plus a kind says where sensitive data sits. Rotating
+  the secret re-raises them.
 - **Admins read them in `validate`,** where the findings list carries the keys and
   `detectionSection` counts them, and the content's author sees their own. Even a path plus a
   kind says where sensitive data sits, so nobody else gets them.

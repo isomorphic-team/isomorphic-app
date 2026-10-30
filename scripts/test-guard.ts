@@ -60,7 +60,11 @@ import { loadBrainConfig, DEFAULT_BRAIN_CONFIG } from '../src/lib/brain-config.t
 
 import {
 	canDecideFinding,
+	coveredByDismissal,
 	decidePolicyRescan,
+	dismissPolicyFinding,
+	policyFingerprintKey,
+	valueFingerprints,
 	policyCounts,
 	policyFindings,
 	policyKey,
@@ -69,6 +73,7 @@ import {
 	readReconciledFindings,
 	type QueueFinding
 } from '../src/lib/review-queue.ts';
+import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 
 import { checker } from './check.ts';
@@ -76,6 +81,10 @@ import { checker } from './check.ts';
 const { check, done } = checker('guard checks');
 
 const kinds = (text: string): DetectionKind[] => detectSensitive(text).map((d) => d.kind);
+
+// A blob sha for the stub stores: changes with the content and does not contain it.
+const stubSha = (path: string, content: string) =>
+	createHash('sha1').update(`${path}\0${content}`).digest('hex');
 
 // A Luhn-valid number of `length` digits starting with `prefix`.
 function card(prefix: string, length: number): string {
@@ -494,6 +503,44 @@ console.log('\npolicy findings: the guard as a producer (9)');
 		(await readFindings(db, 'b1'))[0]?.authorUserId === 'u1'
 	);
 
+	const fpKey = await policyFingerprintKey('secret-one');
+	const ssnPrints = (text: string, brain = 'b1', key = fpKey) =>
+		valueFingerprints(key, brain, 'us-ssn', text);
+	const one = await ssnPrints('SSN 123-45-6789');
+	check(
+		'a fingerprint is not the value, nor its plain hash',
+		one.length === 1 && !one[0].includes('123456789') && one[0].length === 64
+	);
+	check(
+		'the same value is the same fingerprint, whatever surrounds it',
+		one[0] === (await ssnPrints('Moved. SSN 123-45-6789 here.'))[0]
+	);
+	check(
+		'only the kind asked for',
+		(await valueFingerprints(fpKey, 'b1', 'us-ssn', 'AKIAIOSFODNN7EXAMPLE')).length === 0
+	);
+	check(
+		'a repeated value is one fingerprint',
+		(await ssnPrints('SSN 123-45-6789 and SSN 123-45-6789')).length === 1
+	);
+	check(
+		'another brain cannot compare fingerprints',
+		one[0] !== (await ssnPrints('SSN 123-45-6789', 'b2'))[0]
+	);
+	check(
+		'another deployment secret cannot either',
+		one[0] !== (await ssnPrints('SSN 123-45-6789', 'b1', await policyFingerprintKey('two')))[0]
+	);
+	const card = (await valueFingerprints(fpKey, 'b1', 'card-number', '4111 1111 1111 1111'))[0];
+	check(
+		'formatting is not a new value',
+		card === (await valueFingerprints(fpKey, 'b1', 'card-number', '4111-1111-1111-1111'))[0]
+	);
+	const both = await ssnPrints('SSN 123-45-6789 and SSN 234-56-7890');
+	check('every value covered is covered', coveredByDismissal(one, both));
+	check('a value not looked at is not', !coveredByDismissal(both, one));
+	check('a file with no values left is covered', coveredByDismissal([], one));
+
 	const legacy = localD1(':memory:').db as unknown as D1Database;
 	const insert = legacy.prepare(
 		`INSERT INTO policy_detections
@@ -613,7 +660,9 @@ console.log('\nbaseline scan: the real migrations, a stub store (8)');
 	const store = {
 		getHead: async () => ({ commitSha: 'h', treeSha: 't' }),
 		listTree: async () =>
-			Object.keys(files).map((path) => ({ path, sha: `${path}:${files[path]}` })),
+			Object.keys(files).map((path) => ({ path, sha: stubSha(path, files[path]) })),
+		readFile: async (_r: unknown, path: string) =>
+			files[path] === undefined ? null : { content: files[path], sha: stubSha(path, files[path]) },
 		fetchPages: async (_r: unknown, entries: { path: string }[]) => ({
 			pages: entries
 				.filter((e) => !e.path.endsWith('.dat'))
@@ -698,6 +747,42 @@ console.log('\nbaseline scan: the real migrations, a stub store (8)');
 		policyCounts(await readFindings(db, 'b1')).length === fixed.length &&
 			fixed.some((c) => c.path === 'wiki/intake.md'),
 		JSON.stringify(fixed)
+	);
+
+	files['wiki/intake.md'] = 'SSN 123-45-6789';
+	const refuses = await dismissPolicyFinding(
+		{ ...source, secret: undefined },
+		policyKey('wiki/intake.md', 'us-ssn'),
+		{ why: 'x' }
+	);
+	check('no deployment secret, no dismissal', !!refuses && /secret/.test(refuses), String(refuses));
+	check(
+		'an unknown key is refused',
+		!!(await dismissPolicyFinding({ ...source, secret: 's' }, 'policy:nope:us-ssn', { why: '' }))
+	);
+	await dismissPolicyFinding({ ...source, secret: 's' }, policyKey('wiki/intake.md', 'us-ssn'), {
+		why: 'test value',
+		by: 'u1'
+	});
+	const stored = JSON.stringify(
+		(await db.prepare('SELECT * FROM policy_dismissals').all()).results
+	);
+	check('a dismissal stores no value', !stored.includes('6789') && stored.includes('u1'), stored);
+	const secure = { ...source, secret: 's' };
+	const intakeOpen = async () =>
+		(await readReconciledFindings(secure)).some((f) => f.paths[0] === 'wiki/intake.md');
+	check('a dismissed finding is gone', !(await intakeOpen()));
+	files['wiki/intake.md'] = 'An edit. SSN 123-45-6789';
+	check('an edit keeping the value stays dismissed', !(await intakeOpen()));
+	files['wiki/intake.md'] = 'An edit. SSN 234-56-7890';
+	check('a swapped value reopens it', await intakeOpen());
+	files['wiki/intake.md'] = 'An edit. SSN 123-45-6789';
+	check('the reviewed value back again stays dismissed', !(await intakeOpen()));
+	files['wiki/intake.md'] = 'nothing';
+	await readReconciledFindings(secure);
+	check(
+		'fixing the file forgets the dismissal, so the value coming back is raised',
+		(await db.prepare('SELECT * FROM policy_dismissals').all()).results.length === 0
 	);
 
 	const big: Record<string, string> = {};
