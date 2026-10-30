@@ -9,6 +9,7 @@
 // Worker-safe: no node:* imports.
 
 import type { D1Database } from '@cloudflare/workers-types';
+import type { BrainStore, RepoRef, TreeEntry } from './brain-repo.ts';
 import { findingKey, type Finding } from './findings.ts';
 import { roleAtLeast, type Role } from './orgs.ts';
 import { detectSensitive } from './policy-detectors.ts';
@@ -36,6 +37,13 @@ export interface QueueFinding {
 const WRITE_BATCH = 40;
 
 const FINDING_WEIGHT = 4;
+// Above everything advisory: a credential in a brain outranks a stale overview.
+const POLICY_WEIGHT = 5;
+
+// Changed files one report rescans. The rest are left as they stand until the next.
+export const POLICY_RESCAN_BUDGET = 100;
+
+const POLICY_PREFIX = 'policy:';
 
 // ---------- keys ----------
 
@@ -71,6 +79,87 @@ export function valuesOnPages(
 	return claims.every((c) => contents.get(c.path)?.includes(c.value) ?? false);
 }
 
+// `policy:<path>:<detection kind>`. By kind, never by offset, so an edit elsewhere on the
+// page keeps the key and its dismissal. A kind holds no colon; a path may.
+export const policyKey = (path: string, kind: string) => `${POLICY_PREFIX}${path}:${kind}`;
+
+export const isPolicyKey = (key: string) => key.startsWith(POLICY_PREFIX);
+
+const policyKindOf = (key: string) => key.slice(key.lastIndexOf(':') + 1);
+
+// ---------- the guard as a producer ----------
+
+// One finding per (path, kind) in a scan of a whole file, so each count is that file's
+// count. No value is carried: the detections hold offsets only.
+export function policyFindings(
+	detections: readonly { path: string; kind: string }[],
+	authorUserId: string | null,
+	runId: string
+): QueueFinding[] {
+	const counts = new Map<string, { path: string; kind: string; count: number }>();
+	for (const { path, kind } of detections) {
+		const key = policyKey(path, kind);
+		const entry = counts.get(key) ?? { path, kind, count: 0 };
+		entry.count += 1;
+		counts.set(key, entry);
+	}
+	return [...counts].map(([key, { path, kind, count }]) => ({
+		key,
+		kind: 'policy',
+		paths: [path],
+		headline: `Sensitive data (${kind}) in ${path}.`,
+		evidence: ['Values are not stored, so read the file to review.'],
+		proposal: null,
+		scores: { detections: count },
+		pageShas: {},
+		runId,
+		clusterId: null,
+		authorUserId
+	}));
+}
+
+// What a report does with policy findings given the repository as it stands. Unlike a
+// model's claim, a detection can simply be checked again: a file that changed keeps its
+// finding if the detection is still there, and closes it if not. A changed file not in
+// `contents` (past the budget, or no text) stands until a later report reads it.
+export function decidePolicyRescan(
+	findings: readonly QueueFinding[],
+	tree: ReadonlyMap<string, string>,
+	contents: ReadonlyMap<string, string>
+): { close: string[]; refresh: QueueFinding[] } {
+	const close: string[] = [];
+	const refresh: QueueFinding[] = [];
+	for (const f of findings) {
+		const path = f.paths[0];
+		const sha = tree.get(path);
+		if (!sha) {
+			close.push(f.key);
+			continue;
+		}
+		if (f.pageShas[path] === sha) continue;
+		const text = contents.get(path);
+		if (text === undefined) continue;
+		const kind = policyKindOf(f.key);
+		const count = detectSensitive(text).filter((d) => d.kind === kind).length;
+		if (count === 0) close.push(f.key);
+		else refresh.push({ ...f, pageShas: { [path]: sha }, scores: { detections: count } });
+	}
+	return { close, refresh };
+}
+
+// Per (path, kind) counts of the policy findings, for groupDetections.
+export function policyCounts(
+	findings: readonly QueueFinding[]
+): { path: string; kind: string; count: number }[] {
+	return findings
+		.filter((f) => f.kind === 'policy')
+		.map((f) => ({
+			path: f.paths[0],
+			kind: policyKindOf(f.key),
+			count: f.scores?.detections ?? 1
+		}));
+}
+
 // ---------- visibility ----------
 
 // Who may see a finding, by kind. Consolidation findings go to editors. A policy finding
@@ -82,18 +171,25 @@ export function canSeeFinding(kind: string, viewer: { role: Role; isAuthor: bool
 	return roleAtLeast(viewer.role, 'admin');
 }
 
+// Who may answer a finding through `resolve`. Silencing a report of sensitive data is an
+// admin's call, and a key is guessable from a path, so this cannot rest on who can see it.
+export function canDecideFinding(key: string, role: Role): boolean {
+	return !isPolicyKey(key) || roleAtLeast(role, 'admin');
+}
+
 // ---------- staleness ----------
 
 // A finding is stale once any page it cites has changed or gone, since what it says was
-// true of those exact pages.
+// true of those exact pages. A policy finding is rechecked instead (decidePolicyRescan).
 export function isStale(f: QueueFinding, current: ReadonlyMap<string, string>): boolean {
+	if (f.kind === 'policy') return false;
 	return f.paths.some((p) => !f.pageShas[p] || current.get(p) !== f.pageShas[p]);
 }
 
 function toFinding(f: QueueFinding): Finding {
 	return {
 		key: f.key,
-		weight: FINDING_WEIGHT,
+		weight: f.kind === 'policy' ? POLICY_WEIGHT : FINDING_WEIGHT,
 		headline: [`- ${f.headline}`, ...f.evidence.map((e) => `    ${e}`)].join('\n')
 	};
 }
@@ -156,7 +252,8 @@ export async function upsertFindings(
 		 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?13)
 		 ON CONFLICT (brain_id, key) DO UPDATE SET
 		   kind = ?3, paths = ?4, headline = ?5, evidence = ?6, proposal = ?7, scores = ?8,
-		   page_shas = ?9, run_id = ?10, cluster_id = ?11, author_user_id = ?12, updated_at = ?13`
+		   page_shas = ?9, run_id = ?10, cluster_id = ?11,
+		   author_user_id = COALESCE(?12, author_user_id), updated_at = ?13`
 	);
 	for (let i = 0; i < findings.length; i += WRITE_BATCH) {
 		await db.batch(
@@ -228,6 +325,56 @@ export async function readFindings(db: D1Database, brainId: string): Promise<Que
 		.bind(brainId)
 		.all<FindingRow>();
 	return results.map(parseRow).filter((f): f is QueueFinding => f !== null);
+}
+
+export async function deleteFindings(
+	db: D1Database,
+	brainId: string,
+	keys: readonly string[]
+): Promise<void> {
+	const stmt = db.prepare('DELETE FROM review_findings WHERE brain_id = ?1 AND key = ?2');
+	for (let i = 0; i < keys.length; i += WRITE_BATCH) {
+		await db.batch(keys.slice(i, i + WRITE_BATCH).map((k) => stmt.bind(brainId, k)));
+	}
+}
+
+// The queue as it stands now, policy findings checked against the repository. It reads
+// the tree (every file, since a scan covers more than pages) only when policy rows
+// exist, so a brain without any pays nothing.
+export async function readReconciledFindings(t: {
+	db: D1Database;
+	store: BrainStore;
+	repo: RepoRef;
+	defaultBranch: string;
+	brainId: string;
+}): Promise<QueueFinding[]> {
+	const rows = await readFindings(t.db, t.brainId);
+	const policy = rows.filter((f) => f.kind === 'policy');
+	if (!policy.length) return rows;
+
+	const head = await t.store.getHead(t.repo, t.defaultBranch);
+	const entries = await t.store.listTree(t.repo, head, { extension: '*' });
+	const tree = new Map(entries.map((e) => [e.path, e.sha]));
+	const changed: TreeEntry[] = [];
+	for (const path of new Set(policy.map((f) => f.paths[0]))) {
+		const sha = tree.get(path);
+		if (sha && policy.some((f) => f.paths[0] === path && f.pageShas[path] !== sha)) {
+			changed.push({ path, sha });
+		}
+	}
+	const { pages } = changed.length
+		? await t.store.fetchPages(t.repo, changed.slice(0, POLICY_RESCAN_BUDGET))
+		: { pages: [] as { path: string; content: string }[] };
+	const { close, refresh } = decidePolicyRescan(
+		policy,
+		tree,
+		new Map(pages.map((p) => [p.path, p.content]))
+	);
+	await deleteFindings(t.db, t.brainId, close);
+	await upsertFindings(t.db, t.brainId, refresh);
+	const closed = new Set(close);
+	const refreshed = new Map(refresh.map((f) => [f.key, f]));
+	return rows.filter((f) => !closed.has(f.key)).map((f) => refreshed.get(f.key) ?? f);
 }
 
 // The index's blob sha per page, to compare findings against. Only called with rows in

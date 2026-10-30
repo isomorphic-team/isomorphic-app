@@ -248,23 +248,19 @@ check(
 		view: 'review',
 		policy: {
 			mode: 'shadow',
-			windowDays: 30,
 			total: 3,
 			pages: [{ path: 'a.md', count: 3, kinds: [{ kind: 'us-ssn', count: 3 }] }, { count: 1 }]
 		}
 	}).policy;
 	check(
-		'parseReview: reads mode, window, total and pages',
-		r.mode === 'shadow' && r.windowDays === 30 && r.total === 3 && r.pages[0]?.kinds[0]?.count === 3
+		'parseReview: reads mode, total and pages',
+		r.mode === 'shadow' && r.total === 3 && r.pages[0]?.kinds[0]?.count === 3
 	);
 	check('parseReview: a page without a path is dropped', r.pages.length === 1);
 	const empty = parseReview({}).policy;
 	check(
 		'parseReview: an empty payload is the default (on) with nothing flagged',
-		empty.mode === 'shadow' &&
-			empty.total === 0 &&
-			empty.pages.length === 0 &&
-			empty.windowDays === 30
+		empty.mode === 'shadow' && empty.total === 0 && empty.pages.length === 0
 	);
 	check(
 		'parseReview: coverage is read, and a missing one is no scan with no claim',

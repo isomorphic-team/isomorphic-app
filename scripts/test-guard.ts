@@ -27,6 +27,8 @@
 //   8. A BASELINE FINDING THAT AGES OUT. A scan's rows outlive the report window and
 //      the retention prune, because the content is still there; a repeated step
 //      cannot double-count; and a scan is resumable from its cursor.
+//   9. A POLICY FINDING THAT LIES. It closes when the data is gone and only then, an
+//      unrelated edit keeps it, and only an admin can silence it.
 
 import { localD1 } from '../src/local/d1-sqlite.ts';
 import type { D1Database } from '@cloudflare/workers-types';
@@ -46,7 +48,6 @@ import {
 	recordDetections,
 	readBaseline,
 	readCoverage,
-	readDetectionCounts,
 	RETENTION_MS
 } from '../src/lib/policy-store.ts';
 import {
@@ -56,6 +57,19 @@ import {
 	BASELINE_FILE_BUDGET
 } from '../src/lib/policy-baseline.ts';
 import { loadBrainConfig, DEFAULT_BRAIN_CONFIG } from '../src/lib/brain-config.ts';
+
+import {
+	canDecideFinding,
+	decidePolicyRescan,
+	policyCounts,
+	policyFindings,
+	policyKey,
+	queueReport,
+	readFindings,
+	readReconciledFindings,
+	type QueueFinding
+} from '../src/lib/review-queue.ts';
+import { readFileSync } from 'node:fs';
 
 import { checker } from './check.ts';
 
@@ -334,55 +348,176 @@ console.log('\nvalidate report: admins only, kinds and counts (6)');
 	await recordDetections(db, scope, scanWrites(twoKinds), now - 40 * 86_400_000);
 	await recordDetections(db, scope, scanWrites(twoKinds), now);
 	await recordDetections(db, { ...scope, brainId: 'b2' }, scanWrites(twoKinds), now);
-	const counts = await readDetectionCounts(db, 'b1', now - 30 * 86_400_000);
+	const counts = policyCounts(await readFindings(db, 'b1'));
 	const ssn = counts.find((c) => c.path === 'wiki/intake.md' && c.kind === 'us-ssn');
 	check(
-		'counts are per path and kind, inside the window, this brain only',
+		'findings are per path and kind, count the file as written, this brain only',
 		ssn?.count === 2 && counts.length === 3,
 		JSON.stringify(counts)
 	);
 
 	const coverage = guardCoverage('shadow', '2026-10-01 00:00:00', null);
-	const text = detectionSection('admin', counts, coverage);
+	const text = detectionSection('admin', 2, coverage);
 	check(
 		'an admin sees the section',
-		text.includes('shown to admins only') && text.includes('4 detection(s) across 2 page(s)'),
+		text.includes('shown to admins only): 2 open finding(s)'),
 		text
 	);
-	check(
-		'the busiest page first, kinds by count',
-		text.includes('- wiki/intake.md: 2 us-ssn, 1 date-of-birth\n- wiki/setup.md: 1 api-token'),
-		text
-	);
-	check('an owner sees it too', detectionSection('owner', counts, coverage) === text);
-	check('an editor sees nothing', detectionSection('editor', counts, coverage) === '');
-	check('a viewer sees nothing', detectionSection('viewer', counts, coverage) === '');
+	check('an owner sees it too', detectionSection('owner', 2, coverage) === text);
+	check('an editor sees nothing', detectionSection('editor', 2, coverage) === '');
+	check('a viewer sees nothing', detectionSection('viewer', 2, coverage) === '');
 	check('the report states its coverage (7)', text.includes(coverage.text));
-	const empty = detectionSection('admin', [], coverage);
+	const empty = detectionSection('admin', 0, coverage);
 	check(
-		'nothing recorded still states coverage, and never says clean (7)',
-		empty.includes('nothing recorded') &&
+		'nothing open still states coverage, and never says clean (7)',
+		empty.includes('no open findings') &&
 			empty.includes('has not been scanned') &&
 			!/clean/i.test(empty),
 		empty
 	);
+	const unread = detectionSection('admin', null, coverage);
 	check(
-		'nothing recorded, an editor still sees nothing',
-		!detectionSection('editor', [], coverage)
+		'an unreadable queue claims no count (7)',
+		!/open/.test(unread) && unread.includes(coverage.text),
+		unread
 	);
-	check('no value appears', !text.includes('6789') && !text.includes('AKIA'));
 
 	const many = Array.from({ length: MAX_REPORT_PATHS + 3 }, (_, i) => ({
 		path: `wiki/p${i}.md`,
 		kind: 'us-ssn',
 		count: 1
 	}));
-	const capped = detectionSection('admin', many, coverage);
+	const capped = reviewSummary('shadow', groupDetections(many), coverage);
 	check(
 		'long lists are capped',
 		capped.includes('- and 3 more page(s)') &&
 			capped.split('\n- wiki/').length === MAX_REPORT_PATHS + 1,
 		capped
+	);
+}
+
+console.log('\npolicy findings: the guard as a producer (9)');
+{
+	const made = policyFindings(
+		[
+			{ path: 'wiki/a.md', kind: 'us-ssn' },
+			{ path: 'wiki/a.md', kind: 'us-ssn' },
+			{ path: 'wiki/a.md', kind: 'api-token' }
+		],
+		'u1',
+		'write'
+	);
+	check(
+		'one finding per path and kind, counted',
+		made.length === 2 &&
+			made[0].key === policyKey('wiki/a.md', 'us-ssn') &&
+			made[0].scores?.detections === 2 &&
+			made[0].authorUserId === 'u1'
+	);
+
+	const f = (over: Partial<QueueFinding> = {}): QueueFinding => ({
+		...made[0],
+		pageShas: { 'wiki/a.md': 'old' },
+		...over
+	});
+	const decide = (sha: string | null, text?: string) =>
+		decidePolicyRescan(
+			[f()],
+			new Map(sha ? [['wiki/a.md', sha]] : []),
+			new Map(text === undefined ? [] : [['wiki/a.md', text]])
+		);
+	const unchanged = decide('old');
+	check('an unchanged file stands', !unchanged.close.length && !unchanged.refresh.length);
+	check('a deleted file closes it', decide(null).close.length === 1);
+	const edited = decide('new', 'Edited elsewhere. SSN 123-45-6789');
+	check(
+		'an unrelated edit keeps it, with the new count and sha',
+		edited.close.length === 0 &&
+			edited.refresh[0]?.scores?.detections === 1 &&
+			edited.refresh[0]?.pageShas['wiki/a.md'] === 'new',
+		JSON.stringify(edited)
+	);
+	check('the data gone closes it', decide('new', 'nothing here').close.length === 1);
+	check(
+		'another kind on the page does not keep it',
+		decide('new', 'AKIAIOSFODNN7EXAMPLE').close.length === 1
+	);
+	const unread = decide('new');
+	check(
+		'a changed file not read yet stands until it is',
+		!unread.close.length && !unread.refresh.length
+	);
+	check(
+		'a path with a colon still reads its kind',
+		decidePolicyRescan(
+			[f({ key: policyKey('wiki/a:b.md', 'us-ssn'), paths: ['wiki/a:b.md'], pageShas: {} })],
+			new Map([['wiki/a:b.md', 'new']]),
+			new Map([['wiki/a:b.md', 'SSN 123-45-6789']])
+		).refresh.length === 1
+	);
+
+	check(
+		'a policy finding is never just stale',
+		queueReport([f()], new Map(), { role: 'admin' }).open.length === 1
+	);
+	const editor: QueueFinding = f({ authorUserId: 'someone' });
+	check(
+		'only an admin answers a policy finding',
+		canDecideFinding(editor.key, 'admin') &&
+			canDecideFinding(editor.key, 'owner') &&
+			!canDecideFinding(editor.key, 'editor')
+	);
+	check('other findings stay with editors', canDecideFinding('island:wiki/a.md', 'editor'));
+
+	const db = localD1(':memory:').db as unknown as D1Database;
+	const scope = { brainId: 'b1', mode: 'shadow' as const, actorUserId: 'u1' };
+	await recordDetections(
+		db,
+		scope,
+		scanWrites([{ path: 'wiki/a.md', content: 'SSN 123-45-6789' }])
+	);
+	const [written] = await readFindings(db, 'b1');
+	check(
+		'a write produces a finding, with no value in the row',
+		written?.key === policyKey('wiki/a.md', 'us-ssn') &&
+			written.authorUserId === 'u1' &&
+			!JSON.stringify(written).includes('6789'),
+		JSON.stringify(written)
+	);
+	await recordDetections(
+		db,
+		{ ...scope, actorUserId: undefined },
+		scanWrites([{ path: 'wiki/a.md', content: 'SSN 123-45-6789' }])
+	);
+	check(
+		'a later write with no known author keeps the one on record',
+		(await readFindings(db, 'b1'))[0]?.authorUserId === 'u1'
+	);
+
+	const legacy = localD1(':memory:').db as unknown as D1Database;
+	const insert = legacy.prepare(
+		`INSERT INTO policy_detections
+		   (brain_id, path, kind, severity, start_offset, end_offset, mode, actor_user_id, created_at)
+		 VALUES ('b1', 'wiki/a.md', 'us-ssn', 'high', 0, 1, 'shadow', ?1, ?2)`
+	);
+	await insert.bind('u1', 1000).run();
+	await insert.bind('u1', 2000).run();
+	const backfill = legacy.prepare(
+		readFileSync('migrations/0020_policy_findings_backfill.sql', 'utf8')
+	);
+	await backfill.run();
+	await backfill.run();
+	const carried = await readFindings(legacy, 'b1');
+	check(
+		'the backfill writes the shape policyFindings writes, once',
+		carried.length === 1 &&
+			carried[0].key === made[0].key &&
+			carried[0].headline === made[0].headline &&
+			JSON.stringify(carried[0].evidence) === JSON.stringify(made[0].evidence) &&
+			JSON.stringify(carried[0].paths) === JSON.stringify(made[0].paths) &&
+			carried[0].kind === 'policy' &&
+			carried[0].scores?.detections === 2,
+		JSON.stringify(carried)
 	);
 }
 
@@ -477,7 +612,8 @@ console.log('\nbaseline scan: the real migrations, a stub store (8)');
 	};
 	const store = {
 		getHead: async () => ({ commitSha: 'h', treeSha: 't' }),
-		listTree: async () => Object.keys(files).map((path) => ({ path, sha: path })),
+		listTree: async () =>
+			Object.keys(files).map((path) => ({ path, sha: `${path}:${files[path]}` })),
 		fetchPages: async (_r: unknown, entries: { path: string }[]) => ({
 			pages: entries
 				.filter((e) => !e.path.endsWith('.dat'))
@@ -524,11 +660,11 @@ console.log('\nbaseline scan: the real migrations, a stub store (8)');
 		[{ path: 'wiki/new.md', kind: 'us-ssn', severity: 'high', start: 0, end: 1 }],
 		later
 	);
-	const counts = await readDetectionCounts(db, 'b1', later - 30 * 86_400_000);
+	const queued = policyCounts(await readFindings(db, 'b1'));
 	check(
-		'a baseline finding outlives the report window and the retention prune',
-		counts.length === 4 && counts.some((c) => c.path === '.env'),
-		JSON.stringify(counts)
+		'a baseline finding stays in the report however long ago the scan ran',
+		queued.length === 4 && queued.some((c) => c.path === '.env'),
+		JSON.stringify(queued)
 	);
 	const coverage = await readCoverage(db, 'b1', 'shadow');
 	check('coverage reads the finished scan', coverage.baseline === 'done');
@@ -543,18 +679,24 @@ console.log('\nbaseline scan: the real migrations, a stub store (8)');
 		JSON.stringify(after)
 	);
 
+	const source = { db, store, repo: target.repo, defaultBranch: 'main', brainId: 'b1' };
 	files['.env'] = 'clean now';
 	delete files['zz-last.md'];
-	await advanceBaseline(target, later + 1);
-	const fixed = await readDetectionCounts(db, 'b1', later);
+	const fixed = policyCounts(await readReconciledFindings(source));
 	check(
-		'a fixed file leaves the report at the next scan',
+		'a fixed file leaves the report without another scan',
 		!fixed.some((c) => c.path === '.env'),
 		JSON.stringify(fixed)
 	);
 	check(
-		'so does a deleted file, past the end of the new tree',
+		'so does a deleted file',
 		!fixed.some((c) => c.path === 'zz-last.md'),
+		JSON.stringify(fixed)
+	);
+	check(
+		'closing is durable, and an unchanged file is kept',
+		policyCounts(await readFindings(db, 'b1')).length === fixed.length &&
+			fixed.some((c) => c.path === 'wiki/intake.md'),
 		JSON.stringify(fixed)
 	);
 
@@ -624,7 +766,7 @@ const reportCoverage = guardCoverage('shadow', null, null);
 
 	const off = reviewSummary('off', { total: 0, pages: [] }, reportCoverage);
 	check('off says so', off.includes('turned off for this brain'));
-	check('nothing flagged says so', off.includes('Nothing flagged in the last 30 days.'));
+	check('nothing open says so', off.includes('Nothing open.'));
 	check(
 		'no internal mode names reach people',
 		!/shadow/i.test(reviewSummary('shadow', { total: 0, pages: [] }, reportCoverage))

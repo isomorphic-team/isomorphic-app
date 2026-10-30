@@ -14,7 +14,7 @@ import type { BrainStore, FileWrite } from './brain-repo.ts';
 import type { PolicyMode } from './brain-policy.ts';
 import { roleAtLeast, type Role } from './orgs.ts';
 import { detectSensitive, type Detection } from './policy-detectors.ts';
-import type { BaselineState, DetectionCount } from './policy-store.ts';
+import type { BaselineState } from './policy-store.ts';
 
 export interface WriteDetection extends Detection {
 	path: string;
@@ -62,8 +62,7 @@ export function guardStore(store: BrainStore, opts: GuardOptions): BrainStore {
 	};
 }
 
-// How far back `validate` reports, and how many pages it lists.
-export const REPORT_WINDOW_DAYS = 30;
+// How many pages a summary lists.
 export const MAX_REPORT_PATHS = 20;
 
 // The release that first ran the guard. Nothing before it was scanned, however old the
@@ -101,6 +100,12 @@ export function guardCoverage(
 	return { since, baseline: baseline?.status ?? 'none', text: `${writes} ${existing}` };
 }
 
+export interface DetectionCount {
+	path: string;
+	kind: string;
+	count: number;
+}
+
 /** One page's detections, busiest kind first. */
 export interface DetectionPage {
 	path: string;
@@ -128,32 +133,20 @@ export function groupDetections(counts: readonly DetectionCount[]): {
 	return { total: pages.reduce((n, p) => n + p.count, 0), pages };
 }
 
-// "in the last 30 days", widened when a baseline scan's rows are in the counts.
-function windowPhrase(coverage: GuardCoverage): string {
-	const days = `the last ${REPORT_WINDOW_DAYS} days`;
-	return coverage.baseline === 'none' ? `in ${days}` : `in ${days} and the baseline scan`;
-}
-
-// The `validate` section for the guard: '' unless the caller is a brain admin.
-// Admin-only because even a path and a kind ("wiki/intake.md: us-ssn") says where
-// sensitive data sits. It names kinds and counts, never values, since none are stored.
-// It always states its coverage, so an empty report cannot read as a clean brain.
-export function detectionSection(
-	role: Role,
-	counts: readonly DetectionCount[],
-	coverage: GuardCoverage
-): string {
+// The `validate` section for the guard: '' unless the caller is a brain admin. A path
+// and a kind already say where sensitive data sits. The
+// findings themselves are in the list above it, with the keys `resolve` takes, so this
+// counts them and states coverage, which an empty report must never read as a clean
+// brain. A null count means the queue could not be read, and claims nothing.
+export function detectionSection(role: Role, open: number | null, coverage: GuardCoverage): string {
 	if (!roleAtLeast(role, 'admin')) return '';
-	if (counts.length === 0) {
-		return `\n\nSensitive data (shown to admins only): nothing recorded. ${coverage.text}`;
-	}
-	const { total, pages } = groupDetections(counts);
-	return (
-		`\n\nSensitive data found (shown to admins only): ${total} detection(s) across` +
-		` ${pages.length} page(s) ${windowPhrase(coverage)}. A page may have changed` +
-		` since. Values are not stored, so read the page to review.\n${detectionLines(pages)}` +
-		`\n${coverage.text}`
-	);
+	const count =
+		open === null
+			? ''
+			: open === 0
+				? 'no open findings. '
+				: `${open} open finding(s) among those above. Values are not stored, so read the file to review. `;
+	return `\n\nSensitive data (shown to admins only): ${count}${coverage.text}`;
 }
 
 function detectionLines(pages: readonly DetectionPage[]): string {
@@ -173,11 +166,11 @@ export function reviewSummary(
 ): string {
 	const off = mode === 'off' ? 'Sensitive-data checks are turned off for this brain.\n\n' : '';
 	if (grouped.total === 0) {
-		return `${off}Nothing flagged ${windowPhrase(coverage)}. ${coverage.text}`;
+		return `${off}Nothing open. ${coverage.text}`;
 	}
 	return (
-		`${off}${grouped.total} detection(s) across ${grouped.pages.length} page(s)` +
-		` ${windowPhrase(coverage)}. Values are not stored, so read the page to review.\n` +
+		`${off}${grouped.total} detection(s) across ${grouped.pages.length} page(s). Values are` +
+		` not stored, so read the page to review.\n` +
 		`${detectionLines(grouped.pages)}\n${coverage.text}`
 	);
 }

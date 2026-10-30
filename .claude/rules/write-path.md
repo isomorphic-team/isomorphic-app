@@ -100,19 +100,22 @@ runtime hand to every tool, so it sees every write that reaches `commitOrPR` or 
   migration 0015). A failing recorder is swallowed; a failed write records nothing.
 - **Detections carry offsets, never the matched text,** and the table has no column that could
   hold it. Keep it that way: copying a leaked secret into D1 makes the leak worse.
-- **Admins read detections in `validate`** (`detectionSection`): the last
-  `REPORT_WINDOW_DAYS` of rows, plus the latest baseline scan's, as pages and kinds with counts.
-  Brain admin and owner only, since a path plus a kind already says where sensitive data sits;
-  editors and viewers get no section.
+- **Detections become policy findings** in the findings queue (`policyFindings`), one per file
+  and kind, so reports read `review_findings` and `policy_detections` stays the raw log. Each
+  report rechecks changed files through the detectors (`readReconciledFindings`,
+  `decidePolicyRescan`): an unrelated edit keeps a finding, and removing the data closes it. A
+  policy finding is never just stale. Only a brain admin may answer one (`canDecideFinding`).
+- **Admins read them in `validate`,** where the findings list carries the keys and
+  `detectionSection` counts them, and the content's author sees their own. Even a path plus a
+  kind says where sensitive data sits, so nobody else gets them.
 - **A report states its coverage and never reads as clean** (`guardCoverage`, `readCoverage`):
   both surfaces say what was seen, also when nothing was found.
 - **The baseline scan** (`src/lib/policy-baseline.ts`, D1 `policy_baseline`, migration 0018) is
   `configure_brain` with `baseline_scan: true`, or the Review screen's button, which repeats it.
   It reads every text file through the store, `BASELINE_FILE_BUDGET` paths per call from a
-  cursor, with no model. Its rows are `mode = 'baseline'`, exempt from the report window and
-  the retention prune, and the next scan replaces them.
+  cursor, with no model, and raises policy findings like a write does.
 - **The app's Review screen** (`view_review` in `src/tools/apps.ts`, `app/views/ReviewView.tsx`)
-  shows the same rows through `groupDetections`, the one ordering both surfaces use. The tool
+  shows open policy findings through `groupDetections`, minus dismissed ones. The tool
   refuses below brain admin, and More offers Review (never the rail) only when the active
   brain's row says `canShare` (`activeBrainIsAdmin`), or on a single-user deployment, whose
   operator owns it.

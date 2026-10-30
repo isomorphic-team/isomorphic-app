@@ -7,11 +7,12 @@
 import type { D1Database } from '@cloudflare/workers-types';
 import type { PolicyMode } from './brain-policy.ts';
 import { guardCoverage, type GuardCoverage, type WriteDetection } from './policy-guard.ts';
+import { policyFindings, upsertFindings } from './review-queue.ts';
 
 export const RETENTION_MS = 90 * 24 * 60 * 60 * 1000;
 
-// Detections a baseline scan recorded. They are exempt from the retention prune and the
-// report window, which both measure writes: the content they point at is still there.
+// Detections a baseline scan recorded. They are exempt from the retention prune, which
+// measures writes; the next scan replaces them.
 const BASELINE_MODE = 'baseline';
 
 // Rows per D1 batch when a scan records its detections.
@@ -24,7 +25,8 @@ export interface DetectionScope {
 	mode: PolicyMode;
 }
 
-// One batch: this write's rows, plus pruning the brain's expired ones.
+// This write's rows, plus pruning the brain's expired ones, as one batch; then its
+// findings, which is what the reports read. `policy_detections` stays the raw log.
 export async function recordDetections(
 	db: D1Database,
 	scope: DetectionScope,
@@ -57,31 +59,12 @@ export async function recordDetections(
 			)
 		)
 	]);
-}
-
-export interface DetectionCount {
-	path: string;
-	kind: string;
-	count: number;
-}
-
-// Detections per (path, kind): writes recorded since `since` (epoch ms), plus the latest
-// baseline scan's. Grouped in SQL so the read stays one small result however noisy a
-// brain is.
-export async function readDetectionCounts(
-	db: D1Database,
-	brainId: string,
-	since: number
-): Promise<DetectionCount[]> {
-	const { results } = await db
-		.prepare(
-			`SELECT path, kind, COUNT(*) AS count FROM policy_detections
-			 WHERE brain_id = ?1 AND (created_at >= ?2 OR mode = ?3)
-			 GROUP BY path, kind`
-		)
-		.bind(brainId, since, BASELINE_MODE)
-		.all<DetectionCount>();
-	return results;
+	await upsertFindings(
+		db,
+		scope.brainId,
+		policyFindings(detections, scope.actorUserId ?? null, 'write'),
+		now
+	);
 }
 
 export interface BaselineScope {
@@ -204,6 +187,12 @@ export async function saveBaselineStep(
 				)
 		);
 	}
+	await upsertFindings(
+		db,
+		scope.brainId,
+		policyFindings(detections, null, `baseline-${next.startedAt}`),
+		now
+	);
 	await db
 		.prepare(
 			`UPDATE policy_baseline

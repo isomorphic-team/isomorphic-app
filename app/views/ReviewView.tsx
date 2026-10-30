@@ -36,10 +36,9 @@ function ReviewView({ policy }: { policy: ReviewPolicy }) {
 	const scanning = progress?.startsWith('Scanning') ?? false;
 	return (
 		<div>
-			<div class="mb-3 text-sm text-muted">
-				{policy.mode === 'off' ? 'Checks are off for this brain · ' : ''}Last {policy.windowDays}{' '}
-				days{baseline === 'none' ? '' : ' and the baseline scan'}
-			</div>
+			{policy.mode === 'off' ? (
+				<div class="mb-3 text-sm text-muted">Checks are off for this brain</div>
+			) : null}
 			<div class="mb-3 text-sm text-muted">{text}</div>
 			{policy.mode === 'off' ? null : (
 				<div class="mb-4 flex items-center gap-3">
@@ -50,7 +49,7 @@ function ReviewView({ policy }: { policy: ReviewPolicy }) {
 				</div>
 			)}
 			{policy.pages.length === 0 ? (
-				<div class="mt-16 text-center text-muted">Nothing flagged.</div>
+				<div class="mt-16 text-center text-muted">Nothing open.</div>
 			) : (
 				<List>
 					{policy.pages.map((p) => (
