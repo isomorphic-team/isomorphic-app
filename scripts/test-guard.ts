@@ -22,6 +22,11 @@
 //   6. THE REPORT REACHING THE WRONG PERSON. `validate` shows detections to brain
 //      admins only, since even "wiki/intake.md: us-ssn" says where sensitive data
 //      sits, and it lists kinds and counts, never values.
+//   7. A REPORT THAT READS AS CLEAN ON PARTIAL COVERAGE. Every admin report states what
+//      it has seen, and an empty one never implies an empty brain.
+//   8. A BASELINE FINDING THAT AGES OUT. A scan's rows outlive the report window and
+//      the retention prune, because the content is still there; a repeated step
+//      cannot double-count; and a scan is resumable from its cursor.
 
 import { localD1 } from '../src/local/d1-sqlite.ts';
 import type { D1Database } from '@cloudflare/workers-types';
@@ -29,6 +34,7 @@ import type { BrainStore, FileWrite } from '../src/lib/brain-repo.ts';
 import { detectSensitive, luhn, type DetectionKind } from '../src/lib/policy-detectors.ts';
 import {
 	guardStore,
+	guardCoverage,
 	scanWrites,
 	detectionSection,
 	groupDetections,
@@ -36,7 +42,19 @@ import {
 	MAX_REPORT_PATHS,
 	type WriteDetection
 } from '../src/lib/policy-guard.ts';
-import { recordDetections, readDetectionCounts, RETENTION_MS } from '../src/lib/policy-store.ts';
+import {
+	recordDetections,
+	readBaseline,
+	readCoverage,
+	readDetectionCounts,
+	RETENTION_MS
+} from '../src/lib/policy-store.ts';
+import {
+	advanceBaseline,
+	baselineStepText,
+	planBaselineStep,
+	BASELINE_FILE_BUDGET
+} from '../src/lib/policy-baseline.ts';
 import { loadBrainConfig, DEFAULT_BRAIN_CONFIG } from '../src/lib/brain-config.ts';
 
 import { checker } from './check.ts';
@@ -45,12 +63,30 @@ const { check, done } = checker('guard checks');
 
 const kinds = (text: string): DetectionKind[] => detectSensitive(text).map((d) => d.kind);
 
+// A Luhn-valid number of `length` digits starting with `prefix`.
+function card(prefix: string, length: number): string {
+	const body = prefix.padEnd(length - 1, '7');
+	for (let c = 0; c < 10; c++) if (luhn(`${body}${c}`)) return `${body}${c}`;
+	throw new Error('unreachable');
+}
+
 console.log('\ndetectors: true positives');
 {
 	const cases: [string, string, DetectionKind][] = [
 		['Visa, grouped', 'card on file: 4111 1111 1111 1111 exp 04/29', 'card-number'],
 		['Amex, ungrouped', 'amex 378282246310005.', 'card-number'],
 		['Mastercard, hyphens', '5555-5555-5555-4444', 'card-number'],
+		['Mastercard 2-series', card('2221', 16), 'card-number'],
+		['Mastercard 2-series, top of range', card('2720', 16), 'card-number'],
+		['Visa, 13 digits', card('4', 13), 'card-number'],
+		['Discover', card('6011', 16), 'card-number'],
+		['Discover, 644 range', card('644', 16), 'card-number'],
+		['JCB', card('3530', 16), 'card-number'],
+		['Diners', card('3056', 14), 'card-number'],
+		['postgres URI', 'postgres://app:s3cr3tValue@db.internal:5432/app', 'connection-string'],
+		['redis URI, no user', 'redis://:s3cr3tValue@cache:6379', 'connection-string'],
+		['mongodb+srv URI', 'mongodb+srv://svc:Tr0ub4dor@cluster.mongodb.net', 'connection-string'],
+		['https basic auth', 'https://deploy:hunter2x@registry.example.com/x', 'connection-string'],
 		['SSN', 'SSN 123-45-6789 on the intake form', 'us-ssn'],
 		['AWS key id', 'aws_access_key_id = AKIAIOSFODNN7EXAMPLE', 'api-token'],
 		['GitHub token', `token: ghp_${'a'.repeat(36)}`, 'api-token'],
@@ -86,7 +122,27 @@ console.log('\ndetectors: everyday content is not flagged (1)');
 		['unlabelled record id', 'ticket 00123456 closed'],
 		['epoch millis', 'created_at 1759254000000'],
 		['short sk- prefix', 'the sk-learn package'],
-		['public key', '-----BEGIN PUBLIC KEY-----']
+		['public key', '-----BEGIN PUBLIC KEY-----'],
+		['Luhn-valid, no network prefix', card('6100', 16)],
+		['Luhn-valid, 56 is not Mastercard', card('5600', 16)],
+		['Luhn-valid, below the 2-series', card('2220', 16)],
+		['Luhn-valid, above the 2-series', card('2721', 16)],
+		['Visa prefix, wrong length', card('4', 15)],
+		['Amex prefix, wrong length', card('3782', 16)],
+		['Mastercard prefix, wrong length', card('51', 15)],
+		['Diners prefix, wrong length', card('3056', 16)],
+		['URI with a user and no password', 'postgres://app@db.internal:5432/app'],
+		['URI with a port only', 'https://example.com:8443/path'],
+		['git over ssh', 'ssh://git@github.com:22/acme/repo.git'],
+		['password placeholder in angle brackets', 'postgres://app:<password>@db:5432/app'],
+		['password placeholder, env style', 'postgres://app:${PASSWORD}@db:5432/app'],
+		['password placeholder, bare env', 'postgres://app:$DB_PASSWORD@db:5432/app'],
+		['password placeholder, mustache', 'postgres://app:{{password}}@db:5432/app'],
+		['password placeholder, brackets', 'mysql://root:[password]@db/app'],
+		['password placeholder, word', 'postgres://user:password@localhost/app'],
+		['password placeholder, your_password', 'postgres://user:your_password@host/app'],
+		['password placeholder, stars', 'postgres://user:****@host/app'],
+		['password placeholder, printf', 'postgres://user:%s@host/app']
 	];
 	for (const [label, text] of clean) {
 		check(label, detectSensitive(text).length === 0, JSON.stringify(detectSensitive(text)));
@@ -286,7 +342,8 @@ console.log('\nvalidate report: admins only, kinds and counts (6)');
 		JSON.stringify(counts)
 	);
 
-	const text = detectionSection('admin', counts);
+	const coverage = guardCoverage('shadow', '2026-10-01 00:00:00', null);
+	const text = detectionSection('admin', counts, coverage);
 	check(
 		'an admin sees the section',
 		text.includes('shown to admins only') && text.includes('4 detection(s) across 2 page(s)'),
@@ -297,10 +354,22 @@ console.log('\nvalidate report: admins only, kinds and counts (6)');
 		text.includes('- wiki/intake.md: 2 us-ssn, 1 date-of-birth\n- wiki/setup.md: 1 api-token'),
 		text
 	);
-	check('an owner sees it too', detectionSection('owner', counts) === text);
-	check('an editor sees nothing', detectionSection('editor', counts) === '');
-	check('a viewer sees nothing', detectionSection('viewer', counts) === '');
-	check('nothing to report, no section', detectionSection('admin', []) === '');
+	check('an owner sees it too', detectionSection('owner', counts, coverage) === text);
+	check('an editor sees nothing', detectionSection('editor', counts, coverage) === '');
+	check('a viewer sees nothing', detectionSection('viewer', counts, coverage) === '');
+	check('the report states its coverage (7)', text.includes(coverage.text));
+	const empty = detectionSection('admin', [], coverage);
+	check(
+		'nothing recorded still states coverage, and never says clean (7)',
+		empty.includes('nothing recorded') &&
+			empty.includes('has not been scanned') &&
+			!/clean/i.test(empty),
+		empty
+	);
+	check(
+		'nothing recorded, an editor still sees nothing',
+		!detectionSection('editor', [], coverage)
+	);
 	check('no value appears', !text.includes('6789') && !text.includes('AKIA'));
 
 	const many = Array.from({ length: MAX_REPORT_PATHS + 3 }, (_, i) => ({
@@ -308,7 +377,7 @@ console.log('\nvalidate report: admins only, kinds and counts (6)');
 		kind: 'us-ssn',
 		count: 1
 	}));
-	const capped = detectionSection('admin', many);
+	const capped = detectionSection('admin', many, coverage);
 	check(
 		'long lists are capped',
 		capped.includes('- and 3 more page(s)') &&
@@ -317,7 +386,224 @@ console.log('\nvalidate report: admins only, kinds and counts (6)');
 	);
 }
 
+console.log('\ncoverage: what the report has looked at (7)');
+{
+	const state = (over = {}) => ({
+		status: 'done' as const,
+		cursor: 'z',
+		filesScanned: 40,
+		filesSkipped: 2,
+		detections: 1,
+		startedAt: 0,
+		finishedAt: Date.UTC(2026, 9, 20),
+		...over
+	});
+	check(
+		'an old brain is covered only from the first release of the guard',
+		guardCoverage('shadow', '2026-01-01 09:00:00', null).since === '2026-09-30'
+	);
+	check(
+		'a newer brain is covered from its own date',
+		guardCoverage('shadow', '2026-10-15 09:00:00', null).since === '2026-10-15'
+	);
+	check(
+		'an unknown brain date falls back to the first release',
+		guardCoverage('shadow', null, null).since === '2026-09-30'
+	);
+	const none = guardCoverage('shadow', null, null);
+	check(
+		'no scan: says so, and says pushes are unseen',
+		none.baseline === 'none' &&
+			none.text.includes('has not been scanned') &&
+			none.text.includes('pushed directly'),
+		none.text
+	);
+	const running = guardCoverage('shadow', null, state({ status: 'running', finishedAt: null }));
+	check(
+		'an unfinished scan is not a scanned brain',
+		running.baseline === 'running' &&
+			running.text.includes('unfinished') &&
+			!running.text.includes('was scanned'),
+		running.text
+	);
+	const done = guardCoverage('shadow', null, state());
+	check(
+		'a finished scan gives its date and counts the binaries it skipped',
+		done.baseline === 'done' &&
+			done.text.includes('scanned on 2026-10-20') &&
+			done.text.includes('2 binary file(s) skipped'),
+		done.text
+	);
+	check(
+		'checks off does not claim to cover writes',
+		guardCoverage('off', null, null).text.includes('not scanned') &&
+			!guardCoverage('off', null, null).text.includes('since')
+	);
+}
+
+console.log('\nplanBaselineStep: a budgeted window (8)');
+{
+	const e = (path: string) => ({ path, sha: path });
+	const tree = [e('c.md'), e('a.md'), e('b.png'), e('d.env')];
+	const first = planBaselineStep(tree, null, 2);
+	check(
+		'sorted, windowed, binaries passed over',
+		first.read.map((x) => x.path).join() === 'a.md' &&
+			first.skipped === 1 &&
+			first.last === 'b.png' &&
+			!first.done,
+		JSON.stringify(first)
+	);
+	const second = planBaselineStep(tree, first.last, 2);
+	check(
+		'resumes after the cursor and finishes',
+		second.read.map((x) => x.path).join() === 'c.md,d.env' && second.done
+	);
+	const third = planBaselineStep(tree, 'z', 2);
+	check('nothing left is done, and keeps the cursor', third.done && third.last === 'z');
+	check('an empty tree is done', planBaselineStep([], null, 2).done);
+}
+
+console.log('\nbaseline scan: the real migrations, a stub store (8)');
+{
+	const db = localD1(':memory:').db as unknown as D1Database;
+	const files: Record<string, string> = {
+		'wiki/intake.md': 'SSN 123-45-6789',
+		'wiki/clean.md': 'nothing here',
+		'.env': 'DATABASE_URL=postgres://app:s3cr3tValue@db:5432/app',
+		'wiki/photo.png': 'SSN 123-45-6789',
+		'wiki/unknown.dat': 'binary, no text from the store',
+		'zz-last.md': 'SSN 123-45-6789'
+	};
+	const store = {
+		getHead: async () => ({ commitSha: 'h', treeSha: 't' }),
+		listTree: async () => Object.keys(files).map((path) => ({ path, sha: path })),
+		fetchPages: async (_r: unknown, entries: { path: string }[]) => ({
+			pages: entries
+				.filter((e) => !e.path.endsWith('.dat'))
+				.map((e) => ({ path: e.path, content: files[e.path] })),
+			truncated: false
+		})
+	} as unknown as BrainStore;
+	const target = {
+		db,
+		store,
+		repo: { owner: 'o', repo: 'r' },
+		config: DEFAULT_BRAIN_CONFIG,
+		scope: { brainId: 'b1', orgId: 'o1', actorUserId: 'u1' }
+	};
+	const now = Date.now();
+	check('no scan yet', (await readBaseline(db, 'b1')) === null);
+	const done = await advanceBaseline(target, now);
+	check(
+		'one call finishes a small brain, every text file read, dotfiles included',
+		done.status === 'done' && done.filesScanned === 4 && done.filesSkipped === 2,
+		JSON.stringify(done)
+	);
+	check(
+		'the reply says finished',
+		baselineStepText(done).includes('finished') && !baselineStepText(done).includes('6789')
+	);
+	const rows = (await db.prepare('SELECT * FROM policy_detections').all()).results as Record<
+		string,
+		unknown
+	>[];
+	check(
+		'rows carry baseline mode and no value',
+		rows.length === 3 &&
+			rows.every((r) => r.mode === 'baseline') &&
+			!JSON.stringify(rows).includes('s3cr3t') &&
+			!JSON.stringify(rows).includes('6789'),
+		JSON.stringify(rows)
+	);
+
+	const later = now + 200 * 86_400_000;
+	await recordDetections(
+		db,
+		{ brainId: 'b1', mode: 'shadow' },
+		[{ path: 'wiki/new.md', kind: 'us-ssn', severity: 'high', start: 0, end: 1 }],
+		later
+	);
+	const counts = await readDetectionCounts(db, 'b1', later - 30 * 86_400_000);
+	check(
+		'a baseline finding outlives the report window and the retention prune',
+		counts.length === 4 && counts.some((c) => c.path === '.env'),
+		JSON.stringify(counts)
+	);
+	const coverage = await readCoverage(db, 'b1', 'shadow');
+	check('coverage reads the finished scan', coverage.baseline === 'done');
+
+	const again = await advanceBaseline(target, later);
+	const after = (
+		await db.prepare("SELECT path FROM policy_detections WHERE mode = 'baseline'").all()
+	).results;
+	check(
+		'asking again replaces the last scan rather than adding to it',
+		again.detections === 3 && after.length === 3,
+		JSON.stringify(after)
+	);
+
+	files['.env'] = 'clean now';
+	delete files['zz-last.md'];
+	await advanceBaseline(target, later + 1);
+	const fixed = await readDetectionCounts(db, 'b1', later);
+	check(
+		'a fixed file leaves the report at the next scan',
+		!fixed.some((c) => c.path === '.env'),
+		JSON.stringify(fixed)
+	);
+	check(
+		'so does a deleted file, past the end of the new tree',
+		!fixed.some((c) => c.path === 'zz-last.md'),
+		JSON.stringify(fixed)
+	);
+
+	const big: Record<string, string> = {};
+	for (let i = 0; i < BASELINE_FILE_BUDGET + 5; i++) {
+		big[`wiki/p${String(i).padStart(4, '0')}.md`] = 'SSN 123-45-6789';
+	}
+	const bigTarget = {
+		...target,
+		scope: { brainId: 'b2' },
+		store: {
+			...store,
+			listTree: async () => Object.keys(big).map((path) => ({ path, sha: path })),
+			fetchPages: async (_r: unknown, entries: { path: string }[]) => ({
+				pages: entries.map((e) => ({ path: e.path, content: big[e.path] })),
+				truncated: false
+			})
+		} as unknown as BrainStore
+	};
+	const one = await advanceBaseline(bigTarget, now);
+	check(
+		'a large brain stops at the budget, unfinished',
+		one.status === 'running' && one.filesScanned === BASELINE_FILE_BUDGET,
+		JSON.stringify(one)
+	);
+	const stillPartial = await readCoverage(db, 'b2', 'shadow');
+	check('coverage does not call it scanned yet', stillPartial.baseline === 'running');
+
+	// A step whose reply was lost: its rows landed, the cursor did not move.
+	await db
+		.prepare(
+			'UPDATE policy_baseline SET cursor = NULL, files_scanned = 0, detections = 0 WHERE brain_id = ?1'
+		)
+		.bind('b2')
+		.run();
+	await advanceBaseline(bigTarget, now);
+	const two = await advanceBaseline(bigTarget, now);
+	const total = await db
+		.prepare("SELECT COUNT(*) AS n FROM policy_detections WHERE brain_id = 'b2'")
+		.first<{ n: number }>();
+	check(
+		'a repeated step does not double-count, and the next one finishes',
+		two.status === 'done' && total?.n === BASELINE_FILE_BUDGET + 5 && two.filesScanned === total.n,
+		JSON.stringify({ two, total })
+	);
+}
+
 console.log('\nReview screen: grouping and summary (6)');
+const reportCoverage = guardCoverage('shadow', null, null);
 {
 	const counts = [
 		{ path: 'wiki/b.md', kind: 'api-token', count: 1 },
@@ -336,14 +622,14 @@ console.log('\nReview screen: grouping and summary (6)');
 		g.pages[0].count === 3 && g.pages[0].kinds.map((k) => k.kind).join() === 'us-ssn,date-of-birth'
 	);
 
-	const off = reviewSummary('off', { total: 0, pages: [] });
+	const off = reviewSummary('off', { total: 0, pages: [] }, reportCoverage);
 	check('off says so', off.includes('turned off for this brain'));
 	check('nothing flagged says so', off.includes('Nothing flagged in the last 30 days.'));
 	check(
 		'no internal mode names reach people',
-		!/shadow/i.test(reviewSummary('shadow', { total: 0, pages: [] }))
+		!/shadow/i.test(reviewSummary('shadow', { total: 0, pages: [] }, reportCoverage))
 	);
-	const on = reviewSummary('shadow', g);
+	const on = reviewSummary('shadow', g, reportCoverage);
 	check(
 		'shadow lists the pages',
 		!/shadow/i.test(on) &&

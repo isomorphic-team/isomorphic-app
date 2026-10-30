@@ -24,6 +24,7 @@ import {
 	parseAsset,
 	parseSearchHits,
 	parseActivity,
+	parseBaselineStep,
 	parseReview,
 	parseGraph,
 	parseMembers,
@@ -756,6 +757,19 @@ async function openReview() {
 			retry: () => openReview()
 		});
 	}
+}
+
+// Walk the baseline scan to its end, a budgeted step per call, then reload the Review
+// screen. `onStep` hears the running file count. A refused step throws through
+// payloadOf, and the scan resumes from its cursor when asked again.
+export async function runBaselineScan(onStep: (filesScanned: number) => void) {
+	for (;;) {
+		const result = await callTool('configure_brain', { ...brainArgs(), baseline_scan: true });
+		const step = parseBaselineStep(payloadOf(result));
+		onStep(step.filesScanned);
+		if (step.done) break;
+	}
+	await openReview();
 }
 
 // Open the org roster — members + pending invites. Drives the same view the

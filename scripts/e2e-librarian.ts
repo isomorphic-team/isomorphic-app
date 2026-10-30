@@ -1857,6 +1857,23 @@ try {
 		const configBefore = (await fileText('.isomorphic.json')) ?? '';
 		check('the brain under test has a config to protect', configBefore.includes('"wiki/"'));
 		let before = await commitCount();
+
+		br = await callBrain('configure_brain', { baseline_scan: true, name: 'Nope' });
+		check('baseline_scan refuses to run alongside a setting', br.isError, br.text);
+		br = await callBrain('configure_brain', { baseline_scan: true });
+		check(
+			'baseline_scan runs through the real store and reports a finished pass',
+			!br.isError && /Baseline scan finished: [1-9]/.test(br.text),
+			br.text
+		);
+		check('baseline_scan commits nothing', (await commitCount()) === before);
+		const validated = await call('validate', {});
+		check(
+			'validate then tells an admin the existing content was scanned',
+			validated.text.includes('Existing content was scanned'),
+			validated.text
+		);
+
 		br = await callBrain('configure_brain', {});
 		check('configure_brain refuses when a config already exists', br.isError, br.text);
 		check(

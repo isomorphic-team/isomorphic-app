@@ -1,6 +1,6 @@
 # Design: consistency checks
 
-Status: **proposed** (2026-10-13). Nothing below is built.
+Status: **proposed** (2026-10-13). C1 and C2 are built; the rest is not.
 
 This is the consolidation half of the roadmap's "brain review" (steps 2 and 5).
 
@@ -106,8 +106,10 @@ These are pure and stay in the AGPL core. They keep invariant 1 of the consolida
 
 **1a. A template-aware `near-duplicate`.** The existing check is noise on any brain with templated pages.
 
-- Before comparing, drop from each page's shingle set every bigram that occurs on at least half the pages in its folder, when the folder holds enough pages to have a template. What remains is what the page says, not the shape it shares.
-- This also permits scaling past `MAX_DUP_PAGES`. An inverted index, blocking pairs on shared rare bigrams, replaces the all-pairs pass. Bodies are still loaded through the index, under the budgeted and resumable rule for whole-brain passes.
+- Before comparing, drop from each page's shingle set every bigram held by at least a quarter of the pages in its folder, and by at least `MIN_TEMPLATE_HOLDERS` (4) pages. What remains is what the page says, not the shape it shares.
+- The share is a quarter, not half, because folders mix stubs built from a template with full pages. On a 242-page private brain with a 44-page people folder, half left 54 false pairs in that folder and a quarter left 5. The holder floor keeps a few pages telling one story from being read as a template.
+- A page left with too little to compare is dropped.
+- This also permits scaling past the old 400-page limit. An inverted index, blocking pairs on bigrams held by at most `MAX_BLOCKING_PAGES` pages, replaces the all-pairs pass, and `MAX_DUP_PAGES` is 2,000. `validate` loads bodies in one call, so a brain past that still skips the check and a budgeted pass waits for C6.
 - **Tests:**
   - a folder of templated pages about different entities: no tension
   - two pages telling the same story inside that folder: still flagged
@@ -117,7 +119,7 @@ These are pure and stay in the AGPL core. They keep invariant 1 of the consolida
 
 **1b. A `same-identifier` tension kind.** Two or more content pages whose frontmatter carries the same value for an identity field describe one entity. It is cheap and exact where a brain records identifiers, and silent where it does not.
 
-- **Identity fields** are `email` by default. A brain adds its own in `.isomorphic.json` with an optional list of frontmatter keys, for example a CRM record ID. The list is data; no field name is special-cased in code.
+- **Identity fields** are `email` by default. A brain adds its own in `.isomorphic.json` with `"review": {"identityFields": [...]}`, for example a CRM record ID. The list is data; the only field-specific rule is `email`'s normalization. A brain that restricts `index.fields` must keep these keys indexed.
 - **Scope:** content pages under the brain's content roots only. Folder notes and tool-maintained pages are excluded.
 - **Normalization:** trim, then lowercase for `email`. Other fields compare exactly.
 - **Source:** `fieldsByPath`, which `validate` already loads from the queryable frontmatter table. No page bodies, so no page-count cap.
@@ -256,8 +258,8 @@ Roadmap step 2 extends the `validate` / `resolve` pattern into one findings queu
 
 | Item | What                                                                                                       | Where                    | Surface                                                                       |
 | ---- | ---------------------------------------------------------------------------------------------------------- | ------------------------ | ----------------------------------------------------------------------------- |
-| C1   | Template-aware `near-duplicate`, scaling past `MAX_DUP_PAGES`                                              | core                     | `consolidate.ts`, tests                                                       |
-| C2   | `same-identifier` tension                                                                                  | core                     | `consolidate.ts`, config field, tests                                         |
+| C1   | Built: template-aware `near-duplicate`, scaling to `MAX_DUP_PAGES`                                         | core                     | `consolidate.ts`, tests                                                       |
+| C2   | Built: `same-identifier` tension                                                                           | core                     | `consolidate.ts`, config field, tests                                         |
 | C3   | Consolidation kinds in the unified findings queue, staleness, `validate` and `resolve`                     | core (roadmap step 2)    | D1 migration, findings, tests                                                 |
 | C4   | Pipeline: candidates, pre-scan, detect, claim triage, verify, tier, through the gateway                    | `ee/` (roadmap step 5)   | `ee/review/`, tests with a stubbed gateway                                    |
 | C4a  | Anthropic adapter in the gateway: Haiku first, Luna fallback, zero-retention declaration, cost from tokens | `ee/`                    | `ee/review/gateway.ts`, tests pinning the fallback order and the refusal path |

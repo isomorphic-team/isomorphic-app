@@ -198,6 +198,15 @@ test.describe('the ⋯', () => {
 		await expect(app.getByText('wiki/open-questions.md')).toBeVisible();
 		await expect(go(app, 'More')).toHaveAttribute('aria-current', 'page');
 	});
+
+	test('Review states its coverage and walks the baseline scan to the end', async ({ page }) => {
+		const app = await openApp(page, 'review');
+		await expect(app.getByText('has not been scanned')).toBeVisible();
+		await app.getByRole('button', { name: 'Scan existing content' }).click();
+		await expect(app.getByText('Existing content was scanned')).toBeVisible();
+		await expect(app.getByRole('button', { name: 'Scan again' })).toBeVisible();
+		await expect(app.getByText('wiki/open-questions.md')).toBeVisible();
+	});
 });
 
 test.describe('the trail', () => {

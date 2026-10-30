@@ -31,6 +31,7 @@ import {
 	parseAsset,
 	parseSearchHits,
 	parseActivity,
+	parseBaselineStep,
 	parseReview,
 	parseGraph,
 	parseMembers,
@@ -264,6 +265,20 @@ check(
 			empty.total === 0 &&
 			empty.pages.length === 0 &&
 			empty.windowDays === 30
+	);
+	check(
+		'parseReview: coverage is read, and a missing one is no scan with no claim',
+		parseReview({ policy: { coverage: { baseline: 'done', text: 'x' } } }).policy.coverage
+			.baseline === 'done' &&
+			empty.coverage.baseline === 'none' &&
+			empty.coverage.text === ''
+	);
+	check(
+		'parseBaselineStep: only an explicit done is done',
+		parseBaselineStep({ baseline: { status: 'done', filesScanned: 4 } }).done &&
+			parseBaselineStep({ baseline: { status: 'done', filesScanned: 4 } }).filesScanned === 4 &&
+			!parseBaselineStep({ baseline: { status: 'running' } }).done &&
+			!parseBaselineStep({}).done
 	);
 	check(
 		'parseReview: only an explicit off reads as off',

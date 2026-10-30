@@ -62,7 +62,8 @@ import {
 } from '../lib/brain-index.ts';
 import { CONFIG_PATH, DEFAULT_BRAIN_CONFIG } from '../lib/brain-config.ts';
 import { fail } from './shared.ts';
-import type { BrainsWire } from '../lib/tool-payloads.ts';
+import { advanceBaseline, baselineStepText } from '../lib/policy-baseline.ts';
+import type { BaselineStepWire, BrainsWire } from '../lib/tool-payloads.ts';
 import { toolAnnotations } from '../lib/tool-annotations.ts';
 
 // The GitHub client, for the three operations in this file that are GitHub as a
@@ -773,9 +774,9 @@ export function registerBrainTools(
 	server.registerTool(
 		'configure_brain',
 		{
-			...toolAnnotations('Configure a brain: rename it, or set its content layout', 'destructive'),
+			...toolAnnotations('Configure a brain: rename it, set its layout, or scan it', 'destructive'),
 			description:
-				"A brain's own settings. RENAME: pass `name` alone to change what the brain is called; nothing in its repository changes. CONTENT LAYOUT: set up an adopted repo so its pages appear, by writing a .isomorphic.json describing where its content lives; use when a connected brain shows no pages because its markdown isn't under the default 'wiki/' layout. Defaults to indexing the whole repo. If the repo already has a .isomorphic.json, this refuses and shows the current one; pass `overwrite: true` to replace it deliberately. Needs admin on the brain. configure_brain never moves a brain between organizations.",
+				"A brain's own settings. RENAME: pass `name` alone to change what the brain is called; nothing in its repository changes. CONTENT LAYOUT: set up an adopted repo so its pages appear, by writing a .isomorphic.json describing where its content lives; use when a connected brain shows no pages because its markdown isn't under the default 'wiki/' layout. Defaults to indexing the whole repo. If the repo already has a .isomorphic.json, this refuses and shows the current one; pass `overwrite: true` to replace it deliberately. BASELINE SCAN: pass `baseline_scan: true` alone to check everything already in the brain for sensitive data (credentials, card numbers, health identifiers); it reads the repository's text files, uses no model, changes nothing in the repository, and records kinds and locations, never values. A large brain takes several calls: repeat until the reply says finished. Needs admin on the brain. configure_brain never moves a brain between organizations.",
 			inputSchema: z.object({
 				brain: z
 					.string()
@@ -794,11 +795,46 @@ export function registerBrainTools(
 					.optional()
 					.describe(
 						'Replace an existing .isomorphic.json. Without this, a repo that already has one is left alone and its current config is shown.'
+					),
+				baseline_scan: z
+					.boolean()
+					.optional()
+					.describe(
+						'Start or continue a scan of existing content for sensitive data. Pass it alone. A finished scan is replaced by a new one.'
 					)
 			})
 		},
-		async ({ brain, name, content_roots, overwrite }) => {
+		async ({ brain, name, content_roots, overwrite, baseline_scan }) => {
 			const ctx = await getContext({ requires: 'admin', brain });
+
+			if (baseline_scan) {
+				if (name !== undefined || content_roots !== undefined || overwrite !== undefined) {
+					return fail('Pass baseline_scan alone: it does not change any setting.');
+				}
+				if (ctx.config.policyMode === 'off') {
+					return fail(
+						'Sensitive-data checks are turned off for this brain, so nothing was scanned.'
+					);
+				}
+				const baseline = await advanceBaseline({
+					db: ctx.db,
+					store: ctx.store,
+					repo: ctx.repoArgs,
+					config: ctx.config,
+					scope: { brainId: ctx.brainId, orgId: ctx.orgId, actorUserId: ctx.actorUserId }
+				});
+				return {
+					content: [{ type: 'text' as const, text: baselineStepText(baseline) }],
+					structuredContent: {
+						baseline: {
+							status: baseline.status,
+							filesScanned: baseline.filesScanned,
+							filesSkipped: baseline.filesSkipped,
+							detections: baseline.detections
+						}
+					} satisfies BaselineStepWire
+				};
+			}
 
 			let renamed = '';
 			if (name !== undefined) {

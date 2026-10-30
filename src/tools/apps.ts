@@ -50,7 +50,7 @@ import {
 } from '../lib/brain-config.ts';
 import { roleAtLeast, type TenantOpts } from '../lib/orgs.ts';
 import { groupDetections, reviewSummary, REPORT_WINDOW_DAYS } from '../lib/policy-guard.ts';
-import { readDetectionCounts } from '../lib/policy-store.ts';
+import { readCoverage, readDetectionCounts } from '../lib/policy-store.ts';
 import { brainArgFor, fail } from './shared.ts';
 import type {
 	PageViewWire,
@@ -416,7 +416,7 @@ export function registerBrainApp(
 		{
 			...toolAnnotations('Open the review screen', 'read'),
 			description:
-				"view_review: open a brain's Review screen in Isomorphic, for brain admins. It shows what the data-policy guard recorded: which pages had sensitive data written into them (API tokens, private keys, card numbers, Social Security numbers, medical record numbers, dates of birth), how many of each kind, over the last 30 days. Values are never shown or stored. Use when an admin asks whether sensitive or confidential data has landed in the brain, or wants to review data-policy activity.",
+				"view_review: open a brain's Review screen in Isomorphic, for brain admins. It shows what the data-policy guard recorded: which pages hold sensitive data (API tokens, connection strings, private keys, card numbers, Social Security numbers, medical record numbers, dates of birth) and how many of each kind, from writes over the last 30 days and from the latest baseline scan of existing content, and it states what the checks have and have not covered. Values are never shown or stored. Use when an admin asks whether sensitive or confidential data has landed in the brain, or wants to review data-policy activity.",
 			inputSchema: { brain: brainArg },
 			_meta: { ui: { resourceUri: BRAIN_APP_URI } }
 		},
@@ -429,11 +429,16 @@ export function registerBrainApp(
 			}
 			const since = Date.now() - REPORT_WINDOW_DAYS * 24 * 60 * 60 * 1000;
 			const grouped = groupDetections(await readDetectionCounts(db, brainId, since));
+			const coverage = await readCoverage(db, brainId, config.policyMode);
 			return {
 				content: [
 					{
 						type: 'text' as const,
-						text: withLink(reviewSummary(config.policyMode, grouped), 'view_review', activeBrain.id)
+						text: withLink(
+							reviewSummary(config.policyMode, grouped, coverage),
+							'view_review',
+							activeBrain.id
+						)
 					}
 				],
 				structuredContent: {
@@ -443,7 +448,8 @@ export function registerBrainApp(
 						mode: config.policyMode,
 						windowDays: REPORT_WINDOW_DAYS,
 						total: grouped.total,
-						pages: grouped.pages
+						pages: grouped.pages,
+						coverage: { baseline: coverage.baseline, text: coverage.text }
 					},
 					config: editPolicy(config),
 					activeBrain

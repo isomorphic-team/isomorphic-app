@@ -141,6 +141,10 @@ function contentBrainId(args: Record<string, unknown>): string {
 // selector in the host chrome.
 let openPath = 'wiki/concepts/vision.md';
 
+// The Review screen's baseline scan: two steps, so a preview walks the resume loop.
+let baselineFixture: 'none' | 'done' = 'none';
+let baselineSteps = 0;
+
 // In-memory org roster so `#members` previews the members view (list / invite /
 // set role / remove) without a server. `ME` is the owner, so the preview shows the
 // full admin control set. Roles are the DB tokens the real tools use.
@@ -1005,12 +1009,26 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
 					kinds: [{ kind: 'api-token', count: 1 }]
 				}
 			];
+			const scanned = baselineFixture === 'done';
 			const r = text('4 detection(s) across 2 page(s) in the last 30 days.');
 			return {
 				...r,
 				structuredContent: {
 					view: 'review',
-					policy: { mode: 'shadow', windowDays: 30, total: 4, pages }
+					policy: {
+						mode: 'shadow',
+						windowDays: 30,
+						total: 4,
+						pages,
+						coverage: {
+							baseline: baselineFixture,
+							text: `This covers writes made through Isomorphic since 2026-09-30. Changes pushed directly to the repository are not seen. ${
+								scanned
+									? 'Existing content was scanned on 2026-10-30: 12 file(s), 1 binary file(s) skipped.'
+									: 'Content already in the brain has not been scanned.'
+							}`
+						}
+					}
 				}
 			};
 		}
@@ -1357,6 +1375,22 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
 			};
 		}
 		case 'configure_brain': {
+			if (args?.baseline_scan) {
+				baselineSteps += 1;
+				const done = baselineSteps % 2 === 0;
+				if (done) baselineFixture = 'done';
+				return {
+					...text(done ? 'Baseline scan finished.' : 'Baseline scan in progress.'),
+					structuredContent: {
+						baseline: {
+							status: done ? 'done' : 'running',
+							filesScanned: done ? 12 : 6,
+							filesSkipped: 1,
+							detections: 0
+						}
+					}
+				};
+			}
 			const b = brainsFixture.find(
 				(x) => x.id === String(args?.brain ?? activeBrainId) || x.orgId === 'org-acme'
 			);

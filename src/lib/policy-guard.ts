@@ -14,7 +14,7 @@ import type { BrainStore, FileWrite } from './brain-repo.ts';
 import type { PolicyMode } from './brain-policy.ts';
 import { roleAtLeast, type Role } from './orgs.ts';
 import { detectSensitive, type Detection } from './policy-detectors.ts';
-import type { DetectionCount } from './policy-store.ts';
+import type { BaselineState, DetectionCount } from './policy-store.ts';
 
 export interface WriteDetection extends Detection {
 	path: string;
@@ -66,6 +66,41 @@ export function guardStore(store: BrainStore, opts: GuardOptions): BrainStore {
 export const REPORT_WINDOW_DAYS = 30;
 export const MAX_REPORT_PATHS = 20;
 
+// The release that first ran the guard. Nothing before it was scanned, however old the
+// brain, so a coverage date is never earlier than this.
+export const GUARD_FIRST_RELEASED = '2026-09-30';
+
+/** What the report in front of an admin has actually looked at. */
+export interface GuardCoverage {
+	// YYYY-MM-DD: the earliest write the guard can have seen on this brain.
+	since: string;
+	baseline: 'none' | 'running' | 'done';
+	// The statement both surfaces show. Partial coverage is never reported as clean.
+	text: string;
+}
+
+const isoDate = (ms: number) => new Date(ms).toISOString().slice(0, 10);
+
+export function guardCoverage(
+	mode: PolicyMode,
+	brainCreatedAt: string | null,
+	baseline: BaselineState | null
+): GuardCoverage {
+	const created = (brainCreatedAt ?? '').slice(0, 10);
+	const since = created > GUARD_FIRST_RELEASED ? created : GUARD_FIRST_RELEASED;
+	const writes =
+		mode === 'off'
+			? 'Checks are off, so new writes are not scanned.'
+			: `This covers writes made through Isomorphic since ${since}. Changes pushed directly to the repository are not seen.`;
+	let existing = 'Content already in the brain has not been scanned.';
+	if (baseline?.status === 'running') {
+		existing = `A scan of existing content is unfinished: ${baseline.filesScanned} file(s) so far.`;
+	} else if (baseline?.finishedAt) {
+		existing = `Existing content was scanned on ${isoDate(baseline.finishedAt)}: ${baseline.filesScanned} file(s), ${baseline.filesSkipped} binary file(s) skipped.`;
+	}
+	return { since, baseline: baseline?.status ?? 'none', text: `${writes} ${existing}` };
+}
+
 /** One page's detections, busiest kind first. */
 export interface DetectionPage {
 	path: string;
@@ -93,17 +128,31 @@ export function groupDetections(counts: readonly DetectionCount[]): {
 	return { total: pages.reduce((n, p) => n + p.count, 0), pages };
 }
 
-// The `validate` section for shadow-mode detections: '' unless the caller is a brain
-// admin and there is something to report. Admin-only because even a path and a kind
-// ("wiki/intake.md: us-ssn") says where sensitive data sits. It names kinds and
-// counts, never values, since none are stored.
-export function detectionSection(role: Role, counts: readonly DetectionCount[]): string {
-	if (!roleAtLeast(role, 'admin') || counts.length === 0) return '';
+// "in the last 30 days", widened when a baseline scan's rows are in the counts.
+function windowPhrase(coverage: GuardCoverage): string {
+	const days = `the last ${REPORT_WINDOW_DAYS} days`;
+	return coverage.baseline === 'none' ? `in ${days}` : `in ${days} and the baseline scan`;
+}
+
+// The `validate` section for the guard: '' unless the caller is a brain admin.
+// Admin-only because even a path and a kind ("wiki/intake.md: us-ssn") says where
+// sensitive data sits. It names kinds and counts, never values, since none are stored.
+// It always states its coverage, so an empty report cannot read as a clean brain.
+export function detectionSection(
+	role: Role,
+	counts: readonly DetectionCount[],
+	coverage: GuardCoverage
+): string {
+	if (!roleAtLeast(role, 'admin')) return '';
+	if (counts.length === 0) {
+		return `\n\nSensitive data (shown to admins only): nothing recorded. ${coverage.text}`;
+	}
 	const { total, pages } = groupDetections(counts);
 	return (
-		`\n\nSensitive data found in writes (shown to admins only): ${total} detection(s) across` +
-		` ${pages.length} page(s) in the last ${REPORT_WINDOW_DAYS} days. A page may have changed` +
-		` since. Values are not stored, so read the page to review.\n${detectionLines(pages)}`
+		`\n\nSensitive data found (shown to admins only): ${total} detection(s) across` +
+		` ${pages.length} page(s) ${windowPhrase(coverage)}. A page may have changed` +
+		` since. Values are not stored, so read the page to review.\n${detectionLines(pages)}` +
+		`\n${coverage.text}`
 	);
 }
 
@@ -119,15 +168,16 @@ function detectionLines(pages: readonly DetectionPage[]): string {
 // The Review screen's text block, for the model reading the result.
 export function reviewSummary(
 	mode: PolicyMode,
-	grouped: { total: number; pages: readonly DetectionPage[] }
+	grouped: { total: number; pages: readonly DetectionPage[] },
+	coverage: GuardCoverage
 ): string {
 	const off = mode === 'off' ? 'Sensitive-data checks are turned off for this brain.\n\n' : '';
 	if (grouped.total === 0) {
-		return `${off}Nothing flagged in the last ${REPORT_WINDOW_DAYS} days.`;
+		return `${off}Nothing flagged ${windowPhrase(coverage)}. ${coverage.text}`;
 	}
 	return (
-		`${off}${grouped.total} detection(s) across ${grouped.pages.length} page(s) in the last` +
-		` ${REPORT_WINDOW_DAYS} days. Values are not stored, so read the page to review.\n` +
-		detectionLines(grouped.pages)
+		`${off}${grouped.total} detection(s) across ${grouped.pages.length} page(s)` +
+		` ${windowPhrase(coverage)}. Values are not stored, so read the page to review.\n` +
+		`${detectionLines(grouped.pages)}\n${coverage.text}`
 	);
 }
