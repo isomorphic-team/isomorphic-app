@@ -6,8 +6,8 @@
 -- by asking again. What each pass counts is its own business, so counters are one JSON
 -- object rather than columns.
 --
--- The model consolidation pass (kind 'consolidation') is the first user; the policy
--- baseline scan (kind 'policy-baseline') moves here in 0023.
+-- The model consolidation pass (kind 'consolidation') is the first user. The policy
+-- baseline scan keeps policy_baseline (0018) until it moves here.
 --
 -- Additive: nothing before this reads it.
 
