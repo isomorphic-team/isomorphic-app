@@ -764,7 +764,7 @@ async function openReview() {
 // payloadOf, and the scan resumes from its cursor when asked again.
 export async function runBaselineScan(onStep: (filesScanned: number) => void) {
 	for (;;) {
-		const result = await callTool('configure_brain', { ...brainArgs(), baseline_scan: true });
+		const result = await callTool('review_brain', { ...brainArgs(), check: 'sensitive-data' });
 		const step = parseBaselineStep(payloadOf(result));
 		onStep(step.filesScanned);
 		if (step.done) break;

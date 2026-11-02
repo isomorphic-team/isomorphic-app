@@ -1066,13 +1066,19 @@ console.log('\nconfigure_brain renames at BRAIN scope; connect_brain moves at OR
 		'an org OWNER holding only brain viewer cannot rename either: the name is the brain’s',
 		await denies(orgBoss, 'configure_brain', rename)
 	);
+	for (const check_ of ['sensitive-data', 'contradictions']) {
+		check(
+			`a brain viewer cannot run the ${check_} review`,
+			!(await passesGate(lurker, 'review_brain', { check: check_ }))
+		);
+		check(
+			`an org OWNER holding only brain viewer cannot run the ${check_} review either`,
+			!(await passesGate(orgBoss, 'review_brain', { check: check_ }))
+		);
+	}
 	check(
-		'a brain viewer cannot run the baseline scan',
-		await denies(lurker, 'configure_brain', { baseline_scan: true })
-	);
-	check(
-		'an org OWNER holding only brain viewer cannot run it either',
-		await denies(orgBoss, 'configure_brain', { baseline_scan: true })
+		'a brain admin with no org power can run a review pass',
+		await passesGate(sharedAdmin, 'review_brain', { check: 'sensitive-data' })
 	);
 	const renamed = await attempt(sharedAdmin, 'configure_brain', rename);
 	check(

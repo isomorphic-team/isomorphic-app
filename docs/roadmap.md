@@ -50,7 +50,7 @@ Settled so far:
 - **Writes made outside Isomorphic are scanned after the fact** (push webhook), not blocked.
   Branch lockdown is left to the brain owner.
 - **Model stages are forward-only.** Existing content gets only the deterministic detectors,
-  through the baseline scan an admin runs (`configure_brain` with `baseline_scan`).
+  through the baseline scan an admin runs (`review_brain` with `check: "sensitive-data"`).
 - **A classifier is a guardrail, not a guarantee.** Recall on well-edited prose is limited, and
   the docs and UI say so.
 
@@ -84,7 +84,7 @@ Order:
    consolidation. Can run alongside step 3.
 5. **Consolidation.** Approve/reject only at first, with automatic small fixes enabled per brain
    by an admin. Its own edits go through the guard like any other write. Built: the
-   admin-run pass (`configure_brain` with `consolidate: true`, `ee/review/consolidation.ts`),
+   admin-run pass (`review_brain` with `check: "contradictions"`, `ee/review/consolidation.ts`),
    with a Jev screen and Haiku triage, writing `conflict` findings with proposals and no auto
    tier. Left: bound each step by time rather than by pair count (a 12-pair step takes 30 to
    60 seconds, near a host's tool timeout), claim clustering (C5), and the Review screen

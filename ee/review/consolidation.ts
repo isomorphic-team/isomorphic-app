@@ -681,9 +681,9 @@ export function consolidationStepText(s: ConsolidationState): string {
 	if (s.status === 'done') return `Consolidation finished: ${counts} validate lists the findings.`;
 	if (s.status === 'stopped') {
 		const why = STOP_TEXT[s.stoppedReason ?? ''] ?? s.stoppedReason ?? 'unknown';
-		return `Consolidation stopped: ${why}. ${counts} Call configure_brain with consolidate: true to resume once that changes.`;
+		return `Consolidation stopped: ${why}. ${counts} Call review_brain with check "contradictions" to resume once that changes.`;
 	}
-	return `Consolidation in progress: ${counts} Call configure_brain with consolidate: true again to continue.`;
+	return `Consolidation in progress: ${counts} Call review_brain with check "contradictions" again to continue.`;
 }
 
 // ---------- the step a tool runs ----------

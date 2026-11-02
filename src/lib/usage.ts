@@ -66,6 +66,8 @@ export const TOOL_KINDS: Record<string, UsageKind> = {
 	// Administration: people, brains, and the wiring between them. Kept apart from
 	// writes so a busy month of onboarding does not read as a busy month of
 	// authoring.
+	// The deep review passes: admin-only maintenance of a brain, not authoring.
+	review_brain: 'admin',
 	create_brain: 'admin',
 	connect_brain: 'admin',
 	disconnect_brain: 'admin',
