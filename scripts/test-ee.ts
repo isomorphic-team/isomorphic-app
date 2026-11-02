@@ -45,6 +45,8 @@ import {
 	JEV_CLAIM_PAGE_CHARS,
 	JEV_CONFLICT_QUESTION,
 	MISLEADING_QUESTION,
+	STEP_TIME_MS,
+	TRIAGE_SCHEMA,
 	TRIAGE_SYSTEM,
 	advanceConsolidation,
 	blockShape,
@@ -56,11 +58,12 @@ import {
 	runConsolidationStep,
 	sendable,
 	triageFindings,
+	triagePrompt,
 	type Claim,
 	type PageText,
 	type Proposal
 } from '../ee/review/consolidation.ts';
-import { conflictKey, readFindings } from '../src/lib/review-queue.ts';
+import { conflictKey, readFindings, upsertFindings } from '../src/lib/review-queue.ts';
 import { resetIndex } from '../src/lib/brain-index.ts';
 import { continuePass, readPass, savePass, savePassStatement } from '../src/lib/brain-pass.ts';
 import { SNAPSHOT_BEGIN, SNAPSHOT_END } from '../src/lib/view-directives.ts';
@@ -553,6 +556,7 @@ console.log('\nconsolidation: candidates, pre-scan, claim filter, verify (6)');
 	const b = page('clients/acme.md', 'Acme', 'As of 2026-01 the day rate is $1,500 per day.\n');
 	const claim = (over: Partial<Claim> = {}): Claim => ({
 		subject: 'Acme day rate',
+		fact: 'day rate',
 		quote_a: 'The day rate for Acme is $1,200 per day.',
 		quote_b: 'As of 2026-01 the day rate is $1,500 per day.',
 		value_a: '$1,200',
@@ -589,6 +593,17 @@ console.log('\nconsolidation: candidates, pre-scan, claim filter, verify (6)');
 			f.pageShas[a.path] === 's1' &&
 			f.pageShas[b.path] === 's2' &&
 			f.scores?.misleading === 0.8
+	);
+	check('the finding carries its fact label as its cluster', f.clusterId === 'day rate');
+	check(
+		'the prompt lists the labels the brain already uses, and nothing when there are none',
+		triagePrompt(a, b, ['pod size', 'day rate']).endsWith(
+			'<known_facts>\npod size\nday rate\n</known_facts>'
+		) && !triagePrompt(a, b).includes('known_facts')
+	);
+	check(
+		'the schema asks for the fact label',
+		(TRIAGE_SCHEMA.properties.claims.items.required as readonly string[]).includes('fact')
 	);
 	check(
 		'its verified patch and the page that stands go in the proposal, for review',
@@ -829,6 +844,28 @@ console.log('\nconsolidation: a pass over an indexed brain (7)');
 			[...full].every((p) => answered.has(p) || prompts.includes(p))
 		);
 		check('the run row reads back', (await readRun(db, brain.brainId))?.status === 'done');
+
+		await upsertFindings(db, brain.brainId, [
+			{
+				key: 'conflict:x|y:1',
+				kind: 'conflict',
+				paths: ['x', 'y'],
+				headline: 'h',
+				evidence: [],
+				proposal: null,
+				scores: null,
+				pageShas: {},
+				runId: 'earlier',
+				clusterId: 'pod size',
+				authorUserId: null
+			}
+		]);
+		prompts.length = 0;
+		await advanceConsolidation({ ...target, newRunId: () => 'run-labels' }, NOW);
+		check(
+			'a pass hands triage the fact labels already in the queue',
+			prompts.length > 0 && prompts.every((p) => p.includes('<known_facts>\npod size'))
+		);
 
 		await resetIndex(db, brain.brainId);
 		const fresh = await advanceConsolidation({ ...target, newRunId: () => 'run-4' }, NOW);
@@ -1102,6 +1139,81 @@ console.log('\nconsolidation: the Jev screen (8)');
 		check(
 			'a gateway that cannot decide never scores claims, and keeps them unscored',
 			noJev.findings === 1 && claimStates.length === 0 && unscoredRows[0]?.scores === null
+		);
+	} finally {
+		await brain.cleanup();
+		await rm(src, { recursive: true, force: true });
+	}
+}
+
+console.log('\nconsolidation: each step is bounded by time (10)');
+{
+	const src = await mkdtemp(join(tmpdir(), 'ee-time-'));
+	for (let n = 1; n <= 10; n++) {
+		await seed(
+			src,
+			`notes/acme-${n}.md`,
+			`# Acme topic ${n}\n\nAcme topic ${n} notes about Acme.\n`
+		);
+	}
+	const brain = await openFolderAsBrain(src, 'wiki');
+	const db = brain.db as unknown as D1Database;
+	try {
+		const prompts: string[] = [];
+		const gateway: Pick<Gateway, 'chatJson'> = {
+			async chatJson<T>(_system: string, user: string) {
+				prompts.push(user);
+				return { value: { claims: [] } as T, model: HAIKU_MODEL, costUsd: 0 };
+			}
+		};
+		const base = {
+			db,
+			brainId: brain.brainId,
+			orgId: 'o1',
+			config: brain.config,
+			store: brain.store,
+			repo: brain.repoArgs,
+			gateway
+		};
+
+		// A clock that never moves: one step checks the whole plan.
+		const whole = await advanceConsolidation(
+			{ ...base, newRunId: () => 'whole', clock: () => 0 },
+			NOW
+		);
+		const all = new Set(prompts);
+		check(
+			'with time to spare, one step checks more pairs than one batch',
+			whole.status === 'done' && whole.pairsChecked > 6 && all.size === whole.pairsChecked
+		);
+
+		// A clock that jumps past the limit after the first batch: each step checks one batch.
+		prompts.length = 0;
+		let tick = 0;
+		const slow = () => (tick++ === 0 ? 0 : STEP_TIME_MS);
+		const first = await advanceConsolidation({ ...base, newRunId: () => 'slow', clock: slow }, NOW);
+		check(
+			'a step stops starting batches once the time is up, and the pass keeps running',
+			first.status === 'running' && first.pairsChecked === 6 && prompts.length === 6
+		);
+		let steps = 1;
+		let state = first;
+		while (state.status === 'running' && steps < 20) {
+			tick = 0;
+			state = await advanceConsolidation({ ...base, clock: slow }, NOW);
+			steps++;
+		}
+		check(
+			'later steps finish the pass, and between them every pair is checked',
+			state.status === 'done' && steps > 1 && [...all].every((p) => prompts.includes(p))
+		);
+		check(
+			'the cut-off steps check exactly the pairs the single step did, no more',
+			new Set(prompts).size === all.size && state.pairsChecked === prompts.length
+		);
+		check(
+			"a pair is repeated only where the cut fell inside one page's pairs",
+			prompts.length - all.size < 6 * (steps - 1)
 		);
 	} finally {
 		await brain.cleanup();

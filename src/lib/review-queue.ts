@@ -327,8 +327,110 @@ function toFinding(f: QueueFinding): Finding {
 	return {
 		key: f.key,
 		weight: f.kind === 'policy' ? POLICY_WEIGHT : FINDING_WEIGHT,
-		headline: [`- ${f.headline}`, ...[...count, ...f.evidence].map((e) => `    ${e}`)].join('\n')
+		headline: [`- ${f.headline}`, ...[...count, ...f.evidence].map((e) => `    ${e}`)].join('\n'),
+		...(f.kind === 'conflict' && f.clusterId ? { cluster: f.clusterId } : {})
 	};
+}
+
+// ---------- clusters ----------
+
+// A cluster groups conflict findings about one fact, for display only: keys and
+// dismissals stay per finding, so a cluster gaining or losing pages reopens nothing.
+// `cluster:<label>` answers every finding in it at once through `resolve`.
+const CLUSTER_PREFIX = 'cluster:';
+export const clusterKey = (label: string) => `${CLUSTER_PREFIX}${label}`;
+export const isClusterKey = (key: string) => key.startsWith(CLUSTER_PREFIX);
+export const clusterLabelOf = (key: string) => key.slice(CLUSTER_PREFIX.length);
+
+// The fact a claim is about, as a cluster label: lowercase words, no punctuation, so
+// "Engagement length." and "engagement  length" are one fact.
+export function normalizeFactLabel(fact: string): string {
+	return fact
+		.normalize('NFKC')
+		.toLowerCase()
+		.replace(/[^\p{L}\p{N}\s-]/gu, ' ')
+		.replace(/\s+/g, ' ')
+		.trim()
+		.slice(0, 60)
+		.trim();
+}
+
+// Findings sharing a cluster label, two or more, become one item listing each member
+// with its own key. Everything else passes through. Run after dismissals are filtered,
+// so a dismissed member never shows.
+export function clusterFindings(findings: readonly Finding[]): Finding[] {
+	const groups = new Map<string, Finding[]>();
+	for (const f of findings) {
+		if (f.cluster) groups.set(f.cluster, [...(groups.get(f.cluster) ?? []), f]);
+	}
+	const out: Finding[] = [];
+	const placed = new Set<string>();
+	for (const f of findings) {
+		const members = f.cluster ? groups.get(f.cluster) : undefined;
+		if (!members || members.length < 2) {
+			out.push(f);
+			continue;
+		}
+		if (placed.has(f.cluster!)) continue;
+		placed.add(f.cluster!);
+		const label = f.cluster!;
+		const lines = members.map((m) =>
+			m.headline
+				.split('\n')
+				.map((line, i) => `  ${line}${i === 0 ? `  [${m.key}]` : ''}`)
+				.join('\n')
+		);
+		out.push({
+			key: clusterKey(label),
+			weight: Math.max(...members.map((m) => m.weight)) + 0.5,
+			headline: [
+				`- ${members.length} disagreements about "${label}". Resolve the cluster key to answer them all, or each by its own key.`,
+				...lines
+			].join('\n')
+		});
+	}
+	return out;
+}
+
+// Decisions with a cluster key replaced by one decision per conflict finding in the
+// cluster, or the reason a cluster key named nothing.
+export async function expandClusterDecisions<D extends { finding: string }>(
+	decisions: readonly D[],
+	readRows: () => Promise<QueueFinding[]>
+): Promise<D[] | string> {
+	if (!decisions.some((d) => isClusterKey(d.finding))) return [...decisions];
+	const rows = await readRows();
+	const out: D[] = [];
+	for (const d of decisions) {
+		if (!isClusterKey(d.finding)) {
+			out.push(d);
+			continue;
+		}
+		const label = clusterLabelOf(d.finding);
+		const members = rows.filter((r) => r.kind === 'conflict' && r.clusterId === label);
+		if (!members.length)
+			return `"${d.finding}" names no findings: the cluster may have been answered already.`;
+		out.push(...members.map((m) => ({ ...d, finding: m.key })));
+	}
+	return out;
+}
+
+// The labels already used in a brain's conflict findings, so triage can reuse one for
+// the same fact rather than coining another.
+export async function readFactLabels(
+	db: D1Database,
+	brainId: string,
+	limit = 200
+): Promise<string[]> {
+	const { results } = await db
+		.prepare(
+			`SELECT DISTINCT cluster_id FROM review_findings
+			 WHERE brain_id = ?1 AND kind = 'conflict' AND cluster_id IS NOT NULL
+			 ORDER BY cluster_id LIMIT ?2`
+		)
+		.bind(brainId, limit)
+		.all<{ cluster_id: string }>();
+	return results.map((r) => r.cluster_id);
 }
 
 // The queue as one viewer's `validate` reports it.

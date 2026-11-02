@@ -2,7 +2,7 @@
 // `conflict` findings in the unified queue. Licensed under ee/LICENSE.
 // Design: docs/design/consistency-checks.md, Part 2 (C4).
 //
-// A pass is budgeted and resumable. Each call checks up to PAIRS_PER_STEP page pairs from
+// A pass is budgeted and resumable. Each call plans up to PAIRS_PER_STEP page pairs from
 // its cursor (D1 `brain_passes`, kind 'consolidation', through src/lib/brain-pass.ts),
 // through the gateway, and writes what survives the filters to review_findings. Nothing is written to the brain: every finding waits for a person
 // (the auto tier is off).
@@ -51,6 +51,8 @@ import { detectSensitive } from '../../src/lib/policy-detectors.ts';
 import {
 	conflictKey,
 	normalizeDisputedValue,
+	normalizeFactLabel,
+	readFactLabels,
 	readPageShas,
 	upsertFindings,
 	valuesOnPages,
@@ -67,9 +69,15 @@ import {
 	type Question
 } from './gateway.ts';
 
-// Pairs one call checks. Each is one model request, run CONCURRENCY at a time.
-export const PAIRS_PER_STEP = 12;
-const CONCURRENCY = 4;
+// Pairs one call plans. The clock decides how many it checks: a step starts no new batch
+// once STEP_TIME_MS have passed, so a call ends inside a host's tool timeout however slow
+// the models are, and the pairs it did not reach are the next call's. The first batch
+// always runs, so every call makes progress.
+export const PAIRS_PER_STEP = 48;
+export const STEP_TIME_MS = 15_000;
+
+// Pairs checked at once. Each holds one model request open.
+const CONCURRENCY = 6;
 
 // Search hits paired with each page.
 export const RELATED_PER_PAGE = 3;
@@ -195,6 +203,7 @@ export const sendable = (content: string) =>
 
 export interface Claim {
 	subject: string;
+	fact: string;
 	quote_a: string;
 	quote_b: string;
 	value_a: string;
@@ -218,6 +227,7 @@ export const TRIAGE_SCHEMA = {
 				additionalProperties: false,
 				required: [
 					'subject',
+					'fact',
 					'quote_a',
 					'quote_b',
 					'value_a',
@@ -230,6 +240,7 @@ export const TRIAGE_SCHEMA = {
 				],
 				properties: {
 					subject: { type: 'string' },
+					fact: { type: 'string' },
 					quote_a: { type: 'string' },
 					quote_b: { type: 'string' },
 					value_a: { type: 'string' },
@@ -263,6 +274,7 @@ export const TRIAGE_SYSTEM = `You compare two pages from a team's knowledge base
 
 For each disagreement:
 - subject: the fact in a few words.
+- fact: two to five lowercase words naming WHAT is disputed, never either value, worded the same whichever pages state it (e.g. "engagement length", "advisor hourly rate"). If it is the same fact as one listed in known_facts, copy that label exactly.
 - quote_a / quote_b: the line from each page that states it, copied exactly.
 - value_a / value_b: the disputed value as each page writes it, copied exactly from inside the quote (a number, a date, a name, a status).
 - explained: true when dates, scope or an existing note on either page account for the difference, so a careful reader would not be misled.
@@ -277,10 +289,15 @@ For each disagreement:
 
 Report only real disagreements about the same thing. Different facts about different things are not disagreements. Return an empty list when the pages agree.`;
 
-export function triagePrompt(a: PageText, b: PageText): string {
+// The pair, plus the fact labels the brain already uses, so the same fact gets the same
+// label whichever pair raises it.
+export function triagePrompt(a: PageText, b: PageText, knownFacts: readonly string[] = []): string {
 	const page = (label: string, p: PageText) =>
 		`<page_${label} path="${p.path}" title="${p.title.replace(/"/g, "'")}">\n${p.content}\n</page_${label}>`;
-	return `${page('a', a)}\n\n${page('b', b)}`;
+	const facts = knownFacts.length
+		? `\n\n<known_facts>\n${knownFacts.join('\n')}\n</known_facts>`
+		: '';
+	return `${page('a', a)}\n\n${page('b', b)}${facts}`;
 }
 
 // A page's block structure: fences, headings, and each run of table rows or list items.
@@ -404,7 +421,7 @@ export async function triageFindings(input: {
 				[b.path]: input.pageShas[b.path] ?? ''
 			},
 			runId: input.runId,
-			clusterId: null,
+			clusterId: normalizeFactLabel(c.fact ?? '') || null,
 			authorUserId: null
 		});
 	}
@@ -482,6 +499,8 @@ export interface ConsolidationTarget {
 	repo: RepoRef;
 	gateway: Pick<Gateway, 'chatJson' | 'decide'>;
 	newRunId?: () => string;
+	// The step's clock, for STEP_TIME_MS. Date.now unless a test drives it.
+	clock?: () => number;
 }
 
 // Why a pass stopped, for the run row and the reply.
@@ -542,6 +561,7 @@ export async function advanceConsolidation(
 
 	const plan = planStep(pages, partners, state.cursor);
 	const shas = Object.fromEntries(await readPageShas(t.db, t.brainId));
+	const knownFacts = await readFactLabels(t.db, t.brainId);
 	const found: QueueFinding[] = [];
 	// The first pair a refused gateway stopped. Pairs after it may have run in the same
 	// batch; the cursor stays before it, so the next step checks them again.
@@ -604,7 +624,7 @@ export async function advanceConsolidation(
 			}
 			const served = await t.gateway.chatJson<{ claims: Claim[] }>(
 				TRIAGE_SYSTEM,
-				triagePrompt(a, b),
+				triagePrompt(a, b, knownFacts),
 				TRIAGE_SCHEMA as unknown as Record<string, unknown>
 			);
 			count(served.model, served.costUsd);
@@ -640,7 +660,15 @@ export async function advanceConsolidation(
 		}
 	}
 
+	const clock = t.clock ?? Date.now;
+	const started = clock();
+	// The first pair this step did not start, when the clock ran out first.
+	let firstUnstarted = Infinity;
 	for (let i = 0; i < plan.pairs.length && !stoppedReason; i += CONCURRENCY) {
+		if (i > 0 && clock() - started >= STEP_TIME_MS) {
+			firstUnstarted = i;
+			break;
+		}
 		const batch = plan.pairs.slice(i, i + CONCURRENCY).map((_, j) => check(i + j));
 		await Promise.all(batch);
 	}
@@ -648,12 +676,13 @@ export async function advanceConsolidation(
 	await upsertFindings(t.db, t.brainId, found, now);
 	state.findings += found.length;
 
-	if (stoppedReason) {
-		// The cursor moves past every source that ends before the first stopped pair.
-		const stoppedSource = plan.pairs[firstStopped].source;
-		const before = plan.pairs.slice(0, firstStopped).filter((p) => p.source !== stoppedSource);
+	const firstOpen = Math.min(firstStopped, firstUnstarted);
+	if (firstOpen !== Infinity) {
+		// The cursor moves past every source that ends before the first pair left open.
+		const openSource = plan.pairs[firstOpen].source;
+		const before = plan.pairs.slice(0, firstOpen).filter((p) => p.source !== openSource);
 		state.cursor = before.at(-1)?.source ?? state.cursor;
-		state.status = 'stopped';
+		state.status = stoppedReason ? 'stopped' : 'running';
 		state.stoppedReason = stoppedReason;
 	} else {
 		state.cursor = plan.last;
@@ -688,7 +717,7 @@ export function consolidationStepText(s: ConsolidationState): string {
 
 // ---------- the step a tool runs ----------
 
-// The state as configure_brain returns it.
+// The state as review_brain returns it.
 export function consolidationWire(s: ConsolidationState): ConsolidationStepWire['consolidation'] {
 	return {
 		status: s.status,

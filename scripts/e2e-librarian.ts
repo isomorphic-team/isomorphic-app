@@ -2057,6 +2057,65 @@ try {
 			report.text
 		);
 
+		// Clusters: findings about one fact show as one item, and its cluster key answers
+		// every member through resolve, one ledger entry each.
+		const ca = 'wiki/cluster-a.md';
+		const cb = 'wiki/cluster-b.md';
+		const cc = 'wiki/cluster-c.md';
+		await call('write_page', { path: ca, content: 'Engagements run 3 to 12 months.\n' });
+		await call('write_page', { path: cb, content: 'Engagements run 6 to 12 months.\n' });
+		await call('write_page', { path: cc, content: 'Engagements run 12 to 14 months.\n' });
+		await call('validate', {});
+		const clusterShas = await readPageShas(db as never, brainId);
+		const member = async (pair: [string, string], values: [string, string]) => ({
+			...finding(await conflictKey(pair, values), values, 'r2'),
+			paths: pair,
+			pageShas: Object.fromEntries(pair.map((p) => [p, clusterShas.get(p) ?? ''])),
+			clusterId: 'engagement length'
+		});
+		const m1 = await member([ca, cb], ['3 to 12', '6 to 12']);
+		const m2 = await member([cb, cc], ['6 to 12', '12 to 14']);
+		await upsertFindings(db as never, brainId, [m1, m2]);
+		report = await call('validate', {});
+		check(
+			'two findings about one fact show as one item, each still with its own key',
+			report.text.includes('[cluster:engagement length]') &&
+				report.text.includes('2 disagreements about "engagement length"') &&
+				report.text.includes(`[${m1.key}]`) &&
+				report.text.includes(`[${m2.key}]`),
+			report.text
+		);
+		const clusterDismissal = await call('resolve', {
+			decisions: [
+				{ finding: 'cluster:engagement length', action: 'dismiss', why: 'ranges differ by level' }
+			]
+		});
+		check('resolve answers a cluster by its key', !clusterDismissal.isError, clusterDismissal.text);
+		report = await call('validate', {});
+		check(
+			'the cluster dismissal silences every member',
+			!report.text.includes('engagement length') &&
+				!report.text.includes(`[${m1.key}]`) &&
+				!report.text.includes(`[${m2.key}]`),
+			report.text
+		);
+		const clusterLedger = (await fileText('.isomorphic/review.json')) ?? '';
+		check(
+			'and writes one ledger entry per finding, never the cluster',
+			clusterLedger.includes(m1.key) &&
+				clusterLedger.includes(m2.key) &&
+				!clusterLedger.includes('cluster:'),
+			clusterLedger
+		);
+		const unknown = await call('resolve', {
+			decisions: [{ finding: 'cluster:no such fact', action: 'dismiss', why: 'x' }]
+		});
+		check(
+			'a cluster key that names nothing is refused',
+			unknown.isError && unknown.text.includes('names no findings'),
+			unknown.text
+		);
+
 		// The guard as a producer: a write raises a finding through the real tools, an
 		// unrelated edit keeps it, a dismissal clears both surfaces, and fixing closes it.
 		const flagged = 'wiki/queue-flagged.md';

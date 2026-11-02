@@ -87,7 +87,9 @@ are in the list, with keys.
   state, and a decision stays a dismissal in the ledger. Visibility is per kind
   (`canSeeFinding`), a row whose page shas no longer match is stale and only counted, and
   `upsertFindings` scrubs every row through the detectors. A conflict's key is the page pair
-  plus a fingerprint of the disputed values (`conflictKey`), never the cluster.
+  plus a fingerprint of the disputed values (`conflictKey`), never the cluster. A cluster is a
+  fact label for display (`clusterFindings` groups two or more in `validate`); `cluster:<label>`
+  in `resolve` expands to one decision per member (`expandClusterDecisions`).
 - **`review_brain` runs the deep passes; `validate` only reports.** Separate tools because
   hosts approve per tool and `validate` is a free read they run unasked, while a pass takes
   minutes and, for `contradictions`, model credits. What may run and `validate`'s line about
