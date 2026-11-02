@@ -281,7 +281,7 @@ export interface ReviewViewWire extends InBrain {
 	};
 }
 
-/** One step of the baseline scan (configure_brain with baseline_scan). */
+/** One step of the baseline scan (review_brain, check "sensitive-data"). */
 export interface BaselineStepWire {
 	baseline: {
 		status: 'running' | 'done';
@@ -291,7 +291,7 @@ export interface BaselineStepWire {
 	};
 }
 
-/** One step of the model consolidation pass (configure_brain with consolidate). */
+/** One step of the model consolidation pass (review_brain, check "contradictions"). */
 export interface ConsolidationStepWire {
 	consolidation: {
 		status: 'running' | 'stopped' | 'done';

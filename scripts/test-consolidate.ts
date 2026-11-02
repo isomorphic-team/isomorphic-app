@@ -45,6 +45,7 @@ import {
 import { localD1 } from '../src/local/d1-sqlite.ts';
 import type { D1Database } from '@cloudflare/workers-types';
 import type { Role } from '../src/lib/orgs.ts';
+import { contradictionCoverage, reviewCheckRefusal } from '../src/lib/review-checks.ts';
 import { checker } from './check.ts';
 
 const { check, done } = checker('consolidate checks');
@@ -823,6 +824,57 @@ const of = (ts: Tension[], kind: string) => ts.filter((t) => t.kind === kind);
 		f.every((x) => x.weight === 4)
 	);
 	check('import: nothing pending, nothing reported', importFindings('crm', []).length === 0);
+}
+
+console.log('\nreview_brain: what may run, and what validate says about the contradictions pass');
+{
+	const on = { policyMode: 'shadow' as const, contradictionsAvailable: true };
+	check(
+		'both checks run when the brain allows them',
+		reviewCheckRefusal('sensitive-data', on) === null &&
+			reviewCheckRefusal('contradictions', on) === null
+	);
+	check(
+		'sensitive-data is refused when the brain turned the checks off',
+		/turned off/.test(reviewCheckRefusal('sensitive-data', { ...on, policyMode: 'off' }) ?? '')
+	);
+	check(
+		'contradictions is refused where the deployment has no model key, and says why',
+		/enterprise feature/.test(
+			reviewCheckRefusal('contradictions', { ...on, contradictionsAvailable: false }) ?? ''
+		)
+	);
+	check(
+		'turning sensitive-data checks off does not touch contradictions, and the reverse',
+		reviewCheckRefusal('contradictions', { ...on, policyMode: 'off' }) === null &&
+			reviewCheckRefusal('sensitive-data', { ...on, contradictionsAvailable: false }) === null
+	);
+
+	const done = {
+		status: 'done' as const,
+		finishedAt: Date.UTC(2026, 10, 2, 15),
+		pairsChecked: 157,
+		findings: 14
+	};
+	check('no line for an editor', contradictionCoverage('editor', true, done) === '');
+	check('no line where the check cannot run', contradictionCoverage('owner', false, done) === '');
+	check(
+		'an admin is told it has not run, and how to run it',
+		/not run on this brain yet\. review_brain with check "contradictions"/.test(
+			contradictionCoverage('admin', true, null)
+		)
+	);
+	check(
+		'a pass in progress says how far it got',
+		/in progress, 40 page pair\(s\) checked so far/.test(
+			contradictionCoverage('admin', true, { ...done, status: 'stopped', pairsChecked: 40 })
+		)
+	);
+	check(
+		'a finished pass says when, over how much, and that later edits are not covered',
+		contradictionCoverage('owner', true, done) ===
+			'\n\nContradiction check: last finished 2026-11-02 over 157 page pair(s), 14 finding(s) raised. Pages edited since are not covered; review_brain with check "contradictions" runs it again.'
+	);
 }
 
 done();

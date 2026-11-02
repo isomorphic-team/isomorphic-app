@@ -285,8 +285,8 @@ Roadmap step 2 extends the `validate` / `resolve` pattern into one findings queu
   exhausted credits or an overload.
 - **Candidates** are each page's three best search hits on its title, plus the near-duplicate
   and same-identifier tensions. A pair over `MAX_PAIR_CHARS` is skipped and counted, never cut.
-- **The trigger** is `configure_brain` with `consolidate: true`, admin only, a budgeted step
-  per call. `pnpm consolidate:report <folder> --models` runs the same pass over a local copy.
+- **The trigger** is `review_brain` with `check: "contradictions"`, admin only, a budgeted
+  step per call. `validate` lists what it found and, for admins, when it last ran. `pnpm consolidate:report <folder> --models` runs the same pass over a local copy.
 - **Not yet:** clustering (C5), the push trigger (C6) and the Review screen section (C7).
 
 C1 and C2 stand alone and ship first. C3 is shared with the guard's own findings and belongs to roadmap step 2. C4 and C5 are the model work. C7 is where the value lands for people, because the review tier carries most of the work.

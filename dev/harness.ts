@@ -1373,8 +1373,8 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
 				}
 			};
 		}
-		case 'configure_brain': {
-			if (args?.baseline_scan) {
+		case 'review_brain': {
+			if (args?.check === 'sensitive-data') {
 				baselineSteps += 1;
 				const done = baselineSteps % 2 === 0;
 				if (done) baselineFixture = 'done';
@@ -1390,6 +1390,9 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
 					}
 				};
 			}
+			return { ...text('Contradictions check: not set up in the harness.'), isError: true };
+		}
+		case 'configure_brain': {
 			const b = brainsFixture.find(
 				(x) => x.id === String(args?.brain ?? activeBrainId) || x.orgId === 'org-acme'
 			);
