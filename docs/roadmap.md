@@ -73,6 +73,11 @@ Order:
      are visible to the author and admins only. Consolidation findings are visible to editors.
      The guard's deterministic detections are its first producer; step 3's model stages and
      step 5 add more.
+   - Built: one run-state table for every budgeted, resumable whole-brain pass
+     (`brain_passes`, `src/lib/brain-pass.ts`); consolidation and the baseline scan use it.
+     Left, the contract half of moving the baseline scan off `policy_baseline` (0018), as two
+     deploys so each stays rollback-safe: first stop writing `policy_baseline` and remove the
+     fallback read in `readBaseline`, then drop the table in a later migration.
 3. **Guard enforcement.** The rulebook page, both model stages, the tiers, quarantine,
    self-release and the audit log.
 4. **Push webhook.** The after-the-fact scan for the guard, and the incremental trigger for
@@ -81,7 +86,9 @@ Order:
    by an admin. Its own edits go through the guard like any other write. Built: the
    admin-run pass (`configure_brain` with `consolidate: true`, `ee/review/consolidation.ts`),
    with a Jev screen and Haiku triage, writing `conflict` findings with proposals and no auto
-   tier.
+   tier. Left: bound each step by time rather than by pair count (a 12-pair step takes 30 to
+   60 seconds, near a host's tool timeout), claim clustering (C5), and the Review screen
+   section (C7).
 6. **When a deployment needs it:** an entitlement writer driven by billing (outside this
    repository), and signed offline license keys for self-hosters.
 
