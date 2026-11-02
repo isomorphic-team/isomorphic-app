@@ -86,9 +86,8 @@ Order:
    by an admin. Its own edits go through the guard like any other write. Built: the
    admin-run pass (`configure_brain` with `consolidate: true`, `ee/review/consolidation.ts`),
    with a Jev screen and Haiku triage, writing `conflict` findings with proposals and no auto
-   tier. Left: bound each step by time rather than by pair count (a 12-pair step takes 30 to
-   60 seconds, near a host's tool timeout), claim clustering (C5), and the Review screen
-   section (C7).
+   tier. Each step stops starting new pairs after 15 seconds, so a call ends well inside a
+   host's tool timeout. Left: claim clustering (C5) and the Review screen section (C7).
 6. **When a deployment needs it:** an entitlement writer driven by billing (outside this
    repository), and signed offline license keys for self-hosters.
 

@@ -2,7 +2,7 @@
 // `conflict` findings in the unified queue. Licensed under ee/LICENSE.
 // Design: docs/design/consistency-checks.md, Part 2 (C4).
 //
-// A pass is budgeted and resumable. Each call checks up to PAIRS_PER_STEP page pairs from
+// A pass is budgeted and resumable. Each call plans up to PAIRS_PER_STEP page pairs from
 // its cursor (D1 `brain_passes`, kind 'consolidation', through src/lib/brain-pass.ts),
 // through the gateway, and writes what survives the filters to review_findings. Nothing is written to the brain: every finding waits for a person
 // (the auto tier is off).
@@ -67,9 +67,15 @@ import {
 	type Question
 } from './gateway.ts';
 
-// Pairs one call checks. Each is one model request, run CONCURRENCY at a time.
-export const PAIRS_PER_STEP = 12;
-const CONCURRENCY = 4;
+// Pairs one call plans. The clock decides how many it checks: a step starts no new batch
+// once STEP_TIME_MS have passed, so a call ends inside a host's tool timeout however slow
+// the models are, and the pairs it did not reach are the next call's. The first batch
+// always runs, so every call makes progress.
+export const PAIRS_PER_STEP = 48;
+export const STEP_TIME_MS = 15_000;
+
+// Pairs checked at once. Each holds one model request open.
+const CONCURRENCY = 6;
 
 // Search hits paired with each page.
 export const RELATED_PER_PAGE = 3;
@@ -482,6 +488,8 @@ export interface ConsolidationTarget {
 	repo: RepoRef;
 	gateway: Pick<Gateway, 'chatJson' | 'decide'>;
 	newRunId?: () => string;
+	// The step's clock, for STEP_TIME_MS. Date.now unless a test drives it.
+	clock?: () => number;
 }
 
 // Why a pass stopped, for the run row and the reply.
@@ -640,7 +648,15 @@ export async function advanceConsolidation(
 		}
 	}
 
+	const clock = t.clock ?? Date.now;
+	const started = clock();
+	// The first pair this step did not start, when the clock ran out first.
+	let firstUnstarted = Infinity;
 	for (let i = 0; i < plan.pairs.length && !stoppedReason; i += CONCURRENCY) {
+		if (i > 0 && clock() - started >= STEP_TIME_MS) {
+			firstUnstarted = i;
+			break;
+		}
 		const batch = plan.pairs.slice(i, i + CONCURRENCY).map((_, j) => check(i + j));
 		await Promise.all(batch);
 	}
@@ -648,12 +664,13 @@ export async function advanceConsolidation(
 	await upsertFindings(t.db, t.brainId, found, now);
 	state.findings += found.length;
 
-	if (stoppedReason) {
-		// The cursor moves past every source that ends before the first stopped pair.
-		const stoppedSource = plan.pairs[firstStopped].source;
-		const before = plan.pairs.slice(0, firstStopped).filter((p) => p.source !== stoppedSource);
+	const firstOpen = Math.min(firstStopped, firstUnstarted);
+	if (firstOpen !== Infinity) {
+		// The cursor moves past every source that ends before the first pair left open.
+		const openSource = plan.pairs[firstOpen].source;
+		const before = plan.pairs.slice(0, firstOpen).filter((p) => p.source !== openSource);
 		state.cursor = before.at(-1)?.source ?? state.cursor;
-		state.status = 'stopped';
+		state.status = stoppedReason ? 'stopped' : 'running';
 		state.stoppedReason = stoppedReason;
 	} else {
 		state.cursor = plan.last;

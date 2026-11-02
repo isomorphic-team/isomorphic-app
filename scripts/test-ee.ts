@@ -45,6 +45,7 @@ import {
 	JEV_CLAIM_PAGE_CHARS,
 	JEV_CONFLICT_QUESTION,
 	MISLEADING_QUESTION,
+	STEP_TIME_MS,
 	TRIAGE_SYSTEM,
 	advanceConsolidation,
 	blockShape,
@@ -1102,6 +1103,81 @@ console.log('\nconsolidation: the Jev screen (8)');
 		check(
 			'a gateway that cannot decide never scores claims, and keeps them unscored',
 			noJev.findings === 1 && claimStates.length === 0 && unscoredRows[0]?.scores === null
+		);
+	} finally {
+		await brain.cleanup();
+		await rm(src, { recursive: true, force: true });
+	}
+}
+
+console.log('\nconsolidation: each step is bounded by time (10)');
+{
+	const src = await mkdtemp(join(tmpdir(), 'ee-time-'));
+	for (let n = 1; n <= 10; n++) {
+		await seed(
+			src,
+			`notes/acme-${n}.md`,
+			`# Acme topic ${n}\n\nAcme topic ${n} notes about Acme.\n`
+		);
+	}
+	const brain = await openFolderAsBrain(src, 'wiki');
+	const db = brain.db as unknown as D1Database;
+	try {
+		const prompts: string[] = [];
+		const gateway: Pick<Gateway, 'chatJson'> = {
+			async chatJson<T>(_system: string, user: string) {
+				prompts.push(user);
+				return { value: { claims: [] } as T, model: HAIKU_MODEL, costUsd: 0 };
+			}
+		};
+		const base = {
+			db,
+			brainId: brain.brainId,
+			orgId: 'o1',
+			config: brain.config,
+			store: brain.store,
+			repo: brain.repoArgs,
+			gateway
+		};
+
+		// A clock that never moves: one step checks the whole plan.
+		const whole = await advanceConsolidation(
+			{ ...base, newRunId: () => 'whole', clock: () => 0 },
+			NOW
+		);
+		const all = new Set(prompts);
+		check(
+			'with time to spare, one step checks more pairs than one batch',
+			whole.status === 'done' && whole.pairsChecked > 6 && all.size === whole.pairsChecked
+		);
+
+		// A clock that jumps past the limit after the first batch: each step checks one batch.
+		prompts.length = 0;
+		let tick = 0;
+		const slow = () => (tick++ === 0 ? 0 : STEP_TIME_MS);
+		const first = await advanceConsolidation({ ...base, newRunId: () => 'slow', clock: slow }, NOW);
+		check(
+			'a step stops starting batches once the time is up, and the pass keeps running',
+			first.status === 'running' && first.pairsChecked === 6 && prompts.length === 6
+		);
+		let steps = 1;
+		let state = first;
+		while (state.status === 'running' && steps < 20) {
+			tick = 0;
+			state = await advanceConsolidation({ ...base, clock: slow }, NOW);
+			steps++;
+		}
+		check(
+			'later steps finish the pass, and between them every pair is checked',
+			state.status === 'done' && steps > 1 && [...all].every((p) => prompts.includes(p))
+		);
+		check(
+			'the cut-off steps check exactly the pairs the single step did, no more',
+			new Set(prompts).size === all.size && state.pairsChecked === prompts.length
+		);
+		check(
+			"a pair is repeated only where the cut fell inside one page's pairs",
+			prompts.length - all.size < 6 * (steps - 1)
 		);
 	} finally {
 		await brain.cleanup();
