@@ -42,6 +42,7 @@ import { McpServer } from '@modelcontextprotocol/server';
 import { registerImportTools } from '../src/tools/importer.ts';
 import { registerLibrarianTools } from '../src/tools/librarian.ts';
 import { registerBrainTools } from '../src/tools/brains.ts';
+import type { ConsolidationStepWire } from '../src/lib/tool-payloads.ts';
 import {
 	listAccessibleBrains,
 	listAccessibleOrgs,
@@ -138,6 +139,8 @@ const server = new McpServer({ name: 'librarian-e2e', version: '0.0.0' });
 let writeHeadCalls = 0;
 // The brain role every tool sees; flipped to prove a gate through the tool itself.
 let callerRole: 'owner' | 'editor' = 'owner';
+// The Worker wires the enterprise consolidation pass in only when it holds a model key.
+let consolidate: (() => Promise<{ text: string; wire: ConsolidationStepWire }>) | undefined;
 // Wrapped in the guard as the Worker and the local runtime wrap it, so writes here raise
 // the same policy findings.
 const getContext = async () => {
@@ -165,6 +168,7 @@ const getContext = async () => {
 		db,
 		brainId,
 		policySecret: 'e2e-secret',
+		consolidate,
 		activeBrain: { id: name, label: name }
 	};
 };
@@ -1891,6 +1895,39 @@ try {
 			br.text
 		);
 		check('baseline_scan commits nothing', (await commitCount()) === before);
+
+		br = await callBrain('configure_brain', { consolidate: true });
+		check(
+			'consolidate on a deployment without a model key says the feature is not set up',
+			br.isError && br.text.includes('enterprise feature'),
+			br.text
+		);
+		let ran = 0;
+		consolidate = async () => {
+			ran++;
+			return {
+				text: 'Consolidation finished: stub.',
+				wire: {
+					consolidation: {
+						status: 'done',
+						pairsChecked: 1,
+						pairsSkipped: 0,
+						findings: 0,
+						costUsd: 0
+					}
+				}
+			};
+		};
+		br = await callBrain('configure_brain', { consolidate: true, baseline_scan: true });
+		check('consolidate refuses to run alongside anything else', br.isError && ran === 0, br.text);
+		br = await callBrain('configure_brain', { consolidate: true });
+		check(
+			'consolidate runs the wired pass once and returns its reply',
+			!br.isError && ran === 1 && br.text === 'Consolidation finished: stub.',
+			br.text
+		);
+		consolidate = undefined;
+		check('consolidate commits nothing', (await commitCount()) === before);
 		const validated = await call('validate', {});
 		check(
 			'validate then tells an admin the existing content was scanned',

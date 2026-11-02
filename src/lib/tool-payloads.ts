@@ -291,6 +291,17 @@ export interface BaselineStepWire {
 	};
 }
 
+/** One step of the model consolidation pass (configure_brain with consolidate). */
+export interface ConsolidationStepWire {
+	consolidation: {
+		status: 'running' | 'stopped' | 'done';
+		pairsChecked: number;
+		pairsSkipped: number;
+		findings: number;
+		costUsd: number;
+	} | null;
+}
+
 export interface GraphViewWire extends InBrain {
 	view: 'graph';
 	webUrl?: string;

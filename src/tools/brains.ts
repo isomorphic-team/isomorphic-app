@@ -776,7 +776,7 @@ export function registerBrainTools(
 		{
 			...toolAnnotations('Configure a brain: rename it, set its layout, or scan it', 'destructive'),
 			description:
-				"A brain's own settings. RENAME: pass `name` alone to change what the brain is called; nothing in its repository changes. CONTENT LAYOUT: set up an adopted repo so its pages appear, by writing a .isomorphic.json describing where its content lives; use when a connected brain shows no pages because its markdown isn't under the default 'wiki/' layout. Defaults to indexing the whole repo. If the repo already has a .isomorphic.json, this refuses and shows the current one; pass `overwrite: true` to replace it deliberately. BASELINE SCAN: pass `baseline_scan: true` alone to check everything already in the brain for sensitive data (credentials, card numbers, health identifiers); it reads the repository's text files, uses no model, changes nothing in the repository, and records kinds and locations, never values. A large brain takes several calls: repeat until the reply says finished. Needs admin on the brain. configure_brain never moves a brain between organizations.",
+				"A brain's own settings. RENAME: pass `name` alone to change what the brain is called; nothing in its repository changes. CONTENT LAYOUT: set up an adopted repo so its pages appear, by writing a .isomorphic.json describing where its content lives; use when a connected brain shows no pages because its markdown isn't under the default 'wiki/' layout. Defaults to indexing the whole repo. If the repo already has a .isomorphic.json, this refuses and shows the current one; pass `overwrite: true` to replace it deliberately. BASELINE SCAN: pass `baseline_scan: true` alone to check everything already in the brain for sensitive data (credentials, card numbers, health identifiers); it reads the repository's text files, uses no model, changes nothing in the repository, and records kinds and locations, never values. A large brain takes several calls: repeat until the reply says finished. CONSOLIDATION: pass `consolidate: true` alone to have a model compare related pages and report where they contradict each other, as findings `validate` lists; an enterprise feature, it spends model credits within the organization's monthly cap, changes nothing in the repository, and also takes several calls. Needs admin on the brain. configure_brain never moves a brain between organizations.",
 			inputSchema: z.object({
 				brain: z
 					.string()
@@ -801,11 +801,40 @@ export function registerBrainTools(
 					.optional()
 					.describe(
 						'Start or continue a scan of existing content for sensitive data. Pass it alone. A finished scan is replaced by a new one.'
+					),
+				consolidate: z
+					.boolean()
+					.optional()
+					.describe(
+						'Start or continue a model pass that finds pages contradicting each other. Pass it alone. A finished pass is replaced by a new one.'
 					)
 			})
 		},
-		async ({ brain, name, content_roots, overwrite, baseline_scan }) => {
+		async ({ brain, name, content_roots, overwrite, baseline_scan, consolidate }) => {
 			const ctx = await getContext({ requires: 'admin', brain });
+
+			if (consolidate) {
+				if (
+					name !== undefined ||
+					content_roots !== undefined ||
+					overwrite !== undefined ||
+					baseline_scan !== undefined
+				) {
+					return fail('Pass consolidate alone: it does not change any setting.');
+				}
+				if (!ctx.consolidate) {
+					return fail(
+						'Consolidation is an enterprise feature this deployment has not set up: it needs a model key.'
+					);
+				}
+				// The pass reads the content index, so it reads it as fresh as every read does.
+				await ensureFresh(ctx.db, ctx.store, ctx.repoArgs, ctx.brainId, ctx.config);
+				const step = await ctx.consolidate();
+				return {
+					content: [{ type: 'text' as const, text: step.text }],
+					structuredContent: step.wire
+				};
+			}
 
 			if (baseline_scan) {
 				if (name !== undefined || content_roots !== undefined || overwrite !== undefined) {

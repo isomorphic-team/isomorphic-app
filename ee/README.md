@@ -8,9 +8,10 @@ development and testing; production use needs a subscription. Why the line falls
 Every feature here checks a per-org entitlement and does nothing without one, so an unentitled
 org runs the core product unchanged.
 
-| Path                | What                                                                                    |
-| ------------------- | --------------------------------------------------------------------------------------- |
-| `entitlements.ts`   | `hasFeature`: whether an org has a feature. Rows are written by `pnpm entitle`.         |
-| `review/gateway.ts` | The model gateway: zero-data-retention routing only, entitled orgs only, a monthly cap. |
+| Path                      | What                                                                                               |
+| ------------------------- | -------------------------------------------------------------------------------------------------- |
+| `entitlements.ts`         | `hasFeature`: whether an org has the `enterprise` entitlement. Rows are written by `pnpm entitle`. |
+| `review/gateway.ts`       | The model gateway: Haiku first, Luna as the fallback, entitled orgs only, a monthly cap.           |
+| `review/consolidation.ts` | The consolidation pass: pages that contradict each other, as `conflict` findings.                  |
 
 This directory does not accept outside contributions.

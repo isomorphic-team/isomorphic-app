@@ -9,8 +9,8 @@
 import type { D1Database } from '@cloudflare/workers-types';
 
 export const FEATURES = {
-	// The data-policy guard's model stages and brain consolidation, and the gateway they use.
-	reviewModels: 'review-models'
+	// Every enterprise feature: model-powered consolidation and the gateway it uses.
+	enterprise: 'enterprise'
 } as const;
 
 export type Feature = (typeof FEATURES)[keyof typeof FEATURES];
