@@ -30,11 +30,7 @@
 import { McpServer, type RegisteredTool } from '@modelcontextprotocol/server';
 import { registeredTools, wrapToolHandler } from './lib/registered-tools.ts';
 import { serveMcp, serverOptions } from './lib/mcp-serve.ts';
-import type {
-	ConsolidationStepWire,
-	IdentityWire,
-	OrgMembershipWire
-} from './lib/tool-payloads.ts';
+import type { ConsolidationStep, IdentityWire, OrgMembershipWire } from './lib/tool-payloads.ts';
 import { consolidationWire, runConsolidationStep } from '../ee/review/consolidation.ts';
 import { z } from 'zod';
 import type { OAuthHelpers } from '@cloudflare/workers-oauth-provider';
@@ -245,8 +241,15 @@ function deploymentSecret(env: Env): string | undefined {
 // deployment holds a model key. The entitlement and the spend cap are checked inside.
 function consolidationFor(
 	env: Env,
-	scope: { brainId: string; orgId: string; actorUserId: string; config: BrainConfig }
-): (() => Promise<{ text: string; wire: ConsolidationStepWire }>) | undefined {
+	scope: {
+		brainId: string;
+		orgId: string;
+		actorUserId: string;
+		config: BrainConfig;
+		store: BrainStore;
+		repo: { owner: string; repo: string };
+	}
+): ConsolidationStep | undefined {
 	const anthropicKey = env.ANTHROPIC_API_KEY?.trim() || undefined;
 	const openRouterKey = env.OPENROUTER_API_KEY?.trim() || undefined;
 	if (!anthropicKey && !openRouterKey) return undefined;
@@ -326,7 +329,7 @@ interface TenantContext {
 	// Every gate reading this treats null as "not a member", never as "no gate".
 	orgRole: Role | null;
 	policySecret?: string;
-	consolidate?: () => Promise<{ text: string; wire: ConsolidationStepWire }>;
+	consolidate?: ConsolidationStep;
 	// The resolved org's id + the acting user's id. The member-management tools need
 	// them to scope the roster and enforce self-guards.
 	orgId?: string;
@@ -710,7 +713,9 @@ class McpSession {
 				brainId: target.brain_id,
 				orgId: target.org_id,
 				actorUserId: userId,
-				config
+				config,
+				store,
+				repo: repoArgs
 			}),
 			config,
 			author,

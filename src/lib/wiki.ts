@@ -270,19 +270,19 @@ export function maskCode(md: string): string {
 	const blank = (s: string) => s.replace(/[^\n]/g, ' ');
 	let fence: string | null = null;
 	const lines = md.split('\n').map((line) => {
-		const m = line.match(FENCE_RE);
-		if (fence !== null) {
-			// A closing fence is the same character, at least as long as the opener.
-			if (m && m[1][0] === fence[0] && m[1].length >= fence.length) fence = null;
-			return blank(line);
-		}
-		if (m) {
-			fence = m[1];
-			return blank(line);
-		}
-		return line;
+		const inFence = fence !== null || FENCE_RE.test(line);
+		fence = nextFence(line, fence);
+		return inFence ? blank(line) : line;
 	});
 	return lines.join('\n').replace(INLINE_CODE_RE, blank);
+}
+
+// The open fence marker after `line`, or null outside a fence. A closing fence is the
+// same character, at least as long as the opener.
+export function nextFence(line: string, fence: string | null): string | null {
+	const m = line.match(FENCE_RE);
+	if (fence === null) return m ? m[1] : null;
+	return m && m[1][0] === fence[0] && m[1].length >= fence.length ? null : fence;
 }
 
 export function extractLinks(body: string): PageLink[] {

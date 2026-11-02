@@ -61,6 +61,8 @@ import {
 	type Proposal
 } from '../ee/review/consolidation.ts';
 import { conflictKey, readFindings } from '../src/lib/review-queue.ts';
+import { resetIndex } from '../src/lib/brain-index.ts';
+import { SNAPSHOT_BEGIN, SNAPSHOT_END } from '../src/lib/view-directives.ts';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -180,7 +182,7 @@ console.log('\ngateway: entitlements, ZDR on the wire, spend (1, 2, 3)');
 
 	const opened = await openGateway({ apiKey: 'k', db, orgId: 'o1', fetch: provider.fn, now });
 	if (!opened.ok) throw new Error('expected an open gateway');
-	const answers = await opened.gateway.decide('state', { q: { type: 'noul', instructions: 'x' } });
+	const answers = await opened.gateway.decide!('state', { q: { type: 'noul', instructions: 'x' } });
 	check('decide returns the answers', answers.value.q?.noul === 0.9);
 	const reply = await opened.gateway.chatJson<{ ok: boolean }>('sys', 'user', { type: 'object' });
 	check('chatJson parses the reply', reply.value.ok === true);
@@ -198,7 +200,7 @@ console.log('\ngateway: entitlements, ZDR on the wire, spend (1, 2, 3)');
 
 	let reason = '';
 	try {
-		await opened.gateway.decide('state', {});
+		await opened.gateway.decide!('state', {});
 	} catch (e) {
 		reason = e instanceof GatewayRefused ? e.reason : String(e);
 	}
@@ -345,6 +347,12 @@ async function entitled(db: D1Database, orgId = 'o1', cap?: number) {
 		.run();
 }
 
+// Write one file under a fixture folder.
+async function seed(dir: string, rel: string, text: string) {
+	await mkdir(join(dir, rel, '..'), { recursive: true });
+	await writeFile(join(dir, rel), text);
+}
+
 const spent = async (db: D1Database) =>
 	(await db
 		.prepare('SELECT calls, cost_usd FROM model_usage_monthly WHERE org_id = ?1')
@@ -472,6 +480,29 @@ console.log('\ngateway: Haiku first, Luna as the fallback, cost from tokens (5)'
 		capReason = e instanceof GatewayRefused ? e.reason : String(e);
 	}
 	check('the cap counts Haiku spend and stops the next call', capReason === 'over-cap');
+
+	const limited = localD1(':memory:').db as unknown as D1Database;
+	await entitled(limited);
+	const busy = (async () =>
+		new Response('{"error":"slow down"}', { status: 429 })) as unknown as typeof fetch;
+	const lunaBusy = await openGateway({
+		apiKey: 'ork',
+		db: limited,
+		orgId: 'o1',
+		fetch: busy,
+		now: () => NOW
+	});
+	if (!lunaBusy.ok) throw new Error('expected an open gateway');
+	let lunaReason = '';
+	try {
+		await lunaBusy.gateway.chatJson('s', 'u', {});
+	} catch (e) {
+		lunaReason = e instanceof ModelUnavailable ? e.reason : String(e);
+	}
+	check(
+		'a rate limit from OpenRouter is a rate limit, as from Anthropic',
+		lunaReason === 'rate-limit'
+	);
 }
 
 console.log('\nconsolidation: candidates, pre-scan, claim filter, verify (6)');
@@ -642,6 +673,24 @@ console.log('\nconsolidation: candidates, pre-scan, claim filter, verify (6)');
 		],
 		{ a: tabled, b }
 	);
+	const snapshotted = page(
+		'people/a.md',
+		'Acme engagement',
+		`The day rate for Acme is $1,200 per day.\n\n${SNAPSHOT_BEGIN}\nRate: $1,200 (generated)\n${SNAPSHOT_END}\n`
+	);
+	const inSnapshot = await triage(
+		[claim({ patch: { page: 'a', find: 'Rate: $1,200 (generated)', replace: 'Rate: $1,500' } })],
+		{ a: snapshotted, b }
+	);
+	const isp = inSnapshot.findings[0]?.proposal as Proposal | undefined;
+	check(
+		"a patch inside a generated okf-view snapshot is rejected by the write path's own rule",
+		isp?.patch === null && /snapshot/.test(isp.patchRejected ?? '')
+	);
+	check(
+		'a tilde fence closes only on tildes, as the indexer reads it',
+		blockShape('~~~\n```\n| x |\n~~~\n| y |') === 'FFT'
+	);
 	check(
 		'a patch that edits a table cell in place passes',
 		(inTable.findings[0]?.proposal as Proposal | undefined)?.patch !== null
@@ -670,10 +719,7 @@ console.log('\nconsolidation: candidates, pre-scan, claim filter, verify (6)');
 console.log('\nconsolidation: a pass over an indexed brain (7)');
 {
 	const src = await mkdtemp(join(tmpdir(), 'ee-brain-'));
-	const write = async (rel: string, text: string) => {
-		await mkdir(join(src, rel, '..'), { recursive: true });
-		await writeFile(join(src, rel), text);
-	};
+	const write = (rel: string, text: string) => seed(src, rel, text);
 	const LOW = 'The day rate for Acme engagement is $1,200 per day.';
 	const HIGH = 'As of 2026-01 the Acme engagement day rate is $1,500 per day.';
 	await write('people/acme-engagement.md', `# Acme engagement\n\n${LOW}\n`);
@@ -724,6 +770,8 @@ console.log('\nconsolidation: a pass over an indexed brain (7)');
 			orgId: 'o1',
 			actorUserId: 'u1',
 			config: brain.config,
+			store: brain.store,
+			repo: brain.repoArgs,
 			gateway,
 			newRunId: () => 'run-1'
 		};
@@ -781,12 +829,21 @@ console.log('\nconsolidation: a pass over an indexed brain (7)');
 		);
 		check('the run row reads back', (await readRun(db, brain.brainId))?.status === 'done');
 
+		await resetIndex(db, brain.brainId);
+		const fresh = await advanceConsolidation({ ...target, newRunId: () => 'run-4' }, NOW);
+		check(
+			'the pass brings the index up to the branch head itself',
+			fresh.status === 'done' && fresh.pairsChecked > 0
+		);
+
 		await db.prepare('DELETE FROM org_entitlements').run();
 		const unentitled = await runConsolidationStep({
 			db,
 			brainId: brain.brainId,
 			orgId: 'o1',
 			config: brain.config,
+			store: brain.store,
+			repo: brain.repoArgs,
 			anthropicKey: 'ak',
 			fetch: (() => {
 				throw new Error('no fetch');
@@ -822,7 +879,7 @@ console.log('\nconsolidation: the Jev screen (8)');
 	});
 	check(
 		'without an OpenRouter key the gateway cannot decide',
-		noOpenRouter.ok && !noOpenRouter.gateway.canDecide
+		noOpenRouter.ok && !noOpenRouter.gateway.decide
 	);
 	const jevProvider = stubFetch(0.0002);
 	const withJev = await openGateway({
@@ -833,13 +890,13 @@ console.log('\nconsolidation: the Jev screen (8)');
 		now: () => NOW
 	});
 	if (!withJev.ok) throw new Error('expected an open gateway');
-	const decided = await withJev.gateway.decide(
+	const decided = await withJev.gateway.decide!(
 		{ a: { path: 'a', text: 'x' } },
 		JEV_CONFLICT_QUESTION
 	);
 	check(
 		'decide reports Jev as the model and its cost, with the state sent as given',
-		withJev.gateway.canDecide &&
+		!!withJev.gateway.decide &&
 			decided.model === JEV_MODEL &&
 			near(decided.costUsd, 0.0002) &&
 			JSON.stringify(jevProvider.calls[0].body.state) ===
@@ -847,10 +904,7 @@ console.log('\nconsolidation: the Jev screen (8)');
 	);
 
 	const src = await mkdtemp(join(tmpdir(), 'ee-screen-'));
-	const write = async (rel: string, text: string) => {
-		await mkdir(join(src, rel, '..'), { recursive: true });
-		await writeFile(join(src, rel), text);
-	};
+	const write = (rel: string, text: string) => seed(src, rel, text);
 	const LOW = 'The day rate for Acme engagement is $1,200 per day.';
 	const HIGH = 'As of 2026-01 the Acme engagement day rate is $1,500 per day.';
 	await write('people/acme-engagement.md', `# Acme engagement\n\n${LOW}\n`);
@@ -870,8 +924,7 @@ console.log('\nconsolidation: the Jev screen (8)');
 		const triaged: string[] = [];
 		const screened: string[] = [];
 		let screenFails: 'none' | 'error' | 'refused' = 'none';
-		const gateway: Pick<Gateway, 'chatJson' | 'decide' | 'canDecide'> = {
-			canDecide: true,
+		const gateway: Pick<Gateway, 'chatJson' | 'decide'> = {
 			async decide(state) {
 				const s = state as { a: { text: string }; b: { text: string } };
 				const both = s.a.text + s.b.text;
@@ -895,6 +948,8 @@ console.log('\nconsolidation: the Jev screen (8)');
 			brainId: brain.brainId,
 			orgId: 'o1',
 			config: brain.config,
+			store: brain.store,
+			repo: brain.repoArgs,
 			gateway,
 			newRunId: () => 'screen-1'
 		};
@@ -936,7 +991,7 @@ console.log('\nconsolidation: the Jev screen (8)');
 		screenFails = 'none';
 		const screenedBefore = screened.length;
 		const unscreened = await advanceConsolidation(
-			{ ...target, gateway: { ...gateway, canDecide: false }, newRunId: () => 'screen-2b' },
+			{ ...target, gateway: { ...gateway, decide: undefined }, newRunId: () => 'screen-2b' },
 			NOW
 		);
 		check(
@@ -956,9 +1011,8 @@ console.log('\nconsolidation: the Jev screen (8)');
 			[];
 		let claimScore = 0.2;
 		let decideCalls = 0;
-		const scoring: Pick<Gateway, 'chatJson' | 'decide' | 'canDecide'> = {
-			canDecide: true,
-			async decide(state, questions): ReturnType<Gateway['decide']> {
+		const scoring: Pick<Gateway, 'chatJson' | 'decide'> = {
+			async decide(state, questions): ReturnType<NonNullable<Gateway['decide']>> {
 				decideCalls++;
 				const st = state as (typeof claimStates)[number] & {
 					a?: { text: string };
@@ -1040,7 +1094,7 @@ console.log('\nconsolidation: the Jev screen (8)');
 		claimStates.length = 0;
 		await db.prepare('DELETE FROM review_findings').run();
 		const noJev = await advanceConsolidation(
-			{ ...target, gateway: { ...scoring, canDecide: false }, newRunId: () => 'claim-3' },
+			{ ...target, gateway: { ...scoring, decide: undefined }, newRunId: () => 'claim-3' },
 			NOW
 		);
 		const unscoredRows = await readFindings(db, brain.brainId);

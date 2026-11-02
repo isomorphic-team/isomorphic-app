@@ -827,8 +827,6 @@ export function registerBrainTools(
 						'Consolidation is an enterprise feature this deployment has not set up: it needs a model key.'
 					);
 				}
-				// The pass reads the content index, so it reads it as fresh as every read does.
-				await ensureFresh(ctx.db, ctx.store, ctx.repoArgs, ctx.brainId, ctx.config);
 				const step = await ctx.consolidate();
 				return {
 					content: [{ type: 'text' as const, text: step.text }],

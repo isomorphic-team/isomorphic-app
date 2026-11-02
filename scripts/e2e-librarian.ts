@@ -42,7 +42,7 @@ import { McpServer } from '@modelcontextprotocol/server';
 import { registerImportTools } from '../src/tools/importer.ts';
 import { registerLibrarianTools } from '../src/tools/librarian.ts';
 import { registerBrainTools } from '../src/tools/brains.ts';
-import type { ConsolidationStepWire } from '../src/lib/tool-payloads.ts';
+import type { ConsolidationStep } from '../src/lib/tool-payloads.ts';
 import {
 	listAccessibleBrains,
 	listAccessibleOrgs,
@@ -140,7 +140,7 @@ let writeHeadCalls = 0;
 // The brain role every tool sees; flipped to prove a gate through the tool itself.
 let callerRole: 'owner' | 'editor' = 'owner';
 // The Worker wires the enterprise consolidation pass in only when it holds a model key.
-let consolidate: (() => Promise<{ text: string; wire: ConsolidationStepWire }>) | undefined;
+let consolidate: ConsolidationStep | undefined;
 // Wrapped in the guard as the Worker and the local runtime wrap it, so writes here raise
 // the same policy findings.
 const getContext = async () => {

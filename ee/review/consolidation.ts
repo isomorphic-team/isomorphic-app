@@ -31,8 +31,15 @@
 import type { D1Database } from '@cloudflare/workers-types';
 import type { BrainConfig } from '../../src/lib/brain-policy.ts';
 import { isContentPath, isToolMaintained } from '../../src/lib/brain-policy.ts';
-import { listIndexedPages, loadAllFields, loadPageContents } from '../../src/lib/brain-index.ts';
+import {
+	ensureFresh,
+	listIndexedPages,
+	loadAllFields,
+	loadPageContents
+} from '../../src/lib/brain-index.ts';
+import type { BrainStore, RepoRef } from '../../src/lib/brain-repo.ts';
 import { computeTensions, MAX_DUP_PAGES } from '../../src/lib/consolidate.ts';
+import { applyPageEdits } from '../../src/lib/page-patch.ts';
 import { detectSensitive } from '../../src/lib/policy-detectors.ts';
 import {
 	conflictKey,
@@ -44,7 +51,14 @@ import {
 } from '../../src/lib/review-queue.ts';
 import { rankPages, signalsFromContent, tokenizeQuery } from '../../src/lib/search.ts';
 import type { ConsolidationStepWire } from '../../src/lib/tool-payloads.ts';
-import { GatewayRefused, ModelUnavailable, openGateway, type Gateway } from './gateway.ts';
+import { nextFence } from '../../src/lib/wiki.ts';
+import {
+	GatewayRefused,
+	ModelUnavailable,
+	openGateway,
+	type Gateway,
+	type Question
+} from './gateway.ts';
 
 // Pairs one call checks. Each is one model request, run CONCURRENCY at a time.
 export const PAIRS_PER_STEP = 12;
@@ -133,12 +147,15 @@ export function planStep(
 	budget = PAIRS_PER_STEP
 ): StepPlan {
 	const sorted = [...pages].sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
+	// Lowered once: ranking lowercases every body it scores, and a step ranks many times.
+	const lowered = sorted.map((p) => ({ ...p, content: p.content.toLowerCase() }));
+	const byPath = new Map(lowered.map((p) => [p.path, p]));
 	const related = new Map<string, Set<string>>();
 	const partnersOf = (path: string) => {
 		let set = related.get(path);
 		if (!set) {
-			const page = sorted.find((p) => p.path === path);
-			set = new Set([...(page ? relatedPages(page, sorted) : []), ...(partners.get(path) ?? [])]);
+			const page = byPath.get(path);
+			set = new Set([...(page ? relatedPages(page, lowered) : []), ...(partners.get(path) ?? [])]);
 			related.set(path, set);
 		}
 		return set;
@@ -263,17 +280,17 @@ export function triagePrompt(a: PageText, b: PageText): string {
 // A patch that changes it has split or broken something a reader relies on.
 export function blockShape(markdown: string): string {
 	const out: string[] = [];
-	let inFence = false;
+	let fence: string | null = null;
 	let prev = '';
 	for (const line of markdown.split('\n')) {
-		const t = line.trim();
-		if (/^(```|~~~)/.test(t)) {
-			inFence = !inFence;
+		const was: string | null = fence;
+		fence = nextFence(line, fence);
+		if (was !== fence) {
 			out.push('F');
 			prev = 'F';
-			continue;
 		}
-		if (inFence) continue;
+		if (was !== null || fence !== null) continue;
+		const t = line.trim();
 		const kind = /^#{1,6}\s/.test(t)
 			? 'H'
 			: t.startsWith('|')
@@ -289,17 +306,9 @@ export function blockShape(markdown: string): string {
 	return out.join('');
 }
 
-const occurrences = (haystack: string, needle: string) => {
-	if (!needle) return 0;
-	let n = 0;
-	for (let i = haystack.indexOf(needle); i !== -1; i = haystack.indexOf(needle, i + 1)) n++;
-	return n;
-};
-
-export type Tier = 'review' | 'person';
-
 export interface Proposal {
-	tier: Tier;
+	// `review` for a patch that passed the checks, `person` for everything else.
+	tier: 'review' | 'person';
 	action: Claim['action'];
 	// The page whose version stands, or null when the pages cannot say.
 	stands: string | null;
@@ -326,9 +335,7 @@ export async function triageFindings(input: {
 		[a.path, a.content],
 		[b.path, b.content]
 	]);
-	const out = new Map<string, QueueFinding>();
-	let dropped = 0;
-	for (const c of input.claims) {
+	const passed = input.claims.filter((c) => {
 		const quoted = valuesOnPages(
 			[
 				{ path: a.path, value: c.quote_a },
@@ -342,11 +349,13 @@ export async function triageFindings(input: {
 			c.quote_a.includes(c.value_a) &&
 			c.quote_b.includes(c.value_b);
 		const differs = normalizeDisputedValue(c.value_a) !== normalizeDisputedValue(c.value_b);
-		if (c.explained || !quoted || !valued || !differs) {
-			dropped++;
-			continue;
-		}
-		const misleading = await input.misleading?.(c);
+		return !c.explained && quoted && valued && differs;
+	});
+	const scores = await Promise.all(passed.map((c) => input.misleading?.(c)));
+	const out = new Map<string, QueueFinding>();
+	let dropped = input.claims.length - passed.length;
+	for (const [i, c] of passed.entries()) {
+		const misleading = scores[i];
 		if (misleading !== undefined && misleading < MIN_MISLEADING) {
 			dropped++;
 			continue;
@@ -356,14 +365,13 @@ export async function triageFindings(input: {
 		let patchRejected: string | undefined;
 		if (c.action === 'patch') {
 			const target = c.patch?.page === 'b' ? b : a;
-			if (!c.patch) patchRejected = 'No patch was given.';
+			// The write path's own rule for an edit: matches exactly once, outside any
+			// generated okf-view snapshot.
+			const applied = c.patch && applyPageEdits(target.content, { edits: [c.patch] });
+			if (!c.patch || !applied) patchRejected = 'No patch was given.';
 			else if (c.patch.find === c.patch.replace) patchRejected = 'The patch changes nothing.';
-			else if (occurrences(target.content, c.patch.find) !== 1)
-				patchRejected = 'The text to replace does not occur exactly once on the page.';
-			else if (
-				blockShape(target.content) !==
-				blockShape(target.content.replace(c.patch.find, () => c.patch!.replace))
-			)
+			else if (!applied.ok) patchRejected = applied.error;
+			else if (blockShape(target.content) !== blockShape(applied.body))
 				patchRejected = 'The patch would split a table, list or code block.';
 			else patch = { path: target.path, find: c.patch.find, replace: c.patch.replace };
 		}
@@ -503,7 +511,10 @@ export interface ConsolidationTarget {
 	orgId: string;
 	actorUserId?: string;
 	config: BrainConfig;
-	gateway: Pick<Gateway, 'chatJson'> & Partial<Pick<Gateway, 'canDecide' | 'decide'>>;
+	// The pass reads the content index, so it brings the index up to the branch head first.
+	store: BrainStore;
+	repo: RepoRef;
+	gateway: Pick<Gateway, 'chatJson' | 'decide'>;
 	newRunId?: () => string;
 }
 
@@ -538,6 +549,7 @@ export async function advanceConsolidation(
 					stoppedReason: null
 				};
 
+	await ensureFresh(t.db, t.store, t.repo, t.brainId, t.config);
 	const listed = (await listIndexedPages(t.db, t.brainId)).filter(
 		(p) => isContentPath(p.path, t.config) && !isToolMaintained(p.path, t.config)
 	);
@@ -573,56 +585,24 @@ export async function advanceConsolidation(
 	const plan = planStep(pages, partners, state.cursor);
 	const shas = Object.fromEntries(await readPageShas(t.db, t.brainId));
 	const found: QueueFinding[] = [];
-	const finished = new Set<number>();
+	// The first pair a refused gateway stopped. Pairs after it may have run in the same
+	// batch; the cursor stays before it, so the next step checks them again.
+	let firstStopped = Infinity;
 	let stoppedReason: string | null = null;
 
-	// Whether Jev clears the pair. A refused gateway stops the pass as anywhere else; any
-	// other failure lets the pair through to triage, so a broken screen costs money, not
-	// findings.
-	async function screenedOut(
-		a: PageText,
-		b: PageText,
-		count: (model: string, costUsd: number) => void
-	): Promise<boolean> {
-		const { decide, canDecide } = t.gateway;
-		if (!canDecide || !decide) return false;
-		if (a.content.length > JEV_MAX_PAGE_CHARS || b.content.length > JEV_MAX_PAGE_CHARS)
-			return false;
-		try {
-			const served = await decide(
-				{ a: { path: a.path, text: a.content }, b: { path: b.path, text: b.content } },
-				JEV_CONFLICT_QUESTION
-			);
-			count(served.model, served.costUsd);
-			return !passesScreen(served.value.conflict?.noul);
-		} catch (err) {
-			if (err instanceof GatewayRefused) throw err;
-			return false;
-		}
-	}
-
-	// Jev's answer to MISLEADING_QUESTION for one claim, or undefined when it cannot say. As
-	// with the screen, only a refused gateway stops the pass.
-	async function misleadingScore(
-		a: PageText,
-		b: PageText,
-		claim: Claim,
+	// Jev's answer to one question, or undefined when it cannot say. A refused gateway stops
+	// the pass as anywhere else; any other failure answers nothing, so a broken Jev costs
+	// money, not findings.
+	async function jevScore(
+		state: unknown,
+		question: Record<string, Question>,
 		count: (model: string, costUsd: number) => void
 	): Promise<number | undefined> {
-		const { decide, canDecide } = t.gateway;
-		if (!canDecide || !decide) return undefined;
-		const cut = (p: PageText) => ({ path: p.path, text: p.content.slice(0, JEV_CLAIM_PAGE_CHARS) });
+		if (!t.gateway.decide) return undefined;
 		try {
-			const served = await decide(
-				{
-					page_a: cut(a),
-					page_b: cut(b),
-					claim: { topic: claim.subject, says_a: claim.quote_a, says_b: claim.quote_b }
-				},
-				MISLEADING_QUESTION
-			);
+			const served = await t.gateway.decide(state, question);
 			count(served.model, served.costUsd);
-			return served.value.misleading?.noul;
+			return served.value[Object.keys(question)[0]]?.noul;
 		} catch (err) {
 			if (err instanceof GatewayRefused) throw err;
 			return undefined;
@@ -641,18 +621,27 @@ export async function advanceConsolidation(
 			a.content.length + b.content.length > MAX_PAIR_CHARS
 		) {
 			state.pairsSkipped++;
-			finished.add(index);
 			return;
 		}
 		const count = (model: string, costUsd: number) => {
 			state.costUsd += costUsd;
 			state.served[model] = (state.served[model] ?? 0) + 1;
 		};
+		const cut = (p: PageText, max: number) => ({ path: p.path, text: p.content.slice(0, max) });
 		try {
-			if (await screenedOut(a, b, count)) {
+			// A page too long for Jev skips the screen rather than being cut.
+			const screenable =
+				a.content.length <= JEV_MAX_PAGE_CHARS && b.content.length <= JEV_MAX_PAGE_CHARS;
+			const conflict = screenable
+				? await jevScore(
+						{ a: cut(a, JEV_MAX_PAGE_CHARS), b: cut(b, JEV_MAX_PAGE_CHARS) },
+						JEV_CONFLICT_QUESTION,
+						count
+					)
+				: undefined;
+			if (!passesScreen(conflict)) {
 				state.pairsChecked++;
 				state.pairsScreened++;
-				finished.add(index);
 				return;
 			}
 			const served = await t.gateway.chatJson<{ claims: Claim[] }>(
@@ -668,7 +657,16 @@ export async function advanceConsolidation(
 				model: served.model,
 				pageShas: shas,
 				runId: state.runId,
-				misleading: (claim) => misleadingScore(a, b, claim, count)
+				misleading: (claim) =>
+					jevScore(
+						{
+							page_a: cut(a, JEV_CLAIM_PAGE_CHARS),
+							page_b: cut(b, JEV_CLAIM_PAGE_CHARS),
+							claim: { topic: claim.subject, says_a: claim.quote_a, says_b: claim.quote_b }
+						},
+						MISLEADING_QUESTION,
+						count
+					)
 			});
 			found.push(...findings);
 			state.pairsChecked++;
@@ -676,12 +674,12 @@ export async function advanceConsolidation(
 			const reason = stopReason(err);
 			if (reason) {
 				stoppedReason ??= reason;
+				firstStopped = Math.min(firstStopped, index);
 				return;
 			}
 			if (err instanceof ModelUnavailable) state.pairsSkipped++;
 			else throw err;
 		}
-		finished.add(index);
 	}
 
 	for (let i = 0; i < plan.pairs.length && !stoppedReason; i += CONCURRENCY) {
@@ -693,11 +691,10 @@ export async function advanceConsolidation(
 	state.findings += found.length;
 
 	if (stoppedReason) {
-		// The cursor moves only past sources whose every pair finished, in plan order.
-		for (const source of new Set(plan.pairs.map((p) => p.source))) {
-			if (plan.pairs.some((p, i) => p.source === source && !finished.has(i))) break;
-			state.cursor = source;
-		}
+		// The cursor moves past every source that ends before the first stopped pair.
+		const stoppedSource = plan.pairs[firstStopped].source;
+		const before = plan.pairs.slice(0, firstStopped).filter((p) => p.source !== stoppedSource);
+		state.cursor = before.at(-1)?.source ?? state.cursor;
 		state.status = 'stopped';
 		state.stoppedReason = stoppedReason;
 	} else {
@@ -758,6 +755,8 @@ export async function runConsolidationStep(opts: {
 	orgId: string;
 	actorUserId?: string;
 	config: BrainConfig;
+	store: BrainStore;
+	repo: RepoRef;
 	openRouterKey?: string;
 	anthropicKey?: string;
 	fetch?: typeof fetch;

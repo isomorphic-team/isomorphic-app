@@ -102,12 +102,12 @@ export function haikuCostUsd(usage: {
 	);
 }
 
-// The failure a Haiku error stands for, or null when it is not one a fallback can cure.
-export function unservedReason(err: unknown): UnservedReason | null {
-	if (!(err instanceof Anthropic.APIError)) return null;
-	if (err.status === 429) return 'rate-limit';
-	if (err.status === 402) return 'credits';
-	if (err.status === 529) return 'overloaded';
+// The failure an HTTP status stands for, from either provider, or null when it is not one a
+// fallback or a later retry can cure.
+function unservedStatus(status: number | undefined): UnservedReason | null {
+	if (status === 429) return 'rate-limit';
+	if (status === 402) return 'credits';
+	if (status === 529) return 'overloaded';
 	return null;
 }
 
@@ -169,9 +169,8 @@ export interface Served<T> {
 }
 
 export interface Gateway {
-	// Whether `decide` can run: Jev needs the OpenRouter key.
-	canDecide: boolean;
-	decide(
+	// Jev, present only with the OpenRouter key.
+	decide?(
 		state: unknown,
 		questions: Record<string, Question>
 	): Promise<Served<Record<string, Answer>>>;
@@ -234,7 +233,11 @@ export async function openGateway(opts: {
 		if (!access.ok) throw new GatewayRefused(access.reason);
 	}
 
-	async function post(path: string, body: unknown): Promise<Record<string, unknown>> {
+	// An OpenRouter request, and the cost it reports, already counted toward the cap.
+	async function post(
+		path: string,
+		body: unknown
+	): Promise<{ json: Record<string, unknown>; costUsd: number }> {
 		if (!opts.apiKey) throw new GatewayRefused('no-key');
 		await admit();
 		const res = await doFetch(OPENROUTER_BASE + path, {
@@ -243,24 +246,24 @@ export async function openGateway(opts: {
 			body: JSON.stringify(body)
 		});
 		const text = await res.text();
-		if (!res.ok) throw new Error(`Model gateway ${path} ${res.status}: ${text.slice(0, 300)}`);
+		if (!res.ok) {
+			const reason = unservedStatus(res.status);
+			if (reason) throw new ModelUnavailable(reason);
+			throw new Error(`Model gateway ${path} ${res.status}: ${text.slice(0, 300)}`);
+		}
 		const json = JSON.parse(text) as Record<string, unknown>;
 		const cost = (json.usage as { cost?: unknown } | undefined)?.cost;
-		await recordSpend(opts.db, opts.orgId, now(), typeof cost === 'number' ? cost : 0);
-		return json;
+		const costUsd = typeof cost === 'number' ? cost : 0;
+		await recordSpend(opts.db, opts.orgId, now(), costUsd);
+		return { json, costUsd };
 	}
 
 	async function luna<T>(system: string, user: string, schema: Record<string, unknown>) {
-		const json = await post('/v1/chat/completions', chatRequest(system, user, schema));
+		const { json, costUsd } = await post('/v1/chat/completions', chatRequest(system, user, schema));
 		const content = (json.choices as { message?: { content?: string } }[] | undefined)?.[0]?.message
 			?.content;
 		if (typeof content !== 'string') throw new Error('Model gateway: no content in reply');
-		const cost = (json.usage as { cost?: unknown } | undefined)?.cost;
-		return {
-			value: JSON.parse(content) as T,
-			model: LUNA_MODEL,
-			costUsd: typeof cost === 'number' ? cost : 0
-		};
+		return { value: JSON.parse(content) as T, model: LUNA_MODEL, costUsd };
 	}
 
 	// Haiku's answer, or the reason it gave none.
@@ -275,7 +278,7 @@ export async function openGateway(opts: {
 		try {
 			msg = await client.messages.create(haikuRequest(system, user, schema));
 		} catch (err) {
-			const reason = unservedReason(err);
+			const reason = err instanceof Anthropic.APIError ? unservedStatus(err.status) : null;
 			if (reason) return reason;
 			throw err;
 		}
@@ -291,16 +294,19 @@ export async function openGateway(opts: {
 	return {
 		ok: true,
 		gateway: {
-			canDecide: !!opts.apiKey,
-			async decide(state, questions) {
-				const json = await post('/alpha/decisions', decisionRequest(state, questions));
-				const cost = (json.usage as { cost?: unknown } | undefined)?.cost;
-				return {
-					value: (json.answers ?? {}) as Record<string, Answer>,
-					model: JEV_MODEL,
-					costUsd: typeof cost === 'number' ? cost : 0
-				};
-			},
+			...(opts.apiKey && {
+				async decide(state: unknown, questions: Record<string, Question>) {
+					const { json, costUsd } = await post(
+						'/alpha/decisions',
+						decisionRequest(state, questions)
+					);
+					return {
+						value: (json.answers ?? {}) as Record<string, Answer>,
+						model: JEV_MODEL,
+						costUsd
+					};
+				}
+			}),
 			async chatJson<T>(system: string, user: string, schema: Record<string, unknown>) {
 				if (!anthropic) return luna<T>(system, user, schema);
 				const served = await haiku<T>(anthropic, system, user, schema);
