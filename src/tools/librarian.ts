@@ -1544,9 +1544,15 @@ export function registerLibrarianTools(
 		{
 			...toolAnnotations('Run a deep review pass over a brain', 'destructive'),
 			description:
-				'review_brain runs one of a brain\'s deep review passes over everything already in it, one budgeted step per call: repeat the call until the reply says finished, and progress is saved between calls. check "sensitive-data" scans every text file in the repository for credentials, card numbers and health identifiers, with no model; it records kinds and locations, never values, and replaces the previous scan. check "contradictions" has a model compare related pages and records where they disagree about the same fact, each with quotes from both pages and a proposed fix or a note that a person must decide; it is an enterprise feature that spends model credits within the organization\'s monthly cap. Neither changes anything in the repository: results are review findings, listed with keys by the brain\'s report. Needs admin on the brain.',
+				'review_brain runs one of a brain\'s deep review passes over everything already in it, one budgeted step per call: repeat the call until the reply says finished, and progress is saved between calls. check "sensitive-data" scans every text file in the repository for credentials, card numbers and health identifiers, with no model; it records kinds and locations, never values, and replaces the previous scan. check "contradictions" has a model compare related pages and records where they disagree about the same fact, each with quotes from both pages and a proposed fix or a note that a person must decide; it is an enterprise feature that spends model credits within the organization\'s monthly cap, and a later pass checks only pairs where a page changed since it was last checked. Neither changes anything in the repository: results are review findings, listed with keys by the brain\'s report. Needs admin on the brain.',
 			inputSchema: z.object({
 				brain: brainArg,
+				fresh: z
+					.boolean()
+					.optional()
+					.describe(
+						'For "contradictions": start over and check every page pair, ignoring what earlier passes already checked. Leave unset to check only pairs whose pages changed since their last check.'
+					),
 				check: z
 					.enum(REVIEW_CHECKS)
 					.describe(
@@ -1554,7 +1560,7 @@ export function registerLibrarianTools(
 					)
 			})
 		},
-		async ({ brain, check }) => {
+		async ({ brain, check, fresh }) => {
 			const ctx = await getContext({ requires: 'admin', brain });
 			const refusal = reviewCheckRefusal(check, {
 				policyMode: ctx.config.policyMode,
@@ -1562,7 +1568,7 @@ export function registerLibrarianTools(
 			});
 			if (refusal) return fail(refusal);
 			if (check === 'contradictions' && ctx.consolidate) {
-				const step = await ctx.consolidate();
+				const step = await ctx.consolidate({ fresh });
 				return {
 					content: [{ type: 'text' as const, text: step.text }],
 					structuredContent: step.wire

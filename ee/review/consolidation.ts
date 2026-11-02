@@ -41,7 +41,9 @@ import type { BrainStore, RepoRef } from '../../src/lib/brain-repo.ts';
 import {
 	continuePass,
 	readPass,
+	readPassItems,
 	savePass,
+	savePassItems,
 	type PassState,
 	type PassStatus
 } from '../../src/lib/brain-pass.ts';
@@ -63,6 +65,8 @@ import type { ConsolidationStepWire } from '../../src/lib/tool-payloads.ts';
 import { nextFence } from '../../src/lib/wiki.ts';
 import {
 	GatewayRefused,
+	HAIKU_MODEL,
+	JEV_MODEL,
 	ModelUnavailable,
 	openGateway,
 	type Gateway,
@@ -159,7 +163,10 @@ export function planStep(
 	pages: readonly PageText[],
 	partners: ReadonlyMap<string, readonly string[]>,
 	cursor: string | null,
-	budget = PAIRS_PER_STEP
+	budget = PAIRS_PER_STEP,
+	// Whether a pair costs a check. One that does not (unchanged since its last check)
+	// rides along without using the budget, so a brain that has not changed is one call.
+	costs: (pair: Pair) => boolean = () => true
 ): StepPlan {
 	const sorted = [...pages].sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
 	// Lowered once: ranking lowercases every body it scores, and a step ranks many times.
@@ -185,7 +192,8 @@ export function planStep(
 			.filter((other) => other > page.path || !partnersOf(other).has(page.path))
 			.sort()
 			.map((other) => ({ source: page.path, pair: [page.path, other].sort() as unknown as Pair }));
-		if (pairs.length && pairs.length + own.length > budget) {
+		const spent = pairs.filter((p) => costs(p.pair)).length;
+		if (spent && spent + own.filter((p) => costs(p.pair)).length > budget) {
 			return { pairs, last, done: false };
 		}
 		pairs.push(...own);
@@ -428,6 +436,40 @@ export async function triageFindings(input: {
 	return { findings: [...out.values()], dropped };
 }
 
+// ---------- what earlier passes checked ----------
+
+// A digest of everything that decides a pair's answer: the prompts, the schema, the gates
+// and the models. Part of every pair's fingerprint, so changing any of it makes every pair
+// worth checking again.
+let versionMemo: Promise<string> | null = null;
+function checkVersion(): Promise<string> {
+	versionMemo ??= crypto.subtle
+		.digest(
+			'SHA-256',
+			new TextEncoder().encode(
+				JSON.stringify([
+					TRIAGE_SYSTEM,
+					TRIAGE_SCHEMA,
+					JEV_CONFLICT_QUESTION,
+					MISLEADING_QUESTION,
+					JEV_GATE,
+					MIN_MISLEADING,
+					JEV_MAX_PAGE_CHARS,
+					JEV_CLAIM_PAGE_CHARS,
+					HAIKU_MODEL,
+					JEV_MODEL
+				])
+			)
+		)
+		.then((d) =>
+			[...new Uint8Array(d)]
+				.map((b) => b.toString(16).padStart(2, '0'))
+				.join('')
+				.slice(0, 16)
+		);
+	return versionMemo;
+}
+
 // ---------- run state ----------
 
 const KIND = 'consolidation';
@@ -442,6 +484,11 @@ export interface ConsolidationState {
 	pairsSkipped: number;
 	// Checked pairs Jev cleared, so triage never saw them.
 	pairsScreened: number;
+	// Pairs skipped because neither page, nor the check itself, changed since they were
+	// last checked. Their findings stand as they were.
+	pairsUnchanged: number;
+	// A pass that ignores what earlier passes checked, set when it starts.
+	fresh: boolean;
 	findings: number;
 	costUsd: number;
 	served: Record<string, number>;
@@ -450,13 +497,22 @@ export interface ConsolidationState {
 
 type Counters = Pick<
 	ConsolidationState,
-	'pairsChecked' | 'pairsSkipped' | 'pairsScreened' | 'findings' | 'costUsd' | 'served'
+	| 'pairsChecked'
+	| 'pairsSkipped'
+	| 'pairsScreened'
+	| 'pairsUnchanged'
+	| 'fresh'
+	| 'findings'
+	| 'costUsd'
+	| 'served'
 >;
 
 const noCounts = (): Counters => ({
 	pairsChecked: 0,
 	pairsSkipped: 0,
 	pairsScreened: 0,
+	pairsUnchanged: 0,
+	fresh: false,
 	findings: 0,
 	costUsd: 0,
 	served: {}
@@ -499,6 +555,8 @@ export interface ConsolidationTarget {
 	repo: RepoRef;
 	gateway: Pick<Gateway, 'chatJson' | 'decide'>;
 	newRunId?: () => string;
+	// Start a new pass that checks every pair, ignoring what earlier passes checked.
+	fresh?: boolean;
 	// The step's clock, for STEP_TIME_MS. Date.now unless a test drives it.
 	clock?: () => number;
 }
@@ -519,8 +577,8 @@ export async function advanceConsolidation(
 	const scope = { brainId: t.brainId, orgId: t.orgId, actorUserId: t.actorUserId };
 	const state = flatten(
 		continuePass(
-			await readPass(t.db, t.brainId, KIND, noCounts()),
-			noCounts(),
+			t.fresh ? null : await readPass(t.db, t.brainId, KIND, noCounts()),
+			{ ...noCounts(), fresh: !!t.fresh },
 			t.newRunId ?? (() => crypto.randomUUID()),
 			now
 		)
@@ -559,8 +617,24 @@ export async function advanceConsolidation(
 		}
 	}
 
-	const plan = planStep(pages, partners, state.cursor);
 	const shas = Object.fromEntries(await readPageShas(t.db, t.brainId));
+	// What earlier passes checked: a pair whose fingerprint still matches costs nothing.
+	const version = await checkVersion();
+	const lastChecked = state.fresh
+		? new Map<string, string>()
+		: await readPassItems(t.db, t.brainId, KIND);
+	const fingerprint = ([a, b]: Pair) =>
+		shas[a] && shas[b] ? `${version}:${shas[a]}:${shas[b]}` : null;
+	const unchanged = (pair: Pair) => {
+		const fp = fingerprint(pair);
+		return fp !== null && lastChecked.get(pair.join('|')) === fp;
+	};
+	const checked: { item: string; fingerprint: string }[] = [];
+	const remember = (pair: Pair) => {
+		const fp = fingerprint(pair);
+		if (fp) checked.push({ item: pair.join('|'), fingerprint: fp });
+	};
+	const plan = planStep(pages, partners, state.cursor, PAIRS_PER_STEP, (pair) => !unchanged(pair));
 	const knownFacts = await readFactLabels(t.db, t.brainId);
 	const found: QueueFinding[] = [];
 	// The first pair a refused gateway stopped. Pairs after it may have run in the same
@@ -588,7 +662,12 @@ export async function advanceConsolidation(
 	}
 
 	async function check(index: number) {
-		const [pa, pb] = plan.pairs[index].pair;
+		const pair = plan.pairs[index].pair;
+		if (unchanged(pair)) {
+			state.pairsUnchanged++;
+			return;
+		}
+		const [pa, pb] = pair;
 		const a = byPath.get(pa);
 		const b = byPath.get(pb);
 		if (
@@ -620,6 +699,7 @@ export async function advanceConsolidation(
 			if (!passesScreen(conflict)) {
 				state.pairsChecked++;
 				state.pairsScreened++;
+				remember(pair);
 				return;
 			}
 			const served = await t.gateway.chatJson<{ claims: Claim[] }>(
@@ -648,6 +728,7 @@ export async function advanceConsolidation(
 			});
 			found.push(...findings);
 			state.pairsChecked++;
+			remember(pair);
 		} catch (err) {
 			const reason = stopReason(err);
 			if (reason) {
@@ -674,6 +755,7 @@ export async function advanceConsolidation(
 	}
 
 	await upsertFindings(t.db, t.brainId, found, now);
+	await savePassItems(t.db, t.brainId, KIND, checked, now);
 	state.findings += found.length;
 
 	const firstOpen = Math.min(firstStopped, firstUnstarted);
@@ -706,7 +788,10 @@ const STOP_TEXT: Record<string, string> = {
 export function consolidationStepText(s: ConsolidationState): string {
 	const cost = `$${s.costUsd.toFixed(4)}`;
 	const screened = s.pairsScreened ? ` (${s.pairsScreened} cleared by the screen)` : '';
-	const counts = `${s.pairsChecked} page pair(s) checked${screened}, ${s.pairsSkipped} skipped, ${s.findings} conflict finding(s), ${cost} spent.`;
+	const unchanged = s.pairsUnchanged
+		? ` ${s.pairsUnchanged} unchanged since their last check, not checked again.`
+		: '';
+	const counts = `${s.pairsChecked} page pair(s) checked${screened}, ${s.pairsSkipped} skipped, ${s.findings} conflict finding(s), ${cost} spent.${unchanged}`;
 	if (s.status === 'done') return `Consolidation finished: ${counts} validate lists the findings.`;
 	if (s.status === 'stopped') {
 		const why = STOP_TEXT[s.stoppedReason ?? ''] ?? s.stoppedReason ?? 'unknown';
@@ -724,6 +809,7 @@ export function consolidationWire(s: ConsolidationState): ConsolidationStepWire[
 		pairsChecked: s.pairsChecked,
 		pairsSkipped: s.pairsSkipped,
 		pairsScreened: s.pairsScreened,
+		pairsUnchanged: s.pairsUnchanged,
 		findings: s.findings,
 		costUsd: s.costUsd
 	};
@@ -747,6 +833,7 @@ export async function runConsolidationStep(opts: {
 	openRouterKey?: string;
 	anthropicKey?: string;
 	fetch?: typeof fetch;
+	fresh?: boolean;
 }): Promise<ConsolidationStepReply> {
 	const opened = await openGateway({
 		apiKey: opts.openRouterKey,

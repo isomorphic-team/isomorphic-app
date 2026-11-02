@@ -74,5 +74,5 @@ export function contradictionCoverage(
 		return `\n\nContradiction check: in progress, ${pass.pairsChecked} page pair(s) checked so far. ${run} continues it.`;
 	}
 	const when = pass.finishedAt ? new Date(pass.finishedAt).toISOString().slice(0, 10) : 'earlier';
-	return `\n\nContradiction check: last finished ${when} over ${pass.pairsChecked} page pair(s), ${pass.findings} finding(s) raised. Pages edited since are not covered; ${run} runs it again.`;
+	return `\n\nContradiction check: last finished ${when} over ${pass.pairsChecked} page pair(s), ${pass.findings} finding(s) raised. ${run} checks pages edited since, and only those.`;
 }

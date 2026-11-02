@@ -293,6 +293,10 @@ Roadmap step 2 extends the `validate` / `resolve` pattern into one findings queu
   shows findings sharing a label as one item, and `resolve` takes `cluster:<label>` to answer
   every member, one ledger entry each. On a 65-page private brain, one run grouped 20
   findings into 12 items; two runs with no shared queue matched about half their labels.
+- **Memory.** Each checked pair is recorded with a fingerprint of both pages' versions and
+  the check's own version, so a later pass checks only pairs where a page changed (on the
+  same brain, a second run checked nothing and spent nothing). `fresh` forces a full recheck.
+  This is also what C6's incremental run needs: the webhook only has to start a pass.
 - **Not yet:** the push trigger (C6) and the Review screen section (C7).
 
 C1 and C2 stand alone and ship first. C3 is shared with the guard's own findings and belongs to roadmap step 2. C4 and C5 are the model work. C7 is where the value lands for people, because the review tier carries most of the work.

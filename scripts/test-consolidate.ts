@@ -992,9 +992,9 @@ console.log('\nreview_brain: what may run, and what validate says about the cont
 		)
 	);
 	check(
-		'a finished pass says when, over how much, and that later edits are not covered',
+		'a finished pass says when, over how much, and that running it again checks only later edits',
 		contradictionCoverage('owner', true, done) ===
-			'\n\nContradiction check: last finished 2026-11-02 over 157 page pair(s), 14 finding(s) raised. Pages edited since are not covered; review_brain with check "contradictions" runs it again.'
+			'\n\nContradiction check: last finished 2026-11-02 over 157 page pair(s), 14 finding(s) raised. review_brain with check "contradictions" checks pages edited since, and only those.'
 	);
 }
 

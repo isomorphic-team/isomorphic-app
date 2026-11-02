@@ -1926,8 +1926,10 @@ try {
 		);
 
 		let ran = 0;
-		consolidate = async () => {
+		let askedFresh: boolean | undefined;
+		consolidate = async (opts) => {
 			ran++;
+			askedFresh = opts?.fresh;
 			return {
 				text: 'Consolidation finished: stub.',
 				wire: {
@@ -1936,6 +1938,7 @@ try {
 						pairsChecked: 1,
 						pairsSkipped: 0,
 						pairsScreened: 0,
+						pairsUnchanged: 0,
 						findings: 0,
 						costUsd: 0
 					}
@@ -1952,7 +1955,16 @@ try {
 		reviewed = await call('review_brain', { check: 'contradictions' });
 		check(
 			'review_brain runs the wired contradictions pass once and returns its reply',
-			!reviewed.isError && ran === 1 && reviewed.text === 'Consolidation finished: stub.',
+			!reviewed.isError &&
+				ran === 1 &&
+				askedFresh === undefined &&
+				reviewed.text === 'Consolidation finished: stub.',
+			reviewed.text
+		);
+		reviewed = await call('review_brain', { check: 'contradictions', fresh: true });
+		check(
+			'fresh reaches the pass, and is unset unless asked for',
+			!reviewed.isError && ran === 2 && askedFresh === true,
 			reviewed.text
 		);
 		const finished = Date.UTC(2026, 10, 2);
