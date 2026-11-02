@@ -87,7 +87,9 @@ are in the list, with keys.
   state, and a decision stays a dismissal in the ledger. Visibility is per kind
   (`canSeeFinding`), a row whose page shas no longer match is stale and only counted, and
   `upsertFindings` scrubs every row through the detectors. A conflict's key is the page pair
-  plus a fingerprint of the disputed values (`conflictKey`), never the cluster.
+  plus a fingerprint of the disputed values (`conflictKey`), never the cluster. A cluster is a
+  fact label for display (`clusterFindings` groups two or more in `validate`); `cluster:<label>`
+  in `resolve` expands to one decision per member (`expandClusterDecisions`).
 - `resolve` actions: `dismiss` / `undismiss` for structure, consolidation and policy findings
   (policy dismissals go to D1, see `write-path.md`);
   `delete` / `alias` / `suppress` / `recreate` for import findings.

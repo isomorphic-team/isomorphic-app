@@ -16,7 +16,9 @@ import {
 	canDecideFinding,
 	deletePolicyDismissals,
 	dismissPolicyFinding,
-	isPolicyKey
+	isPolicyKey,
+	expandClusterDecisions,
+	readFindings
 } from '../lib/review-queue.ts';
 import { z } from 'zod';
 import {
@@ -339,9 +341,15 @@ export function registerImportTools(
 					.max(100)
 			})
 		},
-		async ({ decisions: allDecisions, brain }) => {
+		async ({ decisions: requested, brain }) => {
 			const ctx = await getContext({ requires: 'editor', brain });
 			const { store, repoArgs, config, author, db, brainId } = ctx;
+
+			// A cluster key answers every conflict finding in the cluster, one ledger entry
+			// per finding, so each dismissal still covers exactly its own disagreement.
+			const expanded = await expandClusterDecisions(requested, () => readFindings(db, brainId));
+			if (typeof expanded === 'string') return fail(expanded);
+			const allDecisions = expanded;
 
 			const importDecisions = allDecisions.filter((d) => isImportKey(d.finding));
 			const reviewDecisions = allDecisions.filter((d) => !isImportKey(d.finding));

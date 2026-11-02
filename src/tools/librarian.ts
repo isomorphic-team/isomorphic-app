@@ -97,6 +97,7 @@ import { readCoverage } from '../lib/policy-store.ts';
 import {
 	isPolicyKey,
 	queueReport,
+	clusterFindings,
 	readPageShas,
 	readReconciledFindings,
 	staleNote
@@ -1485,7 +1486,7 @@ export function registerLibrarianTools(
 				}
 
 				if (kept.length) {
-					const { text } = renderFindings(kept, MAX_FINDINGS_SHOWN);
+					const { text } = renderFindings(clusterFindings(kept), MAX_FINDINGS_SHOWN);
 					const silenced = all.length - kept.length;
 					const note = silenced ? ` ${silenced} previously dismissed and not shown.` : '';
 					findingsText =

@@ -145,11 +145,18 @@ async function modelPass() {
 		console.log(JSON.stringify(conflicts, null, 2));
 		return;
 	}
-	console.log(`\n${conflicts.length} conflict(s):\n`);
+	const clusters = new Map<string, number>();
+	for (const f of conflicts) {
+		if (f.clusterId) clusters.set(f.clusterId, (clusters.get(f.clusterId) ?? 0) + 1);
+	}
+	const shared = [...clusters].filter(([, n]) => n > 1);
+	console.log(
+		`\n${conflicts.length} conflict(s), ${clusters.size} fact label(s), ${shared.length} shared: ${shared.map(([l, n]) => `"${l}" x${n}`).join(', ') || 'none'}\n`
+	);
 	for (const [i, f] of conflicts.entries()) {
 		const p = f.proposal as Proposal;
 		console.log(
-			`${String(i + 1).padStart(2)}. [${p.tier}, misleading ${f.scores?.misleading ?? 'unscored'}] ${f.headline}`
+			`${String(i + 1).padStart(2)}. [${p.tier}, misleading ${f.scores?.misleading ?? 'unscored'}, fact "${f.clusterId ?? '-'}"] ${f.headline}`
 		);
 		for (const e of f.evidence) console.log(`      ${e}`);
 		if (p.patch)

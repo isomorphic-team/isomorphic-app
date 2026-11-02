@@ -51,6 +51,8 @@ import { detectSensitive } from '../../src/lib/policy-detectors.ts';
 import {
 	conflictKey,
 	normalizeDisputedValue,
+	normalizeFactLabel,
+	readFactLabels,
 	readPageShas,
 	upsertFindings,
 	valuesOnPages,
@@ -201,6 +203,7 @@ export const sendable = (content: string) =>
 
 export interface Claim {
 	subject: string;
+	fact: string;
 	quote_a: string;
 	quote_b: string;
 	value_a: string;
@@ -224,6 +227,7 @@ export const TRIAGE_SCHEMA = {
 				additionalProperties: false,
 				required: [
 					'subject',
+					'fact',
 					'quote_a',
 					'quote_b',
 					'value_a',
@@ -236,6 +240,7 @@ export const TRIAGE_SCHEMA = {
 				],
 				properties: {
 					subject: { type: 'string' },
+					fact: { type: 'string' },
 					quote_a: { type: 'string' },
 					quote_b: { type: 'string' },
 					value_a: { type: 'string' },
@@ -269,6 +274,7 @@ export const TRIAGE_SYSTEM = `You compare two pages from a team's knowledge base
 
 For each disagreement:
 - subject: the fact in a few words.
+- fact: two to five lowercase words naming WHAT is disputed, never either value, worded the same whichever pages state it (e.g. "engagement length", "advisor hourly rate"). If it is the same fact as one listed in known_facts, copy that label exactly.
 - quote_a / quote_b: the line from each page that states it, copied exactly.
 - value_a / value_b: the disputed value as each page writes it, copied exactly from inside the quote (a number, a date, a name, a status).
 - explained: true when dates, scope or an existing note on either page account for the difference, so a careful reader would not be misled.
@@ -283,10 +289,15 @@ For each disagreement:
 
 Report only real disagreements about the same thing. Different facts about different things are not disagreements. Return an empty list when the pages agree.`;
 
-export function triagePrompt(a: PageText, b: PageText): string {
+// The pair, plus the fact labels the brain already uses, so the same fact gets the same
+// label whichever pair raises it.
+export function triagePrompt(a: PageText, b: PageText, knownFacts: readonly string[] = []): string {
 	const page = (label: string, p: PageText) =>
 		`<page_${label} path="${p.path}" title="${p.title.replace(/"/g, "'")}">\n${p.content}\n</page_${label}>`;
-	return `${page('a', a)}\n\n${page('b', b)}`;
+	const facts = knownFacts.length
+		? `\n\n<known_facts>\n${knownFacts.join('\n')}\n</known_facts>`
+		: '';
+	return `${page('a', a)}\n\n${page('b', b)}${facts}`;
 }
 
 // A page's block structure: fences, headings, and each run of table rows or list items.
@@ -410,7 +421,7 @@ export async function triageFindings(input: {
 				[b.path]: input.pageShas[b.path] ?? ''
 			},
 			runId: input.runId,
-			clusterId: null,
+			clusterId: normalizeFactLabel(c.fact ?? '') || null,
 			authorUserId: null
 		});
 	}
@@ -550,6 +561,7 @@ export async function advanceConsolidation(
 
 	const plan = planStep(pages, partners, state.cursor);
 	const shas = Object.fromEntries(await readPageShas(t.db, t.brainId));
+	const knownFacts = await readFactLabels(t.db, t.brainId);
 	const found: QueueFinding[] = [];
 	// The first pair a refused gateway stopped. Pairs after it may have run in the same
 	// batch; the cursor stays before it, so the next step checks them again.
@@ -612,7 +624,7 @@ export async function advanceConsolidation(
 			}
 			const served = await t.gateway.chatJson<{ claims: Claim[] }>(
 				TRIAGE_SYSTEM,
-				triagePrompt(a, b),
+				triagePrompt(a, b, knownFacts),
 				TRIAGE_SCHEMA as unknown as Record<string, unknown>
 			);
 			count(served.model, served.costUsd);
