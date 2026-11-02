@@ -80,8 +80,10 @@ Order:
      fallback read in `readBaseline`, then drop the table in a later migration.
 3. **Guard enforcement.** The rulebook page, both model stages, the tiers, quarantine,
    self-release and the audit log.
-4. **Push webhook.** The after-the-fact scan for the guard, and the incremental trigger for
-   consolidation. Can run alongside step 3.
+4. **Push webhook and background passes.** The after-the-fact scan for the guard, and the
+   incremental trigger for consolidation. A pass started by a push or by `review_brain` runs in
+   the background, so `review_brain` returns at once instead of the client calling it once per
+   step. Can run alongside step 3.
 5. **Consolidation.** Approve/reject only at first, with automatic small fixes enabled per brain
    by an admin. Its own edits go through the guard like any other write. Built: the
    admin-run pass (`review_brain` with `check: "contradictions"`, `ee/review/consolidation.ts`),

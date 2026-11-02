@@ -264,7 +264,7 @@ Roadmap step 2 extends the `validate` / `resolve` pattern into one findings queu
 | C4   | Pipeline: candidates, pre-scan, detect, claim triage, verify, tier, through the gateway                    | `ee/` (roadmap step 5)   | `ee/review/`, tests with a stubbed gateway                                    |
 | C4a  | Anthropic adapter in the gateway: Haiku first, Luna fallback, zero-retention declaration, cost from tokens | `ee/`                    | `ee/review/gateway.ts`, tests pinning the fallback order and the refusal path |
 | C5   | Claim clustering across pairs                                                                              | `ee/`                    | pipeline, tests with a stubbed gateway                                        |
-| C6   | Runs: webhook-triggered incremental pass, admin full pass, D1 cursor                                       | core trigger, `ee/` work | webhook (roadmap step 4), tests                                               |
+| C6   | Runs: webhook-triggered incremental pass, admin full pass in the background, D1 cursor                     | core trigger, `ee/` work | webhook (roadmap step 4), background driver, tests                            |
 | C7   | Consolidation section of the Review screen, approve and dismiss                                            | core                     | `ReviewView.tsx`, browser tests                                               |
 
 **How the C4 prototype differs from the plan above** (2026-11-02):
@@ -297,7 +297,14 @@ Roadmap step 2 extends the `validate` / `resolve` pattern into one findings queu
   the check's own version, so a later pass checks only pairs where a page changed (on the
   same brain, a second run checked nothing and spent nothing). `fresh` forces a full recheck.
   This is also what C6's incremental run needs: the webhook only has to start a pass.
-- **Not yet:** the push trigger (C6) and the Review screen section (C7).
+- **Background passes (C6).** Today `review_brain` runs one step per call, so the client calls
+  it until the pass reports finished, and stopping early leaves it half done. Instead, starting a
+  pass returns at once and the Worker runs the steps itself, each a fresh invocation inside the
+  same 15-second bound, resuming from the cursor and the pair memory already in D1. `validate`'s
+  coverage line shows progress, and a gateway refusal still stops the pass as `stopped`. The push
+  webhook and `review_brain` start the same job. The driver is a Cloudflare Queue or a cron
+  trigger, not a Durable Object.
+- **Not yet:** the push trigger and background passes (C6), and the Review screen section (C7).
 
 C1 and C2 stand alone and ship first. C3 is shared with the guard's own findings and belongs to roadmap step 2. C4 and C5 are the model work. C7 is where the value lands for people, because the review tier carries most of the work.
 
@@ -310,4 +317,4 @@ C1 and C2 stand alone and ship first. C3 is shared with the guard's own findings
 - **How should claims be clustered?** Options: by the decision model on claim pairs, by a normalized subject key the LLM emits, or both.
 - **Are conflict keys stable across runs?** The fingerprint is only as stable as the values triage names: `$95/hr` one run and `$95` the next is a different key. Run triage twice over the flagged sets and measure how many keys match, and how much a cluster's entries grow `.isomorphic/review.json`, before C4 fixes the format.
 - **Do contradictions inside one page need their own single-page pass,** or is the pairwise pass enough in practice?
-- **Is a D1 cursor enough** for a full pass on a large brain within Worker limits, or does a full pass need a queue?
+- **Queue or cron for background passes?** A Queue message per step starts the next step at once and retries a failed one; a cron trigger needs no new binding but waits up to its interval between steps. The D1 cursor is the state either way.
