@@ -119,7 +119,7 @@ runtime hand to every tool, so it sees every write that reaches `commitOrPR` or 
   both surfaces say what was seen, also when nothing was found.
 - **The baseline scan** (`src/lib/policy-baseline.ts`; run state in `brain_passes`, kind
   `policy-baseline`, since 0023, with `policy_baseline` still written until it is dropped) is
-  `configure_brain` with `baseline_scan: true`, or the Review screen's button, which repeats it.
+  `review_brain` with `check: "sensitive-data"`, or the Review screen's button, which repeats it.
   It reads every text file through the store, `BASELINE_FILE_BUDGET` paths per call from a
   cursor, with no model, and raises policy findings like a write does.
 - **The app's Review screen** (`view_review` in `src/tools/apps.ts`, `app/views/ReviewView.tsx`)

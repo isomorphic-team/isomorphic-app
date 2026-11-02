@@ -103,5 +103,5 @@ export function baselineStepText(s: BaselineState): string {
 	const counts = `${s.filesScanned} file(s) scanned, ${s.filesSkipped} binary file(s) skipped, ${s.detections} detection(s).`;
 	return s.status === 'done'
 		? `Baseline scan finished: ${counts} view_review shows what it found.`
-		: `Baseline scan in progress: ${counts} Call configure_brain with baseline_scan: true again to continue.`;
+		: `Baseline scan in progress: ${counts} Call review_brain with check "sensitive-data" again to continue.`;
 }

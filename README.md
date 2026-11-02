@@ -236,7 +236,7 @@ the server, with deterministic detectors and no model, so nothing leaves your de
   The detectors look for private keys, API tokens, connection strings with a password, card
   numbers, US Social Security numbers, and labelled medical record numbers and dates of
   birth. They favor precision, so ordinary emails and phone numbers are not flagged.
-- **What is already there is checked too.** `configure_brain` with `baseline_scan: true`, or
+- **What is already there is checked too.** `review_brain` with `check: "sensitive-data"`, or
   a button on the Review screen, scans every text file in the repository once.
 - **A finding stays open until the data is gone.** An unrelated edit does not clear it, and
   removing the data closes it.
