@@ -32,7 +32,8 @@ Licensed under `ee/LICENSE`, not the AGPL. Placement rule and history:
   Worker's `consolidate` on the brain context, wired only when a model key is set, and run by
   `configure_brain` with `consolidate: true`. Budgeted per call and resumable from a
   cursor; a gateway refusal stops it as `stopped`, and asking again resumes. A page with a
-  high-severity detection never reaches the gateway. Claims are kept only when their quotes and
+  high-severity detection never reaches the gateway. With an OpenRouter key, Jev screens each
+  pair first at a 0.3 conflict score (`passesScreen`); a screen error lets the pair through. Claims are kept only when their quotes and
   values are on the pages word for word; nothing is written to the brain.
 - **No outside contributions**, and no customer names here either: the public-repo hygiene rules
   apply to `ee/` exactly as to the core.

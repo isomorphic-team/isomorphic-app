@@ -405,7 +405,7 @@ entitlement's monthly spend cap, and only on a deployment holding a model key:
 
 ```sh
 pnpm exec wrangler secret put ANTHROPIC_API_KEY    # Claude Haiku, tried first
-pnpm exec wrangler secret put OPENROUTER_API_KEY   # optional: Luna, the fallback
+pnpm exec wrangler secret put OPENROUTER_API_KEY   # optional: the Jev screen, and Luna as fallback
 ```
 
 Requests to Anthropic get your Anthropic organization's own data retention, which is standard

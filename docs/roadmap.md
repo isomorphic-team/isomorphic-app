@@ -80,7 +80,8 @@ Order:
 5. **Consolidation.** Approve/reject only at first, with automatic small fixes enabled per brain
    by an admin. Its own edits go through the guard like any other write. Built: the
    admin-run pass (`configure_brain` with `consolidate: true`, `ee/review/consolidation.ts`),
-   on Haiku alone, writing `conflict` findings with proposals and no auto tier.
+   with a Jev screen and Haiku triage, writing `conflict` findings with proposals and no auto
+   tier.
 6. **When a deployment needs it:** an entitlement writer driven by billing (outside this
    repository), and signed offline license keys for self-hosters.
 

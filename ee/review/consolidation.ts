@@ -11,13 +11,16 @@
 //   1. Candidates: each page's RELATED_PER_PAGE best search hits on its title, plus the
 //      near-duplicate and same-identifier tensions.
 //   2. Pre-scan: a page with a high-severity detection never reaches the gateway.
-//   3. Detect and triage in one request: the model lists each disagreement, quoting both
+//   3. Screen, when the gateway has Jev: a pair Jev scores under JEV_GATE for contradiction
+//      goes no further. A pair with a page over JEV_MAX_PAGE_CHARS skips the screen rather
+//      than being cut, and a screen that errors lets the pair through.
+//   4. Triage in one Haiku request: the model lists each disagreement, quoting both
 //      sides, says whether dates or scope explain it, which version stands, and proposes
 //      one action.
-//   4. Claim filter: explained claims, claims scored under MIN_MISLEADING, and claims whose
+//   5. Claim filter: explained claims, claims scored under MIN_MISLEADING, and claims whose
 //      quotes or values do not appear word for word on their page are dropped.
-//   5. Verify, mechanically: a proposed patch must match its page exactly once.
-//   6. Tier: `person` when the pages cannot settle it, `review` otherwise.
+//   6. Verify, mechanically: a proposed patch must match its page exactly once.
+//   7. Tier: `person` when the pages cannot settle it, `review` otherwise.
 //
 // Worker-safe: no node:* imports.
 
@@ -52,6 +55,27 @@ export const MAX_PAIR_CHARS = 200_000;
 
 // Claims a reader would not be misled by are dropped.
 export const MIN_MISLEADING = 0.4;
+
+// Jev's contradiction score below which a pair is cleared without triage. 0.3 kept 81% of
+// the conflicts a reference model found and sent on a fifth of all pairs (brain-evals,
+// 2026-09-24).
+export const JEV_GATE = 0.3;
+
+// Jev reads 32K tokens. A pair with a longer page skips the screen and goes to triage.
+export const JEV_MAX_PAGE_CHARS = 40_000;
+
+// The question the gate was measured on, word for word.
+export const JEV_CONFLICT_QUESTION = {
+	conflict: {
+		type: 'noul',
+		instructions: 'Do `a` and `b` state facts about the same thing that contradict each other?'
+	}
+} as const;
+
+// Whether a pair goes on to triage, from Jev's conflict score. No score sends it on.
+export function passesScreen(conflict: number | undefined): boolean {
+	return conflict === undefined || !(conflict < JEV_GATE);
+}
 
 export interface PageText {
 	path: string;
@@ -324,6 +348,8 @@ export interface ConsolidationState {
 	cursor: string | null;
 	pairsChecked: number;
 	pairsSkipped: number;
+	// Checked pairs Jev cleared, so triage never saw them.
+	pairsScreened: number;
 	findings: number;
 	costUsd: number;
 	served: Record<string, number>;
@@ -336,6 +362,7 @@ interface RunRow {
 	cursor: string | null;
 	pairs_checked: number;
 	pairs_skipped: number;
+	pairs_screened: number;
 	findings: number;
 	cost_usd: number;
 	served: string;
@@ -345,8 +372,8 @@ interface RunRow {
 export async function readRun(db: D1Database, brainId: string): Promise<ConsolidationState | null> {
 	const r = await db
 		.prepare(
-			`SELECT run_id, status, cursor, pairs_checked, pairs_skipped, findings, cost_usd, served,
-			        stopped_reason
+			`SELECT run_id, status, cursor, pairs_checked, pairs_skipped, pairs_screened, findings,
+			        cost_usd, served, stopped_reason
 			 FROM consolidation_runs WHERE brain_id = ?1`
 		)
 		.bind(brainId)
@@ -364,6 +391,7 @@ export async function readRun(db: D1Database, brainId: string): Promise<Consolid
 		cursor: r.cursor,
 		pairsChecked: r.pairs_checked,
 		pairsSkipped: r.pairs_skipped,
+		pairsScreened: r.pairs_screened,
 		findings: r.findings,
 		costUsd: r.cost_usd,
 		served,
@@ -381,14 +409,14 @@ async function saveRun(
 		.prepare(
 			`INSERT INTO consolidation_runs
 			   (brain_id, org_id, run_id, status, cursor, pairs_checked, pairs_skipped, findings,
-			    cost_usd, served, stopped_reason, started_by, started_at, updated_at)
-			 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?13)
+			    cost_usd, served, stopped_reason, started_by, started_at, updated_at, pairs_screened)
+			 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?13, ?14)
 			 ON CONFLICT (brain_id) DO UPDATE SET
 			   org_id = ?2, run_id = ?3, status = ?4, cursor = ?5, pairs_checked = ?6,
 			   pairs_skipped = ?7, findings = ?8, cost_usd = ?9, served = ?10, stopped_reason = ?11,
 			   started_by = CASE WHEN run_id = ?3 THEN started_by ELSE ?12 END,
 			   started_at = CASE WHEN run_id = ?3 THEN started_at ELSE ?13 END,
-			   updated_at = ?13`
+			   updated_at = ?13, pairs_screened = ?14`
 		)
 		.bind(
 			scope.brainId,
@@ -403,7 +431,8 @@ async function saveRun(
 			JSON.stringify(s.served),
 			s.stoppedReason,
 			scope.actorUserId ?? null,
-			now
+			now,
+			s.pairsScreened
 		)
 		.run();
 }
@@ -416,7 +445,7 @@ export interface ConsolidationTarget {
 	orgId: string;
 	actorUserId?: string;
 	config: BrainConfig;
-	gateway: Pick<Gateway, 'chatJson'>;
+	gateway: Pick<Gateway, 'chatJson'> & Partial<Pick<Gateway, 'canDecide' | 'decide'>>;
 	newRunId?: () => string;
 }
 
@@ -444,6 +473,7 @@ export async function advanceConsolidation(
 					cursor: null,
 					pairsChecked: 0,
 					pairsSkipped: 0,
+					pairsScreened: 0,
 					findings: 0,
 					costUsd: 0,
 					served: {},
@@ -488,6 +518,31 @@ export async function advanceConsolidation(
 	const finished = new Set<number>();
 	let stoppedReason: string | null = null;
 
+	// Whether Jev clears the pair. A refused gateway stops the pass as anywhere else; any
+	// other failure lets the pair through to triage, so a broken screen costs money, not
+	// findings.
+	async function screenedOut(
+		a: PageText,
+		b: PageText,
+		count: (model: string, costUsd: number) => void
+	): Promise<boolean> {
+		const { decide, canDecide } = t.gateway;
+		if (!canDecide || !decide) return false;
+		if (a.content.length > JEV_MAX_PAGE_CHARS || b.content.length > JEV_MAX_PAGE_CHARS)
+			return false;
+		try {
+			const served = await decide(
+				{ a: { path: a.path, text: a.content }, b: { path: b.path, text: b.content } },
+				JEV_CONFLICT_QUESTION
+			);
+			count(served.model, served.costUsd);
+			return !passesScreen(served.value.conflict?.noul);
+		} catch (err) {
+			if (err instanceof GatewayRefused) throw err;
+			return false;
+		}
+	}
+
 	async function check(index: number) {
 		const [pa, pb] = plan.pairs[index].pair;
 		const a = byPath.get(pa);
@@ -503,14 +558,23 @@ export async function advanceConsolidation(
 			finished.add(index);
 			return;
 		}
+		const count = (model: string, costUsd: number) => {
+			state.costUsd += costUsd;
+			state.served[model] = (state.served[model] ?? 0) + 1;
+		};
 		try {
+			if (await screenedOut(a, b, count)) {
+				state.pairsChecked++;
+				state.pairsScreened++;
+				finished.add(index);
+				return;
+			}
 			const served = await t.gateway.chatJson<{ claims: Claim[] }>(
 				TRIAGE_SYSTEM,
 				triagePrompt(a, b),
 				TRIAGE_SCHEMA as unknown as Record<string, unknown>
 			);
-			state.costUsd += served.costUsd;
-			state.served[served.model] = (state.served[served.model] ?? 0) + 1;
+			count(served.model, served.costUsd);
 			const { findings } = await triageFindings({
 				a,
 				b,
@@ -570,7 +634,8 @@ const STOP_TEXT: Record<string, string> = {
 // What the tool says about a step, for the model and for an admin reading the reply.
 export function consolidationStepText(s: ConsolidationState): string {
 	const cost = `$${s.costUsd.toFixed(4)}`;
-	const counts = `${s.pairsChecked} page pair(s) checked, ${s.pairsSkipped} skipped, ${s.findings} conflict finding(s), ${cost} spent.`;
+	const screened = s.pairsScreened ? ` (${s.pairsScreened} cleared by the screen)` : '';
+	const counts = `${s.pairsChecked} page pair(s) checked${screened}, ${s.pairsSkipped} skipped, ${s.findings} conflict finding(s), ${cost} spent.`;
 	if (s.status === 'done') return `Consolidation finished: ${counts} validate lists the findings.`;
 	if (s.status === 'stopped') {
 		const why = STOP_TEXT[s.stoppedReason ?? ''] ?? s.stoppedReason ?? 'unknown';
@@ -587,6 +652,7 @@ export function consolidationWire(s: ConsolidationState): ConsolidationStepWire[
 		status: s.status,
 		pairsChecked: s.pairsChecked,
 		pairsSkipped: s.pairsSkipped,
+		pairsScreened: s.pairsScreened,
 		findings: s.findings,
 		costUsd: s.costUsd
 	};

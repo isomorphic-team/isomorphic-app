@@ -1,6 +1,6 @@
 # Design: consistency checks
 
-Status: **proposed** (2026-10-13). C1, C2 and C3 are built. C4 and C4a are built as a prototype on Haiku alone (2026-11-02); the rest is not.
+Status: **proposed** (2026-10-13). C1, C2 and C3 are built. C4 and C4a are built as a prototype: a Jev screen, then Haiku triage (2026-11-02); the rest is not.
 
 This is the consolidation half of the roadmap's "brain review" (steps 2 and 5).
 
@@ -269,9 +269,12 @@ Roadmap step 2 extends the `validate` / `resolve` pattern into one findings queu
 
 **How the C4 prototype differs from the plan above** (2026-11-02):
 
-- **Haiku alone.** Detect and triage are one Haiku request per pair, and every gate is a
-  score Haiku writes, not Jev's calibrated probability. The verify step is the mechanical
-  checks only. Everything lands in review or person, so no uncalibrated score decides a write.
+- **Detect is a Jev screen, triage is one Haiku request.** With an OpenRouter key, Jev's
+  `conflict` score gates each pair at 0.3 on the question the evals measured (pages over
+  40,000 characters skip the screen rather than being cut). Without one, every pair goes to
+  Haiku. The claim filter and the patch checks run on Haiku's own scores, and verify is the
+  mechanical checks only. Everything lands in review or person, so no uncalibrated score
+  decides a write.
 - **No zero-retention declaration.** Anthropic requests get the operator's Anthropic
   organization's own retention. The gateway falls back to Luna on a refusal, a rate limit,
   exhausted credits or an overload.

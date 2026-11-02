@@ -1912,6 +1912,7 @@ try {
 						status: 'done',
 						pairsChecked: 1,
 						pairsSkipped: 0,
+						pairsScreened: 0,
 						findings: 0,
 						costUsd: 0
 					}

@@ -16,6 +16,7 @@ CREATE TABLE IF NOT EXISTS consolidation_runs (
   cursor         TEXT,                     -- last source page fully checked; NULL at the start
   pairs_checked  INTEGER NOT NULL DEFAULT 0,
   pairs_skipped  INTEGER NOT NULL DEFAULT 0, -- sensitive data, too long, or refused
+  pairs_screened INTEGER NOT NULL DEFAULT 0, -- checked pairs the decision model cleared
   findings       INTEGER NOT NULL DEFAULT 0,
   cost_usd       REAL NOT NULL DEFAULT 0,
   served         TEXT NOT NULL DEFAULT '{}', -- JSON: model id -> requests it answered

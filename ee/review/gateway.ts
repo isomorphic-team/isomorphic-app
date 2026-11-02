@@ -11,7 +11,7 @@
 //      operator's Anthropic organization's own retention, which is standard unless the
 //      operator has arranged otherwise with Anthropic.
 //
-// Text-writing requests try Claude Haiku first and fall back to Luna on a refusal, a rate
+// Yes/no judgments go to Jev through OpenRouter. Text-writing requests try Claude Haiku first and fall back to Luna on a refusal, a rate
 // limit, exhausted credits or an overload, when an OpenRouter key exists. The operator
 // configures the keys. A deployment with neither has no gateway, and the core product runs
 // exactly as before.
@@ -128,7 +128,8 @@ export interface Answer {
 	confidence?: number;
 }
 
-export function decisionRequest(state: string, questions: Record<string, Question>) {
+// `state` is what Jev judges: a string, or an object of named parts.
+export function decisionRequest(state: unknown, questions: Record<string, Question>) {
 	return { model: JEV_MODEL, state, questions, provider: ZDR_PROVIDER };
 }
 
@@ -168,7 +169,12 @@ export interface Served<T> {
 }
 
 export interface Gateway {
-	decide(state: string, questions: Record<string, Question>): Promise<Record<string, Answer>>;
+	// Whether `decide` can run: Jev needs the OpenRouter key.
+	canDecide: boolean;
+	decide(
+		state: unknown,
+		questions: Record<string, Question>
+	): Promise<Served<Record<string, Answer>>>;
 	chatJson<T>(system: string, user: string, schema: Record<string, unknown>): Promise<Served<T>>;
 }
 
@@ -285,9 +291,15 @@ export async function openGateway(opts: {
 	return {
 		ok: true,
 		gateway: {
+			canDecide: !!opts.apiKey,
 			async decide(state, questions) {
 				const json = await post('/alpha/decisions', decisionRequest(state, questions));
-				return (json.answers ?? {}) as Record<string, Answer>;
+				const cost = (json.usage as { cost?: unknown } | undefined)?.cost;
+				return {
+					value: (json.answers ?? {}) as Record<string, Answer>,
+					model: JEV_MODEL,
+					costUsd: typeof cost === 'number' ? cost : 0
+				};
 			},
 			async chatJson<T>(system: string, user: string, schema: Record<string, unknown>) {
 				if (!anthropic) return luna<T>(system, user, schema);

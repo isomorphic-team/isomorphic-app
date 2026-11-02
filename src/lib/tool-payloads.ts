@@ -297,6 +297,7 @@ export interface ConsolidationStepWire {
 		status: 'running' | 'stopped' | 'done';
 		pairsChecked: number;
 		pairsSkipped: number;
+		pairsScreened: number;
 		findings: number;
 		costUsd: number;
 	} | null;

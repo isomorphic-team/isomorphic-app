@@ -33,6 +33,7 @@ import {
 	decisionRequest,
 	gatewayAccess,
 	HAIKU_MODEL,
+	JEV_MODEL,
 	LUNA_MODEL,
 	ModelUnavailable,
 	haikuCostUsd,
@@ -41,9 +42,11 @@ import {
 	type Gateway
 } from '../ee/review/gateway.ts';
 import {
+	JEV_CONFLICT_QUESTION,
 	TRIAGE_SYSTEM,
 	advanceConsolidation,
 	consolidationStepText,
+	passesScreen,
 	planStep,
 	readRun,
 	relatedPages,
@@ -175,7 +178,7 @@ console.log('\ngateway: entitlements, ZDR on the wire, spend (1, 2, 3)');
 	const opened = await openGateway({ apiKey: 'k', db, orgId: 'o1', fetch: provider.fn, now });
 	if (!opened.ok) throw new Error('expected an open gateway');
 	const answers = await opened.gateway.decide('state', { q: { type: 'noul', instructions: 'x' } });
-	check('decide returns the answers', answers.q?.noul === 0.9);
+	check('decide returns the answers', answers.value.q?.noul === 0.9);
 	const reply = await opened.gateway.chatJson<{ ok: boolean }>('sys', 'user', { type: 'object' });
 	check('chatJson parses the reply', reply.value.ok === true);
 	check(
@@ -722,6 +725,158 @@ console.log('\nconsolidation: a pass over an indexed brain (7)');
 		check(
 			'an org without the enterprise entitlement runs nothing',
 			unentitled.text.includes('no enterprise entitlement')
+		);
+	} finally {
+		await brain.cleanup();
+		await rm(src, { recursive: true, force: true });
+	}
+}
+
+console.log('\nconsolidation: the Jev screen (8)');
+{
+	check(
+		'the gate is 0.3: below clears, at or above goes to triage, no answer goes to triage',
+		!passesScreen(0.29) && passesScreen(0.3) && passesScreen(0.9) && passesScreen(undefined)
+	);
+
+	const db0 = localD1(':memory:').db as unknown as D1Database;
+	await entitled(db0);
+	const api = stubAnthropic(() => 'ok');
+	const noOpenRouter = await openGateway({
+		apiKey: undefined,
+		anthropicKey: 'ak',
+		db: db0,
+		orgId: 'o1',
+		fetch: api.fn,
+		now: () => NOW
+	});
+	check(
+		'without an OpenRouter key the gateway cannot decide',
+		noOpenRouter.ok && !noOpenRouter.gateway.canDecide
+	);
+	const jevProvider = stubFetch(0.0002);
+	const withJev = await openGateway({
+		apiKey: 'ork',
+		db: db0,
+		orgId: 'o1',
+		fetch: jevProvider.fn,
+		now: () => NOW
+	});
+	if (!withJev.ok) throw new Error('expected an open gateway');
+	const decided = await withJev.gateway.decide(
+		{ a: { path: 'a', text: 'x' } },
+		JEV_CONFLICT_QUESTION
+	);
+	check(
+		'decide reports Jev as the model and its cost, with the state sent as given',
+		withJev.gateway.canDecide &&
+			decided.model === JEV_MODEL &&
+			near(decided.costUsd, 0.0002) &&
+			JSON.stringify(jevProvider.calls[0].body.state) ===
+				JSON.stringify({ a: { path: 'a', text: 'x' } })
+	);
+
+	const src = await mkdtemp(join(tmpdir(), 'ee-screen-'));
+	const write = async (rel: string, text: string) => {
+		await mkdir(join(src, rel, '..'), { recursive: true });
+		await writeFile(join(src, rel), text);
+	};
+	const LOW = 'The day rate for Acme engagement is $1,200 per day.';
+	const HIGH = 'As of 2026-01 the Acme engagement day rate is $1,500 per day.';
+	await write('people/acme-engagement.md', `# Acme engagement\n\n${LOW}\n`);
+	await write('clients/acme.md', `# Acme engagement terms\n\n${HIGH}\n`);
+	await write('notes/acme-engagement-log.md', '# Acme engagement log\n\nKickoff went well.\n');
+	await write(
+		'notes/acme-engagement-archive.md',
+		`# Acme engagement archive\n\n${'Old notes. '.repeat(4_000)}\n`
+	);
+	const brain = await openFolderAsBrain(src, 'wiki');
+	const db = brain.db as unknown as D1Database;
+	try {
+		await entitled(db);
+		const triaged: string[] = [];
+		const screened: string[] = [];
+		let screenFails: 'none' | 'error' | 'refused' = 'none';
+		const gateway: Pick<Gateway, 'chatJson' | 'decide' | 'canDecide'> = {
+			canDecide: true,
+			async decide(state) {
+				const s = state as { a: { text: string }; b: { text: string } };
+				const both = s.a.text + s.b.text;
+				screened.push(both);
+				if (screenFails === 'error') throw new Error('Model gateway 500');
+				if (screenFails === 'refused') throw new GatewayRefused('over-cap');
+				const conflict = both.includes('$1,200') && both.includes('$1,500') ? 0.9 : 0.1;
+				return {
+					value: { conflict: { type: 'noul', noul: conflict } },
+					model: JEV_MODEL,
+					costUsd: 0.0002
+				};
+			},
+			async chatJson<T>(_system: string, user: string) {
+				triaged.push(user);
+				return { value: { claims: [] } as T, model: HAIKU_MODEL, costUsd: 0.001 };
+			}
+		};
+		const target = {
+			db,
+			brainId: brain.brainId,
+			orgId: 'o1',
+			config: brain.config,
+			gateway,
+			newRunId: () => 'screen-1'
+		};
+		const s = await advanceConsolidation(target, NOW);
+		const archivePairs = triaged.filter((u) => u.includes('Old notes.')).length;
+		check(
+			'only the pair Jev flags, and pairs too long for Jev, reach triage',
+			s.status === 'done' &&
+				triaged.some((u) => u.includes('$1,200') && u.includes('$1,500')) &&
+				triaged.length === 1 + archivePairs &&
+				archivePairs > 0 &&
+				!screened.some((x) => x.includes('Old notes.'))
+		);
+		check(
+			'cleared pairs count as checked and screened, and Jev is recorded as a model',
+			s.pairsScreened > 0 &&
+				s.pairsChecked === s.pairsScreened + triaged.length &&
+				s.served[JEV_MODEL] === screened.length &&
+				near(s.costUsd, 0.0002 * screened.length + 0.001 * triaged.length)
+		);
+		check(
+			'the step text says how many the screen cleared',
+			consolidationStepText(s).includes(`(${s.pairsScreened} cleared by the screen)`)
+		);
+		check(
+			'the screened count reads back',
+			(await readRun(db, brain.brainId))?.pairsScreened === s.pairsScreened
+		);
+
+		triaged.length = 0;
+		screenFails = 'error';
+		const failed = await advanceConsolidation({ ...target, newRunId: () => 'screen-2' }, NOW);
+		check(
+			'a screen that errors lets every pair through to triage',
+			failed.status === 'done' &&
+				failed.pairsScreened === 0 &&
+				triaged.length === failed.pairsChecked
+		);
+		screenFails = 'none';
+		const screenedBefore = screened.length;
+		const unscreened = await advanceConsolidation(
+			{ ...target, gateway: { ...gateway, canDecide: false }, newRunId: () => 'screen-2b' },
+			NOW
+		);
+		check(
+			'a gateway that cannot decide never calls the screen',
+			unscreened.status === 'done' &&
+				unscreened.pairsScreened === 0 &&
+				screened.length === screenedBefore
+		);
+		screenFails = 'refused';
+		const refused = await advanceConsolidation({ ...target, newRunId: () => 'screen-3' }, NOW);
+		check(
+			'a refused gateway at the screen stops the pass',
+			refused.status === 'stopped' && refused.stoppedReason === 'over-cap'
 		);
 	} finally {
 		await brain.cleanup();
