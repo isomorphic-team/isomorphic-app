@@ -26,6 +26,8 @@ export interface Finding {
 	headline: string;
 	/** Ordering within the report; higher first. */
 	weight: number;
+	/** Findings about one fact share this label, so a report can show them as one item. */
+	cluster?: string;
 }
 
 export interface ReviewLedger {

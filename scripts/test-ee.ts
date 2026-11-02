@@ -46,6 +46,7 @@ import {
 	JEV_CONFLICT_QUESTION,
 	MISLEADING_QUESTION,
 	STEP_TIME_MS,
+	TRIAGE_SCHEMA,
 	TRIAGE_SYSTEM,
 	advanceConsolidation,
 	blockShape,
@@ -57,11 +58,12 @@ import {
 	runConsolidationStep,
 	sendable,
 	triageFindings,
+	triagePrompt,
 	type Claim,
 	type PageText,
 	type Proposal
 } from '../ee/review/consolidation.ts';
-import { conflictKey, readFindings } from '../src/lib/review-queue.ts';
+import { conflictKey, readFindings, upsertFindings } from '../src/lib/review-queue.ts';
 import { resetIndex } from '../src/lib/brain-index.ts';
 import { continuePass, readPass, savePass, savePassStatement } from '../src/lib/brain-pass.ts';
 import { SNAPSHOT_BEGIN, SNAPSHOT_END } from '../src/lib/view-directives.ts';
@@ -554,6 +556,7 @@ console.log('\nconsolidation: candidates, pre-scan, claim filter, verify (6)');
 	const b = page('clients/acme.md', 'Acme', 'As of 2026-01 the day rate is $1,500 per day.\n');
 	const claim = (over: Partial<Claim> = {}): Claim => ({
 		subject: 'Acme day rate',
+		fact: 'day rate',
 		quote_a: 'The day rate for Acme is $1,200 per day.',
 		quote_b: 'As of 2026-01 the day rate is $1,500 per day.',
 		value_a: '$1,200',
@@ -590,6 +593,17 @@ console.log('\nconsolidation: candidates, pre-scan, claim filter, verify (6)');
 			f.pageShas[a.path] === 's1' &&
 			f.pageShas[b.path] === 's2' &&
 			f.scores?.misleading === 0.8
+	);
+	check('the finding carries its fact label as its cluster', f.clusterId === 'day rate');
+	check(
+		'the prompt lists the labels the brain already uses, and nothing when there are none',
+		triagePrompt(a, b, ['pod size', 'day rate']).endsWith(
+			'<known_facts>\npod size\nday rate\n</known_facts>'
+		) && !triagePrompt(a, b).includes('known_facts')
+	);
+	check(
+		'the schema asks for the fact label',
+		(TRIAGE_SCHEMA.properties.claims.items.required as readonly string[]).includes('fact')
 	);
 	check(
 		'its verified patch and the page that stands go in the proposal, for review',
@@ -830,6 +844,28 @@ console.log('\nconsolidation: a pass over an indexed brain (7)');
 			[...full].every((p) => answered.has(p) || prompts.includes(p))
 		);
 		check('the run row reads back', (await readRun(db, brain.brainId))?.status === 'done');
+
+		await upsertFindings(db, brain.brainId, [
+			{
+				key: 'conflict:x|y:1',
+				kind: 'conflict',
+				paths: ['x', 'y'],
+				headline: 'h',
+				evidence: [],
+				proposal: null,
+				scores: null,
+				pageShas: {},
+				runId: 'earlier',
+				clusterId: 'pod size',
+				authorUserId: null
+			}
+		]);
+		prompts.length = 0;
+		await advanceConsolidation({ ...target, newRunId: () => 'run-labels' }, NOW);
+		check(
+			'a pass hands triage the fact labels already in the queue',
+			prompts.length > 0 && prompts.every((p) => p.includes('<known_facts>\npod size'))
+		);
 
 		await resetIndex(db, brain.brainId);
 		const fresh = await advanceConsolidation({ ...target, newRunId: () => 'run-4' }, NOW);
