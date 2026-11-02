@@ -272,9 +272,14 @@ Roadmap step 2 extends the `validate` / `resolve` pattern into one findings queu
 - **Detect is a Jev screen, triage is one Haiku request.** With an OpenRouter key, Jev's
   `conflict` score gates each pair at 0.3 on the question the evals measured (pages over
   40,000 characters skip the screen rather than being cut). Without one, every pair goes to
-  Haiku. The claim filter and the patch checks run on Haiku's own scores, and verify is the
-  mechanical checks only. Everything lands in review or person, so no uncalibrated score
-  decides a write.
+  Haiku. Each surviving claim goes back to Jev with the evals' "would a reader be misled?"
+  question, dropped under 0.4; Haiku writes no score of its own, since a model's confidence
+  in its own claims carried no signal in the evals. The triage prompt carries the evals'
+  authority rules (primary records outrank derived pages, dated records are never
+  rewritten, a generated page goes to a person naming its generator). Verify is mechanical:
+  a patch must match once and leave the page's tables, lists and fences intact. A patch that
+  passes goes to review; everything else, proposed notes included, goes to a person. Nothing
+  decides a write unattended.
 - **No zero-retention declaration.** Anthropic requests get the operator's Anthropic
   organization's own retention. The gateway falls back to Luna on a refusal, a rate limit,
   exhausted credits or an overload.

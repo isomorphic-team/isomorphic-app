@@ -42,9 +42,12 @@ import {
 	type Gateway
 } from '../ee/review/gateway.ts';
 import {
+	JEV_CLAIM_PAGE_CHARS,
 	JEV_CONFLICT_QUESTION,
+	MISLEADING_QUESTION,
 	TRIAGE_SYSTEM,
 	advanceConsolidation,
+	blockShape,
 	consolidationStepText,
 	passesScreen,
 	planStep,
@@ -523,20 +526,24 @@ console.log('\nconsolidation: candidates, pre-scan, claim filter, verify (6)');
 		value_a: '$1,200',
 		value_b: '$1,500',
 		explained: false,
-		misleading: 0.8,
 		stands: 'b',
 		action: 'patch',
 		patch: { page: 'a', find: '$1,200', replace: '$1,500' },
 		why: 'The dated record is later.',
 		...over
 	});
-	const triage = (claims: Claim[], pair = { a, b }) =>
+	const scored: string[] = [];
+	const triage = (claims: Claim[], pair = { a, b }, misleading: number | null = 0.8) =>
 		triageFindings({
 			...pair,
 			claims,
 			model: HAIKU_MODEL,
 			pageShas: { [a.path]: 's1', [b.path]: 's2' },
-			runId: 'r1'
+			runId: 'r1',
+			misleading: async (c) => {
+				scored.push(c.subject);
+				return misleading ?? undefined;
+			}
 		});
 
 	const kept = await triage([claim()]);
@@ -562,7 +569,6 @@ console.log('\nconsolidation: candidates, pre-scan, claim filter, verify (6)');
 	const same = { a, b: { ...b, content: a.content } };
 	const drops: [string, Claim, { a: PageText; b: PageText }][] = [
 		['an explained claim', claim({ explained: true }), { a, b }],
-		['a claim nobody would be misled by', claim({ misleading: 0.39 }), { a, b }],
 		['a quote that is not on its page', claim({ quote_a: 'The day rate is $1,200.' }), { a, b }],
 		['a value that is not inside its quote', claim({ value_a: '$1,100' }), { a, b }],
 		['an empty value', claim({ value_b: ' ' }), { a, b }],
@@ -572,10 +578,24 @@ console.log('\nconsolidation: candidates, pre-scan, claim filter, verify (6)');
 			same
 		]
 	];
+	scored.length = 0;
 	for (const [label, c, pair] of drops) {
 		const r = await triage([c], pair);
 		check(`${label} is dropped`, r.findings.length === 0 && r.dropped === 1);
 	}
+	check('a claim the mechanical filters drop is never sent to be scored', scored.length === 0);
+	const unmisleading = await triage([claim()], { a, b }, 0.39);
+	check(
+		'a claim Jev scores under 0.4 on misleading is dropped',
+		unmisleading.findings.length === 0 && unmisleading.dropped === 1
+	);
+	const atGate = await triage([claim()], { a, b }, 0.4);
+	check('a claim scored at 0.4 is kept', atGate.findings.length === 1);
+	const unscored = await triage([claim()], { a, b }, null);
+	check(
+		'a claim with no score is kept, and carries no scores',
+		unscored.findings.length === 1 && unscored.findings[0].scores === null
+	);
 	const twice = page(
 		'people/a.md',
 		'Acme engagement',
@@ -584,8 +604,58 @@ console.log('\nconsolidation: candidates, pre-scan, claim filter, verify (6)');
 	const rejected = await triage([claim()], { a: twice, b });
 	const rp = rejected.findings[0]?.proposal as Proposal | undefined;
 	check(
-		'a patch whose text occurs more than once is kept for review without the patch',
-		rejected.findings.length === 1 && rp?.patch === null && !!rp?.patchRejected
+		'a patch whose text occurs more than once goes to a person without the patch',
+		rejected.findings.length === 1 &&
+			rp?.patch === null &&
+			rp.tier === 'person' &&
+			!!rp.patchRejected
+	);
+	const tabled = page(
+		'people/a.md',
+		'Acme engagement',
+		'Rates:\n\n| Client | Rate |\n| --- | --- |\n| Acme | $1,200 |\n| Globex | $900 |\n'
+	);
+	const split = await triage(
+		[
+			claim({
+				quote_a: '| Acme | $1,200 |',
+				patch: {
+					page: 'a',
+					find: '| Acme | $1,200 |',
+					replace: '| Acme | $1,500 |\n\nNote: rate changed in 2026.\n'
+				}
+			})
+		],
+		{ a: tabled, b }
+	);
+	const sp = split.findings[0]?.proposal as Proposal | undefined;
+	check(
+		'a patch that splits a table is rejected',
+		sp?.patch === null && sp.tier === 'person' && /table/.test(sp.patchRejected ?? '')
+	);
+	const inTable = await triage(
+		[
+			claim({
+				quote_a: '| Acme | $1,200 |',
+				patch: { page: 'a', find: '| Acme | $1,200 |', replace: '| Acme | $1,500 |' }
+			})
+		],
+		{ a: tabled, b }
+	);
+	check(
+		'a patch that edits a table cell in place passes',
+		(inTable.findings[0]?.proposal as Proposal | undefined)?.patch !== null
+	);
+	check(
+		'block shape sees fences, headings, and runs of table rows and list items',
+		blockShape('# T\n\n- a\n- b\n\n| x |\n| y |\n\n```\n| not a table |\n```\n') === 'HLTFF' &&
+			blockShape('| x |\nbreak\n| y |') === 'TT' &&
+			blockShape('- a\n- b') === 'L'
+	);
+	const noted = await triage([claim({ action: 'note', patch: null })]);
+	check(
+		'a proposed note goes to a person',
+		(noted.findings[0]?.proposal as Proposal | undefined)?.tier === 'person'
 	);
 	const person = await triage([claim({ action: 'person', patch: null, stands: 'neither' })]);
 	const pp = person.findings[0]?.proposal as Proposal | undefined;
@@ -784,7 +854,10 @@ console.log('\nconsolidation: the Jev screen (8)');
 	const LOW = 'The day rate for Acme engagement is $1,200 per day.';
 	const HIGH = 'As of 2026-01 the Acme engagement day rate is $1,500 per day.';
 	await write('people/acme-engagement.md', `# Acme engagement\n\n${LOW}\n`);
-	await write('clients/acme.md', `# Acme engagement terms\n\n${HIGH}\n`);
+	await write(
+		'clients/acme.md',
+		`# Acme engagement terms\n\n${HIGH}\n\n${'Terms. '.repeat(4_000)}\n`
+	);
 	await write('notes/acme-engagement-log.md', '# Acme engagement log\n\nKickoff went well.\n');
 	await write(
 		'notes/acme-engagement-archive.md',
@@ -877,6 +950,103 @@ console.log('\nconsolidation: the Jev screen (8)');
 		check(
 			'a refused gateway at the screen stops the pass',
 			refused.status === 'stopped' && refused.stoppedReason === 'over-cap'
+		);
+
+		const claimStates: { claim?: { topic: string; says_a: string }; page_a?: { text: string } }[] =
+			[];
+		let claimScore = 0.2;
+		let decideCalls = 0;
+		const scoring: Pick<Gateway, 'chatJson' | 'decide' | 'canDecide'> = {
+			canDecide: true,
+			async decide(state, questions): ReturnType<Gateway['decide']> {
+				decideCalls++;
+				const st = state as (typeof claimStates)[number] & {
+					a?: { text: string };
+					b?: { text: string };
+				};
+				if (st.claim) {
+					claimStates.push(st);
+					check(
+						'the claim question is the one the evals measured',
+						questions === MISLEADING_QUESTION
+					);
+					return {
+						value: { misleading: { type: 'noul', noul: claimScore } },
+						model: JEV_MODEL,
+						costUsd: 0.0003
+					};
+				}
+				const both = (st.a?.text ?? '') + (st.b?.text ?? '');
+				const conflict = both.includes('$1,200') && both.includes('$1,500') ? 0.9 : 0.1;
+				return {
+					value: { conflict: { type: 'noul', noul: conflict } },
+					model: JEV_MODEL,
+					costUsd: 0.0002
+				};
+			},
+			async chatJson<T>(_system: string, user: string) {
+				const hit = user.includes('$1,200') && user.includes('$1,500');
+				const lowFirst = user.indexOf('$1,200') < user.indexOf('$1,500');
+				const claims = hit
+					? [
+							{
+								subject: 'Acme day rate',
+								quote_a: lowFirst ? LOW : HIGH,
+								quote_b: lowFirst ? HIGH : LOW,
+								value_a: lowFirst ? '$1,200' : '$1,500',
+								value_b: lowFirst ? '$1,500' : '$1,200',
+								explained: false,
+								stands: 'neither',
+								action: 'person',
+								patch: null,
+								why: 'The pages disagree.'
+							}
+						]
+					: [];
+				return { value: { claims } as T, model: HAIKU_MODEL, costUsd: 0.001 };
+			}
+		};
+		await db.prepare('DELETE FROM review_findings').run();
+		const low = await advanceConsolidation(
+			{ ...target, gateway: scoring, newRunId: () => 'claim-1' },
+			NOW
+		);
+		check(
+			'a claim Jev scores as not misleading is dropped inside the pass, and its cost counted',
+			low.status === 'done' &&
+				low.findings === 0 &&
+				claimStates.length === 1 &&
+				claimStates[0].claim?.topic === 'Acme day rate' &&
+				[LOW, HIGH].includes(claimStates[0].claim?.says_a ?? '') &&
+				(claimStates[0].page_a?.text.length ?? 0) <= JEV_CLAIM_PAGE_CHARS &&
+				low.served[JEV_MODEL] === decideCalls
+		);
+		claimScore = 0.9;
+		const high = await advanceConsolidation(
+			{ ...target, gateway: scoring, newRunId: () => 'claim-2' },
+			NOW
+		);
+		const kept = await readFindings(db, brain.brainId);
+		check(
+			'a claim Jev scores as misleading is queued with its score',
+			high.findings === 1 && kept.length === 1 && kept[0].scores?.misleading === 0.9
+		);
+		check(
+			'the claim question reads each page cut to 24,000 characters, as measured',
+			claimStates.length > 0 &&
+				claimStates.every((st) => (st.page_a?.text.length ?? 0) <= JEV_CLAIM_PAGE_CHARS) &&
+				claimStates.some((st) => (st.page_a?.text.length ?? 0) === JEV_CLAIM_PAGE_CHARS)
+		);
+		claimStates.length = 0;
+		await db.prepare('DELETE FROM review_findings').run();
+		const noJev = await advanceConsolidation(
+			{ ...target, gateway: { ...scoring, canDecide: false }, newRunId: () => 'claim-3' },
+			NOW
+		);
+		const unscoredRows = await readFindings(db, brain.brainId);
+		check(
+			'a gateway that cannot decide never scores claims, and keeps them unscored',
+			noJev.findings === 1 && claimStates.length === 0 && unscoredRows[0]?.scores === null
 		);
 	} finally {
 		await brain.cleanup();

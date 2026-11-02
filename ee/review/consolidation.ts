@@ -17,10 +17,14 @@
 //   4. Triage in one Haiku request: the model lists each disagreement, quoting both
 //      sides, says whether dates or scope explain it, which version stands, and proposes
 //      one action.
-//   5. Claim filter: explained claims, claims scored under MIN_MISLEADING, and claims whose
-//      quotes or values do not appear word for word on their page are dropped.
-//   6. Verify, mechanically: a proposed patch must match its page exactly once.
-//   7. Tier: `person` when the pages cannot settle it, `review` otherwise.
+//   5. Claim filter: explained claims and claims whose quotes or values do not appear word
+//      for word on their page are dropped. With Jev, so is a claim it scores under
+//      MIN_MISLEADING on whether a reader would be misled. The triaging model's own score is
+//      not used: in the evals a model's confidence in its own claims carried no signal.
+//   6. Verify, mechanically: a proposed patch must match its page exactly once and leave its
+//      markdown structure as it was (no table, list or fence split).
+//   7. Tier: `review` for a patch that passed, `person` for everything else. Proposed notes go
+//      to a person too: in the evals most were judged unnecessary or misplaced.
 //
 // Worker-safe: no node:* imports.
 
@@ -53,8 +57,20 @@ export const RELATED_PER_PAGE = 3;
 // line that settles the disagreement. About 50K tokens, inside Haiku's short rate card.
 export const MAX_PAIR_CHARS = 200_000;
 
-// Claims a reader would not be misled by are dropped.
+// Claims Jev scores under this on MISLEADING_QUESTION are dropped (brain-evals: precision
+// 71-79% at 0.4, against 70-74% unfiltered).
 export const MIN_MISLEADING = 0.4;
+
+// The per-claim question the evals measured, word for word. Pages are cut to
+// JEV_CLAIM_PAGE_CHARS as there: the claim names what to look at.
+export const MISLEADING_QUESTION = {
+	misleading: {
+		type: 'noul',
+		instructions:
+			'Reading `page_a` and `page_b` as they stand today, would a reader take something outdated or wrong about `claim.topic` as current? Answer no if the difference is explained by dates, scope, or a note already on the page.'
+	}
+} as const;
+export const JEV_CLAIM_PAGE_CHARS = 24_000;
 
 // Jev's contradiction score below which a pair is cleared without triage. 0.3 kept 81% of
 // the conflicts a reference model found and sent on a fifth of all pairs (brain-evals,
@@ -160,7 +176,6 @@ export interface Claim {
 	value_a: string;
 	value_b: string;
 	explained: boolean;
-	misleading: number;
 	stands: 'a' | 'b' | 'neither';
 	action: 'patch' | 'note' | 'person';
 	patch: { page: 'a' | 'b'; find: string; replace: string } | null;
@@ -184,7 +199,6 @@ export const TRIAGE_SCHEMA = {
 					'value_a',
 					'value_b',
 					'explained',
-					'misleading',
 					'stands',
 					'action',
 					'patch',
@@ -197,7 +211,6 @@ export const TRIAGE_SCHEMA = {
 					value_a: { type: 'string' },
 					value_b: { type: 'string' },
 					explained: { type: 'boolean' },
-					misleading: { type: 'number' },
 					stands: { type: 'string', enum: ['a', 'b', 'neither'] },
 					action: { type: 'string', enum: ['patch', 'note', 'person'] },
 					patch: {
@@ -229,9 +242,12 @@ For each disagreement:
 - quote_a / quote_b: the line from each page that states it, copied exactly.
 - value_a / value_b: the disputed value as each page writes it, copied exactly from inside the quote (a number, a date, a name, a status).
 - explained: true when dates, scope or an existing note on either page account for the difference, so a careful reader would not be misled.
-- misleading: from 0 to 1, how likely a reader of the current pages is to be misled.
-- stands: which version is right by these rules. A dated record outranks a summary of it. Where facts changed, the later dated record wins. A dated record that was accurate on its date is annotated, never rewritten. Use "neither" when the pages cannot settle it.
-- action: "patch" to correct the wrong page's line, "note" to add a dated note, or "person" when someone has to decide.
+- stands: which version is right by these rules.
+  - Primary records outrank derived pages. Primary: dated meeting notes, contracts, threads, source documents, data exports. Derived: index and overview pages, rollups, summaries, profiles.
+  - Where facts changed over time, the later dated record wins.
+  - A dated record that was accurate on its date is not wrong. Never rewrite it to match later events: correct the living summary page instead.
+  - Use "neither" when the pages cannot settle it.
+- action: "patch" to correct the wrong page's line, "note" to add a dated note, or "person" when someone has to decide. If the page that would change says a script, sync or generator produces it, use "person" and name the generator in why.
 - patch: for "patch", the page to change, a span of its text to find (copied exactly, long enough to occur once) and its replacement. Otherwise null.
 - why: one sentence.
 
@@ -241,6 +257,36 @@ export function triagePrompt(a: PageText, b: PageText): string {
 	const page = (label: string, p: PageText) =>
 		`<page_${label} path="${p.path}" title="${p.title.replace(/"/g, "'")}">\n${p.content}\n</page_${label}>`;
 	return `${page('a', a)}\n\n${page('b', b)}`;
+}
+
+// A page's block structure: fences, headings, and each run of table rows or list items.
+// A patch that changes it has split or broken something a reader relies on.
+export function blockShape(markdown: string): string {
+	const out: string[] = [];
+	let inFence = false;
+	let prev = '';
+	for (const line of markdown.split('\n')) {
+		const t = line.trim();
+		if (/^(```|~~~)/.test(t)) {
+			inFence = !inFence;
+			out.push('F');
+			prev = 'F';
+			continue;
+		}
+		if (inFence) continue;
+		const kind = /^#{1,6}\s/.test(t)
+			? 'H'
+			: t.startsWith('|')
+				? 'T'
+				: /^([-*+]|\d+[.)])\s/.test(t)
+					? 'L'
+					: t === ''
+						? ''
+						: 'P';
+		if (kind === 'H' || ((kind === 'T' || kind === 'L') && kind !== prev)) out.push(kind);
+		prev = kind;
+	}
+	return out.join('');
 }
 
 const occurrences = (haystack: string, needle: string) => {
@@ -264,7 +310,8 @@ export interface Proposal {
 }
 
 // The claims worth a person's time, each with its key, its verified proposal and why the
-// rest were dropped. Pure.
+// rest were dropped. `misleading` scores a claim that passed the mechanical filters, or
+// says nothing (undefined), which keeps it.
 export async function triageFindings(input: {
 	a: PageText;
 	b: PageText;
@@ -272,6 +319,7 @@ export async function triageFindings(input: {
 	model: string;
 	pageShas: Readonly<Record<string, string>>;
 	runId: string;
+	misleading?: (claim: Claim) => Promise<number | undefined>;
 }): Promise<{ findings: QueueFinding[]; dropped: number }> {
 	const { a, b } = input;
 	const contents = new Map([
@@ -294,7 +342,12 @@ export async function triageFindings(input: {
 			c.quote_a.includes(c.value_a) &&
 			c.quote_b.includes(c.value_b);
 		const differs = normalizeDisputedValue(c.value_a) !== normalizeDisputedValue(c.value_b);
-		if (c.explained || c.misleading < MIN_MISLEADING || !quoted || !valued || !differs) {
+		if (c.explained || !quoted || !valued || !differs) {
+			dropped++;
+			continue;
+		}
+		const misleading = await input.misleading?.(c);
+		if (misleading !== undefined && misleading < MIN_MISLEADING) {
 			dropped++;
 			continue;
 		}
@@ -307,6 +360,11 @@ export async function triageFindings(input: {
 			else if (c.patch.find === c.patch.replace) patchRejected = 'The patch changes nothing.';
 			else if (occurrences(target.content, c.patch.find) !== 1)
 				patchRejected = 'The text to replace does not occur exactly once on the page.';
+			else if (
+				blockShape(target.content) !==
+				blockShape(target.content.replace(c.patch.find, () => c.patch!.replace))
+			)
+				patchRejected = 'The patch would split a table, list or code block.';
 			else patch = { path: target.path, find: c.patch.find, replace: c.patch.replace };
 		}
 
@@ -318,14 +376,14 @@ export async function triageFindings(input: {
 			headline: `${c.subject}: "${a.title}" says ${c.value_a}, "${b.title}" says ${c.value_b}.`,
 			evidence: [`${a.path}: "${c.quote_a}"`, `${b.path}: "${c.quote_b}"`, c.why],
 			proposal: {
-				tier: c.action === 'person' ? 'person' : 'review',
+				tier: patch ? 'review' : 'person',
 				action: c.action,
 				stands: c.stands === 'a' ? a.path : c.stands === 'b' ? b.path : null,
 				patch,
 				...(patchRejected ? { patchRejected } : {}),
 				model: input.model
 			} satisfies Proposal,
-			scores: { misleading: c.misleading },
+			scores: misleading === undefined ? null : { misleading },
 			pageShas: {
 				[a.path]: input.pageShas[a.path] ?? '',
 				[b.path]: input.pageShas[b.path] ?? ''
@@ -543,6 +601,34 @@ export async function advanceConsolidation(
 		}
 	}
 
+	// Jev's answer to MISLEADING_QUESTION for one claim, or undefined when it cannot say. As
+	// with the screen, only a refused gateway stops the pass.
+	async function misleadingScore(
+		a: PageText,
+		b: PageText,
+		claim: Claim,
+		count: (model: string, costUsd: number) => void
+	): Promise<number | undefined> {
+		const { decide, canDecide } = t.gateway;
+		if (!canDecide || !decide) return undefined;
+		const cut = (p: PageText) => ({ path: p.path, text: p.content.slice(0, JEV_CLAIM_PAGE_CHARS) });
+		try {
+			const served = await decide(
+				{
+					page_a: cut(a),
+					page_b: cut(b),
+					claim: { topic: claim.subject, says_a: claim.quote_a, says_b: claim.quote_b }
+				},
+				MISLEADING_QUESTION
+			);
+			count(served.model, served.costUsd);
+			return served.value.misleading?.noul;
+		} catch (err) {
+			if (err instanceof GatewayRefused) throw err;
+			return undefined;
+		}
+	}
+
 	async function check(index: number) {
 		const [pa, pb] = plan.pairs[index].pair;
 		const a = byPath.get(pa);
@@ -581,7 +667,8 @@ export async function advanceConsolidation(
 				claims: served.value.claims ?? [],
 				model: served.model,
 				pageShas: shas,
-				runId: state.runId
+				runId: state.runId,
+				misleading: (claim) => misleadingScore(a, b, claim, count)
 			});
 			found.push(...findings);
 			state.pairsChecked++;

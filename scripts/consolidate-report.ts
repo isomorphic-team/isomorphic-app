@@ -147,7 +147,7 @@ async function modelPass() {
 	for (const [i, f] of conflicts.entries()) {
 		const p = f.proposal as Proposal;
 		console.log(
-			`${String(i + 1).padStart(2)}. [${p.tier}, misleading ${f.scores?.misleading}] ${f.headline}`
+			`${String(i + 1).padStart(2)}. [${p.tier}, misleading ${f.scores?.misleading ?? 'unscored'}] ${f.headline}`
 		);
 		for (const e of f.evidence) console.log(`      ${e}`);
 		if (p.patch)

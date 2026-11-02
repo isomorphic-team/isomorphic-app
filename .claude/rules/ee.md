@@ -34,6 +34,8 @@ Licensed under `ee/LICENSE`, not the AGPL. Placement rule and history:
   cursor; a gateway refusal stops it as `stopped`, and asking again resumes. A page with a
   high-severity detection never reaches the gateway. With an OpenRouter key, Jev screens each
   pair first at a 0.3 conflict score (`passesScreen`); a screen error lets the pair through. Claims are kept only when their quotes and
-  values are on the pages word for word; nothing is written to the brain.
+  values are on the pages word for word and, with Jev, that it scores 0.4 or more on whether a
+  reader would be misled; a patch must also keep the page's block structure (`blockShape`).
+  Nothing is written to the brain.
 - **No outside contributions**, and no customer names here either: the public-repo hygiene rules
   apply to `ee/` exactly as to the core.
