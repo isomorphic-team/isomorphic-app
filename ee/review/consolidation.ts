@@ -417,6 +417,8 @@ const KIND = 'consolidation';
 
 export interface ConsolidationState {
 	runId: string;
+	startedAt: number;
+	finishedAt: number | null;
 	status: PassStatus;
 	cursor: string | null;
 	pairsChecked: number;
@@ -456,13 +458,13 @@ export async function readRun(db: D1Database, brainId: string): Promise<Consolid
 async function saveRun(
 	db: D1Database,
 	scope: { brainId: string; orgId: string; actorUserId?: string },
-	{ runId, status, cursor, stoppedReason, ...counters }: ConsolidationState,
+	{ runId, status, cursor, stoppedReason, startedAt, finishedAt, ...counters }: ConsolidationState,
 	now: number
 ) {
 	await savePass(
 		db,
 		{ ...scope, kind: KIND },
-		{ runId, status, cursor, stoppedReason, counters },
+		{ runId, status, cursor, stoppedReason, startedAt, finishedAt, counters },
 		now
 	);
 }
@@ -500,7 +502,8 @@ export async function advanceConsolidation(
 		continuePass(
 			await readPass(t.db, t.brainId, KIND, noCounts()),
 			noCounts(),
-			t.newRunId ?? (() => crypto.randomUUID())
+			t.newRunId ?? (() => crypto.randomUUID()),
+			now
 		)
 	);
 

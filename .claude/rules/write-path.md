@@ -117,7 +117,8 @@ runtime hand to every tool, so it sees every write that reaches `commitOrPR` or 
   kind says where sensitive data sits, so nobody else gets them.
 - **A report states its coverage and never reads as clean** (`guardCoverage`, `readCoverage`):
   both surfaces say what was seen, also when nothing was found.
-- **The baseline scan** (`src/lib/policy-baseline.ts`, D1 `policy_baseline`, migration 0018) is
+- **The baseline scan** (`src/lib/policy-baseline.ts`; run state in `brain_passes`, kind
+  `policy-baseline`, since 0023, with `policy_baseline` still written until it is dropped) is
   `configure_brain` with `baseline_scan: true`, or the Review screen's button, which repeats it.
   It reads every text file through the store, `BASELINE_FILE_BUDGET` paths per call from a
   cursor, with no model, and raises policy findings like a write does.

@@ -1128,7 +1128,7 @@ console.log('\nbrain passes: the shared run state (9)');
 				run_id: string;
 			}>();
 
-	const fresh = continuePass(null, defaults, () => 'r1');
+	const fresh = continuePass(null, defaults, () => 'r1', NOW);
 	check(
 		'no pass yet: a new running pass at the start',
 		fresh.runId === 'r1' &&
@@ -1152,7 +1152,12 @@ console.log('\nbrain passes: the shared run state (9)');
 		{ ...read, status: 'stopped', stoppedReason: 'over-cap' },
 		NOW + 1000
 	);
-	const resumed = continuePass(await readPass(db, 'b1', 'probe', defaults), defaults, () => 'r2');
+	const resumed = continuePass(
+		await readPass(db, 'b1', 'probe', defaults),
+		defaults,
+		() => 'r2',
+		NOW
+	);
 	check(
 		'a stopped pass is resumed, not replaced',
 		resumed.runId === 'r1' &&
@@ -1170,7 +1175,7 @@ console.log('\nbrain passes: the shared run state (9)');
 	);
 	await savePass(db, scope, { ...resumed, status: 'done' }, NOW + 2000);
 	check('a finished pass records when', (await row())?.finished_at === NOW + 2000);
-	const next = continuePass(await readPass(db, 'b1', 'probe', defaults), defaults, () => 'r2');
+	const next = continuePass(await readPass(db, 'b1', 'probe', defaults), defaults, () => 'r2', NOW);
 	check(
 		'a finished pass is replaced by a new one',
 		next.runId === 'r2' && next.cursor === null && next.counters.seen === 0
