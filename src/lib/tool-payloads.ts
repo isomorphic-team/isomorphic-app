@@ -291,6 +291,21 @@ export interface BaselineStepWire {
 	};
 }
 
+/** One step of the model consolidation pass (configure_brain with consolidate). */
+export interface ConsolidationStepWire {
+	consolidation: {
+		status: 'running' | 'stopped' | 'done';
+		pairsChecked: number;
+		pairsSkipped: number;
+		pairsScreened: number;
+		findings: number;
+		costUsd: number;
+	} | null;
+}
+
+/** One step of the consolidation pass, as the Worker wires it into a brain's context. */
+export type ConsolidationStep = () => Promise<{ text: string; wire: ConsolidationStepWire }>;
+
 export interface GraphViewWire extends InBrain {
 	view: 'graph';
 	webUrl?: string;

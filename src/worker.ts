@@ -30,7 +30,8 @@
 import { McpServer, type RegisteredTool } from '@modelcontextprotocol/server';
 import { registeredTools, wrapToolHandler } from './lib/registered-tools.ts';
 import { serveMcp, serverOptions } from './lib/mcp-serve.ts';
-import type { IdentityWire, OrgMembershipWire } from './lib/tool-payloads.ts';
+import type { ConsolidationStep, IdentityWire, OrgMembershipWire } from './lib/tool-payloads.ts';
+import { consolidationWire, runConsolidationStep } from '../ee/review/consolidation.ts';
 import { z } from 'zod';
 import type { OAuthHelpers } from '@cloudflare/workers-oauth-provider';
 import { installationOctokit, tokenOctokit, staticAuth, type AppCreds } from './lib/github.ts';
@@ -118,6 +119,11 @@ interface Env {
 	// Static-mode bearer (single-tenant self-hosting). Read only when
 	// AUTH_MODE=static.
 	MCP_BEARER_TOKEN?: string;
+
+	// Model keys for the enterprise consolidation pass (ee/review/). Anthropic serves Claude
+	// Haiku first; OpenRouter serves Luna as the fallback. Neither set: no pass.
+	ANTHROPIC_API_KEY?: string;
+	OPENROUTER_API_KEY?: string;
 
 	// OAuth-mode storage. OAUTH_PROVIDER is injected at runtime by the
 	// OAuthProvider wrapper; we type it for consumer code.
@@ -231,6 +237,33 @@ function deploymentSecret(env: Env): string | undefined {
 	return (env.AUTH_MODE === 'oauth' ? env.AUTH_SECRET : env.MCP_BEARER_TOKEN)?.trim() || undefined;
 }
 
+// The enterprise consolidation pass (ee/review/consolidation.ts), wired in only when the
+// deployment holds a model key. The entitlement and the spend cap are checked inside.
+function consolidationFor(
+	env: Env,
+	scope: {
+		brainId: string;
+		orgId: string;
+		actorUserId: string;
+		config: BrainConfig;
+		store: BrainStore;
+		repo: { owner: string; repo: string };
+	}
+): ConsolidationStep | undefined {
+	const anthropicKey = env.ANTHROPIC_API_KEY?.trim() || undefined;
+	const openRouterKey = env.OPENROUTER_API_KEY?.trim() || undefined;
+	if (!anthropicKey && !openRouterKey) return undefined;
+	return async () => {
+		const { text, state } = await runConsolidationStep({
+			db: env.PLATFORM_DB,
+			...scope,
+			anthropicKey,
+			openRouterKey
+		});
+		return { text, wire: { consolidation: state && consolidationWire(state) } };
+	};
+}
+
 function assetKeyFor(env: Env): Promise<CryptoKey> | undefined {
 	const secret = deploymentSecret(env);
 	if (!secret) return undefined;
@@ -296,6 +329,7 @@ interface TenantContext {
 	// Every gate reading this treats null as "not a member", never as "no gate".
 	orgRole: Role | null;
 	policySecret?: string;
+	consolidate?: ConsolidationStep;
 	// The resolved org's id + the acting user's id. The member-management tools need
 	// them to scope the roster and enforce self-guards.
 	orgId?: string;
@@ -675,6 +709,14 @@ class McpSession {
 			orgId: target.org_id,
 			actorUserId: userId,
 			policySecret: deploymentSecret(env),
+			consolidate: consolidationFor(env, {
+				brainId: target.brain_id,
+				orgId: target.org_id,
+				actorUserId: userId,
+				config,
+				store,
+				repo: repoArgs
+			}),
 			config,
 			author,
 			db: env.PLATFORM_DB,

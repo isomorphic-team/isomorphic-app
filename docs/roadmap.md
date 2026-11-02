@@ -65,8 +65,9 @@ Order:
    - Built: the open-core split. [`design/open-source-boundary.md`](design/open-source-boundary.md)
      is revised, `ee/` is under the Isomorphic Enterprise License, and per-org entitlements
      (`org_entitlements`, `hasFeature`, `pnpm entitle`) gate its features.
-   - Built: the model gateway (`ee/review/gateway.ts`): zero-data-retention routing on every
-     request, entitled orgs only, a monthly spend cap per org. Nothing calls it yet.
+   - Built: the model gateway (`ee/review/gateway.ts`): Claude Haiku first and Luna as the
+     fallback, zero-data-retention routing on every OpenRouter request, `enterprise`-entitled
+     orgs only, a monthly spend cap per org.
    - Built: the unified findings queue in D1 (`src/lib/review-queue.ts`), extending the
      `validate` / `resolve` pattern with a finding `kind` and per-kind visibility. Policy findings
      are visible to the author and admins only. Consolidation findings are visible to editors.
@@ -77,7 +78,10 @@ Order:
 4. **Push webhook.** The after-the-fact scan for the guard, and the incremental trigger for
    consolidation. Can run alongside step 3.
 5. **Consolidation.** Approve/reject only at first, with automatic small fixes enabled per brain
-   by an admin. Its own edits go through the guard like any other write.
+   by an admin. Its own edits go through the guard like any other write. Built: the
+   admin-run pass (`configure_brain` with `consolidate: true`, `ee/review/consolidation.ts`),
+   with a Jev screen and Haiku triage, writing `conflict` findings with proposals and no auto
+   tier.
 6. **When a deployment needs it:** an entitlement writer driven by billing (outside this
    repository), and signed offline license keys for self-hosters.
 

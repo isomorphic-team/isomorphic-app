@@ -1,6 +1,6 @@
 ---
 paths:
-  - "src/lib/{brain-index,brain-repo,brain-config,brain-policy,links,wiki}.ts"
+  - "src/lib/{brain-index,brain-repo,brain-config,brain-policy,brain-pass,links,wiki}.ts"
   - "src/local/**"
   - "src/db/index-schema.sql"
   - "scripts/test-{index,links}.ts"
@@ -76,5 +76,7 @@ a derived index in D1 (`src/lib/brain-index.ts`, schema in `migrations/`).
   `indexed_commit_sha` alone if unfinished. An over-long pass does not degrade to slow, it
   degrades to a brain that can never be read (it hits the host's tool timeout and restarts
   forever). **Any new whole-brain pass: budget, cursor, advance the marker only when done.**
+  Its run state goes in `brain_passes` through `src/lib/brain-pass.ts` (`readPass`,
+  `continuePass`, `savePass`), one row per brain per kind; don't add a table per pass.
 - The local runtime's `getHead` reports a digest of the working tree; `listCommits` reports
   git shas.

@@ -1,6 +1,6 @@
 # Design: consistency checks
 
-Status: **proposed** (2026-10-13). C1, C2 and C3 are built; the rest is not.
+Status: **proposed** (2026-10-13). C1, C2 and C3 are built. C4 and C4a are built as a prototype: a Jev screen, then Haiku triage (2026-11-02); the rest is not.
 
 This is the consolidation half of the roadmap's "brain review" (steps 2 and 5).
 
@@ -135,7 +135,7 @@ These are pure and stay in the AGPL core. They keep invariant 1 of the consolida
 
 ### Part 2: model-powered consolidation in `ee/`
 
-Contradictions need a model. Since 2026-09-30, model use has a home: `ee/`, behind the `review-models` entitlement, with every request through `ee/review/gateway.ts`.
+Contradictions need a model. Since 2026-09-30, model use has a home: `ee/`, behind the `enterprise` entitlement, with every request through `ee/review/gateway.ts`.
 
 - **Zero retention:** `ZDR_PROVIDER` routes only to zero-data-retention endpoints.
 - **Entitled orgs only:** a brain whose org has no entitlement runs the core unchanged.
@@ -266,6 +266,28 @@ Roadmap step 2 extends the `validate` / `resolve` pattern into one findings queu
 | C5   | Claim clustering across pairs                                                                              | `ee/`                    | pipeline, tests with a stubbed gateway                                        |
 | C6   | Runs: webhook-triggered incremental pass, admin full pass, D1 cursor                                       | core trigger, `ee/` work | webhook (roadmap step 4), tests                                               |
 | C7   | Consolidation section of the Review screen, approve and dismiss                                            | core                     | `ReviewView.tsx`, browser tests                                               |
+
+**How the C4 prototype differs from the plan above** (2026-11-02):
+
+- **Detect is a Jev screen, triage is one Haiku request.** With an OpenRouter key, Jev's
+  `conflict` score gates each pair at 0.3 on the question the evals measured (pages over
+  40,000 characters skip the screen rather than being cut). Without one, every pair goes to
+  Haiku. Each surviving claim goes back to Jev with the evals' "would a reader be misled?"
+  question, dropped under 0.4; Haiku writes no score of its own, since a model's confidence
+  in its own claims carried no signal in the evals. The triage prompt carries the evals'
+  authority rules (primary records outrank derived pages, dated records are never
+  rewritten, a generated page goes to a person naming its generator). Verify is mechanical:
+  a patch must match once and leave the page's tables, lists and fences intact. A patch that
+  passes goes to review; everything else, proposed notes included, goes to a person. Nothing
+  decides a write unattended.
+- **No zero-retention declaration.** Anthropic requests get the operator's Anthropic
+  organization's own retention. The gateway falls back to Luna on a refusal, a rate limit,
+  exhausted credits or an overload.
+- **Candidates** are each page's three best search hits on its title, plus the near-duplicate
+  and same-identifier tensions. A pair over `MAX_PAIR_CHARS` is skipped and counted, never cut.
+- **The trigger** is `configure_brain` with `consolidate: true`, admin only, a budgeted step
+  per call. `pnpm consolidate:report <folder> --models` runs the same pass over a local copy.
+- **Not yet:** clustering (C5), the push trigger (C6) and the Review screen section (C7).
 
 C1 and C2 stand alone and ship first. C3 is shared with the guard's own findings and belongs to roadmap step 2. C4 and C5 are the model work. C7 is where the value lands for people, because the review tier carries most of the work.
 

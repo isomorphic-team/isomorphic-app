@@ -118,7 +118,7 @@ import {
 	nonPageKind,
 	resolveMoveTarget
 } from '../lib/write-target.ts';
-import type { SearchWire } from '../lib/tool-payloads.ts';
+import type { ConsolidationStep, SearchWire } from '../lib/tool-payloads.ts';
 import { toolAnnotations } from '../lib/tool-annotations.ts';
 
 // Frontmatter keys are free-form and brain-owned, exactly like folders and
@@ -176,6 +176,9 @@ export interface BrainContext {
 	actorUserId?: string;
 	// Keys policy dismissals: the secret this auth mode already requires.
 	policySecret?: string;
+	// One step of the model consolidation pass, when the Worker wires the enterprise
+	// feature in. Absent on a deployment with no model key.
+	consolidate?: ConsolidationStep;
 	// The brain's content-shape config — which paths are editable content,
 	// immutable source, or the tool-maintained changelog. Read from .isomorphic.json
 	// (or defaults). Every write-policy decision below reads from it.

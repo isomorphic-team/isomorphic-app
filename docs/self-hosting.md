@@ -397,6 +397,23 @@ issue text and requires an explicit confirmation before posting, publishes nothi
 account, and records the reporter privately in D1 (`feedback_reports`) keyed by the opaque
 report id printed in the issue. A per-user cap of ten reports a day bounds abuse.
 
+**Model consolidation (enterprise, optional).** `configure_brain` with `consolidate: true`
+has a model compare related pages and queue the contradictions it finds as findings `validate`
+lists. It is an `ee/` feature: it runs only for an organization with the `enterprise`
+entitlement (`pnpm entitle --org <org_id> --feature enterprise --cap 5`), within that
+entitlement's monthly spend cap, and only on a deployment holding a model key:
+
+```sh
+pnpm exec wrangler secret put ANTHROPIC_API_KEY    # Claude Haiku, tried first
+pnpm exec wrangler secret put OPENROUTER_API_KEY   # optional: the Jev screen, and Luna as fallback
+```
+
+Requests to Anthropic get your Anthropic organization's own data retention, which is standard
+unless you have arranged otherwise with Anthropic; requests through OpenRouter route only to
+zero-data-retention endpoints. A page holding a credential or card number is never sent. To
+see what a pass would find before deploying anything, run it over a local copy:
+`pnpm consolidate:report <folder> --models --cap 1`.
+
 **Backups.** Your knowledge is in a git repository, so it is already backed up everywhere it
 is cloned. The D1 database holds only derived data plus org and membership rows. Losing the
 index costs a rebuild; losing the org tables costs re-inviting people. Neither loses content.

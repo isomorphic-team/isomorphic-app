@@ -4,9 +4,9 @@
 // Default is a DRY RUN that prints the SQL; nothing touches D1 until --apply.
 //
 // Usage:
-//   pnpm entitle --org <org_id> --feature review-models [--source plan|trial|manual]
+//   pnpm entitle --org <org_id> --feature enterprise [--source plan|trial|manual]
 //     [--expires 2027-01-01] [--cap 50] [--note "..."] [--apply local|remote|both]
-//   pnpm entitle --org <org_id> --feature review-models --revoke [--apply ...]
+//   pnpm entitle --org <org_id> --feature enterprise --revoke [--apply ...]
 
 import { spawnSync } from 'node:child_process';
 import { entitlementSql, type EntitlementSource, type Feature } from '../ee/entitlements.ts';
@@ -22,7 +22,7 @@ function fail(message: string): never {
 }
 
 const orgId = arg('org') ?? fail('--org <org_id> is required.');
-const feature = (arg('feature') ?? fail('--feature is required (e.g. review-models).')) as Feature;
+const feature = (arg('feature') ?? fail('--feature is required (e.g. enterprise).')) as Feature;
 const apply = arg('apply');
 if (apply && !['local', 'remote', 'both'].includes(apply))
 	fail('--apply is local, remote or both.');
