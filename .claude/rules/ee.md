@@ -29,8 +29,9 @@ Licensed under `ee/LICENSE`, not the AGPL. Placement rule and history:
   `DEFAULT_MONTHLY_CAP_USD`.
 - **The consolidation pass** (`ee/review/consolidation.ts`, run state in `brain_passes` through `src/lib/brain-pass.ts`) is the
   Worker's `consolidate` on the brain context, wired only when a model key is set, and run by
-  `configure_brain` with `consolidate: true`. Each step stops starting batches after `STEP_TIME_MS` (the first
-  batch always runs) and resumes from a cursor that never passes an unchecked pair; a gateway refusal stops it as `stopped`, and asking again resumes. A page with a
+  `review_brain` with `check: "contradictions"`. Each step stops starting batches after
+  `STEP_TIME_MS` (the first batch always runs) and resumes from a cursor that never passes an
+  unchecked pair; a gateway refusal stops it as `stopped`, and asking again resumes. A page with a
   high-severity detection never reaches the gateway. With an OpenRouter key, Jev screens each
   pair first at a 0.3 conflict score (`passesScreen`); a screen error lets the pair through. Claims are kept only when their quotes and
   values are on the pages word for word and, with Jev, that it scores 0.4 or more on whether a

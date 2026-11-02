@@ -285,12 +285,14 @@ Roadmap step 2 extends the `validate` / `resolve` pattern into one findings queu
   exhausted credits or an overload.
 - **Candidates** are each page's three best search hits on its title, plus the near-duplicate
   and same-identifier tensions. A pair over `MAX_PAIR_CHARS` is skipped and counted, never cut.
-- **The trigger** is `configure_brain` with `consolidate: true`, admin only, a budgeted step
-  per call. `pnpm consolidate:report <folder> --models` runs the same pass over a local copy.
+- **The trigger** is `review_brain` with `check: "contradictions"`, admin only, a budgeted
+  step per call. `validate` lists what it found and, for admins, when it last ran.
+  `pnpm consolidate:report <folder> --models` runs the same pass over a local copy.
 - **Clusters (C5)** come from a fact label triage writes per claim, reusing a label the
   brain's queue already holds when it is the same fact (`known_facts` in the prompt). `validate`
   shows findings sharing a label as one item, and `resolve` takes `cluster:<label>` to answer
-  every member, one ledger entry each. Label stability across runs is not yet measured.
+  every member, one ledger entry each. On a 65-page private brain, one run grouped 20
+  findings into 12 items; two runs with no shared queue matched about half their labels.
 - **Not yet:** the push trigger (C6) and the Review screen section (C7).
 
 C1 and C2 stand alone and ship first. C3 is shared with the guard's own findings and belongs to roadmap step 2. C4 and C5 are the model work. C7 is where the value lands for people, because the review tier carries most of the work.

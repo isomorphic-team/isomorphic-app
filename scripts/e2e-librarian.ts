@@ -43,6 +43,7 @@ import { registerImportTools } from '../src/tools/importer.ts';
 import { registerLibrarianTools } from '../src/tools/librarian.ts';
 import { registerBrainTools } from '../src/tools/brains.ts';
 import type { ConsolidationStep } from '../src/lib/tool-payloads.ts';
+import { savePass } from '../src/lib/brain-pass.ts';
 import {
 	listAccessibleBrains,
 	listAccessibleOrgs,
@@ -1886,22 +1887,44 @@ try {
 		check('the brain under test has a config to protect', configBefore.includes('"wiki/"'));
 		let before = await commitCount();
 
-		br = await callBrain('configure_brain', { baseline_scan: true, name: 'Nope' });
-		check('baseline_scan refuses to run alongside a setting', br.isError, br.text);
-		br = await callBrain('configure_brain', { baseline_scan: true });
-		check(
-			'baseline_scan runs through the real store and reports a finished pass',
-			!br.isError && /Baseline scan finished: [1-9]/.test(br.text),
-			br.text
-		);
-		check('baseline_scan commits nothing', (await commitCount()) === before);
+		// The review passes left configure_brain; an old call gets a pointer and changes
+		// nothing, rather than being read as a layout write.
+		for (const [arg, pass] of [
+			['baseline_scan', 'sensitive-data'],
+			['consolidate', 'contradictions']
+		] as const) {
+			br = await callBrain('configure_brain', { [arg]: true });
+			check(
+				`configure_brain points an old ${arg} call at review_brain and changes nothing`,
+				br.isError &&
+					br.text.includes(`review_brain with check "${pass}"`) &&
+					(await fileText('.isomorphic.json')) === configBefore &&
+					(await commitCount()) === before,
+				br.text
+			);
+		}
 
-		br = await callBrain('configure_brain', { consolidate: true });
+		let reviewed = await call('review_brain', { check: 'sensitive-data' });
 		check(
-			'consolidate on a deployment without a model key says the feature is not set up',
-			br.isError && br.text.includes('enterprise feature'),
-			br.text
+			'review_brain runs the sensitive-data scan through the real store to a finished pass',
+			!reviewed.isError && /Baseline scan finished: [1-9]/.test(reviewed.text),
+			reviewed.text
 		);
+		check('the sensitive-data scan commits nothing', (await commitCount()) === before);
+
+		reviewed = await call('review_brain', { check: 'contradictions' });
+		check(
+			'contradictions on a deployment without a model key says it is not set up',
+			reviewed.isError && reviewed.text.includes('enterprise feature'),
+			reviewed.text
+		);
+		let checked = await call('validate', {});
+		check(
+			'validate says nothing about a contradictions check that cannot run here',
+			!checked.text.includes('Contradiction check'),
+			checked.text
+		);
+
 		let ran = 0;
 		consolidate = async () => {
 			ran++;
@@ -1919,16 +1942,54 @@ try {
 				}
 			};
 		};
-		br = await callBrain('configure_brain', { consolidate: true, baseline_scan: true });
-		check('consolidate refuses to run alongside anything else', br.isError && ran === 0, br.text);
-		br = await callBrain('configure_brain', { consolidate: true });
+		checked = await call('validate', {});
 		check(
-			'consolidate runs the wired pass once and returns its reply',
-			!br.isError && ran === 1 && br.text === 'Consolidation finished: stub.',
-			br.text
+			'validate tells an admin the contradictions check has not run, and how to run it',
+			checked.text.includes('Contradiction check: not run on this brain yet') &&
+				checked.text.includes('review_brain with check "contradictions"'),
+			checked.text
 		);
+		reviewed = await call('review_brain', { check: 'contradictions' });
+		check(
+			'review_brain runs the wired contradictions pass once and returns its reply',
+			!reviewed.isError && ran === 1 && reviewed.text === 'Consolidation finished: stub.',
+			reviewed.text
+		);
+		const finished = Date.UTC(2026, 10, 2);
+		await savePass(
+			db,
+			{ brainId: brain.brainId, kind: 'consolidation' },
+			{
+				runId: 'e2e-run',
+				status: 'done',
+				cursor: null,
+				counters: { pairsChecked: 7, findings: 2 },
+				stoppedReason: null,
+				startedAt: finished,
+				finishedAt: finished
+			},
+			finished
+		);
+		checked = await call('validate', {});
+		check(
+			'after a pass, validate says when it ran and over how much',
+			checked.text.includes(
+				'Contradiction check: last finished 2026-11-02 over 7 page pair(s), 2 finding(s) raised.'
+			),
+			checked.text
+		);
+		callerRole = 'editor';
+		checked = await call('validate', {});
+		check(
+			'an editor gets the findings but not the contradictions coverage line',
+			!checked.text.includes('Contradiction check'),
+			checked.text
+		);
+		// Who may run a pass is pinned by pnpm test:scope: this harness's context does not
+		// enforce `requires`.
+		callerRole = 'owner';
 		consolidate = undefined;
-		check('consolidate commits nothing', (await commitCount()) === before);
+		check('no review pass commits anything', (await commitCount()) === before);
 		const validated = await call('validate', {});
 		check(
 			'validate then tells an admin the existing content was scanned',

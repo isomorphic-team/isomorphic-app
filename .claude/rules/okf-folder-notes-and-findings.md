@@ -1,6 +1,6 @@
 ---
 paths:
-  - "src/lib/{advisories,findings,consolidate,probe,wiki,view-directives,server-instructions}.ts"
+  - "src/lib/{advisories,findings,consolidate,probe,wiki,view-directives,server-instructions,review-checks}.ts"
   - "src/tools/{librarian,importer}.ts"
   - "brain-template/**"
   - "app/core/util.ts"
@@ -90,6 +90,12 @@ are in the list, with keys.
   plus a fingerprint of the disputed values (`conflictKey`), never the cluster. A cluster is a
   fact label for display (`clusterFindings` groups two or more in `validate`); `cluster:<label>`
   in `resolve` expands to one decision per member (`expandClusterDecisions`).
+- **`review_brain` runs the deep passes; `validate` only reports.** Separate tools because
+  hosts approve per tool and `validate` is a free read they run unasked, while a pass takes
+  minutes and, for `contradictions`, model credits. What may run and `validate`'s line about
+  the contradictions pass (admins only, where it can run) are `src/lib/review-checks.ts`.
+  `configure_brain` still accepts the old `baseline_scan` / `consolidate` arguments only to
+  answer with a pointer: dropped from the schema, they would make the call a layout write.
 - `resolve` actions: `dismiss` / `undismiss` for structure, consolidation and policy findings
   (policy dismissals go to D1, see `write-path.md`);
   `delete` / `alias` / `suppress` / `recreate` for import findings.
