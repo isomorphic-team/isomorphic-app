@@ -298,13 +298,17 @@ export interface ConsolidationStepWire {
 		pairsChecked: number;
 		pairsSkipped: number;
 		pairsScreened: number;
+		pairsUnchanged: number;
 		findings: number;
 		costUsd: number;
 	} | null;
 }
 
 /** One step of the consolidation pass, as the Worker wires it into a brain's context. */
-export type ConsolidationStep = () => Promise<{ text: string; wire: ConsolidationStepWire }>;
+export type ConsolidationStep = (opts?: {
+	// Start a new pass that checks every pair, ignoring what earlier passes checked.
+	fresh?: boolean;
+}) => Promise<{ text: string; wire: ConsolidationStepWire }>;
 
 export interface GraphViewWire extends InBrain {
 	view: 'graph';

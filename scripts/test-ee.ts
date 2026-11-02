@@ -548,6 +548,11 @@ console.log('\nconsolidation: candidates, pre-scan, claim filter, verify (6)');
 	);
 	check('the budget splits the pass into steps', steps > 1);
 	check('a fresh plan with a big budget is one step', planStep(pages, new Map(), null, 100).done);
+	check(
+		'pairs that cost no check ride along without using the budget',
+		planStep(pages, new Map([['a.md', ['d.md']]]), null, 1, () => false).done &&
+			!planStep(pages, new Map([['a.md', ['d.md']]]), null, 1).done
+	);
 
 	check('a page with a private key is not sendable', !sendable('x\n-----BEGIN PRIVATE KEY-----\n'));
 	check('a plain page is sendable', sendable('The day rate is $1,200.'));
@@ -823,7 +828,10 @@ console.log('\nconsolidation: a pass over an indexed brain (7)');
 
 		prompts.length = 0;
 		failOn = 0;
-		const stopped = await advanceConsolidation({ ...target, newRunId: () => 'run-2' }, NOW);
+		const stopped = await advanceConsolidation(
+			{ ...target, newRunId: () => 'run-2', fresh: true },
+			NOW
+		);
 		check(
 			'a gateway refusal stops the pass and says why',
 			stopped.status === 'stopped' &&
@@ -861,14 +869,17 @@ console.log('\nconsolidation: a pass over an indexed brain (7)');
 			}
 		]);
 		prompts.length = 0;
-		await advanceConsolidation({ ...target, newRunId: () => 'run-labels' }, NOW);
+		await advanceConsolidation({ ...target, newRunId: () => 'run-labels', fresh: true }, NOW);
 		check(
 			'a pass hands triage the fact labels already in the queue',
 			prompts.length > 0 && prompts.every((p) => p.includes('<known_facts>\npod size'))
 		);
 
 		await resetIndex(db, brain.brainId);
-		const fresh = await advanceConsolidation({ ...target, newRunId: () => 'run-4' }, NOW);
+		const fresh = await advanceConsolidation(
+			{ ...target, newRunId: () => 'run-4', fresh: true },
+			NOW
+		);
 		check(
 			'the pass brings the index up to the branch head itself',
 			fresh.status === 'done' && fresh.pairsChecked > 0
@@ -1019,7 +1030,10 @@ console.log('\nconsolidation: the Jev screen (8)');
 
 		triaged.length = 0;
 		screenFails = 'error';
-		const failed = await advanceConsolidation({ ...target, newRunId: () => 'screen-2' }, NOW);
+		const failed = await advanceConsolidation(
+			{ ...target, newRunId: () => 'screen-2', fresh: true },
+			NOW
+		);
 		check(
 			'a screen that errors lets every pair through to triage',
 			failed.status === 'done' &&
@@ -1029,7 +1043,12 @@ console.log('\nconsolidation: the Jev screen (8)');
 		screenFails = 'none';
 		const screenedBefore = screened.length;
 		const unscreened = await advanceConsolidation(
-			{ ...target, gateway: { ...gateway, decide: undefined }, newRunId: () => 'screen-2b' },
+			{
+				...target,
+				gateway: { ...gateway, decide: undefined },
+				newRunId: () => 'screen-2b',
+				fresh: true
+			},
 			NOW
 		);
 		check(
@@ -1039,7 +1058,10 @@ console.log('\nconsolidation: the Jev screen (8)');
 				screened.length === screenedBefore
 		);
 		screenFails = 'refused';
-		const refused = await advanceConsolidation({ ...target, newRunId: () => 'screen-3' }, NOW);
+		const refused = await advanceConsolidation(
+			{ ...target, newRunId: () => 'screen-3', fresh: true },
+			NOW
+		);
 		check(
 			'a refused gateway at the screen stops the pass',
 			refused.status === 'stopped' && refused.stoppedReason === 'over-cap'
@@ -1100,7 +1122,7 @@ console.log('\nconsolidation: the Jev screen (8)');
 		};
 		await db.prepare('DELETE FROM review_findings').run();
 		const low = await advanceConsolidation(
-			{ ...target, gateway: scoring, newRunId: () => 'claim-1' },
+			{ ...target, gateway: scoring, newRunId: () => 'claim-1', fresh: true },
 			NOW
 		);
 		check(
@@ -1115,7 +1137,7 @@ console.log('\nconsolidation: the Jev screen (8)');
 		);
 		claimScore = 0.9;
 		const high = await advanceConsolidation(
-			{ ...target, gateway: scoring, newRunId: () => 'claim-2' },
+			{ ...target, gateway: scoring, newRunId: () => 'claim-2', fresh: true },
 			NOW
 		);
 		const kept = await readFindings(db, brain.brainId);
@@ -1132,7 +1154,12 @@ console.log('\nconsolidation: the Jev screen (8)');
 		claimStates.length = 0;
 		await db.prepare('DELETE FROM review_findings').run();
 		const noJev = await advanceConsolidation(
-			{ ...target, gateway: { ...scoring, decide: undefined }, newRunId: () => 'claim-3' },
+			{
+				...target,
+				gateway: { ...scoring, decide: undefined },
+				newRunId: () => 'claim-3',
+				fresh: true
+			},
 			NOW
 		);
 		const unscoredRows = await readFindings(db, brain.brainId);
@@ -1191,7 +1218,10 @@ console.log('\nconsolidation: each step is bounded by time (10)');
 		prompts.length = 0;
 		let tick = 0;
 		const slow = () => (tick++ === 0 ? 0 : STEP_TIME_MS);
-		const first = await advanceConsolidation({ ...base, newRunId: () => 'slow', clock: slow }, NOW);
+		const first = await advanceConsolidation(
+			{ ...base, newRunId: () => 'slow', fresh: true, clock: slow },
+			NOW
+		);
 		check(
 			'a step stops starting batches once the time is up, and the pass keeps running',
 			first.status === 'running' && first.pairsChecked === 6 && prompts.length === 6
@@ -1214,6 +1244,141 @@ console.log('\nconsolidation: each step is bounded by time (10)');
 		check(
 			"a pair is repeated only where the cut fell inside one page's pairs",
 			prompts.length - all.size < 6 * (steps - 1)
+		);
+	} finally {
+		await brain.cleanup();
+		await rm(src, { recursive: true, force: true });
+	}
+}
+
+console.log('\nconsolidation: a pass remembers what it checked (11)');
+{
+	const pairOf = (prompt: string) =>
+		[...prompt.matchAll(/path="([^"]+)"/g)]
+			.map((m) => m[1])
+			.sort()
+			.join('|');
+	const src = await mkdtemp(join(tmpdir(), 'ee-memory-'));
+	for (let n = 1; n <= 6; n++) {
+		await seed(
+			src,
+			`notes/acme-${n}.md`,
+			`# Acme topic ${n}\n\nAcme topic ${n} notes about Acme.\n`
+		);
+	}
+	const brain = await openFolderAsBrain(src, 'wiki');
+	const db = brain.db as unknown as D1Database;
+	try {
+		const prompts: string[] = [];
+		let claims: unknown[] = [];
+		const gateway: Pick<Gateway, 'chatJson'> = {
+			async chatJson<T>(_system: string, user: string) {
+				prompts.push(user);
+				return { value: { claims } as T, model: HAIKU_MODEL, costUsd: 0.001 };
+			}
+		};
+		const base = {
+			db,
+			brainId: brain.brainId,
+			orgId: 'o1',
+			config: brain.config,
+			store: brain.store,
+			repo: brain.repoArgs,
+			gateway
+		};
+
+		const first = await advanceConsolidation({ ...base, newRunId: () => 'm1' }, NOW);
+		const remembered = await db
+			.prepare("SELECT COUNT(*) AS n FROM brain_pass_items WHERE kind = 'consolidation'")
+			.first<{ n: number }>();
+		check(
+			'a first pass checks every pair and remembers each one',
+			first.status === 'done' &&
+				first.pairsChecked > 0 &&
+				first.pairsUnchanged === 0 &&
+				remembered?.n === first.pairsChecked
+		);
+		const all = first.pairsChecked;
+		const firstPairs = new Set(prompts.map(pairOf));
+
+		prompts.length = 0;
+		const again = await advanceConsolidation({ ...base, newRunId: () => 'm2' }, NOW);
+		check(
+			'a pass over an unchanged brain checks nothing, spends nothing, and finishes in one call',
+			again.status === 'done' &&
+				again.pairsChecked === 0 &&
+				again.pairsUnchanged === all &&
+				again.costUsd === 0 &&
+				prompts.length === 0
+		);
+		check(
+			'its reply says the unchanged pairs were not checked again',
+			consolidationStepText(again).includes(`${all} unchanged since their last check`)
+		);
+
+		await brain.store.commitFiles(brain.repoArgs, {
+			message: 'Edit one page',
+			writes: [
+				{
+					path: 'wiki/notes/acme-3.md',
+					content: '# Acme topic 3\n\nAcme topic 3 notes about Acme.\n\n'
+				}
+			]
+		});
+		prompts.length = 0;
+		const edited = await advanceConsolidation({ ...base, newRunId: () => 'm3' }, NOW);
+		const withEdited = [...firstPairs].filter((x) => x.split('|').includes('wiki/notes/acme-3.md'));
+		check(
+			'after one page changes, exactly the pairs with that page are checked again, on either side',
+			edited.status === 'done' &&
+				withEdited.length > 0 &&
+				JSON.stringify(prompts.map(pairOf).sort()) === JSON.stringify(withEdited.sort()) &&
+				edited.pairsUnchanged === all - withEdited.length,
+			JSON.stringify({ withEdited, rechecked: prompts.map(pairOf) })
+		);
+		prompts.length = 0;
+		const forced = await advanceConsolidation({ ...base, newRunId: () => 'm4', fresh: true }, NOW);
+		check(
+			'fresh checks every pair again, ignoring what was remembered',
+			forced.status === 'done' &&
+				forced.fresh &&
+				forced.pairsChecked === all &&
+				forced.pairsUnchanged === 0 &&
+				prompts.length === all
+		);
+		prompts.length = 0;
+		const after = await advanceConsolidation({ ...base, newRunId: () => 'm5' }, NOW);
+		check(
+			'a pass after a fresh one is back to checking only what changed',
+			after.pairsChecked === 0 && after.pairsUnchanged === all && !after.fresh
+		);
+
+		let tick = 0;
+		const slow = () => (tick++ === 0 ? 0 : STEP_TIME_MS);
+		const partial = await advanceConsolidation(
+			{ ...base, newRunId: () => 'm-partial', fresh: true, clock: slow },
+			NOW
+		);
+		tick = 0;
+		const restarted = await advanceConsolidation(
+			{ ...base, newRunId: () => 'm-restart', fresh: true },
+			NOW
+		);
+		check(
+			'fresh replaces a pass still in progress rather than resuming it',
+			partial.status === 'running' &&
+				restarted.runId === 'm-restart' &&
+				restarted.pairsChecked === all
+		);
+
+		await db
+			.prepare("UPDATE brain_pass_items SET fingerprint = 'old-version:' || fingerprint")
+			.run();
+		prompts.length = 0;
+		const newVersion = await advanceConsolidation({ ...base, newRunId: () => 'm6' }, NOW);
+		check(
+			'a pair checked under a different prompt, gate or model is checked again',
+			newVersion.pairsChecked === all && prompts.length === all
 		);
 	} finally {
 		await brain.cleanup();

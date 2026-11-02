@@ -12,7 +12,10 @@
 // The entitlement it needs is granted in its own throwaway database, so nothing deployed
 // is touched and nothing is written to the folder.
 //
-//   pnpm consolidate:report <folder> --models [--cap 0.5]
+//   pnpm consolidate:report <folder> --models [--cap 0.5] [--runs 2]
+//
+// --runs repeats the pass over the same database, so later runs show what the memory of
+// checked pairs saves: with nothing edited between runs, they check nothing.
 import type { D1Database } from '@cloudflare/workers-types';
 import { FEATURES, entitlementSql } from '../ee/entitlements.ts';
 import { runConsolidationStep, type Proposal } from '../ee/review/consolidation.ts';
@@ -28,12 +31,15 @@ const withModels = args.includes('--models');
 const rootFlag = args.indexOf('--root');
 const rootArg = rootFlag === -1 ? null : args[rootFlag + 1];
 const capFlag = args.indexOf('--cap');
+const runsFlag = args.indexOf('--runs');
+const runs = runsFlag === -1 ? 1 : Number(args[runsFlag + 1]);
 const cap = capFlag === -1 ? 1 : Number(args[capFlag + 1]);
 const positional = args.filter(
 	(a, i) =>
 		!a.startsWith('--') &&
 		!(rootFlag !== -1 && i === rootFlag + 1) &&
-		!(capFlag !== -1 && i === capFlag + 1)
+		!(capFlag !== -1 && i === capFlag + 1) &&
+		!(runsFlag !== -1 && i === runsFlag + 1)
 );
 if (!Number.isFinite(cap) || cap <= 0) {
 	console.error('--cap takes a positive number of dollars.');
@@ -122,22 +128,24 @@ async function modelPass() {
 			})
 		)
 		.run();
-	console.log(`\nModel consolidation pass, capped at $${cap}:`);
-	for (let step = 0; step < 500; step++) {
-		const { text, state } = await runConsolidationStep({
-			db,
-			brainId: brain.brainId,
-			orgId,
-			config: brain.config,
-			store: brain.store,
-			repo: brain.repoArgs,
-			anthropicKey,
-			openRouterKey
-		});
-		console.log(`  ${text}`);
-		if (state?.status !== 'running') {
-			if (state) console.log(`  Served by: ${JSON.stringify(state.served)}`);
-			break;
+	for (let run = 1; run <= runs; run++) {
+		console.log(`\nModel consolidation pass ${run} of ${runs}, capped at $${cap}:`);
+		for (let step = 0; step < 500; step++) {
+			const { text, state } = await runConsolidationStep({
+				db,
+				brainId: brain.brainId,
+				orgId,
+				config: brain.config,
+				store: brain.store,
+				repo: brain.repoArgs,
+				anthropicKey,
+				openRouterKey
+			});
+			console.log(`  ${text}`);
+			if (state?.status !== 'running') {
+				if (state) console.log(`  Served by: ${JSON.stringify(state.served)}`);
+				break;
+			}
 		}
 	}
 	const conflicts = (await readFindings(db, brain.brainId)).filter((f) => f.kind === 'conflict');

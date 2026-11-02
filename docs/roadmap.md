@@ -87,8 +87,9 @@ Order:
    admin-run pass (`review_brain` with `check: "contradictions"`, `ee/review/consolidation.ts`),
    with a Jev screen and Haiku triage, writing `conflict` findings with proposals and no auto
    tier. Each step stops starting new pairs after 15 seconds, so a call ends well inside a
-   host's tool timeout. Built: claim clusters (C5), from a fact label per claim. Left: the Review screen section
-   (C7).
+   host's tool timeout. Built: claim clusters (C5), from a fact label per claim, and a memory of each
+   checked pair, so a later pass checks only pairs whose pages changed. Left: the Review
+   screen section (C7).
 6. **When a deployment needs it:** an entitlement writer driven by billing (outside this
    repository), and signed offline license keys for self-hosters.
 
