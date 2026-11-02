@@ -2,7 +2,6 @@
 paths:
   - "ee/**"
   - "scripts/{test-ee,entitle,consolidate-report}.ts"
-  - "migrations/0022_consolidation_runs.sql"
   - "migrations/0016_org_entitlements.sql"
 ---
 
@@ -28,7 +27,7 @@ Licensed under `ee/LICENSE`, not the AGPL. Placement rule and history:
   month, counted from the `usage.cost` OpenRouter reports or from Haiku's tokens at list price
   (`haikuCostUsd`), credits included. An entitlement's `monthly_cap_usd` beats
   `DEFAULT_MONTHLY_CAP_USD`.
-- **The consolidation pass** (`ee/review/consolidation.ts`, D1 `consolidation_runs`) is the
+- **The consolidation pass** (`ee/review/consolidation.ts`, run state in `brain_passes` through `src/lib/brain-pass.ts`) is the
   Worker's `consolidate` on the brain context, wired only when a model key is set, and run by
   `configure_brain` with `consolidate: true`. Budgeted per call and resumable from a
   cursor; a gateway refusal stops it as `stopped`, and asking again resumes. A page with a

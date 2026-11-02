@@ -62,6 +62,7 @@ import {
 } from '../ee/review/consolidation.ts';
 import { conflictKey, readFindings } from '../src/lib/review-queue.ts';
 import { resetIndex } from '../src/lib/brain-index.ts';
+import { continuePass, readPass, savePass, savePassStatement } from '../src/lib/brain-pass.ts';
 import { SNAPSHOT_BEGIN, SNAPSHOT_END } from '../src/lib/view-directives.ts';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -1106,6 +1107,101 @@ console.log('\nconsolidation: the Jev screen (8)');
 		await brain.cleanup();
 		await rm(src, { recursive: true, force: true });
 	}
+}
+
+console.log('\nbrain passes: the shared run state (9)');
+{
+	const db = localD1(':memory:').db as unknown as D1Database;
+	const defaults = { seen: 0, extra: 'none' };
+	const scope = { brainId: 'b1', kind: 'probe', orgId: 'o1', actorUserId: 'u1' };
+	const row = () =>
+		db
+			.prepare(
+				'SELECT started_by, started_at, updated_at, finished_at, run_id FROM brain_passes WHERE brain_id = ?1 AND kind = ?2'
+			)
+			.bind('b1', 'probe')
+			.first<{
+				started_by: string;
+				started_at: number;
+				updated_at: number;
+				finished_at: number | null;
+				run_id: string;
+			}>();
+
+	const fresh = continuePass(null, defaults, () => 'r1');
+	check(
+		'no pass yet: a new running pass at the start',
+		fresh.runId === 'r1' &&
+			fresh.status === 'running' &&
+			fresh.cursor === null &&
+			fresh.counters.seen === 0
+	);
+	await savePass(db, scope, { ...fresh, cursor: 'a.md', counters: { seen: 3, extra: 'x' } }, NOW);
+	const read = await readPass(db, 'b1', 'probe', defaults);
+	check(
+		'a saved step reads back',
+		read?.runId === 'r1' &&
+			read.cursor === 'a.md' &&
+			read.counters.seen === 3 &&
+			read.status === 'running'
+	);
+	if (!read) throw new Error('expected a pass');
+	await savePass(
+		db,
+		{ ...scope, actorUserId: 'u2' },
+		{ ...read, status: 'stopped', stoppedReason: 'over-cap' },
+		NOW + 1000
+	);
+	const resumed = continuePass(await readPass(db, 'b1', 'probe', defaults), defaults, () => 'r2');
+	check(
+		'a stopped pass is resumed, not replaced',
+		resumed.runId === 'r1' &&
+			resumed.status === 'running' &&
+			resumed.stoppedReason === null &&
+			resumed.cursor === 'a.md'
+	);
+	const r1 = await row();
+	check(
+		'who started a run and when are kept across its steps',
+		r1?.started_by === 'u1' &&
+			r1.started_at === NOW &&
+			r1.updated_at === NOW + 1000 &&
+			r1.finished_at === null
+	);
+	await savePass(db, scope, { ...resumed, status: 'done' }, NOW + 2000);
+	check('a finished pass records when', (await row())?.finished_at === NOW + 2000);
+	const next = continuePass(await readPass(db, 'b1', 'probe', defaults), defaults, () => 'r2');
+	check(
+		'a finished pass is replaced by a new one',
+		next.runId === 'r2' && next.cursor === null && next.counters.seen === 0
+	);
+	await savePass(db, { ...scope, actorUserId: 'u3' }, next, NOW + 3000);
+	const r2 = await row();
+	check(
+		'a new run records its own starter and start',
+		r2?.run_id === 'r2' &&
+			r2.started_by === 'u3' &&
+			r2.started_at === NOW + 3000 &&
+			r2.finished_at === null
+	);
+	await db.prepare(`UPDATE brain_passes SET counters = '{"seen":7}' WHERE kind = 'probe'`).run();
+	const older = await readPass(db, 'b1', 'probe', defaults);
+	check(
+		'a counter missing from an older row reads as its default',
+		older?.counters.seen === 7 && older.counters.extra === 'none'
+	);
+	await db.prepare(`UPDATE brain_passes SET counters = 'not json' WHERE kind = 'probe'`).run();
+	const broken = await readPass(db, 'b1', 'probe', defaults);
+	check(
+		'unreadable counters fall back to the defaults and keep the run',
+		broken?.counters.seen === 0 && broken.runId === 'r2'
+	);
+	await db.batch([savePassStatement(db, { ...scope, kind: 'other' }, fresh, NOW)]);
+	check(
+		'kinds are separate rows, and a step can be saved inside a batch',
+		(await readPass(db, 'b1', 'other', defaults))?.runId === 'r1' &&
+			(await readPass(db, 'b1', 'probe', defaults))?.runId === 'r2'
+	);
 }
 
 done();

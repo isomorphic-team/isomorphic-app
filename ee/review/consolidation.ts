@@ -3,8 +3,8 @@
 // Design: docs/design/consistency-checks.md, Part 2 (C4).
 //
 // A pass is budgeted and resumable. Each call checks up to PAIRS_PER_STEP page pairs from
-// the cursor in D1, through the gateway, and writes what survives the filters to
-// review_findings. Nothing is written to the brain: every finding waits for a person
+// its cursor (D1 `brain_passes`, kind 'consolidation', through src/lib/brain-pass.ts),
+// through the gateway, and writes what survives the filters to review_findings. Nothing is written to the brain: every finding waits for a person
 // (the auto tier is off).
 //
 // Stages per pair:
@@ -38,6 +38,13 @@ import {
 	loadPageContents
 } from '../../src/lib/brain-index.ts';
 import type { BrainStore, RepoRef } from '../../src/lib/brain-repo.ts';
+import {
+	continuePass,
+	readPass,
+	savePass,
+	type PassState,
+	type PassStatus
+} from '../../src/lib/brain-pass.ts';
 import { computeTensions, MAX_DUP_PAGES } from '../../src/lib/consolidate.ts';
 import { applyPageEdits } from '../../src/lib/page-patch.ts';
 import { detectSensitive } from '../../src/lib/policy-detectors.ts';
@@ -406,11 +413,11 @@ export async function triageFindings(input: {
 
 // ---------- run state ----------
 
-export type RunStatus = 'running' | 'stopped' | 'done';
+const KIND = 'consolidation';
 
 export interface ConsolidationState {
 	runId: string;
-	status: RunStatus;
+	status: PassStatus;
 	cursor: string | null;
 	pairsChecked: number;
 	pairsSkipped: number;
@@ -422,85 +429,42 @@ export interface ConsolidationState {
 	stoppedReason: string | null;
 }
 
-interface RunRow {
-	run_id: string;
-	status: string;
-	cursor: string | null;
-	pairs_checked: number;
-	pairs_skipped: number;
-	pairs_screened: number;
-	findings: number;
-	cost_usd: number;
-	served: string;
-	stopped_reason: string | null;
-}
+type Counters = Pick<
+	ConsolidationState,
+	'pairsChecked' | 'pairsSkipped' | 'pairsScreened' | 'findings' | 'costUsd' | 'served'
+>;
+
+const noCounts = (): Counters => ({
+	pairsChecked: 0,
+	pairsSkipped: 0,
+	pairsScreened: 0,
+	findings: 0,
+	costUsd: 0,
+	served: {}
+});
+
+const flatten = ({ counters, ...p }: PassState<Counters>): ConsolidationState => ({
+	...p,
+	...counters
+});
 
 export async function readRun(db: D1Database, brainId: string): Promise<ConsolidationState | null> {
-	const r = await db
-		.prepare(
-			`SELECT run_id, status, cursor, pairs_checked, pairs_skipped, pairs_screened, findings,
-			        cost_usd, served, stopped_reason
-			 FROM consolidation_runs WHERE brain_id = ?1`
-		)
-		.bind(brainId)
-		.first<RunRow>();
-	if (!r) return null;
-	let served: Record<string, number> = {};
-	try {
-		served = JSON.parse(r.served) as Record<string, number>;
-	} catch {
-		// A row that cannot say who served it still says how far it got.
-	}
-	return {
-		runId: r.run_id,
-		status: r.status as RunStatus,
-		cursor: r.cursor,
-		pairsChecked: r.pairs_checked,
-		pairsSkipped: r.pairs_skipped,
-		pairsScreened: r.pairs_screened,
-		findings: r.findings,
-		costUsd: r.cost_usd,
-		served,
-		stoppedReason: r.stopped_reason
-	};
+	const pass = await readPass(db, brainId, KIND, noCounts());
+	return pass && flatten(pass);
 }
 
 async function saveRun(
 	db: D1Database,
 	scope: { brainId: string; orgId: string; actorUserId?: string },
-	s: ConsolidationState,
+	{ runId, status, cursor, stoppedReason, ...counters }: ConsolidationState,
 	now: number
 ) {
-	await db
-		.prepare(
-			`INSERT INTO consolidation_runs
-			   (brain_id, org_id, run_id, status, cursor, pairs_checked, pairs_skipped, findings,
-			    cost_usd, served, stopped_reason, started_by, started_at, updated_at, pairs_screened)
-			 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?13, ?14)
-			 ON CONFLICT (brain_id) DO UPDATE SET
-			   org_id = ?2, run_id = ?3, status = ?4, cursor = ?5, pairs_checked = ?6,
-			   pairs_skipped = ?7, findings = ?8, cost_usd = ?9, served = ?10, stopped_reason = ?11,
-			   started_by = CASE WHEN run_id = ?3 THEN started_by ELSE ?12 END,
-			   started_at = CASE WHEN run_id = ?3 THEN started_at ELSE ?13 END,
-			   updated_at = ?13, pairs_screened = ?14`
-		)
-		.bind(
-			scope.brainId,
-			scope.orgId,
-			s.runId,
-			s.status,
-			s.cursor,
-			s.pairsChecked,
-			s.pairsSkipped,
-			s.findings,
-			s.costUsd,
-			JSON.stringify(s.served),
-			s.stoppedReason,
-			scope.actorUserId ?? null,
-			now,
-			s.pairsScreened
-		)
-		.run();
+	await savePass(
+		db,
+		{ ...scope, kind: KIND },
+		{ runId, status, cursor, stoppedReason, counters },
+		now
+	);
 }
 
 // ---------- one step ----------
@@ -532,22 +496,13 @@ export async function advanceConsolidation(
 	now = Date.now()
 ): Promise<ConsolidationState> {
 	const scope = { brainId: t.brainId, orgId: t.orgId, actorUserId: t.actorUserId };
-	const existing = await readRun(t.db, t.brainId);
-	const state: ConsolidationState =
-		existing && existing.status !== 'done'
-			? { ...existing, status: 'running', stoppedReason: null }
-			: {
-					runId: t.newRunId?.() ?? crypto.randomUUID(),
-					status: 'running',
-					cursor: null,
-					pairsChecked: 0,
-					pairsSkipped: 0,
-					pairsScreened: 0,
-					findings: 0,
-					costUsd: 0,
-					served: {},
-					stoppedReason: null
-				};
+	const state = flatten(
+		continuePass(
+			await readPass(t.db, t.brainId, KIND, noCounts()),
+			noCounts(),
+			t.newRunId ?? (() => crypto.randomUUID())
+		)
+	);
 
 	await ensureFresh(t.db, t.store, t.repo, t.brainId, t.config);
 	const listed = (await listIndexedPages(t.db, t.brainId)).filter(
