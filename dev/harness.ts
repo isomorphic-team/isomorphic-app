@@ -1010,14 +1010,13 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
 				}
 			];
 			const scanned = baselineFixture === 'done';
-			const r = text('4 detection(s) across 2 page(s) in the last 30 days.');
+			const r = text('4 detection(s) across 2 page(s).');
 			return {
 				...r,
 				structuredContent: {
 					view: 'review',
 					policy: {
 						mode: 'shadow',
-						windowDays: 30,
 						total: 4,
 						pages,
 						coverage: {

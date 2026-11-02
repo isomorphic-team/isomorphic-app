@@ -154,6 +154,9 @@ async function getContext(opts?: { brain?: string }): Promise<BrainContext> {
 		config,
 		author,
 		db: b.db,
+		// Fixed, so a dismissal survives a restart. The key protects nothing here: the
+		// values sit in plain text in the folder beside this database.
+		policySecret: 'isomorphic-local',
 		brainId: b.brainId,
 		activeBrain: { id: b.label, label: b.label }
 	};
