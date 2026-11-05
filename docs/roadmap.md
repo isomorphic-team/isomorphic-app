@@ -624,6 +624,10 @@ in-workerd coverage of the tool handlers.
 
 # TODO: Google / OIDC sign-in
 
+What an organization's IT function asks for on top of this (verified domains, a provider per
+org, SSO enforcement, just-in-time provisioning, SCIM) is a separate and larger piece:
+[`docs/design/enterprise-identity.md`](design/enterprise-identity.md).
+
 Magic-link sign-in works and is what the hosted service runs. The recommended PRIMARY
 provider is still Google/OIDC: redirect-based, same-browser, a round trip of seconds, and so
 immune to email prefetch and to the TTL fragility of an email hop. Mirror a known-good

@@ -1,6 +1,8 @@
 # The open-source boundary
 
-- Status: decided 2026-07-27, revised 2026-09-30 to open core for enterprise features
+- Status: decided 2026-07-27, revised 2026-09-30 to open core for enterprise features, revised
+  2026-11-05 so that an entitlement, not a directory, is what makes a feature enterprise
+  ([`enterprise-identity.md`](./enterprise-identity.md))
 - Related: [`docs/licensing.md`](../licensing.md), [`GOVERNANCE.md`](../../GOVERNANCE.md),
   [`docs/self-hosting.md`](../self-hosting.md), [`ee/README.md`](../../ee/README.md)
 
@@ -33,21 +35,37 @@ The hosted service differs from a self-hosted instance in four ways:
 4. **Operational work.** We run it, watch it, upgrade it, take the support calls.
 
 There is still no private module and no `if (isHosted)` branch. A feature is enterprise because
-it lives in `ee/` and checks an entitlement, never because of where it runs.
+it checks an entitlement, never because of where it runs, and usually it lives in `ee/` as
+well. The next section separates those two tests, which the 2026-09-30 wording ran together.
 
-## What goes in `ee/`, and what never does
+## What is enterprise, what goes in `ee/`, and what is neither
 
 **The test is who buys it.** A capability a team needs to work together stays in the core. A
 capability an organization's compliance, security, or leadership function buys goes in `ee/`.
 This is the buyer-based split GitLab uses, and it is the reason the original objection to open
 core (below) no longer applies: the core is not kept incomplete for the people using it.
 
-In `ee/`: model-powered review (the data-policy guard's model stages and brain consolidation),
-the model gateway those use, and the entitlement check itself.
+**A feature is enterprise because it checks an entitlement**, and most enterprise features also
+live in `ee/` because most of them are separable subsystems. The two are not the same test, and
+the 2026-11-05 revision exists because treating them as one got sign-in wrong.
 
-Never in `ee/`: multi-tenancy, orgs, roles, members, sharing, multi-brain, sign-in including
-Enterprise SSO / SAML, the deterministic detectors, the findings queue and `resolve`, and
-anything that fixes a bug in the core. A core feature never calls into `ee/` to do its own job.
+In `ee/`: model-powered review (the data-policy guard's model stages and brain consolidation),
+and the model gateway those use. The entitlement read (`hasFeature`, `getEntitlement`) is in
+`ee/entitlements.ts` today and moves to `src/lib/` with the first entitled core feature, so
+that core code can gate itself without calling into `ee/`; the operator's grant tooling
+(`entitlementSql`) stays in `ee/`. Until that move lands, no core code may call `hasFeature`.
+
+Entitled but NOT in `ee/`: enterprise identity, which is threaded through the sign-in path
+every user takes and cannot be lifted out of it. Verified organization domains, per-org
+identity provider configuration, SSO enforcement, just-in-time provisioning and SCIM each check
+an entitlement where they stand. [`enterprise-identity.md`](./enterprise-identity.md) has the
+reasoning and the core/entitled split.
+
+Never entitled, in `ee/` or anywhere: multi-tenancy, orgs, roles, members, sharing, multi-brain,
+the ability to sign in at all, the deterministic detectors, the findings queue and `resolve`,
+and anything that fixes a bug in the core. A self-hoster gets working sign-in, including a
+plain OIDC provider for their own directory, with no key and no subscription. A core feature
+never calls into `ee/` to do its own job.
 
 ## Why this is not the open core we rejected
 

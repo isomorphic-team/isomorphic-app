@@ -17,6 +17,11 @@ Licensed under `ee/LICENSE`, not the AGPL. Placement rule and history:
   `hasFeature` / `getEntitlement` in `ee/entitlements.ts`). Rows are written only by
   `pnpm entitle` (or billing outside the repo), never by the Worker. No row or an expired one
   means off.
+- **An entitled feature does not have to live in `ee/`** (decided 2026-11-05,
+  `docs/design/open-source-boundary.md`). Enterprise identity will check the same entitlement
+  from the core, and moving it there moves the entitlement READ to `src/lib/` first, so the
+  invariant above still holds. Nothing has moved yet: today `hasFeature` is in `ee/`, so core
+  code still must not call it.
 - **Every model request goes through `ee/review/gateway.ts`.** Text goes to Claude Haiku first
   (`ANTHROPIC_API_KEY`, the official SDK) and falls back to Luna (`OPENROUTER_API_KEY`) on a
   refusal, 429, 402 or 529. Every OpenRouter request carries `ZDR_PROVIDER` (`zdr: true`,
