@@ -172,15 +172,15 @@ a reading of the spec's edge cases rather than a paragraph here.
 
 ## What is core, and what is entitled
 
-| Capability                                   | Core | Entitled |
-| -------------------------------------------- | ---- | -------- |
-| Magic link sign-in                           | yes  |          |
-| OIDC sign-in, one provider per deployment    | yes  |          |
-| Verified organization domains                |      | yes      |
-| Per-org identity provider config             |      | yes      |
-| SSO enforcement                              |      | yes      |
-| Just-in-time provisioning                    |      | yes      |
-| SCIM                                         |      | yes      |
+| Capability                                | Core | Entitled |
+| ----------------------------------------- | ---- | -------- |
+| Magic link sign-in                        | yes  |          |
+| OIDC sign-in, one provider per deployment | yes  |          |
+| Verified organization domains             |      | yes      |
+| Per-org identity provider config          |      | yes      |
+| SSO enforcement                           |      | yes      |
+| Just-in-time provisioning                 |      | yes      |
+| SCIM                                      |      | yes      |
 
 The split is the buyer test the boundary document already states, applied honestly. A
 self-hoster pointing their own directory at their own instance pays nothing. An organization
