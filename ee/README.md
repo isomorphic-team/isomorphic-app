@@ -8,6 +8,12 @@ development and testing; production use needs a subscription. Why the line falls
 Every feature here checks a per-org entitlement and does nothing without one, so an unentitled
 org runs the core product unchanged.
 
+Not every enterprise feature lives here. Enterprise identity will check the same entitlement
+from the core, because every sign-in runs through it
+([`docs/design/enterprise-identity.md`](../docs/design/enterprise-identity.md), proposed). It
+moves the entitlement read to `src/lib/` and leaves the grant tooling here. Nothing has moved
+yet.
+
 | Path                      | What                                                                                               |
 | ------------------------- | -------------------------------------------------------------------------------------------------- |
 | `entitlements.ts`         | `hasFeature`: whether an org has the `enterprise` entitlement. Rows are written by `pnpm entitle`. |
