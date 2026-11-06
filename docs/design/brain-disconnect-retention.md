@@ -1,152 +1,135 @@
-# Design: what a disconnected brain leaves behind
+# Design: delete a brain's data when it is disconnected
 
 Status: **proposed** (2026-11-05). Nothing here is built.
 
-Related: [`privacy-checks.md`](./privacy-checks.md) (what the guard records and why it records
-offsets rather than values), [`storage-and-tenancy.md`](./storage-and-tenancy.md) (which
-credential reaches which repo), [`org-roles-permissions.md`](./org-roles-permissions.md) (what
-revocation tears down today).
+Related: [`privacy-checks.md`](./privacy-checks.md) (what the policy guard stores),
+[`storage-and-tenancy.md`](./storage-and-tenancy.md) (why derived state is keyed by `brain_id`),
+[`.claude/rules/org-model-and-permissions.md`](../../.claude/rules/org-model-and-permissions.md)
+(what revocation deletes today).
 
 ## The problem
 
-`disconnect_brain` removes the pointer and the grants. It does not remove the derived copy of
-the brain's content.
+`disconnect_brain` (`src/tools/brains.ts`) calls `deleteBrainGrants`, then `deleteBrain`.
+`deleteBrain` deletes only the `brains` row. Every other table with a `brain_id` column keeps its
+rows, including `brain_pages`, whose `content` column holds the full text of every indexed page.
 
-The handler calls `deleteBrainGrants` and then `deleteBrain`, and `deleteBrain` is a single
-statement against `brains`. Every other table keyed by `brain_id` keeps its rows. That includes
-`brain_pages`, whose `content` column holds the full text of every indexed page.
+`resetIndex` (`src/lib/brain-index.ts`) already deletes four of those tables in one batch. Its only
+caller is `configure_brain`, which uses it to force a full rebuild.
 
-`resetIndex` (`src/lib/brain-index.ts`) already does most of the right cleanup. It exists for a
-different reason: dropping the index so the next freshness check does a full rebuild when the
-content shape changes. Nothing calls it from the disconnect path.
+The org-model rule says revocation deletes what depends on it, and lists
+`disconnect_brain → deleteBrainGrants`. The index and the review and policy tables are not on that
+list.
 
-The org model states the principle already: revocation tears down what hangs off it,
-`disconnect_brain` to `deleteBrainGrants`, `remove_member` to `deleteUserBrainGrantsInOrg`. The
-derived index is simply missing from that list.
+## Why it matters
 
-### What this is, and what it is not
+**1. Retention.** While the repository stays disconnected, the product cannot read these rows:
+every read resolves a `brains` row through `tenantContext`, and that row is gone. Anyone with
+direct database access still can. So we cannot truthfully say that disconnecting a brain removes
+its content from the deployment, and the rows pile up, one set per brain ever disconnected.
 
-The orphaned rows are **not reachable through the product**. Every read resolves an org, a role
-and a brain through `tenantContext`, keyed on a `brains` row that no longer exists, so no
-request can name the brain and no tool can return its pages. Search is scoped by `brain_id`
-resolved the same way.
+**2. Reattachment.** `brain_id` is derived from the repository name: `brainIdFor` returns
+`brain-<owner>-<repo>`. Connecting the same repository again, from any org, produces the same
+`brain_id`, and the new brain picks up every row the old one left behind: review findings,
+policy detections and their `actor_user_id`, dismissals with their `why` text and `dismissed_by`,
+and pass state. If the second connection is from a different org, that org sees the first org's
+review history and dismissal notes. The comment above `deleteBrainGrants` names exactly this risk
+for grants; the fix stopped at grants.
 
-So this is a **retention** gap, not an access-control gap. Nobody gains access they did not
-have. What it costs is the ability to say, accurately, that disconnecting a brain removes its
-content from the deployment. An operator querying the database directly can still read it, and
-that operator is the one party the sentence was supposed to reassure a customer about.
+Page text is not the concern in case 2, since the new org can read the repository anyway. The
+exposure is the metadata the first org's people wrote.
 
-It also compounds silently. A deployment accumulates one orphaned index per brain ever
-disconnected, with no surface that lists them and no query that would notice.
+## What is stored per brain
 
-## What is stored per brain today
+Every table with a `brain_id` column, from the schema after migration 0024:
 
-Every table carrying a `brain_id`, and what it holds:
+| Table               | Holds                                                                 | Action           |
+| ------------------- | --------------------------------------------------------------------- | ---------------- |
+| `brain_pages`       | path, title, blob sha, full `content`                                 | Purge            |
+| `brain_links`       | the link graph between pages                                          | Purge            |
+| `brain_page_fields` | frontmatter values                                                    | Purge            |
+| `brain_index_meta`  | indexed commit, rebuild cursor                                        | Purge            |
+| `review_findings`   | `headline`, `evidence` (lines quoted from pages), `proposal`, author  | Purge            |
+| `policy_detections` | path, kind, offsets, actor; never the matched text                    | Purge            |
+| `policy_dismissals` | HMAC fingerprints, file sha, `why`, `dismissed_by`                    | Purge            |
+| `policy_baseline`   | scan status and a cursor holding the last path scanned                | Purge            |
+| `brain_passes`      | pass run state: status, cursor, counters                              | Purge            |
+| `brain_pass_items`  | per-item fingerprints; `item` is a page path or pair of paths         | Purge            |
+| `write_attempts`    | retry ledger; `summary` is the tool's reply text, replayed on retry   | Purge            |
+| `invitations`       | rows with `brain_id` set are pending brain invites, with the email    | Purge            |
+| `brain_memberships` | per-brain grants                                                      | Already deleted  |
+| `usage_daily`       | per-day call and error counts by org, brain, user, tool               | Keep             |
+| `feedback_reports`  | product feedback; `brain_id` records the active brain at report time  | Keep             |
 
-| Table                | Holds                                                           | Content? |
-| -------------------- | --------------------------------------------------------------- | -------- |
-| `brain_pages`        | `content`: each page's full text, plus title and blob sha        | Yes      |
-| `brain_links`        | the link graph between pages                                     | Derived  |
-| `brain_page_fields`  | frontmatter field values, extracted from page content            | Derived  |
-| `brain_index_meta`   | index state and the rebuild cursor                               | Pointer  |
-| `review_findings`    | `headline`, `evidence` (lines quoted from pages), `proposal`     | Yes      |
-| `write_attempts`     | the retry ledger: fingerprint, state, `summary`                  | Likely   |
-| `policy_detections`  | path plus detection kind and offsets, never the matched text     | Pointer  |
-| `policy_dismissals`  | one keyed HMAC per dismissed value                               | Derived  |
-| `policy_baseline`    | scan status, counts, and a cursor holding the last path handled  | Pointer  |
-| `brain_passes`       | pass run state: status, cursor, counters                         | Pointer  |
-| `brain_memberships`  | per-brain grants                                                 | No       |
-| `usage_daily`        | per-day counters at (day, org, brain, user, tool)                | No       |
+Notes on individual rows:
 
-"Pointer" means the row holds no page text but still says something about the content: which
-paths existed, and for `policy_detections`, which of them held sensitive data of which kind. A
-list of paths plus "this one had a private key in it" is not nothing, and it outlives the
-pages it describes.
+- **Tables without page text still get purged** if they name paths. A list of paths plus "this
+  one contained a private key" says where sensitive data sat, and should not outlive the brain.
+- **`policy_baseline`** is being replaced by `brain_passes` (migration 0023 is the expand step),
+  but current code still writes it. Purge both until a later migration drops it.
+- **`write_attempts`** rows are pruned after 10 minutes, but pruning only runs when another write
+  starts, so on a quiet deployment they stay. Purging them costs one statement.
+- **`invitations`** has a foreign key to `brains` with no `ON DELETE` action, and D1 enforces
+  foreign keys by default. A pending brain invite may already make `disconnect_brain` fail.
+  Confirm this with a test before phase 1; if it does, phase 1 also fixes that bug.
+- **`usage_daily`** is kept because it holds only integers and is what the analytics tab uses
+  for history. Deleting one brain's rows would rewrite past totals. If keeping it ever becomes a
+  problem, the fix is a retention window on the whole table.
+- **`feedback_reports`** is kept because it is a report about the product, covered by its own
+  privacy rules.
+- **Attached media is not in the database.** `attach_media` commits files to the brain's
+  repository, and downloads go through short-lived signed links (`src/lib/asset-link.ts`).
+  Disconnecting leaves them in the repository the customer owns.
 
-Two things are **not** in this table on purpose:
+## The change
 
-- **Attached media lives in the brain's own repository.** `attach_media` commits through the
-  store like any other write, and downloads are served through a short-lived signed link
-  (`src/lib/asset-link.ts`) rather than a stored copy. Disconnecting leaves the files where
-  they always were, in the repository the customer owns.
-- **`feedback_reports` is keyed by an `owner/repo` string, not a `brain_id`.** It is a report
-  about the product submitted by a person, not brain data, and it is covered by its own privacy
-  rules.
+**One function.** Add `forgetBrain(db, brainId)` in `src/lib/`. It deletes every "Purge" row in
+the table above, the grants, and the `brains` row, in a single `db.batch()`. The next table keyed
+on `brain_id` then has one place to register. This follows the `effectiveBrainRole` pattern: the
+logic sits in `src/lib/` where a test can call it, and the Worker only wires it in.
 
-## The decision
+**One batch.** If the `brains` row were deleted first and the rest then failed, the remaining rows
+would have nothing pointing at them. A single batch either runs completely or not at all.
 
-**Disconnect forgets content.** Anything that holds page text, quotes it, or records where it
-sat is purged when the brain is disconnected. Counters that carry no content are kept.
+**Also run it on connect.** `connect_brain` and `create_brain` should call `forgetBrain` on the
+new `brain_id` before `createBrain` when no `brains` row exists for it. That closes reattachment
+for residue already on disk, without waiting for the sweep in phase 3.
 
-| Disposition | Tables |
-| ----------- | ------ |
-| **Purge on disconnect** | `brain_pages`, `brain_links`, `brain_page_fields`, `brain_index_meta`, `review_findings`, `write_attempts`, `policy_detections`, `policy_dismissals`, `policy_baseline`, `brain_passes` |
-| **Keep** | `usage_daily` |
-| **Already handled** | `brain_memberships`, via `deleteBrainGrants` |
+**Tests.** Per the testing policy: index a page, add a finding and a dismissal, disconnect, and
+assert the rows are gone. Reconnect the same repository and assert no old finding or dismissal
+comes back. Then remove the purge and confirm both assertions fail.
 
-Why `usage_daily` stays: it holds integers at a day grain and no content, it is what answers
-whether an org uses its brains at all, and zeroing a month's history because one brain was
-disconnected would make the analytics tab lie about the past. It never leaves the deployment's
-own database. If that answer ever stops being comfortable, the fix is a retention window on the
-whole table, not a purge keyed on one brain.
+**Update the rule.** Add `disconnect_brain → forgetBrain` to
+`.claude/rules/org-model-and-permissions.md`.
 
-Why the policy tables go, despite holding no matched text: a path plus a detection kind is a
-map of where sensitive data sat, and it is exactly the thing a reader should not find for a
-brain the deployment no longer serves. The dismissal fingerprints go with them.
+### Reconnecting after the fix
 
-### Reconnecting
-
-A repository connected again is a new brain with a new `brain_id`. The index rebuilds from the
-repository, which is the source of truth, so nothing of substance is lost. Previously dismissed
-policy findings re-raise, because the dismissals were purged with everything else. That is the
-safe direction and it matches the existing reasoning in `privacy-checks.md`, where rotating the
-key behind the fingerprints re-raises dismissals for the same reason.
-
-## The shape of the change
-
-**One function owns the list.** A single `forgetBrain(db, brainId)` in `src/lib/`, db-only and
-directly callable from a test, so that the next table keyed on `brain_id` has one obvious place
-to register itself. This is the same shape as `effectiveBrainRole`: the decision lives where a
-test can reach it, and the Worker only wires it in. A purge spread across call sites is how the
-index came to be missed in the first place.
-
-**Order matters.** If the `brains` row is deleted first and the purge then fails, the content is
-orphaned with nothing left pointing at it, so no cleanup keyed on `brains` can ever find it
-again. The purge runs first, or the whole thing runs as one `db.batch()`.
-
-**The test has to go red.** Per the testing policy: disconnect a brain with an indexed page,
-assert the row is gone, then remove the purge and confirm the assertion fails.
+The brain gets the same `brain_id`, starts with no derived state, and rebuilds its index from the
+repository. Previously dismissed policy findings come back. That is the safe direction, and it
+matches `privacy-checks.md`, where rotating the secret behind the fingerprints has the same
+effect.
 
 ## Phases
 
-1. **`forgetBrain` plus the disconnect wiring.** The function, the full table list, one batch,
-   and the battery that proves it. This is the whole user-visible fix.
-2. **The other exit paths.** Deleting an org, a repository deleted upstream, an installation
-   revoked, and a repository reconnected under a fresh `brain_id` while the old rows survive.
-   Each either routes through `forgetBrain` or gets a stated reason not to.
-3. **The orphan sweep.** Every existing deployment already carries residue from every brain it
-   has ever disconnected, and phase 1 does nothing about that. A sweep over rows whose
-   `brain_id` matches no `brains` row, budgeted and resumable like any other whole-brain pass.
-   This is the phase that changes what is true of data already on disk.
-4. **Say it in the docs.** A retention section stating what each surface keeps and for how long,
-   so the question has a published answer instead of a code-reading exercise. `SECURITY.md`
-   already tells self-hosters that a private brain belongs in a private repository; this is the
-   same kind of statement about the derived copy.
+1. **`forgetBrain`, wired into disconnect and connect, with tests.** This is the whole
+   user-visible fix.
+2. **Other ways a brain goes away.** Org deletion, a repository deleted upstream, and an
+   installation revoked. Each either calls `forgetBrain` or the doc states why not.
+3. **Orphan sweep.** Delete rows whose `brain_id` matches no `brains` row, including rows that
+   migration 0011 left keyed by `owner/repo`. Budget it and make it resumable like the other
+   whole-brain passes. Until it runs, residue from past disconnects stays in the database.
+4. **Document retention.** A section stating what each surface keeps and for how long, so the
+   answer is written down rather than read out of the code.
 
-Phases 1 and 2 are one change. Phase 3 should follow immediately, because the sentence the fix
-is meant to support stays false until it runs.
+Ship phases 1 and 2 together. Run phase 3 right after.
 
 ## Known gaps
 
-- **Archived brains keep their index**, deliberately: `brains.archived_at` filters a brain out
-  of the two base queries without removing it, and archiving is reversible. Worth stating in
-  phase 4 rather than changing.
-- **`write_attempts.summary` needs reading before phase 1.** It is listed as content above on
-  the strength of its name and the retry ledger's purpose. If it turns out to hold only a
-  status string, it moves to the keep column, and the doc should say which.
-- **Nothing here covers the MCP client's own history.** The server never calls a model, so a
-  conversation that read a brain lives with whatever client made the call, under that client's
-  retention. Disconnecting a brain cannot reach it, and no change proposed here pretends to.
-- **No deletion receipt.** Phase 1 purges rows; it does not record that it did. An operator
-  asked to prove a purge ran has only the absence of rows. A receipt would mean writing down
-  that a brain existed, after deciding to forget it, which needs its own argument.
+- **Archived brains keep their data.** `brains.archived_at` hides a brain from the brain list
+  queries without deleting it, and archiving is reversible. State this in phase 4; do not change
+  it.
+- **MCP clients keep their own history.** The server never calls a model, so a conversation that
+  read a brain is stored by the client that made it, under that client's retention. Disconnecting
+  cannot reach it.
+- **No deletion receipt.** Phase 1 deletes rows but records nothing. Proving a purge ran means
+  showing the rows are absent. A receipt would itself record that the brain existed, so adding
+  one needs its own decision.
