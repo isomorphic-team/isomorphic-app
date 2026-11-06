@@ -38,11 +38,12 @@ import {
 	setBrainGrant,
 	setBrainName,
 	getBrainByRepo,
+	brainIdFor,
 	getOrgById,
 	activeAfterDisconnect
 } from '../lib/orgs.ts';
 import { createAndScaffoldBrain } from '../lib/scaffold-core.ts';
-import { clearBrainResidue, forgetBrain } from '../lib/brain-forget.ts';
+import { forgetBrain } from '../lib/brain-forget.ts';
 import { getConnection, orgAdministersConnection } from '../lib/storage-connections.ts';
 import {
 	countPendingBrainInvites,
@@ -117,14 +118,6 @@ function brainRows(brains: AccessibleBrain[], activeId: string | undefined): Bra
 		orgLabel: orgDisplay(b),
 		...(b.read_only ? { readOnly: true } : {})
 	}));
-}
-
-// Slug a brain_id (PK) from owner/repo — unique across orgs adopting same-named repos.
-function brainIdFor(owner: string, repo: string): string {
-	return `brain-${`${owner}-${repo}`
-		.toLowerCase()
-		.replace(/[^a-z0-9]+/g, '-')
-		.replace(/^-|-$/g, '')}`;
 }
 
 function rowsText(rows: BrainRow[]): string {
@@ -436,8 +429,6 @@ export function registerBrainTools(
 				// admin grant in the same breath: on a private brain a grant is the only way
 				// in, for org admins as well.
 				const newBrainId = brainIdFor(created.owner, created.name);
-				// Same repo name, same id: start empty rather than inherit an earlier brain's rows.
-				await clearBrainResidue(ctx.db, newBrainId);
 				await createBrain(ctx.db, {
 					brain_id: newBrainId,
 					org_id: ctx.org.org_id,
@@ -634,8 +625,6 @@ export function registerBrainTools(
 				// silently is a disclosure. The adopter gets the same explicit admin grant the
 				// creator does, which on a private brain is the only way in.
 				const newBrainId = brainIdFor(owner, name);
-				// Same repo name, same id: start empty rather than inherit an earlier brain's rows.
-				await clearBrainResidue(ctx.db, newBrainId);
 				await createBrain(ctx.db, {
 					brain_id: newBrainId,
 					org_id: orgId,

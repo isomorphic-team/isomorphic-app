@@ -75,25 +75,31 @@ was.
 - **`forgetBrain`** deletes the purged rows and the `brains` row in one `db.batch()`, grants and
   invites before the row they reference. `disconnect_brain` calls it. One batch, so a failure
   part way cannot remove the `brains` row and leave rows that nothing points at.
-- **`clearBrainResidue`** deletes purged rows under an id that no `brains` row holds.
-  `create_brain` and `connect_brain` call it before creating the brain, so a reconnected
-  repository starts empty. It is a no-op when a brain holds the id, which keeps it safe if two
-  repository names ever slugify to the same id.
-- **`purgeBrainRowsStatements`** is the shared form, taking a subquery of brain ids.
-  `ensureStaticTenant` uses it to purge a brain dropped from earlier config in the same batch
-  that drops it.
+- **`createBrain`** runs `clearBrainResidueStatements` in the batch that inserts the brain,
+  deleting rows under the new id in `BRAIN_UNLINKED_TABLES` (the purged tables with no foreign
+  key to `brains`, the only ones residue can sit in). Every creation path goes through it, so
+  a reconnected repository starts empty. It is a no-op when a brain holds the id, which keeps it
+  safe if two repository names ever slugify to the same id. `brainIdFor` (`src/lib/orgs.ts`) is
+  the one place the id is derived.
+- **`forgetBrainsStatements`** takes a subquery of brain ids and deletes their purged rows and
+  then the brains rows, from one selector. `forgetBrain` passes one id; `ensureStaticTenant`
+  passes the brains config no longer names. That function runs once per request, so it checks
+  for such a brain first and adds the statements only when one exists.
+- **`resetIndex`** drops `BRAIN_INDEX_TABLES`, the same constant the purge list starts from.
 - **Migration 0025** deletes rows whose `brain_id` matches no `brains` row, in every purged table,
-  including rows that 0011 left keyed by `owner/repo`. It writes one row per orphaned row.
+  including rows that 0011 left keyed by `owner/repo`, and indexes `invitations.brain_id`. It
+  writes one row per orphaned row.
 
 The `disconnect_brain` tool description now says Isomorphic deletes its own copy of the brain.
 
 **Tests** (`pnpm test:access`): one row is seeded in every `brain_id` table for two brains, one is
 forgotten, and the battery checks that every purged table is empty for it (including with a
 pending brain invite), that kept tables are untouched, that the other brain is untouched, that
-`clearBrainResidue` empties an orphaned id and leaves a live one alone, that 0025 covers every
+`BRAIN_UNLINKED_TABLES` matches the schema's foreign keys, that `createBrain` starts a
+reconnected repository empty and clears nothing under a live brain's id, that 0025 covers every
 purged table and deletes orphans, and that a static config change purges the old brain's index.
 Removing the purge from `forgetBrain`, or the purge from `ensureStaticTenant`, turns it red.
-The tool wiring (the calls in `src/tools/brains.ts`) is not covered by a battery.
+The one call in `disconnect_brain` (`src/tools/brains.ts`) is not covered by a battery.
 
 ### Reconnecting
 
@@ -104,8 +110,8 @@ has the same effect.
 
 ## Phases
 
-1. **Built.** `forgetBrain` in `disconnect_brain`, `clearBrainResidue` in `create_brain` and
-   `connect_brain`, and the tests.
+1. **Built.** `forgetBrain` in `disconnect_brain`, residue cleared inside `createBrain`, and the
+   tests.
 2. **Built.** Other ways a brain goes away. The only other one in the code is
    `ensureStaticTenant` dropping a brain from earlier config, which now purges. There is no org
    deletion, and no webhook for a repository deleted upstream or an installation revoked; each
@@ -119,7 +125,10 @@ has the same effect.
 
 - **Archived brains keep their data.** `brains.archived_at` hides a brain from the brain list
   queries without deleting it, and archiving is reversible.
-- **Id collisions.** `brainIdFor` maps `a-b/c` and `a/b-c` to the same id. `clearBrainResidue`
+- **Random ids would be the deeper fix for reattachment.** A random `brain_id` for new brains
+  would make reattachment impossible and close the collision below, but changes what an id
+  looks like, so it is left as a separate decision. It would not help retention.
+- **Id collisions.** `brainIdFor` maps `a-b/c` and `a/b-c` to the same id. Clearing residue
   will not delete a live brain's rows because of it, but connecting the second repository still
   fails on the primary key. That predates this change.
 - **MCP clients keep their own history.** The server never calls a model, so a conversation that

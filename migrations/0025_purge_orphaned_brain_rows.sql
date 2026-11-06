@@ -28,3 +28,7 @@ DELETE FROM write_attempts WHERE brain_id NOT IN (SELECT brain_id FROM brains);
 DELETE FROM brain_memberships WHERE brain_id NOT IN (SELECT brain_id FROM brains);
 DELETE FROM invitations
  WHERE brain_id IS NOT NULL AND brain_id NOT IN (SELECT brain_id FROM brains);
+
+-- forgetBrain deletes brain invites by brain_id, which had no index.
+CREATE INDEX IF NOT EXISTS invitations_brain_idx ON invitations (brain_id)
+  WHERE brain_id IS NOT NULL;

@@ -20,6 +20,7 @@
 import type { D1Database, D1PreparedStatement } from '@cloudflare/workers-types';
 import { type RepoRef, type TreeEntry, type BrainStore, MAX_SCAN_PAGES } from './brain-repo.ts';
 import { classifyMdLink } from './links.ts';
+import { BRAIN_INDEX_TABLES } from './brain-forget.ts';
 import { type BrainConfig, CONFIG_PATH, isContentPath, loadIndexConfig } from './brain-config.ts';
 import {
 	parseFrontmatter,
@@ -648,12 +649,9 @@ export async function writeThroughIndex(
 // pages that just became in-scope. Deleting the meta row makes ensureFresh take the
 // !meta → fullBuild path, which re-walks the tree against the new config.
 export async function resetIndex(db: D1Database, brainId: string): Promise<void> {
-	await db.batch([
-		db.prepare(`DELETE FROM brain_index_meta WHERE brain_id = ?1`).bind(brainId),
-		db.prepare(`DELETE FROM brain_pages WHERE brain_id = ?1`).bind(brainId),
-		db.prepare(`DELETE FROM brain_links WHERE brain_id = ?1`).bind(brainId),
-		db.prepare(`DELETE FROM brain_page_fields WHERE brain_id = ?1`).bind(brainId)
-	]);
+	await db.batch(
+		BRAIN_INDEX_TABLES.map((t) => db.prepare(`DELETE FROM ${t} WHERE brain_id = ?1`).bind(brainId))
+	);
 }
 
 // Does this repo look like it was adopted but never told where its content lives?

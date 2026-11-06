@@ -4,29 +4,42 @@
 // or BRAIN_KEPT_TABLES; `pnpm test:access` reads the schema and fails on a table in
 // neither. Design: docs/design/brain-disconnect-retention.md.
 //
-// Purging matters beyond retention: `brain_id` is derived from the repository name,
-// so a repository connected again gets the same id and would pick up whatever an
-// earlier brain left behind, from whichever org that brain was in.
+// Purging matters beyond retention: `brain_id` is derived from the repository name
+// (`brainIdFor`), so a repository connected again gets the same id and would pick up
+// whatever an earlier brain left behind, from whichever org that brain was in.
 
 import type { D1Database, D1PreparedStatement } from '@cloudflare/workers-types';
 
-/**
- * Deleted with the brain: page text, anything quoting it, anything naming paths,
- * grants and pending brain invites. Grants and invites come before `brains` in the
- * delete order because both carry a foreign key to it.
- */
-export const BRAIN_PURGED_TABLES = [
+/** The content index. `resetIndex` drops these to force a full rebuild. */
+export const BRAIN_INDEX_TABLES = [
+	'brain_index_meta',
 	'brain_pages',
 	'brain_links',
-	'brain_page_fields',
-	'brain_index_meta',
+	'brain_page_fields'
+] as const;
+
+/**
+ * Purged tables with no foreign key to `brains`, so their rows can outlive the
+ * brains row. These are the only ones residue can sit in.
+ */
+export const BRAIN_UNLINKED_TABLES = [
+	...BRAIN_INDEX_TABLES,
 	'review_findings',
 	'policy_detections',
 	'policy_dismissals',
 	'policy_baseline',
 	'brain_passes',
 	'brain_pass_items',
-	'write_attempts',
+	'write_attempts'
+] as const;
+
+/**
+ * Deleted with the brain: page text, anything quoting it, anything naming paths,
+ * grants and pending brain invites. Grants and invites reference `brains`, so they
+ * are deleted before the brains row.
+ */
+export const BRAIN_PURGED_TABLES = [
+	...BRAIN_UNLINKED_TABLES,
 	'brain_memberships',
 	'invitations'
 ] as const;
@@ -38,26 +51,18 @@ export const BRAIN_PURGED_TABLES = [
 export const BRAIN_KEPT_TABLES = ['usage_daily', 'feedback_reports'] as const;
 
 /**
- * Statements deleting the purged rows of every brain id `brainIds` selects. A
- * subquery, so a caller removing brains by some other condition (a static
- * deployment dropping a brain from earlier config) purges in the same batch.
+ * Statements deleting every brain `brainIds` selects (a subquery) with its purged
+ * rows, purged rows first. One selector for both, so the rows purged and the brains
+ * deleted cannot drift apart.
  */
-export function purgeBrainRowsStatements(
+export function forgetBrainsStatements(
 	db: D1Database,
 	brainIds: string,
 	...binds: unknown[]
 ): D1PreparedStatement[] {
-	return BRAIN_PURGED_TABLES.map((t) =>
+	return [...BRAIN_PURGED_TABLES, 'brains'].map((t) =>
 		db.prepare(`DELETE FROM ${t} WHERE brain_id IN (${brainIds})`).bind(...binds)
 	);
-}
-
-/** The statements that delete a brain and everything purged with it, in order. */
-export function forgetBrainStatements(db: D1Database, brainId: string): D1PreparedStatement[] {
-	return [
-		...purgeBrainRowsStatements(db, 'SELECT ?1', brainId),
-		db.prepare(`DELETE FROM brains WHERE brain_id = ?1`).bind(brainId)
-	];
 }
 
 /**
@@ -65,21 +70,26 @@ export function forgetBrainStatements(db: D1Database, brainId: string): D1Prepar
  * cannot remove the `brains` row and leave rows that nothing points at.
  */
 export async function forgetBrain(db: D1Database, brainId: string): Promise<void> {
-	await db.batch(forgetBrainStatements(db, brainId));
+	await db.batch(forgetBrainsStatements(db, 'SELECT ?1', brainId));
 }
 
 /**
- * Delete rows left under `brainId` when no brain holds that id. Call before creating
- * a brain, so it starts empty instead of inheriting an earlier brain's rows. A no-op
- * when a `brains` row exists, which keeps it safe if two repositories ever map to
- * the same id.
+ * Statements deleting rows left under `brainId` when no brain holds that id.
+ * `createBrain` runs them in the batch that inserts the brain, so a new brain starts
+ * empty instead of inheriting an earlier one's rows. A no-op when a brain holds the
+ * id, which keeps it safe if two repository names ever map to the same id.
  */
-export async function clearBrainResidue(db: D1Database, brainId: string): Promise<void> {
-	await db.batch(
-		purgeBrainRowsStatements(
-			db,
-			'SELECT ?1 WHERE NOT EXISTS (SELECT 1 FROM brains WHERE brain_id = ?1)',
-			brainId
-		)
+export function clearBrainResidueStatements(
+	db: D1Database,
+	brainId: string
+): D1PreparedStatement[] {
+	return BRAIN_UNLINKED_TABLES.map((t) =>
+		db
+			.prepare(
+				`DELETE FROM ${t}
+				  WHERE brain_id = ?1
+				    AND NOT EXISTS (SELECT 1 FROM brains WHERE brain_id = ?1)`
+			)
+			.bind(brainId)
 	);
 }

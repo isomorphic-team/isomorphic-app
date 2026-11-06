@@ -20,7 +20,8 @@ import {
 	GITHUB_TOKEN_KIND,
 	githubAppConnectionId
 } from './storage-connections.ts';
-import { purgeBrainRowsStatements } from './brain-forget.ts';
+import { forgetBrainsStatements } from './brain-forget.ts';
+import { brainIdFor } from './orgs.ts';
 
 export const STATIC_ORG_ID = 'static';
 export const STATIC_USER_ID = 'static-operator';
@@ -30,15 +31,6 @@ export const STATIC_USER_EMAIL = 'operator@static.invalid';
 export const GITHUB_TOKEN_CONNECTION_ID = 'github-token:env';
 
 export type StaticCredential = { kind: 'token' } | { kind: 'installation'; installationId: number };
-
-// The brain's primary key, from the repo. The same slug create_brain and
-// connect_brain derive, so a static brain looks like any other.
-export function staticBrainId(owner: string, repo: string): string {
-	return `brain-${`${owner}-${repo}`
-		.toLowerCase()
-		.replace(/[^a-z0-9]+/g, '-')
-		.replace(/^-|-$/g, '')}`;
-}
 
 // The connection row a static credential is recorded as. A token is referenced,
 // never stored: `external_id` names where the secret lives ("env"), and
@@ -62,15 +54,19 @@ export function staticConnection(
 			};
 }
 
+// Brains in the static org that config no longer names.
+const STALE_BRAINS = `SELECT brain_id FROM brains WHERE org_id = ?1 AND NOT (repo_owner = ?2 AND repo_name = ?3)`;
+
 export async function ensureStaticTenant(
 	db: D1Database,
 	input: { owner: string; repo: string; credential: StaticCredential }
 ): Promise<{ userId: string }> {
 	const { owner, repo } = input;
 	const conn = staticConnection(input.credential, owner);
-	const brainId = staticBrainId(owner, repo);
+	const brainId = brainIdFor(owner, repo);
 	const installationId =
 		input.credential.kind === 'installation' ? input.credential.installationId : 0;
+	const stale = await db.prepare(STALE_BRAINS).bind(STATIC_ORG_ID, owner, repo).first();
 	await db.batch([
 		db
 			.prepare(`INSERT OR IGNORE INTO app_users (user_id, email, name) VALUES (?1, ?2, 'Operator')`)
@@ -114,18 +110,9 @@ export async function ensureStaticTenant(
 		// for this repo (under another id, or another org) is adopted into the static
 		// org rather than failing the unique constraint. Config is the truth: a brain
 		// from earlier config would otherwise sit beside the current one and, being
-		// older, become the default.
-		// Its index, findings and grants go with it, before the row they hang off.
-		...purgeBrainRowsStatements(
-			db,
-			`SELECT brain_id FROM brains WHERE org_id = ?1 AND NOT (repo_owner = ?2 AND repo_name = ?3)`,
-			STATIC_ORG_ID,
-			owner,
-			repo
-		),
-		db
-			.prepare(`DELETE FROM brains WHERE org_id = ?1 AND NOT (repo_owner = ?2 AND repo_name = ?3)`)
-			.bind(STATIC_ORG_ID, owner, repo)
+		// older, become the default. Its rows go with it. Runs per request, so the
+		// statements are issued only when such a brain exists (rare: a config change).
+		...(stale ? forgetBrainsStatements(db, STALE_BRAINS, STATIC_ORG_ID, owner, repo) : [])
 	]);
 	return { userId: STATIC_USER_ID };
 }
