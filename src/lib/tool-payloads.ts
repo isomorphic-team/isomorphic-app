@@ -281,7 +281,7 @@ export interface ReviewViewWire extends InBrain {
 	};
 }
 
-/** One step of the baseline scan (configure_brain with baseline_scan). */
+/** One step of the baseline scan (review_brain, check "sensitive-data"). */
 export interface BaselineStepWire {
 	baseline: {
 		status: 'running' | 'done';
@@ -291,20 +291,24 @@ export interface BaselineStepWire {
 	};
 }
 
-/** One step of the model consolidation pass (configure_brain with consolidate). */
+/** One step of the model consolidation pass (review_brain, check "contradictions"). */
 export interface ConsolidationStepWire {
 	consolidation: {
 		status: 'running' | 'stopped' | 'done';
 		pairsChecked: number;
 		pairsSkipped: number;
 		pairsScreened: number;
+		pairsUnchanged: number;
 		findings: number;
 		costUsd: number;
 	} | null;
 }
 
 /** One step of the consolidation pass, as the Worker wires it into a brain's context. */
-export type ConsolidationStep = () => Promise<{ text: string; wire: ConsolidationStepWire }>;
+export type ConsolidationStep = (opts?: {
+	// Start a new pass that checks every pair, ignoring what earlier passes checked.
+	fresh?: boolean;
+}) => Promise<{ text: string; wire: ConsolidationStepWire }>;
 
 export interface GraphViewWire extends InBrain {
 	view: 'graph';

@@ -50,7 +50,7 @@ Settled so far:
 - **Writes made outside Isomorphic are scanned after the fact** (push webhook), not blocked.
   Branch lockdown is left to the brain owner.
 - **Model stages are forward-only.** Existing content gets only the deterministic detectors,
-  through the baseline scan an admin runs (`configure_brain` with `baseline_scan`).
+  through the baseline scan an admin runs (`review_brain` with `check: "sensitive-data"`).
 - **A classifier is a guardrail, not a guarantee.** Recall on well-edited prose is limited, and
   the docs and UI say so.
 
@@ -73,15 +73,25 @@ Order:
      are visible to the author and admins only. Consolidation findings are visible to editors.
      The guard's deterministic detections are its first producer; step 3's model stages and
      step 5 add more.
+   - Built: one run-state table for every budgeted, resumable whole-brain pass
+     (`brain_passes`, `src/lib/brain-pass.ts`); consolidation and the baseline scan use it.
+     Left, the contract half of moving the baseline scan off `policy_baseline` (0018), as two
+     deploys so each stays rollback-safe: first stop writing `policy_baseline` and remove the
+     fallback read in `readBaseline`, then drop the table in a later migration.
 3. **Guard enforcement.** The rulebook page, both model stages, the tiers, quarantine,
    self-release and the audit log.
-4. **Push webhook.** The after-the-fact scan for the guard, and the incremental trigger for
-   consolidation. Can run alongside step 3.
+4. **Push webhook and background passes.** The after-the-fact scan for the guard, and the
+   incremental trigger for consolidation. A pass started by a push or by `review_brain` runs in
+   the background, so `review_brain` returns at once instead of the client calling it once per
+   step. Can run alongside step 3.
 5. **Consolidation.** Approve/reject only at first, with automatic small fixes enabled per brain
    by an admin. Its own edits go through the guard like any other write. Built: the
-   admin-run pass (`configure_brain` with `consolidate: true`, `ee/review/consolidation.ts`),
+   admin-run pass (`review_brain` with `check: "contradictions"`, `ee/review/consolidation.ts`),
    with a Jev screen and Haiku triage, writing `conflict` findings with proposals and no auto
-   tier.
+   tier. Each step stops starting new pairs after 15 seconds, so a call ends well inside a
+   host's tool timeout. Built: claim clusters (C5), from a fact label per claim, and a memory of each
+   checked pair, so a later pass checks only pairs whose pages changed. Left: the Review
+   screen section (C7).
 6. **When a deployment needs it:** an entitlement writer driven by billing (outside this
    repository), and signed offline license keys for self-hosters.
 

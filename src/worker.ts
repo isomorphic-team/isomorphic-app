@@ -253,12 +253,13 @@ function consolidationFor(
 	const anthropicKey = env.ANTHROPIC_API_KEY?.trim() || undefined;
 	const openRouterKey = env.OPENROUTER_API_KEY?.trim() || undefined;
 	if (!anthropicKey && !openRouterKey) return undefined;
-	return async () => {
+	return async (opts) => {
 		const { text, state } = await runConsolidationStep({
 			db: env.PLATFORM_DB,
 			...scope,
 			anthropicKey,
-			openRouterKey
+			openRouterKey,
+			fresh: opts?.fresh
 		});
 		return { text, wire: { consolidation: state && consolidationWire(state) } };
 	};

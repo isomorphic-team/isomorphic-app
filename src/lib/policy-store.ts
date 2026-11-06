@@ -1,10 +1,15 @@
-// The data-policy guard's D1 half: `policy_detections` (migration 0015) and
-// `policy_baseline` (migration 0018). Kept apart from policy-guard.ts so that file
-// stays free of storage.
+// The data-policy guard's D1 half: `policy_detections` (migration 0015) and the baseline
+// scan's run state, in `brain_passes` (kind 'policy-baseline', through brain-pass.ts).
+// Kept apart from policy-guard.ts so that file stays free of storage.
+//
+// The scan's state moved from `policy_baseline` (0018) in 0023. Until a later migration
+// drops that table, every save also writes it, so a rolled-back version reads its own
+// table current, and a read falls back to it for a row only that version wrote.
 //
 // Worker-safe: no node:* imports.
 
-import type { D1Database } from '@cloudflare/workers-types';
+import type { D1Database, D1PreparedStatement } from '@cloudflare/workers-types';
+import { readPass, savePassStatement, type PassState } from './brain-pass.ts';
 import type { PolicyMode } from './brain-policy.ts';
 import { guardCoverage, type GuardCoverage, type WriteDetection } from './policy-guard.ts';
 import { policyFindings, upsertFindings } from './review-queue.ts';
@@ -83,7 +88,64 @@ export interface BaselineState {
 	finishedAt: number | null;
 }
 
-interface BaselineRow {
+const BASELINE_KIND = 'policy-baseline';
+
+type BaselineCounts = Pick<BaselineState, 'filesScanned' | 'filesSkipped' | 'detections'>;
+const noBaselineCounts = (): BaselineCounts => ({
+	filesScanned: 0,
+	filesSkipped: 0,
+	detections: 0
+});
+
+const baselineRunId = (startedAt: number) => `baseline-${startedAt}`;
+
+function toPass({ status, cursor, startedAt, finishedAt, ...counters }: BaselineState) {
+	return {
+		runId: baselineRunId(startedAt),
+		status,
+		cursor,
+		counters,
+		stoppedReason: null,
+		startedAt,
+		finishedAt
+	} satisfies PassState<BaselineCounts>;
+}
+
+// The step's state in both tables, as statements for the caller's batch.
+function saveBaselineState(
+	db: D1Database,
+	scope: BaselineScope,
+	s: BaselineState,
+	now: number
+): D1PreparedStatement[] {
+	return [
+		savePassStatement(db, { ...scope, kind: BASELINE_KIND }, toPass(s), now),
+		db
+			.prepare(
+				`INSERT INTO policy_baseline
+				   (brain_id, status, cursor, files_scanned, files_skipped, detections, started_by,
+				    started_at, finished_at)
+				 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+				 ON CONFLICT (brain_id) DO UPDATE SET
+				   status = ?2, cursor = ?3, files_scanned = ?4, files_skipped = ?5, detections = ?6,
+				   started_by = CASE WHEN started_at = ?8 THEN started_by ELSE ?7 END,
+				   started_at = ?8, finished_at = ?9`
+			)
+			.bind(
+				scope.brainId,
+				s.status,
+				s.cursor,
+				s.filesScanned,
+				s.filesSkipped,
+				s.detections,
+				scope.actorUserId ?? null,
+				s.startedAt,
+				s.finishedAt
+			)
+	];
+}
+
+interface LegacyBaselineRow {
 	status: string;
 	cursor: string | null;
 	files_scanned: number;
@@ -94,13 +156,23 @@ interface BaselineRow {
 }
 
 export async function readBaseline(db: D1Database, brainId: string): Promise<BaselineState | null> {
+	const pass = await readPass(db, brainId, BASELINE_KIND, noBaselineCounts());
+	if (pass) {
+		return {
+			status: pass.status === 'done' ? 'done' : 'running',
+			cursor: pass.cursor,
+			...pass.counters,
+			startedAt: pass.startedAt,
+			finishedAt: pass.finishedAt
+		};
+	}
 	const r = await db
 		.prepare(
 			`SELECT status, cursor, files_scanned, files_skipped, detections, started_at, finished_at
 			 FROM policy_baseline WHERE brain_id = ?1`
 		)
 		.bind(brainId)
-		.first<BaselineRow>();
+		.first<LegacyBaselineRow>();
 	if (!r) return null;
 	return {
 		status: r.status === 'done' ? 'done' : 'running',
@@ -119,29 +191,20 @@ export async function beginBaseline(
 	scope: BaselineScope,
 	now: number
 ): Promise<BaselineState> {
+	const state: BaselineState = {
+		status: 'running',
+		cursor: null,
+		...noBaselineCounts(),
+		startedAt: now,
+		finishedAt: null
+	};
 	await db.batch([
 		db
 			.prepare('DELETE FROM policy_detections WHERE brain_id = ?1 AND mode = ?2')
 			.bind(scope.brainId, BASELINE_MODE),
-		db
-			.prepare(
-				`INSERT INTO policy_baseline (brain_id, status, started_by, started_at)
-				 VALUES (?1, 'running', ?2, ?3)
-				 ON CONFLICT (brain_id) DO UPDATE SET
-				   status = 'running', cursor = NULL, files_scanned = 0, files_skipped = 0,
-				   detections = 0, started_by = ?2, started_at = ?3, finished_at = NULL`
-			)
-			.bind(scope.brainId, scope.actorUserId ?? null, now)
+		...saveBaselineState(db, scope, state, now)
 	]);
-	return {
-		status: 'running',
-		cursor: null,
-		filesScanned: 0,
-		filesSkipped: 0,
-		detections: 0,
-		startedAt: now,
-		finishedAt: null
-	};
+	return state;
 }
 
 // One step's rows, then its progress. The range delete makes a repeated step harmless:
@@ -193,23 +256,7 @@ export async function saveBaselineStep(
 		policyFindings(detections, null, `baseline-${next.startedAt}`),
 		now
 	);
-	await db
-		.prepare(
-			`UPDATE policy_baseline
-			 SET status = ?2, cursor = ?3, files_scanned = ?4, files_skipped = ?5,
-			     detections = ?6, finished_at = ?7
-			 WHERE brain_id = ?1`
-		)
-		.bind(
-			scope.brainId,
-			next.status,
-			next.cursor,
-			next.filesScanned,
-			next.filesSkipped,
-			next.detections,
-			next.finishedAt
-		)
-		.run();
+	await db.batch(saveBaselineState(db, scope, next, now));
 }
 
 // Everything the coverage statement needs for one brain.

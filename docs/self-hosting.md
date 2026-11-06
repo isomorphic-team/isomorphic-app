@@ -397,7 +397,7 @@ issue text and requires an explicit confirmation before posting, publishes nothi
 account, and records the reporter privately in D1 (`feedback_reports`) keyed by the opaque
 report id printed in the issue. A per-user cap of ten reports a day bounds abuse.
 
-**Model consolidation (enterprise, optional).** `configure_brain` with `consolidate: true`
+**Model consolidation (enterprise, optional).** `review_brain` with `check: "contradictions"`
 has a model compare related pages and queue the contradictions it finds as findings `validate`
 lists. It is an `ee/` feature: it runs only for an organization with the `enterprise`
 entitlement (`pnpm entitle --org <org_id> --feature enterprise --cap 5`), within that

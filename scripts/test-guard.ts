@@ -813,7 +813,9 @@ console.log('\nbaseline scan: the real migrations, a stub store (8)');
 	// A step whose reply was lost: its rows landed, the cursor did not move.
 	await db
 		.prepare(
-			'UPDATE policy_baseline SET cursor = NULL, files_scanned = 0, detections = 0 WHERE brain_id = ?1'
+			`UPDATE brain_passes SET cursor = NULL,
+			   counters = json_object('filesScanned', 0, 'filesSkipped', 0, 'detections', 0)
+			 WHERE brain_id = ?1 AND kind = 'policy-baseline'`
 		)
 		.bind('b2')
 		.run();
@@ -826,6 +828,118 @@ console.log('\nbaseline scan: the real migrations, a stub store (8)');
 		'a repeated step does not double-count, and the next one finishes',
 		two.status === 'done' && total?.n === BASELINE_FILE_BUDGET + 5 && two.filesScanned === total.n,
 		JSON.stringify({ two, total })
+	);
+}
+
+console.log('\nbaseline state in brain_passes, and the move from policy_baseline (16)');
+{
+	const db = localD1(':memory:').db as unknown as D1Database;
+	await db
+		.prepare(
+			`INSERT INTO policy_baseline
+			   (brain_id, status, cursor, files_scanned, files_skipped, detections, started_by, started_at, finished_at)
+			 VALUES ('b9', 'done', 'z.md', 40, 2, 3, 'u9', 1000, 2000)`
+		)
+		.run();
+	const legacyOnly = await readBaseline(db, 'b9');
+	check(
+		'a row only the previous version wrote still reads',
+		legacyOnly?.status === 'done' &&
+			legacyOnly.filesScanned === 40 &&
+			legacyOnly.detections === 3 &&
+			legacyOnly.finishedAt === 2000,
+		JSON.stringify(legacyOnly)
+	);
+	const copy = db.prepare(readFileSync('migrations/0023_baseline_to_brain_passes.sql', 'utf8'));
+	await copy.run();
+	await copy.run();
+	const moved = await db
+		.prepare(
+			`SELECT run_id, status, cursor, counters, started_by, started_at, finished_at
+			 FROM brain_passes WHERE brain_id = 'b9' AND kind = 'policy-baseline'`
+		)
+		.all<{
+			run_id: string;
+			status: string;
+			cursor: string;
+			counters: string;
+			started_by: string;
+			started_at: number;
+			finished_at: number;
+		}>();
+	const m = moved.results[0];
+	check(
+		'the migration copies the row once, with its counters as JSON',
+		moved.results.length === 1 &&
+			m.run_id === 'baseline-1000' &&
+			m.status === 'done' &&
+			m.cursor === 'z.md' &&
+			m.started_by === 'u9' &&
+			m.started_at === 1000 &&
+			m.finished_at === 2000 &&
+			JSON.stringify(JSON.parse(m.counters)) ===
+				JSON.stringify({ filesScanned: 40, filesSkipped: 2, detections: 3 }),
+		JSON.stringify(moved.results)
+	);
+	const fromPasses = await readBaseline(db, 'b9');
+	check(
+		'the moved row reads the same as the old one',
+		JSON.stringify(fromPasses) === JSON.stringify(legacyOnly),
+		JSON.stringify(fromPasses)
+	);
+
+	const store = {
+		getHead: async () => 'head',
+		listTree: async () => [{ path: 'wiki/a.md', sha: 's1' }],
+		fetchPages: async () => ({
+			pages: [{ path: 'wiki/a.md', content: 'nothing sensitive' }],
+			truncated: false
+		})
+	} as unknown as BrainStore;
+	const target = {
+		db,
+		store,
+		repo: { owner: 'o', repo: 'r' },
+		config: DEFAULT_BRAIN_CONFIG,
+		scope: { brainId: 'b9', orgId: 'o9', actorUserId: 'u10' }
+	};
+	const rescan = await advanceBaseline(target, 5000);
+	const pass = await db
+		.prepare(
+			`SELECT run_id, status, counters, started_by FROM brain_passes
+			 WHERE brain_id = 'b9' AND kind = 'policy-baseline'`
+		)
+		.first<{ run_id: string; status: string; counters: string; started_by: string }>();
+	const old = await db
+		.prepare(
+			`SELECT status, files_scanned, detections, started_by, started_at, finished_at
+			 FROM policy_baseline WHERE brain_id = 'b9'`
+		)
+		.first<{
+			status: string;
+			files_scanned: number;
+			detections: number;
+			started_by: string;
+			started_at: number;
+			finished_at: number;
+		}>();
+	check(
+		'a new scan after a finished one starts a new run in brain_passes',
+		rescan.status === 'done' &&
+			pass?.run_id === 'baseline-5000' &&
+			pass.started_by === 'u10' &&
+			JSON.parse(pass.counters).filesScanned === 1,
+		JSON.stringify(pass)
+	);
+	check(
+		'and still writes policy_baseline, so a rolled-back version reads its table current',
+		old?.status === 'done' &&
+			old.files_scanned === 1 &&
+			old.detections === 0 &&
+			old.started_by === 'u10' &&
+			old.started_at === 5000 &&
+			old.finished_at === 5000,
+		JSON.stringify(old)
 	);
 }
 

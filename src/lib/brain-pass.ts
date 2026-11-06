@@ -20,6 +20,10 @@ export interface PassState<C> {
 	cursor: string | null;
 	counters: C;
 	stoppedReason: string | null;
+	// When this run began, and finished (null until done). Read from the row; a save keeps
+	// the stored start for the same run id.
+	startedAt: number;
+	finishedAt: number | null;
 }
 
 export interface PassScope {
@@ -35,6 +39,8 @@ interface PassRow {
 	cursor: string | null;
 	counters: string;
 	stopped_reason: string | null;
+	started_at: number;
+	finished_at: number | null;
 }
 
 export async function readPass<C extends object>(
@@ -45,7 +51,7 @@ export async function readPass<C extends object>(
 ): Promise<PassState<C> | null> {
 	const r = await db
 		.prepare(
-			`SELECT run_id, status, cursor, counters, stopped_reason
+			`SELECT run_id, status, cursor, counters, stopped_reason, started_at, finished_at
 			 FROM brain_passes WHERE brain_id = ?1 AND kind = ?2`
 		)
 		.bind(brainId, kind)
@@ -62,7 +68,9 @@ export async function readPass<C extends object>(
 		status: r.status as PassStatus,
 		cursor: r.cursor,
 		counters: { ...defaults, ...counters },
-		stoppedReason: r.stopped_reason
+		stoppedReason: r.stopped_reason,
+		startedAt: r.started_at,
+		finishedAt: r.finished_at
 	};
 }
 
@@ -70,7 +78,8 @@ export async function readPass<C extends object>(
 export function continuePass<C>(
 	existing: PassState<C> | null,
 	defaults: C,
-	newRunId: () => string
+	newRunId: () => string,
+	now: number
 ): PassState<C> {
 	if (existing && existing.status !== 'done') {
 		return { ...existing, status: 'running', stoppedReason: null };
@@ -80,7 +89,9 @@ export function continuePass<C>(
 		status: 'running',
 		cursor: null,
 		counters: defaults,
-		stoppedReason: null
+		stoppedReason: null,
+		startedAt: now,
+		finishedAt: null
 	};
 }
 
@@ -127,4 +138,44 @@ export async function savePass<C>(
 	now: number
 ): Promise<void> {
 	await savePassStatement(db, scope, s, now).run();
+}
+
+// ---------- what a pass last checked ----------
+
+// Each item a kind of pass has checked in a brain, with the fingerprint of everything that
+// check depended on. A pass skips an item whose fingerprint has not changed.
+export async function readPassItems(
+	db: D1Database,
+	brainId: string,
+	kind: string
+): Promise<Map<string, string>> {
+	const { results } = await db
+		.prepare('SELECT item, fingerprint FROM brain_pass_items WHERE brain_id = ?1 AND kind = ?2')
+		.bind(brainId, kind)
+		.all<{ item: string; fingerprint: string }>();
+	return new Map(results.map((r) => [r.item, r.fingerprint]));
+}
+
+// Rows per D1 batch when a step records what it checked.
+const ITEM_BATCH = 40;
+
+export async function savePassItems(
+	db: D1Database,
+	brainId: string,
+	kind: string,
+	items: readonly { item: string; fingerprint: string }[],
+	now: number
+): Promise<void> {
+	const stmt = db.prepare(
+		`INSERT INTO brain_pass_items (brain_id, kind, item, fingerprint, checked_at)
+		 VALUES (?1, ?2, ?3, ?4, ?5)
+		 ON CONFLICT (brain_id, kind, item) DO UPDATE SET fingerprint = ?4, checked_at = ?5`
+	);
+	for (let i = 0; i < items.length; i += ITEM_BATCH) {
+		await db.batch(
+			items
+				.slice(i, i + ITEM_BATCH)
+				.map((x) => stmt.bind(brainId, kind, x.item, x.fingerprint, now))
+		);
+	}
 }

@@ -2,7 +2,7 @@
 // `conflict` findings in the unified queue. Licensed under ee/LICENSE.
 // Design: docs/design/consistency-checks.md, Part 2 (C4).
 //
-// A pass is budgeted and resumable. Each call checks up to PAIRS_PER_STEP page pairs from
+// A pass is budgeted and resumable. Each call plans up to PAIRS_PER_STEP page pairs from
 // its cursor (D1 `brain_passes`, kind 'consolidation', through src/lib/brain-pass.ts),
 // through the gateway, and writes what survives the filters to review_findings. Nothing is written to the brain: every finding waits for a person
 // (the auto tier is off).
@@ -41,7 +41,9 @@ import type { BrainStore, RepoRef } from '../../src/lib/brain-repo.ts';
 import {
 	continuePass,
 	readPass,
+	readPassItems,
 	savePass,
+	savePassItems,
 	type PassState,
 	type PassStatus
 } from '../../src/lib/brain-pass.ts';
@@ -51,6 +53,8 @@ import { detectSensitive } from '../../src/lib/policy-detectors.ts';
 import {
 	conflictKey,
 	normalizeDisputedValue,
+	normalizeFactLabel,
+	readFactLabels,
 	readPageShas,
 	upsertFindings,
 	valuesOnPages,
@@ -61,15 +65,23 @@ import type { ConsolidationStepWire } from '../../src/lib/tool-payloads.ts';
 import { nextFence } from '../../src/lib/wiki.ts';
 import {
 	GatewayRefused,
+	HAIKU_MODEL,
+	JEV_MODEL,
 	ModelUnavailable,
 	openGateway,
 	type Gateway,
 	type Question
 } from './gateway.ts';
 
-// Pairs one call checks. Each is one model request, run CONCURRENCY at a time.
-export const PAIRS_PER_STEP = 12;
-const CONCURRENCY = 4;
+// Pairs one call plans. The clock decides how many it checks: a step starts no new batch
+// once STEP_TIME_MS have passed, so a call ends inside a host's tool timeout however slow
+// the models are, and the pairs it did not reach are the next call's. The first batch
+// always runs, so every call makes progress.
+export const PAIRS_PER_STEP = 48;
+export const STEP_TIME_MS = 15_000;
+
+// Pairs checked at once. Each holds one model request open.
+const CONCURRENCY = 6;
 
 // Search hits paired with each page.
 export const RELATED_PER_PAGE = 3;
@@ -151,7 +163,10 @@ export function planStep(
 	pages: readonly PageText[],
 	partners: ReadonlyMap<string, readonly string[]>,
 	cursor: string | null,
-	budget = PAIRS_PER_STEP
+	budget = PAIRS_PER_STEP,
+	// Whether a pair costs a check. One that does not (unchanged since its last check)
+	// rides along without using the budget, so a brain that has not changed is one call.
+	costs: (pair: Pair) => boolean = () => true
 ): StepPlan {
 	const sorted = [...pages].sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
 	// Lowered once: ranking lowercases every body it scores, and a step ranks many times.
@@ -177,7 +192,8 @@ export function planStep(
 			.filter((other) => other > page.path || !partnersOf(other).has(page.path))
 			.sort()
 			.map((other) => ({ source: page.path, pair: [page.path, other].sort() as unknown as Pair }));
-		if (pairs.length && pairs.length + own.length > budget) {
+		const spent = pairs.filter((p) => costs(p.pair)).length;
+		if (spent && spent + own.filter((p) => costs(p.pair)).length > budget) {
 			return { pairs, last, done: false };
 		}
 		pairs.push(...own);
@@ -195,6 +211,7 @@ export const sendable = (content: string) =>
 
 export interface Claim {
 	subject: string;
+	fact: string;
 	quote_a: string;
 	quote_b: string;
 	value_a: string;
@@ -218,6 +235,7 @@ export const TRIAGE_SCHEMA = {
 				additionalProperties: false,
 				required: [
 					'subject',
+					'fact',
 					'quote_a',
 					'quote_b',
 					'value_a',
@@ -230,6 +248,7 @@ export const TRIAGE_SCHEMA = {
 				],
 				properties: {
 					subject: { type: 'string' },
+					fact: { type: 'string' },
 					quote_a: { type: 'string' },
 					quote_b: { type: 'string' },
 					value_a: { type: 'string' },
@@ -263,6 +282,7 @@ export const TRIAGE_SYSTEM = `You compare two pages from a team's knowledge base
 
 For each disagreement:
 - subject: the fact in a few words.
+- fact: two to five lowercase words naming WHAT is disputed, never either value, worded the same whichever pages state it (e.g. "engagement length", "advisor hourly rate"). If it is the same fact as one listed in known_facts, copy that label exactly.
 - quote_a / quote_b: the line from each page that states it, copied exactly.
 - value_a / value_b: the disputed value as each page writes it, copied exactly from inside the quote (a number, a date, a name, a status).
 - explained: true when dates, scope or an existing note on either page account for the difference, so a careful reader would not be misled.
@@ -277,10 +297,15 @@ For each disagreement:
 
 Report only real disagreements about the same thing. Different facts about different things are not disagreements. Return an empty list when the pages agree.`;
 
-export function triagePrompt(a: PageText, b: PageText): string {
+// The pair, plus the fact labels the brain already uses, so the same fact gets the same
+// label whichever pair raises it.
+export function triagePrompt(a: PageText, b: PageText, knownFacts: readonly string[] = []): string {
 	const page = (label: string, p: PageText) =>
 		`<page_${label} path="${p.path}" title="${p.title.replace(/"/g, "'")}">\n${p.content}\n</page_${label}>`;
-	return `${page('a', a)}\n\n${page('b', b)}`;
+	const facts = knownFacts.length
+		? `\n\n<known_facts>\n${knownFacts.join('\n')}\n</known_facts>`
+		: '';
+	return `${page('a', a)}\n\n${page('b', b)}${facts}`;
 }
 
 // A page's block structure: fences, headings, and each run of table rows or list items.
@@ -404,11 +429,45 @@ export async function triageFindings(input: {
 				[b.path]: input.pageShas[b.path] ?? ''
 			},
 			runId: input.runId,
-			clusterId: null,
+			clusterId: normalizeFactLabel(c.fact ?? '') || null,
 			authorUserId: null
 		});
 	}
 	return { findings: [...out.values()], dropped };
+}
+
+// ---------- what earlier passes checked ----------
+
+// A digest of everything that decides a pair's answer: the prompts, the schema, the gates
+// and the models. Part of every pair's fingerprint, so changing any of it makes every pair
+// worth checking again.
+let versionMemo: Promise<string> | null = null;
+function checkVersion(): Promise<string> {
+	versionMemo ??= crypto.subtle
+		.digest(
+			'SHA-256',
+			new TextEncoder().encode(
+				JSON.stringify([
+					TRIAGE_SYSTEM,
+					TRIAGE_SCHEMA,
+					JEV_CONFLICT_QUESTION,
+					MISLEADING_QUESTION,
+					JEV_GATE,
+					MIN_MISLEADING,
+					JEV_MAX_PAGE_CHARS,
+					JEV_CLAIM_PAGE_CHARS,
+					HAIKU_MODEL,
+					JEV_MODEL
+				])
+			)
+		)
+		.then((d) =>
+			[...new Uint8Array(d)]
+				.map((b) => b.toString(16).padStart(2, '0'))
+				.join('')
+				.slice(0, 16)
+		);
+	return versionMemo;
 }
 
 // ---------- run state ----------
@@ -417,12 +476,19 @@ const KIND = 'consolidation';
 
 export interface ConsolidationState {
 	runId: string;
+	startedAt: number;
+	finishedAt: number | null;
 	status: PassStatus;
 	cursor: string | null;
 	pairsChecked: number;
 	pairsSkipped: number;
 	// Checked pairs Jev cleared, so triage never saw them.
 	pairsScreened: number;
+	// Pairs skipped because neither page, nor the check itself, changed since they were
+	// last checked. Their findings stand as they were.
+	pairsUnchanged: number;
+	// A pass that ignores what earlier passes checked, set when it starts.
+	fresh: boolean;
 	findings: number;
 	costUsd: number;
 	served: Record<string, number>;
@@ -431,13 +497,22 @@ export interface ConsolidationState {
 
 type Counters = Pick<
 	ConsolidationState,
-	'pairsChecked' | 'pairsSkipped' | 'pairsScreened' | 'findings' | 'costUsd' | 'served'
+	| 'pairsChecked'
+	| 'pairsSkipped'
+	| 'pairsScreened'
+	| 'pairsUnchanged'
+	| 'fresh'
+	| 'findings'
+	| 'costUsd'
+	| 'served'
 >;
 
 const noCounts = (): Counters => ({
 	pairsChecked: 0,
 	pairsSkipped: 0,
 	pairsScreened: 0,
+	pairsUnchanged: 0,
+	fresh: false,
 	findings: 0,
 	costUsd: 0,
 	served: {}
@@ -456,13 +531,13 @@ export async function readRun(db: D1Database, brainId: string): Promise<Consolid
 async function saveRun(
 	db: D1Database,
 	scope: { brainId: string; orgId: string; actorUserId?: string },
-	{ runId, status, cursor, stoppedReason, ...counters }: ConsolidationState,
+	{ runId, status, cursor, stoppedReason, startedAt, finishedAt, ...counters }: ConsolidationState,
 	now: number
 ) {
 	await savePass(
 		db,
 		{ ...scope, kind: KIND },
-		{ runId, status, cursor, stoppedReason, counters },
+		{ runId, status, cursor, stoppedReason, startedAt, finishedAt, counters },
 		now
 	);
 }
@@ -480,6 +555,10 @@ export interface ConsolidationTarget {
 	repo: RepoRef;
 	gateway: Pick<Gateway, 'chatJson' | 'decide'>;
 	newRunId?: () => string;
+	// Start a new pass that checks every pair, ignoring what earlier passes checked.
+	fresh?: boolean;
+	// The step's clock, for STEP_TIME_MS. Date.now unless a test drives it.
+	clock?: () => number;
 }
 
 // Why a pass stopped, for the run row and the reply.
@@ -498,9 +577,10 @@ export async function advanceConsolidation(
 	const scope = { brainId: t.brainId, orgId: t.orgId, actorUserId: t.actorUserId };
 	const state = flatten(
 		continuePass(
-			await readPass(t.db, t.brainId, KIND, noCounts()),
-			noCounts(),
-			t.newRunId ?? (() => crypto.randomUUID())
+			t.fresh ? null : await readPass(t.db, t.brainId, KIND, noCounts()),
+			{ ...noCounts(), fresh: !!t.fresh },
+			t.newRunId ?? (() => crypto.randomUUID()),
+			now
 		)
 	);
 
@@ -537,8 +617,25 @@ export async function advanceConsolidation(
 		}
 	}
 
-	const plan = planStep(pages, partners, state.cursor);
 	const shas = Object.fromEntries(await readPageShas(t.db, t.brainId));
+	// What earlier passes checked: a pair whose fingerprint still matches costs nothing.
+	const version = await checkVersion();
+	const lastChecked = state.fresh
+		? new Map<string, string>()
+		: await readPassItems(t.db, t.brainId, KIND);
+	const fingerprint = ([a, b]: Pair) =>
+		shas[a] && shas[b] ? `${version}:${shas[a]}:${shas[b]}` : null;
+	const unchanged = (pair: Pair) => {
+		const fp = fingerprint(pair);
+		return fp !== null && lastChecked.get(pair.join('|')) === fp;
+	};
+	const checked: { item: string; fingerprint: string }[] = [];
+	const remember = (pair: Pair) => {
+		const fp = fingerprint(pair);
+		if (fp) checked.push({ item: pair.join('|'), fingerprint: fp });
+	};
+	const plan = planStep(pages, partners, state.cursor, PAIRS_PER_STEP, (pair) => !unchanged(pair));
+	const knownFacts = await readFactLabels(t.db, t.brainId);
 	const found: QueueFinding[] = [];
 	// The first pair a refused gateway stopped. Pairs after it may have run in the same
 	// batch; the cursor stays before it, so the next step checks them again.
@@ -565,7 +662,12 @@ export async function advanceConsolidation(
 	}
 
 	async function check(index: number) {
-		const [pa, pb] = plan.pairs[index].pair;
+		const pair = plan.pairs[index].pair;
+		if (unchanged(pair)) {
+			state.pairsUnchanged++;
+			return;
+		}
+		const [pa, pb] = pair;
 		const a = byPath.get(pa);
 		const b = byPath.get(pb);
 		if (
@@ -597,11 +699,12 @@ export async function advanceConsolidation(
 			if (!passesScreen(conflict)) {
 				state.pairsChecked++;
 				state.pairsScreened++;
+				remember(pair);
 				return;
 			}
 			const served = await t.gateway.chatJson<{ claims: Claim[] }>(
 				TRIAGE_SYSTEM,
-				triagePrompt(a, b),
+				triagePrompt(a, b, knownFacts),
 				TRIAGE_SCHEMA as unknown as Record<string, unknown>
 			);
 			count(served.model, served.costUsd);
@@ -625,6 +728,7 @@ export async function advanceConsolidation(
 			});
 			found.push(...findings);
 			state.pairsChecked++;
+			remember(pair);
 		} catch (err) {
 			const reason = stopReason(err);
 			if (reason) {
@@ -637,20 +741,30 @@ export async function advanceConsolidation(
 		}
 	}
 
+	const clock = t.clock ?? Date.now;
+	const started = clock();
+	// The first pair this step did not start, when the clock ran out first.
+	let firstUnstarted = Infinity;
 	for (let i = 0; i < plan.pairs.length && !stoppedReason; i += CONCURRENCY) {
+		if (i > 0 && clock() - started >= STEP_TIME_MS) {
+			firstUnstarted = i;
+			break;
+		}
 		const batch = plan.pairs.slice(i, i + CONCURRENCY).map((_, j) => check(i + j));
 		await Promise.all(batch);
 	}
 
 	await upsertFindings(t.db, t.brainId, found, now);
+	await savePassItems(t.db, t.brainId, KIND, checked, now);
 	state.findings += found.length;
 
-	if (stoppedReason) {
-		// The cursor moves past every source that ends before the first stopped pair.
-		const stoppedSource = plan.pairs[firstStopped].source;
-		const before = plan.pairs.slice(0, firstStopped).filter((p) => p.source !== stoppedSource);
+	const firstOpen = Math.min(firstStopped, firstUnstarted);
+	if (firstOpen !== Infinity) {
+		// The cursor moves past every source that ends before the first pair left open.
+		const openSource = plan.pairs[firstOpen].source;
+		const before = plan.pairs.slice(0, firstOpen).filter((p) => p.source !== openSource);
 		state.cursor = before.at(-1)?.source ?? state.cursor;
-		state.status = 'stopped';
+		state.status = stoppedReason ? 'stopped' : 'running';
 		state.stoppedReason = stoppedReason;
 	} else {
 		state.cursor = plan.last;
@@ -674,24 +788,28 @@ const STOP_TEXT: Record<string, string> = {
 export function consolidationStepText(s: ConsolidationState): string {
 	const cost = `$${s.costUsd.toFixed(4)}`;
 	const screened = s.pairsScreened ? ` (${s.pairsScreened} cleared by the screen)` : '';
-	const counts = `${s.pairsChecked} page pair(s) checked${screened}, ${s.pairsSkipped} skipped, ${s.findings} conflict finding(s), ${cost} spent.`;
+	const unchanged = s.pairsUnchanged
+		? ` ${s.pairsUnchanged} unchanged since their last check, not checked again.`
+		: '';
+	const counts = `${s.pairsChecked} page pair(s) checked${screened}, ${s.pairsSkipped} skipped, ${s.findings} conflict finding(s), ${cost} spent.${unchanged}`;
 	if (s.status === 'done') return `Consolidation finished: ${counts} validate lists the findings.`;
 	if (s.status === 'stopped') {
 		const why = STOP_TEXT[s.stoppedReason ?? ''] ?? s.stoppedReason ?? 'unknown';
-		return `Consolidation stopped: ${why}. ${counts} Call configure_brain with consolidate: true to resume once that changes.`;
+		return `Consolidation stopped: ${why}. ${counts} Call review_brain with check "contradictions" to resume once that changes.`;
 	}
-	return `Consolidation in progress: ${counts} Call configure_brain with consolidate: true again to continue.`;
+	return `Consolidation in progress: ${counts} Call review_brain with check "contradictions" again to continue.`;
 }
 
 // ---------- the step a tool runs ----------
 
-// The state as configure_brain returns it.
+// The state as review_brain returns it.
 export function consolidationWire(s: ConsolidationState): ConsolidationStepWire['consolidation'] {
 	return {
 		status: s.status,
 		pairsChecked: s.pairsChecked,
 		pairsSkipped: s.pairsSkipped,
 		pairsScreened: s.pairsScreened,
+		pairsUnchanged: s.pairsUnchanged,
 		findings: s.findings,
 		costUsd: s.costUsd
 	};
@@ -715,6 +833,7 @@ export async function runConsolidationStep(opts: {
 	openRouterKey?: string;
 	anthropicKey?: string;
 	fetch?: typeof fetch;
+	fresh?: boolean;
 }): Promise<ConsolidationStepReply> {
 	const opened = await openGateway({
 		apiKey: opts.openRouterKey,

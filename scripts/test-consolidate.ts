@@ -39,12 +39,17 @@ import {
 	scrubSensitive,
 	staleNote,
 	upsertFindings,
+	clusterFindings,
+	expandClusterDecisions,
+	normalizeFactLabel,
+	readFactLabels,
 	valuesOnPages,
 	type QueueFinding
 } from '../src/lib/review-queue.ts';
 import { localD1 } from '../src/local/d1-sqlite.ts';
 import type { D1Database } from '@cloudflare/workers-types';
 import type { Role } from '../src/lib/orgs.ts';
+import { contradictionCoverage, reviewCheckRefusal } from '../src/lib/review-checks.ts';
 import { checker } from './check.ts';
 
 const { check, done } = checker('consolidate checks');
@@ -823,6 +828,174 @@ const of = (ts: Tension[], kind: string) => ts.filter((t) => t.kind === kind);
 		f.every((x) => x.weight === 4)
 	);
 	check('import: nothing pending, nothing reported', importFindings('crm', []).length === 0);
+}
+
+console.log('\nclusters: findings about one fact, shown as one item');
+{
+	check(
+		'a fact label is lowercase words, punctuation and spacing ignored',
+		normalizeFactLabel('  Engagement   Length. ') === 'engagement length' &&
+			normalizeFactLabel('Advisor (hourly) rate!') === 'advisor hourly rate' &&
+			normalizeFactLabel('') === ''
+	);
+	const f = (key: string, cluster?: string, weight = 4) => ({
+		key,
+		weight,
+		headline: `- ${key} headline\n    evidence for ${key}`,
+		...(cluster ? { cluster } : {})
+	});
+	const grouped = clusterFindings([
+		f('conflict:a|b:1', 'engagement length'),
+		f('island:x'),
+		f('conflict:b|c:2', 'engagement length'),
+		f('conflict:d|e:3', 'pod size')
+	]);
+	const item = grouped[0];
+	check(
+		'two findings sharing a label become one item where the first stood, others pass through in order',
+		grouped.length === 3 &&
+			item.key === 'cluster:engagement length' &&
+			grouped[1].key === 'island:x' &&
+			grouped[2].key === 'conflict:d|e:3'
+	);
+	check(
+		'the item lists every member with its own key and evidence, and ranks above them',
+		item.headline.includes('2 disagreements about "engagement length"') &&
+			item.headline.includes('[conflict:a|b:1]') &&
+			item.headline.includes('[conflict:b|c:2]') &&
+			item.headline.includes('evidence for conflict:b|c:2') &&
+			item.weight === 4.5
+	);
+	check('a label held by one finding is not a cluster', grouped[2].key === 'conflict:d|e:3');
+
+	const rows = [
+		{ key: 'conflict:a|b:1', kind: 'conflict', clusterId: 'engagement length' },
+		{ key: 'conflict:b|c:2', kind: 'conflict', clusterId: 'engagement length' },
+		{ key: 'conflict:d|e:3', kind: 'conflict', clusterId: 'pod size' },
+		{ key: 'policy:x:us-ssn', kind: 'policy', clusterId: 'engagement length' }
+	] as unknown as QueueFinding[];
+	let reads = 0;
+	const read = async () => {
+		reads++;
+		return rows;
+	};
+	const plain = [{ finding: 'island:x', action: 'dismiss', why: 'w' }];
+	check(
+		'decisions without a cluster key pass through without reading the queue',
+		JSON.stringify(await expandClusterDecisions(plain, read)) === JSON.stringify(plain) &&
+			reads === 0
+	);
+	const expanded = await expandClusterDecisions(
+		[
+			{ finding: 'cluster:engagement length', action: 'dismiss', why: 'by level' },
+			{ finding: 'island:x', action: 'dismiss', why: 'w' }
+		],
+		read
+	);
+	check(
+		'a cluster key becomes one decision per conflict member, keeping the action and reason',
+		Array.isArray(expanded) &&
+			JSON.stringify(expanded.map((d) => [d.finding, d.why])) ===
+				JSON.stringify([
+					['conflict:a|b:1', 'by level'],
+					['conflict:b|c:2', 'by level'],
+					['island:x', 'w']
+				])
+	);
+	check(
+		'a cluster key naming nothing is refused',
+		typeof (await expandClusterDecisions([{ finding: 'cluster:nope', why: '' }], read)) === 'string'
+	);
+
+	const db = localD1(':memory:').db as unknown as D1Database;
+	const row = (key: string, kind: 'conflict' | 'policy', clusterId: string | null) => ({
+		key,
+		kind,
+		paths: ['a.md'],
+		headline: 'h',
+		evidence: [],
+		proposal: null,
+		scores: null,
+		pageShas: { 'a.md': 's' },
+		runId: 'r',
+		clusterId,
+		authorUserId: null
+	});
+	await upsertFindings(db, 'b1', [
+		row('conflict:1', 'conflict', 'pod size'),
+		row('conflict:2', 'conflict', 'engagement length'),
+		row('conflict:3', 'conflict', 'pod size'),
+		row('conflict:4', 'conflict', null),
+		row('policy:a.md:us-ssn', 'policy', 'secret label')
+	]);
+	await upsertFindings(db, 'b2', [row('conflict:9', 'conflict', 'other brain')]);
+	check(
+		"the labels a brain's conflict findings use, each once, from that brain only",
+		JSON.stringify(await readFactLabels(db, 'b1')) ===
+			JSON.stringify(['engagement length', 'pod size'])
+	);
+	const conflictRow = row('conflict:5', 'conflict', 'pod size');
+	const shown = queueReport(
+		[conflictRow, row('policy:b.md:us-ssn', 'policy', 'pod size')],
+		new Map([['a.md', 's']]),
+		{ role: 'admin' }
+	);
+	check(
+		'only conflict findings carry their label into the report',
+		shown.open.find((x) => x.key === 'conflict:5')?.cluster === 'pod size' &&
+			shown.open.find((x) => x.key === 'policy:b.md:us-ssn')?.cluster === undefined
+	);
+}
+
+console.log('\nreview_brain: what may run, and what validate says about the contradictions pass');
+{
+	const on = { policyMode: 'shadow' as const, contradictionsAvailable: true };
+	check(
+		'both checks run when the brain allows them',
+		reviewCheckRefusal('sensitive-data', on) === null &&
+			reviewCheckRefusal('contradictions', on) === null
+	);
+	check(
+		'sensitive-data is refused when the brain turned the checks off',
+		/turned off/.test(reviewCheckRefusal('sensitive-data', { ...on, policyMode: 'off' }) ?? '')
+	);
+	check(
+		'contradictions is refused where the deployment has no model key, and says why',
+		/enterprise feature/.test(
+			reviewCheckRefusal('contradictions', { ...on, contradictionsAvailable: false }) ?? ''
+		)
+	);
+	check(
+		'turning sensitive-data checks off does not touch contradictions, and the reverse',
+		reviewCheckRefusal('contradictions', { ...on, policyMode: 'off' }) === null &&
+			reviewCheckRefusal('sensitive-data', { ...on, contradictionsAvailable: false }) === null
+	);
+
+	const done = {
+		status: 'done' as const,
+		finishedAt: Date.UTC(2026, 10, 2, 15),
+		pairsChecked: 157,
+		findings: 14
+	};
+	check('no line for an editor', contradictionCoverage('editor', true, done) === '');
+	check('no line where the check cannot run', contradictionCoverage('owner', false, done) === '');
+	check(
+		'an admin is told it has not run, and how to run it',
+		/not run on this brain yet\. review_brain with check "contradictions"/.test(
+			contradictionCoverage('admin', true, null)
+		)
+	);
+	check(
+		'a pass in progress says how far it got',
+		/in progress, 40 page pair\(s\) checked so far/.test(
+			contradictionCoverage('admin', true, { ...done, status: 'stopped', pairsChecked: 40 })
+		)
+	);
+	check(
+		'a finished pass says when, over how much, and that running it again checks only later edits',
+		contradictionCoverage('owner', true, done) ===
+			'\n\nContradiction check: last finished 2026-11-02 over 157 page pair(s), 14 finding(s) raised. review_brain with check "contradictions" checks pages edited since, and only those.'
+	);
 }
 
 done();

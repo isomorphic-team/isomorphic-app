@@ -77,6 +77,8 @@ a derived index in D1 (`src/lib/brain-index.ts`, schema in `migrations/`).
   degrades to a brain that can never be read (it hits the host's tool timeout and restarts
   forever). **Any new whole-brain pass: budget, cursor, advance the marker only when done.**
   Its run state goes in `brain_passes` through `src/lib/brain-pass.ts` (`readPass`,
-  `continuePass`, `savePass`), one row per brain per kind; don't add a table per pass.
+  `continuePass`, `savePass`), one row per brain per kind (`consolidation`, `policy-baseline`);
+  don't add a table per pass. What a pass last checked, item by item, goes in
+  `brain_pass_items` (`readPassItems`, `savePassItems`), so a later pass can skip unchanged items.
 - The local runtime's `getHead` reports a digest of the working tree; `listCommits` reports
   git shas.
