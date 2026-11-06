@@ -19,6 +19,7 @@ import type { Octokit } from 'octokit';
 import type { CommitAuthor } from './brain-repo.ts';
 import type { OrgMembershipWire } from './tool-payloads.ts';
 import { brainSlug, handleOfSlug, newBrainHandle } from './brain-slug.ts';
+import { clearBrainResidueStatements } from './brain-forget.ts';
 import {
 	GITHUB_APP_KIND,
 	connectionOwnerFor,
@@ -576,6 +577,16 @@ export async function addMembership(
 		.run();
 }
 
+// A brain's primary key, from its repo. Every creation path derives it here, so a
+// repo connected again gets the same id: why createBrain clears residue first.
+export function brainIdFor(owner: string, repo: string): string {
+	return `brain-${`${owner}-${repo}`
+		.toLowerCase()
+		.replace(/[^a-z0-9]+/g, '-')
+		.replace(/^-|-$/g, '')}`;
+}
+
+// Inserts the brain in the batch that clears rows an earlier brain left under its id.
 export async function createBrain(
 	db: D1Database,
 	b: {
@@ -589,24 +600,26 @@ export async function createBrain(
 		storage_connection_id?: string | null;
 	}
 ): Promise<void> {
-	await db
-		.prepare(
-			`INSERT INTO brains (brain_id, org_id, repo_owner, repo_name, name, created_by, visibility,
+	await db.batch([
+		...clearBrainResidueStatements(db, b.brain_id),
+		db
+			.prepare(
+				`INSERT INTO brains (brain_id, org_id, repo_owner, repo_name, name, created_by, visibility,
 			                     storage_connection_id)
        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
        ON CONFLICT(repo_owner, repo_name) DO NOTHING`
-		)
-		.bind(
-			b.brain_id,
-			b.org_id,
-			b.repo_owner,
-			b.repo_name,
-			b.name ?? null,
-			b.created_by ?? null,
-			b.visibility ?? 'org',
-			b.storage_connection_id ?? null
-		)
-		.run();
+			)
+			.bind(
+				b.brain_id,
+				b.org_id,
+				b.repo_owner,
+				b.repo_name,
+				b.name ?? null,
+				b.created_by ?? null,
+				b.visibility ?? 'org',
+				b.storage_connection_id ?? null
+			)
+	]);
 }
 
 // The brain for a given repo, or null. Used by connect_brain to detect a repo that's
@@ -620,12 +633,6 @@ export async function getBrainByRepo(
 		.prepare(`SELECT * FROM brains WHERE repo_owner = ?1 AND repo_name = ?2`)
 		.bind(repoOwner, repoName)
 		.first<Brain>();
-}
-
-// Detach a brain from its org (disconnect). The GitHub repo and its content are
-// untouched — this only removes the brains row so the repo stops being a brain.
-export async function deleteBrain(db: D1Database, brainId: string): Promise<void> {
-	await db.prepare(`DELETE FROM brains WHERE brain_id = ?1`).bind(brainId).run();
 }
 
 // ---------- email invitations ----------
@@ -1020,12 +1027,6 @@ export async function setBrainVisibility(
 		.prepare(`UPDATE brains SET visibility = ?2 WHERE brain_id = ?1`)
 		.bind(brainId, visibility)
 		.run();
-}
-
-// Drop every grant on a brain: called when the brain is disconnected, so its
-// rows don't outlive it and re-attach if the same repo is adopted again later.
-export async function deleteBrainGrants(db: D1Database, brainId: string): Promise<void> {
-	await db.prepare(`DELETE FROM brain_memberships WHERE brain_id = ?1`).bind(brainId).run();
 }
 
 // Drop every grant a user holds on brains belonging to one org: called when they

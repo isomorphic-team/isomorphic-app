@@ -35,15 +35,15 @@ import {
 	roleLabel,
 	roleAtLeast,
 	createBrain,
-	deleteBrain,
-	deleteBrainGrants,
 	setBrainGrant,
 	setBrainName,
 	getBrainByRepo,
+	brainIdFor,
 	getOrgById,
 	activeAfterDisconnect
 } from '../lib/orgs.ts';
 import { createAndScaffoldBrain } from '../lib/scaffold-core.ts';
+import { forgetBrain } from '../lib/brain-forget.ts';
 import { getConnection, orgAdministersConnection } from '../lib/storage-connections.ts';
 import {
 	countPendingBrainInvites,
@@ -118,14 +118,6 @@ function brainRows(brains: AccessibleBrain[], activeId: string | undefined): Bra
 		orgLabel: orgDisplay(b),
 		...(b.read_only ? { readOnly: true } : {})
 	}));
-}
-
-// Slug a brain_id (PK) from owner/repo — unique across orgs adopting same-named repos.
-function brainIdFor(owner: string, repo: string): string {
-	return `brain-${`${owner}-${repo}`
-		.toLowerCase()
-		.replace(/[^a-z0-9]+/g, '-')
-		.replace(/^-|-$/g, '')}`;
 }
 
 function rowsText(rows: BrainRow[]): string {
@@ -916,7 +908,7 @@ export function registerBrainTools(
 			{
 				...toolAnnotations('Disconnect a brain', 'destructive'),
 				description:
-					'Remove a brain from its organization: it stops appearing in the switcher, and nobody reaches it through Isomorphic any more. Its repository and content are untouched. If it was the active brain, another of your brains becomes active. Organization admin only; you can’t remove an org’s only brain.',
+					'Remove a brain from its organization: it stops appearing in the switcher, and nobody reaches it through Isomorphic any more. Isomorphic deletes its own copy of the brain (the page index, review findings and policy records); the repository itself is untouched. If it was the active brain, another of your brains becomes active. Organization admin only; you can’t remove an org’s only brain.',
 				inputSchema: z.object({
 					brain: z.string().describe('Which brain to disconnect (name/handle or owner/repo id).')
 				})
@@ -942,10 +934,10 @@ export function registerBrainTools(
 				if (all.filter((b) => b.org_id === target.org_id).length <= 1) {
 					return fail(`Can’t disconnect the organization’s only brain.`);
 				}
-				// Drop the access grants with the brain, or they outlive it and silently
-				// re-attach if the same repo is adopted again later under the same id.
-				await deleteBrainGrants(ctx.db, target.brain_id);
-				await deleteBrain(ctx.db, target.brain_id);
+				// The brain, its grants and every derived row in one batch. A row left behind
+				// would re-attach if the same repo is adopted again, since the id is derived
+				// from the repo name.
+				await forgetBrain(ctx.db, target.brain_id);
 				// If we removed the active brain, fall the active pointer back to a survivor,
 				// and report THAT as active. Reporting ctx.activeBrain here named the brain
 				// just deleted, so the refreshed list marked no row active.

@@ -158,8 +158,9 @@ manage the roster.
 
 Revocation has to actually revoke, so grants are torn down with the thing they hang off:
 
-- `disconnect_brain` → `deleteBrainGrants`, or the rows outlive the brain and re-attach if the same
-  repo is adopted again under the same id.
+- `disconnect_brain` → `forgetBrain`, which deletes the grants with the rest of the brain's rows,
+  or they outlive the brain and re-attach if the same repo is adopted again under the same id
+  ([`brain-disconnect-retention.md`](./brain-disconnect-retention.md)).
 - `remove_member` → `deleteUserBrainGrantsInOrg`, or removing someone from the org leaves per-brain
   grants that still let them in.
 

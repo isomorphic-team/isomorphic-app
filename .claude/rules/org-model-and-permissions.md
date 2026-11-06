@@ -108,8 +108,14 @@ org roster.
   them, and every org-scope gate must read null as "not a member", never as "no gate".
 - **`brains.read_only` is the one CEILING**, applied last. **`brains.archived_at` is NOT in the
   rule**: archived brains are filtered in the SQL of the two base queries.
-- **Revocation tears down what hangs off it:** `disconnect_brain` → `deleteBrainGrants`,
-  `remove_member` → `deleteUserBrainGrantsInOrg`.
+- **Revocation tears down what hangs off it:** `disconnect_brain` → `forgetBrain`,
+  `remove_member` → `deleteUserBrainGrantsInOrg`. `forgetBrain` (`src/lib/brain-forget.ts`)
+  deletes the brain with its grants, pending brain invites, index, findings and policy rows in
+  one batch; `createBrain` clears residue under the new id in its insert batch, because
+  `brain_id` is derived from the repo name (`brainIdFor`) and a reconnected repo gets the same
+  id. A new table
+  with a `brain_id` column goes in `BRAIN_PURGED_TABLES` or `BRAIN_KEPT_TABLES`;
+  `pnpm test:access` fails until it does.
 
 ## Sharing and guests
 
