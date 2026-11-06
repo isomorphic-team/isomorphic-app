@@ -104,9 +104,10 @@ its org. The content index (`ensureFresh`) self-builds on the first read — no 
 
 ## Removing, renaming, or moving a brain
 
-- **Remove:** `disconnect_brain`, or `DELETE FROM brains WHERE brain_id = '<brain_id>';`
-  (local + remote). The repo and its content are untouched: you're only detaching it
-  from the org.
+- **Remove:** `disconnect_brain`. It deletes the brain and Isomorphic's own copy of its
+  data (index, findings, policy records, grants). The repo and its content are untouched.
+  Don't delete the `brains` row by hand: that fails while grants or brain invites exist, and
+  otherwise leaves the brain's other rows behind.
 - **Rename:** `configure_brain` with `name` (brain admin).
 - **Move to another org:** `connect_brain` with the brain's name or id as `repo` and the
   destination `org`, then again with `confirm: true` (org admin in both orgs). The first call previews whose access changes. The brain

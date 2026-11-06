@@ -168,7 +168,8 @@ which means Claude authoring Claude's own future tools. Capped at 25 per brain.
   `brain` argument.
 - **`create_brain`**: scaffold a fresh repository under the org and switch to it.
 - **`connect_brain`** / **`disconnect_brain`**: adopt an existing repository of markdown, or
-  drop it from the org (the repository itself is untouched). `connect_brain` also moves a brain
+  drop it from the org, deleting Isomorphic's copy of its index and review data (the
+  repository itself is untouched). `connect_brain` also moves a brain
   from one org to another: the first call previews whose access changes, and nothing moves
   until a second call confirms it.
 

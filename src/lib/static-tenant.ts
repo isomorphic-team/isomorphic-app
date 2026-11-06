@@ -20,6 +20,7 @@ import {
 	GITHUB_TOKEN_KIND,
 	githubAppConnectionId
 } from './storage-connections.ts';
+import { purgeBrainRowsStatements } from './brain-forget.ts';
 
 export const STATIC_ORG_ID = 'static';
 export const STATIC_USER_ID = 'static-operator';
@@ -114,6 +115,14 @@ export async function ensureStaticTenant(
 		// org rather than failing the unique constraint. Config is the truth: a brain
 		// from earlier config would otherwise sit beside the current one and, being
 		// older, become the default.
+		// Its index, findings and grants go with it, before the row they hang off.
+		...purgeBrainRowsStatements(
+			db,
+			`SELECT brain_id FROM brains WHERE org_id = ?1 AND NOT (repo_owner = ?2 AND repo_name = ?3)`,
+			STATIC_ORG_ID,
+			owner,
+			repo
+		),
 		db
 			.prepare(`DELETE FROM brains WHERE org_id = ?1 AND NOT (repo_owner = ?2 AND repo_name = ?3)`)
 			.bind(STATIC_ORG_ID, owner, repo)

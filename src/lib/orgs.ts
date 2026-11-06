@@ -622,12 +622,6 @@ export async function getBrainByRepo(
 		.first<Brain>();
 }
 
-// Detach a brain from its org (disconnect). The GitHub repo and its content are
-// untouched — this only removes the brains row so the repo stops being a brain.
-export async function deleteBrain(db: D1Database, brainId: string): Promise<void> {
-	await db.prepare(`DELETE FROM brains WHERE brain_id = ?1`).bind(brainId).run();
-}
-
 // ---------- email invitations ----------
 //
 // An `invitations` row is how an admin puts someone in an org without touching
@@ -1022,8 +1016,8 @@ export async function setBrainVisibility(
 		.run();
 }
 
-// Drop every grant on a brain: called when the brain is disconnected, so its
-// rows don't outlive it and re-attach if the same repo is adopted again later.
+// Drop every grant on a brain. Disconnect deletes grants through forgetBrain
+// (src/lib/brain-forget.ts) with the rest of the brain's rows.
 export async function deleteBrainGrants(db: D1Database, brainId: string): Promise<void> {
 	await db.prepare(`DELETE FROM brain_memberships WHERE brain_id = ?1`).bind(brainId).run();
 }

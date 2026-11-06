@@ -271,6 +271,13 @@ check(
 // No network: node:sqlite is a Node builtin.
 
 import { localD1, replayMigrations } from '../src/local/d1-sqlite.ts';
+import { readFileSync } from 'node:fs';
+import {
+	BRAIN_PURGED_TABLES,
+	BRAIN_KEPT_TABLES,
+	forgetBrain,
+	clearBrainResidue
+} from '../src/lib/brain-forget.ts';
 import { bindFixtureStorage } from './fixture-storage.ts';
 import { brainSlug } from '../src/lib/brain-slug.ts';
 import { DatabaseSync } from 'node:sqlite';
@@ -1552,6 +1559,149 @@ check(
 		'an org with no default connection is an error, never a guess at an installation',
 		message?.includes('no storage connection') === true,
 		String(message)
+	);
+}
+
+// ---------------------------------------------------------------------------
+console.log('\nforgetting a brain: what disconnect deletes, and what it keeps');
+// ---------------------------------------------------------------------------
+// brain_id is derived from the repo name, so a row left behind re-attaches to the
+// next brain on the same repo, from any org. These checks seed one row in EVERY
+// table with a brain_id column, generically from the live schema, so a table added
+// later is covered without editing this section.
+{
+	const { db: fdb, sqlite: f } = localD1();
+	f.exec(`
+	  INSERT INTO orgs (org_id, name, model, installation_id, brain_owner, created_by, created_at)
+	    VALUES ('fo', 'Acme', 'customer', 1, 'acme', 'u1', '2026-01-01');
+	  INSERT INTO app_users (user_id, email, name) VALUES ('u1', 'u1@example.com', 'U1');
+	  INSERT INTO brains (brain_id, org_id, repo_owner, repo_name, name, visibility, created_at) VALUES
+	    ('b-gone', 'fo', 'acme', 'gone', 'Gone', 'private', '2026-01-01'),
+	    ('b-live', 'fo', 'acme', 'live', 'Live', 'private', '2026-01-01');
+	`);
+	type Col = { name: string; type: string; notnull: number; dflt_value: unknown };
+	const tables = (
+		f.prepare(`SELECT name FROM sqlite_master WHERE type = 'table'`).all() as { name: string }[]
+	)
+		.map((r) => r.name)
+		.filter((t) =>
+			(f.prepare(`SELECT name FROM pragma_table_info(?)`).all(t) as { name: string }[]).some(
+				(c) => c.name === 'brain_id'
+			)
+		)
+		.filter((t) => t !== 'brains');
+	const listed = new Set<string>([...BRAIN_PURGED_TABLES, ...BRAIN_KEPT_TABLES]);
+	const unlisted = tables.filter((t) => !listed.has(t));
+	check(
+		'every table with a brain_id is listed as purged or kept',
+		unlisted.length === 0,
+		`unlisted: ${unlisted.join(', ')} (add it to src/lib/brain-forget.ts)`
+	);
+	const gone = [...listed].filter((t) => !tables.includes(t));
+	check('every listed table exists', gone.length === 0, `missing: ${gone.join(', ')}`);
+
+	let seq = 0;
+	const seed = (table: string, brainId: string) => {
+		const cols = (f.prepare(`SELECT * FROM pragma_table_info(?)`).all(table) as Col[]).filter(
+			(c) => c.name === 'brain_id' || (c.notnull && c.dflt_value === null)
+		);
+		const vals = cols.map((c) => {
+			if (c.name === 'brain_id') return brainId;
+			if (c.name === 'org_id') return 'fo';
+			if (c.name === 'user_id' || c.name.endsWith('_by')) return 'u1';
+			if (c.name === 'role') return 'viewer';
+			seq += 1;
+			return /INT|REAL|NUM/i.test(c.type) ? seq : `v${seq}`;
+		});
+		f.prepare(
+			`INSERT INTO ${table} (${cols.map((c) => c.name).join(', ')}) VALUES (${cols.map(() => '?').join(', ')})`
+		).run(...(vals as []));
+	};
+	const count = (table: string, brainId: string) =>
+		Number(
+			(
+				f.prepare(`SELECT COUNT(*) AS n FROM ${table} WHERE brain_id = ?`).get(brainId) as {
+					n: number;
+				}
+			).n
+		);
+	for (const t of tables) {
+		seed(t, 'b-gone');
+		seed(t, 'b-live');
+	}
+
+	await forgetBrain(fdb, 'b-gone');
+	const left = BRAIN_PURGED_TABLES.filter((t) => count(t, 'b-gone') > 0);
+	check(
+		'forgetBrain deletes its rows in every purged table',
+		left.length === 0,
+		`left: ${left.join(', ')}`
+	);
+	check(
+		'...and the brains row',
+		f.prepare(`SELECT 1 FROM brains WHERE brain_id = 'b-gone'`).get() === undefined
+	);
+	check(
+		'...even with a pending brain invite holding a foreign key to it',
+		count('invitations', 'b-gone') === 0
+	);
+	check(
+		'...keeps the usage and feedback rows',
+		BRAIN_KEPT_TABLES.every((t) => count(t, 'b-gone') === 1)
+	);
+	check(
+		'...and touches no other brain',
+		tables.every((t) => count(t, 'b-live') === 1)
+	);
+
+	// Residue from before the fix: rows under an id no brain holds.
+	for (const t of BRAIN_PURGED_TABLES)
+		if (t !== 'brain_memberships' && t !== 'invitations') seed(t, 'b-old');
+	await clearBrainResidue(fdb, 'b-old');
+	check(
+		'clearBrainResidue empties an id before a brain is created on it',
+		BRAIN_PURGED_TABLES.every((t) => count(t, 'b-old') === 0)
+	);
+	await clearBrainResidue(fdb, 'b-live');
+	check(
+		'...and is a no-op on an id a live brain holds',
+		tables.every((t) => count(t, 'b-live') === 1)
+	);
+
+	// The migration that deletes what earlier disconnects left behind.
+	for (const t of BRAIN_PURGED_TABLES)
+		if (t !== 'brain_memberships' && t !== 'invitations') seed(t, 'b-older');
+	const sweep = readFileSync(
+		new URL('../migrations/0025_purge_orphaned_brain_rows.sql', import.meta.url),
+		'utf8'
+	);
+	check(
+		'0025 covers every purged table',
+		BRAIN_PURGED_TABLES.every((t) => sweep.includes(`DELETE FROM ${t}`))
+	);
+	f.exec(sweep);
+	check(
+		'0025 deletes orphaned rows',
+		BRAIN_PURGED_TABLES.every((t) => count(t, 'b-older') === 0)
+	);
+	check(
+		'...and leaves live brains alone',
+		tables.every((t) => count(t, 'b-live') === 1)
+	);
+}
+
+// A static deployment whose config moves to another repo drops the old brain, and
+// its rows go with it in the same batch.
+{
+	const { db: sdb, sqlite: s2 } = localD1();
+	const cred = { kind: 'token' as const };
+	await ensureStaticTenant(sdb, { owner: 'acme', repo: 'first', credential: cred });
+	s2.exec(`INSERT INTO brain_pages (brain_id, path, title, blob_sha, content)
+	         VALUES ('brain-acme-first', 'a.md', 'A', 'sha', 'text')`);
+	await ensureStaticTenant(sdb, { owner: 'acme', repo: 'second', credential: cred });
+	check(
+		"static config change deletes the old brain's index",
+		s2.prepare(`SELECT 1 FROM brain_pages WHERE brain_id = 'brain-acme-first'`).get() === undefined
 	);
 }
 
