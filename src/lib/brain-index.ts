@@ -767,6 +767,15 @@ export async function hasIndexedPages(db: D1Database, brainId: string): Promise<
 	return row !== null;
 }
 
+/** The index's blob sha per page. */
+export async function readPageShas(db: D1Database, brainId: string): Promise<Map<string, string>> {
+	const { results } = await db
+		.prepare('SELECT path, blob_sha FROM brain_pages WHERE brain_id = ?1')
+		.bind(brainId)
+		.all<{ path: string; blob_sha: string }>();
+	return new Map(results.map((r) => [r.path, r.blob_sha]));
+}
+
 // The brain's content pages with display titles, straight from the index (no link
 // resolution). Backs list_pages / browse_brain so the file tree can show titles.
 // Call ensureFresh first so the list reflects the current repo.
@@ -1008,17 +1017,16 @@ export interface BrainSearch {
 }
 
 export async function searchBrains(
-	db: D1Database,
-	brainIds: string[],
+	indexes: BrainIndex[],
 	query: string,
 	prefix: string | undefined,
 	limits: { perBrain: number; total: number; perPage?: number }
 ): Promise<BrainSearch> {
 	const perPage = limits.perPage ?? DEFAULT_SEARCH_OPTIONS.perPage;
 	const results = await Promise.all(
-		brainIds.map(async (brainId) => ({
-			brainId,
-			result: await searchIndex(db, brainId, query, prefix, limits.perBrain, perPage)
+		indexes.map(async (index) => ({
+			brainId: index.brainId,
+			result: await index.search(query, prefix, limits.perBrain, perPage)
 		}))
 	);
 	const merged = mergeBrainResults(results, limits.total);
@@ -1070,3 +1078,67 @@ function startsWithSql(column: string, prefix: string, binds: unknown[]): string
 export function escapeLike(s: string): string {
 	return s.replace(/[\\%_]/g, (c) => `\\${c}`);
 }
+
+// ------------------------------------------------------------------ the seam ----
+
+/**
+ * One brain's derived index: the only way tools reach it, as `BrainStore` is the only way
+ * they reach content. Tools never hold the database behind it, so where the index is stored
+ * is decided in one place (docs/design/brain-index-storage.md).
+ */
+export interface BrainIndex {
+	readonly brainId: string;
+	/** Reconcile with the branch head. MUST be awaited before any read below. */
+	ensureFresh(store: BrainStore, repo: RepoRef, config: BrainConfig): Promise<IndexState>;
+	writeThrough(
+		config: BrainConfig,
+		baseSha: string,
+		landedSha: string,
+		writes: { path: string; content: string; encoding?: string }[],
+		deletes: string[]
+	): Promise<boolean>;
+	/** Drop every row, so the next read rebuilds from the store. */
+	reset(): Promise<void>;
+	hasPages(): Promise<boolean>;
+	listPages(): Promise<{ path: string; title: string }[]>;
+	/** Each page's git blob sha, as indexed. */
+	pageShas(): Promise<Map<string, string>>;
+	pageContents(paths: string[]): Promise<Map<string, string>>;
+	graph(config: BrainConfig): Promise<ResolvedGraph>;
+	allFields(): Promise<Map<string, PageFields>>;
+	fieldsFor(paths: string[]): Promise<Map<string, PageFields>>;
+	search(
+		query: string,
+		prefix: string | undefined,
+		max: number,
+		perPage?: number
+	): Promise<SearchResult>;
+}
+
+/** Opens the index of any brain, for the tools that read more than the active one. */
+export type OpenIndex = (brainId: string) => BrainIndex;
+
+/** The two index fields of a tool context: the brain's own index and the opener. */
+export const indexRefs = (openIndex: OpenIndex, brainId: string) => ({
+	index: openIndex(brainId),
+	openIndex
+});
+
+/** The index in a D1 database, shared by every brain and keyed by `brain_id`. */
+export const d1Index =
+	(db: D1Database): OpenIndex =>
+	(brainId) => ({
+		brainId,
+		ensureFresh: (store, repo, config) => ensureFresh(db, store, repo, brainId, config),
+		writeThrough: (config, baseSha, landedSha, writes, deletes) =>
+			writeThroughIndex(db, brainId, config, baseSha, landedSha, writes, deletes),
+		reset: () => resetIndex(db, brainId),
+		hasPages: () => hasIndexedPages(db, brainId),
+		listPages: () => listIndexedPages(db, brainId),
+		pageShas: () => readPageShas(db, brainId),
+		pageContents: (paths) => loadPageContents(db, brainId, paths),
+		graph: (config) => loadResolvedGraph(db, brainId, config),
+		allFields: () => loadAllFields(db, brainId),
+		fieldsFor: (paths) => loadFieldsFor(db, brainId, paths),
+		search: (query, prefix, max, perPage) => searchIndex(db, brainId, query, prefix, max, perPage)
+	});

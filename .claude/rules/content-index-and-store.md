@@ -34,8 +34,13 @@ storage, plus `githubStore(octokit)`; `src/local/brain-store-fs.ts` is the git-o
 `search_pages`, `find_inbound_links`, `validate`, `view_graph` and custom-tool discovery query
 a derived index in D1 (`src/lib/brain-index.ts`, schema in `migrations/`).
 
+- **Tools reach the index only through `BrainIndex`** (`ctx.index` for the brain in hand,
+  `ctx.openIndex(brainId)` for another), never by passing a database to a function in
+  `brain-index.ts`. Those functions are the D1 implementation behind `d1Index(db)`; the context
+  builders in `worker.ts` and `local.ts` choose the database. `pnpm test:wiring` fails on a
+  direct call from `src/` or `ee/`. An operation the index lacks goes on the interface.
 - **The index is a derived cache, NEVER the source of truth.** Every read calls
-  `ensureFresh(db, store, repo, brainId, config)`, which compares the branch head to
+  `index.ensureFresh(store, repo, config)`, which compares the branch head to
   `brain_index_meta.indexed_commit_sha` and reindexes changed pages (diffing blob shas) before
   serving. Edits made outside our tools are therefore never missed. There is deliberately no
   webhook: the read-time guard is the correctness mechanism.
@@ -60,7 +65,7 @@ a derived index in D1 (`src/lib/brain-index.ts`, schema in `migrations/`).
   fresh. Bounded by inbound links, not brain size. `backlinksTo` returns one `count`: use it,
   not `mdCount + wikiCount`.
 - **Writes are WRITE-THROUGH.** A successful direct commit upserts rows for exactly the pages it
-  touched (`writeThroughIndex`, called from `commitBundle`) and advances `indexed_commit_sha`,
+  touched (`index.writeThrough`, called from `commitBundle`) and advances `indexed_commit_sha`,
   in ONE conditional D1 transaction that no-ops if the index moved. Bundles over the
   40-statement budget, PR writes, and the fs backend skip it and reconcile on the next read.
   Failures are swallowed: the commit is the fact. Blob shas via Web Crypto (`gitBlobSha`).

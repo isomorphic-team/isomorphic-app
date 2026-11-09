@@ -8,7 +8,7 @@ import type { McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
 import type { BrainContext } from './librarian.ts';
 import type { TenantOpts } from '../lib/orgs.ts';
-import { ensureFresh, listIndexedPages, detectNeedsConfig } from '../lib/brain-index.ts';
+import { detectNeedsConfig } from '../lib/brain-index.ts';
 import { listNonPagePaths, pathPolicyOf, isContentPath } from '../lib/brain-config.ts';
 import { tryRenderViews } from '../lib/views.ts';
 import type { ListPagesWire, ReadPageWire } from '../lib/tool-payloads.ts';
@@ -37,14 +37,14 @@ export function registerCoreTools(
 			})
 		},
 		async ({ prefix, brain }) => {
-			const { store, repoArgs, config, db, brainId, activeBrain } = await getContext({ brain });
+			const { store, repoArgs, config, index, activeBrain } = await getContext({ brain });
 
 			// No prefix = "the brain's editable content", which is exactly what the
 			// index holds — serve it from there (instant) and attach each page's title
 			// in structuredContent so the app's file tree can label files by title.
 			if (!prefix) {
-				await ensureFresh(db, store, repoArgs, brainId, config);
-				const pages = await listIndexedPages(db, brainId);
+				await index.ensureFresh(store, repoArgs, config);
+				const pages = await index.listPages();
 				// Attachments are listed separately from genuinely-hidden files: an image
 				// somebody uploaded is content, and burying it behind "show hidden" beside
 				// .gitkeep markers meant the brain stored things it would not show you.
@@ -133,7 +133,7 @@ export function registerCoreTools(
 			})
 		},
 		async ({ path, brain }) => {
-			const { store, repoArgs, db, brainId, config } = await getContext({ brain });
+			const { store, repoArgs, index, config } = await getContext({ brain });
 			const file = await store.readFile(repoArgs, path);
 			if (!file) {
 				return {
@@ -146,7 +146,7 @@ export function registerCoreTools(
 			// rendering beneath it — the current data without losing sight of the
 			// directive (so they don't hand-edit derived content). Falls back to
 			// the raw file if computing fails.
-			const views = await tryRenderViews(text, path, { db, store, repoArgs, brainId, config });
+			const views = await tryRenderViews(text, path, { index, store, repoArgs, config });
 			// `path`, `markdown`, and `sha` form the structured read result for the app.
 			// `markdown` mirrors the text fallback exactly, so either MCP result channel
 			// carries the same page and version. No `view` key, so this stays a quiet

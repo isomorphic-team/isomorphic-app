@@ -39,6 +39,7 @@
 // shimmed to the D1 surface, so ensureFresh / loadResolvedGraph / backlinksTo run for
 // real exactly like prod.
 import { McpServer } from '@modelcontextprotocol/server';
+import { d1Index, indexRefs, readPageShas } from '../src/lib/brain-index.ts';
 import { registerImportTools } from '../src/tools/importer.ts';
 import { registerLibrarianTools } from '../src/tools/librarian.ts';
 import { registerBrainTools } from '../src/tools/brains.ts';
@@ -63,7 +64,6 @@ import { recordDetections } from '../src/lib/policy-store.ts';
 import {
 	conflictKey,
 	policyKey,
-	readPageShas,
 	upsertFindings,
 	type QueueFinding
 } from '../src/lib/review-queue.ts';
@@ -168,6 +168,7 @@ const getContext = async () => {
 		author: undefined,
 		db,
 		brainId,
+		...indexRefs(d1Index(db), brainId),
 		policySecret: 'e2e-secret',
 		consolidate,
 		activeBrain: { id: name, label: name }
@@ -1566,7 +1567,7 @@ try {
 		orgContext,
 		listOrgs: () => listAccessibleOrgs(db, [USER]),
 		listBrains: () => listAccessibleBrains(db, [USER]),
-		db,
+		openIndex: d1Index(db),
 		activeBrainId: () => activeId,
 		setActiveBrain: async (id: string) => {
 			activeId = id;

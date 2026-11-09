@@ -27,6 +27,7 @@
 //   pnpm test:scope
 
 import { readFileSync, readdirSync } from 'node:fs';
+import { d1Index, indexRefs } from '../src/lib/brain-index.ts';
 import { localD1 } from '../src/local/d1-sqlite.ts';
 import { bindFixtureStorage } from './fixture-storage.ts';
 import { orgStorage } from '../src/lib/storage-connections.ts';
@@ -199,6 +200,7 @@ function contextFor(p: Persona) {
 			config: DEFAULT_BRAIN_CONFIG,
 			db,
 			brainId: 'b-main',
+			...indexRefs(d1Index(db), 'b-main'),
 			activeBrain: { id: 'main-0a1b2c', label: 'Main' }
 		} as BrainContext;
 	};
@@ -364,7 +366,7 @@ function toolsFor(
 		},
 		invalidateConfig: () => {},
 		analyticsEnabled: true,
-		db,
+		openIndex: d1Index(db),
 		webBaseUrl: deployment.webBaseUrl
 	});
 	return handlers;

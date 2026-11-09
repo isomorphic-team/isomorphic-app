@@ -33,7 +33,7 @@ import {
 	type ImportDecision,
 	type ImportRecord
 } from '../lib/brain-import.ts';
-import { ensureFresh, loadAllFields } from '../lib/brain-index.ts';
+
 import { commitOpts } from '../lib/change-record.ts';
 import { hasViews, renderViews, buildViewContext } from '../lib/views.ts';
 import { insertLogEntry, todayIso } from '../lib/wiki.ts';
@@ -112,7 +112,7 @@ export function registerImportTools(
 		},
 		async ({ source, records, source_owned, manifest, adopt_existing, dry_run, brain }) => {
 			const ctx = await getContext({ requires: 'editor', brain });
-			const { store, repoArgs, config, author, db, brainId } = ctx;
+			const { index, store, repoArgs, config, author } = ctx;
 
 			if (config.sourceOfTruth === 'source') {
 				return fail(
@@ -141,11 +141,11 @@ export function registerImportTools(
 			}
 
 			// Freshness first — key discovery and diffs must reflect repo HEAD.
-			await ensureFresh(db, store, repoArgs, brainId, config);
+			await index.ensureFresh(store, repoArgs, config);
 
 			// Which pages claim which keys (source_key / source_keys frontmatter,
 			// straight from the index — discovery only, never the diff basis).
-			const allFields = await loadAllFields(db, brainId);
+			const allFields = await index.allFields();
 			const claimsByPath = new Map<string, string[]>();
 			for (const [path, fields] of allFields) {
 				const keys = [
@@ -257,7 +257,7 @@ export function registerImportTools(
 			let writes = p.writes.map((w) => ({ path: w.path, content: w.content }));
 			if (writes.some((w) => hasViews(w.content))) {
 				try {
-					const viewCtx = await buildViewContext(db, brainId, config);
+					const viewCtx = await buildViewContext(index, config);
 					writes = await Promise.all(
 						writes.map(async (w) =>
 							hasViews(w.content)
@@ -343,7 +343,7 @@ export function registerImportTools(
 		},
 		async ({ decisions: requested, brain }) => {
 			const ctx = await getContext({ requires: 'editor', brain });
-			const { store, repoArgs, config, author, db, brainId } = ctx;
+			const { index, store, repoArgs, config, author, db, brainId } = ctx;
 
 			// A cluster key answers every conflict finding in the cluster, one ledger entry
 			// per finding, so each dismissal still covers exactly its own disagreement.
@@ -470,8 +470,8 @@ export function registerImportTools(
 			const badAlias = decisions.find((d) => d.action === 'alias' && !d.alias_to?.trim());
 			if (badAlias) return fail(`Decision for "${badAlias.key}": alias needs "alias_to".`);
 
-			await ensureFresh(db, store, repoArgs, brainId, config);
-			const allFields = await loadAllFields(db, brainId);
+			await index.ensureFresh(store, repoArgs, config);
+			const allFields = await index.allFields();
 
 			// Pages the decisions touch: claimants of decided keys + alias targets.
 			const decidedKeys = new Set(decisions.map((d) => d.key.trim()));

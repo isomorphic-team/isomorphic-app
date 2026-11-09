@@ -13,6 +13,7 @@
 // shimmed to the D1 surface brain-index uses, so ensureFresh / key discovery run for
 // real.
 import { McpServer } from '@modelcontextprotocol/server';
+import { d1Index, indexRefs } from '../src/lib/brain-index.ts';
 import { registerImportTools } from '../src/tools/importer.ts';
 import { importKey } from '../src/lib/findings.ts';
 import { registerLibrarianTools } from '../src/tools/librarian.ts';
@@ -36,6 +37,7 @@ const getContext = async () => ({
 	author: undefined,
 	db,
 	brainId,
+	...indexRefs(d1Index(db), brainId),
 	activeBrain: { id: brainId, label: name }
 });
 registerImportTools(server, getContext);

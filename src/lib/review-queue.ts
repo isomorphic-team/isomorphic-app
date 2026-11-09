@@ -645,13 +645,3 @@ export async function readReconciledFindings(t: PolicyTarget): Promise<QueueFind
 				: f
 		);
 }
-
-// The index's blob sha per page, to compare findings against. Only called with rows in
-// hand, so a brain with an empty queue pays one query.
-export async function readPageShas(db: D1Database, brainId: string): Promise<Map<string, string>> {
-	const { results } = await db
-		.prepare('SELECT path, blob_sha FROM brain_pages WHERE brain_id = ?1')
-		.bind(brainId)
-		.all<{ path: string; blob_sha: string }>();
-	return new Map(results.map((r) => [r.path, r.blob_sha]));
-}

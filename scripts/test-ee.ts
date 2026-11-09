@@ -16,6 +16,7 @@
 //      unknown feature or a malformed org id, and escapes a note.
 
 import type { D1Database } from '@cloudflare/workers-types';
+import { d1Index } from '../src/lib/brain-index.ts';
 import { localD1 } from '../src/local/d1-sqlite.ts';
 import {
 	FEATURES,
@@ -787,6 +788,7 @@ console.log('\nconsolidation: a pass over an indexed brain (7)');
 		};
 		const target = {
 			db,
+			index: d1Index(db)(brain.brainId),
 			brainId: brain.brainId,
 			orgId: 'o1',
 			actorUserId: 'u1',
@@ -888,6 +890,7 @@ console.log('\nconsolidation: a pass over an indexed brain (7)');
 		await db.prepare('DELETE FROM org_entitlements').run();
 		const unentitled = await runConsolidationStep({
 			db,
+			index: d1Index(db)(brain.brainId),
 			brainId: brain.brainId,
 			orgId: 'o1',
 			config: brain.config,
@@ -994,6 +997,7 @@ console.log('\nconsolidation: the Jev screen (8)');
 		};
 		const target = {
 			db,
+			index: d1Index(db)(brain.brainId),
 			brainId: brain.brainId,
 			orgId: 'o1',
 			config: brain.config,
@@ -1195,6 +1199,7 @@ console.log('\nconsolidation: each step is bounded by time (10)');
 		};
 		const base = {
 			db,
+			index: d1Index(db)(brain.brainId),
 			brainId: brain.brainId,
 			orgId: 'o1',
 			config: brain.config,
@@ -1279,6 +1284,7 @@ console.log('\nconsolidation: a pass remembers what it checked (11)');
 		};
 		const base = {
 			db,
+			index: d1Index(db)(brain.brainId),
 			brainId: brain.brainId,
 			orgId: 'o1',
 			config: brain.config,

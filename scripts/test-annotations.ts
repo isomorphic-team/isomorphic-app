@@ -155,7 +155,7 @@ const listed = new Set<string>();
 		setActiveBrain: nope,
 		invalidateConfig: () => {},
 		analyticsEnabled: true,
-		db: {} as never,
+		openIndex: {} as never,
 		webBaseUrl: 'https://brain.example'
 	});
 	// A brain-authored tool: its title comes from the page, at runtime.

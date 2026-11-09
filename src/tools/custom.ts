@@ -18,13 +18,7 @@
 import type { McpServer } from '@modelcontextprotocol/server';
 import type { TenantOpts } from '../lib/orgs.ts';
 import type { BrainContext } from './librarian.ts';
-import {
-	ensureFresh,
-	listIndexedPages,
-	searchIndex,
-	loadResolvedGraph,
-	backlinksTo
-} from '../lib/brain-index.ts';
+import { backlinksTo } from '../lib/brain-index.ts';
 import { elisionNote, DEFAULT_SEARCH_OPTIONS } from '../lib/search.ts';
 import { tryRenderViews } from '../lib/views.ts';
 import { BRAIN_APP_URI } from './apps.ts';
@@ -54,9 +48,9 @@ export interface CustomToolLoad {
 // (one indexed-page listing, no blob fetches). Fail-open: a malformed page is an
 // error entry, never a thrown request.
 export async function loadCustomToolDefs(ctx: BrainContext): Promise<CustomToolLoad> {
-	const { db, store, repoArgs, brainId, config } = ctx;
-	await ensureFresh(db, store, repoArgs, brainId, config);
-	const toolPages = (await listIndexedPages(db, brainId)).filter((p) => isToolPagePath(p.path));
+	const { index, store, repoArgs, config } = ctx;
+	await index.ensureFresh(store, repoArgs, config);
+	const toolPages = (await index.listPages()).filter((p) => isToolPagePath(p.path));
 	if (toolPages.length === 0) return { defs: [], errors: [] };
 
 	const blobs = await Promise.all(
@@ -110,10 +104,9 @@ async function runView(def: CustomToolDef, args: Record<string, unknown>, ctx: B
 	// runs ensureFresh internally and fails open (null → raw fence).
 	const synthetic = '```okf-view\n' + directive + '\n```\n';
 	const rendered = await tryRenderViews(synthetic, def.sourcePath, {
-		db: ctx.db,
+		index: ctx.index,
 		store: ctx.store,
 		repoArgs: ctx.repoArgs,
-		brainId: ctx.brainId,
 		config: ctx.config
 	});
 	const preamble = def.instructions ? fill(def.instructions, args) + '\n\n' : '';
@@ -145,13 +138,13 @@ async function runOp(def: CustomToolDef, args: Record<string, unknown>, ctx: Bra
 }
 
 async function execOp(op: OpName, a: Record<string, string>, ctx: BrainContext): Promise<string> {
-	const { db, store, repoArgs, brainId, config } = ctx;
+	const { index, store, repoArgs, config } = ctx;
 	switch (op) {
 		case 'search_pages': {
 			const query = (a.query ?? '').trim();
 			if (query.length < 2) return 'search_pages needs a "query" arg of at least 2 characters.';
-			await ensureFresh(db, store, repoArgs, brainId, config);
-			const result = await searchIndex(db, brainId, query, a.prefix || undefined, 50);
+			await index.ensureFresh(store, repoArgs, config);
+			const result = await index.search(query, a.prefix || undefined, 50);
 			const { hits } = result;
 			if (hits.length === 0) return `No matches for "${query}".`;
 			return (
@@ -166,10 +159,9 @@ async function execOp(op: OpName, a: Record<string, string>, ctx: BrainContext):
 			const file = await store.readFile(repoArgs, path);
 			if (!file) return `"${path}" does not exist.`;
 			const views = await tryRenderViews(file.content, path, {
-				db,
+				index,
 				store,
 				repoArgs,
-				brainId,
 				config
 			});
 			return views?.snapshotted ?? file.content;
@@ -177,8 +169,8 @@ async function execOp(op: OpName, a: Record<string, string>, ctx: BrainContext):
 		case 'find_inbound_links': {
 			const path = (a.path ?? '').trim();
 			if (!path) return 'find_inbound_links needs a "path" arg.';
-			await ensureFresh(db, store, repoArgs, brainId, config);
-			const resolved = await loadResolvedGraph(db, brainId, config);
+			await index.ensureFresh(store, repoArgs, config);
+			const resolved = await index.graph(config);
 			const refs = backlinksTo(resolved, path);
 			if (refs.length === 0) return `No pages link to "${path}".`;
 			return (
@@ -186,8 +178,8 @@ async function execOp(op: OpName, a: Record<string, string>, ctx: BrainContext):
 			);
 		}
 		case 'list_pages': {
-			await ensureFresh(db, store, repoArgs, brainId, config);
-			const pages = await listIndexedPages(db, brainId);
+			await index.ensureFresh(store, repoArgs, config);
+			const pages = await index.listPages();
 			const prefix = (a.prefix ?? '').trim();
 			const filtered = prefix ? pages.filter((p) => p.path.startsWith(prefix)) : pages;
 			if (filtered.length === 0) return prefix ? `No pages under "${prefix}".` : 'No pages.';
