@@ -242,4 +242,45 @@ check(
 	'a missing browser or missing linux baselines would skip green in CI'
 );
 
+// ---------- tools reach the content index only through BrainIndex ----------
+
+// The functions in src/lib/brain-index.ts that take a database are the D1 implementation
+// behind `BrainIndex`. A tool calling one directly has to pick a database itself, which is
+// how an index read ends up on the wrong one once the index has its own.
+const D1_INDEX_FUNCTIONS = [
+	'ensureFresh',
+	'writeThroughIndex',
+	'resetIndex',
+	'hasIndexedPages',
+	'listIndexedPages',
+	'readPageShas',
+	'loadPageContents',
+	'loadResolvedGraph',
+	'loadAllFields',
+	'loadFieldsFor',
+	'indexSignals',
+	'searchIndex'
+];
+const directIndexCall = new RegExp(`(?<![.\\w])(${D1_INDEX_FUNCTIONS.join('|')})\\(`);
+const sourceFiles = ['src/', 'ee/'].flatMap((dir) =>
+	(readdirSync(new URL(dir, root), { recursive: true }) as string[])
+		.filter((f) => f.endsWith('.ts'))
+		.map((f) => dir + f)
+);
+const offenders = sourceFiles
+	.filter((f) => f !== 'src/lib/brain-index.ts')
+	.flatMap((f) =>
+		readFileSync(new URL(f, root), 'utf8')
+			.split('\n')
+			.filter((line) => !/^\s*(\/\/|\*)/.test(line) && directIndexCall.test(line))
+			.map((line) => `${f}: ${line.trim()}`)
+	);
+console.log(`\nthe content index is reached through BrainIndex`);
+check('there are source files to scan', sourceFiles.length > 50);
+check(
+	'nothing outside brain-index.ts calls its database functions',
+	offenders.length === 0,
+	offenders.join('\n')
+);
+
 done();

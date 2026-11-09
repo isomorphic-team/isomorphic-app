@@ -54,14 +54,11 @@ import {
 	logPathOf
 } from '../lib/brain-config.ts';
 import {
-	ensureFresh,
-	loadResolvedGraph,
 	backlinksTo,
 	searchBrains,
-	loadAllFields,
-	loadPageContents,
-	writeThroughIndex,
-	MAX_FIELD_KEYS_PER_PAGE
+	MAX_FIELD_KEYS_PER_PAGE,
+	type BrainIndex,
+	type OpenIndex
 } from '../lib/brain-index.ts';
 import { isMediaPath, mediaTypeOf } from '../lib/media.ts';
 import { tryRenderViews, type ViewDeps } from '../lib/views.ts';
@@ -98,7 +95,6 @@ import {
 	isPolicyKey,
 	queueReport,
 	clusterFindings,
-	readPageShas,
 	readReconciledFindings,
 	staleNote
 } from '../lib/review-queue.ts';
@@ -198,6 +194,10 @@ export interface BrainContext {
 	// that backs the read tools (src/lib/brain-index.ts).
 	db: D1Database;
 	brainId: string;
+	// This brain's content index, and the opener for another brain's (cross-brain
+	// search). The only way a tool reaches the index: `db` is the platform database.
+	index: BrainIndex;
+	openIndex: OpenIndex;
 	// Which brain this call resolved to (id + display label), so app tools can echo the
 	// active brain to the nav switcher.
 	activeBrain: { id: string; label: string };
@@ -242,15 +242,15 @@ export function landed(ctx: BrainContext, outcome: WriteOutcome, done: string, p
 async function commitBundle(ctx: BrainContext, opts: CommitOrPROpts): Promise<WriteOutcome> {
 	const outcome = await ctx.store.commitOrPR(ctx.repoArgs, opts);
 	if (outcome.commitSha && opts.head) {
-		await writeThroughIndex(
-			ctx.db,
-			ctx.brainId,
-			ctx.config,
-			opts.head.commitSha,
-			outcome.commitSha,
-			opts.writes ?? [],
-			opts.deletes ?? []
-		).catch(() => {});
+		await ctx.index
+			.writeThrough(
+				ctx.config,
+				opts.head.commitSha,
+				outcome.commitSha,
+				opts.writes ?? [],
+				opts.deletes ?? []
+			)
+			.catch(() => {});
 	}
 	return outcome;
 }
@@ -355,9 +355,9 @@ async function fetchInboundLinkersForPaths(
 	// saves a second listTree round trip for the same answer.
 	tree?: TreeEntry[]
 ): Promise<{ pages: PageContent[]; truncated: boolean }> {
-	const { store, repoArgs, config, db, brainId } = ctx;
-	const { truncated } = await ensureFresh(db, store, repoArgs, brainId, config);
-	const resolved = await loadResolvedGraph(db, brainId, config);
+	const { store, repoArgs, config, index } = ctx;
+	const { truncated } = await index.ensureFresh(store, repoArgs, config);
+	const resolved = await index.graph(config);
 	const linkerPaths = new Set<string>();
 	for (const t of targetPaths) {
 		for (const r of backlinksTo(resolved, t)) {
@@ -391,9 +391,9 @@ async function inboundRefs(
 	ctx: BrainContext,
 	targets: string[]
 ): Promise<{ refs: { path: string; count: number }[]; truncated: boolean }> {
-	const { store, repoArgs, config, db, brainId } = ctx;
-	const { truncated } = await ensureFresh(db, store, repoArgs, brainId, config);
-	const resolved = await loadResolvedGraph(db, brainId, config);
+	const { store, repoArgs, config, index } = ctx;
+	const { truncated } = await index.ensureFresh(store, repoArgs, config);
+	const resolved = await index.graph(config);
 	const targetSet = new Set(targets);
 	const counts = new Map<string, number>();
 	for (const t of targets) {
@@ -411,10 +411,9 @@ async function inboundRefs(
 // pages without views; falls back to the unrefreshed content on any failure.
 async function withFreshSnapshots(ctx: BrainContext, path: string, content: string) {
 	const deps: ViewDeps = {
-		db: ctx.db,
+		index: ctx.index,
 		store: ctx.store,
 		repoArgs: ctx.repoArgs,
-		brainId: ctx.brainId,
 		config: ctx.config
 	};
 	const views = await tryRenderViews(content, path, deps);
@@ -1270,7 +1269,7 @@ export function registerLibrarianTools(
 			})
 		},
 		async ({ path, brain }) => {
-			const { store, repoArgs, config, db, brainId } = await getContext({ brain });
+			const { store, repoArgs, config, index } = await getContext({ brain });
 			// An attachment takes a different existence check. readFile decodes the blob as
 			// UTF-8, which on a PNG does not fail but returns mojibake, so pageTitle() would
 			// run over binary garbage. An attachment's title is its filename.
@@ -1287,8 +1286,8 @@ export function registerLibrarianTools(
 				title = pageTitle(path, existing.content);
 			}
 
-			const { truncated } = await ensureFresh(db, store, repoArgs, brainId, config);
-			const resolved = await loadResolvedGraph(db, brainId, config);
+			const { truncated } = await index.ensureFresh(store, repoArgs, config);
+			const resolved = await index.graph(config);
 			const refs = backlinksTo(resolved, path);
 
 			// Structured payload for the in-client app's "Linked references" panel.
@@ -1331,10 +1330,20 @@ export function registerLibrarianTools(
 			inputSchema: z.object({ brain: brainArg })
 		},
 		async ({ brain }) => {
-			const { store, repoArgs, config, db, brainId, role, actorUserId, policySecret, consolidate } =
-				await getContext({ brain });
-			const { truncated } = await ensureFresh(db, store, repoArgs, brainId, config);
-			const resolved = await loadResolvedGraph(db, brainId, config);
+			const {
+				store,
+				repoArgs,
+				config,
+				db,
+				brainId,
+				index,
+				role,
+				actorUserId,
+				policySecret,
+				consolidate
+			} = await getContext({ brain });
+			const { truncated } = await index.ensureFresh(store, repoArgs, config);
+			const resolved = await index.graph(config);
 
 			// Every link that resolved to no page (see loadResolvedGraph), reported in
 			// two sections: files that aren't there, and names that match no page.
@@ -1417,8 +1426,8 @@ export function registerLibrarianTools(
 				const notePaths = resolved.pages
 					.filter((p) => isFolderNoteName(p.path.slice(p.path.lastIndexOf('/') + 1)))
 					.map((p) => p.path);
-				const noteContents = await loadPageContents(db, brainId, notePaths);
-				const fieldsByPath = await loadAllFields(db, brainId);
+				const noteContents = await index.pageContents(notePaths);
+				const fieldsByPath = await index.allFields();
 				const conceptPages = resolved.pages.filter(
 					(p) =>
 						!isFolderNoteName(p.path.slice(p.path.lastIndexOf('/') + 1)) &&
@@ -1430,11 +1439,7 @@ export function registerLibrarianTools(
 				// thing here — so above the cap that check is skipped rather than run.
 				const contents =
 					resolved.pages.length <= MAX_DUP_PAGES
-						? await loadPageContents(
-								db,
-								brainId,
-								resolved.pages.map((p) => p.path)
-							)
+						? await index.pageContents(resolved.pages.map((p) => p.path))
 						: undefined;
 
 				// Stored findings. An unreadable queue costs this block, not the report.
@@ -1448,7 +1453,7 @@ export function registerLibrarianTools(
 					secret: policySecret
 				}).catch(() => []);
 				if (rows.length) {
-					queued = queueReport(rows, await readPageShas(db, brainId), {
+					queued = queueReport(rows, await index.pageShas(), {
 						role,
 						userId: actorUserId
 					});
@@ -1632,7 +1637,7 @@ export function registerLibrarianTools(
 		},
 		async ({ query, prefix, brain, scope, expect }) => {
 			const ctx = await getContext({ brain });
-			const { store, repoArgs, config, db, brainId } = ctx;
+			const { store, repoArgs, config, brainId, index } = ctx;
 			// FRESHNESS IS PER BRAIN, and only the brain you are in keeps it. ensureFresh
 			// costs one branchCommitSha per brain, plus a full reindex for any whose HEAD
 			// moved since it was last touched, which for a rarely-opened brain is the
@@ -1641,7 +1646,7 @@ export function registerLibrarianTools(
 			// are served from whatever is indexed, and the result says so. A read_page on
 			// any hit resolves the authoritative blob anyway, and slightly stale discovery
 			// followed by a fresh read is correct behaviour for a search.
-			const { truncated } = await ensureFresh(db, store, repoArgs, brainId, config);
+			const { truncated } = await index.ensureFresh(store, repoArgs, config);
 
 			const targets = await searchTargets(ctx, scope === 'all' ? deps : undefined);
 			const wide = targets.length > 1;
@@ -1655,8 +1660,7 @@ export function registerLibrarianTools(
 			// limits collapse and the result is identical to the single-brain search.
 			const perBrain = wide ? 15 : opts.max;
 			const found = await searchBrains(
-				db,
-				targets.map((t) => t.key),
+				targets.map((t) => ctx.openIndex(t.key)),
 				query,
 				prefix,
 				{ perBrain, total: opts.max, perPage: opts.perPage }

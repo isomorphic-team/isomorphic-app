@@ -16,7 +16,6 @@
 import type { McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
 import type { Octokit } from 'octokit';
-import type { D1Database } from '@cloudflare/workers-types';
 import type { BrainContext } from './librarian.ts';
 import {
 	type TenantOpts,
@@ -53,13 +52,7 @@ import {
 	planBrainMove
 } from '../lib/brain-move.ts';
 import { githubStore } from '../lib/brain-repo.ts';
-import {
-	resetIndex,
-	detectNeedsConfig,
-	ensureFresh,
-	hasIndexedPages,
-	listIndexedPages
-} from '../lib/brain-index.ts';
+import { detectNeedsConfig, type OpenIndex } from '../lib/brain-index.ts';
 import { CONFIG_PATH, DEFAULT_BRAIN_CONFIG } from '../lib/brain-config.ts';
 import { fail } from './shared.ts';
 import type { BrainsWire } from '../lib/tool-payloads.ts';
@@ -149,16 +142,16 @@ function closedText(closed: StewardedBrain[]): string {
 // tree scan, because that is the one case where "no pages" might mean "not indexed
 // yet".
 async function detectRowSetup(
-	db: D1Database,
+	openIndex: OpenIndex,
 	getContext: (opts?: TenantOpts) => Promise<BrainContext>,
 	b: AccessibleBrain
 ): Promise<{ needsConfig: boolean; configPrUrl?: string }> {
 	try {
 		// The index is keyed by the primary key; the handle only addresses the brain.
-		if (await hasIndexedPages(db, b.brain_id)) return { needsConfig: false };
+		if (await openIndex(b.brain_id).hasPages()) return { needsConfig: false };
 		const c = await getContext({ requires: 'admin', brain: b.id });
-		await ensureFresh(c.db, c.store, c.repoArgs, c.brainId, c.config);
-		const pages = await listIndexedPages(c.db, c.brainId);
+		await c.index.ensureFresh(c.store, c.repoArgs, c.config);
+		const pages = await c.index.listPages();
 		if (pages.length > 0) return { needsConfig: false };
 		if (!(await detectNeedsConfig(c.store, c.repoArgs, c.config))) return { needsConfig: false };
 		// Misconfigured — is a "configure" PR already open (protected repo)?
@@ -202,9 +195,9 @@ export function registerBrainTools(
 		// deployment with usage recording off never shows a destination whose click
 		// would come back "unknown tool".
 		analyticsEnabled: boolean;
-		// The platform database, for the one read `brains` makes per brain without
+		// Opens any brain's index, for the one read `brains` makes per brain without
 		// resolving that brain's context: whether its index holds any page.
-		db: D1Database;
+		openIndex: OpenIndex;
 		// The origin the WEB APP is served from (`webBaseUrl` in src/lib/web-app.ts),
 		// or undefined when this deployment has none. Same vehicle and same reason as
 		// `analyticsEnabled`: the widget cannot ask the server what it serves, and a
@@ -225,7 +218,7 @@ export function registerBrainTools(
 		setActiveBrain,
 		invalidateConfig,
 		analyticsEnabled,
-		db,
+		openIndex,
 		webBaseUrl
 	} = deps;
 	// `people`: whether this deployment has anyone to share with, invite, or count.
@@ -339,7 +332,7 @@ export function registerBrainTools(
 			await Promise.all(
 				rows.map(async (r, i) => {
 					if (!r.canManage) return;
-					const s = await detectRowSetup(db, getContext, brains[i]);
+					const s = await detectRowSetup(openIndex, getContext, brains[i]);
 					r.needsConfig = s.needsConfig;
 					r.configPrUrl = s.configPrUrl;
 				})
@@ -888,7 +881,7 @@ export function registerBrainTools(
 			// new roots (a config change needs a FULL rebuild — content blobs are unchanged,
 			// so an incremental reindex wouldn't pick up the newly in-scope pages).
 			invalidateConfig(ctx.repoArgs.owner, ctx.repoArgs.repo);
-			await resetIndex(ctx.db, ctx.brainId);
+			await ctx.index.reset();
 			return {
 				content: [
 					{

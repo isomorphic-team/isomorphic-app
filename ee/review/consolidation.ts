@@ -31,12 +31,7 @@
 import type { D1Database } from '@cloudflare/workers-types';
 import type { BrainConfig } from '../../src/lib/brain-policy.ts';
 import { isContentPath, isToolMaintained } from '../../src/lib/brain-policy.ts';
-import {
-	ensureFresh,
-	listIndexedPages,
-	loadAllFields,
-	loadPageContents
-} from '../../src/lib/brain-index.ts';
+import type { BrainIndex } from '../../src/lib/brain-index.ts';
 import type { BrainStore, RepoRef } from '../../src/lib/brain-repo.ts';
 import {
 	continuePass,
@@ -55,7 +50,6 @@ import {
 	normalizeDisputedValue,
 	normalizeFactLabel,
 	readFactLabels,
-	readPageShas,
 	upsertFindings,
 	valuesOnPages,
 	type QueueFinding
@@ -546,6 +540,7 @@ async function saveRun(
 
 export interface ConsolidationTarget {
 	db: D1Database;
+	index: BrainIndex;
 	brainId: string;
 	orgId: string;
 	actorUserId?: string;
@@ -584,8 +579,8 @@ export async function advanceConsolidation(
 		)
 	);
 
-	await ensureFresh(t.db, t.store, t.repo, t.brainId, t.config);
-	const listed = (await listIndexedPages(t.db, t.brainId)).filter(
+	await t.index.ensureFresh(t.store, t.repo, t.config);
+	const listed = (await t.index.listPages()).filter(
 		(p) => isContentPath(p.path, t.config) && !isToolMaintained(p.path, t.config)
 	);
 	if (listed.length > MAX_DUP_PAGES) {
@@ -593,11 +588,7 @@ export async function advanceConsolidation(
 		await saveRun(t.db, scope, stopped, now);
 		return stopped;
 	}
-	const contents = await loadPageContents(
-		t.db,
-		t.brainId,
-		listed.map((p) => p.path)
-	);
+	const contents = await t.index.pageContents(listed.map((p) => p.path));
 	const pages: PageText[] = listed.map((p) => ({ ...p, content: contents.get(p.path) ?? '' }));
 	const byPath = new Map(pages.map((p) => [p.path, p]));
 
@@ -606,7 +597,7 @@ export async function advanceConsolidation(
 		pages: listed,
 		edges: [],
 		contents,
-		fields: await loadAllFields(t.db, t.brainId),
+		fields: await t.index.allFields(),
 		identityFields: t.config.identityFields,
 		isContent: (p) => isContentPath(p, t.config)
 	})) {
@@ -617,7 +608,7 @@ export async function advanceConsolidation(
 		}
 	}
 
-	const shas = Object.fromEntries(await readPageShas(t.db, t.brainId));
+	const shas = Object.fromEntries(await t.index.pageShas());
 	// What earlier passes checked: a pair whose fingerprint still matches costs nothing.
 	const version = await checkVersion();
 	const lastChecked = state.fresh
@@ -824,6 +815,7 @@ export interface ConsolidationStepReply {
 // the Worker and `pnpm consolidate:report --models` share.
 export async function runConsolidationStep(opts: {
 	db: D1Database;
+	index: BrainIndex;
 	brainId: string;
 	orgId: string;
 	actorUserId?: string;

@@ -30,17 +30,13 @@
 //
 // Worker-safe (no node:*). Callers MUST ensureFresh() before building a context.
 
-import type { D1Database } from '@cloudflare/workers-types';
 import type { BrainConfig } from './brain-config.ts';
 import type { RepoRef, BrainStore } from './brain-repo.ts';
 import {
 	type ResolvedGraph,
 	type PageFields,
-	ensureFresh,
-	loadResolvedGraph,
-	loadFieldsFor,
-	loadAllFields,
-	backlinksTo
+	backlinksTo,
+	type BrainIndex
 } from './brain-index.ts';
 import { relativeHref, resolveRelative } from './wiki.ts';
 import {
@@ -69,19 +65,18 @@ export interface ViewContext {
 }
 
 export async function buildViewContext(
-	db: D1Database,
-	brainId: string,
+	index: BrainIndex,
 	config: BrainConfig
 ): Promise<ViewContext> {
-	const resolved = await loadResolvedGraph(db, brainId, config);
+	const resolved = await index.graph(config);
 	return {
 		resolved,
 		fieldsFor: async (paths) => {
 			// Small candidate sets (one page's backlinks): chunked IN queries. Large
 			// sets (kind: pages over the brain): one whole-brain statement, filtered
 			// in memory — cheaper than dozens of IN chunks (AC-5: 1-2 statements).
-			if (paths.length <= 100) return loadFieldsFor(db, brainId, paths);
-			const all = await loadAllFields(db, brainId);
+			if (paths.length <= 100) return index.fieldsFor(paths);
+			const all = await index.allFields();
 			const wanted = new Set(paths);
 			return new Map([...all].filter(([p]) => wanted.has(p)));
 		}
@@ -385,10 +380,9 @@ export interface RenderedViews {
 // unexpected data) so callers always have the raw content to fall back to — a
 // view must never make a page unreadable or block a save.
 export interface ViewDeps {
-	db: D1Database;
+	index: BrainIndex;
 	store: BrainStore;
 	repoArgs: RepoRef;
-	brainId: string;
 	config: BrainConfig;
 }
 
@@ -399,8 +393,8 @@ export async function tryRenderViews(
 ): Promise<RenderedViews | null> {
 	if (!hasViews(content)) return null;
 	try {
-		await ensureFresh(deps.db, deps.store, deps.repoArgs, deps.brainId, deps.config);
-		const ctx = await buildViewContext(deps.db, deps.brainId, deps.config);
+		await deps.index.ensureFresh(deps.store, deps.repoArgs, deps.config);
+		const ctx = await buildViewContext(deps.index, deps.config);
 		return await renderViews(content, pagePath, ctx);
 	} catch (err) {
 		console.warn(`[views] failed to compute views for ${pagePath}:`, err);

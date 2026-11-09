@@ -34,6 +34,7 @@
 // together.
 
 import { serve } from '@hono/node-server';
+import { d1Index, indexRefs } from './lib/brain-index.ts';
 import { Hono } from 'hono';
 import { McpServer } from '@modelcontextprotocol/server';
 import { serveMcp, serverOptions } from './lib/mcp-serve.ts';
@@ -154,6 +155,7 @@ async function getContext(opts?: { brain?: string }): Promise<BrainContext> {
 		config,
 		author,
 		db: b.db,
+		...indexRefs(d1Index(b.db), b.brainId),
 		// Fixed, so a dismissal survives a restart. The key protects nothing here: the
 		// values sit in plain text in the folder beside this database.
 		policySecret: 'isomorphic-local',

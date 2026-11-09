@@ -17,6 +17,7 @@
 // --runs repeats the pass over the same database, so later runs show what the memory of
 // checked pairs saves: with nothing edited between runs, they check nothing.
 import type { D1Database } from '@cloudflare/workers-types';
+import { d1Index } from '../src/lib/brain-index.ts';
 import { FEATURES, entitlementSql } from '../ee/entitlements.ts';
 import { runConsolidationStep, type Proposal } from '../ee/review/consolidation.ts';
 import { readFindings } from '../src/lib/review-queue.ts';
@@ -133,6 +134,7 @@ async function modelPass() {
 		for (let step = 0; step < 500; step++) {
 			const { text, state } = await runConsolidationStep({
 				db,
+				index: d1Index(db)(brain.brainId),
 				brainId: brain.brainId,
 				orgId,
 				config: brain.config,

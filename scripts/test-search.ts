@@ -23,7 +23,13 @@ import {
 	type PageSignal,
 	type SearchResult
 } from '../src/lib/search.ts';
-import { escapeLike, indexSignals, searchBrains, searchIndex } from '../src/lib/brain-index.ts';
+import {
+	d1Index,
+	escapeLike,
+	indexSignals,
+	searchBrains,
+	searchIndex
+} from '../src/lib/brain-index.ts';
 import { searchTargets, type BrainContext } from '../src/tools/librarian.ts';
 import type { AccessibleBrain } from '../src/lib/orgs.ts';
 import { localD1 } from '../src/local/d1-sqlite.ts';
@@ -764,10 +770,15 @@ function result(paths: string[], budgetHit = false): SearchResult {
 		'# Secret\nthe kickoff nobody may see\n'
 	);
 
-	const wide = await searchBrains(db, ['acme/wiki', 'northwind/wiki'], 'kickoff', undefined, {
-		perBrain: 15,
-		total: 50
-	});
+	const wide = await searchBrains(
+		['acme/wiki', 'northwind/wiki'].map(d1Index(db)),
+		'kickoff',
+		undefined,
+		{
+			perBrain: 15,
+			total: 50
+		}
+	);
 	check(
 		'a brain absent from the list contributes nothing',
 		!wide.hits.some((h) => h.brainId === 'private/wiki')
@@ -787,7 +798,7 @@ function result(paths: string[], budgetHit = false): SearchResult {
 	);
 	check('the terms are reported once', wide.terms.includes('kickoff'), JSON.stringify(wide.terms));
 
-	const scoped = await searchBrains(db, ['northwind/wiki'], 'kickoff', 'wiki/notes/', {
+	const scoped = await searchBrains(['northwind/wiki'].map(d1Index(db)), 'kickoff', 'wiki/notes/', {
 		perBrain: 50,
 		total: 50
 	});
@@ -796,7 +807,10 @@ function result(paths: string[], budgetHit = false): SearchResult {
 		scoped.hits.length === 1 && scoped.hits[0].path === 'wiki/notes/later.md',
 		JSON.stringify(scoped.hits)
 	);
-	const none = await searchBrains(db, [], 'kickoff', undefined, { perBrain: 50, total: 50 });
+	const none = await searchBrains([].map(d1Index(db)), 'kickoff', undefined, {
+		perBrain: 50,
+		total: 50
+	});
 	check('no brains means no hits', none.hits.length === 0);
 }
 

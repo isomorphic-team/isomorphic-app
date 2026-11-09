@@ -28,6 +28,7 @@
 //     counters. Schema is `migrations/`.
 
 import { McpServer, type RegisteredTool } from '@modelcontextprotocol/server';
+import { d1Index, indexRefs, type BrainIndex, type OpenIndex } from './lib/brain-index.ts';
 import { registeredTools, wrapToolHandler } from './lib/registered-tools.ts';
 import { serveMcp, serverOptions } from './lib/mcp-serve.ts';
 import type { ConsolidationStep, IdentityWire, OrgMembershipWire } from './lib/tool-payloads.ts';
@@ -258,6 +259,7 @@ function consolidationFor(
 	return async (opts) => {
 		const { text, state } = await runConsolidationStep({
 			db: env.PLATFORM_DB,
+			index: d1Index(env.PLATFORM_DB)(scope.brainId),
 			...scope,
 			anthropicKey,
 			openRouterKey,
@@ -348,6 +350,9 @@ interface TenantContext {
 	// usage. Never shown to a person and never changed by a move or rename.
 	db: D1Database;
 	brainId: string;
+	// This brain's content index and the opener for another brain's (BrainContext).
+	index: BrainIndex;
+	openIndex: OpenIndex;
 	// The brain this call resolved to, as the handle tools and the app pass around
 	// (`id`) plus its display label.
 	activeBrain: { id: string; label: string };
@@ -728,6 +733,7 @@ class McpSession {
 			config,
 			author,
 			db: env.PLATFORM_DB,
+			...indexRefs(d1Index(env.PLATFORM_DB), target.brain_id),
 			...brainRefs(target)
 		};
 	}
@@ -1132,7 +1138,7 @@ class McpSession {
 			setActiveBrain: (id) => this.setActiveBrain(id),
 			invalidateConfig: (owner, repo) => this.invalidateConfig(owner, repo),
 			analyticsEnabled: this.usageEnabled(),
-			db: this.env.PLATFORM_DB,
+			openIndex: d1Index(this.env.PLATFORM_DB),
 			webBaseUrl: this.webBase()
 		});
 

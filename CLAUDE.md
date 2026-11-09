@@ -97,8 +97,8 @@ notes); see the OKF rules file.
   `validate` reports defects and findings, `resolve` answers them, `review_brain` runs deep passes.
 - **`BrainStore` (`src/lib/brain-repo.ts`) is the only seam between tools and storage.**
   Content reads and writes never call octokit. Only `wiki/log.md` is tool-maintained.
-- **The content index in D1 is a derived cache, never the source of truth**; every read checks
-  the branch head first.
+- **The content index is a derived cache, never the source of truth**, reached only through
+  `BrainIndex` (`ctx.index`, `src/lib/brain-index.ts`); every read checks the branch head first.
 - **Brain templates:** `brain-template/` is codegen'd into `src/lib/brain-template.generated.ts`
   (Workers have no filesystem). `src/lib/scaffold-core.ts` scaffolds for bootstrap and
   `create_brain`. Agent-facing schema doc: `brain-template/AGENTS.md`.

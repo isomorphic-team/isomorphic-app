@@ -1,6 +1,6 @@
 # Design: where the derived index lives, and full-text search
 
-Status: **proposed** (2026-11-09). Nothing here is built. A full-text search prototype and its
+Status: **in implementation** (2026-11-09). Step 1 of the order of work is built. A full-text search prototype and its
 comparison script are on the branch `search-fts5-prototype`, unmerged.
 
 Related: [`search-relevance.md`](search-relevance.md) (today's ranking),
@@ -130,6 +130,7 @@ several matches share. It reads only `brain_links` and needs none of the storage
 Each step is its own pull request and can be reverted alone.
 
 1. **The index interface** in `src/lib/`, with today's D1 tables behind it. No behaviour change.
+   Built: `BrainIndex` and `d1Index` in `src/lib/brain-index.ts`.
 2. **The index Worker and per-brain object,** with the local runtime keeping `node:sqlite` behind
    the same interface, and preview isolation (a per-pull-request host, or an id prefix).
 3. **Backfill** every brain from git into its object, after estimating the rows written.

@@ -29,14 +29,8 @@ import {
 } from '@modelcontextprotocol/ext-apps/server';
 import { z } from 'zod';
 import { BRAIN_APP_HTML } from '../lib/app-bundle.generated.ts';
-import type { D1Database } from '@cloudflare/workers-types';
 import { MAX_SCAN_PAGES, type RepoRef, type BrainStore } from '../lib/brain-repo.ts';
-import {
-	ensureFresh,
-	loadResolvedGraph,
-	listIndexedPages,
-	detectNeedsConfig
-} from '../lib/brain-index.ts';
+import { detectNeedsConfig, type BrainIndex } from '../lib/brain-index.ts';
 import { tryRenderViews, stripSnapshots } from '../lib/views.ts';
 import { browseSummary, treeFitsInline } from '../lib/browse.ts';
 import type { BrainContext } from './librarian.ts';
@@ -140,14 +134,13 @@ const APP_UI_META = { ui: { prefersBorder: false } } as const;
 // a degree so the renderer can size hubs. ensureFresh reconciles the index with the
 // repo HEAD first, so the graph reflects the current brain, unbounded by page count.
 async function buildGraph(
-	db: D1Database,
+	index: BrainIndex,
 	store: BrainStore,
 	repoArgs: RepoRef,
-	brainId: string,
 	config: BrainConfig
 ) {
-	const { truncated } = await ensureFresh(db, store, repoArgs, brainId, config);
-	const resolved = await loadResolvedGraph(db, brainId, config);
+	const { truncated } = await index.ensureFresh(store, repoArgs, config);
+	const resolved = await index.graph(config);
 	// Dedupe the resolved directed edges into undirected connections and count each
 	// node's degree so the renderer can size hubs.
 	const edges: GraphLink[] = [];
@@ -253,17 +246,16 @@ export function registerBrainApp(
 			_meta: { ui: { resourceUri: BRAIN_APP_URI } }
 		},
 		async ({ path, brain }) => {
-			const { store, repoArgs, config, activeBrain, db, brainId } = await getContext({ brain });
+			const { index, store, repoArgs, config, activeBrain } = await getContext({ brain });
 			const file = await store.readFile(repoArgs, path);
 			if (!file) return fail(`"${path}" does not exist.`);
 			// Derived views: replace each okf-view fence (and its cached snapshot)
 			// with the live rendering computed from the content index, so the user
 			// always sees current data. Falls back to the raw file if computing fails.
 			const views = await tryRenderViews(file.content, path, {
-				db,
+				index,
 				store,
 				repoArgs,
-				brainId,
 				config
 			});
 			const markdown = views?.display ?? file.content;
@@ -299,13 +291,13 @@ export function registerBrainApp(
 			_meta: { ui: { resourceUri: BRAIN_APP_URI } }
 		},
 		async ({ brain }) => {
-			const { store, repoArgs, config, db, brainId, activeBrain } = await getContext({ brain });
+			const { index, store, repoArgs, config, activeBrain } = await getContext({ brain });
 			// Serve the page list from the content index (ensureFresh reconciles it with
 			// HEAD first) — so it's instant and carries each page's display title, letting
 			// the file tree label files by title instead of filename. The index already
 			// holds exactly the brain's content pages (isContentPath), so no extra filter.
-			await ensureFresh(db, store, repoArgs, brainId, config);
-			const pages = await listIndexedPages(db, brainId);
+			await index.ensureFresh(store, repoArgs, config);
+			const pages = await index.listPages();
 			const paths = pages.map((p) => p.path);
 			// Attachments listed apart from hidden files — see listNonPagePaths.
 			const { assets, hidden } = await listNonPagePaths(store, repoArgs, config);
@@ -485,8 +477,8 @@ export function registerBrainApp(
 			_meta: { ui: { resourceUri: BRAIN_APP_URI } }
 		},
 		async ({ path, brain }) => {
-			const { store, repoArgs, config, db, brainId, activeBrain } = await getContext({ brain });
-			const { nodes, edges, truncated } = await buildGraph(db, store, repoArgs, brainId, config);
+			const { store, repoArgs, config, index, activeBrain } = await getContext({ brain });
+			const { nodes, edges, truncated } = await buildGraph(index, store, repoArgs, config);
 			const focus = path && nodes.some((n) => n.id === path) ? path : undefined;
 			const text =
 				`Brain graph: ${nodes.length} page(s), ${edges.length} link(s).` +
