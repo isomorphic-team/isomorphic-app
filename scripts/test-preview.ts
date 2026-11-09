@@ -61,6 +61,11 @@ console.log('\nthe plan is derived from the pull request number');
 		plan.databaseName
 	);
 	check(
+		'the index database is <base>-pr-<number>-index',
+		plan.indexDatabaseName === 'platform-db-preview-pr-128-index',
+		plan.indexDatabaseName
+	);
+	check(
 		'a non-number is refused',
 		throws(() => planPreview({ ...BASE, pr: NaN }), 'pull request')
 	);
@@ -106,9 +111,9 @@ console.log('\nJSONC is read without touching strings');
 
 console.log('\nthe previews block carries every binding the template declares');
 {
-	// As setup:config renders it for a preview: no CF_INDEX_D1_DATABASE_ID, so no INDEX_DB.
+	// As setup:config renders it for a preview, which has its own index database.
 	const template = parseJsonc(
-		optionalBlock(readFileSync('wrangler.template.jsonc', 'utf8'), 'index-db', false)
+		optionalBlock(readFileSync('wrangler.template.jsonc', 'utf8'), 'index-db', true)
 	) as Record<string, unknown>;
 	const config = previewConfig(template);
 	const previews = config.previews as Record<string, unknown>;
@@ -142,19 +147,30 @@ console.log('\nthe previews block carries every binding the template declares');
 	);
 	const d1 = (previews.d1_databases as Record<string, unknown>[])[0];
 	check(
+		'both databases are carried, the index one included',
+		JSON.stringify(previews.d1_databases) === JSON.stringify(template.d1_databases) &&
+			(previews.d1_databases as { binding: string }[]).map((d) => d.binding).join() ===
+				'PLATFORM_DB,INDEX_DB',
+		JSON.stringify(previews.d1_databases)
+	);
+	check(
 		'the D1 binding is the top-level one',
 		JSON.stringify(d1) === JSON.stringify((template.d1_databases as unknown[])[0])
 	);
 	check('the block is a copy, not shared objects', d1 !== (template.d1_databases as unknown[])[0]);
 	check(
-		'two D1 bindings are refused rather than guessed between',
+		'D1 bindings other than the platform and index databases are refused',
 		throws(
 			() =>
 				previewConfig({
-					d1_databases: [{ binding: 'A' }, { binding: 'B' }]
+					d1_databases: [{ binding: 'PLATFORM_DB' }, { binding: 'B' }]
 				}),
-			'one D1 binding'
+			'PLATFORM_DB, INDEX_DB'
 		)
+	);
+	check(
+		'a config without the index database is refused',
+		throws(() => previewConfig({ d1_databases: [{ binding: 'PLATFORM_DB' }] }), 'INDEX_DB')
 	);
 }
 
@@ -250,7 +266,9 @@ console.log('\nthe workflow keeps secrets away from pull request code');
 	check(
 		'deploy reads only the bundle and the SQL from the artifact',
 		artifactUses.length > 0 &&
-			artifactUses.every((u) => u === 'bundle/worker.js' || u === 'migrations/*.sql'),
+			artifactUses.every((u) =>
+				['bundle/worker.js', 'migrations/*.sql', 'migrations-index/*.sql'].includes(u)
+			),
 		JSON.stringify(artifactUses)
 	);
 	check('cleanup checks out the default ref', !/^\s+ref:/m.test(job('cleanup')));

@@ -35,6 +35,8 @@ export type PreviewPlan = {
 	name: string;
 	origin: string;
 	databaseName: string;
+	/** The content index's own database, per pull request like the platform one. */
+	indexDatabaseName: string;
 };
 
 const LABEL = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/;
@@ -61,7 +63,8 @@ export function planPreview(inputs: PreviewInputs): PreviewPlan {
 	return {
 		name,
 		origin: `https://${label}.${subdomain}.workers.dev`,
-		databaseName: `${databaseBase}-pr-${pr}`
+		databaseName: `${databaseBase}-pr-${pr}`,
+		indexDatabaseName: `${databaseBase}-pr-${pr}-index`
 	};
 }
 
@@ -103,13 +106,18 @@ type WranglerConfig = Record<string, unknown> & {
  */
 export function previewConfig(config: WranglerConfig): WranglerConfig {
 	const databases = config.d1_databases ?? [];
-	if (databases.length !== 1)
-		throw new Error(`Expected one D1 binding in the generated config, found ${databases.length}`);
+	const bindings = databases.map((d) => String(d.binding)).join(', ');
+	// The pull request's two databases and nothing else: a binding this does not know
+	// would be copied into a Preview pointing wherever the profile happened to point.
+	if (bindings !== 'PLATFORM_DB, INDEX_DB')
+		throw new Error(
+			`Expected the D1 bindings PLATFORM_DB, INDEX_DB in the generated config, found ${bindings || 'none'}`
+		);
 	return {
 		...config,
 		previews: {
 			vars: { ...config.vars },
-			d1_databases: [{ ...databases[0] }],
+			d1_databases: databases.map((d) => ({ ...d })),
 			kv_namespaces: (config.kv_namespaces ?? []).map((kv) => ({ ...kv }))
 		}
 	};
@@ -204,7 +212,9 @@ function main(argv: string[]): void {
 	switch (command) {
 		case 'plan': {
 			const plan = planPreview(inputsFromEnv());
-			console.log(`name=${plan.name}\norigin=${plan.origin}\ndatabase=${plan.databaseName}`);
+			console.log(
+				`name=${plan.name}\norigin=${plan.origin}\ndatabase=${plan.databaseName}\nindex_database=${plan.indexDatabaseName}`
+			);
 			return;
 		}
 		case 'config': {

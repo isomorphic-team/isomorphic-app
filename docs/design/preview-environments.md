@@ -26,14 +26,15 @@ A preview gives each pull request a real origin with a real sign-in, where a rev
 Each pull request gets a Worker Preview named `pr-<number>` on a dedicated **preview
 Worker**, served at `https://pr-<number>-<preview worker>.<subdomain>.workers.dev`.
 
-| Resource   | Production              | Preview                                          |
-| ---------- | ----------------------- | ------------------------------------------------ |
-| Worker     | (the deployment's name) | `PREVIEW_WORKER_NAME`, hosting every Preview     |
-| D1         | `platform-db`           | `<PREVIEW_D1_DATABASE_NAME>-pr-<number>`, per PR |
-| KV         | `OAUTH_KV`              | one shared preview namespace                     |
-| Secrets    | the production Worker's | the preview Worker's Previews base config        |
-| GitHub App | the platform App        | a separate App on a throwaway organization       |
-| Feedback   | `FEEDBACK_TOKEN` set    | unset, so `submit_feedback` is not registered    |
+| Resource   | Production              | Preview                                                |
+| ---------- | ----------------------- | ------------------------------------------------------ |
+| Worker     | (the deployment's name) | `PREVIEW_WORKER_NAME`, hosting every Preview           |
+| D1         | `platform-db`           | `<PREVIEW_D1_DATABASE_NAME>-pr-<number>`, per PR       |
+| D1 (index) | `index-db`              | `<PREVIEW_D1_DATABASE_NAME>-pr-<number>-index`, per PR |
+| KV         | `OAUTH_KV`              | one shared preview namespace                           |
+| Secrets    | the production Worker's | the preview Worker's Previews base config              |
+| GitHub App | the platform App        | a separate App on a throwaway organization             |
+| Feedback   | `FEEDBACK_TOKEN` set    | unset, so `submit_feedback` is not registered          |
 
 `preview.yml` runs three jobs, and the split is the security model:
 
