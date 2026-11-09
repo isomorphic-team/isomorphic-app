@@ -77,7 +77,7 @@ import { WEB_APP_HEADERS, signInRedirect, webShell } from './lib/web-shell.ts';
 import { registerLibrarianTools } from './tools/librarian.ts';
 import { registerImportTools } from './tools/importer.ts';
 import { registerBrainApp } from './tools/apps.ts';
-import { SERVER_INSTRUCTIONS } from './lib/server-instructions.ts';
+import { composeInstructions, SERVER_INSTRUCTIONS } from './lib/server-instructions.ts';
 import { registerCoreTools } from './tools/core.ts';
 import { registerMediaTools } from './tools/media.ts';
 import { registerMemberTools } from './tools/members.ts';
@@ -106,7 +106,9 @@ import { guardStore } from './lib/policy-guard.ts';
 import { recordDetections } from './lib/policy-store.ts';
 import {
 	peekJsonRpc,
+	isHandshake,
 	needsBrainPreamble,
+	withFallback,
 	jsonRpcError,
 	describeRequest
 } from './lib/mcp-preamble.ts';
@@ -357,7 +359,12 @@ interface TenantContext {
 // the tenant/brain resolution and tool registration. Nothing here persists between
 // requests except the active brain, which lives in KV keyed by user (see
 // loadActiveBrain / setActiveBrain). Server-level guidance (SERVER_INSTRUCTIONS)
-// lives in src/lib/server-instructions.ts, shared with the local runtime.
+// lives in src/lib/server-instructions.ts, shared with the local runtime; a handshake
+// appends the caller's brains to it (handshakeInstructions).
+// How long a handshake waits for the caller's brain list before answering with the
+// static instructions.
+const HANDSHAKE_LOOKUP_MS = 1_500;
+
 class McpSession {
 	readonly env: Env;
 	readonly props: McpProps | undefined;
@@ -863,11 +870,25 @@ class McpSession {
 
 	// Build the MCP server for this request: instantiate McpServer and register
 	// every tool. Called once per request by mcpApiHandler, then served statelessly.
-	buildServer(): McpServer {
+	// The instructions a handshake answers with: SERVER_INSTRUCTIONS plus the brains
+	// the caller can search, active first. Fail-open and bounded: the handshake is the
+	// request a user cannot retry past, so a slow or failed lookup answers with the
+	// static text rather than holding the connection open.
+	async handshakeInstructions(): Promise<string> {
+		const lookup = (async () => {
+			await this.loadActiveBrain();
+			return composeInstructions(await this.listAccessibleBrainsForCaller(), this.activeBrainId);
+		})();
+		return withFallback(lookup, HANDSHAKE_LOOKUP_MS, SERVER_INSTRUCTIONS, (err) =>
+			console.warn(`[instructions] ${err instanceof Error ? err.message : String(err)}`)
+		);
+	}
+
+	buildServer(instructions: string = SERVER_INSTRUCTIONS): McpServer {
 		const env = this.env;
 		const server = new McpServer(
 			{ name: 'isomorphic-mind', title: 'Isomorphic', version: '0.1.0' },
-			serverOptions(SERVER_INSTRUCTIONS)
+			serverOptions(instructions)
 		);
 
 		// ---------- whoami ----------
@@ -1170,7 +1191,9 @@ const mcpApiHandler = {
 				await session.loadActiveBrain();
 				await session.loadCustomTools();
 			}
-			const server = session.buildServer();
+			const server = session.buildServer(
+				isHandshake(peek) ? await session.handshakeInstructions() : undefined
+			);
 			const started = Date.now();
 			// Either protocol era; see src/lib/mcp-serve.ts.
 			const { response: res, era, error } = await serveMcp(forwarded, server);

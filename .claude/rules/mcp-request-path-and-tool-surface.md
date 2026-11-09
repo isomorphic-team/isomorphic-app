@@ -35,6 +35,13 @@ enableJsonResponse: true })`. The split uses the SDK's own `isLegacyRequest`.
 - **`needsBrainPreamble`** skips brain resolution for `initialize`, `server/discover`, `ping`
   and notifications, and is conservative for anything unknown. **`tools/list` still resolves**
   (a brain's own tools belong in it).
+- **A handshake builds the caller's instructions** (`isHandshake`): `handshakeInstructions`
+  in `worker.ts` reads the active pointer and `listAccessibleBrains`, and
+  `composeInstructions` (`src/lib/server-instructions.ts`, `pnpm test:instructions`) appends
+  those brains, active first, within `SERVER_INSTRUCTIONS_LIMIT`, with each name reduced to
+  one line of data. `withFallback` bounds the lookup at `HANDSHAKE_LOOKUP_MS` and answers
+  with the static text on a timeout or error (`pnpm test:preamble`). The local runtime
+  serves the static text.
 - `loadActiveBrain` and `loadCustomTools` fail open.
 - **`describeRequest` logs** any `/mcp` answer at 4xx or over 5s: methods, message SHAPES (key
   names only, never values), protocol era, status, duration, transport error. A slow call

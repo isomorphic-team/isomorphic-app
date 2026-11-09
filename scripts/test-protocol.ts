@@ -93,6 +93,14 @@ async function exercise(label: string, mode: Negotiation, expectEra: McpEra): Pr
 		JSON.stringify(caps?.resources)
 	);
 
+	// The handshake is where a host gets the server instructions, including the
+	// per-caller section the Worker composes for it, in both eras.
+	check(
+		'the handshake carries the server instructions',
+		client.getInstructions() === 'probe',
+		String(client.getInstructions())
+	);
+
 	const tools = await client.listTools();
 	const names = tools.tools.map((t) => t.name);
 	check('tools/list reaches the registered tools', names.includes('echo'), names.join(','));

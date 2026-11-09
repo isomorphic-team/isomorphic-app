@@ -98,6 +98,16 @@ export function describeRequest(
  * from the static surface. Conservative in both unknown directions: an
  * unparsed body and an unrecognised method both mean yes.
  */
+/**
+ * Whether this request is a handshake: `initialize`, or `server/discover` on the
+ * 2026-07-28 revision. Its result carries the server instructions, so it is the one
+ * request that builds the caller's section of them (composeInstructions). An unparsed
+ * body is not one: it gets the static text.
+ */
+export function isHandshake(peek: JsonRpcPeek): boolean {
+	return peek.methods.some((m) => m === 'initialize' || m === 'server/discover');
+}
+
 export function needsBrainPreamble(peek: JsonRpcPeek): boolean {
 	if (!peek.parsed) return true;
 	return !peek.methods.every((m) => BRAIN_FREE_METHODS.has(m) || isNotification(m));
@@ -123,4 +133,30 @@ export function jsonRpcError(
 			...(ray ? { data: { ray } } : {})
 		}
 	});
+}
+
+/**
+ * `work`'s result, or `fallback` when it rejects or takes longer than `ms`. For lookups a
+ * request can answer without: a late result is dropped, and a late rejection is caught
+ * here rather than surfacing as an unhandled one.
+ */
+export async function withFallback<T>(
+	work: Promise<T>,
+	ms: number,
+	fallback: T,
+	onError?: (err: unknown) => void
+): Promise<T> {
+	let timer: ReturnType<typeof setTimeout> | undefined;
+	const settled = work.catch((err) => {
+		onError?.(err);
+		return fallback;
+	});
+	const late = new Promise<T>((resolve) => {
+		timer = setTimeout(() => resolve(fallback), ms);
+	});
+	try {
+		return await Promise.race([settled, late]);
+	} finally {
+		clearTimeout(timer);
+	}
 }
