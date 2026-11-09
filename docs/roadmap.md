@@ -692,6 +692,32 @@ expose a real one.
 - **Pagination / "load more"** once a brain has a long history (one page of up to 50 commits
   today).
 
+# TODO: index storage and full-text search
+
+[`design/brain-index-storage.md`](design/brain-index-storage.md). The content index and the
+state derived from it move out of the platform database into one SQLite-backed Durable Object
+per brain, implemented in a separate index Worker that this Worker binds to (which keeps
+version URLs and the pre-promotion smoke). Then `search_pages` moves to FTS5 inside that
+object: on 130 probe questions over four real brains a prototype put the right page first 103
+times against 86 today, and searched a 5,380-page brain about three times faster.
+
+In order, each its own pull request: an index interface in `src/lib/` with today's tables
+behind it; the index Worker and per-brain object, with the local runtime and previews covered;
+a backfill from git; FTS5 in shadow, with disagreements logged; then the switch. Open before
+the second step: whether SQLite-backed Durable Objects are on the Workers free plan, and how
+`scope: "all"` performs as one call per brain.
+
+# TODO: related pages in search results
+
+After the hits, `search_pages` lists pages one link from the strong matches that hold none of
+the query's words, with links declared in frontmatter (`depends: [[Billing]]`) named by their
+key and listed first. Prototyped and measured on real brains (results in
+[`design/brain-index-storage.md`](design/brain-index-storage.md)): followed naively it lists
+attendees and changelogs, so only matches holding every term are followed, a body-linked page
+needs two matches touching it, and hubs pass declared relations only. Needs nothing from the
+storage change. Before shipping: stop loading the whole page list per search to resolve
+wikilinks.
+
 # TODO: content index, optional work
 
 The derived D1 index is built and is what every read tool queries (see CLAUDE.md, "Content
@@ -707,10 +733,11 @@ reads correct and unbounded.
   `getRef` in steady state. Our own direct writes already advance the index through
   write-through, so only outside edits would wait out the TTL.
 
-Decided against: **FTS5.** Verified available in D1 and not used: a virtual table disables
-`wrangler d1 export` for the whole database, and BM25 cannot meet the requirement that
-ranking be reproducible from row data and pinned by a pure test. Ranking is `src/lib/search.ts`;
-the reasoning is in [`design/search-relevance.md`](design/search-relevance.md).
+**FTS5 in the platform database** stays decided against: a virtual table disables
+`wrangler d1 export` for the whole database, which holds the org tables. FTS5 itself is
+proposed in its own storage, under "index storage and full-text search" above, with BM25 as one
+signal and the order still decided by a pure module. Today's ranking is `src/lib/search.ts`;
+its reasoning is in [`design/search-relevance.md`](design/search-relevance.md).
 
 # TODO: graph view follow-ups
 

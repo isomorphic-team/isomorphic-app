@@ -180,8 +180,8 @@ agent that opens this repo. When they drift, an agent acts on the drift with con
 
 Each is stated in full in its rules file; these hold even when that file has not loaded.
 
-- **Never add a Durable Object binding** (it silently loses preview URLs and the pre-promotion
-  smoke) or a `routes` block to the wrangler template.
+- **Never implement a Durable Object class in this Worker** (it loses preview URLs and the
+  smoke; binding one in another Worker does not) or add a `routes` block to the template.
 - **Never widen the platform App's permissions** in `src/manifest.ts`.
 - **Don't enable CodeQL default setup** in repository settings.
 - **Don't re-add `update_brain`, a `manage_*` tool, or `set_fields`**, and don't grow the tool

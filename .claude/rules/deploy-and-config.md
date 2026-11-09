@@ -72,9 +72,11 @@ apply in the step before, schema first.
   no secret; forks are previewed only by a maintainer's `workflow_dispatch`. Design and setup:
   `docs/design/preview-environments.md`.
 - **The pre-promotion smoke depends on preview URLs,** which Cloudflare withholds from Workers
-  implementing a Durable Object (`metadata.has_preview`). This Worker has them today. **Adding a
-  Durable Object binding would silently drop the pipeline onto promote-then-roll-back**, where a
-  bad version serves real traffic during the smoke. The workflow warns rather than failing.
+  implementing a Durable Object (`metadata.has_preview`). This Worker has them today.
+  **Implementing a Durable Object class in this Worker would silently drop the pipeline onto
+  promote-then-roll-back**, where a bad version serves real traffic during the smoke. The
+  workflow warns rather than failing. A binding to a class implemented in ANOTHER Worker
+  (`script_name`) keeps version URLs and Worker Previews (`docs/references.md`).
 - **Nothing catches a wrong `PUBLIC_BASE_URL`:** the OAuth provider is built per request origin
   (`src/lib/oauth-provider.ts`), so every check passes on any hostname.
 
