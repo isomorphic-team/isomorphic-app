@@ -1,7 +1,6 @@
 # Design: where the derived index lives, and full-text search
 
-Status: **in implementation** (2026-11-09). Steps 1 and 2 of the order of work are built. A full-text search prototype and its
-comparison script are on the branch `search-fts5-prototype`, unmerged.
+Status: **in implementation** (2026-11-09). Steps 1 to 3 of the order of work are built: full-text search runs in shadow.
 
 Related: [`search-relevance.md`](search-relevance.md) (today's ranking),
 [`storage-and-tenancy.md`](storage-and-tenancy.md) (derived state keyed by `brain_id`),
@@ -137,7 +136,8 @@ because the index is rebuildable, moving it into objects later is a backfill.
    `migrations-index/`, `indexDatabase`. A deployment that binds it starts with an empty index,
    which each brain refills on its next read; estimate the rows written before binding it.
 3. **FTS5 in shadow** in `INDEX_DB`: built alongside, disagreements with `searchIndex` logged,
-   latency measured on the real deployment.
+   latency measured on the real deployment. Built: `migrations-index/0002_pages_fts.sql`,
+   `shadowSearch`. Read the `search-shadow` lines in Workers Logs before step 4.
 4. **Switch `search_pages`,** keeping `expect` able to explain a rank.
 5. **Drop the index tables from the platform database,** once every deployment binds `INDEX_DB`.
 6. **The index Worker and per-brain object,** when a limit calls for it: a brain near D1's size

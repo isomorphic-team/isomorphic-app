@@ -22,6 +22,7 @@ import {
 	INDEX_SCHEMA_VERSION,
 	listIndexedPages,
 	indexDatabase,
+	resetIndex,
 	writeThroughIndex,
 	REBUILD_PAGE_BUDGET,
 	REINDEX_PAGE_BUDGET
@@ -32,6 +33,7 @@ import { DEFAULT_BRAIN_CONFIG, type BrainConfig } from '../src/lib/brain-policy.
 import { pageTitle } from '../src/lib/wiki.ts';
 
 import { checker } from './check.ts';
+import { checkFtsIndex, rebuildFtsIndex, searchIndexFts } from '../src/lib/search-fts-index.ts';
 import { BRAIN_INDEX_TABLES } from '../src/lib/brain-forget.ts';
 import { openFolderAsBrain } from './local-brain.ts';
 import { fakeGithub, type FakePage } from './fake-github.ts';
@@ -769,6 +771,78 @@ console.log('\nContent index — bounded, resumable ensureFresh\n');
 	);
 }
 
+// ---------------------------------------------------------------- scenario 12
+// The full-text table is kept current by triggers on brain_pages, so it has to
+// survive every way the indexer writes that table: the cold build, write-through
+// (INSERT OR REPLACE over an existing row, which fires no DELETE trigger), a delete, an
+// incremental reindex and a reset. checkFtsIndex compares the FTS index with the rows.
+{
+	console.log('\nFTS index follows every write to brain_pages');
+	resetDb();
+	gh.pages = makePages(12);
+	gh.head = 'commit-fts-0';
+	await ensureFresh(db, store, repo, brainId, config);
+	const paths = async (q: string) => [
+		...new Set((await searchIndexFts(db, brainId, q, undefined, 50)).hits.map((h) => h.path))
+	];
+	const consistent = async () => {
+		try {
+			await checkFtsIndex(db);
+			return true;
+		} catch {
+			return false;
+		}
+	};
+	const victim = gh.pages[0].path;
+	const doomed = gh.pages[1].path;
+
+	const v1 = { path: victim, content: '# Victim\n\nMentions zanzibar once.\n' };
+	gh.pages[0] = { ...v1, sha: 'sha-fts-1' };
+	gh.head = 'commit-fts-1';
+	const wrote = await writeThroughIndex(db, brainId, config, 'commit-fts-0', gh.head, [v1], []);
+	check(
+		'fts: a page written through is searchable',
+		wrote && (await paths('zanzibar')).join() === victim
+	);
+
+	const v2 = { path: victim, content: '# Victim\n\nNow about quokkas.\n' };
+	gh.pages[0] = { ...v2, sha: 'sha-fts-2' };
+	gh.head = 'commit-fts-2';
+	await writeThroughIndex(db, brainId, config, 'commit-fts-1', gh.head, [v2], []);
+	check(
+		'fts: replacing a page drops its old words',
+		(await paths('zanzibar')).length === 0 && (await paths('quokka')).join() === victim
+	);
+
+	gh.pages = gh.pages.filter((p) => p.path !== doomed);
+	gh.head = 'commit-fts-3';
+	await writeThroughIndex(db, brainId, config, 'commit-fts-2', gh.head, [], [doomed]);
+
+	// Changed outside the tools: the next read reindexes it.
+	gh.pages[1] = { ...gh.pages[1], sha: 'sha-fts-4', content: '# Outside\n\nA wombat edit.\n' };
+	gh.head = 'commit-fts-4';
+	await ensureFresh(db, store, repo, brainId, config);
+	check(
+		'fts: an incremental reindex is searchable',
+		(await paths('wombat')).join() === gh.pages[1].path
+	);
+	check('fts: the index matches brain_pages after every write path', await consistent());
+
+	const incremental = await paths('quokka wombat page');
+	await rebuildFtsIndex(db);
+	check(
+		'fts: a rebuild returns what the incremental index returned',
+		incremental.length > 0 && (await paths('quokka wombat page')).join() === incremental.join(),
+		JSON.stringify(incremental)
+	);
+
+	await resetIndex(db, brainId);
+	check(
+		'fts: a reset index holds nothing',
+		(await paths('quokka')).length === 0 && (await consistent())
+	);
+}
+
 // ---------------------------------------------------------- the two schemas agree
 // The index runs in its own database when INDEX_DB is bound and in the platform
 // database otherwise, so both must carry the same four tables. The one intended
@@ -802,7 +876,7 @@ console.log('\nContent index — bounded, resumable ensureFresh\n');
 		own.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all() as { name: string }[]
 	)
 		.map((t) => t.name)
-		.filter((n) => n !== 'local_migrations')
+		.filter((n) => n !== 'local_migrations' && !n.startsWith('brain_pages_fts'))
 		.sort();
 	check(
 		'the index database holds the index tables and nothing else',

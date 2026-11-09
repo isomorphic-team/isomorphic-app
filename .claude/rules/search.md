@@ -1,6 +1,6 @@
 ---
 paths:
-  - "src/lib/{search,probe,brain-index}.ts"
+  - "src/lib/{search,search-fts,search-fts-index,search-shadow,probe,brain-index}.ts"
   - "scripts/{test-search,test-probe,probe-report}.ts"
   - "app/views/SearchView.tsx"
   - "tests/ui/search.spec.ts"
@@ -30,10 +30,18 @@ ORDERS or DROPS a result is in the pure `src/lib/search.ts` (`pnpm test:search`)
   pattern through `containsSql` / `startsWithSql`, which fall back to `instr(lower(...))` past
   the limit; the local D1 shim enforces the same limit so `test:search` sees it.
 - **The response says what it left out** (`elisionNote`) and which terms it searched.
-- **FTS5 is available in D1 and deliberately not used:** a virtual table disables
-  `wrangler d1 export` for the whole database (which holds org and user rows), and BM25 cannot
-  be pinned by a pure test. Read `docs/references.md` before reopening it. Swapping phase 1 for
-  FTS5 would touch neither ranking nor its tests.
+- **FTS5 never goes in the platform database:** a virtual table disables `wrangler d1 export`
+  for the whole database, which holds org and user rows (`docs/references.md`). It lives in
+  the index database only (`migrations-index/0002_pages_fts.sql`): an external-content table
+  over `brain_pages`, kept current by triggers, so no write path names it. `pnpm test:index`
+  drives the real write paths and checks it with FTS5's integrity check.
+- **The FTS5 engine runs in shadow, and `search_pages` still answers from `searchIndex`.**
+  `indexFor` turns the shadow on only where `INDEX_DB` is bound. `shadowSearch`
+  (`src/lib/search-shadow.ts`) runs `searchIndexFts` beside the current engine, abandons it
+  after `SHADOW_BUDGET_MS`, and logs one `search-shadow` JSON line of counts and timings:
+  never a query, a path or a brain. Its ordering is pure (`rankFtsPages` in
+  `src/lib/search-fts.ts`: coverage, phrase, `bm25()`, path). Compare the engines on a folder
+  with `pnpm search:compare <folder> <probes.json>`.
 - **Probe against a real brain before believing a ranking change.** `pnpm probe:report <folder>
   <probes.json>` runs probes through the real `searchIndex` offline and reports how many
   landed in the top band and the mean reciprocal rank (`summarizeProbes`), the numbers to

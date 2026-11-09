@@ -26,13 +26,17 @@ import {
 import {
 	d1Index,
 	escapeLike,
+	indexFor,
 	indexSignals,
 	searchBrains,
 	searchIndex
 } from '../src/lib/brain-index.ts';
 import { searchTargets, type BrainContext } from '../src/tools/librarian.ts';
 import type { AccessibleBrain } from '../src/lib/orgs.ts';
-import { localD1 } from '../src/local/d1-sqlite.ts';
+import { INDEX_MIGRATIONS_DIR, localD1 } from '../src/local/d1-sqlite.ts';
+import { searchIndexFts } from '../src/lib/search-fts-index.ts';
+import { HL_CLOSE, HL_OPEN, linesFromHighlight } from '../src/lib/search-fts.ts';
+import { compareSearch, shadowSearch, type ShadowLog } from '../src/lib/search-shadow.ts';
 
 import { checker } from './check.ts';
 
@@ -888,6 +892,230 @@ function brain(id: string, name: string): AccessibleBrain {
 	check(
 		'a broken brain list falls back to the active brain',
 		t.length === 1 && t[0].handle === 'acme/wiki'
+	);
+}
+
+// --------------------------------------------------------- FTS5 (shadow) -------
+//
+// searchIndexFts answers the same contract through SQLite FTS5. Coverage still decides
+// first; BM25 (rare terms count for more, title weighted) orders within a coverage band,
+// and porter stemming lets a plural find a singular. node:sqlite ships FTS5, so this
+// runs the real thing.
+
+{
+	const fts = [
+		...Array.from({ length: 6 }, (_, i) => ({
+			path: `wiki/updates/update-${i}.md`,
+			title: `Update ${i}`,
+			content: `# Update ${i}\nThe project moved forward this week.`
+		})),
+		{
+			path: 'wiki/vendors/northwind.md',
+			title: 'Shortlist',
+			content: '# Shortlist\nNorthwind vendor shortlist.'
+		},
+		{
+			path: 'wiki/vendors/both.md',
+			title: 'Kickoff',
+			content: `# Kickoff\n${'Long notes from the session. '.repeat(40)}\nProject kickoff with Northwind.`
+		},
+		{
+			path: 'wiki/vendors/heavy.md',
+			title: 'Heavy',
+			content: '# Heavy\nNorthwind Northwind Northwind Northwind Northwind Northwind.'
+		},
+		{
+			path: 'wiki/finance/referral.md',
+			title: 'Referral',
+			content:
+				'---\ntype: policy\n---\n# Referral\n\nThe referral fee is 10 percent.\nPaid monthly.'
+		},
+		{ path: 'wiki/a-notes.md', title: 'Notes', content: 'Quarterly budget review.' },
+		{ path: 'wiki/z-q3.md', title: 'Budget', content: 'Quarterly budget review.' }
+	];
+	// The index database's schema, where the full-text table and its triggers live.
+	const { db, sqlite } = localD1(':memory:', INDEX_MIGRATIONS_DIR);
+	for (const p of fts) {
+		sqlite
+			.prepare(
+				'INSERT INTO brain_pages (brain_id, path, title, blob_sha, content) VALUES (?, ?, ?, ?, ?)'
+			)
+			.run(BRAIN, p.path, p.title, 'sha-' + p.path, p.content);
+	}
+
+	const rare = await searchIndexFts(db, BRAIN, 'northwind project', undefined, 50);
+	const order = [...new Set(rare.hits.map((h) => h.path))];
+	check(
+		'fts: a page holding every term ranks first',
+		order[0] === 'wiki/vendors/both.md',
+		JSON.stringify(order)
+	);
+	check(
+		'fts: within a coverage band the rare term outranks the common one',
+		order.indexOf('wiki/vendors/northwind.md') <
+			order.findIndex((p) => p.startsWith('wiki/updates/')),
+		JSON.stringify(order)
+	);
+
+	const stem = await searchIndexFts(db, BRAIN, 'fees', undefined, 50);
+	check(
+		'fts: a plural query finds the singular, on the right line',
+		stem.hits[0]?.path === 'wiki/finance/referral.md' &&
+			stem.hits.some((h) => h.line === 6 && h.text === 'The referral fee is 10 percent.'),
+		JSON.stringify(stem.hits)
+	);
+
+	const titled = await searchIndexFts(db, BRAIN, 'budget', undefined, 50);
+	check(
+		'fts: a title match counts, breaking a tie that path order would break the other way',
+		titled.hits[0]?.path === 'wiki/z-q3.md',
+		JSON.stringify(titled.hits)
+	);
+
+	const scoped = await searchIndexFts(db, BRAIN, 'northwind', 'wiki/vendors/both', 50);
+	check(
+		'fts: a prefix restricts to a subtree',
+		scoped.hits.length > 0 && scoped.hits.every((h) => h.path.startsWith('wiki/vendors/both')),
+		JSON.stringify(scoped.hits)
+	);
+
+	let threw = false;
+	try {
+		await searchIndexFts(db, BRAIN, 'NEAR( "budget 50% AND OR *', undefined, 50);
+	} catch {
+		threw = true;
+	}
+	check('fts: query text is never read as FTS5 syntax', !threw);
+
+	check(
+		'fts: highlight lines strip the markers and keep line numbers',
+		JSON.stringify(
+			linesFromHighlight(
+				`a\n${HL_OPEN}x${HL_CLOSE} and ${HL_OPEN}y${HL_CLOSE}\nb ${HL_OPEN}x${HL_CLOSE}`
+			)
+		) ===
+			JSON.stringify([
+				{ line: 2, text: 'x and y', matched: 2 },
+				{ line: 3, text: 'b x', matched: 1 }
+			])
+	);
+}
+
+// ------------------------------------------------------------ shadow search ----
+//
+// shadowSearch answers from the current engine whatever the other one does, and logs a
+// comparison that names no query, path or brain.
+{
+	const result = (paths: string[]): SearchResult => ({
+		hits: paths.map((path) => ({ path, line: 1, text: 'secret text' })),
+		terms: ['alpha', 'beta'],
+		pagesMatched: paths.length,
+		pagesShown: paths.length,
+		linesElided: 0,
+		budgetHit: false
+	});
+	const current = result(['a.md', 'b.md', 'c.md', 'd.md']);
+	const lines: ShadowLog[] = [];
+	const log = (l: ShadowLog) => void lines.push(l);
+
+	const cmp = compareSearch(current, result(['b.md', 'a.md', 'x.md']));
+	check(
+		'shadow: the comparison counts agreement in the first place and the first three',
+		!cmp.top1Same && cmp.top3Shared === 2 && cmp.top3Of === 3 && cmp.pagesFts === 3,
+		JSON.stringify(cmp)
+	);
+	check('shadow: two empty results agree', compareSearch(result([]), result([])).top1Same === true);
+
+	let got = await shadowSearch(
+		{ current: async () => current, fts: async () => result(['a.md']) },
+		log
+	);
+	check("shadow: the answer is the current engine's", got === current);
+	check(
+		'shadow: a comparison is logged',
+		lines.length === 1 && lines[0].outcome === 'compared' && lines[0].terms === 2,
+		JSON.stringify(lines)
+	);
+	check(
+		'shadow: the log line carries no query term, path or line text',
+		!/alpha|beta|\.md|secret/.test(JSON.stringify(lines)),
+		JSON.stringify(lines)
+	);
+
+	lines.length = 0;
+	got = await shadowSearch(
+		{
+			current: async () => current,
+			fts: async () => {
+				throw new Error('no such table');
+			}
+		},
+		log
+	);
+	check(
+		'shadow: a failing shadow engine changes nothing and is logged as an error',
+		got === current && lines[0]?.outcome === 'error',
+		JSON.stringify(lines)
+	);
+
+	lines.length = 0;
+	got = await shadowSearch(
+		{ current: async () => current, fts: () => new Promise<SearchResult>(() => {}) },
+		log,
+		{ budgetMs: 5 }
+	);
+	check(
+		'shadow: a shadow engine that never answers is abandoned at the budget',
+		got === current && lines[0]?.outcome === 'timeout',
+		JSON.stringify(lines)
+	);
+
+	got = await shadowSearch({ current: async () => current, fts: async () => current }, () => {
+		throw new Error('log sink down');
+	});
+	check('shadow: a log that throws does not cost the answer', got === current);
+
+	let threw = false;
+	try {
+		await shadowSearch(
+			{
+				current: async () => {
+					throw new Error('index unavailable');
+				},
+				fts: async () => current
+			},
+			log
+		);
+	} catch {
+		threw = true;
+	}
+	check('shadow: a failure of the current engine still reaches the caller', threw);
+
+	// The wiring: full-text search runs only where the index has its own database.
+	const { db: own, sqlite: ownSql } = localD1(':memory:', INDEX_MIGRATIONS_DIR);
+	ownSql
+		.prepare(
+			"INSERT INTO brain_pages (brain_id, path, title, blob_sha, content) VALUES ('b', 'wiki/fee.md', 'Fee', 's', 'The fee is ten.')"
+		)
+		.run();
+	const logged: string[] = [];
+	let answered: SearchResult | undefined;
+	const realLog = console.log;
+	console.log = (l: string) => void logged.push(l);
+	try {
+		answered = await indexFor({ PLATFORM_DB: db, INDEX_DB: own })('b').search('fee', undefined, 50);
+		await indexFor({ PLATFORM_DB: db })(BRAIN).search('fee', undefined, 50);
+	} finally {
+		console.log = realLog;
+	}
+	check(
+		'shadow: a deployment with INDEX_DB still answers from searchIndex',
+		answered?.hits.length === 1
+	);
+	check(
+		'shadow: it compares on INDEX_DB, and runs no shadow on the platform database',
+		logged.length === 1 && JSON.parse(logged[0]).outcome === 'compared',
+		logged.join('\n')
 	);
 }
 
