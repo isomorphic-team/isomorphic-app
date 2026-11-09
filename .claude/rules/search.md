@@ -1,6 +1,6 @@
 ---
 paths:
-  - "src/lib/{search,search-fts,search-fts-index,search-shadow,probe,brain-index}.ts"
+  - "src/lib/{search,search-fts,search-fts-index,search-engine,probe,brain-index}.ts"
   - "scripts/{test-search,test-probe,probe-report}.ts"
   - "app/views/SearchView.tsx"
   - "tests/ui/search.spec.ts"
@@ -35,11 +35,15 @@ ORDERS or DROPS a result is in the pure `src/lib/search.ts` (`pnpm test:search`)
   the index database only (`migrations-index/0002_pages_fts.sql`): an external-content table
   over `brain_pages`, kept current by triggers, so no write path names it. `pnpm test:index`
   drives the real write paths and checks it with FTS5's integrity check.
-- **The FTS5 engine runs in shadow, and `search_pages` still answers from `searchIndex`.**
-  `indexFor` turns the shadow on only where `INDEX_DB` is bound. `shadowSearch`
-  (`src/lib/search-shadow.ts`) runs `searchIndexFts` beside the current engine, abandons it
-  after `SHADOW_BUDGET_MS`, and logs one `search-shadow` JSON line of counts and timings:
-  never a query, a path or a brain. Its ordering is pure (`rankFtsPages` in
+- **Which engine answers is `ftsFirstSearch` (`src/lib/search-engine.ts`).** `indexFor` gives
+  a deployment with `INDEX_DB` the FTS5 engine (`searchIndexFts`); without it, the local
+  runtime included, `searchIndex` answers. `searchIndex` also answers a query with no letter
+  or digit in any term, and any search on which FTS5 throws. Each search on the FTS5 path
+  logs one `search` JSON line (engine, counts, milliseconds): never a query, a path or a brain.
+- **What FTS5 matches differs from LIKE.** Porter stemming (`fees` finds "fee"). Whole words,
+  except that a term no page holds as a word is retried as a prefix (`config` finds
+  "configuration"); a match in the middle of a word is gone. Punctuation inside a term is
+  dropped (`50%` searches `50`). Its ordering is pure (`rankFtsPages` in
   `src/lib/search-fts.ts`: coverage, phrase, `bm25()`, path). Compare the engines on a folder
   with `pnpm search:compare <folder> <probes.json>`.
 - **Probe against a real brain before believing a ranking change.** `pnpm probe:report <folder>

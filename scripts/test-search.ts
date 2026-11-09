@@ -36,7 +36,7 @@ import type { AccessibleBrain } from '../src/lib/orgs.ts';
 import { INDEX_MIGRATIONS_DIR, localD1 } from '../src/local/d1-sqlite.ts';
 import { searchIndexFts } from '../src/lib/search-fts-index.ts';
 import { HL_CLOSE, HL_OPEN, linesFromHighlight } from '../src/lib/search-fts.ts';
-import { compareSearch, shadowSearch, type ShadowLog } from '../src/lib/search-shadow.ts';
+import { ftsCanAnswer, ftsFirstSearch, type SearchEngineLog } from '../src/lib/search-engine.ts';
 
 import { checker } from './check.ts';
 
@@ -930,6 +930,7 @@ function brain(id: string, name: string): AccessibleBrain {
 			content:
 				'---\ntype: policy\n---\n# Referral\n\nThe referral fee is 10 percent.\nPaid monthly.'
 		},
+		{ path: 'wiki/feedback.md', title: 'Feedback', content: 'Customer feedback log.' },
 		{ path: 'wiki/a-notes.md', title: 'Notes', content: 'Quarterly budget review.' },
 		{ path: 'wiki/z-q3.md', title: 'Budget', content: 'Quarterly budget review.' }
 	];
@@ -963,6 +964,20 @@ function brain(id: string, name: string): AccessibleBrain {
 		stem.hits[0]?.path === 'wiki/finance/referral.md' &&
 			stem.hits.some((h) => h.line === 6 && h.text === 'The referral fee is 10 percent.'),
 		JSON.stringify(stem.hits)
+	);
+
+	// "north" is not the stem of "Northwind", so only the prefix retry can find it.
+	const partial = await searchIndexFts(db, BRAIN, 'north', undefined, 50);
+	check(
+		'fts: a term no page holds as a word matches as the start of one',
+		partial.hits.some((h) => h.path === 'wiki/vendors/northwind.md'),
+		JSON.stringify(partial.hits)
+	);
+	const whole = await searchIndexFts(db, BRAIN, 'fee', undefined, 50);
+	check(
+		'fts: a term some page holds as a word is not widened to a prefix',
+		whole.hits.length > 0 && whole.hits.every((h) => h.path === 'wiki/finance/referral.md'),
+		JSON.stringify(whole.hits)
 	);
 
 	const titled = await searchIndexFts(db, BRAIN, 'budget', undefined, 50);
@@ -1001,10 +1016,10 @@ function brain(id: string, name: string): AccessibleBrain {
 	);
 }
 
-// ------------------------------------------------------------ shadow search ----
+// ------------------------------------------------------- which engine answers ----
 //
-// shadowSearch answers from the current engine whatever the other one does, and logs a
-// comparison that names no query, path or brain.
+// ftsFirstSearch answers from FTS5, from searchIndex when FTS5 cannot express the query
+// or fails, and logs a line that names no query, path or brain.
 {
 	const result = (paths: string[]): SearchResult => ({
 		hits: paths.map((path) => ({ path, line: 1, text: 'secret text' })),
@@ -1014,108 +1029,105 @@ function brain(id: string, name: string): AccessibleBrain {
 		linesElided: 0,
 		budgetHit: false
 	});
-	const current = result(['a.md', 'b.md', 'c.md', 'd.md']);
-	const lines: ShadowLog[] = [];
-	const log = (l: ShadowLog) => void lines.push(l);
+	const fromFts = result(['fts.md']);
+	const fromLike = result(['like.md', 'other.md']);
+	const lines: SearchEngineLog[] = [];
+	const log = (l: SearchEngineLog) => void lines.push(l);
+	const engines = { fts: async () => fromFts, like: async () => fromLike };
 
-	const cmp = compareSearch(current, result(['b.md', 'a.md', 'x.md']));
 	check(
-		'shadow: the comparison counts agreement in the first place and the first three',
-		!cmp.top1Same && cmp.top3Shared === 2 && cmp.top3Of === 3 && cmp.pagesFts === 3,
-		JSON.stringify(cmp)
-	);
-	check('shadow: two empty results agree', compareSearch(result([]), result([])).top1Same === true);
-
-	let got = await shadowSearch(
-		{ current: async () => current, fts: async () => result(['a.md']) },
-		log
-	);
-	check("shadow: the answer is the current engine's", got === current);
-	check(
-		'shadow: a comparison is logged',
-		lines.length === 1 && lines[0].outcome === 'compared' && lines[0].terms === 2,
-		JSON.stringify(lines)
+		'engine: FTS5 answers a query with words in it',
+		(await ftsFirstSearch('alpha beta', engines, log)) === fromFts
 	);
 	check(
-		'shadow: the log line carries no query term, path or line text',
-		!/alpha|beta|\.md|secret/.test(JSON.stringify(lines)),
+		'engine: the log line says which engine, with counts and no query, path or text',
+		lines.length === 1 &&
+			lines[0].engine === 'fts5' &&
+			lines[0].pages === 1 &&
+			!/alpha|beta|\.md|secret/.test(JSON.stringify(lines)),
 		JSON.stringify(lines)
 	);
 
 	lines.length = 0;
-	got = await shadowSearch(
-		{
-			current: async () => current,
-			fts: async () => {
-				throw new Error('no such table');
-			}
+	check(
+		'engine: a query of symbols alone goes to searchIndex, which matches them literally',
+		!ftsCanAnswer('%% __') &&
+			(await ftsFirstSearch('%% __', engines, log)) === fromLike &&
+			lines[0]?.engine === 'like',
+		JSON.stringify(lines)
+	);
+	check(
+		"engine: a term with a symbol in it is still FTS5's",
+		ftsCanAnswer('50%') && ftsCanAnswer('snake_case')
+	);
+
+	lines.length = 0;
+	const failing = {
+		fts: async (): Promise<SearchResult> => {
+			throw new Error('no such table: brain_pages_fts');
 		},
-		log
-	);
+		like: async () => fromLike
+	};
 	check(
-		'shadow: a failing shadow engine changes nothing and is logged as an error',
-		got === current && lines[0]?.outcome === 'error',
+		'engine: when FTS5 fails, searchIndex answers and the line says fallback',
+		(await ftsFirstSearch('alpha', failing, log)) === fromLike && lines[0]?.engine === 'fallback',
 		JSON.stringify(lines)
 	);
 
-	lines.length = 0;
-	got = await shadowSearch(
-		{ current: async () => current, fts: () => new Promise<SearchResult>(() => {}) },
-		log,
-		{ budgetMs: 5 }
-	);
 	check(
-		'shadow: a shadow engine that never answers is abandoned at the budget',
-		got === current && lines[0]?.outcome === 'timeout',
-		JSON.stringify(lines)
+		'engine: a log that throws does not cost the answer',
+		(await ftsFirstSearch('alpha', engines, () => {
+			throw new Error('log sink down');
+		})) === fromFts
 	);
-
-	got = await shadowSearch({ current: async () => current, fts: async () => current }, () => {
-		throw new Error('log sink down');
-	});
-	check('shadow: a log that throws does not cost the answer', got === current);
 
 	let threw = false;
 	try {
-		await shadowSearch(
+		await ftsFirstSearch(
+			'alpha',
 			{
-				current: async () => {
+				fts: failing.fts,
+				like: async () => {
 					throw new Error('index unavailable');
-				},
-				fts: async () => current
+				}
 			},
 			log
 		);
 	} catch {
 		threw = true;
 	}
-	check('shadow: a failure of the current engine still reaches the caller', threw);
+	check('engine: with both engines failing, the caller sees the error', threw);
 
-	// The wiring: full-text search runs only where the index has its own database.
+	// The wiring. "fees" finds "fee" only by stemming, so the answer shows which engine ran.
+	const stemPage = "VALUES ('b', 'wiki/fee.md', 'Fee', 's', 'The fee is ten.')";
+	const insert = 'INSERT INTO brain_pages (brain_id, path, title, blob_sha, content) ';
 	const { db: own, sqlite: ownSql } = localD1(':memory:', INDEX_MIGRATIONS_DIR);
-	ownSql
-		.prepare(
-			"INSERT INTO brain_pages (brain_id, path, title, blob_sha, content) VALUES ('b', 'wiki/fee.md', 'Fee', 's', 'The fee is ten.')"
-		)
-		.run();
-	const logged: string[] = [];
-	let answered: SearchResult | undefined;
+	ownSql.prepare(insert + stemPage).run();
+	const { db: platformOnly, sqlite: platformSql } = localD1();
+	platformSql.prepare(insert + stemPage).run();
 	const realLog = console.log;
-	console.log = (l: string) => void logged.push(l);
+	console.log = () => {};
+	let withIndexDb: SearchResult;
+	let without: SearchResult;
 	try {
-		answered = await indexFor({ PLATFORM_DB: db, INDEX_DB: own })('b').search('fee', undefined, 50);
-		await indexFor({ PLATFORM_DB: db })(BRAIN).search('fee', undefined, 50);
+		withIndexDb = await indexFor({ PLATFORM_DB: platformOnly, INDEX_DB: own })('b').search(
+			'fees',
+			undefined,
+			50
+		);
+		without = await indexFor({ PLATFORM_DB: platformOnly })('b').search('fees', undefined, 50);
 	} finally {
 		console.log = realLog;
 	}
 	check(
-		'shadow: a deployment with INDEX_DB still answers from searchIndex',
-		answered?.hits.length === 1
+		'engine: a deployment with INDEX_DB answers from FTS5',
+		withIndexDb.hits[0]?.path === 'wiki/fee.md',
+		JSON.stringify(withIndexDb.hits)
 	);
 	check(
-		'shadow: it compares on INDEX_DB, and runs no shadow on the platform database',
-		logged.length === 1 && JSON.parse(logged[0]).outcome === 'compared',
-		logged.join('\n')
+		'engine: one without it answers from searchIndex',
+		without.hits.length === 0,
+		JSON.stringify(without.hits)
 	);
 }
 
