@@ -422,6 +422,8 @@ export function registerBrainTools(
 				// admin grant in the same breath: on a private brain a grant is the only way
 				// in, for org admins as well.
 				const newBrainId = brainIdFor(created.owner, created.name);
+				// An earlier brain under this id may have left index rows (see brain-forget.ts).
+				await openIndex(newBrainId).reset();
 				await createBrain(ctx.db, {
 					brain_id: newBrainId,
 					org_id: ctx.org.org_id,
@@ -618,6 +620,8 @@ export function registerBrainTools(
 				// silently is a disclosure. The adopter gets the same explicit admin grant the
 				// creator does, which on a private brain is the only way in.
 				const newBrainId = brainIdFor(owner, name);
+				// An earlier brain under this id may have left index rows (see brain-forget.ts).
+				await openIndex(newBrainId).reset();
 				await createBrain(ctx.db, {
 					brain_id: newBrainId,
 					org_id: orgId,
@@ -930,6 +934,10 @@ export function registerBrainTools(
 				// The brain, its grants and every derived row in one batch. A row left behind
 				// would re-attach if the same repo is adopted again, since the id is derived
 				// from the repo name.
+				// The index first, while the brain still exists: it may sit in its own
+				// database, outside the batch below, and an index without a brain is the
+				// residue to avoid. If the batch then fails, the brain rebuilds its index.
+				await openIndex(target.brain_id).reset();
 				await forgetBrain(ctx.db, target.brain_id);
 				// If we removed the active brain, fall the active pointer back to a survivor,
 				// and report THAT as active. Reporting ctx.activeBrain here named the brain

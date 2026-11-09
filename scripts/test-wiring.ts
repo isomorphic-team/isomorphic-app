@@ -242,6 +242,34 @@ check(
 	'a missing browser or missing linux baselines would skip green in CI'
 );
 
+// ---------- the wrangler template's optional index database ----------
+
+// setup-config keeps or drops the INDEX_DB block. Either way the result has to be a
+// config wrangler accepts: valid once comments are stripped, with the right databases.
+{
+	const { optionalBlock } = await import('./optional-block.ts');
+	const template = readFileSync(new URL('wrangler.template.jsonc', root), 'utf8');
+	const bindings = (text: string): string[] => {
+		const json = text.replace(/^\s*\/\/.*$/gm, '').replace(/"__[A-Z0-9_]+__"/g, '"x"');
+		return (JSON.parse(json) as { d1_databases: { binding: string }[] }).d1_databases.map(
+			(d) => d.binding
+		);
+	};
+	console.log(`\nthe wrangler template's index database is optional`);
+	check(
+		'kept, the config binds both databases',
+		bindings(optionalBlock(template, 'index-db', true)).join() === 'PLATFORM_DB,INDEX_DB'
+	);
+	check(
+		'dropped, it binds the platform database alone',
+		bindings(optionalBlock(template, 'index-db', false)).join() === 'PLATFORM_DB'
+	);
+	check(
+		'dropped, nothing of the block is left behind',
+		!/INDEX|index-db/.test(optionalBlock(template, 'index-db', false))
+	);
+}
+
 // ---------- tools reach the content index only through BrainIndex ----------
 
 // The functions in src/lib/brain-index.ts that take a database are the D1 implementation

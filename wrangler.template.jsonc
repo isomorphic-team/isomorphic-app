@@ -120,6 +120,17 @@
 			"database_name": "__D1_DATABASE_NAME__",
 			"database_id": "__D1_DATABASE_ID__",
 			"migrations_dir": "migrations"
+		},
+		// The content index's own database: derived from git, rebuildable, never exported.
+		// `pnpm setup:config` keeps this block only when CF_INDEX_D1_DATABASE_ID is set;
+		// without it the index uses PLATFORM_DB. Schema: `migrations-index/`.
+		// index-db:start
+		{
+			"binding": "INDEX_DB",
+			"database_name": "__INDEX_D1_DATABASE_NAME__",
+			"database_id": "__INDEX_D1_DATABASE_ID__",
+			"migrations_dir": "migrations-index"
 		}
+		// index-db:end
 	]
 }

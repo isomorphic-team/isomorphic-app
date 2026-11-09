@@ -21,16 +21,18 @@ import {
 	ensureFresh,
 	INDEX_SCHEMA_VERSION,
 	listIndexedPages,
+	indexDatabase,
 	writeThroughIndex,
 	REBUILD_PAGE_BUDGET,
 	REINDEX_PAGE_BUDGET
 } from '../src/lib/brain-index.ts';
 import { githubStore, MAX_SCAN_PAGES } from '../src/lib/brain-repo.ts';
-import { applyMigrations, replayMigrations } from '../src/local/d1-sqlite.ts';
+import { INDEX_MIGRATIONS_DIR, applyMigrations, replayMigrations } from '../src/local/d1-sqlite.ts';
 import { DEFAULT_BRAIN_CONFIG, type BrainConfig } from '../src/lib/brain-policy.ts';
 import { pageTitle } from '../src/lib/wiki.ts';
 
 import { checker } from './check.ts';
+import { BRAIN_INDEX_TABLES } from '../src/lib/brain-forget.ts';
 import { openFolderAsBrain } from './local-brain.ts';
 import { fakeGithub, type FakePage } from './fake-github.ts';
 
@@ -40,10 +42,12 @@ const { check, done } = checker('content-index checks');
 //
 // Schema comes from the real migrations, not src/db/index-schema.sql, which is a
 // reference copy that can drift from what a deployment actually runs. Its own shim
-// rather than localD1's, because this test counts statements and batches.
+// rather than localD1's, because this test counts statements and batches. The schema is
+// the index database's alone (migrations-index/), so a query reaching for a platform
+// table fails here.
 
 let sqlite = new DatabaseSync(':memory:');
-applyMigrations(sqlite);
+applyMigrations(sqlite, INDEX_MIGRATIONS_DIR);
 
 let stmtCount = 0; // statements executed since the last resetCounters()
 let batchCount = 0;
@@ -128,7 +132,7 @@ const config: BrainConfig = { ...DEFAULT_BRAIN_CONFIG };
 
 function resetDb() {
 	sqlite = new DatabaseSync(':memory:');
-	applyMigrations(sqlite);
+	applyMigrations(sqlite, INDEX_MIGRATIONS_DIR);
 	failBatchStatement = null;
 	beforeBatch = null;
 	gh.configFilesByRef.clear();
@@ -762,6 +766,59 @@ console.log('\nContent index — bounded, resumable ensureFresh\n');
 		'write-through reduces the verifying read from 6 calls to 1',
 		advanced && verifyCalls === 1 && batchCount === 0,
 		`calls=${verifyCalls} batches=${batchCount}`
+	);
+}
+
+// ---------------------------------------------------------- the two schemas agree
+// The index runs in its own database when INDEX_DB is bound and in the platform
+// database otherwise, so both must carry the same four tables. The one intended
+// difference is brain_pages.id, the integer key in the index database.
+{
+	console.log('\nthe index tables match in both databases');
+	const platform = new DatabaseSync(':memory:');
+	applyMigrations(platform);
+	const own = new DatabaseSync(':memory:');
+	applyMigrations(own, INDEX_MIGRATIONS_DIR);
+	const shape = (d: DatabaseSync, table: string) =>
+		(
+			d.prepare(`PRAGMA table_info(${table})`).all() as {
+				name: string;
+				type: string;
+				notnull: number;
+			}[]
+		)
+			.filter((c) => !(table === 'brain_pages' && c.name === 'id'))
+			.map((c) => `${c.name} ${c.type} ${c.notnull}`)
+			.sort()
+			.join(', ');
+	for (const table of BRAIN_INDEX_TABLES) {
+		check(
+			`${table} has the same columns in both`,
+			shape(own, table) !== '' && shape(own, table) === shape(platform, table),
+			`index: ${shape(own, table)}\nplatform: ${shape(platform, table)}`
+		);
+	}
+	const tables = (
+		own.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all() as { name: string }[]
+	)
+		.map((t) => t.name)
+		.filter((n) => n !== 'local_migrations')
+		.sort();
+	check(
+		'the index database holds the index tables and nothing else',
+		tables.join() === [...BRAIN_INDEX_TABLES].sort().join(),
+		tables.join()
+	);
+
+	const platformDb = {} as Parameters<typeof indexDatabase>[0]['PLATFORM_DB'];
+	const indexDb = {} as typeof platformDb;
+	check(
+		'the index uses INDEX_DB when it is bound',
+		indexDatabase({ PLATFORM_DB: platformDb, INDEX_DB: indexDb }) === indexDb
+	);
+	check(
+		'and the platform database when it is not',
+		indexDatabase({ PLATFORM_DB: platformDb }) === platformDb
 	);
 }
 

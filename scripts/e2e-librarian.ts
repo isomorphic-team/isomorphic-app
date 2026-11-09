@@ -58,7 +58,8 @@ import { registerBrainApp } from '../src/tools/apps.ts';
 import { loadCustomToolDefs, registerCustomTools } from '../src/tools/custom.ts';
 import { loadBrainConfig } from '../src/lib/brain-config.ts';
 import type { BrainStore } from '../src/lib/brain-repo.ts';
-import { localD1 } from '../src/local/d1-sqlite.ts';
+import { brainIdFor } from '../src/lib/orgs.ts';
+import { INDEX_MIGRATIONS_DIR, localD1 } from '../src/local/d1-sqlite.ts';
 import { guardStore } from '../src/lib/policy-guard.ts';
 import { recordDetections } from '../src/lib/policy-store.ts';
 import {
@@ -82,6 +83,21 @@ import {
 
 // ---- D1 over node:sqlite, the real migrations (src/local/d1-sqlite.ts) ----
 const { db } = localD1();
+// The content index in its own database, as a deployment that binds INDEX_DB has it: a
+// tool reading the index through the platform database finds no rows here.
+const { db: indexDb, sqlite: indexSqlite } = localD1(':memory:', INDEX_MIGRATIONS_DIR);
+const indexRows = (id: string) =>
+	(
+		indexSqlite.prepare('SELECT COUNT(*) AS n FROM brain_pages WHERE brain_id = ?').get(id) as {
+			n: number;
+		}
+	).n;
+const seedIndexRow = (id: string) =>
+	indexSqlite
+		.prepare(
+			"INSERT OR REPLACE INTO brain_pages (brain_id, path, title, blob_sha, content) VALUES (?, 'wiki/left.md', 'Left', 'sha', 'left behind')"
+		)
+		.run(id);
 
 // ---- the brain under test ----
 const brain = await scratchBrain('brain-librarian-e2e', 'Librarian E2E test, safe to delete');
@@ -168,7 +184,7 @@ const getContext = async () => {
 		author: undefined,
 		db,
 		brainId,
-		...indexRefs(d1Index(db), brainId),
+		...indexRefs(d1Index(indexDb), brainId),
 		policySecret: 'e2e-secret',
 		consolidate,
 		activeBrain: { id: name, label: name }
@@ -193,7 +209,7 @@ const { check, done } = checker('librarian E2E checks');
 // synchronously; the fs backend deliberately cannot because its revision token is a
 // digest of a mutable working tree rather than one immutable commit.
 async function indexedSha(): Promise<string | null> {
-	const row = await db
+	const row = await indexDb
 		.prepare(`SELECT indexed_commit_sha FROM brain_index_meta WHERE brain_id = ?1`)
 		.bind(brainId)
 		.first<{ indexed_commit_sha: string | null }>();
@@ -1567,7 +1583,7 @@ try {
 		orgContext,
 		listOrgs: () => listAccessibleOrgs(db, [USER]),
 		listBrains: () => listAccessibleBrains(db, [USER]),
-		openIndex: d1Index(db),
+		openIndex: d1Index(indexDb),
 		activeBrainId: () => activeId,
 		setActiveBrain: async (id: string) => {
 			activeId = id;
@@ -1607,12 +1623,19 @@ try {
 	// THE REGRESSION. Adopting the first repo into an org that holds none. Before the
 	// org argument existed this call had no way to name ORG_EMPTY at all, because the
 	// only handle was a brain already inside it.
+	const adoptedId = brainIdFor(repoArgs.owner, adoptRepo);
+	seedIndexRow(adoptedId);
 	br = await callBrain('connect_brain', {
 		repo: `${repoArgs.owner}/${adoptRepo}`,
 		org: 'Contoso Group',
 		name: 'Adopted'
 	});
 	check('connect_brain adopts into a brainless org', !br.isError, br.text);
+	check(
+		'...clearing index rows an earlier brain left under the same id',
+		indexRows(adoptedId) === 0,
+		`rows = ${indexRows(adoptedId)}`
+	);
 	const adopted = (await db
 		.prepare(`SELECT org_id, visibility, name FROM brains WHERE repo_name = ?1`)
 		.bind(adoptRepo)
@@ -1741,6 +1764,25 @@ try {
 		'create_brain refuses an org handle that matches nothing',
 		br.isError && /No organization matching/i.test(br.text),
 		br.text
+	);
+
+	// disconnect_brain deletes the brain's index, which sits outside the platform
+	// database's batch. A second brain in the org first: the only one cannot go.
+	await run(
+		`INSERT INTO brains (brain_id, org_id, repo_owner, repo_name, name, created_by, visibility,
+		                     storage_connection_id)
+		 SELECT 'b-e2e-spare', org_id, repo_owner, 'e2e-spare', 'Spare', created_by, 'org',
+		        storage_connection_id
+		 FROM brains WHERE brain_id = ?1`,
+		adoptedId
+	);
+	seedIndexRow(adoptedId);
+	br = await callBrain('disconnect_brain', { brain: 'Adopted' });
+	check('disconnect_brain removes the adopted brain', !br.isError, br.text);
+	check(
+		'...and its index rows with it',
+		indexRows(adoptedId) === 0,
+		`rows = ${indexRows(adoptedId)}`
 	);
 
 	// ---- the retry a lost answer forces (issue #50) ----------------------------
@@ -2017,12 +2059,12 @@ try {
 		await call('write_page', { path: left, content: 'The rate is $95.\n' });
 		await call('write_page', { path: right, content: 'The rate is $120.\n' });
 		await call('validate', {});
-		const located = await db
+		const located = await indexDb
 			.prepare('SELECT brain_id FROM brain_pages WHERE path = ?1')
 			.bind(left)
 			.first<{ brain_id: string }>();
 		const brainId = located?.brain_id ?? '';
-		const queuedShas = await readPageShas(db as never, brainId);
+		const queuedShas = await readPageShas(indexDb, brainId);
 		const finding = (key: string, values: [string, string], runId: string): QueueFinding => ({
 			key,
 			kind: 'conflict',
@@ -2079,7 +2121,7 @@ try {
 		await call('write_page', { path: cb, content: 'Engagements run 6 to 12 months.\n' });
 		await call('write_page', { path: cc, content: 'Engagements run 12 to 14 months.\n' });
 		await call('validate', {});
-		const clusterShas = await readPageShas(db as never, brainId);
+		const clusterShas = await readPageShas(indexDb, brainId);
 		const member = async (pair: [string, string], values: [string, string]) => ({
 			...finding(await conflictKey(pair, values), values, 'r2'),
 			paths: pair,

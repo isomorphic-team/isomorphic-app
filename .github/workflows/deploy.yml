@@ -186,6 +186,8 @@ jobs:
           APP_SLUG: ${{ vars.APP_SLUG }}
           D1_DATABASE_NAME: ${{ vars.D1_DATABASE_NAME }}
           CF_D1_DATABASE_ID: ${{ vars.CF_D1_DATABASE_ID }}
+          INDEX_D1_DATABASE_NAME: ${{ vars.INDEX_D1_DATABASE_NAME }}
+          CF_INDEX_D1_DATABASE_ID: ${{ vars.CF_INDEX_D1_DATABASE_ID }}
           CF_OAUTH_KV_ID: ${{ vars.CF_OAUTH_KV_ID }}
           CF_OAUTH_KV_PREVIEW_ID: ${{ vars.CF_OAUTH_KV_PREVIEW_ID }}
         run: pnpm setup:config --force
@@ -206,6 +208,17 @@ jobs:
         run: pnpm exec wrangler d1 migrations apply "${D1_DATABASE_NAME:-platform-db}" --remote
         env:
           D1_DATABASE_NAME: ${{ vars.D1_DATABASE_NAME }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+
+      # The content index's own database, when this deployment has one
+      # (CF_INDEX_D1_DATABASE_ID). Schema first, as above. Its rows are derived from
+      # git, so a new database fills itself on each brain's next read.
+      - name: Apply index database migrations (prod)
+        if: steps.guard.outputs.ready == 'true' && vars.CF_INDEX_D1_DATABASE_ID != ''
+        run: pnpm exec wrangler d1 migrations apply "${INDEX_D1_DATABASE_NAME:-index-db}" --remote
+        env:
+          INDEX_D1_DATABASE_NAME: ${{ vars.INDEX_D1_DATABASE_NAME }}
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
 

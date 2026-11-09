@@ -30,6 +30,7 @@
 		"worker:deploy": "wrangler deploy",
 		"worker:types": "wrangler types",
 		"db:migrate": "wrangler d1 migrations apply platform-db --local",
+		"db:migrate:index": "wrangler d1 migrations apply index-db --local",
 		"db:migrate:list": "wrangler d1 migrations list platform-db --local",
 		"db:migrate:new": "wrangler d1 migrations create platform-db",
 		"typecheck": "tsc -p tsconfig.node.json --noEmit && tsc -p tsconfig.worker.json --noEmit && tsc -p tsconfig.app.json --noEmit && tsc -p tsconfig.tests.json --noEmit",

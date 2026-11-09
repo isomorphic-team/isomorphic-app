@@ -14,6 +14,8 @@ import type { D1Database } from '@cloudflare/workers-types';
 import { D1_LIKE_PATTERN_LIMIT } from '../lib/brain-index.ts';
 
 const MIGRATIONS_DIR = new URL('../../migrations/', import.meta.url);
+// The index database's own migrations (the INDEX_DB binding).
+export const INDEX_MIGRATIONS_DIR = new URL('../../migrations-index/', import.meta.url);
 
 // Which migrations this database has already had, the same ledger Wrangler keeps
 // against the real D1. It matters once a database outlives a process: `pnpm try`
@@ -29,16 +31,17 @@ const LEDGER = 'CREATE TABLE IF NOT EXISTS local_migrations (name TEXT PRIMARY K
 // still throws.
 const ALREADY_APPLIED = /duplicate column name|already exists/i;
 
-const migrationFiles = (): string[] =>
-	readdirSync(MIGRATIONS_DIR)
+const migrationFiles = (dir: URL = MIGRATIONS_DIR): string[] =>
+	readdirSync(dir)
 		.filter((f) => f.endsWith('.sql'))
 		.sort();
 
-const migrationSql = (f: string): string => readFileSync(new URL(f, MIGRATIONS_DIR), 'utf8');
+const migrationSql = (f: string, dir: URL = MIGRATIONS_DIR): string =>
+	readFileSync(new URL(f, dir), 'utf8');
 
 // The real migrations, not src/db/*.sql, which are reference copies. A migration that
 // fails here would fail a deployment too.
-export function applyMigrations(sqlite: DatabaseSync): void {
+export function applyMigrations(sqlite: DatabaseSync, dir: URL = MIGRATIONS_DIR): void {
 	sqlite.exec(LEDGER);
 	const done = new Set(
 		sqlite
@@ -46,10 +49,10 @@ export function applyMigrations(sqlite: DatabaseSync): void {
 			.all()
 			.map((r) => (r as { name: string }).name)
 	);
-	for (const f of migrationFiles()) {
+	for (const f of migrationFiles(dir)) {
 		if (done.has(f)) continue;
 		try {
-			sqlite.exec(migrationSql(f));
+			sqlite.exec(migrationSql(f, dir));
 		} catch (e) {
 			if (!ALREADY_APPLIED.test(String(e))) throw e;
 		}
@@ -80,13 +83,15 @@ export interface LocalDb {
 	sqlite: DatabaseSync;
 }
 
+// `migrations` picks the schema: the platform database's by default, or
+// INDEX_MIGRATIONS_DIR for a database holding only the content index.
 // `path` defaults to an in-memory database. Pass a file to keep the content index
 // across restarts, which is what the local runtime does.
-export function localD1(path = ':memory:'): LocalDb {
+export function localD1(path = ':memory:', migrations: URL = MIGRATIONS_DIR): LocalDb {
 	const sqlite = new DatabaseSync(path);
 	// D1's cap, so a query that D1 rejects fails here too.
 	sqlite.limits.likePatternLength = D1_LIKE_PATTERN_LIMIT;
-	applyMigrations(sqlite);
+	applyMigrations(sqlite, migrations);
 
 	function statement(sql: string, params: unknown[] = []) {
 		return {

@@ -1,6 +1,6 @@
 # Design: where the derived index lives, and full-text search
 
-Status: **in implementation** (2026-11-09). Step 1 of the order of work is built. A full-text search prototype and its
+Status: **in implementation** (2026-11-09). Steps 1 and 2 of the order of work are built. A full-text search prototype and its
 comparison script are on the branch `search-fts5-prototype`, unmerged.
 
 Related: [`search-relevance.md`](search-relevance.md) (today's ranking),
@@ -127,16 +127,22 @@ several matches share. It reads only `brain_links` and needs none of the storage
 
 ## 6. Order of work
 
-Each step is its own pull request and can be reverted alone.
+Each step is its own pull request and can be reverted alone. Full-text search does not wait for
+the Durable Object: it ships first in a second D1 database (the fallback in section 4), and
+because the index is rebuildable, moving it into objects later is a backfill.
 
 1. **The index interface** in `src/lib/`, with today's D1 tables behind it. No behaviour change.
    Built: `BrainIndex` and `d1Index` in `src/lib/brain-index.ts`.
-2. **The index Worker and per-brain object,** with the local runtime keeping `node:sqlite` behind
-   the same interface, and preview isolation (a per-pull-request host, or an id prefix).
-3. **Backfill** every brain from git into its object, after estimating the rows written.
-4. **FTS5 in shadow:** built alongside, disagreements with `searchIndex` logged, latency measured on
-   the real deployment.
-5. **Switch `search_pages`,** keeping `expect` able to explain a rank.
+2. **The index in its own D1 database,** `INDEX_DB`, optional per deployment. Built:
+   `migrations-index/`, `indexDatabase`. A deployment that binds it starts with an empty index,
+   which each brain refills on its next read; estimate the rows written before binding it.
+3. **FTS5 in shadow** in `INDEX_DB`: built alongside, disagreements with `searchIndex` logged,
+   latency measured on the real deployment.
+4. **Switch `search_pages`,** keeping `expect` able to explain a rank.
+5. **Drop the index tables from the platform database,** once every deployment binds `INDEX_DB`.
+6. **The index Worker and per-brain object,** when a limit calls for it: a brain near D1's size
+   cap, write budget contention between brains, or data residency. Measure `scope: "all"` over a
+   few dozen objects first.
 
 Related pages ships independently of all of this.
 
