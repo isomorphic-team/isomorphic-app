@@ -20,11 +20,18 @@
 //      `brain` takes, the whole text within the limit however many brains there are,
 //      an honest count of any left out, and brain names (text a person typed) reduced
 //      to one line of plain data.
+//   6. One caller's brains in another caller's instructions. Composed from the real
+//      listAccessibleBrains over the real migrations: a member does not see a
+//      colleague's private brain, an org admin does not see the private brains they
+//      only steward, a guest sees only the brain shared with them, and nobody sees
+//      another organization's brains.
 
 import { readFileSync, readdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
-import type { AccessibleBrain } from '../src/lib/orgs.ts';
+import { listAccessibleBrains, type AccessibleBrain } from '../src/lib/orgs.ts';
+import { localD1 } from '../src/local/d1-sqlite.ts';
+import { bindFixtureStorage } from './fixture-storage.ts';
 import {
 	composeInstructions,
 	instructionText,
@@ -208,6 +215,72 @@ console.log("\ncomposeInstructions: the caller's brains");
 	);
 	check('a long name is cut with an ellipsis', instructionText('x'.repeat(200)).length === 60);
 	check('...and a short one kept', instructionText('  Team   wiki ') === 'Team wiki');
+}
+
+console.log("\ncomposeInstructions: no caller sees another's brains");
+{
+	const { db, sqlite } = localD1();
+	// Two organizations. In Northwind: an org-visible brain, a private brain each for
+	// Alice (the owner) and Bob, and Erin, a guest holding one grant. In Contoso: Dave's
+	// private brain and an org-visible one.
+	sqlite.exec(`
+	  INSERT INTO orgs (org_id, name, model, installation_id, brain_owner, created_by, created_at) VALUES
+	    ('org1', 'Northwind', 'customer', 1, 'northwind', 'alice', '2026-01-01'),
+	    ('org2', 'Contoso',   'customer', 2, 'contoso',   'dave',  '2026-01-02');
+	  INSERT INTO app_users (user_id, email, name) VALUES
+	    ('alice', 'alice@example.com', 'Alice'),
+	    ('bob',   'bob@example.com',   'Bob'),
+	    ('dave',  'dave@example.com',  'Dave'),
+	    ('erin',  'erin@example.com',  'Erin');
+	  INSERT INTO memberships (org_id, user_id, role) VALUES
+	    ('org1', 'alice', 'owner'),
+	    ('org1', 'bob',   'editor'),
+	    ('org2', 'dave',  'owner');
+	  INSERT INTO brains (brain_id, org_id, repo_owner, repo_name, name, visibility, created_at) VALUES
+	    ('b-team',    'org1', 'northwind', 'team',    'Northwind Team',   'org',     '2026-01-01'),
+	    ('b-alice',   'org1', 'northwind', 'alicep',  'Alice Private',    'private', '2026-02-01'),
+	    ('b-bob',     'org1', 'northwind', 'bobp',    'Bob Private',      'private', '2026-03-01'),
+	    ('b-cdeals',  'org2', 'contoso',   'deals',   'Contoso Deals',    'private', '2026-02-02'),
+	    ('b-cwiki',   'org2', 'contoso',   'wiki',    'Contoso Wiki',     'org',     '2026-02-03');
+	  INSERT INTO brain_memberships (brain_id, user_id, role) VALUES
+	    ('b-alice',  'alice', 'admin'),
+	    ('b-bob',    'bob',   'admin'),
+	    ('b-cdeals', 'dave',  'admin'),
+	    ('b-team',   'erin',  'viewer');
+	`);
+	bindFixtureStorage(sqlite);
+	const ALL = ['Northwind Team', 'Alice Private', 'Bob Private', 'Contoso Deals', 'Contoso Wiki'];
+	const seenBy = async (user: string) => {
+		const text = composeInstructions(await listAccessibleBrains(db, [user]), undefined);
+		return ALL.filter((name) => text.slice(SERVER_INSTRUCTIONS.length).includes(name)).sort();
+	};
+	const expect = async (user: string, names: string[], label: string) => {
+		const got = await seenBy(user);
+		check(label, JSON.stringify(got) === JSON.stringify([...names].sort()), got.join(', '));
+	};
+	await expect(
+		'alice',
+		['Northwind Team', 'Alice Private'],
+		"the owner: the org's brain and her own, not Bob's private one she stewards"
+	);
+	await expect(
+		'bob',
+		['Northwind Team', 'Bob Private'],
+		"a member: not a colleague's private brain"
+	);
+	await expect('erin', ['Northwind Team'], 'a guest: only the brain shared with her');
+	await expect(
+		'dave',
+		['Contoso Deals', 'Contoso Wiki'],
+		'another organization: none of Northwind'
+	);
+	await expect('nobody', [], 'an unknown caller: no brain at all');
+	check(
+		'an unknown caller is told so',
+		composeInstructions(await listAccessibleBrains(db, ['nobody']), undefined).includes(
+			'No brain is reachable'
+		)
+	);
 }
 
 done();
