@@ -107,7 +107,7 @@ Pictures, PDFs, Word documents and PowerPoint decks are stored in the brain next
 
 ## Custom tools
 
-A page under a **\`tools/\`** folder (e.g. \`wiki/tools/standup-digest.md\`) becomes a **tool in Claude's tool list**, named \`tool_<filename>\`. Create one with \`write_page\` like any page. The behavior is declared in a fenced \` \`\`\`tool \` block; the page body around it is the instruction the model receives when the tool runs. A tool is **read-only** — it can search/read/summarize this brain, never write it — and its arguments are substituted as data (\`{{arg}}\`), never executed.
+A page under a **\`tools/\`** folder (e.g. \`wiki/tools/standup-digest.md\`) becomes a **tool in the assistant's tool list**, named \`tool_<filename>\`. Create one with \`write_page\` like any page. The behavior is declared in a fenced \` \`\`\`tool \` block; the page body around it is the instruction the model receives when the tool runs. A tool is **read-only** — it can search/read/summarize this brain, never write it — and its arguments are substituted as data (\`{{arg}}\`), never executed.
 
 Three kinds:
 
@@ -133,7 +133,7 @@ arg: query = {{project}}
 
 Grammar: \`input: <name> (<type>[, default=<v>][, optional]) <description>\` where \`<type>\` is \`string | number | boolean | enum: a|b|c\`; \`op:\` + \`arg: key = value\`; \`widget\`; \`view:\` (everything after it is the directive). \`op\` and \`view\` are mutually exclusive. Malformed tool pages are reported by \`validate\`.
 
-**New, renamed, or deleted tools only appear after you reconnect the Isomorphic connector in Claude** (the tool list is fetched once per connection). Editing an existing tool's behavior takes effect on its next call with no reconnect.
+**New, renamed, or deleted tools only appear after you reconnect the Isomorphic connector in your AI assistant** (the tool list is fetched once per connection). Editing an existing tool's behavior takes effect on its next call with no reconnect.
 
 ## Privacy
 
@@ -148,7 +148,7 @@ LLM-maintained knowledge base. Content only; the platform that compiles and quer
 
 - Write pages under \`wiki/\`, organized however suits this brain. Folders are arbitrary and there are no fixed entity types.
 - Keep immutable source material (transcripts, emails, docs) under \`source/\`; the platform treats it as read-only, and pages can cite it.
-- Read and edit it through Claude (the Isomorphic MCP server and app), on GitHub, or in any markdown editor such as Obsidian.
+- Read and edit it through any AI assistant connected to Isomorphic (an MCP server with an in-chat app), on GitHub, or in any markdown editor such as Obsidian.
 
 See [\`AGENTS.md\`](./AGENTS.md) for the schema.
 

@@ -25,7 +25,7 @@
 //      Without it a host renders nothing; with one on a plain tool, every call
 //      renders a widget.
 //   6. Other tool-surface fields a host reads: a description longer than
-//      TOOL_DESCRIPTION_LIMIT (Claude Code cuts it), no `execution` field in tools/list
+//      TOOL_DESCRIPTION_LIMIT (Claude Code cuts it) or naming one host (HOST_NAMES), no `execution` field in tools/list
 //      (claude.ai web refuses the whole connector over it), and the retry guidance
 //      on the three write tools, which must name the failure class ("FAILS WITHOUT
 //      A RESULT", a gateway error) rather than only a timeout, because a caller
@@ -38,6 +38,7 @@ import { McpServer, InMemoryTransport } from '@modelcontextprotocol/server';
 
 import {
 	annotationProblems,
+	HOST_NAMES,
 	TOOL_DESCRIPTION_LIMIT,
 	toolAnnotations
 } from '../src/lib/tool-annotations.ts';
@@ -248,6 +249,12 @@ const listed = new Set<string>();
 		`every description fits in ${TOOL_DESCRIPTION_LIMIT} characters`,
 		long.length === 0,
 		long.map((t) => `${t.name} (${t.description?.length})`).join(', ')
+	);
+	const hostBound = tools.filter((t) => HOST_NAMES.test(t.description ?? ''));
+	check(
+		'no description names a specific host',
+		hostBound.length === 0,
+		hostBound.map((t) => `${t.name}: ${t.description?.match(HOST_NAMES)?.[0]}`).join(', ')
 	);
 	for (const name of ['write_page', 'move_page', 'delete_page']) {
 		const description = tools.find((t) => t.name === name)?.description ?? '';

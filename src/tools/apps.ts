@@ -245,7 +245,7 @@ export function registerBrainApp(
 			// Deliberately does NOT name read_page (see read_page in src/tools/core.ts).
 			// The read-vs-view steering lives in the server instructions.
 			description:
-				'Open a brain page in the interactive Isomorphic viewer: rendered markdown, clickable links, browse and search, shown inside Claude. Use this whenever the user wants to LOOK AT or explore a page, AND whenever you cite or reference a specific brain page in an answer: call it on the referenced path so the user can open that page in Isomorphic instead of only reading pasted text. This is for showing a page to the USER; to fetch a page as text for your own reasoning, read it instead. When the deployment serves the web app, the result also carries `webUrl`: the page in a browser tab, which anyone with access to the brain can open after signing in with their email. Give that URL when the user wants to share, send or bookmark a page.',
+				'Open a brain page in the interactive Isomorphic viewer: rendered markdown, clickable links, browse and search, shown inside the conversation. Use this whenever the user wants to LOOK AT or explore a page, AND whenever you cite or reference a specific brain page in an answer: call it on the referenced path so the user can open that page in Isomorphic instead of only reading pasted text. This is for showing a page to the USER; to fetch a page as text for your own reasoning, read it instead. When the deployment serves the web app, the result also carries `webUrl`: the page in a browser tab, which anyone with access to the brain can open after signing in with their email. Give that URL when the user wants to share, send or bookmark a page.',
 			inputSchema: {
 				path: z.string().describe('Page path, e.g. "wiki/customers/acme.md".'),
 				brain: brainArg
@@ -294,7 +294,7 @@ export function registerBrainApp(
 		{
 			...toolAnnotations('Browse the brain', 'read'),
 			description:
-				'Open the brain in the interactive Isomorphic viewer, shown inside Claude, so the user can browse its pages, follow links, and search. Use when the user wants to explore or "see" their brain as a whole rather than ask one specific question, or when your answer points them at several pages at once.',
+				'Open the brain in the interactive Isomorphic viewer, shown inside the conversation, so the user can browse its pages, follow links, and search. Use when the user wants to explore or "see" their brain as a whole rather than ask one specific question, or when your answer points them at several pages at once.',
 			inputSchema: { brain: brainArg },
 			_meta: { ui: { resourceUri: BRAIN_APP_URI } }
 		},

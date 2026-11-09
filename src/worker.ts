@@ -1301,7 +1301,7 @@ function installedPage(url: URL): Response {
     ${idLine}
     <ol>
       <li>Your workspace admin finishes connecting this install to your team.</li>
-      <li>Members sign in at <code>${escapeHtml(url.host)}</code> from Claude — no GitHub account needed.</li>
+      <li>Members sign in at <code>${escapeHtml(url.host)}</code> from their AI assistant — no GitHub account needed.</li>
     </ol>
     <p class="meta">You can close this tab.</p>
   </main>
@@ -1377,7 +1377,7 @@ function connectedOrgPage(result: {
 	return cardPage(
 		'✓',
 		`Organization ${verb}`,
-		`<p>${lead}</p><p>Back in Claude, run <code>connect_brain</code> to adopt a repository as your first brain.</p>`
+		`<p>${lead}</p><p>Back in your AI assistant, run <code>connect_brain</code> to adopt a repository as your first brain.</p>`
 	);
 }
 
@@ -1414,7 +1414,7 @@ async function handleOrgConnectCallback(
 			'Couldn’t finish connecting',
 			`<p>The app installed, but we couldn’t link it to your account: ${escapeHtml(
 				err instanceof Error ? err.message : String(err)
-			)}.</p><p>Try <code>create_org</code> with <code>github: true</code> again from Claude.</p>`
+			)}.</p><p>Try <code>create_org</code> with <code>github: true</code> again from your AI assistant.</p>`
 		);
 	}
 }

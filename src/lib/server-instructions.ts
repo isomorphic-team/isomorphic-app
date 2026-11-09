@@ -17,7 +17,7 @@
 
 export const SERVER_INSTRUCTIONS_LIMIT = 4096;
 
-export const SERVER_INSTRUCTIONS = `Isomorphic is the user's "brain": a personal or team knowledge base, kept as a wiki in a git repository, that you can search, read, edit, and show to the user inside Claude in the Isomorphic viewer. Which tools you have depends on the deployment: a local or single-user setup has no organization, member, sharing or multi-brain tools. Use only the tools you have.
+export const SERVER_INSTRUCTIONS = `Isomorphic is the user's "brain": a personal or team knowledge base, kept as a wiki in a git repository, that you can search, read, edit, and show to the user in the Isomorphic viewer inside the conversation. Which tools you have depends on the deployment: a local or single-user setup has no organization, member, sharing or multi-brain tools. Use only the tools you have.
 
 - ANSWER FROM THE BRAIN FIRST for anything specific to this user or their organization: their notes, projects, people, decisions, customers. Find pages with search_pages, then read them with read_page.
 - SHOW, DON'T PASTE. Use read_page (not view_page) only when YOU need the raw content to reason over it; use view_page when the goal is for the USER to see it. Whenever you cite a specific brain page in an answer, open it with view_page too. edit_page opens the editor for the user to change a page by hand; your own changes go through write_page.

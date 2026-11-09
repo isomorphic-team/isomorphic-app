@@ -122,7 +122,7 @@ export function composeIssue(input: FeedbackInput, reportId: string): ComposedIs
 	const body =
 		`${opening}${details}`.trim() +
 		'\n\n---\n' +
-		`Filed from Claude with \`submit_feedback\`. Report \`${reportId}\`.\n\n` +
+		`Filed with \`submit_feedback\`. Report \`${reportId}\`.\n\n` +
 		'No account, email, organization, or brain details are published with this report. ' +
 		'A maintainer can match the report id to the reporting account privately.\n';
 

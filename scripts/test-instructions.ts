@@ -12,11 +12,15 @@
 //   3. The guidance the instructions exist for going missing: when to reach for the
 //      brain, read_page against view_page, the write rules, the active brain, per-brain
 //      access, and the Open Knowledge Format conventions.
+//   4. Text written for one host. Any MCP client can connect (Claude, ChatGPT, others), so
+//      the instructions and the scaffolded brain's AGENTS.md and README.md name none of
+//      them. Tool descriptions are held to the same rule in `pnpm test:annotations`.
 
 import { readFileSync, readdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
 import { SERVER_INSTRUCTIONS, SERVER_INSTRUCTIONS_LIMIT } from '../src/lib/server-instructions.ts';
+import { HOST_NAMES } from '../src/lib/tool-annotations.ts';
 import { checker } from './check.ts';
 import { NOT_TOOLS, registeredToolNames, toolShapedWords } from './doc-refs.ts';
 
@@ -71,6 +75,19 @@ console.log('\nthe guidance');
 	has('one page per concept, with a type', /ONE PAGE = ONE CONCEPT[^]*`type:`/);
 	has('folder notes are index.md', '<folder>/index.md');
 	has('tidying is a validate/resolve loop', /validate[^]*resolve[^]*"dismiss"/);
+}
+
+console.log('\nno host named');
+{
+	const named = (text: string) => text.match(HOST_NAMES)?.[0];
+	check('the instructions name no host', !named(SERVER_INSTRUCTIONS), named(SERVER_INSTRUCTIONS));
+	for (const file of ['AGENTS.md', 'README.md']) {
+		const text = readFileSync(
+			fileURLToPath(new URL(`../brain-template/${file}`, import.meta.url)),
+			'utf8'
+		);
+		check(`brain-template/${file} names no host`, !named(text), named(text));
+	}
 }
 
 done();

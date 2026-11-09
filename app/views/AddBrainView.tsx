@@ -144,7 +144,7 @@ function AddBrainView({ orgs, first }: { orgs: OrgTarget[]; first: boolean }) {
 					title={first ? 'Create your first brain' : 'Create a new brain'}
 					subtitle={
 						first
-							? 'A brain is a knowledge base Claude reads and maintains for you. Name it to get started.'
+							? 'A brain is a knowledge base your AI assistant reads and maintains for you. Name it to get started.'
 							: 'Give your new knowledge base a name.'
 					}
 					footer={

@@ -102,7 +102,7 @@ Pictures, PDFs, Word documents and PowerPoint decks are stored in the brain next
 
 ## Custom tools
 
-A page under a **`tools/`** folder (e.g. `wiki/tools/standup-digest.md`) becomes a **tool in Claude's tool list**, named `tool_<filename>`. Create one with `write_page` like any page. The behavior is declared in a fenced ` ```tool ` block; the page body around it is the instruction the model receives when the tool runs. A tool is **read-only** — it can search/read/summarize this brain, never write it — and its arguments are substituted as data (`{{arg}}`), never executed.
+A page under a **`tools/`** folder (e.g. `wiki/tools/standup-digest.md`) becomes a **tool in the assistant's tool list**, named `tool_<filename>`. Create one with `write_page` like any page. The behavior is declared in a fenced ` ```tool ` block; the page body around it is the instruction the model receives when the tool runs. A tool is **read-only** — it can search/read/summarize this brain, never write it — and its arguments are substituted as data (`{{arg}}`), never executed.
 
 Three kinds:
 
@@ -128,7 +128,7 @@ arg: query = {{project}}
 
 Grammar: `input: <name> (<type>[, default=<v>][, optional]) <description>` where `<type>` is `string | number | boolean | enum: a|b|c`; `op:` + `arg: key = value`; `widget`; `view:` (everything after it is the directive). `op` and `view` are mutually exclusive. Malformed tool pages are reported by `validate`.
 
-**New, renamed, or deleted tools only appear after you reconnect the Isomorphic connector in Claude** (the tool list is fetched once per connection). Editing an existing tool's behavior takes effect on its next call with no reconnect.
+**New, renamed, or deleted tools only appear after you reconnect the Isomorphic connector in your AI assistant** (the tool list is fetched once per connection). Editing an existing tool's behavior takes effect on its next call with no reconnect.
 
 ## Privacy
 
