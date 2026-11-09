@@ -18,7 +18,26 @@ import Resend from '@auth/core/providers/resend';
 import { D1Adapter } from '@auth/d1-adapter';
 import type { D1Database } from '@cloudflare/workers-types';
 
+import { FEATURES, hasFeature } from '../lib/entitlements.ts';
 import { sendSignInEmail } from '../lib/signin-email.ts';
+import {
+	SSO_COOKIE,
+	SSO_COOKIE_MAX_AGE_SECONDS,
+	cookieValue,
+	readSsoCookie,
+	signSsoCookie,
+	ssoSetCookie
+} from '../lib/sso-cookie.ts';
+import {
+	ENTRA_PROVIDER,
+	checkSsoSignIn,
+	getIdentityConnection,
+	magicLinkRefused,
+	resolveSignInRoute,
+	type EntraClaims,
+	type IdentityConnection
+} from '../lib/sso.ts';
+import { entraProvider } from './entra.ts';
 
 export interface AuthEnv {
 	// Shared with the Worker's D1 binding: Auth.js user/session/account/
@@ -36,6 +55,22 @@ export interface AuthEnv {
 	// "open" signs anyone in as any email they type, with no email sent. For preview
 	// deployments only; anything else (unset included) is the emailed magic link.
 	AUTH_SIGN_IN?: string;
+	// The deployment's multi-tenant Microsoft Entra application, for orgs that sign in
+	// through their own directory. Without both, no address is routed to a directory.
+	AUTH_ENTRA_CLIENT_ID?: string;
+	AUTH_ENTRA_CLIENT_SECRET?: string;
+}
+
+/** The provider sign-in a config is built for: one org's directory. */
+export interface SsoSignIn {
+	connection: IdentityConnection;
+	loginHint?: string;
+}
+
+function entraApp(env: AuthEnv): { clientId: string; clientSecret: string } | null {
+	return env.AUTH_ENTRA_CLIENT_ID && env.AUTH_ENTRA_CLIENT_SECRET
+		? { clientId: env.AUTH_ENTRA_CLIENT_ID, clientSecret: env.AUTH_ENTRA_CLIENT_SECRET }
+		: null;
 }
 
 export type SignInMode = 'email' | 'open';
@@ -53,9 +88,12 @@ export const AUTH_BASE_PATH = '/auth';
 export function buildAuthConfig(
 	env: AuthEnv,
 	// Open mode hands the sign-in link here instead of emailing it.
-	onSignInLink?: (url: string) => void
+	onSignInLink?: (url: string) => void,
+	// Registers the directory provider for this one org. Absent, there is no such provider.
+	sso?: SsoSignIn
 ): AuthConfig {
 	const open = signInMode(env) === 'open';
+	const app = sso ? entraApp(env) : null;
 	return {
 		basePath: AUTH_BASE_PATH,
 		secret: env.AUTH_SECRET,
@@ -66,6 +104,25 @@ export function buildAuthConfig(
 		// the OAuth completion step below via the /auth/session endpoint.
 		session: { strategy: 'database' },
 		callbacks: {
+			// Decides whether a sign-in is accepted. It runs before Auth.js creates or links
+			// a user, and for a magic link both when the link is requested and when it is used.
+			async signIn({ user, account, profile }) {
+				if (account?.provider === ENTRA_PROVIDER) {
+					if (!sso) return false;
+					const decision = await checkSsoSignIn(
+						env.PLATFORM_DB,
+						(profile ?? {}) as EntraClaims,
+						sso.connection
+					);
+					if (!decision.ok)
+						console.warn(
+							`[sso] sign-in refused for org ${sso.connection.orgId}: ${decision.reason}`
+						);
+					return decision.ok;
+				}
+				const address = user?.email ?? account?.providerAccountId ?? '';
+				return !magicLinkRefused(await resolveSignInRoute(env.PLATFORM_DB, address, Date.now()));
+			},
 			// What /auth/session returns, built field by field. With the database
 			// strategy the `session` argument is the stored row, which carries
 			// `sessionToken`: the session cookie's value, which the cookie keeps from
@@ -115,7 +172,16 @@ export function buildAuthConfig(
 						replyTo: env.AUTH_EMAIL_REPLY_TO
 					});
 				}
-			})
+			}),
+			...(sso && app
+				? [
+						entraProvider({
+							...app,
+							tenantId: sso.connection.tenantId,
+							loginHint: sso.loginHint
+						})
+					]
+				: [])
 		]
 	};
 }
@@ -154,6 +220,8 @@ let warnedOpen = false;
  * carry. Nothing else about the flow differs.
  */
 export async function handleAuthRequest(request: Request, env: AuthEnv): Promise<Response> {
+	const sso = await handleSsoRequest(request, env);
+	if (sso) return sso;
 	if (signInMode(env) !== 'open') return Auth(request, buildAuthConfig(env));
 	if (!warnedOpen) {
 		warnedOpen = true;
@@ -178,4 +246,117 @@ export async function handleAuthRequest(request: Request, env: AuthEnv): Promise
 	const headers = new Headers(res.headers);
 	headers.set('location', target.toString());
 	return new Response(null, { status: 302, headers });
+}
+
+const EMAIL_SIGN_IN_PATH = `${AUTH_BASE_PATH}/signin/resend`;
+const SSO_SIGN_IN_PATH = `${AUTH_BASE_PATH}/signin/${ENTRA_PROVIDER}`;
+const SSO_CALLBACK_PATH = `${AUTH_BASE_PATH}/callback/${ENTRA_PROVIDER}`;
+
+/**
+ * The two requests a directory sign-in adds to Auth.js's own, or null for any other request.
+ *
+ * The email POST from the sign-in page is home-realm discovery: an address at a connected
+ * domain starts a sign-in with that org's directory instead of sending a link. The provider's
+ * callback is rebuilt for the same org from the signed cookie the start left, and refused
+ * without it.
+ */
+async function handleSsoRequest(request: Request, env: AuthEnv): Promise<Response | null> {
+	const url = new URL(request.url);
+	const secure = url.protocol === 'https:';
+
+	if (request.method === 'POST' && url.pathname === EMAIL_SIGN_IN_PATH) {
+		// Anything but a form is Auth.js's to answer.
+		const form = await request
+			.clone()
+			.formData()
+			.catch(() => null);
+		if (!form) return null;
+		const field = (name: string) => {
+			const v = form.get(name);
+			return typeof v === 'string' ? v : '';
+		};
+		const email = field('email').trim().toLowerCase();
+		const route = await resolveSignInRoute(env.PLATFORM_DB, email, Date.now());
+		if (route.kind === 'sso' && entraApp(env) && env.AUTH_SECRET) {
+			const start = new Request(`${url.origin}${SSO_SIGN_IN_PATH}`, {
+				method: 'POST',
+				headers: {
+					'content-type': 'application/x-www-form-urlencoded',
+					cookie: request.headers.get('cookie') ?? ''
+				},
+				body: new URLSearchParams({
+					csrfToken: field('csrfToken'),
+					callbackUrl: field('callbackUrl')
+				})
+			});
+			const { connection } = route;
+			const res = await Auth(
+				start,
+				buildAuthConfig(env, undefined, { connection, loginHint: email })
+			);
+			const headers = new Headers(res.headers);
+			const cookie = await signSsoCookie(
+				{
+					orgId: connection.orgId,
+					tenantId: connection.tenantId,
+					expiresAt: Date.now() + SSO_COOKIE_MAX_AGE_SECONDS * 1000
+				},
+				env.AUTH_SECRET
+			);
+			headers.append('set-cookie', ssoSetCookie(cookie, secure));
+			return new Response(res.body, { status: res.status, headers });
+		}
+		if (magicLinkRefused(route)) {
+			return ssoPage(
+				'Single sign-on required',
+				'Your organization requires single sign-on, and it is not available here yet. Ask your administrator.',
+				403
+			);
+		}
+		return null;
+	}
+
+	if (url.pathname === SSO_CALLBACK_PATH) {
+		const connection = await callbackConnection(request, env);
+		if (!connection) {
+			return ssoPage(
+				'Sign-in expired',
+				'This sign-in could not be completed. Go back and start again.',
+				400,
+				ssoSetCookie('', secure)
+			);
+		}
+		const res = await Auth(request, buildAuthConfig(env, undefined, { connection }));
+		const headers = new Headers(res.headers);
+		headers.append('set-cookie', ssoSetCookie('', secure));
+		return new Response(res.body, { status: res.status, headers });
+	}
+
+	return null;
+}
+
+// The org a callback belongs to: the one its signed cookie names, if that org is still
+// connected to the same tenant and still entitled.
+async function callbackConnection(
+	request: Request,
+	env: AuthEnv
+): Promise<IdentityConnection | null> {
+	const now = Date.now();
+	const cookie = await readSsoCookie(
+		cookieValue(request.headers.get('cookie'), SSO_COOKIE),
+		env.AUTH_SECRET ?? '',
+		now
+	);
+	if (!cookie) return null;
+	const connection = await getIdentityConnection(env.PLATFORM_DB, cookie.orgId);
+	if (!connection || connection.tenantId !== cookie.tenantId) return null;
+	if (!(await hasFeature(env.PLATFORM_DB, connection.orgId, FEATURES.enterprise, now))) return null;
+	return connection;
+}
+
+function ssoPage(title: string, body: string, status: number, setCookie?: string): Response {
+	const html = `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${title}</title><style>body{font:16px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;max-width:32rem;margin:12vh auto;padding:0 1.5rem;color:#1a1a1a}h1{font-size:1.25rem;margin:0 0 .5rem}p{color:#444}@media(prefers-color-scheme:dark){body{background:#111;color:#eee}p{color:#bbb}}</style><h1>${title}</h1><p>${body}</p>`;
+	const headers = new Headers({ 'content-type': 'text/html; charset=utf-8' });
+	if (setCookie) headers.append('set-cookie', setCookie);
+	return new Response(html, { status, headers });
 }

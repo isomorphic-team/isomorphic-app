@@ -64,6 +64,12 @@ MCP_BEARER_TOKEN=
 AUTH_SECRET=
 AUTH_RESEND_KEY=
 
+# Optional: directory sign-in for orgs with the enterprise entitlement. One multi-tenant
+# Microsoft Entra application for the whole deployment, redirect URI
+# <origin>/auth/callback/microsoft-entra-id. Set an org up with `pnpm sso`.
+AUTH_ENTRA_CLIENT_ID=
+AUTH_ENTRA_CLIENT_SECRET=
+
 # ======================================================================
 # Deployment identity — consumed by `pnpm setup:config` to generate wrangler.jsonc
 # ======================================================================

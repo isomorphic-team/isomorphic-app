@@ -178,6 +178,10 @@ interface Env {
 	AUTH_EMAIL_REPLY_TO?: string;
 	// "open" (previews only): sign in as any email typed, no email sent. See src/auth/config.ts.
 	AUTH_SIGN_IN?: string;
+	// The deployment's multi-tenant Microsoft Entra application, for orgs that sign in through
+	// their own directory. Unset, no address is routed to a directory.
+	AUTH_ENTRA_CLIENT_ID?: string;
+	AUTH_ENTRA_CLIENT_SECRET?: string;
 
 	// Public origin of the deployed Worker (e.g. https://brain.example.com). Used by
 	// the connected-accounts tools to build the /link/start verification URL — a tool

@@ -2,13 +2,16 @@
 
 Status: **partly built** (2026-11-09).
 
-Built: D2, and the parts of D3, D4, D5 and D9 that need no directory to test: the two tables,
-domain verification, sign-in routing, the rule that accepts a provider sign-in, and the
-provider itself (`src/lib/org-domains.ts`, `src/lib/sso.ts`, `src/auth/entra.ts`,
-`pnpm test:sso`). None of it is reachable yet: no tool claims a domain or connects a
-directory, the sign-in page does not route, and `buildAuthConfig` does not register the
-provider. Enforcement (D6) has its column and its routing rule and no switch. D7 and D8 are
-not started.
+Built: D2, D3, D4, D5 and D9. An address at a verified, connected domain of an entitled org
+is sent from the sign-in page to that org's Entra tenant and comes back signed in, linked to
+the account it already had (`src/lib/org-domains.ts`, `src/lib/sso.ts`,
+`src/lib/sso-cookie.ts`, `src/auth/entra.ts`, `src/auth/config.ts`). `pnpm test:sso` pins the
+decisions and `pnpm test:signin` drives the round trip against a stubbed tenant.
+
+Not built: any tool or screen for an org admin. An operator claims and verifies a domain and
+connects a tenant with `pnpm sso`. Enforcement (D6) has its column and its rules (an enforced
+domain refuses the magic link) and no switch, no grant revocation and no short-lived grants.
+D7 and D8 are not started. No real directory has been signed in through.
 
 This revises one clause of [`open-source-boundary.md`](./open-source-boundary.md), the one that
 kept Enterprise SSO and SAML out of `ee/` permanently. The revision: a feature is enterprise
@@ -144,9 +147,13 @@ for the tenant in the issuer does not match an id with hyphens, so today a pinne
 left alone, but the pin holding depends on that. `allowSsoSignIn` refuses a token whose `tid`
 is not the connected tenant, whatever Auth.js validated it against.
 
-**The callback rebuilds the same config.** Starting a sign-in records the chosen identity
-connection in a signed, short-lived cookie. The callback request reads it to set the issuer,
-and fails closed without it.
+**The callback rebuilds the same config.** Starting a sign-in records the org and tenant in a
+cookie signed with `AUTH_SECRET`, HttpOnly, scoped to `/auth`, valid for fifteen minutes. The
+callback reads it to set the issuer. It is refused without the cookie, and if the org is no
+longer connected to that tenant or no longer entitled.
+
+**State and nonce are checked as well as PKCE.** Auth.js checks only PKCE unless a provider
+asks for more.
 
 **The address comes from our own `profile()`.** The provider's default takes the `email`
 claim, which Entra omits for a user with no mailbox, and fetches a Graph photo into a data URL.
@@ -159,7 +166,10 @@ that org.
 
 Sign-in asks for the email address first. A verified domain with an identity connection routes
 to that provider; anything else gets the magic link. One provider id serves every tenant, so
-there is one redirect URI.
+there is one redirect URI. The address is passed to the directory as `login_hint`.
+
+A deployment with no Entra application sends a connected domain's addresses the magic link,
+unless the domain is enforced, in which case they are refused.
 
 ### D6. SSO enforcement per verified domain
 
@@ -239,9 +249,10 @@ vendor's model, and verified-email linking joins them. Moving out is the expensi
 - **Bootstrapping.** The org admin signs in by magic link to verify the domain and connect the
   provider. Enforcement must refuse to turn on until a test sign-in through the provider has
   succeeded, or the admin can lock the org out.
-- **Unverified against a real tenant.** Whether an admin can consent to the multi-tenant
-  application before its publisher is verified, and the whole sign-in end to end: `pnpm
-test:sso` pins the decisions, not the round trip through a directory.
+- **Consent from another tenant.** The sign-in has run end to end against a real tenant, the
+  one that registers the application, where Microsoft labels the application unverified.
+  Whether another tenant's admin can consent to it before its publisher is verified is
+  untested; publisher verification is on the roadmap.
 - **An entitlement that lapses turns enforcement off.** An unentitled org's domains route and
   enforce nothing, so its addresses get the magic link again.
 - **The resolver sees the domain.** Verification asks Cloudflare's public resolver

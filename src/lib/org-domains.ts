@@ -90,32 +90,40 @@ const DNS_NOERROR = 0;
 const DNS_NXDOMAIN = 3;
 const DNS_TYPE_TXT = 16;
 
-export async function checkDomainTxt(
+/** The domain's TXT strings, or null when the lookup proved nothing. No such domain is none. */
+export async function lookupTxt(
 	domain: string,
-	challenge: string,
 	fetchFn: typeof fetch = fetch
-): Promise<TxtCheck> {
+): Promise<string[] | null> {
 	try {
 		const url = `${DOH_ENDPOINT}?name=${encodeURIComponent(domain)}&type=TXT`;
 		const res = await fetchFn(url, {
 			headers: { accept: 'application/dns-json' },
 			signal: AbortSignal.timeout(DOH_TIMEOUT_MS)
 		});
-		if (!res.ok) return 'unknown';
+		if (!res.ok) return null;
 		const body = (await res.json()) as {
 			Status?: number;
 			Answer?: { type?: number; data?: string }[];
 		};
-		if (body.Status === DNS_NXDOMAIN) return 'missing';
-		if (body.Status !== DNS_NOERROR) return 'unknown';
-		const want = txtRecordValue(challenge);
-		const found = (body.Answer ?? []).some(
-			(a) => a.type === DNS_TYPE_TXT && typeof a.data === 'string' && txtAnswerText(a.data) === want
-		);
-		return found ? 'found' : 'missing';
+		if (body.Status === DNS_NXDOMAIN) return [];
+		if (body.Status !== DNS_NOERROR) return null;
+		return (body.Answer ?? [])
+			.filter((a) => a.type === DNS_TYPE_TXT && typeof a.data === 'string')
+			.map((a) => txtAnswerText(a.data as string));
 	} catch {
-		return 'unknown';
+		return null;
 	}
+}
+
+export async function checkDomainTxt(
+	domain: string,
+	challenge: string,
+	fetchFn: typeof fetch = fetch
+): Promise<TxtCheck> {
+	const values = await lookupTxt(domain, fetchFn);
+	if (!values) return 'unknown';
+	return values.includes(txtRecordValue(challenge)) ? 'found' : 'missing';
 }
 
 /** What a lookup does to a domain's verification. Pure. */
@@ -133,7 +141,7 @@ export function recheckDue(domain: Pick<OrgDomain, 'lastCheckedAt'>, now: number
 	return domain.lastCheckedAt === null || now - domain.lastCheckedAt >= DOMAIN_RECHECK_MS;
 }
 
-function newChallenge(): string {
+export function newChallenge(): string {
 	const bytes = crypto.getRandomValues(new Uint8Array(20));
 	return Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
 }
