@@ -270,7 +270,7 @@ export function registerMediaTools(
 			// A full description, not a terse one: this is the tool an agent hunts for when
 			// a page links a PDF or a deck, and "images only" wording made it look useless.
 			description:
-				'read_media reads a file stored in the brain (an image, a PDF, a Word document, a PowerPoint deck) by its path. For an image type Claude can see (PNG, JPEG, GIF, WebP) it returns the picture itself. For a PDF, DOCX or PPTX it returns the text, by page, section or slide, with `pages` to choose which ("3", "2-5", "10-"); a long document comes back in parts and the reply says how to continue. It also returns a download link, valid for 15 minutes, that opens the original file in a browser or can be fetched into a workspace. Use it when a page references a file and the question depends on what the file says or shows.',
+				'read_media reads a file stored in the brain (an image, a PDF, a Word document, a PowerPoint deck) by its path. For an image type a model can view (PNG, JPEG, GIF, WebP) it returns the picture itself. For a PDF, DOCX or PPTX it returns the text, by page, section or slide, with `pages` to choose which ("3", "2-5", "10-"); a long document comes back in parts and the reply says how to continue. It also returns a download link, valid for 15 minutes, that opens the original file in a browser or can be fetched into a workspace. Use it when a page references a file and the question depends on what the file says or shows.',
 			inputSchema: z.object({
 				path: z
 					.string()
@@ -376,7 +376,7 @@ export function registerMediaTools(
 			if (!isTextExtractable(mimeType) || include_data) {
 				content.push({
 					type: 'text',
-					text: `"${target}" is a ${mimeType} file of ${formatBytes(file.size)}. It is stored in the brain and the Isomorphic app can display it, but Claude cannot read its contents directly.${linkLine}`
+					text: `"${target}" is a ${mimeType} file of ${formatBytes(file.size)}. It is stored in the brain and the Isomorphic app can display it, but its contents cannot be returned as text or as an image.${linkLine}`
 				});
 				return { content, structuredContent };
 			}

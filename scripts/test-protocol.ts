@@ -26,8 +26,11 @@ const { check, done } = checker('protocol checks');
 const URL_ = new URL('http://protocol.test/mcp');
 
 // A fresh server per request, as the Worker builds one.
-function build(): McpServer {
-	const server = new McpServer({ name: 'protocol-probe', version: '0' }, serverOptions('probe'));
+function build(instructions = 'probe'): McpServer {
+	const server = new McpServer(
+		{ name: 'protocol-probe', version: '0' },
+		serverOptions(instructions)
+	);
 	server.registerTool(
 		'echo',
 		{ description: 'Echo a word', inputSchema: z.object({ word: z.string() }) },
@@ -93,6 +96,14 @@ async function exercise(label: string, mode: Negotiation, expectEra: McpEra): Pr
 		JSON.stringify(caps?.resources)
 	);
 
+	// The handshake is where a host gets the server instructions, including the
+	// per-caller section the Worker composes for it, in both eras.
+	check(
+		'the handshake carries the server instructions',
+		client.getInstructions() === 'probe',
+		String(client.getInstructions())
+	);
+
 	const tools = await client.listTools();
 	const names = tools.tools.map((t) => t.name);
 	check('tools/list reaches the registered tools', names.includes('echo'), names.join(','));
@@ -127,6 +138,41 @@ async function exercise(label: string, mode: Negotiation, expectEra: McpEra): Pr
 await exercise('2026-07-28, pinned', { pin: '2026-07-28' }, 'modern');
 await exercise('auto-negotiated (what a current host does)', 'auto', 'modern');
 await exercise('2025, the default client', 'legacy', 'legacy');
+
+// The Worker builds each caller's instructions per request, and the modern leg routes
+// through one handler per isolate (serverFor). Interleaved handshakes from different
+// callers must each get the server built for their own request, never a neighbour's.
+console.log('\nconcurrent handshakes: each caller gets its own instructions');
+for (const mode of ['legacy', { pin: '2026-07-28' }] as const) {
+	const era = mode === 'legacy' ? '2025' : '2026-07-28';
+	const callers = Array.from({ length: 24 }, (_, i) => `caller-${i}`);
+	const got = await Promise.all(
+		callers.map(async (who) => {
+			const client = new Client(
+				{ name: who, version: '0' },
+				mode === 'legacy' ? {} : { versionNegotiation: { mode } }
+			);
+			await client.connect(
+				new StreamableHTTPClientTransport(URL_, {
+					fetch: async (url, init) => {
+						// Yield first so the requests interleave in the shared handler.
+						await new Promise((r) => setTimeout(r, Math.random() * 5));
+						return (await serveMcp(new Request(url, init), build(`for ${who} only`))).response;
+					}
+				})
+			);
+			const seen = client.getInstructions();
+			await client.close();
+			return { who, seen };
+		})
+	);
+	const crossed = got.filter((g) => g.seen !== `for ${g.who} only`);
+	check(
+		`${era}: ${callers.length} interleaved callers each see only their own`,
+		crossed.length === 0,
+		crossed.map((c) => `${c.who} saw ${c.seen}`).join('; ')
+	);
+}
 
 console.log('\nrefusals');
 {

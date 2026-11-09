@@ -65,7 +65,7 @@ export function touchesToolsArea(path: string): boolean {
  */
 export function toolRosterNote(...paths: string[]): string {
 	return paths.some(touchesToolsArea)
-		? '\n\nHeads up: this changes your custom tools. Reconnect the Isomorphic connector in Claude (Settings → Connectors) so the new tool list is picked up.'
+		? '\n\nHeads up: this changes your custom tools. Reconnect the Isomorphic connector in your AI assistant so it picks up the new tool list.'
 		: '';
 }
 

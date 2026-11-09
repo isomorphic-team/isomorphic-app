@@ -53,8 +53,9 @@ A convention with no in-band signal is stated in three places, in order of reach
 adopted repos with no `AGENTS.md`), the tool's own description or argument (the point of
 decision), and `brain-template/AGENTS.md` (scaffolded brains). Folder notes, one-concept pages,
 and "metadata is a field write" all follow it. `instructions` is sent once per connection
-handshake (`initialize`, or `server/discover` on 2026-07-28), so it cannot be per brain: it
-would go stale on `switch_brain`.
+handshake (`initialize`, or `server/discover` on 2026-07-28), so conventions in it cannot be
+per brain: they would go stale on `switch_brain`. The per-caller section the Worker appends
+(`composeInstructions`) lists brains only, as a snapshot that says so.
 
 ## `validate` and `resolve`: defects vs findings
 

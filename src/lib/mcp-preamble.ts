@@ -104,6 +104,16 @@ export function needsBrainPreamble(peek: JsonRpcPeek): boolean {
 }
 
 /**
+ * Whether this request is a handshake: `initialize`, or `server/discover` on the
+ * 2026-07-28 revision. Its result carries the server instructions, so it is the one
+ * request that builds the caller's section of them (composeInstructions). An unparsed
+ * body is not one: it gets the static text.
+ */
+export function isHandshake(peek: JsonRpcPeek): boolean {
+	return peek.methods.some((m) => m === 'initialize' || m === 'server/discover');
+}
+
+/**
  * A JSON-RPC error object for a request that failed before the SDK could
  * answer it. `data.ray` carries Cloudflare's ray id so a user's report can be
  * matched to a log line; an exception thrown out of the handler would otherwise
@@ -123,4 +133,30 @@ export function jsonRpcError(
 			...(ray ? { data: { ray } } : {})
 		}
 	});
+}
+
+/**
+ * `work`'s result, or `fallback` when it rejects or takes longer than `ms`. For lookups a
+ * request can answer without: a late result is dropped, and a late rejection is caught
+ * here rather than surfacing as an unhandled one.
+ */
+export async function withFallback<T>(
+	work: Promise<T>,
+	ms: number,
+	fallback: T,
+	onError?: (err: unknown) => void
+): Promise<T> {
+	let timer: ReturnType<typeof setTimeout> | undefined;
+	const settled = work.catch((err) => {
+		onError?.(err);
+		return fallback;
+	});
+	const late = new Promise<T>((resolve) => {
+		timer = setTimeout(() => resolve(fallback), ms);
+	});
+	try {
+		return await Promise.race([settled, late]);
+	} finally {
+		clearTimeout(timer);
+	}
 }

@@ -4,7 +4,7 @@ paths:
   - "src/local.ts"
   - "src/lib/{mcp-serve,mcp-preamble,registered-tools,server-instructions,tool-annotations}.ts"
   - "src/tools/*.ts"
-  - "scripts/{test-protocol,test-preamble,test-app-resource,test-annotations}.ts"
+  - "scripts/{test-protocol,test-preamble,test-app-resource,test-annotations,test-instructions}.ts"
 ---
 
 # The `/mcp` request path and the tool surface
@@ -35,6 +35,13 @@ enableJsonResponse: true })`. The split uses the SDK's own `isLegacyRequest`.
 - **`needsBrainPreamble`** skips brain resolution for `initialize`, `server/discover`, `ping`
   and notifications, and is conservative for anything unknown. **`tools/list` still resolves**
   (a brain's own tools belong in it).
+- **A handshake builds the caller's instructions** (`isHandshake`): `handshakeInstructions`
+  in `worker.ts` reads the active pointer and `listAccessibleBrains`, and
+  `composeInstructions` (`src/lib/server-instructions.ts`, `pnpm test:instructions`) appends
+  those brains, active first, within `SERVER_INSTRUCTIONS_LIMIT`, with each name reduced to
+  one line of data. `withFallback` bounds the lookup at `HANDSHAKE_LOOKUP_MS` and answers
+  with the static text on a timeout or error (`pnpm test:preamble`). The local runtime
+  serves the static text.
 - `loadActiveBrain` and `loadCustomTools` fail open.
 - **`describeRequest` logs** any `/mcp` answer at 4xx or over 5s: methods, message SHAPES (key
   names only, never values), protocol era, status, duration, transport error. A slow call
@@ -90,7 +97,14 @@ not the `TOOL_KINDS` axis: `edit_page` is read-only here (it opens the editor; t
 ## Tool descriptions
 
 **Each tool's description stands alone and names itself; cross-tool steering lives in
-`SERVER_INSTRUCTIONS`** (hosts load it wholesale). A convention the model cannot infer is stated
+`SERVER_INSTRUCTIONS`** (hosts load it wholesale). Claude Code cuts the instructions at
+`SERVER_INSTRUCTIONS_LIMIT` (4096) characters and an upfront tool description at
+`TOOL_DESCRIPTION_LIMIT` (4096), so the instructions hold only what no one tool's description
+can: when to reach for the brain, how the tools relate, and the brain's conventions. Detail
+about one tool goes in that tool's description. `pnpm test:instructions` and
+`pnpm test:annotations` fail past either limit. Any MCP client can connect, so no string a model or user reads names one:
+`pnpm test:instructions` scans `src/`, `app/`, `ee/` and `brain-template/` for `HOST_NAMES`
+(`scripts/doc-refs.ts`), comments aside. User-facing strings say "your AI assistant". A convention the model cannot infer is stated
 in three places, in descending reach: server instructions, the tool's own description or
 argument, and `brain-template/AGENTS.md`. A host's tool search ranks by description text, so a
 description that mentions another tool by name can outrank that tool: `view_page` once said

@@ -209,7 +209,10 @@ export async function serveAssetLink(
 	const verdict = await verifyAssetToken(key, token, nowSeconds);
 	if (!verdict.ok) {
 		return verdict.reason === 'expired'
-			? plain(410, 'This link has expired. Ask Claude to read the file again for a fresh one.')
+			? plain(
+					410,
+					'This link has expired. Ask your AI assistant to read the file again for a fresh one.'
+				)
 			: notFound();
 	}
 	const { path, exp } = verdict.claim;

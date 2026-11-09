@@ -167,8 +167,8 @@ export function registerBrainAccessTools(
 	// when this deployment serves one; otherwise the connector is the only door.
 	const signInHint = (brainId: string): string =>
 		opts.webBaseUrl
-			? `They sign in at ${opts.webBaseUrl}${webPathFor(brainId, '')} with that email address (a magic link), or connect Isomorphic in Claude with it.`
-			: `They connect Isomorphic in Claude and sign in with that email address (a magic link).`;
+			? `They sign in at ${opts.webBaseUrl}${webPathFor(brainId, '')} with that email address (a magic link), or connect Isomorphic to their AI assistant with it.`
+			: `They connect Isomorphic to their AI assistant and sign in with that email address (a magic link).`;
 	// ---------- brain_access (sharing panel: interactive widget + data) ----------
 	registerAppTool(
 		server,

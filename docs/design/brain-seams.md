@@ -369,6 +369,8 @@ that spans brains**, and that is the whole of the gap.
    it cannot enumerate a caller's brains; `brains` returns them but is only called when something
    prompts it. This is the `read_page` / `view_page` description failure in another costume: a
    capability an agent does not find by name does not exist.
+   (Since 2026-11-09 the handshake appends the caller's brains to the instructions as a dated
+   snapshot, `composeInstructions`; it still cannot follow a `switch_brain`.)
 3. **Attribution in results.** A fan-out result set that does not say which brain each hit came
    from will get one client's material quoted into another client's conversation. Every row must
    name its brain.

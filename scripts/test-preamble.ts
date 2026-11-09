@@ -18,13 +18,20 @@
 //   as an invalid response and reports as a bare gateway error. The report
 //   carried four ray ids and nothing to join them against.
 //
+//   WHAT A HANDSHAKE BUILDS. The handshake is also the one request that looks up the
+//   caller's brains, to list them in the server instructions. isHandshake decides
+//   which requests pay for that, and withFallback bounds it: a slow or failed lookup
+//   answers with the static instructions instead of holding the connection open.
+//
 //   pnpm test:preamble
 
 import {
 	peekJsonRpc,
 	needsBrainPreamble,
 	jsonRpcError,
-	describeRequest
+	describeRequest,
+	isHandshake,
+	withFallback
 } from '../src/lib/mcp-preamble.ts';
 
 import { checker } from './check.ts';
@@ -163,6 +170,55 @@ console.log('\njsonRpcError');
 	const noRay = JSON.parse(jsonRpcError(null, 'boom'));
 	check('omits data when there is no ray', noRay.error.data === undefined);
 	check('a null id stays null', noRay.id === null);
+}
+
+// ---------------------------------------------------------------------------
+// isHandshake and withFallback: the handshake's one lookup, bounded
+// ---------------------------------------------------------------------------
+console.log('\nisHandshake');
+{
+	const hs = (body: string) => isHandshake(peekJsonRpc(body));
+	check('initialize is one', hs(req('initialize')));
+	check('server/discover is one', hs(req('server/discover')));
+	check(
+		'a batch carrying initialize is one',
+		hs(`[${req('initialize')},${note('notifications/x')}]`)
+	);
+	check('tools/list is not', !hs(req('tools/list')));
+	check('ping is not', !hs(req('ping')));
+	check('an unparsed body is not', !hs('{not json'));
+}
+
+console.log('\nwithFallback');
+{
+	const never = new Promise<string>(() => {});
+	check(
+		'a prompt result wins',
+		(await withFallback(Promise.resolve('fresh'), 50, 'static')) === 'fresh'
+	);
+	const t0 = Date.now();
+	check(
+		'a result that never comes falls back',
+		(await withFallback(never, 30, 'static')) === 'static'
+	);
+	check('...within the bound', Date.now() - t0 < 500, `${Date.now() - t0}ms`);
+	let seen: unknown;
+	const failed = await withFallback(Promise.reject(new Error('d1 down')), 50, 'static', (e) => {
+		seen = e;
+	});
+	check('a rejection falls back', failed === 'static');
+	check('...and is reported', seen instanceof Error && seen.message === 'd1 down');
+	// A rejection after the bound must not escape as an unhandled one.
+	let unhandled = false;
+	const onUnhandled = () => {
+		unhandled = true;
+	};
+	process.on('unhandledRejection', onUnhandled);
+	const lateFail = new Promise<string>((_, rej) => setTimeout(() => rej(new Error('late')), 30));
+	check('a late rejection falls back', (await withFallback(lateFail, 5, 'static')) === 'static');
+	await new Promise((r) => setTimeout(r, 60));
+	process.off('unhandledRejection', onUnhandled);
+	check('...without an unhandled rejection', !unhandled);
 }
 
 done();

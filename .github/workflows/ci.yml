@@ -138,6 +138,8 @@ jobs:
       - run: pnpm test:app-resource
       # Every tool carries annotations.title and its read/destructive hint (directory review).
       - run: pnpm test:annotations
+      # The server instructions fit the length Claude Code shows the model, and name real tools.
+      - run: pnpm test:instructions
       - run: pnpm test:loading
       - run: pnpm test:access
       - run: pnpm test:invites

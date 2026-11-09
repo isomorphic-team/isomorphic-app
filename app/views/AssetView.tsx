@@ -149,7 +149,7 @@ function AssetView({
 						<dd class="truncate text-fg">{folder}</dd>
 					</>
 				)}
-				<dt class="text-muted">Claude can see it</dt>
+				<dt class="text-muted">Your AI assistant can read it</dt>
 				{/* Not trivia. It is the difference between "ask Claude what this diagram
 				    says" working and quietly doing nothing, and the answer is not guessable
 				    from the file — a PDF and an SVG both look like documents here. */}
@@ -158,7 +158,7 @@ function AssetView({
 						? 'Yes'
 						: isTextExtractable(mimeType)
 							? 'Its text, by page or slide'
-							: 'No: stored and shown, but not readable by Claude'}
+							: 'No: stored and shown, but your AI assistant cannot read it'}
 				</dd>
 			</dl>
 

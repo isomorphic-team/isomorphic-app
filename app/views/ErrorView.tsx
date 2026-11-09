@@ -18,10 +18,10 @@ function ErrorView({
 	const denied = isHostDenial(detail);
 	return (
 		<div class="mt-10 text-center text-muted">
-			<p class={viewTitle}>{denied ? "Claude didn't allow this tool call." : headline}</p>
+			<p class={viewTitle}>{denied ? "Your assistant didn't allow this tool call." : headline}</p>
 			{denied ? (
 				<p class="mt-1 text-sm">
-					Your Claude client blocked it before it reached Isomorphic. Approve the permission and try
+					Your AI client blocked it before it reached Isomorphic. Approve the permission and try
 					again.
 				</p>
 			) : (
