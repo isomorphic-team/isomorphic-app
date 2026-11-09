@@ -135,6 +135,8 @@ jobs:
       - run: pnpm test:guard
       # Enterprise foundation: ZDR routing on every model request, entitlements, the spend cap.
       - run: pnpm test:ee
+      # Enterprise identity: domain verification, sign-in routing, accepting a provider sign-in.
+      - run: pnpm test:sso
       - run: pnpm test:app-resource
       # Every tool carries annotations.title and its read/destructive hint (directory review).
       - run: pnpm test:annotations

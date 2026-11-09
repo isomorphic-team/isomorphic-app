@@ -117,3 +117,29 @@ CREATE TABLE IF NOT EXISTS invitations (
 );
 
 CREATE INDEX IF NOT EXISTS invitations_email_idx ON invitations (email);
+
+-- Domains an org has claimed (src/lib/org-domains.ts). Several orgs may claim one domain;
+-- one may hold it verified. verified_at is cleared when a re-check finds the TXT record gone.
+CREATE TABLE IF NOT EXISTS org_domains (
+  org_id          TEXT NOT NULL,
+  domain          TEXT NOT NULL,            -- lowercased, no trailing dot
+  challenge       TEXT NOT NULL,            -- the token the domain's TXT record must carry
+  created_at      INTEGER NOT NULL,         -- epoch ms
+  created_by      TEXT,                     -- app_users.user_id
+  verified_at     INTEGER,                  -- epoch ms; NULL = not verified
+  last_checked_at INTEGER,                  -- epoch ms of the last conclusive TXT lookup
+  sso_enforced    INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (org_id, domain)
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS org_domains_verified_idx
+  ON org_domains (domain) WHERE verified_at IS NOT NULL;
+
+-- The identity provider an org signs in through (src/lib/sso.ts). Never a credential.
+CREATE TABLE IF NOT EXISTS identity_connections (
+  org_id     TEXT PRIMARY KEY,
+  provider   TEXT NOT NULL,                 -- 'microsoft-entra-id'
+  tenant_id  TEXT NOT NULL,                 -- the directory's tenant id
+  created_at INTEGER NOT NULL,              -- epoch ms
+  created_by TEXT                           -- app_users.user_id
+);

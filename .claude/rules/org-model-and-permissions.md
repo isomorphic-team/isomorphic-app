@@ -1,7 +1,7 @@
 ---
 paths:
   - "src/worker.ts"
-  - "src/lib/{orgs,storage-connections,brain-move,org-connect,invites,provision,identity,static-tenant,signin-email,scaffold-core}.ts"
+  - "src/lib/{orgs,storage-connections,brain-move,org-connect,invites,provision,identity,static-tenant,signin-email,scaffold-core,org-domains,sso}.ts"
   - "src/tools/{brains,brain-access,members,org-onboarding,connected-accounts}.ts"
   - "src/oauth/**"
   - "src/auth/**"
@@ -10,7 +10,7 @@ paths:
   - "app/core/nav.ts"
   - "app/components/{Breadcrumb,Destinations,RoleSelect,ConnectedAccountsSection}.tsx"
   - "app/views/{Members,BrainAccess,ShareBrain,InviteMember,AddBrain,Brains,ConnectAccount,Settings,More}View.tsx"
-  - "scripts/test-{access,invites,scope,email}.ts"
+  - "scripts/test-{access,invites,scope,email,sso}.ts"
   - "scripts/onboard-org.ts"
 ---
 
@@ -54,6 +54,27 @@ cookies or use incognito when testing.
 through Resend from `src/auth/config.ts`. Auth.js's stock template (hostname subject, lone
 button) was filed as spam. Keep the product name in the subject and From line, the requested
 address, where the link goes, the expiry, and a plain-text part with the same words.
+
+## Enterprise identity (built, not wired)
+
+Design and what is still open: `docs/design/enterprise-identity.md`. `pnpm test:sso`.
+Nothing calls these yet: no tool, no sign-in route, and `buildAuthConfig` registers only the
+magic link.
+
+- **A verified domain decides how its addresses sign in** (`src/lib/org-domains.ts`, table
+  `org_domains`). Proof is a TXT record carrying the org's own challenge, read over DNS over
+  HTTPS. `currentVerifiedDomain` looks a stale one up again before it routes; only a conclusive
+  "gone" unverifies (`afterTxtCheck`), a resolver failure changes nothing.
+- **`resolveSignInRoute` (`src/lib/sso.ts`) is home-realm discovery**, and `chooseSignInRoute`
+  is its pure rule. It checks the `enterprise` entitlement from the core: an unentitled org's
+  domains route and enforce nothing.
+- **An identity connection is a provider and a tenant id, never a credential**
+  (`identity_connections`). `entraIssuer` throws on anything but a tenant id, so
+  `entraProvider` (`src/auth/entra.ts`) cannot be built for the `common` endpoint.
+- **`allowSsoSignIn` must pass before a provider sign-in is trusted.** It compares the token's
+  `tid` with the connected tenant and the address's domain with the org's verified domains.
+  `entraProvider` sets `allowDangerousEmailAccountLinking`, which is safe only behind that
+  check: never register the provider without it in the `signIn` callback.
 
 ## The org model
 
