@@ -48,6 +48,17 @@ We use `@modelcontextprotocol/ext-apps`: `/server` (registerAppTool / registerAp
   client opens when a capability says `listChanged: true`. `InMemoryTransport` links
   2025-era instances only, so a 2026 test drives `createMcpHandler` through a `fetch`
   function (`scripts/test-protocol.ts`).
+- **Server instructions, how to write them (MCP blog, 2025-11-03):**
+  https://blog.modelcontextprotocol.io/posts/2025-11-03-using-server-instructions/ . Cover what
+  tool descriptions cannot (how tools relate, workflows, constraints); do not repeat tool
+  descriptions or give general behavior rules. The spec sets no length limit and calls the
+  field a hint a client may add to the system prompt.
+- **Claude Code's limits on server text** (verified 2026-11-09):
+  https://code.claude.com/docs/en/mcp.md ("Tool search for MCP server authors"). Server
+  instructions, and the description of a tool that loads up front, are cut at 4,096
+  characters; a description loaded through tool search, at 16,384. Only tool names and server
+  instructions load at session start. The CLAUDE_CODE_MAX_MCP_DESCRIPTION_LENGTH environment variable raises both on
+  one user's machine. Claude.ai and Claude Desktop document no limit.
 
 ## Editor stack (Phase D WYSIWYG)
 

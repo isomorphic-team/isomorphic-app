@@ -24,7 +24,8 @@
 //      `_meta.ui.resourceUri` naming the served app, or a plain tool carrying one.
 //      Without it a host renders nothing; with one on a plain tool, every call
 //      renders a widget.
-//   6. Other tool-surface fields a host reads: no `execution` field in tools/list
+//   6. Other tool-surface fields a host reads: a description longer than
+//      TOOL_DESCRIPTION_LIMIT (Claude Code cuts it), no `execution` field in tools/list
 //      (claude.ai web refuses the whole connector over it), and the retry guidance
 //      on the three write tools, which must name the failure class ("FAILS WITHOUT
 //      A RESULT", a gateway error) rather than only a timeout, because a caller
@@ -35,7 +36,11 @@ import { fileURLToPath } from 'node:url';
 import { Client } from '@modelcontextprotocol/client';
 import { McpServer, InMemoryTransport } from '@modelcontextprotocol/server';
 
-import { annotationProblems, toolAnnotations } from '../src/lib/tool-annotations.ts';
+import {
+	annotationProblems,
+	TOOL_DESCRIPTION_LIMIT,
+	toolAnnotations
+} from '../src/lib/tool-annotations.ts';
 import { planCustomTools } from '../src/lib/custom-tools.ts';
 import { registerAnalyticsTools } from '../src/tools/analytics.ts';
 import { registerBrainApp, BRAIN_APP_URI } from '../src/tools/apps.ts';
@@ -237,6 +242,12 @@ const listed = new Set<string>();
 		'tools/list carries no `execution` field',
 		tools.every((t) => !('execution' in t) || t.execution === undefined),
 		JSON.stringify(tools.map((t) => t.execution))
+	);
+	const long = tools.filter((t) => (t.description ?? '').length > TOOL_DESCRIPTION_LIMIT);
+	check(
+		`every description fits in ${TOOL_DESCRIPTION_LIMIT} characters`,
+		long.length === 0,
+		long.map((t) => `${t.name} (${t.description?.length})`).join(', ')
 	);
 	for (const name of ['write_page', 'move_page', 'delete_page']) {
 		const description = tools.find((t) => t.name === name)?.description ?? '';

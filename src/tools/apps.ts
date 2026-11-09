@@ -245,7 +245,7 @@ export function registerBrainApp(
 			// Deliberately does NOT name read_page (see read_page in src/tools/core.ts).
 			// The read-vs-view steering lives in the server instructions.
 			description:
-				'Open a brain page in the interactive Isomorphic viewer: rendered markdown, clickable links, browse and search, shown inside Claude. Use this whenever the user wants to LOOK AT or explore a page, AND whenever you cite or reference a specific brain page in an answer: call it on the referenced path so the user can open that page in Isomorphic instead of only reading pasted text. This is for showing a page to the USER; to fetch a page as text for your own reasoning, read it instead.',
+				'Open a brain page in the interactive Isomorphic viewer: rendered markdown, clickable links, browse and search, shown inside Claude. Use this whenever the user wants to LOOK AT or explore a page, AND whenever you cite or reference a specific brain page in an answer: call it on the referenced path so the user can open that page in Isomorphic instead of only reading pasted text. This is for showing a page to the USER; to fetch a page as text for your own reasoning, read it instead. When the deployment serves the web app, the result also carries `webUrl`: the page in a browser tab, which anyone with access to the brain can open after signing in with their email. Give that URL when the user wants to share, send or bookmark a page.',
 			inputSchema: {
 				path: z.string().describe('Page path, e.g. "wiki/customers/acme.md".'),
 				brain: brainArg
@@ -349,7 +349,7 @@ export function registerBrainApp(
 		{
 			...toolAnnotations('View recent changes', 'read'),
 			description:
-				"Open the brain's activity log in Isomorphic — recent changes with who made each one and when (an audit trail). Pass a `path` to see one page's history instead of the whole brain. Use when the user asks what changed, who edited something, or wants to review recent activity.",
+				"Open the brain's activity log in Isomorphic — recent changes with who made each one and when (an audit trail). Pass a `path` to see one page's history instead of the whole brain. It includes edits made directly in the repository, outside Isomorphic. Use when the user asks what changed, who edited something, or wants to review recent activity.",
 			inputSchema: {
 				path: z
 					.string()

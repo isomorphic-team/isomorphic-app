@@ -4,7 +4,7 @@ paths:
   - "src/local.ts"
   - "src/lib/{mcp-serve,mcp-preamble,registered-tools,server-instructions,tool-annotations}.ts"
   - "src/tools/*.ts"
-  - "scripts/{test-protocol,test-preamble,test-app-resource,test-annotations}.ts"
+  - "scripts/{test-protocol,test-preamble,test-app-resource,test-annotations,test-instructions}.ts"
 ---
 
 # The `/mcp` request path and the tool surface
@@ -90,7 +90,12 @@ not the `TOOL_KINDS` axis: `edit_page` is read-only here (it opens the editor; t
 ## Tool descriptions
 
 **Each tool's description stands alone and names itself; cross-tool steering lives in
-`SERVER_INSTRUCTIONS`** (hosts load it wholesale). A convention the model cannot infer is stated
+`SERVER_INSTRUCTIONS`** (hosts load it wholesale). Claude Code cuts the instructions at
+`SERVER_INSTRUCTIONS_LIMIT` (4096) characters and an upfront tool description at
+`TOOL_DESCRIPTION_LIMIT` (4096), so the instructions hold only what no one tool's description
+can: when to reach for the brain, how the tools relate, and the brain's conventions. Detail
+about one tool goes in that tool's description. `pnpm test:instructions` and
+`pnpm test:annotations` fail past either limit. A convention the model cannot infer is stated
 in three places, in descending reach: server instructions, the tool's own description or
 argument, and `brain-template/AGENTS.md`. A host's tool search ranks by description text, so a
 description that mentions another tool by name can outrank that tool: `view_page` once said

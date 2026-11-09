@@ -72,3 +72,8 @@ export function annotationProblems(tool: {
 	}
 	return problems;
 }
+
+// Claude Code shows the model only this many characters of a tool description when the tool
+// loads up front (tool search off, or the server exempt from deferral); past it, the text is
+// cut. `pnpm test:annotations` holds every listed tool to it.
+export const TOOL_DESCRIPTION_LIMIT = 4096;
