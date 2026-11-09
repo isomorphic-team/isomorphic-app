@@ -14,18 +14,20 @@
 //      month, re-checked before every call, and a cap set on the entitlement beats the default.
 //   4. `pnpm entitle` WRITING SOMETHING ELSE. Its SQL grants and revokes one row, rejects an
 //      unknown feature or a malformed org id, and escapes a note.
+//   5. THE CORE CALLING INTO `ee/`. The entitlement read is in src/lib/ so core code can check
+//      it; only the Worker's wiring may import from `ee/`.
 
 import type { D1Database } from '@cloudflare/workers-types';
 import { d1Index } from '../src/lib/brain-index.ts';
 import { localD1 } from '../src/local/d1-sqlite.ts';
+import { entitlementSql } from '../ee/entitlements.ts';
 import {
 	FEATURES,
-	entitlementSql,
 	getEntitlement,
 	hasFeature,
 	isActive,
 	type Entitlement
-} from '../ee/entitlements.ts';
+} from '../src/lib/entitlements.ts';
 import {
 	DEFAULT_MONTHLY_CAP_USD,
 	GatewayRefused,
@@ -68,6 +70,7 @@ import { conflictKey, readFindings, upsertFindings } from '../src/lib/review-que
 import { resetIndex } from '../src/lib/brain-index.ts';
 import { continuePass, readPass, savePass, savePassStatement } from '../src/lib/brain-pass.ts';
 import { SNAPSHOT_BEGIN, SNAPSHOT_END } from '../src/lib/view-directives.ts';
+import { readFileSync, readdirSync } from 'node:fs';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -227,6 +230,23 @@ console.log('\ngateway: entitlements, ZDR on the wire, spend (1, 2, 3)');
 		.prepare(entitlementSql({ kind: 'revoke', orgId: 'o1', feature: FEATURES.enterprise }))
 		.run();
 	check('revoke removes it', !(await hasFeature(db, 'o1', FEATURES.enterprise, NOW)));
+}
+
+console.log('\nThe core does not import from ee/ (5)');
+{
+	const root = new URL('../', import.meta.url);
+	const importsEe = /from\s+'[^']*\/ee\/[^']*'/;
+	const offenders = (readdirSync(new URL('src/', root), { recursive: true }) as string[])
+		.filter((f) => f.endsWith('.ts') && f !== 'worker.ts')
+		.filter((f) => importsEe.test(readFileSync(new URL('src/' + f, root), 'utf8')));
+	check(
+		`no file under src/ but worker.ts imports from ee/ (${offenders.join(', ')})`,
+		!offenders.length
+	);
+	check(
+		'the pattern sees the wiring in worker.ts',
+		importsEe.test(readFileSync(new URL('src/worker.ts', root), 'utf8'))
+	);
 }
 
 console.log('\npnpm entitle: the SQL (4)');

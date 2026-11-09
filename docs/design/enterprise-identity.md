@@ -1,6 +1,6 @@
 # Design: enterprise identity (per-org SSO, verified domains, SCIM)
 
-Status: **proposed** (2026-11-05). Nothing here is built.
+Status: **partly built** (2026-11-09). D2 is built. Nothing else is.
 
 This revises one clause of [`open-source-boundary.md`](./open-source-boundary.md), the one that
 kept Enterprise SSO and SAML out of `ee/` permanently. The revision: a feature is enterprise
@@ -44,7 +44,7 @@ an org that requires SSO, and no way to remove a person from outside the product
 - **No per-org credential is stored.** `storage_connections` holds an installation id; the
   GitHub App key is a Worker secret. The design keeps it that way.
 - **Entitlements are built.** `org_entitlements`, read through `hasFeature` and
-  `getEntitlement` in `ee/entitlements.ts`, written by `pnpm entitle`.
+  `getEntitlement` in `src/lib/entitlements.ts`, written by `pnpm entitle`.
 - **The Auth.js Entra provider is installed** with `@auth/core` and takes an `issuer` per
   config. Given a tenant-specific issuer, it validates tokens against that tenant only.
 
@@ -90,19 +90,12 @@ Two consequences, stated plainly:
   check; anyone serving that fork over a network must offer its source to their users. PostHog
   accepts the same exposure under MIT, with no such obligation.
 
-### D2. The entitlement read moves into the core
+### D2. The entitlement read is in the core
 
-Core code cannot call `hasFeature` while it is in `ee/`: the core never calls into `ee/` to do
-its own job ([`.claude/rules/ee.md`](../../.claude/rules/ee.md)).
-
-Move the read (`FEATURES`, `Entitlement`, `isActive`, `getEntitlement`, `hasFeature`) to its
-own module in `src/lib/`. `ee/` keeps the grant tooling (`entitlementSql`,
-`ENTITLEMENT_SOURCES`). Four files change their imports: `ee/review/gateway.ts`,
-`scripts/entitle.ts`, `scripts/consolidate-report.ts` and `scripts/test-ee.ts`. The migration
-stays where it is.
-
-The moved code changes license, from the Enterprise License to the AGPL. `ee/` takes no
-outside contributions, so that is the owner's decision alone.
+Built. The core never calls into `ee/` to do its own job
+([`.claude/rules/ee.md`](../../.claude/rules/ee.md)), so the read (`FEATURES`, `Entitlement`,
+`isActive`, `getEntitlement`, `hasFeature`) is in `src/lib/entitlements.ts`, under the AGPL.
+`ee/entitlements.ts` keeps the grant tooling (`entitlementSql`, `ENTITLEMENT_SOURCES`).
 
 This matches PostHog, where the per-org feature list lives on a core model.
 

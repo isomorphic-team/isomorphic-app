@@ -18,7 +18,8 @@
 // checked pairs saves: with nothing edited between runs, they check nothing.
 import type { D1Database } from '@cloudflare/workers-types';
 import { d1Index } from '../src/lib/brain-index.ts';
-import { FEATURES, entitlementSql } from '../ee/entitlements.ts';
+import { entitlementSql } from '../ee/entitlements.ts';
+import { FEATURES } from '../src/lib/entitlements.ts';
 import { runConsolidationStep, type Proposal } from '../ee/review/consolidation.ts';
 import { readFindings } from '../src/lib/review-queue.ts';
 import { loadDevVarsIntoEnv } from '../src/persist.ts';

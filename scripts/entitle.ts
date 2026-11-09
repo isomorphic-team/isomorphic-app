@@ -9,7 +9,8 @@
 //   pnpm entitle --org <org_id> --feature enterprise --revoke [--apply ...]
 
 import { spawnSync } from 'node:child_process';
-import { entitlementSql, type EntitlementSource, type Feature } from '../ee/entitlements.ts';
+import { entitlementSql, type EntitlementSource } from '../ee/entitlements.ts';
+import type { Feature } from '../src/lib/entitlements.ts';
 
 function arg(name: string): string | undefined {
 	const i = process.argv.indexOf(`--${name}`);
