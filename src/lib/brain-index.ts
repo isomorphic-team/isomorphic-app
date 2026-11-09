@@ -21,6 +21,8 @@ import type { D1Database, D1PreparedStatement } from '@cloudflare/workers-types'
 import { type RepoRef, type TreeEntry, type BrainStore, MAX_SCAN_PAGES } from './brain-repo.ts';
 import { classifyMdLink } from './links.ts';
 import { BRAIN_INDEX_TABLES } from './brain-forget.ts';
+import { searchIndexFts } from './search-fts-index.ts';
+import { shadowSearch } from './search-shadow.ts';
 import { type BrainConfig, CONFIG_PATH, isContentPath, loadIndexConfig } from './brain-config.ts';
 import {
 	parseFrontmatter,
@@ -1125,6 +1127,13 @@ export type OpenIndex = (brainId: string) => BrainIndex;
 export const indexDatabase = (env: { PLATFORM_DB: D1Database; INDEX_DB?: D1Database }) =>
 	env.INDEX_DB ?? env.PLATFORM_DB;
 
+/**
+ * Opens indexes for a deployment. With its own index database the full-text engine runs
+ * in shadow on every search: that database is the only one holding the full-text table.
+ */
+export const indexFor = (env: { PLATFORM_DB: D1Database; INDEX_DB?: D1Database }): OpenIndex =>
+	d1Index(indexDatabase(env), { ftsShadow: env.INDEX_DB !== undefined });
+
 /** The two index fields of a tool context: the brain's own index and the opener. */
 export const indexRefs = (openIndex: OpenIndex, brainId: string) => ({
 	index: openIndex(brainId),
@@ -1133,7 +1142,7 @@ export const indexRefs = (openIndex: OpenIndex, brainId: string) => ({
 
 /** The index in a D1 database, shared by every brain and keyed by `brain_id`. */
 export const d1Index =
-	(db: D1Database): OpenIndex =>
+	(db: D1Database, opts: { ftsShadow?: boolean } = {}): OpenIndex =>
 	(brainId) => ({
 		brainId,
 		ensureFresh: (store, repo, config) => ensureFresh(db, store, repo, brainId, config),
@@ -1147,5 +1156,14 @@ export const d1Index =
 		graph: (config) => loadResolvedGraph(db, brainId, config),
 		allFields: () => loadAllFields(db, brainId),
 		fieldsFor: (paths) => loadFieldsFor(db, brainId, paths),
-		search: (query, prefix, max, perPage) => searchIndex(db, brainId, query, prefix, max, perPage)
+		search: (query, prefix, max, perPage) =>
+			opts.ftsShadow
+				? shadowSearch(
+						{
+							current: () => searchIndex(db, brainId, query, prefix, max, perPage),
+							fts: () => searchIndexFts(db, brainId, query, prefix, max, perPage)
+						},
+						(line) => console.log(JSON.stringify(line))
+					)
+				: searchIndex(db, brainId, query, prefix, max, perPage)
 	});

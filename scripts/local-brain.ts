@@ -9,7 +9,7 @@ import { cp, mkdtemp, mkdir, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, join, relative } from 'node:path';
 import { ensureGitRepo, fsBrainStore } from '../src/local/brain-store-fs.ts';
-import { localD1 } from '../src/local/d1-sqlite.ts';
+import { INDEX_MIGRATIONS_DIR, localD1 } from '../src/local/d1-sqlite.ts';
 import { loadBrainConfig } from '../src/lib/brain-config.ts';
 import { ensureFresh } from '../src/lib/brain-index.ts';
 import type { BrainStore } from '../src/lib/brain-repo.ts';
@@ -32,7 +32,13 @@ async function markdownUnder(dir: string): Promise<string[]> {
 	return out.sort();
 }
 
-export async function openFolderAsBrain(source: string, rootName?: string): Promise<LocalBrain> {
+// `indexOnly` gives the brain the index database's schema (full-text table included)
+// instead of the platform database's, for reports that read nothing but the index.
+export async function openFolderAsBrain(
+	source: string,
+	rootName?: string,
+	opts: { indexOnly?: boolean } = {}
+): Promise<LocalBrain> {
 	const root = rootName ?? basename(source);
 	const dir = await mkdtemp(join(tmpdir(), 'brain-'));
 	const cleanup = () => rm(dir, { recursive: true, force: true });
@@ -55,7 +61,7 @@ export async function openFolderAsBrain(source: string, rootName?: string): Prom
 		const store = fsBrainStore({ dir, author: { name: 'Report', email: 'report@localhost' } });
 		const repoArgs = { owner: 'local', repo: basename(source) };
 		const brainId = `${repoArgs.owner}/${repoArgs.repo}`;
-		const { db } = localD1();
+		const { db } = opts.indexOnly ? localD1(':memory:', INDEX_MIGRATIONS_DIR) : localD1();
 		const config = await loadBrainConfig(store, repoArgs);
 		// One read indexes at most REINDEX_PAGE_BUDGET pages and leaves the rest for the
 		// next read. A report is a single pass, so read until a pass adds nothing.

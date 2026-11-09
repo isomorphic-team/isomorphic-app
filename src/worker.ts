@@ -29,13 +29,7 @@
 //     Without it the index is in PLATFORM_DB.
 
 import { McpServer, type RegisteredTool } from '@modelcontextprotocol/server';
-import {
-	d1Index,
-	indexDatabase,
-	indexRefs,
-	type BrainIndex,
-	type OpenIndex
-} from './lib/brain-index.ts';
+import { indexFor, indexRefs, type BrainIndex, type OpenIndex } from './lib/brain-index.ts';
 import { registeredTools, wrapToolHandler } from './lib/registered-tools.ts';
 import { serveMcp, serverOptions } from './lib/mcp-serve.ts';
 import type { ConsolidationStep, IdentityWire, OrgMembershipWire } from './lib/tool-payloads.ts';
@@ -268,7 +262,7 @@ function consolidationFor(
 	return async (opts) => {
 		const { text, state } = await runConsolidationStep({
 			db: env.PLATFORM_DB,
-			index: d1Index(indexDatabase(env))(scope.brainId),
+			index: indexFor(env)(scope.brainId),
 			...scope,
 			anthropicKey,
 			openRouterKey,
@@ -742,7 +736,7 @@ class McpSession {
 			config,
 			author,
 			db: env.PLATFORM_DB,
-			...indexRefs(d1Index(indexDatabase(env)), target.brain_id),
+			...indexRefs(indexFor(env), target.brain_id),
 			...brainRefs(target)
 		};
 	}
@@ -1147,7 +1141,7 @@ class McpSession {
 			setActiveBrain: (id) => this.setActiveBrain(id),
 			invalidateConfig: (owner, repo) => this.invalidateConfig(owner, repo),
 			analyticsEnabled: this.usageEnabled(),
-			openIndex: d1Index(indexDatabase(this.env)),
+			openIndex: indexFor(this.env),
 			webBaseUrl: this.webBase()
 		});
 
