@@ -109,8 +109,9 @@ This matches PostHog, where the per-org feature list lives on a core model.
 ### D3. Verified organization domains
 
 A new table, org_domains: domain, org, challenge value, verified time, and the per-domain
-settings below. Verification is a DNS TXT record, re-checked periodically, so a lapsed domain
-stops routing sign-ins.
+settings below. Verification is a DNS TXT record, read over DNS over HTTPS. It is re-checked at
+sign-in when the last check is more than a day old, so a lapsed domain stops routing sign-ins.
+The Worker has no scheduled handler, and this does not need one.
 
 A verified domain decides how everyone at that domain signs in, members or not. An unverified
 claim routes nothing.
@@ -130,6 +131,17 @@ standard issuer validation before our code sees it. Then check the email domain 
 org's verified domains as PostHog does. Always pass `issuer` explicitly: the provider's
 fallback reads `process.env` and then the `common` endpoint, which accepts any tenant.
 
+**The callback rebuilds the same config.** Starting a sign-in records the chosen identity
+connection in a signed, short-lived cookie. The callback request reads it to set the issuer,
+and fails closed without it.
+
+**The address comes from our own `profile()`.** The provider's default takes the `email`
+claim, which Entra omits for a user with no mailbox, and fetches a Graph photo into a data URL.
+Ours takes `email`, then `preferred_username`, lowercased, requests `openid profile email`
+only, and fetches nothing. The account is keyed on `sub`. A tenant admin can set either claim,
+so the address is trusted only because the issuer is pinned and its domain is verified for
+that org.
+
 ### D5. Home-realm discovery
 
 Sign-in asks for the email address first. A verified domain with an identity connection routes
@@ -144,7 +156,13 @@ An enforced domain refuses the magic link for its addresses.
   directory. Enforcing on a brain would lock out every guest the first time it was turned on.
 - **Enforcing revokes.** OAuth grants issued before enforcement keep working until they
   expire, the same gap PostHog documents for API keys. Turning enforcement on revokes the
-  domain's existing grants through the OAuth provider's grant listing and revocation calls.
+  domain's existing grants through the OAuth provider's grant listing and revocation calls
+  (`listUserGrants`, `revokeGrant`), and deletes those users' rows in the Auth.js sessions
+  table, which is what the web app signs in with.
+- **Enforced grants are short-lived.** A grant issued to an address at an enforced domain gets
+  a per-grant refresh-token lifetime of days, set at code exchange. A person disabled in the
+  directory then loses access when it lapses, because the next sign-in goes through the
+  provider. This bounds the leaver gap before SCIM exists.
 
 ### D7. Just-in-time provisioning
 
@@ -157,6 +175,17 @@ are still invited.
 A SCIM endpoint per org, mapping to `memberships`, authenticated by a bearer token stored as a
 hash the way invitation tokens are. It is the only answer to the leaver question: sign-in never
 removes anyone. It needs its own design and battery.
+
+### D9. The first SSO sign-in links to the existing account
+
+A member who has signed in by magic link already has an Auth.js user, and the product identity
+is keyed on that user's id. Auth.js refuses to attach a second provider to an existing address
+unless the provider sets `allowDangerousEmailAccountLinking`.
+
+Set it on the per-org provider. Auth.js runs the `signIn` callback before it links, and that
+callback refuses any address whose domain is not verified for the org whose issuer was pinned.
+Linking by address is safe only behind that check, so the flag is never set on a provider built
+without a pinned issuer.
 
 ## Core and entitled
 
@@ -197,6 +226,9 @@ vendor's model, and verified-email linking joins them. Moving out is the expensi
 - **Bootstrapping.** The org admin signs in by magic link to verify the domain and connect the
   provider. Enforcement must refuse to turn on until a test sign-in through the provider has
   succeeded, or the admin can lock the org out.
+- **Unverified against a real tenant.** Whether the issuer string takes a trailing slash (the
+  match against the discovery document is exact), and whether an admin can consent to the
+  multi-tenant application before its publisher is verified.
 - **Static mode.** `AUTH_MODE=static` has one operator and no sign-in. The governance tools
   register only when `multiUser` is true, like the member tools.
 - **Sign-in audit.** Nothing records a sign-in as an event. The sessions table holds live
