@@ -103,6 +103,9 @@ Non-obvious things confirmed against the sources above (with the "why it bit us"
   requires a ranking a caller can recompute, and a pure golden test can pin), is why search
   ranks in `src/lib/search.ts` instead. **If FTS5 is revisited**, the seam is deliberate:
   SQL narrows candidates, the pure module orders them, so only the narrowing phase changes.
+  `node:sqlite` ships FTS5 too (porter tokenizer included), so a test can run the real thing;
+  a prototype, its measurements and where the index should live are in
+  [`design/brain-index-storage.md`](design/brain-index-storage.md).
 
 - **`wrangler versions upload` inherits the Worker's secrets; `wrangler deploy` is what you
   give up to get a rollback.** Verified against wrangler 4.85 on 2026-08-18. Secrets set with
@@ -119,12 +122,25 @@ Non-obvious things confirmed against the sources above (with the "why it bit us"
   still carries the append-only `migrations` array declaring `IsomorphicMindMcp` new in v1 and
   deleted in v2, which looked like it might disqualify us and would have sunk both the deploy
   pipeline's pre-promotion check and the preview-environments design. It does not: the check
-  keys off bindings, not that array. The verdict is per version, reported by the server as
-  `metadata.has_preview`, and it is `true` on every version from number 77 onward, which is
-  when `preview_urls: true` entered the config. Read it with
-  `wrangler versions list --json | jq '[.[] | {number, preview: .metadata.has_preview}]'`.
-  **Adding a Durable Object binding takes this away silently**, so anything depending on it
-  should branch on `has_preview` rather than assume.
+  keys off whether the Worker IMPLEMENTS a Durable Object class, not that array. The verdict
+  is per version, reported by the server as `metadata.has_preview`, and it is `true` on every
+  version from number 77 onward, which is when `preview_urls: true` entered the config. Read
+  it with `wrangler versions list --json | jq '[.[] | {number, preview: .metadata.has_preview}]'`.
+  **Implementing a Durable Object class in this Worker takes this away silently**, so anything
+  depending on it should branch on `has_preview` rather than assume.
+
+- **A Worker that only BINDS to a Durable Object implemented in another Worker keeps its
+  version URLs and its Worker Previews.** Tested on 2026-11-09 with wrangler 4.151 and two
+  throwaway Workers (deleted afterwards): a host implementing a SQLite-backed class, and a
+  consumer binding to it with `script_name`. The host reported `has_preview: false` on every
+  version; the consumer `true`. The consumer's version URL, its alias URL and a
+  `wrangler preview` deployment (with the binding repeated under `previews.durable_objects`)
+  all reached the object over RPC and ran an FTS5 `MATCH` with the porter tokenizer inside
+  it. Cloudflare's wording agrees: version URLs "are not generated for Workers that
+  implement a Durable Object"
+  (https://developers.cloudflare.com/workers/versions-and-deployments/version-urls/). A
+  Preview binding to the host reaches the host's production namespace, so isolating a pull
+  request's objects takes a separate host or an id prefix.
 
 - **Worker Previews (`wrangler preview`, open beta) are what `preview.yml` deploys, and they
   are not version URLs.** Verified against the docs and wrangler 4.142 on 2026-10-01:
