@@ -10,14 +10,14 @@ org runs the core product unchanged.
 
 Not every enterprise feature lives here. Enterprise identity will check the same entitlement
 from the core, because every sign-in runs through it
-([`docs/design/enterprise-identity.md`](../docs/design/enterprise-identity.md), proposed). It
-moves the entitlement read to `src/lib/` and leaves the grant tooling here. Nothing has moved
-yet.
+([`docs/design/enterprise-identity.md`](../docs/design/enterprise-identity.md)). The
+entitlement read (`hasFeature`) is therefore in `src/lib/entitlements.ts`, under the AGPL, and
+the grant tooling is here.
 
-| Path                      | What                                                                                               |
-| ------------------------- | -------------------------------------------------------------------------------------------------- |
-| `entitlements.ts`         | `hasFeature`: whether an org has the `enterprise` entitlement. Rows are written by `pnpm entitle`. |
-| `review/gateway.ts`       | The model gateway: Haiku first, Luna as the fallback, entitled orgs only, a monthly cap.           |
-| `review/consolidation.ts` | The consolidation pass: pages that contradict each other, as `conflict` findings.                  |
+| Path                      | What                                                                                                   |
+| ------------------------- | ------------------------------------------------------------------------------------------------------ |
+| `entitlements.ts`         | `entitlementSql`: the statements `pnpm entitle` uses to grant and revoke the `enterprise` entitlement. |
+| `review/gateway.ts`       | The model gateway: Haiku first, Luna as the fallback, entitled orgs only, a monthly cap.               |
+| `review/consolidation.ts` | The consolidation pass: pages that contradict each other, as `conflict` findings.                      |
 
 This directory does not accept outside contributions.

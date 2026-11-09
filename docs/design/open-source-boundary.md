@@ -22,7 +22,7 @@ What changed on 2026-09-30: the repository now has two licenses.
 - **`ee/` holds the enterprise features**, under the [Isomorphic Enterprise
   License](../../ee/LICENSE). The source is public and readable; production use needs a
   subscription. Each feature checks a per-org entitlement (`org_entitlements`,
-  `ee/entitlements.ts`) and does nothing without one.
+  `src/lib/entitlements.ts`) and does nothing without one.
 
 The hosted service differs from a self-hosted instance in four ways:
 
@@ -52,8 +52,8 @@ the model gateway those use, and the operator's grant tooling (`entitlementSql`)
 
 Enterprise but in the core: enterprise identity (verified domains, a provider per org, SSO
 enforcement, just-in-time provisioning, SCIM), because every sign-in runs through it. It checks
-the entitlement where it runs. The entitlement read (`hasFeature`, `getEntitlement`) moves from
-`ee/entitlements.ts` to `src/lib/` with that feature; until then no core code may call it.
+the entitlement where it runs. The entitlement read (`hasFeature`, `getEntitlement`) is in
+`src/lib/entitlements.ts` for that reason; `ee/entitlements.ts` keeps the grant tooling.
 [`enterprise-identity.md`](./enterprise-identity.md) has the design.
 
 Never enterprise: multi-tenancy, orgs, roles, members, sharing, multi-brain, signing in (the
