@@ -18,7 +18,7 @@
 // host reads it once per connection, so that section says it is a snapshot and points at
 // `brains` for the current list.
 
-import { brainLabel, isActiveBrain, orgDisplay, type AccessibleBrain } from './orgs.ts';
+import { brainLabel, chooseBrain, orgDisplay, type AccessibleBrain } from './orgs.ts';
 
 export const SERVER_INSTRUCTIONS_LIMIT = 4096;
 
@@ -46,9 +46,10 @@ export function instructionText(raw: string): string {
 	return flat.length > MAX_NAME ? flat.slice(0, MAX_NAME - 1).trimEnd() + '…' : flat;
 }
 
-function brainLine(b: AccessibleBrain): string {
+// One brain as the section names it: label, the handle `brain` takes, org, and role.
+function brainEntry(b: AccessibleBrain): string {
 	const role = b.read_only ? 'read-only' : b.role;
-	return `- ${instructionText(brainLabel(b))} (brain: "${instructionText(b.id)}"; ${instructionText(orgDisplay(b))}; ${role})`;
+	return `${instructionText(brainLabel(b))} (brain: "${instructionText(b.id)}"; ${instructionText(orgDisplay(b))}; ${role})`;
 }
 
 const SECTION_HEAD =
@@ -68,21 +69,23 @@ export function composeInstructions(
 	if (!brains) return SERVER_INSTRUCTIONS;
 	if (brains.length === 0)
 		return SERVER_INSTRUCTIONS + '\n\nNo brain is reachable from this account yet.';
-	const active = brains.find((b) => isActiveBrain(b, activeBrainId)) ?? brains[0];
+	const active = chooseBrain(brains, { activeBrainId });
 	const others = brains.filter((b) => b !== active);
-	const lines = [`ACTIVE: ${brainLine(active).slice(2)}`];
-	if (others.length) lines.push('Also searchable with `scope: "all"`:');
-	let text = SERVER_INSTRUCTIONS + SECTION_HEAD + '\n' + lines.join('\n');
+	const more = (n: number) => (n ? `\n- and ${n} more: call brains.` : '');
+	let text =
+		SERVER_INSTRUCTIONS +
+		SECTION_HEAD +
+		'\nACTIVE: ' +
+		brainEntry(active) +
+		(others.length ? '\nAlso searchable with `scope: "all"`:' : '');
 	if (text.length > limit) return SERVER_INSTRUCTIONS;
-	for (let i = 0; i < others.length; i++) {
-		const line = '\n' + brainLine(others[i]);
-		const left = others.length - i - 1;
-		// Room for this line, and for the count of the rest if any are left after it.
-		const tail = left ? `\n- and ${left} more: call brains.`.length : 0;
-		if (text.length + line.length + tail > limit) {
-			return text + `\n- and ${others.length - i} more: call brains.`;
-		}
-		text += line;
+	let shown = 0;
+	for (const b of others) {
+		// Room for this brain, and for the count of any left after it.
+		const next = text + '\n- ' + brainEntry(b);
+		if (next.length + more(others.length - shown - 1).length > limit) break;
+		text = next;
+		shown++;
 	}
-	return text;
+	return text + more(others.length - shown);
 }

@@ -353,6 +353,10 @@ interface TenantContext {
 	activeBrain: { id: string; label: string };
 }
 
+// How long a handshake waits for the caller's brain list before answering with the
+// static instructions.
+const HANDSHAKE_LOOKUP_MS = 1_500;
+
 // Per-request MCP session. The transport is stateless (a fresh server + transport
 // per POST, response on the same request). This carries the request env, the
 // decrypted OAuth token props (identity), and the ExecutionContext, and holds all
@@ -361,10 +365,6 @@ interface TenantContext {
 // loadActiveBrain / setActiveBrain). Server-level guidance (SERVER_INSTRUCTIONS)
 // lives in src/lib/server-instructions.ts, shared with the local runtime; a handshake
 // appends the caller's brains to it (handshakeInstructions).
-// How long a handshake waits for the caller's brain list before answering with the
-// static instructions.
-const HANDSHAKE_LOOKUP_MS = 1_500;
-
 class McpSession {
 	readonly env: Env;
 	readonly props: McpProps | undefined;
@@ -876,8 +876,11 @@ class McpSession {
 	// static text rather than holding the connection open.
 	async handshakeInstructions(): Promise<string> {
 		const lookup = (async () => {
-			await this.loadActiveBrain();
-			return composeInstructions(await this.listAccessibleBrainsForCaller(), this.activeBrainId);
+			const [brains] = await Promise.all([
+				this.listAccessibleBrainsForCaller(),
+				this.loadActiveBrain()
+			]);
+			return composeInstructions(brains, this.activeBrainId);
 		})();
 		return withFallback(lookup, HANDSHAKE_LOOKUP_MS, SERVER_INSTRUCTIONS, (err) =>
 			console.warn(`[instructions] ${err instanceof Error ? err.message : String(err)}`)
@@ -1183,10 +1186,10 @@ const mcpApiHandler = {
 		const session = new McpSession(env, props, ctx);
 		try {
 			// `initialize`, `ping` and notifications are answered from the static tool
-			// surface, so they skip the KV read, the tenant resolution, the
-			// installation-token mint and the index freshness check that discovering a
-			// brain's own `tools/` pages costs. The handshake is the request a user
-			// cannot retry past.
+			// surface, so they skip the tenant resolution, the installation-token mint
+			// and the index freshness check that discovering a brain's own `tools/` pages
+			// costs. The handshake is the request a user cannot retry past; its one
+			// lookup, the caller's brain list, is bounded (handshakeInstructions).
 			if (needsBrainPreamble(peek)) {
 				await session.loadActiveBrain();
 				await session.loadCustomTools();

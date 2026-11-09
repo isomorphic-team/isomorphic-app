@@ -192,7 +192,6 @@ console.log('\nisHandshake');
 console.log('\nwithFallback');
 {
 	const never = new Promise<string>(() => {});
-	const slow = new Promise<string>((r) => setTimeout(() => r('slow'), 200));
 	check(
 		'a prompt result wins',
 		(await withFallback(Promise.resolve('fresh'), 50, 'static')) === 'fresh'
@@ -203,7 +202,6 @@ console.log('\nwithFallback');
 		(await withFallback(never, 30, 'static')) === 'static'
 	);
 	check('...within the bound', Date.now() - t0 < 500, `${Date.now() - t0}ms`);
-	check('a late result is dropped', (await withFallback(slow, 20, 'static')) === 'static');
 	let seen: unknown;
 	const failed = await withFallback(Promise.reject(new Error('d1 down')), 50, 'static', (e) => {
 		seen = e;

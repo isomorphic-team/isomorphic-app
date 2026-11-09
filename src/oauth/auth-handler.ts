@@ -135,7 +135,7 @@ export const authHandler = {
 			if (!state || !(await env.OAUTH_KV.get(`pending_link:${state}`))) {
 				return linkPage(
 					'Link expired',
-					'This linking link is invalid or has expired. Start again from Connected accounts in Claude.',
+					'This linking link is invalid or has expired. Start again from Connected accounts in the Isomorphic app.',
 					400
 				);
 			}
@@ -150,7 +150,7 @@ export const authHandler = {
 			if (!pendingJson) {
 				return linkPage(
 					'Link expired',
-					'This linking session expired or was already used. Start again from Connected accounts in Claude.',
+					'This linking session expired or was already used. Start again from Connected accounts in the Isomorphic app.',
 					400
 				);
 			}
@@ -209,7 +209,7 @@ export const authHandler = {
 					joined
 						? ` That address had a pending invitation, so you have joined ${joined === 1 ? 'that organization' : 'those organizations'} too.`
 						: ''
-				} Return to Claude: all your brains are now reachable from either sign-in.`
+				} Return to your AI assistant: all your brains are now reachable from either sign-in.`
 			);
 		}
 

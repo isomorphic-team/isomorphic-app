@@ -25,23 +25,16 @@
 //      Without it a host renders nothing; with one on a plain tool, every call
 //      renders a widget.
 //   6. Other tool-surface fields a host reads: a description longer than
-//      TOOL_DESCRIPTION_LIMIT (Claude Code cuts it) or naming one host (HOST_NAMES), no `execution` field in tools/list
+//      TOOL_DESCRIPTION_LIMIT (Claude Code cuts it), no `execution` field in tools/list
 //      (claude.ai web refuses the whole connector over it), and the retry guidance
 //      on the three write tools, which must name the failure class ("FAILS WITHOUT
 //      A RESULT", a gateway error) rather than only a timeout, because a caller
 //      does not apply "times out" guidance to a 502.
 
-import { readFileSync, readdirSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
 import { Client } from '@modelcontextprotocol/client';
 import { McpServer, InMemoryTransport } from '@modelcontextprotocol/server';
 
-import {
-	annotationProblems,
-	HOST_NAMES,
-	TOOL_DESCRIPTION_LIMIT,
-	toolAnnotations
-} from '../src/lib/tool-annotations.ts';
+import { annotationProblems, toolAnnotations } from '../src/lib/tool-annotations.ts';
 import { planCustomTools } from '../src/lib/custom-tools.ts';
 import { registerAnalyticsTools } from '../src/tools/analytics.ts';
 import { registerBrainApp, BRAIN_APP_URI } from '../src/tools/apps.ts';
@@ -56,20 +49,17 @@ import { registerMemberTools } from '../src/tools/members.ts';
 import { registerOrgOnboardingTools } from '../src/tools/org-onboarding.ts';
 
 import { checker } from './check.ts';
-import { registeredWidgetToolNames } from './doc-refs.ts';
+import {
+	registeredWidgetToolNames,
+	TOOL_DESCRIPTION_LIMIT,
+	toolRegistrationSources
+} from './doc-refs.ts';
 
 const { check, done } = checker('annotation checks');
 
 // Every registration site: src/tools/, plus the tools registered inline in the two
 // runtimes.
-const toolsDir = fileURLToPath(new URL('../src/tools/', import.meta.url));
-const SOURCES = [
-	...readdirSync(toolsDir)
-		.filter((f) => f.endsWith('.ts'))
-		.map((f) => toolsDir + f),
-	fileURLToPath(new URL('../src/worker.ts', import.meta.url)),
-	fileURLToPath(new URL('../src/local.ts', import.meta.url))
-].map((file) => ({ file, src: readFileSync(file, 'utf8') }));
+const SOURCES = toolRegistrationSources();
 const WIDGET_TOOLS = new Set(SOURCES.flatMap(({ src }) => registeredWidgetToolNames(src)));
 
 // The `ui` half of a tool's `_meta`, or {} when it has none.
@@ -249,12 +239,6 @@ const listed = new Set<string>();
 		`every description fits in ${TOOL_DESCRIPTION_LIMIT} characters`,
 		long.length === 0,
 		long.map((t) => `${t.name} (${t.description?.length})`).join(', ')
-	);
-	const hostBound = tools.filter((t) => HOST_NAMES.test(t.description ?? ''));
-	check(
-		'no description names a specific host',
-		hostBound.length === 0,
-		hostBound.map((t) => `${t.name}: ${t.description?.match(HOST_NAMES)?.[0]}`).join(', ')
 	);
 	for (const name of ['write_page', 'move_page', 'delete_page']) {
 		const description = tools.find((t) => t.name === name)?.description ?? '';

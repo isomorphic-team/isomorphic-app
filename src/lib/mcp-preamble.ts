@@ -98,6 +98,11 @@ export function describeRequest(
  * from the static surface. Conservative in both unknown directions: an
  * unparsed body and an unrecognised method both mean yes.
  */
+export function needsBrainPreamble(peek: JsonRpcPeek): boolean {
+	if (!peek.parsed) return true;
+	return !peek.methods.every((m) => BRAIN_FREE_METHODS.has(m) || isNotification(m));
+}
+
 /**
  * Whether this request is a handshake: `initialize`, or `server/discover` on the
  * 2026-07-28 revision. Its result carries the server instructions, so it is the one
@@ -106,11 +111,6 @@ export function describeRequest(
  */
 export function isHandshake(peek: JsonRpcPeek): boolean {
 	return peek.methods.some((m) => m === 'initialize' || m === 'server/discover');
-}
-
-export function needsBrainPreamble(peek: JsonRpcPeek): boolean {
-	if (!peek.parsed) return true;
-	return !peek.methods.every((m) => BRAIN_FREE_METHODS.has(m) || isNotification(m));
 }
 
 /**

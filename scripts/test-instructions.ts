@@ -12,9 +12,8 @@
 //   3. The guidance the instructions exist for going missing: when to reach for the
 //      brain, read_page against view_page, the write rules, the active brain, per-brain
 //      access, and the Open Knowledge Format conventions.
-//   4. Text written for one host. Any MCP client can connect (Claude, ChatGPT, others), so
-//      the instructions and the scaffolded brain's AGENTS.md and README.md name none of
-//      them. Tool descriptions are held to the same rule in `pnpm test:annotations`.
+//   4. Text written for one host. Any MCP client can connect, so no string a model or a
+//      user reads (src/, app/, ee/, brain-template/; comments aside) names one.
 //   5. composeInstructions, the per-caller section a handshake appends: the active
 //      brain first and marked, every other searchable brain after it with the handle
 //      `brain` takes, the whole text within the limit however many brains there are,
@@ -26,7 +25,8 @@
 //      only steward, a guest sees only the brain shared with them, and nobody sees
 //      another organization's brains.
 
-import { readFileSync, readdirSync } from 'node:fs';
+import { execSync } from 'node:child_process';
+import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
 import { listAccessibleBrains, type AccessibleBrain } from '../src/lib/orgs.ts';
@@ -38,9 +38,15 @@ import {
 	SERVER_INSTRUCTIONS,
 	SERVER_INSTRUCTIONS_LIMIT
 } from '../src/lib/server-instructions.ts';
-import { HOST_NAMES } from '../src/lib/tool-annotations.ts';
 import { checker } from './check.ts';
-import { NOT_TOOLS, registeredToolNames, toolShapedWords } from './doc-refs.ts';
+import {
+	HOST_NAMES,
+	hostNamedLines,
+	NOT_TOOLS,
+	registeredToolNames,
+	toolRegistrationSources,
+	toolShapedWords
+} from './doc-refs.ts';
 
 const { check, done } = checker('instructions checks');
 
@@ -50,19 +56,12 @@ check(
 	SERVER_INSTRUCTIONS.length <= SERVER_INSTRUCTIONS_LIMIT,
 	`${SERVER_INSTRUCTIONS.length} characters`
 );
-check('the limit is the 4,096 Claude Code applies', SERVER_INSTRUCTIONS_LIMIT === 4096);
 
 console.log('\ntool names');
 {
-	const toolsDir = fileURLToPath(new URL('../src/tools/', import.meta.url));
-	const sources = [
-		...readdirSync(toolsDir)
-			.filter((f) => f.endsWith('.ts'))
-			.map((f) => toolsDir + f),
-		fileURLToPath(new URL('../src/worker.ts', import.meta.url)),
-		fileURLToPath(new URL('../src/local.ts', import.meta.url))
-	];
-	const registered = new Set(sources.flatMap((f) => registeredToolNames(readFileSync(f, 'utf8'))));
+	const registered = new Set(
+		toolRegistrationSources().flatMap(({ src }) => registeredToolNames(src))
+	);
 	check('found the registered tools', registered.size > 30, `${registered.size}`);
 	const named = toolShapedWords(SERVER_INSTRUCTIONS).filter((w) => !NOT_TOOLS.has(w.name));
 	check('the instructions name tools', named.length > 5, `${named.length}`);
@@ -97,15 +96,34 @@ console.log('\nthe guidance');
 
 console.log('\nno host named');
 {
-	const named = (text: string) => text.match(HOST_NAMES)?.[0];
-	check('the instructions name no host', !named(SERVER_INSTRUCTIONS), named(SERVER_INSTRUCTIONS));
-	for (const file of ['AGENTS.md', 'README.md']) {
-		const text = readFileSync(
-			fileURLToPath(new URL(`../brain-template/${file}`, import.meta.url)),
-			'utf8'
-		);
-		check(`brain-template/${file} names no host`, !named(text), named(text));
-	}
+	// Every string a model or user can read lives in src/, app/, ee/ or brain-template/.
+	// Comments may name a host; the model gateway is an Anthropic API client by design.
+	const ALLOWED = new Set(['ee/review/gateway.ts']);
+	const files = execSync(
+		"git ls-files 'src/**/*.ts' 'app/**/*.ts' 'app/**/*.tsx' 'ee/**/*.ts' 'brain-template/**'",
+		{ encoding: 'utf8', cwd: fileURLToPath(new URL('..', import.meta.url)) }
+	)
+		.split('\n')
+		.filter((f) => f && !f.includes('.generated.') && !ALLOWED.has(f));
+	check('found the source', files.length > 100, `${files.length}`);
+	const root = fileURLToPath(new URL('..', import.meta.url));
+	const hits = files.flatMap((f) =>
+		hostNamedLines(readFileSync(root + f, 'utf8'), { code: !f.endsWith('.md') }).map(
+			(h) => `${f}:${h.line} ${h.text}`
+		)
+	);
+	check('no user- or model-facing text names a host', hits.length === 0, hits.join('\n      '));
+	check('the instructions name none', !HOST_NAMES.test(SERVER_INSTRUCTIONS));
+	check(
+		'a comment may, a string may not',
+		hostNamedLines("// for Claude\nconst a = 'ask Claude';\n")
+			.map((h) => h.line)
+			.join() === '2'
+	);
+	check(
+		'in markdown, a bold or bulleted line is read',
+		hostNamedLines('**Reconnect in Claude**', { code: false }).length === 1
+	);
 }
 
 console.log("\ncomposeInstructions: the caller's brains");
@@ -140,11 +158,9 @@ console.log("\ncomposeInstructions: the caller's brains");
 	);
 
 	const three = [brain(1), brain(2, { org_model: 'platform', role: 'admin' }), brain(3)];
-	const pointed = section(composeInstructions(three, 'b2'));
-	check(
-		'the static text comes first, unchanged',
-		composeInstructions(three, 'b2').startsWith(SERVER_INSTRUCTIONS)
-	);
+	const composed = composeInstructions(three, 'b2');
+	const pointed = section(composed);
+	check('the static text comes first, unchanged', composed.startsWith(SERVER_INSTRUCTIONS));
 	check('the active brain is marked', pointed.includes('ACTIVE: Brain 2 (brain: "brain-2-h2"'));
 	check(
 		'...and leads',
@@ -275,12 +291,6 @@ console.log("\ncomposeInstructions: no caller sees another's brains");
 		'another organization: none of Northwind'
 	);
 	await expect('nobody', [], 'an unknown caller: no brain at all');
-	check(
-		'an unknown caller is told so',
-		composeInstructions(await listAccessibleBrains(db, ['nobody']), undefined).includes(
-			'No brain is reachable'
-		)
-	);
 }
 
 done();

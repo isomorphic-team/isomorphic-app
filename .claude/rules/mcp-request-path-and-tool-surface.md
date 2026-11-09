@@ -102,9 +102,9 @@ not the `TOOL_KINDS` axis: `edit_page` is read-only here (it opens the editor; t
 `TOOL_DESCRIPTION_LIMIT` (4096), so the instructions hold only what no one tool's description
 can: when to reach for the brain, how the tools relate, and the brain's conventions. Detail
 about one tool goes in that tool's description. `pnpm test:instructions` and
-`pnpm test:annotations` fail past either limit. Any MCP client can connect, so neither names a host:
-both batteries fail on a name in `HOST_NAMES` (`src/lib/tool-annotations.ts`), as does
-`brain-template/`. User-facing strings say "your AI assistant". A convention the model cannot infer is stated
+`pnpm test:annotations` fail past either limit. Any MCP client can connect, so no string a model or user reads names one:
+`pnpm test:instructions` scans `src/`, `app/`, `ee/` and `brain-template/` for `HOST_NAMES`
+(`scripts/doc-refs.ts`), comments aside. User-facing strings say "your AI assistant". A convention the model cannot infer is stated
 in three places, in descending reach: server instructions, the tool's own description or
 argument, and `brain-template/AGENTS.md`. A host's tool search ranks by description text, so a
 description that mentions another tool by name can outrank that tool: `view_page` once said

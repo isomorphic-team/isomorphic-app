@@ -72,12 +72,3 @@ export function annotationProblems(tool: {
 	}
 	return problems;
 }
-
-// Claude Code shows the model only this many characters of a tool description when the tool
-// loads up front (tool search off, or the server exempt from deferral); past it, the text is
-// cut. `pnpm test:annotations` holds every listed tool to it.
-export const TOOL_DESCRIPTION_LIMIT = 4096;
-
-// Any MCP client can connect, so text the model or the user reads names none of them.
-// Scanned for in the server instructions, tool descriptions and the brain template.
-export const HOST_NAMES = /\b(Claude|ChatGPT|OpenAI|Anthropic|Copilot|Gemini|Cursor)\b/;

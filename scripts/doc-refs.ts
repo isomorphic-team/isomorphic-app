@@ -6,7 +6,9 @@
 
 // POSIX throughout: every path here is a git path (`git ls-files` prints forward
 // slashes on every platform), and `node:path` would answer in backslashes on Windows.
+import { readFileSync, readdirSync } from 'node:fs';
 import { posix } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 const { dirname, join, matchesGlob, normalize } = posix;
 
@@ -251,4 +253,40 @@ export function designStatus(markdown: string): string | null {
 		return DESIGN_STATUSES.find((s) => lead.startsWith(s)) ?? null;
 	}
 	return null;
+}
+
+/** Every file that registers first-party tools: src/tools/, plus the two runtimes. */
+export function toolRegistrationSources(): { file: string; src: string }[] {
+	const toolsDir = fileURLToPath(new URL('../src/tools/', import.meta.url));
+	return [
+		...readdirSync(toolsDir)
+			.filter((f) => f.endsWith('.ts'))
+			.map((f) => toolsDir + f),
+		fileURLToPath(new URL('../src/worker.ts', import.meta.url)),
+		fileURLToPath(new URL('../src/local.ts', import.meta.url))
+	].map((file) => ({ file, src: readFileSync(file, 'utf8') }));
+}
+
+// Claude Code shows the model only this many characters of a tool description when the
+// tool loads up front (tool search off, or the server exempt from deferral).
+export const TOOL_DESCRIPTION_LIMIT = 4096;
+
+// Any MCP client can connect, so text a model or a user reads names none of them.
+export const HOST_NAMES = /\b(Claude|ChatGPT|OpenAI|Anthropic|Copilot|Gemini|Cursor)\b/;
+
+/**
+ * Lines that name a host, with their line numbers. In code, comments are skipped; prose
+ * (`code: false`, for markdown) is read whole, since a line there may start with `*`.
+ */
+export function hostNamedLines(
+	source: string,
+	{ code = true }: { code?: boolean } = {}
+): { line: number; text: string }[] {
+	const out: { line: number; text: string }[] = [];
+	source.split('\n').forEach((raw, i) => {
+		const text = raw.trim();
+		if (code && /^(\/\/|\*|\/\*|\{\/\*)/.test(text)) return;
+		if (HOST_NAMES.test(raw.replace(/\s\/\/ .*$/, ''))) out.push({ line: i + 1, text });
+	});
+	return out;
 }
