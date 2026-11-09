@@ -249,9 +249,10 @@ vendor's model, and verified-email linking joins them. Moving out is the expensi
 - **Bootstrapping.** The org admin signs in by magic link to verify the domain and connect the
   provider. Enforcement must refuse to turn on until a test sign-in through the provider has
   succeeded, or the admin can lock the org out.
-- **Unverified against a real tenant.** Whether an admin can consent to the multi-tenant
-  application before its publisher is verified, and the whole sign-in end to end: `pnpm
-test:sso` pins the decisions, not the round trip through a directory.
+- **Consent from another tenant.** The sign-in has run end to end against a real tenant, the
+  one that registers the application, where Microsoft labels the application unverified.
+  Whether another tenant's admin can consent to it before its publisher is verified is
+  untested; publisher verification is on the roadmap.
 - **An entitlement that lapses turns enforcement off.** An unentitled org's domains route and
   enforce nothing, so its addresses get the magic link again.
 - **The resolver sees the domain.** Verification asks Cloudflare's public resolver

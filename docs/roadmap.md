@@ -651,6 +651,27 @@ Reconsider at the same time: Auth.js is on database sessions, which is why the `
 callback has to copy `user.id` and why the bridge re-reads the session per request. JWT
 sessions would drop both.
 
+# TODO: publisher verification for the Entra application
+
+A deployment's multi-tenant Entra application
+([`docs/design/enterprise-identity.md`](design/enterprise-identity.md), D4) shows as
+**unverified** on Microsoft's consent screen until its publisher is verified. Beyond the
+badge, a customer tenant's default consent policy does not let users consent to an
+unverified multi-tenant application, so each customer's admin has to grant consent first.
+
+Verifying takes, in the Entra application's registration:
+
+- **A Microsoft AI Cloud Partner Program ID** (formerly MPN) for the operator's business,
+  entered under Branding & properties → Publisher verification.
+- **A publisher domain** that is a verified custom domain in the tenant that registers the
+  application, matching the domain of the Partner Program account's email.
+- **Terms of service and privacy statement URLs** under Branding & properties, which the
+  consent screen links to.
+
+This is a per-deployment operator step, not code: a self-hoster registers and verifies their
+own application. The deployment docs should list it next to `AUTH_ENTRA_CLIENT_ID` and
+`AUTH_ENTRA_CLIENT_SECRET`.
+
 # TODO: branch-protected brains, what is left
 
 Built: a write to a brain whose default branch is protected opens a pull request instead of
