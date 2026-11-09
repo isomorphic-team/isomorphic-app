@@ -149,7 +149,12 @@ jobs:
         run: pnpm exec wrangler versions upload --dry-run --outdir "$RUNNER_TEMP/preview/bundle"
 
       - name: Collect the artifact
-        run: cp -R migrations "$RUNNER_TEMP/preview/migrations"
+        run: |
+          cp -R migrations "$RUNNER_TEMP/preview/migrations"
+          # A branch from before the index database existed has no such folder.
+          if [ -d migrations-index ]; then
+            cp -R migrations-index "$RUNNER_TEMP/preview/migrations-index"
+          fi
 
       - uses: actions/upload-artifact@v7
         with:
@@ -157,6 +162,7 @@ jobs:
           path: |
             ${{ runner.temp }}/preview/bundle/worker.js
             ${{ runner.temp }}/preview/migrations/*.sql
+            ${{ runner.temp }}/preview/migrations-index/*.sql
           if-no-files-found: error
           retention-days: 3
 
@@ -244,6 +250,23 @@ jobs:
           [ -n "$id" ] || { echo "::error::Could not create or find D1 database $DATABASE."; exit 1; }
           echo "id=$id" >> "$GITHUB_OUTPUT"
 
+      # The content index's database, also one per pull request, so a preview searches
+      # with the engine production uses and its index schema is the branch's own.
+      - name: Ensure the pull request's index database
+        id: indexdb
+        if: steps.guard.outputs.ready == 'true'
+        env:
+          DATABASE: ${{ steps.plan.outputs.index_database }}
+        run: |
+          set -euo pipefail
+          id=$(pnpm exec wrangler d1 list --json | pnpm exec tsx scripts/preview.ts database-id "$DATABASE")
+          if [ -z "$id" ]; then
+            pnpm exec wrangler d1 create "$DATABASE"
+            id=$(pnpm exec wrangler d1 list --json | pnpm exec tsx scripts/preview.ts database-id "$DATABASE")
+          fi
+          [ -n "$id" ] || { echo "::error::Could not create or find D1 database $DATABASE."; exit 1; }
+          echo "id=$id" >> "$GITHUB_OUTPUT"
+
       # A Preview reads only the `previews` block of the config, never the top level,
       # so the preview profile is generated as usual and then copied into that block.
       - name: Generate the preview's config
@@ -259,6 +282,8 @@ jobs:
           APP_SLUG: ${{ vars.PREVIEW_APP_SLUG }}
           D1_DATABASE_NAME: ${{ steps.plan.outputs.database }}
           CF_D1_DATABASE_ID: ${{ steps.db.outputs.id }}
+          INDEX_D1_DATABASE_NAME: ${{ steps.plan.outputs.index_database }}
+          CF_INDEX_D1_DATABASE_ID: ${{ steps.indexdb.outputs.id }}
           CF_OAUTH_KV_ID: ${{ vars.PREVIEW_CF_OAUTH_KV_ID }}
           CF_OAUTH_KV_PREVIEW_ID: ${{ vars.PREVIEW_CF_OAUTH_KV_ID }}
         run: |
@@ -271,12 +296,19 @@ jobs:
         if: steps.guard.outputs.ready == 'true'
         env:
           DATABASE: ${{ steps.plan.outputs.database }}
+          INDEX_DATABASE: ${{ steps.plan.outputs.index_database }}
         run: |
           set -euo pipefail
-          rm -rf migrations
-          mkdir migrations
+          rm -rf migrations migrations-index
+          mkdir migrations migrations-index
           cp "$RUNNER_TEMP"/artifact/migrations/*.sql migrations/
           pnpm exec wrangler d1 migrations apply "$DATABASE" --remote --config wrangler.preview.json
+          # Absent on a branch from before the index database existed: its Worker never
+          # reads INDEX_DB, so the database stays empty.
+          if compgen -G "$RUNNER_TEMP/artifact/migrations-index/*.sql" > /dev/null; then
+            cp "$RUNNER_TEMP"/artifact/migrations-index/*.sql migrations-index/
+            pnpm exec wrangler d1 migrations apply "$INDEX_DATABASE" --remote --config wrangler.preview.json
+          fi
 
       # Secrets come from the preview Worker's Previews base config, copied into a
       # Preview when it is created. PUBLIC_BASE_URL is set from the planned origin;
@@ -387,7 +419,10 @@ jobs:
           database=$(printf '%s\n' "$plan" | sed -n 's/^database=//p')
           pnpm exec wrangler preview delete --name "$name" --worker-name "$PREVIEW_WORKER_NAME" --skip-confirmation \
             || echo "::notice::No Preview $name was deleted. It may never have existed; Cloudflare also evicts the oldest Preview at the per-Worker limit."
-          id=$(pnpm exec wrangler d1 list --json | pnpm exec tsx scripts/preview.ts database-id "$database")
-          if [ -n "$id" ]; then
-            pnpm exec wrangler d1 delete "$database" --skip-confirmation
-          fi
+          index_database=$(printf '%s\n' "$plan" | sed -n 's/^index_database=//p')
+          for db in "$database" "$index_database"; do
+            id=$(pnpm exec wrangler d1 list --json | pnpm exec tsx scripts/preview.ts database-id "$db")
+            if [ -n "$id" ]; then
+              pnpm exec wrangler d1 delete "$db" --skip-confirmation
+            fi
+          done
