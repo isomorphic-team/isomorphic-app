@@ -125,6 +125,27 @@ const BUDGET = 50;
 		'summary: counts every verdict',
 		s.total === 4 && s.owned === 2 && s.elsewhere === 1 && s.absent === 1
 	);
+	check('summary: two of four probes put the page in the top band', s.inTopBand === 2);
+	check(
+		'summary: MRR counts first place as 1 and a missing page as 0',
+		s.mrr === 0.5,
+		String(s.mrr)
+	);
+	const second = summarizeProbes([
+		scoreProbe('q5', 'wiki/b.md', [hit('wiki/a.md'), hit('wiki/b.md')], BUDGET),
+		scoreProbe(
+			'q6',
+			'wiki/d.md',
+			[hit('wiki/a.md'), hit('wiki/b.md'), hit('wiki/c.md'), hit('wiki/d.md')],
+			BUDGET
+		)
+	]);
+	check(
+		'summary: MRR averages the reciprocal ranks, and fourth place is outside the band',
+		Math.abs(second.mrr - (1 / 2 + 1 / 4) / 2) < 1e-9 && second.inTopBand === 1,
+		JSON.stringify({ mrr: second.mrr, inTopBand: second.inTopBand })
+	);
+	check('summary: no probes means an MRR of 0, not NaN', summarizeProbes([]).mrr === 0);
 	check(
 		'summary: the rank histogram is the headline number',
 		s.positions.find((p) => p.position === 1)?.count === 2 &&

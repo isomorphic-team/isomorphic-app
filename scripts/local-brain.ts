@@ -57,7 +57,18 @@ export async function openFolderAsBrain(source: string, rootName?: string): Prom
 		const brainId = `${repoArgs.owner}/${repoArgs.repo}`;
 		const { db } = localD1();
 		const config = await loadBrainConfig(store, repoArgs);
-		await ensureFresh(db, store, repoArgs, brainId, config);
+		// One read indexes at most REINDEX_PAGE_BUDGET pages and leaves the rest for the
+		// next read. A report is a single pass, so read until a pass adds nothing.
+		const count = async () =>
+			(await db
+				.prepare('SELECT COUNT(*) AS n FROM brain_pages WHERE brain_id = ?1')
+				.bind(brainId)
+				.first<{ n: number }>())!.n;
+		for (let before = -1, now = 0; now !== before;) {
+			before = now;
+			await ensureFresh(db, store, repoArgs, brainId, config);
+			now = await count();
+		}
 		return { db, store, repoArgs, brainId, config, cleanup };
 	} catch (err) {
 		await cleanup();

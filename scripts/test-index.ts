@@ -13,7 +13,7 @@
 //   pnpm test:index
 
 import { DatabaseSync } from 'node:sqlite';
-import { mkdtempSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -31,6 +31,7 @@ import { DEFAULT_BRAIN_CONFIG, type BrainConfig } from '../src/lib/brain-policy.
 import { pageTitle } from '../src/lib/wiki.ts';
 
 import { checker } from './check.ts';
+import { openFolderAsBrain } from './local-brain.ts';
 import { fakeGithub, type FakePage } from './fake-github.ts';
 
 const { check, done } = checker('content-index checks');
@@ -873,6 +874,33 @@ console.log('\nDerived state keyed by brain_id: the 0011 re-key');
 		JSON.stringify(keys('usage_daily')) === JSON.stringify(['', 'brain-acme-wiki']),
 		JSON.stringify(keys('usage_daily'))
 	);
+}
+
+// ---------- the offline report loader (scripts/local-brain.ts) ----------
+//
+// probe:report, consolidate:report and search comparisons open a folder with
+// openFolderAsBrain. One read indexes at most REINDEX_PAGE_BUDGET pages, and a report
+// makes no second read, so the loader has to keep reading until the whole folder is in.
+{
+	const folder = mkdtempSync(join(tmpdir(), 'loader-'));
+	const pages = REINDEX_PAGE_BUDGET + 5;
+	for (let i = 0; i < pages; i++)
+		writeFileSync(join(folder, `page-${i}.md`), `# Page ${i}\n\nBody ${i}.\n`);
+	const brain = await openFolderAsBrain(folder);
+	try {
+		const n = (await brain.db
+			.prepare('SELECT COUNT(*) AS n FROM brain_pages WHERE brain_id = ?1')
+			.bind(brain.brainId)
+			.first<{ n: number }>())!.n;
+		check(
+			'the report loader indexes a folder larger than one reindex pass',
+			n === pages,
+			`${n} of ${pages} pages indexed`
+		);
+	} finally {
+		await brain.cleanup();
+		rmSync(folder, { recursive: true, force: true });
+	}
 }
 
 done();

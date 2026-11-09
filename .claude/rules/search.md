@@ -35,8 +35,9 @@ ORDERS or DROPS a result is in the pure `src/lib/search.ts` (`pnpm test:search`)
   be pinned by a pure test. Read `docs/references.md` before reopening it. Swapping phase 1 for
   FTS5 would touch neither ranking nor its tests.
 - **Probe against a real brain before believing a ranking change.** `pnpm probe:report <folder>
-  <probes.json>` runs probes through the real `searchIndex` offline; a constructed corpus only
-  confirms what its author intended. `search_pages` also takes `expect` (a path), which reports
+  <probes.json>` runs probes through the real `searchIndex` offline and reports how many
+  landed in the top band and the mean reciprocal rank (`summarizeProbes`), the numbers to
+  compare two runs by; a constructed corpus only confirms what its author intended. `search_pages` also takes `expect` (a path), which reports
   where that page ranked and what beat it (`scoreProbe` in `src/lib/probe.ts`,
   `pnpm test:probe`). A probe that hits the budget is inconclusive, not failed.
 
