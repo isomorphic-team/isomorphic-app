@@ -21,8 +21,9 @@ Licensed under `ee/LICENSE`, not the AGPL. Placement rule and history:
 - **An enterprise feature does not have to live in `ee/`** (2026-11-05,
   `docs/design/open-source-boundary.md`). The entitlement read is in the core, under the AGPL,
   so core code can check it without calling into `ee/`. The grant tooling (`entitlementSql`)
-  stays in `ee/entitlements.ts`. No core feature checks the entitlement yet; enterprise
-  identity will be the first.
+  stays in `ee/entitlements.ts`. Enterprise identity is the one core feature that checks it
+  (`resolveSignInRoute` in `src/lib/sso.ts`, and the directory callback in
+  `src/auth/config.ts`).
 - **Every model request goes through `ee/review/gateway.ts`.** Text goes to Claude Haiku first
   (`ANTHROPIC_API_KEY`, the official SDK) and falls back to Luna (`OPENROUTER_API_KEY`) on a
   refusal, 429, 402 or 529. Every OpenRouter request carries `ZDR_PROVIDER` (`zdr: true`,

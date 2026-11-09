@@ -1,7 +1,7 @@
 ---
 paths:
   - "src/worker.ts"
-  - "src/lib/{orgs,storage-connections,brain-move,org-connect,invites,provision,identity,static-tenant,signin-email,scaffold-core,org-domains,sso}.ts"
+  - "src/lib/{orgs,storage-connections,brain-move,org-connect,invites,provision,identity,static-tenant,signin-email,scaffold-core,org-domains,sso,sso-cookie}.ts"
   - "src/tools/{brains,brain-access,members,org-onboarding,connected-accounts}.ts"
   - "src/oauth/**"
   - "src/auth/**"
@@ -10,8 +10,8 @@ paths:
   - "app/core/nav.ts"
   - "app/components/{Breadcrumb,Destinations,RoleSelect,ConnectedAccountsSection}.tsx"
   - "app/views/{Members,BrainAccess,ShareBrain,InviteMember,AddBrain,Brains,ConnectAccount,Settings,More}View.tsx"
-  - "scripts/test-{access,invites,scope,email,sso}.ts"
-  - "scripts/onboard-org.ts"
+  - "scripts/test-{access,invites,scope,email,sso,signin}.ts"
+  - "scripts/{onboard-org,sso,sso-sql}.ts"
 ---
 
 # Identity, orgs, brains, and who can reach what
@@ -55,26 +55,38 @@ through Resend from `src/auth/config.ts`. Auth.js's stock template (hostname sub
 button) was filed as spam. Keep the product name in the subject and From line, the requested
 address, where the link goes, the expiry, and a plain-text part with the same words.
 
-## Enterprise identity (built, not wired)
+## Enterprise identity: directory sign-in
 
-Design and what is still open: `docs/design/enterprise-identity.md`. `pnpm test:sso`.
-Nothing calls these yet: no tool, no sign-in route, and `buildAuthConfig` registers only the
-magic link.
+Design and what is still open: `docs/design/enterprise-identity.md`. `pnpm test:sso` pins the
+decisions; `pnpm test:signin` drives a directory sign-in through real Auth.js against a
+stubbed tenant that issues signed ID tokens. No real directory has been signed in through.
+
+An org signs in through its Microsoft Entra directory when it has the `enterprise`
+entitlement, a verified domain and an identity connection, and the deployment has
+`AUTH_ENTRA_CLIENT_ID` and `AUTH_ENTRA_CLIENT_SECRET`. **There is no tool for any of it:** an
+operator sets an org up with `pnpm sso` (`scripts/sso.ts`, SQL in `scripts/sso-sql.ts`).
+Enforcement has a column (`org_domains.sso_enforced`) and its rules, and nothing sets it.
 
 - **A verified domain decides how its addresses sign in** (`src/lib/org-domains.ts`, table
   `org_domains`). Proof is a TXT record carrying the org's own challenge, read over DNS over
   HTTPS. `currentVerifiedDomain` looks a stale one up again before it routes; only a conclusive
   "gone" unverifies (`afterTxtCheck`), a resolver failure changes nothing.
 - **`resolveSignInRoute` (`src/lib/sso.ts`) is home-realm discovery**, and `chooseSignInRoute`
-  is its pure rule. It checks the `enterprise` entitlement from the core: an unentitled org's
-  domains route and enforce nothing.
+  is its pure rule. It checks the entitlement from the core: an unentitled org's domains route
+  and enforce nothing. `handleSsoRequest` (`src/auth/config.ts`) runs it on the sign-in page's
+  email POST and starts the provider sign-in for a connected domain.
 - **An identity connection is a provider and a tenant id, never a credential**
   (`identity_connections`). `entraIssuer` throws on anything but a tenant id, so
   `entraProvider` (`src/auth/entra.ts`) cannot be built for the `common` endpoint.
-- **`allowSsoSignIn` must pass before a provider sign-in is trusted.** It compares the token's
-  `tid` with the connected tenant and the address's domain with the org's verified domains.
-  `entraProvider` sets `allowDangerousEmailAccountLinking`, which is safe only behind that
-  check: never register the provider without it in the `signIn` callback.
+- **The provider exists only in a config built for one org** (`buildAuthConfig`'s `sso`
+  argument). The callback learns its org from a cookie signed with `AUTH_SECRET`
+  (`src/lib/sso-cookie.ts`) and is refused without it, or if the org's tenant or entitlement
+  changed since the start.
+- **The `signIn` callback decides.** For the provider it requires `checkSsoSignIn`: the
+  token's `tid` is the connected tenant and the address's domain is verified for that org.
+  `entraProvider` sets `allowDangerousEmailAccountLinking`, so a member keeps their magic-link
+  account, and that is safe only behind this check. For a magic link it refuses an address
+  whose domain is enforced (`magicLinkRefused`), when the link is requested and when it is used.
 
 ## The org model
 

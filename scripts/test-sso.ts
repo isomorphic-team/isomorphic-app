@@ -16,6 +16,12 @@
 //      tenant must be the connected one and the address's domain must be verified for that org.
 //   5. THE PROVIDER BUILT UNPINNED. It always carries one tenant's issuer, asks Graph for
 //      nothing, and cannot be built for a shared endpoint.
+//   6. A CALLBACK NAMING ITS OWN TENANT. The cookie that carries the org and tenant from the
+//      start of a sign-in to its callback reads back only if this deployment signed it and
+//      it has not expired.
+//   7. `pnpm sso` WRITING SOMETHING ELSE. Its SQL verifies a domain only when the challenge
+//      published in DNS is the one stored for that org, never while another org holds the
+//      domain, and it rejects anything that is not an org id, a domain or a tenant id.
 
 import { entraProvider } from '../src/auth/entra.ts';
 import { FEATURES } from '../src/lib/entitlements.ts';
@@ -47,13 +53,22 @@ import {
 	getIdentityConnection,
 	normalizeTenantId,
 	removeIdentityConnection,
+	magicLinkRefused,
 	resolveSignInRoute,
 	setIdentityConnection,
 	type IdentityConnection
 } from '../src/lib/sso.ts';
+import {
+	SSO_COOKIE,
+	cookieValue,
+	readSsoCookie,
+	signSsoCookie,
+	ssoSetCookie
+} from '../src/lib/sso-cookie.ts';
 import { localD1 } from '../src/local/d1-sqlite.ts';
 import { entitlementSql } from '../ee/entitlements.ts';
 import { checker } from './check.ts';
+import { isChallenge, ssoSql } from './sso-sql.ts';
 
 const { check, done } = checker('sso checks');
 
@@ -646,6 +661,222 @@ console.log('\nThe provider (5)');
 				}
 			})()
 		);
+}
+
+console.log('\nThe sign-in cookie (6)');
+{
+	const secret = 'test-secret-test-secret-test-secret-0000';
+	const cookie = { orgId: 'o1', tenantId: TENANT_A, expiresAt: NOW + 60_000 };
+	const value = await signSsoCookie(cookie, secret);
+	const read = await readSsoCookie(value, secret, NOW);
+	check(
+		'a signed cookie reads back',
+		read?.orgId === 'o1' && read.tenantId === TENANT_A && read.expiresAt === NOW + 60_000
+	);
+	check('not after it expires', (await readSsoCookie(value, secret, NOW + 60_000)) === null);
+	check('not with another secret', (await readSsoCookie(value, secret + 'x', NOW)) === null);
+	check('not with no secret', (await readSsoCookie(value, '', NOW)) === null);
+	const [payload, mac] = value.split('.') as [string, string];
+	const forgedPayload = Buffer.from(JSON.stringify({ ...cookie, tenantId: TENANT_B })).toString(
+		'base64url'
+	);
+	check(
+		'not with another tenant under the same signature',
+		(await readSsoCookie(`${forgedPayload}.${mac}`, secret, NOW)) === null
+	);
+	check(
+		'not with a truncated signature',
+		(await readSsoCookie(`${payload}.${mac.slice(0, -1)}`, secret, NOW)) === null
+	);
+	check(
+		'not unsigned',
+		(await readSsoCookie(payload, secret, NOW)) === null &&
+			(await readSsoCookie(`${payload}.`, secret, NOW)) === null
+	);
+	check('not with a third part', (await readSsoCookie(`${value}.x`, secret, NOW)) === null);
+	for (const missing of [null, undefined, '', 'garbage'])
+		check(
+			`not from ${JSON.stringify(missing)}`,
+			(await readSsoCookie(missing, secret, NOW)) === null
+		);
+	let threw = false;
+	try {
+		await signSsoCookie(cookie, '');
+	} catch {
+		threw = true;
+	}
+	check('nothing is signed without a secret', threw);
+
+	check(
+		'a cookie is found among others',
+		cookieValue(`a=1; ${SSO_COOKIE}=${value}; b=2`, SSO_COOKIE) === value
+	);
+	check('a longer name is not it', cookieValue(`x${SSO_COOKIE}=nope`, SSO_COOKIE) === null);
+	check('no header has none', cookieValue(null, SSO_COOKIE) === null);
+	const set = ssoSetCookie(value, true);
+	check(
+		'it is HttpOnly, Lax, scoped to /auth, Secure on https',
+		/; HttpOnly/.test(set) &&
+			/; SameSite=Lax/.test(set) &&
+			/; Path=\/auth;/.test(set) &&
+			/; Secure$/.test(set) &&
+			/Max-Age=900/.test(set)
+	);
+	check('not Secure on http', !/Secure/.test(ssoSetCookie(value, false)));
+	check('an empty value clears it', /Max-Age=0/.test(ssoSetCookie('', true)));
+}
+
+console.log('\nWhen a magic link is refused (3)');
+{
+	const connection = {
+		orgId: 'o1',
+		provider: 'microsoft-entra-id',
+		tenantId: TENANT_A,
+		createdAt: NOW,
+		createdBy: null
+	} as IdentityConnection;
+	const route = (ssoEnforced: boolean, c: IdentityConnection | null) =>
+		chooseSignInRoute({ domain: { ssoEnforced }, entitled: true, connection: c });
+	check('never for a magic-link route', !magicLinkRefused({ kind: 'magic-link' }));
+	check(
+		'not for a connected domain that is not enforced',
+		!magicLinkRefused(route(false, connection))
+	);
+	check('for a connected, enforced domain', magicLinkRefused(route(true, connection)));
+	check('for an enforced domain with no connection', magicLinkRefused(route(true, null)));
+	check(
+		'not when the org is not entitled',
+		!magicLinkRefused(
+			chooseSignInRoute({ domain: { ssoEnforced: true }, entitled: false, connection })
+		)
+	);
+}
+
+console.log('\npnpm sso: the SQL (7)');
+{
+	const { db: d } = localD1();
+	const run = (sql: string) => d.prepare(sql).run();
+	const throws = (f: () => unknown) => {
+		try {
+			f();
+			return false;
+		} catch {
+			return true;
+		}
+	};
+	const c1 = 'a'.repeat(40);
+	const c2 = 'b'.repeat(40);
+	await run(ssoSql({ kind: 'claim', orgId: 'o1', domain: 'Example.com', challenge: c1, now: NOW }));
+	const claimed = (await listOrgDomains(d, 'o1'))[0];
+	check(
+		'claim stores the domain normalized and unverified',
+		claimed?.domain === 'example.com' && claimed.challenge === c1 && claimed.verifiedAt === null
+	);
+
+	await run(
+		ssoSql({ kind: 'verify', orgId: 'o1', domain: 'example.com', published: [c2], now: NOW })
+	);
+	check(
+		'another challenge in DNS verifies nothing',
+		(await verifiedDomain(d, 'example.com')) === null
+	);
+	await run(
+		ssoSql({ kind: 'verify', orgId: 'o1', domain: 'example.com', published: [c2, c1], now: NOW })
+	);
+	check(
+		'its own challenge among those published verifies it',
+		(await verifiedDomain(d, 'example.com'))?.verifiedAt === NOW
+	);
+	await run(
+		ssoSql({ kind: 'verify', orgId: 'o1', domain: 'example.com', published: [c1], now: NOW + DAY })
+	);
+	const again = await verifiedDomain(d, 'example.com');
+	check(
+		'verifying again keeps the first time and records the check',
+		again?.verifiedAt === NOW && again.lastCheckedAt === NOW + DAY
+	);
+
+	await run(ssoSql({ kind: 'claim', orgId: 'o2', domain: 'example.com', challenge: c2, now: NOW }));
+	await run(
+		ssoSql({ kind: 'verify', orgId: 'o2', domain: 'example.com', published: [c2], now: NOW })
+	);
+	check(
+		'a second org cannot verify a held domain',
+		(await verifiedDomain(d, 'example.com'))?.orgId === 'o1'
+	);
+
+	await run(
+		ssoSql({ kind: 'claim', orgId: 'o1', domain: 'example.com', challenge: c2, now: NOW + DAY })
+	);
+	check(
+		'claiming again unverifies and replaces the challenge',
+		(await verifiedDomain(d, 'example.com')) === null &&
+			(await listOrgDomains(d, 'o1'))[0]?.challenge === c2
+	);
+
+	await run(ssoSql({ kind: 'connect', orgId: 'o1', tenantId: TENANT_A.toUpperCase(), now: NOW }));
+	check(
+		'connect stores the tenant lowercased',
+		(await getIdentityConnection(d, 'o1'))?.tenantId === TENANT_A
+	);
+	await run(ssoSql({ kind: 'connect', orgId: 'o1', tenantId: TENANT_B, now: NOW }));
+	check(
+		'connecting again replaces it',
+		(await getIdentityConnection(d, 'o1'))?.tenantId === TENANT_B
+	);
+	await run(ssoSql({ kind: 'disconnect', orgId: 'o1' }));
+	check('disconnect removes it', (await getIdentityConnection(d, 'o1')) === null);
+	await run(ssoSql({ kind: 'remove-domain', orgId: 'o1', domain: 'example.com' }));
+	check(
+		"remove-domain removes this org's claim only",
+		(await listOrgDomains(d, 'o1')).length === 0 && (await listOrgDomains(d, 'o2')).length === 1
+	);
+
+	check(
+		'a challenge is 40 hex characters',
+		isChallenge(c1) && !isChallenge("x' OR '1'='1") && !isChallenge(c1 + 'a')
+	);
+	check(
+		'an injected org id is rejected',
+		throws(() => ssoSql({ kind: 'disconnect', orgId: "o1'; DROP TABLE orgs; --" }))
+	);
+	check(
+		'a bad domain is rejected',
+		throws(() => ssoSql({ kind: 'remove-domain', orgId: 'o1', domain: "x.com' OR '1'='1" }))
+	);
+	check(
+		'a bad challenge is rejected',
+		throws(() =>
+			ssoSql({ kind: 'claim', orgId: 'o1', domain: 'example.com', challenge: "' --", now: NOW })
+		)
+	);
+	check(
+		'a shared endpoint is not a tenant',
+		throws(() => ssoSql({ kind: 'connect', orgId: 'o1', tenantId: 'common', now: NOW }))
+	);
+	check(
+		'verify with nothing published is rejected',
+		throws(() =>
+			ssoSql({
+				kind: 'verify',
+				orgId: 'o1',
+				domain: 'example.com',
+				published: ["' OR 1=1 --"],
+				now: NOW
+			})
+		)
+	);
+	const mixed = ssoSql({
+		kind: 'verify',
+		orgId: 'o1',
+		domain: 'example.com',
+		published: ["') OR 1=1 --", c1],
+		now: NOW
+	});
+	check(
+		'a published value that is not a challenge never reaches the SQL',
+		!mixed.includes('OR 1=1') && mixed.includes(c1)
+	);
 }
 
 done();

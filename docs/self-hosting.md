@@ -397,6 +397,32 @@ issue text and requires an explicit confirmation before posting, publishes nothi
 account, and records the reporter privately in D1 (`feedback_reports`) keyed by the opaque
 report id printed in the issue. A per-user cap of ten reports a day bounds abuse.
 
+**Directory sign-in (enterprise, optional).** An organization's people can sign in with its
+Microsoft Entra directory instead of a magic link. It runs only for an organization with the
+`enterprise` entitlement, and needs one multi-tenant Entra application for the deployment, with
+the redirect URI `<your origin>/auth/callback/microsoft-entra-id` and the delegated permissions
+`openid`, `profile` and `email`:
+
+```sh
+pnpm exec wrangler secret put AUTH_ENTRA_CLIENT_ID
+pnpm exec wrangler secret put AUTH_ENTRA_CLIENT_SECRET
+```
+
+Then, for each organization, claim its email domain, add the TXT record the command prints,
+verify it, and connect the directory's tenant id. Each command prints its SQL and writes
+nothing without `--apply`:
+
+```sh
+pnpm sso --org <org_id> --claim example.com --apply remote
+pnpm sso --org <org_id> --verify example.com --apply remote
+pnpm sso --org <org_id> --connect <tenant id> --apply remote
+```
+
+From then on an address at that domain is sent to the directory from the sign-in page, and a
+member who already signed in by magic link keeps their account. Verification asks Cloudflare's
+public DNS resolver for the domain's TXT records. There is no screen for this yet, and no way
+to require the directory for a domain.
+
 **Model consolidation (enterprise, optional).** `review_brain` with `check: "contradictions"`
 has a model compare related pages and queue the contradictions it finds as findings `validate`
 lists. It is an `ee/` feature: it runs only for an organization with the `enterprise`

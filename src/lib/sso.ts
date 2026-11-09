@@ -100,7 +100,8 @@ export async function removeIdentityConnection(db: D1Database, orgId: string): P
 
 export type SignInRoute =
 	| { kind: 'magic-link' }
-	| { kind: 'sso'; connection: IdentityConnection }
+	// `enforced`: the domain accepts no other way in.
+	| { kind: 'sso'; connection: IdentityConnection; enforced: boolean }
 	// The domain requires the provider and the org has none connected.
 	| { kind: 'refused'; reason: 'sso-not-connected' };
 
@@ -116,9 +117,18 @@ export function chooseSignInRoute(at: {
 	connection: IdentityConnection | null;
 }): SignInRoute {
 	if (!at.domain || !at.entitled) return { kind: 'magic-link' };
-	if (at.connection) return { kind: 'sso', connection: at.connection };
+	if (at.connection)
+		return { kind: 'sso', connection: at.connection, enforced: at.domain.ssoEnforced };
 	if (at.domain.ssoEnforced) return { kind: 'refused', reason: 'sso-not-connected' };
 	return { kind: 'magic-link' };
+}
+
+/**
+ * Whether a magic link is refused for an address with this route. A connected domain routes
+ * to its provider from the sign-in page, and only an enforced one refuses the link itself.
+ */
+export function magicLinkRefused(route: SignInRoute): boolean {
+	return route.kind === 'refused' || (route.kind === 'sso' && route.enforced);
 }
 
 /** Home-realm discovery: the route for the address typed on the sign-in page. */

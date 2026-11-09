@@ -24,6 +24,7 @@
 		"bootstrap": "tsx src/bootstrap.ts",
 		"onboard-org": "tsx scripts/onboard-org.ts",
 		"entitle": "tsx scripts/entitle.ts",
+		"sso": "tsx scripts/sso.ts",
 		"regen:pr": "tsx scripts/regen-pr.ts",
 		"gen:templates": "tsx scripts/gen-brain-template.ts",
 		"worker:dev": "wrangler dev",
