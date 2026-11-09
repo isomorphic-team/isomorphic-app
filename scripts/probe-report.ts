@@ -10,7 +10,13 @@
 // path an agent actually gets, lexical limits included.
 import { readFile } from 'node:fs/promises';
 import { searchIndex } from '../src/lib/brain-index.ts';
-import { scoreProbe, summarizeProbes, diffProbeRuns, type ProbeResult } from '../src/lib/probe.ts';
+import {
+	scoreProbe,
+	summarizeProbes,
+	diffProbeRuns,
+	TOP_BAND,
+	type ProbeResult
+} from '../src/lib/probe.ts';
 import { openFolderAsBrain } from './local-brain.ts';
 
 // The cap search_pages itself uses, so a probe sees exactly what an agent sees.
@@ -92,6 +98,10 @@ try {
 			`\n${summary.total} probes: ${summary.owned} first, ${summary.outranked} outranked, ` +
 				`${summary.buried} buried, ${summary.elsewhere} answered elsewhere, ` +
 				`${summary.absent} absent, ${summary.inconclusive} inconclusive.`
+		);
+		console.log(
+			`Expected page in the top ${TOP_BAND}: ${summary.inTopBand} of ${summary.total}. ` +
+				`Mean reciprocal rank: ${summary.mrr.toFixed(3)}.`
 		);
 		const ranked = summary.positions.filter((p) => p.position !== null);
 		if (ranked.length) {
