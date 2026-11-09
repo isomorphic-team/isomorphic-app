@@ -1,6 +1,14 @@
 # Design: enterprise identity (per-org SSO, verified domains, SCIM)
 
-Status: **partly built** (2026-11-09). D2 is built. Nothing else is.
+Status: **partly built** (2026-11-09).
+
+Built: D2, and the parts of D3, D4, D5 and D9 that need no directory to test: the two tables,
+domain verification, sign-in routing, the rule that accepts a provider sign-in, and the
+provider itself (`src/lib/org-domains.ts`, `src/lib/sso.ts`, `src/auth/entra.ts`,
+`pnpm test:sso`). None of it is reachable yet: no tool claims a domain or connects a
+directory, the sign-in page does not route, and `buildAuthConfig` does not register the
+provider. Enforcement (D6) has its column and its routing rule and no switch. D7 and D8 are
+not started.
 
 This revises one clause of [`open-source-boundary.md`](./open-source-boundary.md), the one that
 kept Enterprise SSO and SAML out of `ee/` permanently. The revision: a feature is enterprise
@@ -106,6 +114,11 @@ settings below. Verification is a DNS TXT record, read over DNS over HTTPS. It i
 sign-in when the last check is more than a day old, so a lapsed domain stops routing sign-ins.
 The Worker has no scheduled handler, and this does not need one.
 
+Several orgs may claim a domain, each with its own challenge; one may hold it verified. Only a
+conclusive answer that the record is gone unverifies a domain. A resolver failure changes
+nothing, so an outage at the resolver cannot reopen the magic link for an enforced domain or
+close sign-in for a verified one.
+
 A verified domain decides how everyone at that domain signs in, members or not. An unverified
 claim routes nothing.
 
@@ -122,7 +135,14 @@ provider for an org is configured with that org's tenant-specific issuer,
 `https://login.microsoftonline.com/<tenant id>/v2.0/`. A token from any other tenant fails
 standard issuer validation before our code sees it. Then check the email domain against the
 org's verified domains as PostHog does. Always pass `issuer` explicitly: the provider's
-fallback reads `process.env` and then the `common` endpoint, which accepts any tenant.
+fallback reads `process.env` and then the `common` endpoint, which accepts any tenant. The
+issuer has no trailing slash; the match against the discovery document is exact.
+
+**Compare the tenant ourselves as well.** On the callback Auth.js reads the token's `tid`
+claim before validating it and re-reads the provider's metadata for that tenant. Its pattern
+for the tenant in the issuer does not match an id with hyphens, so today a pinned issuer is
+left alone, but the pin holding depends on that. `allowSsoSignIn` refuses a token whose `tid`
+is not the connected tenant, whatever Auth.js validated it against.
 
 **The callback rebuilds the same config.** Starting a sign-in records the chosen identity
 connection in a signed, short-lived cookie. The callback request reads it to set the issuer,
@@ -219,9 +239,13 @@ vendor's model, and verified-email linking joins them. Moving out is the expensi
 - **Bootstrapping.** The org admin signs in by magic link to verify the domain and connect the
   provider. Enforcement must refuse to turn on until a test sign-in through the provider has
   succeeded, or the admin can lock the org out.
-- **Unverified against a real tenant.** Whether the issuer string takes a trailing slash (the
-  match against the discovery document is exact), and whether an admin can consent to the
-  multi-tenant application before its publisher is verified.
+- **Unverified against a real tenant.** Whether an admin can consent to the multi-tenant
+  application before its publisher is verified, and the whole sign-in end to end: `pnpm
+test:sso` pins the decisions, not the round trip through a directory.
+- **An entitlement that lapses turns enforcement off.** An unentitled org's domains route and
+  enforce nothing, so its addresses get the magic link again.
+- **The resolver sees the domain.** Verification asks Cloudflare's public resolver
+  (`DOH_ENDPOINT`) for the domain's TXT records.
 - **Static mode.** `AUTH_MODE=static` has one operator and no sign-in. The governance tools
   register only when `multiUser` is true, like the member tools.
 - **Sign-in audit.** Nothing records a sign-in as an event. The sessions table holds live
