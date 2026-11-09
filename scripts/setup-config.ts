@@ -32,6 +32,7 @@ import { existsSync } from 'node:fs';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { readDevVars } from '../src/persist.ts';
+import { optionalBlock } from './optional-block.ts';
 
 const exec = promisify(execFile);
 
@@ -119,6 +120,18 @@ const SETTINGS = [
 		placeholder: '__D1_DATABASE_ID__',
 		default: 'local-dev-d1-database-id',
 		help: 'D1 database id. Fake by default; --provision fills in the real one.'
+	},
+	{
+		key: 'INDEX_D1_DATABASE_NAME',
+		placeholder: '__INDEX_D1_DATABASE_NAME__',
+		default: 'index-db',
+		help: 'Name of the D1 database holding the content index, when CF_INDEX_D1_DATABASE_ID is set.'
+	},
+	{
+		key: 'CF_INDEX_D1_DATABASE_ID',
+		placeholder: '__INDEX_D1_DATABASE_ID__',
+		default: '',
+		help: 'D1 database id for the content index. Empty keeps the index in the platform database; --provision creates one.'
 	},
 	{
 		key: 'CF_OAUTH_KV_ID',
@@ -307,6 +320,17 @@ async function main(): Promise<void> {
 			);
 			process.exit(1);
 		}
+		const indexName = resolved.get('INDEX_D1_DATABASE_NAME')!.value;
+		const indexId = await provisionD1(indexName);
+		if (indexId) {
+			resolved.set('CF_INDEX_D1_DATABASE_ID', { value: indexId, source: 'provisioned' });
+		} else {
+			console.error(
+				`\nCould not create or find the D1 database "${indexName}".\n` +
+					'Create it by hand and pass CF_INDEX_D1_DATABASE_ID.\n'
+			);
+			process.exit(1);
+		}
 		const dbName = resolved.get('D1_DATABASE_NAME')!.value;
 		const d1 = await provisionD1(dbName);
 		if (d1) {
@@ -368,7 +392,11 @@ async function main(): Promise<void> {
 		}
 	}
 
-	let out = await readFile(TEMPLATE_PATH, 'utf8');
+	let out = optionalBlock(
+		await readFile(TEMPLATE_PATH, 'utf8'),
+		'index-db',
+		resolved.get('CF_INDEX_D1_DATABASE_ID')!.value !== ''
+	);
 	for (const s of SETTINGS) {
 		const value = resolved.get(s.key)!.value;
 		// Plain split/join rather than String.replace: a `$` in a resolved value

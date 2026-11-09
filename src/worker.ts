@@ -24,11 +24,18 @@
 //     transport). The active brain lives in OAUTH_KV per user.
 //   - OAUTH_KV stores OAuth provider state (registered clients, grants,
 //     access/refresh tokens) and pending-auth nonces for the sign-in round trip.
-//   - PLATFORM_DB (D1) holds the org model, the content index, and usage
-//     counters. Schema is `migrations/`.
+//   - PLATFORM_DB (D1) holds the org model and usage counters. Schema is `migrations/`.
+//   - INDEX_DB (D1, optional) holds the content index. Schema is `migrations-index/`.
+//     Without it the index is in PLATFORM_DB.
 
 import { McpServer, type RegisteredTool } from '@modelcontextprotocol/server';
-import { d1Index, indexRefs, type BrainIndex, type OpenIndex } from './lib/brain-index.ts';
+import {
+	d1Index,
+	indexDatabase,
+	indexRefs,
+	type BrainIndex,
+	type OpenIndex
+} from './lib/brain-index.ts';
 import { registeredTools, wrapToolHandler } from './lib/registered-tools.ts';
 import { serveMcp, serverOptions } from './lib/mcp-serve.ts';
 import type { ConsolidationStep, IdentityWire, OrgMembershipWire } from './lib/tool-payloads.ts';
@@ -192,6 +199,8 @@ interface Env {
 	// invitations, storage connections), the content index, and usage counters.
 	// Schema is `migrations/`.
 	PLATFORM_DB: D1Database;
+	// The content index's own database. Optional: without it the index uses PLATFORM_DB.
+	INDEX_DB?: D1Database;
 
 	// Product feedback (submit_feedback). FEEDBACK_REPO is the "owner/repo" of the
 	// tracker that receives reports; FEEDBACK_TOKEN is a separate narrowly scoped
@@ -259,7 +268,7 @@ function consolidationFor(
 	return async (opts) => {
 		const { text, state } = await runConsolidationStep({
 			db: env.PLATFORM_DB,
-			index: d1Index(env.PLATFORM_DB)(scope.brainId),
+			index: d1Index(indexDatabase(env))(scope.brainId),
 			...scope,
 			anthropicKey,
 			openRouterKey,
@@ -733,7 +742,7 @@ class McpSession {
 			config,
 			author,
 			db: env.PLATFORM_DB,
-			...indexRefs(d1Index(env.PLATFORM_DB), target.brain_id),
+			...indexRefs(d1Index(indexDatabase(env)), target.brain_id),
 			...brainRefs(target)
 		};
 	}
@@ -1138,7 +1147,7 @@ class McpSession {
 			setActiveBrain: (id) => this.setActiveBrain(id),
 			invalidateConfig: (owner, repo) => this.invalidateConfig(owner, repo),
 			analyticsEnabled: this.usageEnabled(),
-			openIndex: d1Index(this.env.PLATFORM_DB),
+			openIndex: d1Index(indexDatabase(this.env)),
 			webBaseUrl: this.webBase()
 		});
 

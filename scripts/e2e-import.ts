@@ -18,7 +18,7 @@ import { registerImportTools } from '../src/tools/importer.ts';
 import { importKey } from '../src/lib/findings.ts';
 import { registerLibrarianTools } from '../src/tools/librarian.ts';
 import { loadBrainConfig } from '../src/lib/brain-config.ts';
-import { localD1 } from '../src/local/d1-sqlite.ts';
+import { INDEX_MIGRATIONS_DIR, localD1 } from '../src/local/d1-sqlite.ts';
 import { ledgerPath } from '../src/lib/brain-import.ts';
 import { checker } from './check.ts';
 import { connect, replicationLag, scratchBrain } from './e2e-harness.ts';
@@ -37,7 +37,7 @@ const getContext = async () => ({
 	author: undefined,
 	db,
 	brainId,
-	...indexRefs(d1Index(db), brainId),
+	...indexRefs(d1Index(localD1(':memory:', INDEX_MIGRATIONS_DIR).db), brainId),
 	activeBrain: { id: brainId, label: name }
 });
 registerImportTools(server, getContext);

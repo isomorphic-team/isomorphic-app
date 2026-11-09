@@ -1118,6 +1118,13 @@ export interface BrainIndex {
 /** Opens the index of any brain, for the tools that read more than the active one. */
 export type OpenIndex = (brainId: string) => BrainIndex;
 
+/**
+ * The database the content index lives in: its own (`INDEX_DB`) when the deployment binds
+ * one, otherwise the platform database, which carries the same four tables.
+ */
+export const indexDatabase = (env: { PLATFORM_DB: D1Database; INDEX_DB?: D1Database }) =>
+	env.INDEX_DB ?? env.PLATFORM_DB;
+
 /** The two index fields of a tool context: the brain's own index and the opener. */
 export const indexRefs = (openIndex: OpenIndex, brainId: string) => ({
 	index: openIndex(brainId),

@@ -39,6 +39,11 @@ the PreToolUse hook refuses the edit); never commit it (it is one deployment's i
 - **CI:** `ci.yml` runs `pnpm setup:config` with no secrets (fork PRs stay green). `deploy.yml`
   regenerates from repository **variables** and **skips with a warning** if
   `CF_OAUTH_KV_ID`/`CF_D1_DATABASE_ID` are unset rather than deploying template defaults.
+- **`INDEX_DB` is optional** (the content index's own D1 database, schema in
+  `migrations-index/`). The template's block for it sits between `// index-db:start` and
+  `// index-db:end`; `setup:config` keeps it only when `CF_INDEX_D1_DATABASE_ID` is set
+  (`optionalBlock`, `scripts/optional-block.ts`, pinned by `pnpm test:wiring`), and
+  `deploy.yml` applies its migrations only then. `pnpm db:migrate:index` applies them locally.
 - **Don't hardcode our deployment anywhere.** `src/manifest.ts` takes the OAuth callback origin
   as an argument (`PUBLIC_BASE_URL`); the install-callback page derives its host from the request.
 
