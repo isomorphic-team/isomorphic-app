@@ -28,6 +28,19 @@ We use `@modelcontextprotocol/ext-apps`: `/server` (registerAppTool / registerAp
 
 - **Claude MCP Apps design guidelines (host-specific: display modes, sizing, layout):**
   https://claude.com/docs/connectors/building/mcp-apps/design-guidelines
+- **Claude's MCP Apps developer docs** (read 2026-11-10; app tools, entry points, the side
+  panel and embedded sites are limited-availability previews, needing a remote connector and
+  the unified chat-and-Cowork experience):
+  - Getting started, incl. `ui.domain` (first 32 hex of SHA-256 of the server URL +
+    `.claudemcpcontent.com`): https://claude.com/docs/connectors/building/mcp-apps/getting-started
+  - App tools (`app.registerTool` or `onlisttools`/`oncalltool`; 64 tools, 45 s per call,
+    100,000 result chars, first 200 description chars listed): https://claude.com/docs/connectors/building/mcp-apps/app-tools
+  - Entry points (`_meta["openai/ui"].entrypoints: [{ type: "global" }]` beside
+    `ui.resourceUri`; opens with `{}`): https://claude.com/docs/connectors/building/mcp-apps/entry-points
+  - Display modes (the side panel reports `fullscreen`; preferredDisplayMode is a
+    Claude-only `_meta.ui` field): https://claude.com/docs/connectors/building/mcp-apps/display-modes
+  - Embedded sites (`_meta.ui.csp.frameDomains`; blocked for Community listings; the view
+    loses camera, microphone and clipboard write): https://claude.com/docs/connectors/building/mcp-apps/embedded-sites
 - **Known host-rendering gaps (why an iframe may not mount despite a correct payload):**
   - ext-apps#671 — https://github.com/modelcontextprotocol/ext-apps/issues/671
   - anthropics/claude-ai-mcp#236 — https://github.com/anthropics/claude-ai-mcp/issues/236
@@ -204,7 +217,11 @@ application/json and text/event-stream"`, even though `enableJsonResponse: true`
   host mode.** A sidebar is a layout you build _inside_ a fullscreen app (Claude's design
   guidelines recommend exactly that for editors). PiP is a floating window, not a dock.
   The app opts in via `app.requestDisplayMode({ mode })` after checking
-  `availableDisplayModes` in host context.
+  `availableDisplayModes` in host context. Claude's side panel is not a mode either: a view
+  there reports `fullscreen`, at about half the chat width and down to ~320px, so lay out by
+  the host context's containerDimensions, not by mode. Claude grants `fullscreen` only from a recent click or
+  key press with focus in the view, and resolves a refused request with the old mode
+  instead of rejecting.
 - **Resource MIME type is `text/html;profile=mcp-app`**; tool→app link is
   `_meta.ui.resourceUri` (nested form; legacy flat `_meta["ui/resourceUri"]` is
   deprecated).
