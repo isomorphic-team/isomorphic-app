@@ -44,8 +44,10 @@ too.
   tree inline only under `MAX_INLINE_TREE_CHARS` (measured on the serialized payload). Above it
   the widget fetches the tree with `list_pages`, which the conversation never pays for. Large
   trees once exceeded the host's tool-result limit.
-- **The view serves app tools** (`get_open_view`, `show_page`, `show_search`, `reload_view`):
-  the host lists them from the open view and calls them for the model. The contract is
+- **The view serves app tools** (`get_open_view`, and `show_page`, which reloads the page
+  already open in place): the host lists them from the open view and calls them for the
+  model. Each one exists because no server tool can change an open view; don't add one that
+  restates a server tool for the screen. The contract is
   `src/lib/view-tools.ts` (pure, pinned by `pnpm test:app-resource`); `app/core/view-tools.ts`
   runs it, and `tests/ui/view-tools.spec.ts` calls it over the harness bridge. The `tools`
   capability on `new App(...)` and the handlers in `serveViewTools` go together: without the

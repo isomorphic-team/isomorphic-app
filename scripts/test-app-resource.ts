@@ -25,13 +25,12 @@
 
 import { Client } from '@modelcontextprotocol/client';
 import { McpServer, InMemoryTransport } from '@modelcontextprotocol/server';
-import { registerBrainApp, BRAIN_APP_URI } from '../src/tools/apps.ts';
+import { registerBrainApp, BRAIN_APP_URI, GLOBAL_ENTRY_POINT } from '../src/tools/apps.ts';
 import {
 	VIEW_TOOLS,
 	parseViewToolCall,
 	blockedReason,
-	describeOpenView,
-	actionResult,
+	viewResult,
 	type OpenViewSnapshot
 } from '../src/lib/view-tools.ts';
 
@@ -146,12 +145,12 @@ console.log('\ntools/list: every widget tool points at a resource that exists');
 	// The global entry point lists the app where people open it without asking the
 	// model. A host lists one app per marked tool, so exactly one tool carries it, and
 	// it opens with `{}`: a required input would list an app nobody can open.
-	const marked = tools.filter((t) => {
-		const ep = (t._meta as Record<string, { entrypoints?: { type?: string }[] }> | undefined)?.[
-			'openai/ui'
-		]?.entrypoints;
-		return ep?.some((e) => e.type === 'global');
-	});
+	const [entryKey] = Object.keys(GLOBAL_ENTRY_POINT);
+	const marked = tools.filter(
+		(t) =>
+			JSON.stringify((t._meta as Record<string, unknown> | undefined)?.[entryKey]) ===
+			JSON.stringify(GLOBAL_ENTRY_POINT[entryKey as keyof typeof GLOBAL_ENTRY_POINT])
+	);
 	check(
 		'exactly one tool is a global entry point, and it is browse_brain',
 		marked.length === 1 && marked[0].name === 'browse_brain',
@@ -196,10 +195,10 @@ console.log('\nview tools: the contract a host lists from the open view');
 	check(
 		'every first description line stands alone within 200 characters',
 		VIEW_TOOLS.every((t) => {
-			const first = t.description.split('\n')[0];
+			const first = (t.description ?? '').split('\n')[0];
 			return first.length > 0 && first.length <= 200;
 		}),
-		VIEW_TOOLS.map((t) => t.description.split('\n')[0].length).join(', ')
+		VIEW_TOOLS.map((t) => (t.description ?? '').split('\n')[0].length).join(', ')
 	);
 	check(
 		'every tool has a title for the approval prompt',
@@ -217,51 +216,56 @@ console.log('\nview tools: the contract a host lists from the open view');
 		'show_page with a non-string path is refused',
 		!parseViewToolCall('show_page', { path: 3 }).ok
 	);
-	check(
-		'show_search with a blank query is refused',
-		!parseViewToolCall('show_search', { query: '  ' }).ok
-	);
 	check('an unknown tool is refused', !parseViewToolCall('write_page', {}).ok);
 	check('missing arguments read as {}', parseViewToolCall('get_open_view', undefined).ok);
 
 	const dirty: OpenViewSnapshot = {
 		brain: null,
-		kind: 'edit',
+		screen: 'the editor',
+		isError: false,
 		path: 'wiki/a.md',
 		unsavedEdits: true
 	};
-	const clean: OpenViewSnapshot = { ...dirty, unsavedEdits: false };
 	const show = { tool: 'show_page', path: 'wiki/b.md' } as const;
 	check('a move away from unsaved edits is refused', blockedReason(show, dirty) !== null);
-	check(
-		'...as is a reload, which would discard them',
-		blockedReason({ tool: 'reload_view' }, dirty) !== null
-	);
 	check('...but reading the view is not', blockedReason({ tool: 'get_open_view' }, dirty) === null);
-	check('a saved editor can be moved', blockedReason(show, clean) === null);
+	check(
+		'a saved editor can be moved',
+		blockedReason(show, { ...dirty, unsavedEdits: false }) === null
+	);
 
 	const page: OpenViewSnapshot = {
 		brain: { id: 'b-1', label: 'Acme' },
-		kind: 'page',
+		screen: 'a page',
+		isError: false,
 		path: 'wiki/a.md',
-		sha: 'new',
 		unsavedEdits: false
 	};
-	const d = describeOpenView(page);
+	const textOf = (r: { content: unknown[] }) => (r.content[0] as { text: string }).text;
+	const d = textOf(viewResult(page));
 	check('the description names the brain handle', d.includes('brain: "b-1"'), d);
 	check('...and the path', d.includes('Path: wiki/a.md'), d);
 	check(
 		'a reload that moved the page says so',
-		actionResult(page, { path: 'wiki/a.md', sha: 'old' }).text.includes('changed')
+		textOf(viewResult(page, 'updated')).includes('changed and')
 	);
 	check(
 		'a reload that did not says that',
-		actionResult(page, { path: 'wiki/a.md', sha: 'new' }).text.includes('had not changed')
+		textOf(viewResult(page, 'current')).includes('had not changed')
 	);
-	const err = actionResult({ ...page, kind: 'error', error: { headline: "Couldn't load" } });
+	check(
+		'a reload with no verdict claims nothing',
+		!/changed/.test(textOf(viewResult(page, 'unknown')))
+	);
+	const err = viewResult({
+		...page,
+		screen: 'an error',
+		isError: true,
+		error: { headline: "Couldn't load" }
+	});
 	check(
 		'landing on the error screen is an error result',
-		err.isError && err.text.includes("Couldn't load")
+		!!err.isError && textOf(err).includes("Couldn't load")
 	);
 }
 

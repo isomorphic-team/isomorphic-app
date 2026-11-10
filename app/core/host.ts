@@ -15,7 +15,7 @@ import {
 	applyHostStyleVariables,
 	type McpUiHostContext
 } from '@modelcontextprotocol/ext-apps';
-import type { CallToolResult } from '@modelcontextprotocol/client';
+import type { CallToolResult, ListToolsResult } from '@modelcontextprotocol/client';
 import type { DisplayMode } from './types.ts';
 import { bump } from './store.ts';
 import { toast } from './toast.tsx';
@@ -25,11 +25,9 @@ import { isWebHost, webCallTool } from './host-web.ts';
 import { firstText } from '../../src/lib/tool-payloads.ts';
 
 // `tools` declares that the view serves app tools (see serveViewTools). It has to be
-// in the handshake: a host lists a view's tools only when `ui/initialize` said so.
-const app = new App(
-	{ name: 'Isomorphic Brain', version: '0.2.0' },
-	{ tools: { listChanged: true } }
-);
+// in the handshake: a host lists a view's tools only when `ui/initialize` said so,
+// and the SDK throws on the handlers without it. No `listChanged`: the list is fixed.
+const app = new App({ name: 'Isomorphic Brain', version: '0.2.0' }, { tools: {} });
 
 // Fixed for the life of the page: the Worker decides which host is serving.
 const web = isWebHost();
@@ -147,16 +145,13 @@ export function registerHostEvents(events: HostEvents) {
 // The view's app tools: what the host lists from this view and calls while it is
 // open. Registered before connect(), like the events above. The web host has no
 // model attached, so it serves none.
-export interface ViewToolHandlers {
-	list: () => { tools: object[] };
-	call: (name: string, args: unknown) => Promise<CallToolResult>;
-}
-
-export function serveViewTools(handlers: ViewToolHandlers) {
+export function serveViewTools(
+	list: () => ListToolsResult,
+	call: (name: string, args: unknown) => Promise<CallToolResult>
+) {
 	if (web) return;
-	app.onlisttools = async () =>
-		handlers.list() as Awaited<ReturnType<NonNullable<typeof app.onlisttools>>>;
-	app.oncalltool = async (params) => handlers.call(params.name, params.arguments);
+	app.onlisttools = async () => list();
+	app.oncalltool = async (params) => call(params.name, params.arguments);
 }
 
 // Finish whatever handshake this host needs before the app draws real content.

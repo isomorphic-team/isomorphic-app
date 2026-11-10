@@ -33,12 +33,7 @@ const textOf = (r: ToolResult) => r.content.map((c) => c.text ?? '').join('\n');
 
 test('the host can list the view tools', async ({ page }) => {
 	await openApp(page, '');
-	expect(await listTools(page)).toEqual([
-		'get_open_view',
-		'show_page',
-		'show_search',
-		'reload_view'
-	]);
+	expect(await listTools(page)).toEqual(['get_open_view', 'show_page']);
 });
 
 test('get_open_view reports the page on screen', async ({ page }) => {
@@ -64,20 +59,14 @@ test('show_page on a missing page is an error result', async ({ page }) => {
 	expect(r.isError).toBe(true);
 });
 
-test('show_search puts results on screen', async ({ page }) => {
-	const app = await openApp(page, '');
-	const r = await callTool(page, 'show_search', { query: 'vision' });
-	expect(r.isError).toBeFalsy();
-	await expectView(app, 'search');
-	expect(textOf(r)).toContain('Search: vision');
-});
-
-test('reload_view picks up an edit made behind the view', async ({ page }) => {
+test('show_page on the open page reloads it in place', async ({ page }) => {
 	const app = await openApp(page, 'stale');
 	await expectView(app, 'page');
 	const added = 'Added by somebody else while you were reading.';
 	await expect(app.getByText(added)).toHaveCount(0);
-	const r = await callTool(page, 'reload_view');
+	const open = textOf(await callTool(page, 'get_open_view')).match(/^Path: (.+)$/m)?.[1];
+	expect(open).toBeTruthy();
+	const r = await callTool(page, 'show_page', { path: open! });
 	expect(r.isError).toBeFalsy();
 	await expect(app.getByText(added)).toBeVisible();
 	expect(textOf(r)).toContain('The page changed');

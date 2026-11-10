@@ -169,6 +169,11 @@ let editDirty = false;
 function setEditDirty(v: boolean): void {
 	editDirty = v;
 }
+// The one test for unsaved edits: the editor is on screen and holds changes. The
+// leave-edit dialog asks on it, and the view's show_page tool refuses on it.
+function hasUnsavedEdits(): boolean {
+	return currentView.kind === 'edit' && editDirty;
+}
 
 let brainPolicy: BrainPolicy = { paths: { ...DEFAULT_BRAIN_CONFIG.paths } };
 
@@ -481,6 +486,7 @@ export {
 	history,
 	editDirty,
 	setEditDirty,
+	hasUnsavedEdits,
 	browseCache,
 	setBrowseCache,
 	activeBrain,

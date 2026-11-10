@@ -7,83 +7,64 @@ import {
 	VIEW_TOOLS,
 	parseViewToolCall,
 	blockedReason,
-	describeOpenView,
-	actionResult,
-	type OpenViewSnapshot,
-	type ViewToolCall
+	textResult,
+	viewResult,
+	type OpenViewSnapshot
 } from '../../src/lib/view-tools.ts';
-import { currentView, activeBrain, editDirty, show } from './store.ts';
-import { navigateTo, runSearch, refreshBrowse, fetchPage, pageView } from './actions.ts';
+import type { View } from './types.ts';
+import { currentView, activeBrain, hasUnsavedEdits } from './store.ts';
+import { activeDestination, DEST_META } from './nav.ts';
+import { navigateTo, reloadPage } from './actions.ts';
+
+// A view that is a destination reads as the destination's own label ("Files"). The
+// rest are named here.
+const SCREEN: Partial<Record<View['kind'], string>> = {
+	page: 'a page',
+	edit: 'the editor',
+	asset: 'an attachment',
+	more: 'the More menu',
+	loading: 'a loading screen',
+	error: 'an error'
+};
 
 function snapshot(): OpenViewSnapshot {
 	const v = currentView;
-	const snap: OpenViewSnapshot = {
-		brain: activeBrain ? { id: activeBrain.id, label: activeBrain.label } : null,
-		kind: v.kind,
-		unsavedEdits: v.kind === 'edit' && editDirty
+	const dest = activeDestination(v.kind);
+	return {
+		brain: activeBrain,
+		screen: dest ? DEST_META[dest].label : (SCREEN[v.kind] ?? v.kind),
+		isError: v.kind === 'error',
+		unsavedEdits: hasUnsavedEdits(),
+		...(v.kind === 'page' || v.kind === 'edit' || v.kind === 'asset' ? { path: v.path } : {}),
+		...(v.kind === 'search' && v.query ? { query: v.query } : {}),
+		...(v.kind === 'error' ? { error: { headline: v.headline, detail: v.detail } } : {})
 	};
-	if (v.kind === 'page' || v.kind === 'edit' || v.kind === 'asset') snap.path = v.path;
-	if ((v.kind === 'page' || v.kind === 'edit') && v.sha) snap.sha = v.sha;
-	if (v.kind === 'search' && v.query) snap.query = v.query;
-	if (v.kind === 'error') snap.error = { headline: v.headline, detail: v.detail };
-	return snap;
 }
 
-function text(t: string, isError = false): CallToolResult {
-	return { content: [{ type: 'text', text: t }], ...(isError ? { isError: true } : {}) };
-}
-
-async function reload(): Promise<CallToolResult> {
-	const v = currentView;
-	if (v.kind === 'page') {
-		const before = { path: v.path, sha: v.sha };
-		try {
-			show(pageView(v.path, await fetchPage(v.path)), { push: false });
-		} catch (e) {
-			return text(`Couldn't reload ${v.path}: ${e}`, true);
-		}
-		const r = actionResult(snapshot(), before);
-		return text(r.text, r.isError);
-	}
-	if (v.kind === 'browse') {
-		await refreshBrowse();
-		return text(describeOpenView(snapshot()));
-	}
-	if (v.kind === 'search' && v.query) {
-		await runSearch(v.query, v.scope);
-		const r = actionResult(snapshot());
-		return text(r.text, r.isError);
-	}
-	return text(`Nothing to reload.\n${describeOpenView(snapshot())}`);
-}
-
-async function run(call: ViewToolCall): Promise<CallToolResult> {
-	switch (call.tool) {
-		case 'get_open_view':
-			return text(describeOpenView(snapshot()));
-		case 'show_page': {
-			await navigateTo(call.path);
-			const r = actionResult(snapshot());
-			return text(r.text, r.isError);
-		}
-		case 'show_search': {
-			await runSearch(call.query);
-			const r = actionResult(snapshot());
-			return text(r.text, r.isError);
-		}
-		case 'reload_view':
-			return reload();
-	}
-}
-
+// The host lists these rarely and they never change, so the list is built once.
+const LIST = { tools: VIEW_TOOLS };
 export function listViewTools() {
-	return { tools: VIEW_TOOLS.map((t) => ({ ...t })) };
+	return LIST;
 }
 
 export async function callViewTool(name: string, args: unknown): Promise<CallToolResult> {
 	const parsed = parseViewToolCall(name, args);
-	if (!parsed.ok) return text(parsed.text, true);
-	const blocked = blockedReason(parsed.call, snapshot());
-	if (blocked) return text(blocked, true);
-	return run(parsed.call);
+	if (!parsed.ok) return textResult(parsed.text, true);
+	const { call } = parsed;
+	const blocked = blockedReason(call, snapshot());
+	if (blocked) return textResult(blocked, true);
+	if (call.tool === 'get_open_view') return viewResult(snapshot());
+
+	// The page already on screen is reloaded in place, the way its refresh control
+	// does it, rather than reopened through a loading screen.
+	if (currentView.kind === 'page' && currentView.path === call.path) {
+		try {
+			const outcome = await reloadPage();
+			return viewResult(snapshot(), outcome ?? undefined);
+		} catch (e) {
+			return textResult(`Couldn't reload ${call.path}: ${e}`, true);
+		}
+	}
+	await navigateTo(call.path);
+	return viewResult(snapshot());
 }

@@ -75,7 +75,7 @@ import { renderView, viewActions, viewMode } from './views/registry.generated.ts
 // These are one-shot events, so the handlers are registered here at module scope, before
 // connect() — the host may send them the moment the handshake completes.
 let resultPending = false;
-serveViewTools({ list: listViewTools, call: callViewTool });
+serveViewTools(listViewTools, callViewTool);
 registerHostEvents({
 	onToolResult: (r) => handleToolResult(r as Parameters<typeof handleToolResult>[0]),
 	onError: (message) => toast(message, true),
