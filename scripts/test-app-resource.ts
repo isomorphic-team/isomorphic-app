@@ -26,6 +26,14 @@
 import { Client } from '@modelcontextprotocol/client';
 import { McpServer, InMemoryTransport } from '@modelcontextprotocol/server';
 import { registerBrainApp, BRAIN_APP_URI } from '../src/tools/apps.ts';
+import {
+	VIEW_TOOLS,
+	parseViewToolCall,
+	blockedReason,
+	describeOpenView,
+	actionResult,
+	type OpenViewSnapshot
+} from '../src/lib/view-tools.ts';
 
 import { checker } from './check.ts';
 
@@ -134,8 +142,127 @@ console.log('\ntools/list: every widget tool points at a resource that exists');
 		unmirrored.length === 0,
 		unmirrored.map((t) => t.name).join(', ')
 	);
+
+	// The global entry point lists the app where people open it without asking the
+	// model. A host lists one app per marked tool, so exactly one tool carries it, and
+	// it opens with `{}`: a required input would list an app nobody can open.
+	const marked = tools.filter((t) => {
+		const ep = (t._meta as Record<string, { entrypoints?: { type?: string }[] }> | undefined)?.[
+			'openai/ui'
+		]?.entrypoints;
+		return ep?.some((e) => e.type === 'global');
+	});
+	check(
+		'exactly one tool is a global entry point, and it is browse_brain',
+		marked.length === 1 && marked[0].name === 'browse_brain',
+		marked.map((t) => t.name).join(', ')
+	);
+	const entry = marked[0];
+	check(
+		'...it opens with {} (no required input)',
+		!!entry && (entry.inputSchema.required ?? []).length === 0,
+		JSON.stringify(entry?.inputSchema.required)
+	);
+	check(
+		'...and is visible to the model (a host lists only model-callable entry points)',
+		!!entry &&
+			(uiMeta(entry).visibility === undefined ||
+				(uiMeta(entry).visibility as string[]).includes('model'))
+	);
+	check(
+		'...and has a title the host can display, 60 characters or fewer',
+		!!entry?.title && entry.title.length <= 60,
+		entry?.title
+	);
 }
 
 await client.close();
+
+// THE VIEW'S APP TOOLS (src/lib/view-tools.ts). A host refuses a whole view's tools
+// over one bad definition, and saves "Always allow" against a definition, so the
+// limits and the guard are pinned here; the browser half is tests/ui/view-tools.spec.ts.
+console.log('\nview tools: the contract a host lists from the open view');
+{
+	const names = VIEW_TOOLS.map((t) => t.name);
+	check('names are unique', new Set(names).size === names.length, names.join(', '));
+	check(
+		'names fit the host limit (letters, digits, . _ -; 128 chars)',
+		names.every((n) => /^[A-Za-z0-9._-]{1,128}$/.test(n))
+	);
+	check(
+		'every input schema is an object at the root',
+		VIEW_TOOLS.every((t) => t.inputSchema.type === 'object')
+	);
+	check(
+		'every first description line stands alone within 200 characters',
+		VIEW_TOOLS.every((t) => {
+			const first = t.description.split('\n')[0];
+			return first.length > 0 && first.length <= 200;
+		}),
+		VIEW_TOOLS.map((t) => t.description.split('\n')[0].length).join(', ')
+	);
+	check(
+		'every tool has a title for the approval prompt',
+		VIEW_TOOLS.every((t) => !!t.title)
+	);
+
+	const p = parseViewToolCall('show_page', { path: ' ./wiki/a.md ' });
+	check(
+		'show_page normalizes a leading ./ or / and whitespace',
+		p.ok && p.call.tool === 'show_page' && p.call.path === 'wiki/a.md',
+		JSON.stringify(p)
+	);
+	check('show_page without a path is refused', !parseViewToolCall('show_page', {}).ok);
+	check(
+		'show_page with a non-string path is refused',
+		!parseViewToolCall('show_page', { path: 3 }).ok
+	);
+	check(
+		'show_search with a blank query is refused',
+		!parseViewToolCall('show_search', { query: '  ' }).ok
+	);
+	check('an unknown tool is refused', !parseViewToolCall('write_page', {}).ok);
+	check('missing arguments read as {}', parseViewToolCall('get_open_view', undefined).ok);
+
+	const dirty: OpenViewSnapshot = {
+		brain: null,
+		kind: 'edit',
+		path: 'wiki/a.md',
+		unsavedEdits: true
+	};
+	const clean: OpenViewSnapshot = { ...dirty, unsavedEdits: false };
+	const show = { tool: 'show_page', path: 'wiki/b.md' } as const;
+	check('a move away from unsaved edits is refused', blockedReason(show, dirty) !== null);
+	check(
+		'...as is a reload, which would discard them',
+		blockedReason({ tool: 'reload_view' }, dirty) !== null
+	);
+	check('...but reading the view is not', blockedReason({ tool: 'get_open_view' }, dirty) === null);
+	check('a saved editor can be moved', blockedReason(show, clean) === null);
+
+	const page: OpenViewSnapshot = {
+		brain: { id: 'b-1', label: 'Acme' },
+		kind: 'page',
+		path: 'wiki/a.md',
+		sha: 'new',
+		unsavedEdits: false
+	};
+	const d = describeOpenView(page);
+	check('the description names the brain handle', d.includes('brain: "b-1"'), d);
+	check('...and the path', d.includes('Path: wiki/a.md'), d);
+	check(
+		'a reload that moved the page says so',
+		actionResult(page, { path: 'wiki/a.md', sha: 'old' }).text.includes('changed')
+	);
+	check(
+		'a reload that did not says that',
+		actionResult(page, { path: 'wiki/a.md', sha: 'new' }).text.includes('had not changed')
+	);
+	const err = actionResult({ ...page, kind: 'error', error: { headline: "Couldn't load" } });
+	check(
+		'landing on the error screen is an error result',
+		err.isError && err.text.includes("Couldn't load")
+	);
+}
 
 done();

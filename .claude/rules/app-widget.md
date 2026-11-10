@@ -44,6 +44,16 @@ too.
   tree inline only under `MAX_INLINE_TREE_CHARS` (measured on the serialized payload). Above it
   the widget fetches the tree with `list_pages`, which the conversation never pays for. Large
   trees once exceeded the host's tool-result limit.
+- **The view serves app tools** (`get_open_view`, `show_page`, `show_search`, `reload_view`):
+  the host lists them from the open view and calls them for the model. The contract is
+  `src/lib/view-tools.ts` (pure, pinned by `pnpm test:app-resource`); `app/core/view-tools.ts`
+  runs it, and `tests/ui/view-tools.spec.ts` calls it over the harness bridge. The `tools`
+  capability on `new App(...)` and the handlers in `serveViewTools` go together: without the
+  capability the SDK throws on the handlers and the view never boots. Keep each definition
+  constant (a host saves "Always allow" against it), and never let a call leave unsaved edits.
+- **`browse_brain` is the global entry point** (`GLOBAL_ENTRY_POINT` in `src/tools/apps.ts`), so
+  a host can list the app where people open it without asking the model. One tool only; it
+  must open with `{}`.
 - **Add-shaped actions are pushed flows** (`app/ui/Flow.tsx`), e.g. `ShareBrainView`,
   `InviteMemberView`.
 - **Iterate with `pnpm app:dev`** (the real `ui://` bytes over the official AppBridge host and

@@ -24,7 +24,12 @@ import { isWebHost, webCallTool } from './host-web.ts';
 // seam because every view that toasts a tool's reply already imports it from here.
 import { firstText } from '../../src/lib/tool-payloads.ts';
 
-const app = new App({ name: 'Isomorphic Brain', version: '0.2.0' });
+// `tools` declares that the view serves app tools (see serveViewTools). It has to be
+// in the handshake: a host lists a view's tools only when `ui/initialize` said so.
+const app = new App(
+	{ name: 'Isomorphic Brain', version: '0.2.0' },
+	{ tools: { listChanged: true } }
+);
 
 // Fixed for the life of the page: the Worker decides which host is serving.
 const web = isWebHost();
@@ -137,6 +142,21 @@ export function registerHostEvents(events: HostEvents) {
 	app.ontoolinput = events.onResultComing;
 	app.ontoolinputpartial = events.onResultComing;
 	app.ontoolcancelled = events.onResultCancelled;
+}
+
+// The view's app tools: what the host lists from this view and calls while it is
+// open. Registered before connect(), like the events above. The web host has no
+// model attached, so it serves none.
+export interface ViewToolHandlers {
+	list: () => { tools: object[] };
+	call: (name: string, args: unknown) => Promise<CallToolResult>;
+}
+
+export function serveViewTools(handlers: ViewToolHandlers) {
+	if (web) return;
+	app.onlisttools = async () =>
+		handlers.list() as Awaited<ReturnType<NonNullable<typeof app.onlisttools>>>;
+	app.oncalltool = async (params) => handlers.call(params.name, params.arguments);
 }
 
 // Finish whatever handshake this host needs before the app draws real content.

@@ -30,6 +30,7 @@ import { destinations } from './components/Destinations.tsx';
 import {
 	connectHost,
 	registerHostEvents,
+	serveViewTools,
 	isWeb,
 	displayMode,
 	setDisplayMode,
@@ -48,6 +49,7 @@ import {
 	openMore,
 	guardNav
 } from './core/actions.ts';
+import { listViewTools, callViewTool } from './core/view-tools.ts';
 import { toast, Toast, ConfirmDialog } from './core/toast.tsx';
 import { MoreIcon } from './core/icons.tsx';
 import { Button, Menu, MenuRow } from './ui/index.ts';
@@ -73,6 +75,7 @@ import { renderView, viewActions, viewMode } from './views/registry.generated.ts
 // These are one-shot events, so the handlers are registered here at module scope, before
 // connect() — the host may send them the moment the handshake completes.
 let resultPending = false;
+serveViewTools({ list: listViewTools, call: callViewTool });
 registerHostEvents({
 	onToolResult: (r) => handleToolResult(r as Parameters<typeof handleToolResult>[0]),
 	onError: (message) => toast(message, true),

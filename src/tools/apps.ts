@@ -122,6 +122,14 @@ const BRAIN_APP_URI_TEMPLATE = 'ui://isomorphic-mind/brain-app.{v}.html';
 // dropping the app's own border, since the two must never both draw one.
 const APP_UI_META = { ui: { prefersBorder: false } } as const;
 
+// Marks a tool as a GLOBAL ENTRY POINT: a host that reads it lists the app where
+// people open it without asking the model (Claude: the Artifacts page and the
+// sidebar). The key is the OpenAI MCP extension's; Claude reads the same one and
+// also needs `ui.resourceUri` beside it. Only browse_brain carries it, because
+// the host lists one app per marked tool and opens it with `{}` arguments, which
+// browse_brain answers with the active brain's tree.
+export const GLOBAL_ENTRY_POINT = { 'openai/ui': { entrypoints: [{ type: 'global' }] } } as const;
+
 // One node per content page; one edge per link between two pages (GraphNode and
 // GraphLink, the wire types the app's graph view reads). A node's `id` is its repo
 // path, `group` its parent folder (the app colors by area), and `degree` its
@@ -288,7 +296,7 @@ export function registerBrainApp(
 			description:
 				'Open the brain in the interactive Isomorphic viewer, shown inside the conversation, so the user can browse its pages, follow links, and search. Use when the user wants to explore or "see" their brain as a whole rather than ask one specific question, or when your answer points them at several pages at once.',
 			inputSchema: { brain: brainArg },
-			_meta: { ui: { resourceUri: BRAIN_APP_URI } }
+			_meta: { ui: { resourceUri: BRAIN_APP_URI }, ...GLOBAL_ENTRY_POINT }
 		},
 		async ({ brain }) => {
 			const { index, store, repoArgs, config, activeBrain } = await getContext({ brain });
