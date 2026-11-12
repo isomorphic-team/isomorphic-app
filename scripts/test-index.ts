@@ -23,11 +23,11 @@ import {
 	listIndexedPages,
 	indexDatabase,
 	resetIndex,
-	writeThroughIndex,
+	writeThroughIndex as writeThroughWithTags,
 	REBUILD_PAGE_BUDGET,
 	REINDEX_PAGE_BUDGET
 } from '../src/lib/brain-index.ts';
-import { githubStore, MAX_SCAN_PAGES } from '../src/lib/brain-repo.ts';
+import { githubStore, gitBlobSha, MAX_SCAN_PAGES } from '../src/lib/brain-repo.ts';
 import { INDEX_MIGRATIONS_DIR, applyMigrations, replayMigrations } from '../src/local/d1-sqlite.ts';
 import { DEFAULT_BRAIN_CONFIG, type BrainConfig } from '../src/lib/brain-policy.ts';
 import { pageTitle } from '../src/lib/wiki.ts';
@@ -39,6 +39,23 @@ import { openFolderAsBrain } from './local-brain.ts';
 import { fakeGithub, type FakePage } from './fake-github.ts';
 
 const { check, done } = checker('content-index checks');
+
+// Write-through as commitBundle drives it: every written file carries the version tag
+// the GitHub store returns for it (its git blob id).
+type WriteThroughArgs = Parameters<typeof writeThroughWithTags>;
+async function writeThroughIndex(
+	d1: WriteThroughArgs[0],
+	id: string,
+	cfg: BrainConfig,
+	baseSha: string,
+	landedSha: string,
+	writes: WriteThroughArgs[5],
+	deletes: string[]
+): Promise<boolean> {
+	const tags: Record<string, string> = {};
+	for (const w of writes) tags[w.path] = await gitBlobSha(w.content);
+	return writeThroughWithTags(d1, id, cfg, baseSha, landedSha, writes, deletes, tags);
+}
 
 // ---- D1 shim over node:sqlite, instrumented to count the work each read does ----
 //
@@ -472,25 +489,49 @@ console.log('\nContent index — bounded, resumable ensureFresh\n');
 			!(await listIndexedPages(db, brainId)).some((p) => p.path === 'wiki/new-page.md')
 	);
 
-	// The stored blob sha is the REAL git object id, so a later incremental
-	// reindex diffs it as unchanged instead of refetching it.
+	// The stored blob sha is the tag the store returned for the write, so a later
+	// incremental reindex diffs it as unchanged instead of refetching it.
 	gh.head = 'commit-wt-4';
-	await writeThroughIndex(
+	await writeThroughWithTags(
 		db,
 		brainId,
 		config,
 		'commit-wt-3',
 		'commit-wt-4',
 		[{ path: 'wiki/empty.md', content: '' }],
-		[]
+		[],
+		{ 'wiki/empty.md': 'tag-from-store' }
 	);
 	const row = sqlite
 		.prepare(`SELECT blob_sha FROM brain_pages WHERE brain_id = ? AND path = ?`)
 		.get(brainId, 'wiki/empty.md') as { blob_sha: string };
 	check(
-		'blob sha matches git (empty blob)',
-		row.blob_sha === 'e69de29bb2d1d6434b8b29ae775ad8c2e48c5391',
+		'the stored sha is the tag the store returned',
+		row.blob_sha === 'tag-from-store',
 		row.blob_sha
+	);
+
+	// A page with no tag cannot be stored with one the next diff matches, so the
+	// whole write-through is skipped and the next read reconciles.
+	gh.head = 'commit-wt-5';
+	const untagged = await writeThroughWithTags(
+		db,
+		brainId,
+		config,
+		'commit-wt-4',
+		'commit-wt-5',
+		[
+			{ path: 'wiki/tagged.md', content: '# Tagged\n' },
+			{ path: 'wiki/untagged.md', content: '# Untagged\n' }
+		],
+		[],
+		{ 'wiki/tagged.md': 'tag-1' }
+	);
+	check(
+		'a page write without a tag skips write-through',
+		untagged === false &&
+			meta()?.indexed_commit_sha === 'commit-wt-4' &&
+			!(await listIndexedPages(db, brainId)).some((p) => p.path === 'wiki/tagged.md')
 	);
 }
 

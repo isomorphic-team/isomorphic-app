@@ -3,7 +3,7 @@ paths:
   - "src/lib/{brain-index,brain-repo,brain-config,brain-policy,brain-pass,links,wiki}.ts"
   - "src/local/**"
   - "src/db/index-schema.sql"
-  - "scripts/test-{index,links}.ts"
+  - "scripts/test-{index,links,store}.ts"
   - "scripts/e2e-librarian.ts"
 ---
 
@@ -17,6 +17,13 @@ storage, plus `githubStore(octokit)`; `src/local/brain-store-fs.ts` is the git-o
 - **Twelve operations:** `getHead`, `writeHead`, `branchCommitSha`, `repoWritePolicy`, `listTree`,
   `fetchPages`, `readFile`, `readBinary`, `findOpenConfigPr`, `listCommits`, `commitFiles`,
   `commitOrPR`. It is what the tools do, not a general storage abstraction.
+- **Each store declares `capabilities`** (`StoreCapabilities`: `atomicWrite`, `proposals`,
+  `history`). Branch on those, never on which store you hold. Every store is built through
+  `defineStore`, which makes a store without `proposals` refuse pull-request mode.
+- **A write returns each file's version tag** (`CommitResult.versions`, and
+  `WriteOutcome.versions` beside `commitSha` on a direct write): the same value `listTree`
+  reports for that file afterwards. The GitHub store uses the blob id (`gitBlobSha`), the fs
+  store a size and mtime token; a tag is opaque everywhere else. `pnpm test:store` runs this contract against every backend.
 - **If you reach for `ctx.octokit` while touching a brain's CONTENT, it belongs on the store.**
   A raw octokit call in a content path compiles and fails at runtime on the fs backend.
   `octokit` stays on the context (optional) only for GitHub-as-platform calls in
@@ -77,7 +84,8 @@ a derived index in D1 (`src/lib/brain-index.ts`, schema in `migrations/`).
   touched (`index.writeThrough`, called from `commitBundle`) and advances `indexed_commit_sha`,
   in ONE conditional D1 transaction that no-ops if the index moved. Bundles over the
   40-statement budget, PR writes, and the fs backend skip it and reconcile on the next read.
-  Failures are swallowed: the commit is the fact. Blob shas via Web Crypto (`gitBlobSha`).
+  Failures are swallowed: the commit is the fact. Each row's `blob_sha` is the version tag the
+  write returned; a page without one skips write-through.
 - **Queryable frontmatter** (`brain_page_fields`): every scalar or list-of-scalar key, capped
   per page (`MAX_FIELD_KEYS_PER_PAGE`); optional `indexedFields` in `.isomorphic.json`
   restricts. Nested frontmatter blocks are not indexed.

@@ -233,22 +233,23 @@ export function landed(ctx: BrainContext, outcome: WriteOutcome, done: string, p
 }
 
 // The one write chokepoint for the librarian tools: commitOrPR plus a write-through
-// index update. A direct commit reports the revision that landed, and the bundle
-// already holds the exact content of every page it touched, so the index advances in
-// place: the read an agent makes to verify the write costs one getRef instead of an
-// incremental reindex. PR mode leaves the index alone (the branch
-// has not moved), and a write-through failure is swallowed: the commit landed
-// regardless, and the next read reconciles, as it always did.
+// index update. A direct commit reports the revision that landed and each file's new
+// version tag, and the bundle already holds the exact content of every page it
+// touched, so the index advances in place: the read an agent makes to verify the write
+// costs one getRef instead of an incremental reindex. PR mode leaves the index alone
+// (the branch has not moved), and a write-through failure is swallowed: the commit
+// landed regardless, and the next read reconciles, as it always did.
 async function commitBundle(ctx: BrainContext, opts: CommitOrPROpts): Promise<WriteOutcome> {
 	const outcome = await ctx.store.commitOrPR(ctx.repoArgs, opts);
-	if (outcome.commitSha && opts.head) {
+	if (outcome.commitSha && outcome.versions && opts.head) {
 		await ctx.index
 			.writeThrough(
 				ctx.config,
 				opts.head.commitSha,
 				outcome.commitSha,
 				opts.writes ?? [],
-				opts.deletes ?? []
+				opts.deletes ?? [],
+				outcome.versions
 			)
 			.catch(() => {});
 	}
