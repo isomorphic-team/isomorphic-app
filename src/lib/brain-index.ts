@@ -459,26 +459,11 @@ async function incrementalReindex(
 	return complete;
 }
 
-// A git blob's object id for content we already hold, so write-through can store
-// the SAME sha a tree walk reports — blob shas are what incrementalReindex diffs
-// against, and a wrong one would merely cost a harmless refetch later. Worker-safe:
-// Web Crypto SHA-1, no node:crypto.
-async function gitBlobSha(content: string): Promise<string> {
-	const body = new TextEncoder().encode(content);
-	const header = new TextEncoder().encode(`blob ${body.byteLength}\0`);
-	const buf = new Uint8Array(header.byteLength + body.byteLength);
-	buf.set(header, 0);
-	buf.set(body, header.byteLength);
-	const digest = await crypto.subtle.digest('SHA-1', buf);
-	return Array.from(new Uint8Array(digest))
-		.map((b) => b.toString(16).padStart(2, '0'))
-		.join('');
-}
-
 // Write-through: fold one of our own commits into the index instead of leaving the
 // next read to reconcile it. The caller holds the revision the write was based on,
-// the one it landed, and the exact content of every page the bundle touched, so this
-// upserts those rows and advances indexed_commit_sha. The read an agent makes to
+// the one it landed, the exact content of every page the bundle touched, and the
+// version tag the store gave each written file, so this upserts those rows and
+// advances indexed_commit_sha. The read an agent makes to
 // verify a write then costs one getRef instead of an incremental reindex.
 //
 // Only when provably safe: the index must already be CURRENT at the write's base
@@ -494,7 +479,8 @@ export async function writeThroughIndex(
 	baseSha: string,
 	landedSha: string,
 	writes: { path: string; content: string; encoding?: string }[],
-	deletes: string[]
+	deletes: string[],
+	versions: Record<string, string>
 ): Promise<boolean> {
 	const meta = await db
 		.prepare(
@@ -514,10 +500,12 @@ export async function writeThroughIndex(
 	// in the same bundle are invisible to the index, so they need no rows — the sha
 	// still advances past them.
 	const isPage = (p: string) => p.endsWith('.md') && isContentPath(p, config);
+	const pageWrites = writes.filter((w) => isPage(w.path) && w.encoding !== 'base64');
+	// A page without a tag would be stored with one the next diff cannot match.
+	if (pageWrites.some((w) => !versions[w.path])) return false;
 	const stmts: D1PreparedStatement[] = [];
-	for (const w of writes) {
-		if (!isPage(w.path) || w.encoding === 'base64') continue;
-		const blobSha = await gitBlobSha(w.content);
+	for (const w of pageWrites) {
+		const blobSha = versions[w.path];
 		// Every mutation carries the same generation guard. D1 executes one batch as
 		// one transaction, so a concurrent reconcile/write either leaves this base
 		// current and the whole replacement lands, or makes every statement a no-op.
@@ -1097,7 +1085,8 @@ export interface BrainIndex {
 		baseSha: string,
 		landedSha: string,
 		writes: { path: string; content: string; encoding?: string }[],
-		deletes: string[]
+		deletes: string[],
+		versions: Record<string, string>
 	): Promise<boolean>;
 	/** Drop every row, so the next read rebuilds from the store. */
 	reset(): Promise<void>;
@@ -1146,8 +1135,8 @@ export const d1Index =
 	(brainId) => ({
 		brainId,
 		ensureFresh: (store, repo, config) => ensureFresh(db, store, repo, brainId, config),
-		writeThrough: (config, baseSha, landedSha, writes, deletes) =>
-			writeThroughIndex(db, brainId, config, baseSha, landedSha, writes, deletes),
+		writeThrough: (config, baseSha, landedSha, writes, deletes, versions) =>
+			writeThroughIndex(db, brainId, config, baseSha, landedSha, writes, deletes, versions),
 		reset: () => resetIndex(db, brainId),
 		hasPages: () => hasIndexedPages(db, brainId),
 		listPages: () => listIndexedPages(db, brainId),

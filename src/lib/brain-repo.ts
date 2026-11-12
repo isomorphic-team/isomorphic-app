@@ -175,9 +175,9 @@ const GRAPHQL_BLOB_BATCH = 100;
 
 // ---------- the storage seam ----------
 //
-// Everything the tools do to a brain, as twelve operations. The only interface between
-// the tool layer and where a brain physically lives, so a brain can be a GitHub repo
-// or a git repo on disk. Implementations: githubStore below, and the fs/git adapter
+// Everything the tools do to a brain, as twelve operations plus the capabilities the
+// backend declares. The only interface between the tool layer and where a brain
+// physically lives, so a brain can be a GitHub repo or a git repo on disk. Implementations: githubStore below, and the fs/git adapter
 // in src/local/brain-store-fs.ts.
 //
 // Not a general storage abstraction: it is the set of operations the tools already
@@ -226,7 +226,54 @@ export interface CommitOrPROpts extends CommitOpts {
 	mergeMethod?: 'MERGE' | 'SQUASH' | 'REBASE';
 }
 
+// What a backend can do beyond reading and writing files. Each implementation declares
+// its own; callers branch on these, never on which implementation they hold.
+export interface StoreCapabilities {
+	// A multi-file write lands entirely or not at all.
+	atomicWrite: boolean;
+	// The backend can hold a change for review (GitHub pull requests), so
+	// `writeMode: 'pull-request'` is available.
+	proposals: boolean;
+	// Cross-file change history, which listCommits reports.
+	history: boolean;
+}
+
+// Thrown by a store asked for a write it cannot perform as configured.
+export class UnsupportedWriteError extends Error {}
+
+// The refusal every store without `proposals` gives for a pull-request write. Committing
+// anyway would land a change the brain's config says needs review.
+export function refusePullRequestMode(capabilities: StoreCapabilities, writeMode: string): void {
+	if (writeMode === 'pull-request' && !capabilities.proposals) {
+		throw new UnsupportedWriteError(
+			'This brain is configured for pull-request writes, which its storage cannot hold for review. Set writes.mode to "direct" in .isomorphic.json, or serve this brain from GitHub.'
+		);
+	}
+}
+
+// A file's version tag on the git backends: the git blob id, the same value a tree
+// listing reports, so a page written through the index is not refetched on the next
+// diff. Worker-safe: Web Crypto SHA-1, no node:crypto.
+export async function gitBlobSha(content: string): Promise<string> {
+	const body = new TextEncoder().encode(content);
+	const header = new TextEncoder().encode(`blob ${body.byteLength}\0`);
+	const buf = new Uint8Array(header.byteLength + body.byteLength);
+	buf.set(header, 0);
+	buf.set(body, header.byteLength);
+	const digest = await crypto.subtle.digest('SHA-1', buf);
+	return Array.from(new Uint8Array(digest))
+		.map((b) => b.toString(16).padStart(2, '0'))
+		.join('');
+}
+
+export interface CommitResult {
+	sha: string;
+	head: Head;
+	versions: Record<string, string>;
+}
+
 export interface BrainStore {
+	readonly capabilities: StoreCapabilities;
 	// branch: resolve THIS branch instead of asking the platform for the default
 	// (callers pass config.defaultBranch), saving one round trip. Implementations
 	// fall back to discovery when the named branch does not exist.
@@ -259,7 +306,8 @@ export interface BrainStore {
 	findOpenConfigPr(repo: RepoRef): Promise<string | undefined>;
 	// Recent commits, newest first, optionally scoped to one path. Backs view_activity.
 	listCommits(repo: RepoRef, opts: { limit: number; path?: string }): Promise<CommitEntry[]>;
-	commitFiles(repo: RepoRef, opts: CommitOpts): Promise<{ sha: string; head: Head }>;
+	// `versions` holds the new version tag of every file written, by path.
+	commitFiles(repo: RepoRef, opts: CommitOpts): Promise<CommitResult>;
 	commitOrPR(repo: RepoRef, opts: CommitOrPROpts): Promise<WriteOutcome>;
 }
 
@@ -267,6 +315,7 @@ export interface BrainStore {
 // An App installation token and a plain access token work the same here.
 export function githubStore(octokit: Octokit): BrainStore {
 	return {
+		capabilities: { atomicWrite: true, proposals: true, history: true },
 		getHead: (repo, branch) => getHead(octokit, repo, branch),
 		writeHead: (repo, opts) => writeHead(octokit, repo, opts),
 		branchCommitSha: (repo, branch) => branchCommitSha(octokit, repo, branch),
@@ -579,8 +628,9 @@ async function buildTreeEntries(
 	repo: RepoRef,
 	writes: FileWrite[] = [],
 	deletes: string[] = []
-): Promise<TreeParam[]> {
+): Promise<{ tree: TreeParam[]; versions: Record<string, string> }> {
 	const tree: TreeParam[] = [];
+	const versions: Record<string, string> = {};
 	for (const w of writes) {
 		if (w.encoding === 'base64') {
 			const { data: blob } = await octokit.rest.git.createBlob({
@@ -589,14 +639,16 @@ async function buildTreeEntries(
 				encoding: 'base64'
 			});
 			tree.push({ path: w.path, mode: '100644', type: 'blob', sha: blob.sha });
+			versions[w.path] = blob.sha;
 		} else {
 			tree.push({ path: w.path, mode: '100644', type: 'blob', content: w.content });
+			versions[w.path] = await gitBlobSha(w.content);
 		}
 	}
 	for (const path of deletes) {
 		tree.push({ path, mode: '100644', type: 'blob', sha: null });
 	}
-	return tree;
+	return { tree, versions };
 }
 
 // One atomic commit: all writes and deletes land together or not at all.
@@ -612,10 +664,10 @@ async function commitFiles(
 		head?: Head; // pass when already fetched to save round trips
 		author?: CommitAuthor; // attribute the commit to the human, not the App
 	}
-): Promise<{ sha: string; head: Head }> {
+): Promise<CommitResult> {
 	const head = opts.head ?? (await getHead(octokit, repo));
 
-	const tree = await buildTreeEntries(octokit, repo, opts.writes, opts.deletes);
+	const { tree, versions } = await buildTreeEntries(octokit, repo, opts.writes, opts.deletes);
 
 	const { data: newTree } = await octokit.rest.git.createTree({
 		...repo,
@@ -638,7 +690,8 @@ async function commitFiles(
 	});
 	return {
 		sha: commit.sha,
-		head: { branch: head.branch, commitSha: commit.sha, treeSha: newTree.sha }
+		head: { branch: head.branch, commitSha: commit.sha, treeSha: newTree.sha },
+		versions
 	};
 }
 
@@ -664,6 +717,9 @@ export interface WriteOutcome {
 	// the default branch has not moved, or moved via a merge commit this call
 	// does not know — the next read reconciles there, as before.
 	commitSha?: string;
+	// Direct mode only, with commitSha: the new version tag of every file written, by
+	// path (BrainStore.commitFiles). Write-through stores these instead of deriving them.
+	versions?: Record<string, string>;
 }
 
 // Arm GitHub auto-merge on a freshly-opened PR: it merges automatically once the
@@ -743,12 +799,12 @@ async function commitOrPR(
 			head,
 			author: opts.author
 		});
-		return { commitSha: res.head.commitSha };
+		return { commitSha: res.head.commitSha, versions: res.versions };
 	}
 
 	// PR mode: build the identical tree/commit as commitFiles, but land it on a new
 	// branch and open a PR instead of moving the default ref.
-	const tree = await buildTreeEntries(octokit, repo, opts.writes, opts.deletes);
+	const { tree } = await buildTreeEntries(octokit, repo, opts.writes, opts.deletes);
 	const { data: newTree } = await octokit.rest.git.createTree({
 		...repo,
 		base_tree: head.treeSha,

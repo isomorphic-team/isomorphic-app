@@ -22,12 +22,14 @@ import type {
 	CommitEntry,
 	CommitOpts,
 	CommitOrPROpts,
+	CommitResult,
 	Head,
 	PageContent,
 	RepoWritePolicy,
 	TreeEntry,
 	WriteOutcome
 } from '../lib/brain-repo.ts';
+import { refusePullRequestMode } from '../lib/brain-repo.ts';
 
 const exec = promisify(execFile);
 
@@ -173,10 +175,7 @@ export function fsBrainStore(opts: FsStoreOptions): BrainStore {
 		return { branch, commitSha: token, treeSha: token };
 	};
 
-	const commit = async (
-		repoUnused: unknown,
-		o: CommitOpts
-	): Promise<{ sha: string; head: Head }> => {
+	const commit = async (repoUnused: unknown, o: CommitOpts): Promise<CommitResult> => {
 		void repoUnused;
 		// Capture what we are about to overwrite so a failure halfway can be undone.
 		// Buffers, not strings: rolling a half-written bundle back through a utf8 decode
@@ -217,10 +216,20 @@ export function fsBrainStore(opts: FsStoreOptions): BrainStore {
 		const ident = author ?? { name: 'Isomorphic', email: 'local@localhost' };
 		await git(root, ['-c', `user.name=${ident.name}`, '-c', `user.email=${ident.email}`, ...args]);
 		const sha = (await git(root, ['rev-parse', 'HEAD'])).trim();
-		return { sha, head: await head() };
+		// The same tag listTree reports for each file, read back after the write.
+		const versions: Record<string, string> = {};
+		for (const w of o.writes ?? []) {
+			const s = await stat(safeJoin(root, w.path));
+			versions[w.path] = fileToken({ path: w.path, size: s.size, mtimeMs: Math.floor(s.mtimeMs) });
+		}
+		return { sha, head: await head(), versions };
 	};
 
+	// Writes are a git commit (atomic, with history); there are no pull requests.
+	const capabilities = { atomicWrite: true, proposals: false, history: true };
+
 	return {
+		capabilities,
 		// The branch name selects nothing here (every branch is the same working
 		// tree); the parameter exists so the GitHub adapter can skip a round trip.
 		getHead: () => head(),
@@ -310,14 +319,9 @@ export function fsBrainStore(opts: FsStoreOptions): BrainStore {
 		commitFiles: (repo, o) => commit(repo, o),
 
 		commitOrPR: async (repo, o: CommitOrPROpts): Promise<WriteOutcome> => {
-			if (o.writeMode === 'pull-request') {
-				// Only reachable when a brain's own .isomorphic.json asks for review, since
-				// repoWritePolicy never reports protection here. Committing anyway would
-				// land a change the brain said needs approval.
-				throw new LocalGitError(
-					'This brain is configured for pull-request writes, which a local brain cannot open. Set writes.mode to "direct" in .isomorphic.json, or serve this brain from GitHub.'
-				);
-			}
+			// Only reachable when a brain's own .isomorphic.json asks for review, since
+			// repoWritePolicy never reports protection here.
+			refusePullRequestMode(capabilities, o.writeMode);
 			await commit(repo, o);
 			// The local revision is a digest of the mutable working tree, not the git
 			// commit this call created. An external edit can enter that digest without

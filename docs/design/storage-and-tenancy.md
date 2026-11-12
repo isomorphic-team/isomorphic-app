@@ -60,7 +60,7 @@ With that separation, two operations that are hard today become simple and indep
 The content half is done. `BrainStore` (`src/lib/brain-repo.ts`) is the only interface
 between the tool layer and a brain's storage, and the local runtime's fs + git store
 proves a second backend works behind it. Nothing in the read or write path needs to
-change for a new backend; it needs a new implementation of the ten operations.
+change for a new backend; it needs a new implementation of `BrainStore`.
 
 The coupling is all in **tenancy and identity**: which credential reads a brain, what an
 org is, and what a brain is called.
