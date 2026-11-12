@@ -236,7 +236,9 @@ its deploy window, because a rollback reverts code and never schema.
    relocation (step 5) changes them, which is when step 5 needs one.
 5. **A second backend.** An Azure Repos `BrainStore`, a service-principal connection
    kind, a generalized locator, and relocation. Built when a customer needs it, with an
-   e2e battery against a scratch repository (the twin of the `--github` mode).
+   e2e battery against a scratch repository (the twin of the `--github` mode). Backends
+   that are not git (OneDrive, SharePoint, Google Drive) need more than a new
+   implementation: [`storage-backends.md`](storage-backends.md).
 6. **Contract (built).** Checked against production first (18 brains, all bound; every
    org's installation a recorded connection; one dead `tenants` row; no `github_links`).
    Removed: the binding fallback, the `tenants` table, the GitHub half of Connected
