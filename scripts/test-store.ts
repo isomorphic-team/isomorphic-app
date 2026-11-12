@@ -20,11 +20,11 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
 	defineStore,
-	githubStore,
 	gitBlobSha,
 	type BrainStore,
 	type StoreCapabilities
 } from '../src/lib/brain-repo.ts';
+import { githubStore } from '../src/lib/brain-store-github.ts';
 import { ensureGitRepo, fsBrainStore } from '../src/local/brain-store-fs.ts';
 import { checker, errorOf } from './check.ts';
 import { fakeGithub, realGitBlobSha } from './fake-github.ts';
@@ -106,10 +106,12 @@ for (const backend of BACKENDS) {
 	);
 
 	// 2. version tags
-	const head = await store.getHead(repo);
-	const res = await store.commitFiles(repo, { message: 'Add pages', writes, head });
+	const head = await store.getRevision(repo);
+	const res = await store.write(repo, { message: 'Add pages', writes, base: head });
 	const listed = new Map(
-		(await store.listTree(repo, await store.getHead(repo))).map((e) => [e.path, e.sha] as const)
+		(await store.listTree(repo, await store.getRevision(repo))).map(
+			(e) => [e.path, e.version] as const
+		)
 	);
 	for (const w of writes) {
 		check(
@@ -121,7 +123,7 @@ for (const backend of BACKENDS) {
 
 	// 3. pull-request mode without proposals
 	if (!store.capabilities.proposals) {
-		const before = await store.getHead(repo);
+		const before = await store.getRevision(repo);
 		const refused = await errorOf(() =>
 			store.commitOrPR(repo, {
 				message: 'Should not land',
@@ -133,7 +135,7 @@ for (const backend of BACKENDS) {
 		check(`${backend.name}: pull-request mode is refused`, !!refused && PR_REFUSAL.test(refused));
 		check(
 			`${backend.name}: and nothing was written`,
-			(await store.getHead(repo)).commitSha === before.commitSha
+			(await store.getRevision(repo)).id === before.id
 		);
 	}
 }
@@ -142,7 +144,7 @@ for (const backend of BACKENDS) {
 {
 	console.log('\ngithub tags');
 	const store = githubStore(fakeGithub().octokit);
-	const res = await store.commitFiles(repo, { message: 'Add pages', writes });
+	const res = await store.write(repo, { message: 'Add pages', writes });
 	check(
 		'github: write tags are git blob ids',
 		writes.every((w) => res.versions[w.path] === realGitBlobSha(w.content))
@@ -156,7 +158,8 @@ for (const backend of BACKENDS) {
 	});
 	check(
 		'github: a direct commitOrPR reports the tags with the revision',
-		!!direct.commitSha && direct.versions?.['wiki/alpha.md'] === realGitBlobSha(edited)
+		!!direct.landed?.revision.id &&
+			direct.landed.versions['wiki/alpha.md'] === realGitBlobSha(edited)
 	);
 }
 

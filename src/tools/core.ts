@@ -37,18 +37,18 @@ export function registerCoreTools(
 			})
 		},
 		async ({ prefix, brain }) => {
-			const { store, repoArgs, config, index, activeBrain } = await getContext({ brain });
+			const { store, locator, config, index, activeBrain } = await getContext({ brain });
 
 			// No prefix = "the brain's editable content", which is exactly what the
 			// index holds — serve it from there (instant) and attach each page's title
 			// in structuredContent so the app's file tree can label files by title.
 			if (!prefix) {
-				await index.ensureFresh(store, repoArgs, config);
+				await index.ensureFresh(store, locator, config);
 				const pages = await index.listPages();
 				// Attachments are listed separately from genuinely-hidden files: an image
 				// somebody uploaded is content, and burying it behind "show hidden" beside
 				// .gitkeep markers meant the brain stored things it would not show you.
-				const { assets, hidden } = await listNonPagePaths(store, repoArgs, config);
+				const { assets, hidden } = await listNonPagePaths(store, locator, config);
 				// Empty could mean a fresh brain OR an adopted repo whose content isn't under
 				// the configured roots; flag the latter so the app can offer to auto-configure.
 				// Only content-AREA files count as "something to show" here: the hidden list
@@ -56,7 +56,7 @@ export function registerCoreTools(
 				const needsConfig =
 					pages.length === 0 &&
 					!hidden.some((p) => isContentPath(p, config)) &&
-					(await detectNeedsConfig(store, repoArgs, config));
+					(await detectNeedsConfig(store, locator, config));
 				return {
 					content: [
 						{
@@ -93,8 +93,8 @@ export function registerCoreTools(
 
 			// A prefix can target anything (including non-content like raw/), which the
 			// index doesn't hold, so keep the live tree walk for that case.
-			const head = await store.getHead(repoArgs, config.defaultBranch);
-			const paths = (await store.listTree(repoArgs, head))
+			const head = await store.getRevision(locator, config.defaultBranch);
+			const paths = (await store.listTree(locator, head))
 				.map((e) => e.path)
 				.filter((p) => p.startsWith(prefix))
 				.sort();
@@ -133,8 +133,8 @@ export function registerCoreTools(
 			})
 		},
 		async ({ path, brain }) => {
-			const { store, repoArgs, index, config } = await getContext({ brain });
-			const file = await store.readFile(repoArgs, path);
+			const { store, locator, index, config } = await getContext({ brain });
+			const file = await store.readFile(locator, path);
 			if (!file) {
 				return {
 					isError: true,
@@ -146,7 +146,7 @@ export function registerCoreTools(
 			// rendering beneath it — the current data without losing sight of the
 			// directive (so they don't hand-edit derived content). Falls back to
 			// the raw file if computing fails.
-			const views = await tryRenderViews(text, path, { index, store, repoArgs, config });
+			const views = await tryRenderViews(text, path, { index, store, locator, config });
 			// `path`, `markdown`, and `sha` form the structured read result for the app.
 			// `markdown` mirrors the text fallback exactly, so either MCP result channel
 			// carries the same page and version. No `view` key, so this stays a quiet

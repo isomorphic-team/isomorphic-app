@@ -37,7 +37,8 @@ import { consolidationWire, runConsolidationStep } from '../ee/review/consolidat
 import { z } from 'zod';
 import type { OAuthHelpers } from '@cloudflare/workers-oauth-provider';
 import { installationOctokit, tokenOctokit, staticAuth, type AppCreds } from './lib/github.ts';
-import { githubStore, commitAuthorFor, type BrainStore } from './lib/brain-repo.ts';
+import { commitAuthorFor, type BrainStore } from './lib/brain-repo.ts';
+import { githubStore } from './lib/brain-store-github.ts';
 import { platformInstall, provisionOrgForUser } from './lib/provision.ts';
 import { ensureStaticTenant, STATIC_USER_ID } from './lib/static-tenant.ts';
 import { credentialFor, credentialForConnection, orgStorage } from './lib/storage-connections.ts';
@@ -304,8 +305,8 @@ async function openBrainForAssetLink(env: Env, claim: AssetClaim): Promise<Opene
 			? tokenOctokit(requireToken(env))
 			: await installationOctokit(appCreds(env), credential.installationId);
 	const store = githubStore(octokit);
-	const repoArgs = { owner: target.repo_owner, repo: target.repo_name };
-	return { read: store.readBinary, repoArgs, config: await loadBrainConfig(store, repoArgs) };
+	const locator = { owner: target.repo_owner, repo: target.repo_name };
+	return { read: store.readBinary, locator, config: await loadBrainConfig(store, locator) };
 }
 
 // Thrown by brain-scope resolution when the caller has an org but no brain yet
@@ -327,7 +328,7 @@ interface TenantContext {
 	// through this rather than the client above, which is what lets a non-GitHub
 	// backend serve the same tools. See src/lib/brain-repo.ts.
 	store: BrainStore;
-	repoArgs: { owner: string; repo: string };
+	locator: { owner: string; repo: string };
 	// The caller's role ON THE RESOLVED BRAIN (effectiveBrainRole: an explicit
 	// grant or org visibility, whichever is higher). Read
 	// tools ignore it; write/configure/share tools gate on it. The single-tenant
@@ -600,12 +601,12 @@ class McpSession {
 
 	private async loadConfig(
 		store: BrainStore,
-		repoArgs: { owner: string; repo: string }
+		locator: { owner: string; repo: string }
 	): Promise<BrainConfig> {
-		const key = `${repoArgs.owner}/${repoArgs.repo}`;
+		const key = `${locator.owner}/${locator.repo}`;
 		const cached = this.configCache.get(key);
 		if (cached) return cached;
-		const cfg = await loadBrainConfig(store, repoArgs);
+		const cfg = await loadBrainConfig(store, locator);
 		this.configCache.set(key, cfg);
 		return cfg;
 	}
@@ -691,7 +692,7 @@ class McpSession {
 			credential.kind === 'token'
 				? tokenOctokit(requireToken(env))
 				: await installationOctokit(appCreds(env), credential.installationId);
-		const repoArgs = { owner: target.repo_owner, repo: target.repo_name };
+		const locator = { owner: target.repo_owner, repo: target.repo_name };
 		// Attribute commits to the human. Prefer the app_users row (authoritative
 		// name + verified email); fall back to the token email. A member with no
 		// GitHub account still gets legible authorship — GitHub just won't link it
@@ -706,7 +707,7 @@ class McpSession {
 				: commitAuthorFor(await getAppUser(env.PLATFORM_DB, userId), email);
 		this.noteScope(target.org_id, target.brain_id);
 		const store = githubStore(octokit);
-		const config = await this.loadConfig(store, repoArgs);
+		const config = await this.loadConfig(store, locator);
 		return {
 			octokit,
 			store: guardStore(store, {
@@ -723,7 +724,7 @@ class McpSession {
 						detections
 					)
 			}),
-			repoArgs,
+			locator,
 			role: target.role,
 			orgRole: target.org_role,
 			orgId: target.org_id,
@@ -735,7 +736,7 @@ class McpSession {
 				actorUserId: userId,
 				config,
 				store,
-				repo: repoArgs
+				repo: locator
 			}),
 			config,
 			author,
@@ -932,10 +933,10 @@ class McpSession {
 					let roleNote = '';
 					const identity: IdentityWire = { email };
 					try {
-						const { role, repoArgs, activeBrain } = await this.tenantContext();
-						roleNote = ` — ${role} of ${repoArgs.owner}/${repoArgs.repo}`;
+						const { role, locator, activeBrain } = await this.tenantContext();
+						roleNote = ` — ${role} of ${locator.owner}/${locator.repo}`;
 						identity.role = role;
-						identity.org = repoArgs.owner;
+						identity.org = locator.owner;
 						identity.activeBrain = activeBrain;
 					} catch {
 						// Resolution/provisioning not complete; still report the identity.

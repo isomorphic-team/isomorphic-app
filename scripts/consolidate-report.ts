@@ -140,7 +140,7 @@ async function modelPass() {
 				orgId,
 				config: brain.config,
 				store: brain.store,
-				repo: brain.repoArgs,
+				repo: brain.locator,
 				anthropicKey,
 				openRouterKey
 			});

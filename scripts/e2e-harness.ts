@@ -20,7 +20,8 @@ import { Client } from '@modelcontextprotocol/client';
 import { InMemoryTransport, type McpServer } from '@modelcontextprotocol/server';
 import { installationOctokit } from '../src/lib/github.ts';
 import { createAndScaffoldBrain, buildScaffoldFiles } from '../src/lib/scaffold-core.ts';
-import { githubStore, type BrainStore } from '../src/lib/brain-repo.ts';
+import type { BrainStore } from '../src/lib/brain-repo.ts';
+import { githubStore } from '../src/lib/brain-store-github.ts';
 import { ensureGitRepo, fsBrainStore } from '../src/local/brain-store-fs.ts';
 import { readDevVars } from '../src/persist.ts';
 
@@ -50,7 +51,7 @@ export async function eventually<T>(
 
 export interface ScratchBrain {
 	store: BrainStore;
-	repoArgs: { owner: string; repo: string };
+	locator: { owner: string; repo: string };
 	brainId: string;
 	// The repo name, or the temp directory's basename offline.
 	name: string;
@@ -77,14 +78,14 @@ export async function scratchBrain(prefix: string, description: string): Promise
 	console.log(`Creating scratch brain in ${dir} …`);
 	await ensureGitRepo(dir, AUTHOR);
 	const store = fsBrainStore({ dir, author: AUTHOR });
-	const repoArgs = { owner: 'local', repo: name };
+	const locator = { owner: 'local', repo: name };
 	// The same scaffold the GitHub path gets, from the same pure builder, so both
 	// backends start from a byte-identical brain.
-	await store.commitFiles(repoArgs, { message: 'Scaffold brain', writes: buildScaffoldFiles() });
-	const headSha = async () => (await store.getHead(repoArgs)).commitSha;
+	await store.write(locator, { message: 'Scaffold brain', writes: buildScaffoldFiles() });
+	const headSha = async () => (await store.getRevision(locator)).id;
 	return {
 		store,
-		repoArgs,
+		locator,
 		brainId: `local/${name}`,
 		name,
 		scaffoldRepo: async () => {
@@ -123,11 +124,11 @@ async function githubScratchBrain(prefix: string, description: string): Promise<
 	};
 	const brain = await scaffoldRepo(name, description);
 	const store = githubStore(octokit);
-	const repoArgs = { owner: brain.owner, repo: brain.name };
-	const headSha = async () => (await store.getHead(repoArgs)).commitSha;
+	const locator = { owner: brain.owner, repo: brain.name };
+	const headSha = async () => (await store.getRevision(locator)).id;
 	return {
 		store,
-		repoArgs,
+		locator,
 		brainId: `${brain.owner}/${brain.name}`,
 		name,
 		octokit,

@@ -48,15 +48,15 @@ export interface CustomToolLoad {
 // (one indexed-page listing, no blob fetches). Fail-open: a malformed page is an
 // error entry, never a thrown request.
 export async function loadCustomToolDefs(ctx: BrainContext): Promise<CustomToolLoad> {
-	const { index, store, repoArgs, config } = ctx;
-	await index.ensureFresh(store, repoArgs, config);
+	const { index, store, locator, config } = ctx;
+	await index.ensureFresh(store, locator, config);
 	const toolPages = (await index.listPages()).filter((p) => isToolPagePath(p.path));
 	if (toolPages.length === 0) return { defs: [], errors: [] };
 
 	const blobs = await Promise.all(
 		toolPages.map((p) =>
 			store
-				.readFile(repoArgs, p.path)
+				.readFile(locator, p.path)
 				.then((f) => ({ path: p.path, content: f?.content ?? null }))
 				.catch(() => ({ path: p.path, content: null }))
 		)
@@ -106,7 +106,7 @@ async function runView(def: CustomToolDef, args: Record<string, unknown>, ctx: B
 	const rendered = await tryRenderViews(synthetic, def.sourcePath, {
 		index: ctx.index,
 		store: ctx.store,
-		repoArgs: ctx.repoArgs,
+		locator: ctx.locator,
 		config: ctx.config
 	});
 	const preamble = def.instructions ? fill(def.instructions, args) + '\n\n' : '';
@@ -138,12 +138,12 @@ async function runOp(def: CustomToolDef, args: Record<string, unknown>, ctx: Bra
 }
 
 async function execOp(op: OpName, a: Record<string, string>, ctx: BrainContext): Promise<string> {
-	const { index, store, repoArgs, config } = ctx;
+	const { index, store, locator, config } = ctx;
 	switch (op) {
 		case 'search_pages': {
 			const query = (a.query ?? '').trim();
 			if (query.length < 2) return 'search_pages needs a "query" arg of at least 2 characters.';
-			await index.ensureFresh(store, repoArgs, config);
+			await index.ensureFresh(store, locator, config);
 			const result = await index.search(query, a.prefix || undefined, 50);
 			const { hits } = result;
 			if (hits.length === 0) return `No matches for "${query}".`;
@@ -156,12 +156,12 @@ async function execOp(op: OpName, a: Record<string, string>, ctx: BrainContext):
 		case 'read_page': {
 			const path = (a.path ?? '').trim();
 			if (!path) return 'read_page needs a "path" arg.';
-			const file = await store.readFile(repoArgs, path);
+			const file = await store.readFile(locator, path);
 			if (!file) return `"${path}" does not exist.`;
 			const views = await tryRenderViews(file.content, path, {
 				index,
 				store,
-				repoArgs,
+				locator,
 				config
 			});
 			return views?.snapshotted ?? file.content;
@@ -169,7 +169,7 @@ async function execOp(op: OpName, a: Record<string, string>, ctx: BrainContext):
 		case 'find_inbound_links': {
 			const path = (a.path ?? '').trim();
 			if (!path) return 'find_inbound_links needs a "path" arg.';
-			await index.ensureFresh(store, repoArgs, config);
+			await index.ensureFresh(store, locator, config);
 			const resolved = await index.graph(config);
 			const refs = backlinksTo(resolved, path);
 			if (refs.length === 0) return `No pages link to "${path}".`;
@@ -178,7 +178,7 @@ async function execOp(op: OpName, a: Record<string, string>, ctx: BrainContext):
 			);
 		}
 		case 'list_pages': {
-			await index.ensureFresh(store, repoArgs, config);
+			await index.ensureFresh(store, locator, config);
 			const pages = await index.listPages();
 			const prefix = (a.prefix ?? '').trim();
 			const filtered = prefix ? pages.filter((p) => p.path.startsWith(prefix)) : pages;

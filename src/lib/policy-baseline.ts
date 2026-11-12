@@ -10,7 +10,7 @@
 // No model is involved and nothing leaves the deployment. Worker-safe: no node:* imports.
 
 import type { D1Database } from '@cloudflare/workers-types';
-import type { BrainStore, RepoRef, TreeEntry } from './brain-repo.ts';
+import type { BrainStore, BrainLocator, FileEntry } from './brain-repo.ts';
 import type { BrainConfig } from './brain-policy.ts';
 import { detectSensitive } from './policy-detectors.ts';
 import type { WriteDetection } from './policy-guard.ts';
@@ -32,7 +32,7 @@ const BINARY_FILE =
 
 export interface BaselineStepPlan {
 	// Paths to read this call.
-	read: TreeEntry[];
+	read: FileEntry[];
 	// Binary paths passed over this call.
 	skipped: number;
 	// The last path this call covers; null when there was nothing left.
@@ -43,7 +43,7 @@ export interface BaselineStepPlan {
 // The next window of the tree after `cursor`. Sorted by code unit, the order the
 // cursor compares in.
 export function planBaselineStep(
-	tree: readonly TreeEntry[],
+	tree: readonly FileEntry[],
 	cursor: string | null,
 	budget = BASELINE_FILE_BUDGET
 ): BaselineStepPlan {
@@ -63,7 +63,7 @@ export function planBaselineStep(
 export interface BaselineTarget {
 	db: D1Database;
 	store: BrainStore;
-	repo: RepoRef;
+	repo: BrainLocator;
 	config: BrainConfig;
 	scope: BaselineScope;
 }
@@ -75,7 +75,7 @@ export async function advanceBaseline(t: BaselineTarget, now = Date.now()): Prom
 	const existing = await readBaseline(db, scope.brainId);
 	const state = existing?.status === 'running' ? existing : await beginBaseline(db, scope, now);
 
-	const head = await store.getHead(repo, config.defaultBranch);
+	const head = await store.getRevision(repo, config.defaultBranch);
 	const tree = await store.listTree(repo, head, { extension: '*' });
 	const plan = planBaselineStep(tree, state.cursor);
 	const { pages } = plan.read.length

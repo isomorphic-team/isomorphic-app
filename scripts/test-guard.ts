@@ -17,7 +17,7 @@
 //      error surfaces, and nothing is recorded for a write that did not land.
 //   4. A GUARD THAT IS OFF WHEN NOBODY ASKED. It is on by default and never blocks;
 //      only an explicit `"off"` turns it off, and off returns the store untouched.
-//   5. A WRITE PATH THE GUARD MISSES. Both commitOrPR and commitFiles are wrapped,
+//   5. A WRITE PATH THE GUARD MISSES. Both commitOrPR and write are wrapped,
 //      and binary (base64) writes are skipped rather than scanned as text.
 //   6. THE REPORT REACHING THE WRONG PERSON. `validate` shows detections to brain
 //      admins only, since even "wiki/intake.md: us-ssn" says where sensitive data
@@ -207,12 +207,12 @@ function stubStore(opts: { fail?: boolean } = {}) {
 		async commitOrPR() {
 			calls.push('commitOrPR');
 			if (opts.fail) throw new Error('write failed');
-			return { commitSha: 'abc' };
+			return { landed: { revision: { id: 'abc', branch: 'main', snapshot: 'def' }, versions: {} } };
 		},
-		async commitFiles() {
-			calls.push('commitFiles');
+		async write() {
+			calls.push('write');
 			if (opts.fail) throw new Error('write failed');
-			return { sha: 'abc', head: { commitSha: 'abc', treeSha: 'def' } };
+			return { revision: { id: 'abc', branch: 'main', snapshot: 'def' }, versions: {} };
 		}
 	} as unknown as BrainStore;
 	return { store, calls };
@@ -234,13 +234,13 @@ console.log('\nguardStore: shadow records, never blocks (3, 5)');
 	const guarded = guardStore(store, { mode: 'shadow', record: async (d) => void recorded.push(d) });
 	const out = await guarded.commitOrPR(repo, commitOpts);
 	check('the write reached the store', calls.join() === 'commitOrPR');
-	check("the store's result is returned unchanged", out.commitSha === 'abc');
+	check("the store's result is returned unchanged", out.landed?.revision.id === 'abc');
 	check(
 		'commitOrPR detections recorded',
 		recorded.length === 1 && recorded[0][0].kind === 'us-ssn'
 	);
-	await guarded.commitFiles(repo, { message: 'edit', writes: sensitive });
-	check('commitFiles is guarded too', recorded.length === 2);
+	await guarded.write(repo, { message: 'edit', writes: sensitive });
+	check('write is guarded too', recorded.length === 2);
 	await guarded.commitOrPR(repo, {
 		...commitOpts,
 		writes: [{ path: 'wiki/b.md', content: 'fine' }]
@@ -625,7 +625,7 @@ console.log('\ncoverage: what the report has looked at (7)');
 
 console.log('\nplanBaselineStep: a budgeted window (8)');
 {
-	const e = (path: string) => ({ path, sha: path });
+	const e = (path: string) => ({ path, version: path });
 	const tree = [e('c.md'), e('a.md'), e('b.png'), e('d.env')];
 	const first = planBaselineStep(tree, null, 2);
 	check(
@@ -658,9 +658,9 @@ console.log('\nbaseline scan: the real migrations, a stub store (8)');
 		'zz-last.md': 'SSN 123-45-6789'
 	};
 	const store = {
-		getHead: async () => ({ commitSha: 'h', treeSha: 't' }),
+		getRevision: async () => ({ id: 'h', branch: 'main', snapshot: 't' }),
 		listTree: async () =>
-			Object.keys(files).map((path) => ({ path, sha: stubSha(path, files[path]) })),
+			Object.keys(files).map((path) => ({ path, version: stubSha(path, files[path]) })),
 		readFile: async (_r: unknown, path: string) =>
 			files[path] === undefined ? null : { content: files[path], sha: stubSha(path, files[path]) },
 		fetchPages: async (_r: unknown, entries: { path: string }[]) => ({
@@ -794,7 +794,7 @@ console.log('\nbaseline scan: the real migrations, a stub store (8)');
 		scope: { brainId: 'b2' },
 		store: {
 			...store,
-			listTree: async () => Object.keys(big).map((path) => ({ path, sha: path })),
+			listTree: async () => Object.keys(big).map((path) => ({ path, version: path })),
 			fetchPages: async (_r: unknown, entries: { path: string }[]) => ({
 				pages: entries.map((e) => ({ path: e.path, content: big[e.path] })),
 				truncated: false
@@ -889,8 +889,8 @@ console.log('\nbaseline state in brain_passes, and the move from policy_baseline
 	);
 
 	const store = {
-		getHead: async () => 'head',
-		listTree: async () => [{ path: 'wiki/a.md', sha: 's1' }],
+		getRevision: async () => 'head',
+		listTree: async () => [{ path: 'wiki/a.md', version: 's1' }],
 		fetchPages: async () => ({
 			pages: [{ path: 'wiki/a.md', content: 'nothing sensitive' }],
 			truncated: false

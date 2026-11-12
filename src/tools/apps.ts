@@ -29,7 +29,7 @@ import {
 } from '@modelcontextprotocol/ext-apps/server';
 import { z } from 'zod';
 import { BRAIN_APP_HTML } from '../lib/app-bundle.generated.ts';
-import { MAX_SCAN_PAGES, type RepoRef, type BrainStore } from '../lib/brain-repo.ts';
+import { MAX_SCAN_PAGES, type BrainLocator, type BrainStore } from '../lib/brain-repo.ts';
 import { detectNeedsConfig, type BrainIndex } from '../lib/brain-index.ts';
 import { tryRenderViews, stripSnapshots } from '../lib/views.ts';
 import { browseSummary, treeFitsInline } from '../lib/browse.ts';
@@ -144,10 +144,10 @@ export const GLOBAL_ENTRY_POINT = { 'openai/ui': { entrypoints: [{ type: 'global
 async function buildGraph(
 	index: BrainIndex,
 	store: BrainStore,
-	repoArgs: RepoRef,
+	locator: BrainLocator,
 	config: BrainConfig
 ) {
-	const { truncated } = await index.ensureFresh(store, repoArgs, config);
+	const { truncated } = await index.ensureFresh(store, locator, config);
 	const resolved = await index.graph(config);
 	// Dedupe the resolved directed edges into undirected connections and count each
 	// node's degree so the renderer can size hubs.
@@ -254,8 +254,8 @@ export function registerBrainApp(
 			_meta: { ui: { resourceUri: BRAIN_APP_URI } }
 		},
 		async ({ path, brain }) => {
-			const { index, store, repoArgs, config, activeBrain } = await getContext({ brain });
-			const file = await store.readFile(repoArgs, path);
+			const { index, store, locator, config, activeBrain } = await getContext({ brain });
+			const file = await store.readFile(locator, path);
 			if (!file) return fail(`"${path}" does not exist.`);
 			// Derived views: replace each okf-view fence (and its cached snapshot)
 			// with the live rendering computed from the content index, so the user
@@ -263,7 +263,7 @@ export function registerBrainApp(
 			const views = await tryRenderViews(file.content, path, {
 				index,
 				store,
-				repoArgs,
+				locator,
 				config
 			});
 			const markdown = views?.display ?? file.content;
@@ -299,16 +299,16 @@ export function registerBrainApp(
 			_meta: { ui: { resourceUri: BRAIN_APP_URI }, ...GLOBAL_ENTRY_POINT }
 		},
 		async ({ brain }) => {
-			const { index, store, repoArgs, config, activeBrain } = await getContext({ brain });
+			const { index, store, locator, config, activeBrain } = await getContext({ brain });
 			// Serve the page list from the content index (ensureFresh reconciles it with
 			// HEAD first) — so it's instant and carries each page's display title, letting
 			// the file tree label files by title instead of filename. The index already
 			// holds exactly the brain's content pages (isContentPath), so no extra filter.
-			await index.ensureFresh(store, repoArgs, config);
+			await index.ensureFresh(store, locator, config);
 			const pages = await index.listPages();
 			const paths = pages.map((p) => p.path);
 			// Attachments listed apart from hidden files — see listNonPagePaths.
-			const { assets, hidden } = await listNonPagePaths(store, repoArgs, config);
+			const { assets, hidden } = await listNonPagePaths(store, locator, config);
 			// Empty could be a fresh brain or an adopted repo whose content isn't under the
 			// configured roots; flag the latter so the app can offer to auto-configure.
 			// Only content-AREA files count as "something to show": the hidden list
@@ -316,7 +316,7 @@ export function registerBrainApp(
 			const needsConfig =
 				paths.length === 0 &&
 				!hidden.some((p) => isContentPath(p, config)) &&
-				(await detectNeedsConfig(store, repoArgs, config));
+				(await detectNeedsConfig(store, locator, config));
 			// The tree rides along only while it is small (see src/lib/browse.ts). Over
 			// budget it is left out entirely and the app fetches it with list_pages, which
 			// is a widget-initiated call and costs the conversation nothing (the
@@ -363,10 +363,10 @@ export function registerBrainApp(
 			_meta: { ui: { resourceUri: BRAIN_APP_URI } }
 		},
 		async ({ path, limit, brain }) => {
-			const { store, repoArgs, config, activeBrain } = await getContext({ brain });
+			const { store, locator, config, activeBrain } = await getContext({ brain });
 			const per_page = Math.min(Math.max(1, limit ?? 20), 50);
 			// One call, no per-blob fanout; `path` scopes it to one page's history.
-			const commits = await store.listCommits(repoArgs, { limit: per_page, path });
+			const commits = await store.listCommits(locator, { limit: per_page, path });
 			const entries = commits.map((c) => {
 				const message = c.message.split('\n')[0];
 				// Our write tools embed the target path in the message, e.g.
@@ -423,7 +423,7 @@ export function registerBrainApp(
 			_meta: { ui: { resourceUri: BRAIN_APP_URI } }
 		},
 		async ({ brain }) => {
-			const { config, db, brainId, role, activeBrain, store, repoArgs, policySecret } =
+			const { config, db, brainId, role, activeBrain, store, locator, policySecret } =
 				await getContext({ brain });
 			if (!roleAtLeast(role, 'admin')) {
 				return fail(
@@ -433,7 +433,7 @@ export function registerBrainApp(
 			const rows = await readReconciledFindings({
 				db,
 				store,
-				repo: repoArgs,
+				repo: locator,
 				defaultBranch: config.defaultBranch,
 				brainId,
 				secret: policySecret
@@ -485,8 +485,8 @@ export function registerBrainApp(
 			_meta: { ui: { resourceUri: BRAIN_APP_URI } }
 		},
 		async ({ path, brain }) => {
-			const { store, repoArgs, config, index, activeBrain } = await getContext({ brain });
-			const { nodes, edges, truncated } = await buildGraph(index, store, repoArgs, config);
+			const { store, locator, config, index, activeBrain } = await getContext({ brain });
+			const { nodes, edges, truncated } = await buildGraph(index, store, locator, config);
 			const focus = path && nodes.some((n) => n.id === path) ? path : undefined;
 			const text =
 				`Brain graph: ${nodes.length} page(s), ${edges.length} link(s).` +
@@ -524,18 +524,18 @@ export function registerBrainApp(
 			_meta: { ui: { resourceUri: BRAIN_APP_URI } }
 		},
 		async ({ path, brain }) => {
-			const { store, repoArgs, config, activeBrain } = await getContext({ brain });
+			const { store, locator, config, activeBrain } = await getContext({ brain });
 			if (isSourcePath(path, config))
 				return fail(`"${path}" is source material — it can't be edited.`);
 			if (isToolMaintained(path, config)) return fail(`"${path}" is maintained automatically.`);
 			if (!path.endsWith('.md')) return fail('Only markdown pages can be edited.');
 			if (!isContentPath(path, config))
 				return fail(`"${path}" is outside this brain's editable content.`);
-			// Opened where write_page will save it (BrainStore.writeHead): with an open
+			// Opened where write_page will save it (BrainStore.writeBase): with an open
 			// pull request, the page as that pull request holds it, so the sha guard
 			// matches and the save keeps the changes already waiting there.
-			const head = await store.writeHead(repoArgs, config);
-			const file = await store.readFile(repoArgs, path, head.commitSha);
+			const head = await store.writeBase(locator, config);
+			const file = await store.readFile(locator, path, head.id);
 			if (!file) return fail(`"${path}" does not exist.`);
 			// Derived views: the editor gets the okf-view fences but NOT the generated
 			// snapshot regions — generated content must never round-trip through

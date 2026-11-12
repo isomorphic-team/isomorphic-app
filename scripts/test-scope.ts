@@ -189,7 +189,7 @@ function contextFor(p: Persona) {
 		return {
 			octokit,
 			store,
-			repoArgs: { owner: 'northwind', repo: 'main' },
+			locator: { owner: 'northwind', repo: 'main' },
 			role: p.role,
 			orgRole: p.orgRole,
 			orgId: 'org1',

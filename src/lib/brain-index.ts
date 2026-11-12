@@ -18,7 +18,12 @@
 //     ceil(changedPages / 100) subrequests, not one per page.
 
 import type { D1Database, D1PreparedStatement } from '@cloudflare/workers-types';
-import { type RepoRef, type TreeEntry, type BrainStore, MAX_SCAN_PAGES } from './brain-repo.ts';
+import {
+	type BrainLocator,
+	type FileEntry,
+	type BrainStore,
+	MAX_SCAN_PAGES
+} from './brain-repo.ts';
 import { classifyMdLink } from './links.ts';
 import { BRAIN_INDEX_TABLES } from './brain-forget.ts';
 import { searchIndexFts } from './search-fts-index.ts';
@@ -202,11 +207,11 @@ export interface IndexState {
 export async function ensureFresh(
 	db: D1Database,
 	store: BrainStore,
-	repo: RepoRef,
+	repo: BrainLocator,
 	brainId: string,
 	config: BrainConfig
 ): Promise<IndexState> {
-	const liveSha = await store.branchCommitSha(repo, config.defaultBranch);
+	const liveSha = await store.branchRevision(repo, config.defaultBranch);
 	const meta = await db
 		.prepare(
 			`SELECT indexed_commit_sha, truncated, schema_version, rebuild_cursor
@@ -244,8 +249,8 @@ export async function ensureFresh(
 	// and recording that commit with rows derived under the prior config would make
 	// the mismatch look permanently fresh. This is one pinned blob read, not the old
 	// three-call config + write-policy reload.
-	const head = await store.getHead(repo, config.defaultBranch);
-	const freshConfig = await loadIndexConfig(store, repo, head.commitSha, config);
+	const head = await store.getRevision(repo, config.defaultBranch);
+	const freshConfig = await loadIndexConfig(store, repo, head.id, config);
 	const entries = (await store.listTree(repo, head)).filter(
 		(e) => e.path.endsWith('.md') && isContentPath(e.path, freshConfig)
 	);
@@ -260,7 +265,7 @@ export async function ensureFresh(
 	// NULL is meaningful here (the schema's "never built"), and is what an
 	// over-budget FIRST build leaves behind: rows exist, but they don't yet
 	// correspond to any commit, so the next read keeps reconciling.
-	let indexedSha: string | null = head.commitSha;
+	let indexedSha: string | null = head.id;
 
 	if (!meta) {
 		// First build. Bounded for the same reason the others are: a brain big enough
@@ -380,15 +385,15 @@ async function rebuildDerivedFromStore(
 async function fullBuild(
 	db: D1Database,
 	store: BrainStore,
-	repo: RepoRef,
+	repo: BrainLocator,
 	brainId: string,
-	entries: TreeEntry[],
+	entries: FileEntry[],
 	config: BrainConfig
 ): Promise<boolean> {
 	const complete = entries.length <= REINDEX_PAGE_BUDGET;
 	const take = complete ? entries : entries.slice(0, REINDEX_PAGE_BUDGET);
 	const { pages } = await store.fetchPages(repo, take);
-	const shaByPath = new Map(take.map((e) => [e.path, e.sha]));
+	const shaByPath = new Map(take.map((e) => [e.path, e.version]));
 	const stmts: D1PreparedStatement[] = [
 		db.prepare(`DELETE FROM brain_pages WHERE brain_id = ?1`).bind(brainId),
 		db.prepare(`DELETE FROM brain_links WHERE brain_id = ?1`).bind(brainId),
@@ -418,9 +423,9 @@ export const REINDEX_PAGE_BUDGET = 600;
 async function incrementalReindex(
 	db: D1Database,
 	store: BrainStore,
-	repo: RepoRef,
+	repo: BrainLocator,
 	brainId: string,
-	entries: TreeEntry[],
+	entries: FileEntry[],
 	config: BrainConfig
 ): Promise<boolean> {
 	const stored = await db
@@ -430,7 +435,7 @@ async function incrementalReindex(
 	const storedSha = new Map(stored.results.map((r) => [r.path, r.blob_sha]));
 	const livePaths = new Set(entries.map((e) => e.path));
 
-	const allChanged = entries.filter((e) => storedSha.get(e.path) !== e.sha);
+	const allChanged = entries.filter((e) => storedSha.get(e.path) !== e.version);
 	const complete = allChanged.length <= REINDEX_PAGE_BUDGET;
 	// Deletions are cheap (no fetch), so they always land in full on the first pass.
 	const changed = complete ? allChanged : allChanged.slice(0, REINDEX_PAGE_BUDGET);
@@ -448,7 +453,7 @@ async function incrementalReindex(
 	}
 	if (changed.length) {
 		const { pages } = await store.fetchPages(repo, changed);
-		const shaByPath = new Map(changed.map((e) => [e.path, e.sha]));
+		const shaByPath = new Map(changed.map((e) => [e.path, e.version]));
 		for (const p of pages) {
 			stmts.push(
 				...pageUpsert(db, brainId, p.path, p.content, shaByPath.get(p.path) ?? '', config)
@@ -469,7 +474,7 @@ async function incrementalReindex(
 // Only when provably safe: the index must already be CURRENT at the write's base
 // revision (otherwise other pages changed under us and the next read reconciles as
 // usual) and not mid schema-rebuild. Never applies on the PR path — the caller only
-// receives a commitSha for a direct commit. Returns whether the index advanced.
+// receives a landed revision for a direct write. Returns whether the index advanced.
 // Fail-open by contract: the commit has landed regardless, and callers swallow
 // errors; a missed write-through only costs one reconcile.
 export async function writeThroughIndex(
@@ -654,10 +659,10 @@ export async function resetIndex(db: D1Database, brainId: string): Promise<void>
 // returns every blob regardless, so listing everything costs no extra request.
 export async function detectNeedsConfig(
 	store: BrainStore,
-	repo: RepoRef,
+	repo: BrainLocator,
 	config: BrainConfig
 ): Promise<boolean> {
-	const head = await store.getHead(repo, config.defaultBranch);
+	const head = await store.getRevision(repo, config.defaultBranch);
 	const tree = await store.listTree(repo, head, { extension: '*' });
 	if (tree.some((e) => e.path === CONFIG_PATH)) return false; // author configured it explicitly
 	const md = tree.filter((e) => e.path.endsWith('.md'));
@@ -990,7 +995,7 @@ export async function searchIndex(
 //
 // What fan-out costs is not here. Every brain's index lives in the same D1 and the
 // phase-1 query is a handful of booleans per matching page, so N brains are N cheap
-// statements. The cost is FRESHNESS: ensureFresh is one branchCommitSha per brain plus
+// statements. The cost is FRESHNESS: ensureFresh is one branchRevision per brain plus
 // a full reindex for any whose HEAD moved, which for a rarely-opened brain is the common
 // case. So the caller decides which brains to bring up to date (search_pages does only
 // the active one) rather than this function doing it for all of them.
@@ -1078,7 +1083,7 @@ export function escapeLike(s: string): string {
 export interface BrainIndex {
 	readonly brainId: string;
 	/** Reconcile with the branch head. MUST be awaited before any read below. */
-	ensureFresh(store: BrainStore, repo: RepoRef, config: BrainConfig): Promise<IndexState>;
+	ensureFresh(store: BrainStore, repo: BrainLocator, config: BrainConfig): Promise<IndexState>;
 	writeThrough(
 		config: BrainConfig,
 		baseSha: string,

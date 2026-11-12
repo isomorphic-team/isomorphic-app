@@ -814,7 +814,7 @@ console.log('\nconsolidation: a pass over an indexed brain (7)');
 			actorUserId: 'u1',
 			config: brain.config,
 			store: brain.store,
-			repo: brain.repoArgs,
+			repo: brain.locator,
 			gateway,
 			newRunId: () => 'run-1'
 		};
@@ -915,7 +915,7 @@ console.log('\nconsolidation: a pass over an indexed brain (7)');
 			orgId: 'o1',
 			config: brain.config,
 			store: brain.store,
-			repo: brain.repoArgs,
+			repo: brain.locator,
 			anthropicKey: 'ak',
 			fetch: (() => {
 				throw new Error('no fetch');
@@ -1022,7 +1022,7 @@ console.log('\nconsolidation: the Jev screen (8)');
 			orgId: 'o1',
 			config: brain.config,
 			store: brain.store,
-			repo: brain.repoArgs,
+			repo: brain.locator,
 			gateway,
 			newRunId: () => 'screen-1'
 		};
@@ -1224,7 +1224,7 @@ console.log('\nconsolidation: each step is bounded by time (10)');
 			orgId: 'o1',
 			config: brain.config,
 			store: brain.store,
-			repo: brain.repoArgs,
+			repo: brain.locator,
 			gateway
 		};
 
@@ -1309,7 +1309,7 @@ console.log('\nconsolidation: a pass remembers what it checked (11)');
 			orgId: 'o1',
 			config: brain.config,
 			store: brain.store,
-			repo: brain.repoArgs,
+			repo: brain.locator,
 			gateway
 		};
 
@@ -1342,7 +1342,7 @@ console.log('\nconsolidation: a pass remembers what it checked (11)');
 			consolidationStepText(again).includes(`${all} unchanged since their last check`)
 		);
 
-		await brain.store.commitFiles(brain.repoArgs, {
+		await brain.store.write(brain.locator, {
 			message: 'Edit one page',
 			writes: [
 				{

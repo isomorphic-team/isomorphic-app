@@ -112,7 +112,7 @@ export function registerImportTools(
 		},
 		async ({ source, records, source_owned, manifest, adopt_existing, dry_run, brain }) => {
 			const ctx = await getContext({ requires: 'editor', brain });
-			const { index, store, repoArgs, config, author } = ctx;
+			const { index, store, locator, config, author } = ctx;
 
 			if (config.sourceOfTruth === 'source') {
 				return fail(
@@ -141,7 +141,7 @@ export function registerImportTools(
 			}
 
 			// Freshness first — key discovery and diffs must reflect repo HEAD.
-			await index.ensureFresh(store, repoArgs, config);
+			await index.ensureFresh(store, locator, config);
 
 			// Which pages claim which keys (source_key / source_keys frontmatter,
 			// straight from the index — discovery only, never the diff basis).
@@ -162,8 +162,8 @@ export function registerImportTools(
 			const matchedPaths = new Set(
 				[...claimsByPath].filter(([, keys]) => keys.some((k) => recordKeys.has(k))).map(([p]) => p)
 			);
-			const head = await store.writeHead(repoArgs, config);
-			const tree = await store.listTree(repoArgs, head);
+			const head = await store.writeBase(locator, config);
+			const tree = await store.listTree(locator, head);
 			const treePaths = new Set(tree.map((e) => e.path));
 			const existingPaths = new Set([...treePaths].filter((p) => isContentPath(p, config)));
 			const adoptPaths = new Set<string>();
@@ -174,7 +174,7 @@ export function registerImportTools(
 				}
 			}
 			const { pages: matchedPages } = await store.fetchPages(
-				repoArgs,
+				locator,
 				tree.filter((e) => matchedPaths.has(e.path) || adoptPaths.has(e.path))
 			);
 			const contentByPath = new Map(matchedPages.map((p) => [p.path, p.content]));
@@ -188,7 +188,7 @@ export function registerImportTools(
 				: undefined;
 
 			// The source's ledger — importer-owned state in the repo.
-			const ledgerFile = await store.readFile(repoArgs, ledgerPath(source), head.commitSha);
+			const ledgerFile = await store.readFile(locator, ledgerPath(source), head.id);
 			let ledger;
 			try {
 				ledger = parseLedger(ledgerFile?.content ?? null);
@@ -272,7 +272,7 @@ export function registerImportTools(
 			if (ledgerChanged) {
 				writes.push({ path: ledgerPath(source), content: serializeLedger(p.ledgerAfter) });
 			}
-			const log = await store.readFile(repoArgs, logPathOf(config), head.commitSha);
+			const log = await store.readFile(locator, logPathOf(config), head.id);
 			if (log && p.writes.length) {
 				writes.push({
 					path: logPathOf(config),
@@ -280,11 +280,11 @@ export function registerImportTools(
 				});
 			}
 
-			const outcome = await store.commitOrPR(repoArgs, {
+			const outcome = await store.commitOrPR(locator, {
 				...commitOpts(config, author),
 				message: `Import from ${source}: ${summary}\n\nNon-destructive sync — source-owned fields only; deletions proposed, not applied.`,
 				writes,
-				head,
+				base: head,
 				branchPrefix: 'isomorphic/import',
 				prTitle: `Import from ${source}`,
 				prBody: `Upsert ${p.writes.length} page(s) from source \`${source}\` (${summary}). Human content untouched; deletions only proposed. Via the Isomorphic brain tools.`
@@ -343,7 +343,7 @@ export function registerImportTools(
 		},
 		async ({ decisions: requested, brain }) => {
 			const ctx = await getContext({ requires: 'editor', brain });
-			const { index, store, repoArgs, config, author, db, brainId } = ctx;
+			const { index, store, locator, config, author, db, brainId } = ctx;
 
 			// A cluster key answers every conflict finding in the cluster, one ledger entry
 			// per finding, so each dismissal still covers exactly its own disagreement.
@@ -383,7 +383,7 @@ export function registerImportTools(
 				const target = {
 					db,
 					store,
-					repo: repoArgs,
+					repo: locator,
 					defaultBranch: config.defaultBranch,
 					brainId,
 					secret: ctx.policySecret
@@ -414,8 +414,8 @@ export function registerImportTools(
 				);
 
 			if (reviewDecisions.length) {
-				const head = await store.writeHead(repoArgs, config);
-				const raw = await store.readFile(repoArgs, REVIEW_LEDGER_PATH, head.commitSha);
+				const head = await store.writeBase(locator, config);
+				const raw = await store.readFile(locator, REVIEW_LEDGER_PATH, head.id);
 				let ledger;
 				try {
 					ledger = parseReviewLedger(raw?.content ?? null);
@@ -439,11 +439,11 @@ export function registerImportTools(
 				]
 					.filter(Boolean)
 					.join(', ');
-				await store.commitOrPR(repoArgs, {
+				await store.commitOrPR(locator, {
 					...commitOpts(config, author),
 					message: `Record validate decisions: ${summary}`,
 					writes: [{ path: REVIEW_LEDGER_PATH, content: serializeReviewLedger(ledger) }],
-					head,
+					base: head,
 					branchPrefix: 'isomorphic/resolve',
 					prTitle: 'Record validate decisions',
 					prBody: `${summary}. No page content changed — this records that a human decided, so validate stops re-reporting it.`
@@ -470,7 +470,7 @@ export function registerImportTools(
 			const badAlias = decisions.find((d) => d.action === 'alias' && !d.alias_to?.trim());
 			if (badAlias) return fail(`Decision for "${badAlias.key}": alias needs "alias_to".`);
 
-			await index.ensureFresh(store, repoArgs, config);
+			await index.ensureFresh(store, locator, config);
 			const allFields = await index.allFields();
 
 			// Pages the decisions touch: claimants of decided keys + alias targets.
@@ -493,10 +493,10 @@ export function registerImportTools(
 			// Alias targets may carry no key claims yet — include them regardless.
 			for (const t of aliasTargets) relevant.add(t);
 
-			const head = await store.writeHead(repoArgs, config);
-			const tree = await store.listTree(repoArgs, head);
+			const head = await store.writeBase(locator, config);
+			const tree = await store.listTree(locator, head);
 			const { pages } = await store.fetchPages(
-				repoArgs,
+				locator,
 				tree.filter((e) => relevant.has(e.path))
 			);
 			const claimed: ClaimedPage[] = pages.map((p) => ({
@@ -505,7 +505,7 @@ export function registerImportTools(
 				content: p.content
 			}));
 
-			const ledgerFile = await store.readFile(repoArgs, ledgerPath(source), head.commitSha);
+			const ledgerFile = await store.readFile(locator, ledgerPath(source), head.id);
 			let ledger;
 			try {
 				ledger = parseLedger(ledgerFile?.content ?? null);
@@ -532,7 +532,7 @@ export function registerImportTools(
 			if (serializeLedger(p.ledgerAfter) !== serializeLedger(ledger)) {
 				writes.push({ path: ledgerPath(source), content: serializeLedger(p.ledgerAfter) });
 			}
-			const log = await store.readFile(repoArgs, logPathOf(config), head.commitSha);
+			const log = await store.readFile(locator, logPathOf(config), head.id);
 			if (log) {
 				writes.push({
 					path: logPathOf(config),
@@ -544,12 +544,12 @@ export function registerImportTools(
 				});
 			}
 
-			const outcome = await store.commitOrPR(repoArgs, {
+			const outcome = await store.commitOrPR(locator, {
 				...commitOpts(config, author),
 				message: `Resolve import decisions (${source}): ${p.applied.length} applied`,
 				writes,
 				deletes: p.deletes,
-				head,
+				base: head,
 				branchPrefix: 'isomorphic/import',
 				prTitle: `Resolve import decisions (${source})`,
 				prBody: `Apply ${p.applied.length} reconciliation decision(s) for source \`${source}\`. Via the Isomorphic brain tools.`
