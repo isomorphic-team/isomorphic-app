@@ -32,7 +32,7 @@ import type { D1Database } from '@cloudflare/workers-types';
 import type { BrainConfig } from '../../src/lib/brain-policy.ts';
 import { isContentPath, isToolMaintained } from '../../src/lib/brain-policy.ts';
 import type { BrainIndex } from '../../src/lib/brain-index.ts';
-import type { BrainStore, RepoRef } from '../../src/lib/brain-repo.ts';
+import type { BrainStore, BrainLocator } from '../../src/lib/brain-repo.ts';
 import {
 	continuePass,
 	readPass,
@@ -547,7 +547,7 @@ export interface ConsolidationTarget {
 	config: BrainConfig;
 	// The pass reads the content index, so it brings the index up to the branch head first.
 	store: BrainStore;
-	repo: RepoRef;
+	repo: BrainLocator;
 	gateway: Pick<Gateway, 'chatJson' | 'decide'>;
 	newRunId?: () => string;
 	// Start a new pass that checks every pair, ignoring what earlier passes checked.
@@ -821,7 +821,7 @@ export async function runConsolidationStep(opts: {
 	actorUserId?: string;
 	config: BrainConfig;
 	store: BrainStore;
-	repo: RepoRef;
+	repo: BrainLocator;
 	openRouterKey?: string;
 	anthropicKey?: string;
 	fetch?: typeof fetch;
