@@ -42,13 +42,19 @@ const { check, done } = checker('content-index checks');
 
 // Write-through as commitBundle drives it: every written file carries the version tag
 // the GitHub store returns for it (its git blob id).
+type WriteThroughArgs = Parameters<typeof writeThroughWithTags>;
 async function writeThroughIndex(
-	...args: Parameters<typeof writeThroughWithTags> extends [...infer A, unknown] ? A : never
+	d1: WriteThroughArgs[0],
+	id: string,
+	cfg: BrainConfig,
+	baseSha: string,
+	landedSha: string,
+	writes: WriteThroughArgs[5],
+	deletes: string[]
 ): Promise<boolean> {
-	const writes = args[5];
 	const tags: Record<string, string> = {};
 	for (const w of writes) tags[w.path] = await gitBlobSha(w.content);
-	return writeThroughWithTags(...args, tags);
+	return writeThroughWithTags(d1, id, cfg, baseSha, landedSha, writes, deletes, tags);
 }
 
 // ---- D1 shim over node:sqlite, instrumented to count the work each read does ----

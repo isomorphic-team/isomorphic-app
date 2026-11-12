@@ -12,21 +12,21 @@
 //      the next incremental reindex sees as changed. On GitHub it must be git's own
 //      blob id.
 //   3. A REVIEW-REQUIRED WRITE THAT LANDS ANYWAY. A store without `proposals` refuses
-//      `writeMode: 'pull-request'` and writes nothing.
+//      `writeMode: 'pull-request'` and writes nothing, enforced by defineStore before
+//      the store's own commitOrPR runs.
 
-import { mkdtempSync, rmSync, existsSync } from 'node:fs';
+import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
+	defineStore,
 	githubStore,
 	gitBlobSha,
-	refusePullRequestMode,
-	UnsupportedWriteError,
 	type BrainStore,
 	type StoreCapabilities
 } from '../src/lib/brain-repo.ts';
 import { ensureGitRepo, fsBrainStore } from '../src/local/brain-store-fs.ts';
-import { checker } from './check.ts';
+import { checker, errorOf } from './check.ts';
 import { fakeGithub, realGitBlobSha } from './fake-github.ts';
 
 const { check, done } = checker('store checks');
@@ -50,9 +50,7 @@ const BACKENDS: Backend[] = [
 	{
 		name: 'github',
 		expected: { atomicWrite: true, proposals: true, history: true },
-		open: async () => {
-			return githubStore(fakeGithub().octokit);
-		}
+		open: async () => githubStore(fakeGithub().octokit)
 	},
 	{
 		name: 'fs',
@@ -66,30 +64,29 @@ const BACKENDS: Backend[] = [
 	}
 ];
 
-// ---- the pure refusal ----
+const PR_REFUSAL = /configured for pull-request writes/;
+
+// ---- defineStore enforces what a store declares ----
 {
-	const none: StoreCapabilities = { atomicWrite: true, proposals: false, history: true };
-	const all: StoreCapabilities = { ...none, proposals: true };
-	const throws = (fn: () => void) => {
-		try {
-			fn();
-			return false;
-		} catch (err) {
-			return err instanceof UnsupportedWriteError;
-		}
-	};
+	let reached = 0;
+	const declared = (proposals: boolean) =>
+		defineStore({
+			capabilities: { atomicWrite: true, proposals, history: true },
+			commitOrPR: async () => {
+				reached++;
+				return {};
+			}
+		} as unknown as BrainStore);
+	const pr = { message: 'm', writeMode: 'pull-request' as const, defaultBranch: 'main' };
+	const refused = await errorOf(() => declared(false).commitOrPR(repo, pr));
 	check(
-		'no proposals: pull-request mode is refused',
-		throws(() => refusePullRequestMode(none, 'pull-request'))
+		'no proposals: pull-request mode is refused before the store runs',
+		!!refused && PR_REFUSAL.test(refused) && reached === 0,
+		String(refused)
 	);
-	check(
-		'no proposals: direct mode is allowed',
-		!throws(() => refusePullRequestMode(none, 'direct'))
-	);
-	check(
-		'proposals: pull-request mode is allowed',
-		!throws(() => refusePullRequestMode(all, 'pull-request'))
-	);
+	await declared(false).commitOrPR(repo, { ...pr, writeMode: 'direct' });
+	await declared(true).commitOrPR(repo, pr);
+	check('direct mode, and pull-request mode with proposals, reach the store', reached === 2);
 	check(
 		"gitBlobSha matches git's blob id",
 		(await gitBlobSha('')) === 'e69de29bb2d1d6434b8b29ae775ad8c2e48c5391' &&
@@ -100,66 +97,70 @@ const BACKENDS: Backend[] = [
 for (const backend of BACKENDS) {
 	console.log(`\n${backend.name}`);
 	const store = await backend.open();
-	{
-		// 1. capabilities
+
+	// 1. capabilities
+	check(
+		`${backend.name}: declares its capabilities`,
+		JSON.stringify(store.capabilities) === JSON.stringify(backend.expected),
+		JSON.stringify(store.capabilities)
+	);
+
+	// 2. version tags
+	const head = await store.getHead(repo);
+	const res = await store.commitFiles(repo, { message: 'Add pages', writes, head });
+	const listed = new Map(
+		(await store.listTree(repo, await store.getHead(repo))).map((e) => [e.path, e.sha] as const)
+	);
+	for (const w of writes) {
 		check(
-			`${backend.name}: declares its capabilities`,
-			JSON.stringify(store.capabilities) === JSON.stringify(backend.expected),
-			JSON.stringify(store.capabilities)
+			`${backend.name}: ${w.path} write tag equals its listed tag`,
+			!!res.versions[w.path] && res.versions[w.path] === listed.get(w.path),
+			`write=${res.versions[w.path]} listed=${listed.get(w.path)}`
 		);
+	}
 
-		// 2. version tags
-		const head = await store.getHead(repo);
-		const res = await store.commitFiles(repo, { message: 'Add pages', writes, head });
-		const after = await store.getHead(repo);
-		const listed = new Map(
-			(await store.listTree(repo, after)).map((e) => [e.path, e.sha] as const)
+	// 3. pull-request mode without proposals
+	if (!store.capabilities.proposals) {
+		const before = await store.getHead(repo);
+		const refused = await errorOf(() =>
+			store.commitOrPR(repo, {
+				message: 'Should not land',
+				writeMode: 'pull-request',
+				defaultBranch: before.branch,
+				writes: [{ path: 'wiki/refused.md', content: '# Refused\n' }]
+			})
 		);
-		for (const w of writes) {
-			check(
-				`${backend.name}: ${w.path} write tag equals its listed tag`,
-				!!res.versions[w.path] && res.versions[w.path] === listed.get(w.path),
-				`write=${res.versions[w.path]} listed=${listed.get(w.path)}`
-			);
-		}
-		if (backend.name === 'github') {
-			check(
-				'github: write tags are git blob ids',
-				writes.every((w) => res.versions[w.path] === realGitBlobSha(w.content))
-			);
-			const direct = await store.commitOrPR(repo, {
-				message: 'Edit alpha',
-				writeMode: 'direct',
-				defaultBranch: 'main',
-				writes: [{ path: 'wiki/alpha.md', content: '# Alpha\n\nEdited.\n' }]
-			});
-			check(
-				'github: a direct commitOrPR reports the tags with the revision',
-				!!direct.commitSha &&
-					direct.versions?.['wiki/alpha.md'] === realGitBlobSha('# Alpha\n\nEdited.\n')
-			);
-		}
-
-		// 3. pull-request mode without proposals
-		if (!store.capabilities.proposals) {
-			const before = await store.getHead(repo);
-			let refused = false;
-			try {
-				await store.commitOrPR(repo, {
-					message: 'Should not land',
-					writeMode: 'pull-request',
-					defaultBranch: before.branch,
-					writes: [{ path: 'wiki/refused.md', content: '# Refused\n' }]
-				});
-			} catch (err) {
-				refused = err instanceof UnsupportedWriteError;
-			}
-			const unchanged = (await store.getHead(repo)).commitSha === before.commitSha;
-			check(`${backend.name}: pull-request mode is refused`, refused);
-			check(`${backend.name}: and nothing was written`, unchanged);
-		}
+		check(`${backend.name}: pull-request mode is refused`, !!refused && PR_REFUSAL.test(refused));
+		check(
+			`${backend.name}: and nothing was written`,
+			(await store.getHead(repo)).commitSha === before.commitSha
+		);
 	}
 }
 
-for (const d of tmpDirs) if (existsSync(d)) rmSync(d, { recursive: true, force: true });
+// ---- GitHub only: tags are git's blob ids, and a direct commitOrPR reports them ----
+{
+	console.log('\ngithub tags');
+	const store = githubStore(fakeGithub().octokit);
+	const res = await store.commitFiles(repo, { message: 'Add pages', writes });
+	check(
+		'github: write tags are git blob ids',
+		writes.every((w) => res.versions[w.path] === realGitBlobSha(w.content))
+	);
+	const edited = '# Alpha\n\nEdited.\n';
+	const direct = await store.commitOrPR(repo, {
+		message: 'Edit alpha',
+		writeMode: 'direct',
+		defaultBranch: 'main',
+		writes: [{ path: 'wiki/alpha.md', content: edited }]
+	});
+	check(
+		'github: a direct commitOrPR reports the tags with the revision',
+		!!direct.commitSha && direct.versions?.['wiki/alpha.md'] === realGitBlobSha(edited)
+	);
+}
+
+// git's background gc can still be writing into .git; a plain rm then hits ENOTEMPTY.
+for (const d of tmpDirs)
+	rmSync(d, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
 done();

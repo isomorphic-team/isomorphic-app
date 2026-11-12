@@ -18,12 +18,12 @@ storage, plus `githubStore(octokit)`; `src/local/brain-store-fs.ts` is the git-o
   `fetchPages`, `readFile`, `readBinary`, `findOpenConfigPr`, `listCommits`, `commitFiles`,
   `commitOrPR`. It is what the tools do, not a general storage abstraction.
 - **Each store declares `capabilities`** (`StoreCapabilities`: `atomicWrite`, `proposals`,
-  `history`). Branch on those, never on which store you hold. A store without `proposals`
-  refuses pull-request mode through `refusePullRequestMode`, as the fs store does.
+  `history`). Branch on those, never on which store you hold. Every store is built through
+  `defineStore`, which makes a store without `proposals` refuse pull-request mode.
 - **A write returns each file's version tag** (`CommitResult.versions`, and
   `WriteOutcome.versions` beside `commitSha` on a direct write): the same value `listTree`
-  reports for that file afterwards. The git stores use the blob id (`gitBlobSha`); a tag is
-  opaque everywhere else. `pnpm test:store` runs this contract against every backend.
+  reports for that file afterwards. The GitHub store uses the blob id (`gitBlobSha`), the fs
+  store a size and mtime token; a tag is opaque everywhere else. `pnpm test:store` runs this contract against every backend.
 - **If you reach for `ctx.octokit` while touching a brain's CONTENT, it belongs on the store.**
   A raw octokit call in a content path compiles and fails at runtime on the fs backend.
   `octokit` stays on the context (optional) only for GitHub-as-platform calls in

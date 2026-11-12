@@ -241,14 +241,22 @@ export interface StoreCapabilities {
 // Thrown by a store asked for a write it cannot perform as configured.
 export class UnsupportedWriteError extends Error {}
 
-// The refusal every store without `proposals` gives for a pull-request write. Committing
-// anyway would land a change the brain's config says needs review.
-export function refusePullRequestMode(capabilities: StoreCapabilities, writeMode: string): void {
-	if (writeMode === 'pull-request' && !capabilities.proposals) {
-		throw new UnsupportedWriteError(
-			'This brain is configured for pull-request writes, which its storage cannot hold for review. Set writes.mode to "direct" in .isomorphic.json, or serve this brain from GitHub.'
-		);
-	}
+// Every store is built through this, so what a store declares is enforced for it: a
+// store without `proposals` refuses a pull-request write before its own commitOrPR
+// runs. Committing anyway would land a change the brain's config says needs review.
+export function defineStore(store: BrainStore): BrainStore {
+	if (store.capabilities.proposals) return store;
+	return {
+		...store,
+		commitOrPR: async (repo, opts) => {
+			if (opts.writeMode === 'pull-request') {
+				throw new UnsupportedWriteError(
+					'This brain is configured for pull-request writes, which its storage cannot hold for review. Set writes.mode to "direct" in .isomorphic.json, or serve this brain from GitHub.'
+				);
+			}
+			return store.commitOrPR(repo, opts);
+		}
+	};
 }
 
 // A file's version tag on the git backends: the git blob id, the same value a tree
@@ -314,7 +322,7 @@ export interface BrainStore {
 // The GitHub implementation: the functions below, bound to one authenticated Octokit.
 // An App installation token and a plain access token work the same here.
 export function githubStore(octokit: Octokit): BrainStore {
-	return {
+	return defineStore({
 		capabilities: { atomicWrite: true, proposals: true, history: true },
 		getHead: (repo, branch) => getHead(octokit, repo, branch),
 		writeHead: (repo, opts) => writeHead(octokit, repo, opts),
@@ -328,7 +336,7 @@ export function githubStore(octokit: Octokit): BrainStore {
 		listCommits: (repo, opts) => listCommits(octokit, repo, opts),
 		commitFiles: (repo, opts) => commitFiles(octokit, repo, opts),
 		commitOrPR: (repo, opts) => commitOrPR(octokit, repo, opts)
-	};
+	});
 }
 
 // branch: skip the repos.get default-branch discovery and resolve the named branch

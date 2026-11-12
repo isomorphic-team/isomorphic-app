@@ -505,7 +505,6 @@ export async function writeThroughIndex(
 	if (pageWrites.some((w) => !versions[w.path])) return false;
 	const stmts: D1PreparedStatement[] = [];
 	for (const w of pageWrites) {
-		const blobSha = versions[w.path];
 		// Every mutation carries the same generation guard. D1 executes one batch as
 		// one transaction, so a concurrent reconcile/write either leaves this base
 		// current and the whole replacement lands, or makes every statement a no-op.
@@ -523,7 +522,7 @@ export async function writeThroughIndex(
 					brainId,
 					w.path,
 					pageTitle(w.path, w.content),
-					blobSha,
+					versions[w.path],
 					w.content,
 					baseSha,
 					INDEX_SCHEMA_VERSION
