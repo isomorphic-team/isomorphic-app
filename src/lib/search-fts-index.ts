@@ -1,5 +1,5 @@
-// FTS5 search: the IO half. Runs in shadow beside searchIndex; search_pages does not
-// answer from it (docs/design/brain-index-storage.md).
+// FTS5 search: the IO half. Answers search_pages where the index has its own database
+// (src/lib/search-engine.ts, docs/design/brain-index-storage.md).
 //
 // The table, its source view and the triggers that keep it current are the index
 // database's schema (migrations-index/0002_pages_fts.sql). They exist only there, so
@@ -78,7 +78,19 @@ export async function searchIndexFts(
 	};
 	if (terms.length === 0) return empty;
 
-	const any = terms.map(ftsQuote).join(' OR ');
+	// Coverage needs to know which terms each page holds: one MATCH per term (at most six).
+	// A term no page holds as a word is retried as the start of one, so `config` still
+	// finds "configuration", as it did under LIKE. Only then: matching every term as a
+	// prefix would let `fee` count for "feedback".
+	const perTerm = await Promise.all(
+		terms.map(async (t) => {
+			const whole = await matchingPaths(db, brainId, ftsQuote(t));
+			if (whole.size > 0) return { match: ftsQuote(t), paths: whole };
+			const match = `${ftsQuote(t)}*`;
+			return { match, paths: await matchingPaths(db, brainId, match) };
+		})
+	);
+	const any = perTerm.map((t) => t.match).join(' OR ');
 	const rows = await db
 		.prepare(
 			`SELECT p.path, p.title, bm25(${FTS_TABLE}, ${BM25_WEIGHTS}) AS score
@@ -89,8 +101,6 @@ export async function searchIndexFts(
 	const inScope = rows.results.filter((r) => !prefix || r.path.startsWith(prefix));
 	if (inScope.length === 0) return empty;
 
-	// Coverage needs to know which terms each page holds: one MATCH per term (at most six).
-	const perTerm = await Promise.all(terms.map((t) => matchingPaths(db, brainId, ftsQuote(t))));
 	const words = q.phrase.split(/[^\p{L}\p{N}]+/u).filter(Boolean);
 	const phrase =
 		words.length > 1 ? await matchingPaths(db, brainId, ftsQuote(words.join(' '))) : new Set();
@@ -98,7 +108,7 @@ export async function searchIndexFts(
 	const signals: FtsSignal[] = inScope.map((r) => ({
 		path: r.path,
 		title: r.title,
-		covered: perTerm.filter((s) => s.has(r.path)).length,
+		covered: perTerm.filter((t) => t.paths.has(r.path)).length,
 		phrase: phrase.has(r.path),
 		bm25: Number(r.score)
 	}));
