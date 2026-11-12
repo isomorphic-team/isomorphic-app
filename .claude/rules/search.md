@@ -37,8 +37,10 @@ ORDERS or DROPS a result is in the pure `src/lib/search.ts` (`pnpm test:search`)
   drives the real write paths and checks it with FTS5's integrity check.
 - **The FTS5 engine runs in shadow, and `search_pages` still answers from `searchIndex`.**
   `indexFor` turns the shadow on only where `INDEX_DB` is bound. `shadowSearch`
-  (`src/lib/search-shadow.ts`) runs `searchIndexFts` beside the current engine, abandons it
-  after `SHADOW_BUDGET_MS`, and logs one `search-shadow` JSON line of counts and timings:
+  (`src/lib/search-shadow.ts`) runs the two engines one after the other, in an order that
+  alternates (they share a database that runs one query at a time, so overlapping them
+  corrupts both timings), abandons `searchIndexFts` after `SHADOW_BUDGET_MS`, and logs one
+  `search-shadow` JSON line of counts, ranks and timings:
   never a query, a path or a brain. Its ordering is pure (`rankFtsPages` in
   `src/lib/search-fts.ts`: coverage, phrase, `bm25()`, path). Compare the engines on a folder
   with `pnpm search:compare <folder> <probes.json>`.
