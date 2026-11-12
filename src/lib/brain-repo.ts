@@ -1,32 +1,32 @@
-// Brain repo git operations: runtime-portable (Worker-safe, no node:*).
+// The storage seam: what a brain's storage must do for the tools, and the types the
+// tools and stores share. Runtime-portable (Worker-safe, no node:*).
 //
-// The design rule these helpers serve: THE USER NEVER SEES GIT. Tools speak
-// in saves and pages; this module hides the version-control mechanics. The
-// core primitive is `commitFiles()`: one atomic commit for a multi-file bundle
-// (the page, the changelog, and any pages whose links a move repoints). The
-// unit of work is the bundle, never a single file.
+// THE USER NEVER SEES GIT. Tools speak in saves and pages; a store hides how its
+// backend versions files. The core primitive is `write()`: one bundle of writes and
+// deletes (the page, the changelog, and any pages whose links a move repoints) landing
+// as a unit. The unit of work is the bundle, never a single file.
 //
-// Same Git Data API pattern as scaffold-core.ts: blobs inline in tree → tree
-// → commit → ref update. If anything fails halfway, the branch ref never
-// moves, so there is no partial state.
+// Implementations: githubStore (brain-store-github.ts) and the fs/git adapter
+// (src/local/brain-store-fs.ts).
 
-import type { Octokit } from 'octokit';
-import { coalescedPrText } from './change-record.ts';
-import { base64ToUtf8 } from './wiki.ts';
-
-// Type alias (not interface) so it picks up an implicit index signature and
-// stays assignable to octokit's RequestParameters.
-export type RepoRef = {
+// Where one brain's files live, within the backend its store talks to. A GitHub
+// repository today; a backend that is not addressed by owner and name adds its own
+// variant here. Type alias (not interface) so it picks up an implicit index signature
+// and stays assignable to octokit's RequestParameters.
+export type BrainLocator = {
 	owner: string;
 	repo: string;
 };
 
-export interface Head {
+// One state of a whole brain. `id` is opaque: compare it for equality, never parse
+// it. A commit sha on GitHub, a working-tree digest on the fs backend.
+export interface Revision {
+	id: string;
 	branch: string;
-	commitSha: string;
-	treeSha: string;
-	// Set only by writeHead: `branch` is this open pull request's branch, and a write
-	// based on this head is appended to it instead of opening another pull request.
+	// Backend-private: what listTree reads at this revision (GitHub: the root tree id).
+	snapshot: string;
+	// Set only by writeBase: `branch` is this open pull request's branch, and a write
+	// based on this revision is appended to it instead of opening another pull request.
 	pr?: PendingPr;
 }
 
@@ -43,44 +43,11 @@ export interface PendingPr {
 	autoMerge: boolean;
 }
 
-// What choosePendingPr needs from one entry of GitHub's open pull request list.
-export interface OpenPrSummary {
-	number: number;
-	baseRef: string;
-	headRef: string;
-	// The repository the head branch lives in; null when that fork was deleted.
-	headRepo: string | null;
-}
-
-// Branch prefixes Isomorphic opens pull requests from (`branchPrefix` callers).
-export const PR_BRANCH_PREFIX = 'isomorphic/';
-// configure_brain's pull request is reviewed on its own (findOpenConfigPr), so
-// content writes never join it.
-const CONFIG_PR_PREFIX = 'isomorphic/configure';
-
-// Which open pull requests content writes may join, newest first: Isomorphic's own
-// branches in this repository, against the default branch. Every write branches from
-// the default branch otherwise, so two writes inside one pull request's lifetime
-// produce two pull requests, the second built without the first's changes.
-export function pendingPrCandidates(
-	prs: readonly OpenPrSummary[],
-	opts: { defaultBranch: string; repoFullName: string }
-): OpenPrSummary[] {
-	const full = opts.repoFullName.toLowerCase();
-	return prs
-		.filter(
-			(p) =>
-				p.baseRef === opts.defaultBranch &&
-				p.headRepo?.toLowerCase() === full &&
-				p.headRef.startsWith(PR_BRANCH_PREFIX) &&
-				!p.headRef.startsWith(CONFIG_PR_PREFIX)
-		)
-		.sort((a, b) => b.number - a.number);
-}
-
-export interface TreeEntry {
+// One file in a listing. `version` is an opaque per-file tag that changes when the
+// file's bytes do: the git blob id on GitHub, a size and mtime token on the fs backend.
+export interface FileEntry {
 	path: string;
-	sha: string;
+	version: string;
 }
 
 export interface FileWrite {
@@ -97,7 +64,7 @@ export interface FileWrite {
 // which decodes to a string: the whole point here is to never turn bytes into text.
 export interface BinaryContent {
 	contentBase64: string;
-	sha: string;
+	version: string;
 	size: number;
 }
 
@@ -159,31 +126,21 @@ export function githubNoreplyAuthor(
 	return { name, email: `${ghUserId}+${name}@users.noreply.github.com` };
 }
 
-// Upper bound on a single content scan. Not a subrequest limit: fetchPages batches
-// blob reads through GraphQL (see below), so a scan costs
-// ceil(pages / GRAPHQL_BLOB_BATCH) subrequests. The cap is a sanity ceiling on
-// memory/time for a pathologically huge brain; typical brains scan whole, and
-// truncation past it is surfaced to the caller. 5000 covers the largest brain
-// measured (~3,900 pages) at ~50 GraphQL subrequests for a full build;
-// incremental reindexes only fetch changed pages.
+// Upper bound on a single content scan: a sanity ceiling on memory and time for a
+// pathologically large brain. Typical brains scan whole; truncation past it is
+// surfaced to the caller. 5000 covers the largest brain measured (~3,900 pages).
 export const MAX_SCAN_PAGES = 5000;
-
-// How many blob texts to pull per GraphQL request. Each aliased `object` field is
-// cheap, but keep batches bounded so a single response stays a sane size and well
-// under GitHub's GraphQL node/complexity limits. ceil(pages / this) = subrequests.
-const GRAPHQL_BLOB_BATCH = 100;
 
 // ---------- the storage seam ----------
 //
 // Everything the tools do to a brain, as twelve operations plus the capabilities the
 // backend declares. The only interface between the tool layer and where a brain
-// physically lives, so a brain can be a GitHub repo or a git repo on disk. Implementations: githubStore below, and the fs/git adapter
-// in src/local/brain-store-fs.ts.
+// physically lives.
 //
 // Not a general storage abstraction: it is the set of operations the tools already
 // perform, in the shape they already perform them.
 //
-// branchCommitSha, repoWritePolicy, and listCommits are here rather than left as raw
+// branchRevision, repoWritePolicy, and listCommits are here rather than left as raw
 // octokit calls in content paths. A raw octokit call compiles fine and fails at
 // runtime on any other backend.
 
@@ -207,15 +164,15 @@ export interface CommitEntry {
 	url?: string;
 }
 
-export interface CommitOpts {
+export interface WriteOpts {
 	message: string;
 	writes?: FileWrite[];
 	deletes?: string[];
-	head?: Head; // pass when already fetched to save round trips
+	base?: Revision; // the revision to write onto; pass when already fetched
 	author?: CommitAuthor; // attribute the commit to the human, not the App
 }
 
-export interface CommitOrPROpts extends CommitOpts {
+export interface CommitOrPROpts extends WriteOpts {
 	writeMode: 'direct' | 'pull-request';
 	defaultBranch: string;
 	branchPrefix?: string; // PR branch name prefix, e.g. 'isomorphic/edit'
@@ -248,35 +205,21 @@ export function defineStore(store: BrainStore): BrainStore {
 	if (store.capabilities.proposals) return store;
 	return {
 		...store,
-		commitOrPR: async (repo, opts) => {
+		commitOrPR: async (loc, opts) => {
 			if (opts.writeMode === 'pull-request') {
 				throw new UnsupportedWriteError(
 					'This brain is configured for pull-request writes, which its storage cannot hold for review. Set writes.mode to "direct" in .isomorphic.json, or serve this brain from GitHub.'
 				);
 			}
-			return store.commitOrPR(repo, opts);
+			return store.commitOrPR(loc, opts);
 		}
 	};
 }
 
-// A file's version tag on the git backends: the git blob id, the same value a tree
-// listing reports, so a page written through the index is not refetched on the next
-// diff. Worker-safe: Web Crypto SHA-1, no node:crypto.
-export async function gitBlobSha(content: string): Promise<string> {
-	const body = new TextEncoder().encode(content);
-	const header = new TextEncoder().encode(`blob ${body.byteLength}\0`);
-	const buf = new Uint8Array(header.byteLength + body.byteLength);
-	buf.set(header, 0);
-	buf.set(body, header.byteLength);
-	const digest = await crypto.subtle.digest('SHA-1', buf);
-	return Array.from(new Uint8Array(digest))
-		.map((b) => b.toString(16).padStart(2, '0'))
-		.join('');
-}
-
-export interface CommitResult {
-	sha: string;
-	head: Head;
+// What a write landed: the brain's new revision, and the new version tag of every
+// file written, by path (the tag listTree reports for it from then on).
+export interface WriteResult {
+	revision: Revision;
 	versions: Record<string, string>;
 }
 
@@ -285,422 +228,46 @@ export interface BrainStore {
 	// branch: resolve THIS branch instead of asking the platform for the default
 	// (callers pass config.defaultBranch), saving one round trip. Implementations
 	// fall back to discovery when the named branch does not exist.
-	getHead(repo: RepoRef, branch?: string): Promise<Head>;
-	branchCommitSha(repo: RepoRef, branch: string): Promise<string>;
-	repoWritePolicy(repo: RepoRef): Promise<RepoWritePolicy>;
-	listTree(repo: RepoRef, head: Head, opts?: { extension?: string }): Promise<TreeEntry[]>;
+	getRevision(loc: BrainLocator, branch?: string): Promise<Revision>;
+	// The `id` of the revision a named branch is at: what the index freshness guard compares.
+	branchRevision(loc: BrainLocator, branch: string): Promise<string>;
+	repoWritePolicy(loc: BrainLocator): Promise<RepoWritePolicy>;
+	listTree(loc: BrainLocator, at: Revision, opts?: { extension?: string }): Promise<FileEntry[]>;
 	fetchPages(
-		repo: RepoRef,
-		entries: TreeEntry[]
+		loc: BrainLocator,
+		entries: FileEntry[]
 	): Promise<{ pages: PageContent[]; truncated: boolean }>;
-	// The head a write is planned against and committed onto. Direct mode, or PR mode
+	// The revision a write is planned against and committed onto. Direct mode, or PR mode
 	// with no open Isomorphic pull request: the default branch. PR mode with one: that
 	// pull request's branch, with `pr` set, so the write builds on the changes still
 	// waiting there and commitOrPR appends to it.
-	writeHead(
-		repo: RepoRef,
+	writeBase(
+		loc: BrainLocator,
 		opts: { defaultBranch: string; writeMode: 'direct' | 'pull-request' }
-	): Promise<Head>;
-	// `ref` pins the read to one branch/commit. Write paths normally capture HEAD
-	// first so every blob they derive a commit from belongs to that revision.
+	): Promise<Revision>;
+	// `version` is the tag listTree reports for the same file. `ref` pins the read to one
+	// branch or revision. Write paths capture the revision first
+	// so every file they derive a write from belongs to it.
 	readFile(
-		repo: RepoRef,
+		loc: BrainLocator,
 		path: string,
 		ref?: string
-	): Promise<{ content: string; sha: string } | null>;
+	): Promise<{ content: string; version: string } | null>;
 	// One file's raw bytes as base64. Backs read_media; null when absent. `ref` as
 	// for readFile.
-	readBinary(repo: RepoRef, path: string, ref?: string): Promise<BinaryContent | null>;
-	findOpenConfigPr(repo: RepoRef): Promise<string | undefined>;
+	readBinary(loc: BrainLocator, path: string, ref?: string): Promise<BinaryContent | null>;
+	findOpenConfigPr(loc: BrainLocator): Promise<string | undefined>;
 	// Recent commits, newest first, optionally scoped to one path. Backs view_activity.
-	listCommits(repo: RepoRef, opts: { limit: number; path?: string }): Promise<CommitEntry[]>;
-	// `versions` holds the new version tag of every file written, by path.
-	commitFiles(repo: RepoRef, opts: CommitOpts): Promise<CommitResult>;
-	commitOrPR(repo: RepoRef, opts: CommitOrPROpts): Promise<WriteOutcome>;
-}
-
-// The GitHub implementation: the functions below, bound to one authenticated Octokit.
-// An App installation token and a plain access token work the same here.
-export function githubStore(octokit: Octokit): BrainStore {
-	return defineStore({
-		capabilities: { atomicWrite: true, proposals: true, history: true },
-		getHead: (repo, branch) => getHead(octokit, repo, branch),
-		writeHead: (repo, opts) => writeHead(octokit, repo, opts),
-		branchCommitSha: (repo, branch) => branchCommitSha(octokit, repo, branch),
-		repoWritePolicy: (repo) => repoWritePolicy(octokit, repo),
-		listTree: (repo, head, opts) => listTree(octokit, repo, head, opts),
-		fetchPages: (repo, entries) => fetchPages(octokit, repo, entries),
-		readFile: (repo, path, ref) => readFile(octokit, repo, path, ref),
-		readBinary: (repo, path, ref) => readBinary(octokit, repo, path, ref),
-		findOpenConfigPr: (repo) => findOpenConfigPr(octokit, repo),
-		listCommits: (repo, opts) => listCommits(octokit, repo, opts),
-		commitFiles: (repo, opts) => commitFiles(octokit, repo, opts),
-		commitOrPR: (repo, opts) => commitOrPR(octokit, repo, opts)
-	});
-}
-
-// branch: skip the repos.get default-branch discovery and resolve the named branch
-// directly (callers pass config.defaultBranch, which the write-policy probe already
-// learned). A 404 on the named branch falls back to discovery — the repo's default
-// was renamed, or the probe failed earlier and config guessed 'main'.
-async function getHead(octokit: Octokit, repo: RepoRef, branch?: string): Promise<Head> {
-	if (branch) {
-		try {
-			const { data: ref } = await octokit.rest.git.getRef({ ...repo, ref: `heads/${branch}` });
-			const { data: commit } = await octokit.rest.git.getCommit({
-				...repo,
-				commit_sha: ref.object.sha
-			});
-			return { branch, commitSha: ref.object.sha, treeSha: commit.tree.sha };
-		} catch (err) {
-			if ((err as { status?: number })?.status !== 404) throw err;
-		}
-	}
-	const { data: repoData } = await octokit.rest.repos.get(repo);
-	const resolved = repoData.default_branch;
-	const { data: ref } = await octokit.rest.git.getRef({ ...repo, ref: `heads/${resolved}` });
-	const { data: commit } = await octokit.rest.git.getCommit({
-		...repo,
-		commit_sha: ref.object.sha
-	});
-	return { branch: resolved, commitSha: ref.object.sha, treeSha: commit.tree.sha };
-}
-
-// See BrainStore.writeHead. A pull request GitHub reports as conflicting is skipped:
-// writes stacked on it could never merge. Any failure to list falls back to the
-// default branch, which is how every write behaved before pull requests were joined.
-async function writeHead(
-	octokit: Octokit,
-	repo: RepoRef,
-	opts: { defaultBranch: string; writeMode: 'direct' | 'pull-request' }
-): Promise<Head> {
-	if (opts.writeMode === 'pull-request') {
-		const pending = await findPendingPr(octokit, repo, opts.defaultBranch).catch(() => null);
-		if (pending) return pending;
-	}
-	return getHead(octokit, repo, opts.defaultBranch);
-}
-
-// How many candidates writeHead asks GitHub about before giving up on joining one.
-const MAX_PENDING_PR_PROBES = 3;
-
-async function findPendingPr(
-	octokit: Octokit,
-	repo: RepoRef,
-	defaultBranch: string
-): Promise<Head | null> {
-	const { data: open } = await octokit.rest.pulls.list({
-		...repo,
-		state: 'open',
-		base: defaultBranch,
-		per_page: 100
-	});
-	const candidates = pendingPrCandidates(
-		open.map((p) => ({
-			number: p.number,
-			baseRef: p.base.ref,
-			headRef: p.head.ref,
-			headRepo: p.head.repo?.full_name ?? null
-		})),
-		{ defaultBranch, repoFullName: `${repo.owner}/${repo.repo}` }
-	);
-	for (const c of candidates.slice(0, MAX_PENDING_PR_PROBES)) {
-		const { data: pr } = await octokit.rest.pulls.get({ ...repo, pull_number: c.number });
-		if (pr.state !== 'open' || pr.mergeable === false) continue;
-		const { data: commit } = await octokit.rest.git.getCommit({
-			...repo,
-			commit_sha: pr.head.sha
-		});
-		return {
-			branch: pr.head.ref,
-			commitSha: pr.head.sha,
-			treeSha: commit.tree.sha,
-			pr: {
-				number: pr.number,
-				url: pr.html_url,
-				nodeId: pr.node_id,
-				title: pr.title,
-				body: pr.body ?? '',
-				behind: pr.mergeable_state === 'behind',
-				autoMerge: Boolean(pr.auto_merge)
-			}
-		};
-	}
-	return null;
-}
-
-// The commit a named branch points at. getHead resolves the repo's DEFAULT branch;
-// the content index's freshness guard compares against the brain's configured branch,
-// which need not be the same.
-async function branchCommitSha(octokit: Octokit, repo: RepoRef, branch: string): Promise<string> {
-	const { data } = await octokit.rest.git.getRef({ ...repo, ref: `heads/${branch}` });
-	return data.object.sha;
-}
-
-// The repo's default branch, whether it is protected, and which merge method to use
-// when a write lands as a pull request. Throws on failure; resolveWritePolicy in
-// brain-config.ts decides what a failure means (it falls back to direct writes).
-async function repoWritePolicy(octokit: Octokit, repo: RepoRef): Promise<RepoWritePolicy> {
-	const { data: r } = await octokit.rest.repos.get(repo);
-	const defaultBranch = r.default_branch;
-	// Prefer squash (one clean commit per edit bundle), then merge, then rebase.
-	const mergeMethod = r.allow_squash_merge
-		? 'SQUASH'
-		: r.allow_merge_commit
-			? 'MERGE'
-			: r.allow_rebase_merge
-				? 'REBASE'
-				: 'MERGE';
-	// `.protected` on the branch object needs no admin permission (unlike the
-	// /protection endpoint), so this works with plain contents access.
-	const { data: br } = await octokit.rest.repos.getBranch({ ...repo, branch: defaultBranch });
-	return { defaultBranch, branchProtected: Boolean(br.protected), mergeMethod };
-}
-
-// Recent commits, newest first. One call, no per-blob fanout; `path` scopes it to one
-// page's history. `commit.author` is always populated (our attribution work sets it);
-// `author` is the linked GitHub account, absent for non-GitHub members.
-async function listCommits(
-	octokit: Octokit,
-	repo: RepoRef,
-	opts: { limit: number; path?: string }
-): Promise<CommitEntry[]> {
-	const { data } = await octokit.rest.repos.listCommits({
-		...repo,
-		per_page: opts.limit,
-		...(opts.path ? { path: opts.path } : {})
-	});
-	return data.map((c) => ({
-		sha: c.sha,
-		message: c.commit.message ?? '',
-		authorName: c.commit.author?.name ?? c.author?.login ?? 'Unknown',
-		authorLogin: c.author?.login ?? undefined,
-		date: c.commit.author?.date ?? c.commit.committer?.date ?? '',
-		url: c.html_url
-	}));
-}
-
-// The URL of an open "configure" PR (from configure_brain) for this repo, if any.
-// Used to show a pending-review state and to avoid opening a duplicate PR when the
-// repo's default branch is protected. Best-effort — never throws.
-async function findOpenConfigPr(octokit: Octokit, repo: RepoRef): Promise<string | undefined> {
-	try {
-		const { data } = await octokit.rest.pulls.list({ ...repo, state: 'open', per_page: 50 });
-		return data.find((p) => p.head?.ref?.startsWith('isomorphic/configure'))?.html_url;
-	} catch {
-		return undefined;
-	}
-}
-
-// Full recursive tree of blobs ending in `opts.extension` (default ".md"; "*" for all).
-async function listTree(
-	octokit: Octokit,
-	repo: RepoRef,
-	head: Head,
-	opts: { extension?: string } = {}
-): Promise<TreeEntry[]> {
-	const { data: tree } = await octokit.rest.git.getTree({
-		...repo,
-		tree_sha: head.treeSha,
-		recursive: 'true'
-	});
-	const ext = opts.extension ?? '.md';
-	return tree.tree
-		.filter((e) => e.type === 'blob' && e.path && (ext === '*' || e.path.endsWith(ext)))
-		.map((e) => ({ path: e.path!, sha: e.sha! }));
+	listCommits(loc: BrainLocator, opts: { limit: number; path?: string }): Promise<CommitEntry[]>;
+	// One bundle of writes and deletes onto `base` (default: the default branch).
+	// Atomic when capabilities.atomicWrite.
+	write(loc: BrainLocator, opts: WriteOpts): Promise<WriteResult>;
+	commitOrPR(loc: BrainLocator, opts: CommitOrPROpts): Promise<WriteOutcome>;
 }
 
 export interface PageContent {
 	path: string;
 	content: string;
-}
-
-// Fetch the contents of many pages by blob sha. Batched through GraphQL — one
-// request pulls up to GRAPHQL_BLOB_BATCH blob texts via aliased `object(oid:)`
-// fields, so a whole-brain scan costs ceil(pages / batch) subrequests instead of
-// one per page. Capped at MAX_SCAN_PAGES as a sanity bound; `truncated` tells the
-// caller the scan was partial.
-async function fetchPages(
-	octokit: Octokit,
-	repo: RepoRef,
-	entries: TreeEntry[]
-): Promise<{ pages: PageContent[]; truncated: boolean }> {
-	const take = entries.slice(0, MAX_SCAN_PAGES);
-	const pages: PageContent[] = [];
-	// GraphQL caps blob `text` for very large files (returns isTruncated=true with a
-	// partial body). Those are rare for wiki pages, but fetching partial content would
-	// silently drop links near the end — so re-read any truncated blob in full via REST.
-	const oversized: TreeEntry[] = [];
-
-	for (let start = 0; start < take.length; start += GRAPHQL_BLOB_BATCH) {
-		const batch = take.slice(start, start + GRAPHQL_BLOB_BATCH);
-		// Build one query with N aliased blob reads: b0…bN-1, each keyed to a blob oid
-		// passed as a typed variable (GitObjectID) — never string-interpolated, so no
-		// injection surface. A bad/missing oid resolves that alias to null (not a
-		// top-level error), so one odd entry can't fail the whole batch.
-		const varDecls = batch.map((_, i) => `$o${i}: GitObjectID!`).join(', ');
-		const fields = batch
-			.map((_, i) => `b${i}: object(oid: $o${i}) { ... on Blob { text isTruncated } }`)
-			.join('\n');
-		const query = `query ($owner: String!, $repo: String!, ${varDecls}) {
-			repository(owner: $owner, name: $repo) {
-				${fields}
-			}
-		}`;
-		const variables: Record<string, string> = { owner: repo.owner, repo: repo.repo };
-		batch.forEach((e, i) => (variables[`o${i}`] = e.sha));
-
-		const data = await octokit.graphql<{
-			repository: Record<string, { text?: string | null; isTruncated?: boolean } | null>;
-		}>(query, variables);
-
-		const repository = data?.repository ?? {};
-		batch.forEach((e, i) => {
-			const blob = repository[`b${i}`];
-			// text is null for binary blobs; skip those rather than pushing garbage.
-			// (We only ever pass .md entries, so this is a belt-and-suspenders guard.)
-			if (!blob || typeof blob.text !== 'string') return;
-			if (blob.isTruncated) oversized.push(e);
-			else pages.push({ path: e.path, content: blob.text });
-		});
-	}
-
-	// Full re-read of any blob GraphQL truncated (rare). One REST call each, but only
-	// for oversized pages, so the common path stays batched.
-	for (const e of oversized) {
-		const { data } = await octokit.rest.git.getBlob({ ...repo, file_sha: e.sha });
-		pages.push({ path: e.path, content: base64ToUtf8(data.content) });
-	}
-
-	return { pages, truncated: entries.length > take.length };
-}
-
-// Read one file at HEAD via the contents API. Returns null when absent.
-async function readFile(
-	octokit: Octokit,
-	repo: RepoRef,
-	path: string,
-	ref?: string
-): Promise<{ content: string; sha: string } | null> {
-	try {
-		const { data } = await octokit.rest.repos.getContent({ ...repo, path, ...(ref && { ref }) });
-		if (Array.isArray(data) || data.type !== 'file') return null;
-		return { content: base64ToUtf8(data.content), sha: data.sha };
-	} catch (err) {
-		if ((err as { status?: number })?.status === 404) return null;
-		throw err;
-	}
-}
-
-// One file's bytes, base64, without ever decoding them to a string. The contents API
-// carries the bytes inline for small files, which is the common case (an attachment is
-// capped well below the 1 MB inline ceiling); above that it returns metadata with the
-// content omitted, so fall through to the blob API using the sha it did return.
-async function readBinary(
-	octokit: Octokit,
-	repo: RepoRef,
-	path: string,
-	ref?: string
-): Promise<BinaryContent | null> {
-	let sha: string;
-	let size: number;
-	try {
-		const { data } = await octokit.rest.repos.getContent({ ...repo, path, ...(ref && { ref }) });
-		if (Array.isArray(data) || data.type !== 'file') return null;
-		sha = data.sha;
-		size = data.size;
-		// `encoding` is 'none' when GitHub declined to inline the content.
-		if (data.encoding === 'base64' && data.content) {
-			return { contentBase64: data.content.replace(/\n/g, ''), sha, size };
-		}
-	} catch (err) {
-		if ((err as { status?: number })?.status === 404) return null;
-		throw err;
-	}
-	const { data: blob } = await octokit.rest.git.getBlob({ ...repo, file_sha: sha });
-	return { contentBase64: blob.content.replace(/\n/g, ''), sha, size };
-}
-
-type TreeParam = NonNullable<Parameters<Octokit['rest']['git']['createTree']>[0]>['tree'][number];
-
-// The tree entries for one commit's bundle, shared by both write paths so a direct
-// commit and a PR commit can never build the tree differently.
-//
-// A utf-8 write rides inline in the tree, so a whole page bundle still costs one
-// request. A base64 write cannot: createTree decodes inline `content` as UTF-8, so
-// binary has to become a blob first and be referenced by sha. That costs one extra
-// subrequest per binary file, which is bounded by how many attachments are in the
-// bundle (in practice, one).
-async function buildTreeEntries(
-	octokit: Octokit,
-	repo: RepoRef,
-	writes: FileWrite[] = [],
-	deletes: string[] = []
-): Promise<{ tree: TreeParam[]; versions: Record<string, string> }> {
-	const tree: TreeParam[] = [];
-	const versions: Record<string, string> = {};
-	for (const w of writes) {
-		if (w.encoding === 'base64') {
-			const { data: blob } = await octokit.rest.git.createBlob({
-				...repo,
-				content: w.content,
-				encoding: 'base64'
-			});
-			tree.push({ path: w.path, mode: '100644', type: 'blob', sha: blob.sha });
-			versions[w.path] = blob.sha;
-		} else {
-			tree.push({ path: w.path, mode: '100644', type: 'blob', content: w.content });
-			versions[w.path] = await gitBlobSha(w.content);
-		}
-	}
-	for (const path of deletes) {
-		tree.push({ path, mode: '100644', type: 'blob', sha: null });
-	}
-	return { tree, versions };
-}
-
-// One atomic commit: all writes and deletes land together or not at all.
-// `deletes` entries that don't exist in the tree are ignored by GitHub.
-// The returned sha is internal plumbing — never surface it to the user.
-async function commitFiles(
-	octokit: Octokit,
-	repo: RepoRef,
-	opts: {
-		message: string;
-		writes?: FileWrite[];
-		deletes?: string[];
-		head?: Head; // pass when already fetched to save round trips
-		author?: CommitAuthor; // attribute the commit to the human, not the App
-	}
-): Promise<CommitResult> {
-	const head = opts.head ?? (await getHead(octokit, repo));
-
-	const { tree, versions } = await buildTreeEntries(octokit, repo, opts.writes, opts.deletes);
-
-	const { data: newTree } = await octokit.rest.git.createTree({
-		...repo,
-		base_tree: head.treeSha,
-		tree
-	});
-	const author = validCommitAuthor(opts.author);
-	const { data: commit } = await octokit.rest.git.createCommit({
-		...repo,
-		message: opts.message,
-		tree: newTree.sha,
-		parents: [head.commitSha],
-		// committer is filled from author when omitted, so blame shows the human.
-		...(author && { author })
-	});
-	await octokit.rest.git.updateRef({
-		...repo,
-		ref: `heads/${head.branch}`,
-		sha: commit.sha
-	});
-	return {
-		sha: commit.sha,
-		head: { branch: head.branch, commitSha: commit.sha, treeSha: newTree.sha },
-		versions
-	};
 }
 
 export interface WriteOutcome {
@@ -713,203 +280,15 @@ export interface WriteOutcome {
 	merged?: boolean;
 	autoMergeEnabled?: boolean;
 	// PR mode only: the change joined the brain's already-open pull request rather
-	// than opening one (see BrainStore.writeHead).
+	// than opening one (see BrainStore.writeBase).
 	appended?: boolean;
 	// PR mode only: the commit this write added to the pull request's branch, so a
 	// caller can read back what it wrote there (the editor's next sha).
 	branchSha?: string;
-	// Direct mode only: the revision the branch now points at, in the SAME
-	// identifier space branchCommitSha reports (a commit sha on GitHub, the
-	// working-tree digest on the fs backend). The write-through index update
-	// records it (writeThroughIndex in brain-index.ts). Absent on the PR path:
-	// the default branch has not moved, or moved via a merge commit this call
-	// does not know — the next read reconciles there, as before.
-	commitSha?: string;
-	// Direct mode only, with commitSha: the new version tag of every file written, by
-	// path (BrainStore.commitFiles). Write-through stores these instead of deriving them.
-	versions?: Record<string, string>;
-}
-
-// Arm GitHub auto-merge on a freshly-opened PR: it merges automatically once the
-// repo's required checks/approvals pass. Handles the two non-happy cases:
-//   - PR is already mergeable (no pending required checks) → merge it now.
-//   - repo has auto-merge disabled (or it's otherwise unavailable) → leave the PR
-//     open for a human; the caller reports the URL.
-async function armAutoMerge(
-	octokit: Octokit,
-	repo: RepoRef,
-	pr: { node_id: string; number: number },
-	mergeMethod: 'MERGE' | 'SQUASH' | 'REBASE'
-): Promise<{ merged?: boolean; autoMergeEnabled?: boolean }> {
-	try {
-		// NB: @octokit/graphql reserves `method` (among url/headers/query/…) as a
-		// parameter name, so the GraphQL variable must NOT be called `method`.
-		await octokit.graphql(
-			`mutation ($id: ID!, $mergeMethod: PullRequestMergeMethod!) {
-				enablePullRequestAutoMerge(input: { pullRequestId: $id, mergeMethod: $mergeMethod }) {
-					pullRequest { number }
-				}
-			}`,
-			{ id: pr.node_id, mergeMethod }
-		);
-		return { autoMergeEnabled: true };
-	} catch (err) {
-		const msg = String((err as { message?: string })?.message ?? err);
-		// Already green / nothing to wait on → just merge it now.
-		if (/clean status|not in the correct state/i.test(msg)) {
-			try {
-				await octokit.rest.pulls.merge({
-					...repo,
-					pull_number: pr.number,
-					merge_method: mergeMethod.toLowerCase() as 'merge' | 'squash' | 'rebase'
-				});
-				return { merged: true };
-			} catch {
-				return {};
-			}
-		}
-		// Auto-merge disabled on the repo, or some other issue → leave PR open.
-		return {};
-	}
-}
-
-// Land a multi-file bundle either directly (updateRef on the default branch) or,
-// on a protected branch, as a PR: same tree/commit, but on a fresh branch with a
-// pull request opened against the default branch. This is the single write
-// chokepoint the librarian + editor tools call so branch-protection handling
-// lives in one place. `head` should be the default branch's head.
-async function commitOrPR(
-	octokit: Octokit,
-	repo: RepoRef,
-	opts: {
-		writeMode: 'direct' | 'pull-request';
-		defaultBranch: string;
-		message: string;
-		writes?: FileWrite[];
-		deletes?: string[];
-		head?: Head;
-		branchPrefix?: string; // PR branch name prefix, e.g. 'isomorphic/edit'
-		prTitle?: string;
-		prBody?: string;
-		// PR mode: arm auto-merge on the opened PR, with this merge method.
-		autoMerge?: boolean;
-		mergeMethod?: 'MERGE' | 'SQUASH' | 'REBASE';
-		// Attribute the commit to the human who made the change (both modes).
-		author?: CommitAuthor;
-	}
-): Promise<WriteOutcome> {
-	const head = opts.head ?? (await getHead(octokit, repo, opts.defaultBranch));
-	if (opts.writeMode === 'direct') {
-		const res = await commitFiles(octokit, repo, {
-			message: opts.message,
-			writes: opts.writes,
-			deletes: opts.deletes,
-			head,
-			author: opts.author
-		});
-		return { commitSha: res.head.commitSha, versions: res.versions };
-	}
-
-	// PR mode: build the identical tree/commit as commitFiles, but land it on a new
-	// branch and open a PR instead of moving the default ref.
-	const { tree } = await buildTreeEntries(octokit, repo, opts.writes, opts.deletes);
-	const { data: newTree } = await octokit.rest.git.createTree({
-		...repo,
-		base_tree: head.treeSha,
-		tree
-	});
-	const author = validCommitAuthor(opts.author);
-	const { data: commit } = await octokit.rest.git.createCommit({
-		...repo,
-		message: opts.message,
-		tree: newTree.sha,
-		parents: [head.commitSha],
-		...(author && { author })
-	});
-	if (head.pr) return appendToPendingPr(octokit, repo, head, head.pr, commit.sha, opts);
-
-	// crypto.randomUUID keeps retries/concurrent edits from colliding on the branch.
-	const branch =
-		`${opts.branchPrefix ?? 'isomorphic/change'}-${crypto.randomUUID().slice(0, 8)}`.slice(0, 250);
-	await octokit.rest.git.createRef({ ...repo, ref: `refs/heads/${branch}`, sha: commit.sha });
-	const { data: pr } = await octokit.rest.pulls.create({
-		...repo,
-		title: opts.prTitle ?? opts.message.split('\n')[0],
-		body: opts.prBody ?? '',
-		head: branch,
-		base: opts.defaultBranch
-	});
-
-	let autoMergeResult: { merged?: boolean; autoMergeEnabled?: boolean } = {};
-	if (opts.autoMerge) {
-		autoMergeResult = await armAutoMerge(
-			octokit,
-			repo,
-			{ node_id: pr.node_id, number: pr.number },
-			opts.mergeMethod ?? 'MERGE'
-		);
-	}
-	return { prUrl: pr.html_url, prNumber: pr.number, branchSha: commit.sha, ...autoMergeResult };
-}
-
-// Land `commitSha` (whose parent is the pull request's head) on the brain's open pull
-// request: fast-forward its branch, retitle it to cover every change it now holds,
-// bring it up to date with the default branch when it has fallen behind, and arm
-// auto-merge if it is not armed yet. Only the ref update can fail the write; the rest
-// is best effort, because the change has already landed on the pull request.
-async function appendToPendingPr(
-	octokit: Octokit,
-	repo: RepoRef,
-	head: Head,
-	pr: PendingPr,
-	commitSha: string,
-	opts: {
-		message: string;
-		prTitle?: string;
-		autoMerge?: boolean;
-		mergeMethod?: 'MERGE' | 'SQUASH' | 'REBASE';
-	}
-): Promise<WriteOutcome> {
-	try {
-		await octokit.rest.git.updateRef({
-			...repo,
-			ref: `heads/${head.branch}`,
-			sha: commitSha,
-			force: false
-		});
-	} catch (err) {
-		const status = (err as { status?: number })?.status;
-		if (status === 422 || status === 409)
-			throw new Error(
-				`Pull request #${pr.number} changed while this write was being prepared, so nothing was written. Retry the same call.`
-			);
-		throw err;
-	}
-	const text = coalescedPrText(pr, opts.prTitle ?? opts.message.split('\n')[0]);
-	await octokit.rest.pulls
-		.update({ ...repo, pull_number: pr.number, title: text.title, body: text.body })
-		.catch(() => {});
-	if (pr.behind) {
-		await octokit.rest.pulls
-			.updateBranch({ ...repo, pull_number: pr.number, expected_head_sha: commitSha })
-			.catch(() => {});
-	}
-	let autoMergeResult: { merged?: boolean; autoMergeEnabled?: boolean } = pr.autoMerge
-		? { autoMergeEnabled: true }
-		: {};
-	if (opts.autoMerge && !pr.autoMerge) {
-		autoMergeResult = await armAutoMerge(
-			octokit,
-			repo,
-			{ node_id: pr.nodeId, number: pr.number },
-			opts.mergeMethod ?? 'MERGE'
-		);
-	}
-	return {
-		prUrl: pr.url,
-		prNumber: pr.number,
-		appended: true,
-		branchSha: commitSha,
-		...autoMergeResult
-	};
+	// Direct mode only: what the write landed. `revision.id` is in the same identifier
+	// space branchRevision reports, and write-through records it with `versions`
+	// (writeThroughIndex in brain-index.ts). Absent on the PR path, where the default
+	// branch has not moved or moved by a merge this call does not know, and on a store
+	// that leaves the index to reconcile on the next read.
+	landed?: WriteResult;
 }

@@ -1,4 +1,4 @@
-// Golden test for how PR-mode writes share one open pull request (BrainStore.writeHead,
+// Golden test for how PR-mode writes share one open pull request (BrainStore.writeBase,
 // commitOrPR's append path, src/lib/brain-repo.ts) and the text that pull request
 // carries (coalescedPrText, src/lib/change-record.ts). The GitHub store runs against
 // an in-memory fake of the few REST calls it makes, so no network is touched.
@@ -9,7 +9,7 @@
 //   1. A SECOND PULL REQUEST. A write while an Isomorphic pull request is open must
 //      land on that pull request's branch, not open another one from the default
 //      branch that lacks the first change.
-//   2. A WRITE PLANNED WITHOUT THE PENDING CHANGE. writeHead must hand back the pull
+//   2. A WRITE PLANNED WITHOUT THE PENDING CHANGE. writeBase must hand back the pull
 //      request's head, so a read pinned to it sees what is waiting there.
 //   3. JOINING THE WRONG PULL REQUEST: a human's branch, a fork, another base,
 //      configure_brain's own pull request, or one GitHub reports as conflicting.
@@ -21,12 +21,12 @@
 
 import { createHash } from 'node:crypto';
 import type { Octokit } from 'octokit';
+import type { BrainLocator } from '../src/lib/brain-repo.ts';
 import {
 	githubStore,
 	pendingPrCandidates,
-	type OpenPrSummary,
-	type RepoRef
-} from '../src/lib/brain-repo.ts';
+	type OpenPrSummary
+} from '../src/lib/brain-store-github.ts';
 import { coalescedPrText } from '../src/lib/change-record.ts';
 import { checker } from './check.ts';
 
@@ -301,7 +301,7 @@ function fakeGitHub() {
 	};
 }
 
-const repo: RepoRef = { owner: 'example-org', repo: 'brain' };
+const repo: BrainLocator = { owner: 'example-org', repo: 'brain' };
 const prMode = { defaultBranch: 'main', writeMode: 'pull-request' as const };
 const writeOpts = (prTitle: string) => ({
 	...prMode,
@@ -317,16 +317,16 @@ async function storeChecks() {
 	const gh = fakeGitHub();
 	const store = githubStore(gh.octokit);
 
-	const direct = await store.writeHead(repo, { defaultBranch: 'main', writeMode: 'direct' });
+	const direct = await store.writeBase(repo, { defaultBranch: 'main', writeMode: 'direct' });
 	check('direct mode writes on the default branch', direct.branch === 'main' && !direct.pr);
 	check('direct mode never lists pull requests', !gh.calls.includes('pulls.list'));
 
 	// First write: nothing open, so it opens pull request #1.
-	const h1 = await store.writeHead(repo, prMode);
+	const h1 = await store.writeBase(repo, prMode);
 	check('PR mode with nothing open starts from the default branch', h1.branch === 'main' && !h1.pr);
 	const first = await store.commitOrPR(repo, {
 		...writeOpts('Add Team Training'),
-		head: h1,
+		base: h1,
 		writes: [{ path: 'wiki/a.md', content: 'v1\n' }]
 	});
 	check('the first write opens a pull request', first.prNumber === 1 && !first.appended);
@@ -336,17 +336,17 @@ async function storeChecks() {
 	);
 
 	// Second write: joins #1, planned against its branch.
-	const h2 = await store.writeHead(repo, prMode);
+	const h2 = await store.writeBase(repo, prMode);
 	check(
-		'writeHead returns the open pull request',
+		'writeBase returns the open pull request',
 		h2.pr?.number === 1 && h2.branch === gh.prs[0].head
 	);
-	const seen = await store.readFile(repo, 'wiki/a.md', h2.commitSha);
+	const seen = await store.readFile(repo, 'wiki/a.md', h2.id);
 	check('a read pinned to that head sees the pending change', seen?.content === 'v1\n');
 	const opened = gh.calls.filter((c) => c === 'pulls.create').length;
 	const second = await store.commitOrPR(repo, {
 		...writeOpts('Update CHANGELOG.md'),
-		head: h2,
+		base: h2,
 		writes: [{ path: 'wiki/log.md', content: '# Log\n- two\n' }]
 	});
 	check(
@@ -377,10 +377,10 @@ async function storeChecks() {
 	// Behind: main moved, so the append also updates the branch.
 	gh.advanceMain();
 	gh.prs[0].mergeable_state = 'behind';
-	const h3 = await store.writeHead(repo, prMode);
+	const h3 = await store.writeBase(repo, prMode);
 	await store.commitOrPR(repo, {
 		...writeOpts('Update A'),
-		head: h3,
+		base: h3,
 		writes: [{ path: 'wiki/a.md', content: 'v2\n' }]
 	});
 	check(
@@ -390,8 +390,8 @@ async function storeChecks() {
 	);
 	gh.prs[0].mergeable_state = 'clean';
 
-	// Concurrent write: the branch moved between writeHead and the commit.
-	const h4 = await store.writeHead(repo, prMode);
+	// Concurrent write: the branch moved between writeBase and the commit.
+	const h4 = await store.writeBase(repo, prMode);
 	gh.advanceBranch(h4.branch);
 	const theirs = gh.refs.get(h4.branch);
 	const titleBefore = gh.prs[0].title;
@@ -399,7 +399,7 @@ async function storeChecks() {
 	try {
 		await store.commitOrPR(repo, {
 			...writeOpts('Update B'),
-			head: h4,
+			base: h4,
 			writes: [{ path: 'wiki/b.md', content: 'b\n' }]
 		});
 	} catch (err) {
@@ -415,13 +415,13 @@ async function storeChecks() {
 
 	// A conflicting pull request is not joined.
 	gh.prs[0].mergeable = false;
-	const h5 = await store.writeHead(repo, prMode);
+	const h5 = await store.writeBase(repo, prMode);
 	check('a conflicting pull request is skipped', h5.branch === 'main' && !h5.pr);
 	gh.prs[0].mergeable = null;
 
 	// Listing fails: behave as before, from the default branch.
 	gh.setFailList(true);
-	const h6 = await store.writeHead(repo, prMode);
+	const h6 = await store.writeBase(repo, prMode);
 	check(
 		'a failed pull request listing falls back to the default branch',
 		h6.branch === 'main' && !h6.pr

@@ -51,7 +51,7 @@ import {
 	moveBrain,
 	planBrainMove
 } from '../lib/brain-move.ts';
-import { githubStore } from '../lib/brain-repo.ts';
+import { githubStore } from '../lib/brain-store-github.ts';
 import { detectNeedsConfig, type OpenIndex } from '../lib/brain-index.ts';
 import { CONFIG_PATH, DEFAULT_BRAIN_CONFIG } from '../lib/brain-config.ts';
 import { fail } from './shared.ts';
@@ -135,7 +135,7 @@ function closedText(closed: StewardedBrain[]): string {
 // A CONFIGURED BRAIN MUST COST NOTHING HERE. This runs for every brain the caller
 // manages, on every `brains` call, and the widget makes that call on every open.
 // Resolving each brain's context and running `ensureFresh` first costs a token mint,
-// a config read and a `getHead` per brain; with several brains that passes the
+// a config read and a `getRevision` per brain; with several brains that passes the
 // host edge's ~15s limit, which reports a bare 502 and leaves the app without its
 // brain list and `features`. So one indexed row answers it, with no context, no
 // token and no network. Only a brain with an EMPTY index pays for freshness and the
@@ -150,12 +150,12 @@ async function detectRowSetup(
 		// The index is keyed by the primary key; the handle only addresses the brain.
 		if (await openIndex(b.brain_id).hasPages()) return { needsConfig: false };
 		const c = await getContext({ requires: 'admin', brain: b.id });
-		await c.index.ensureFresh(c.store, c.repoArgs, c.config);
+		await c.index.ensureFresh(c.store, c.locator, c.config);
 		const pages = await c.index.listPages();
 		if (pages.length > 0) return { needsConfig: false };
-		if (!(await detectNeedsConfig(c.store, c.repoArgs, c.config))) return { needsConfig: false };
+		if (!(await detectNeedsConfig(c.store, c.locator, c.config))) return { needsConfig: false };
 		// Misconfigured — is a "configure" PR already open (protected repo)?
-		const configPrUrl = await c.store.findOpenConfigPr(c.repoArgs);
+		const configPrUrl = await c.store.findOpenConfigPr(c.locator);
 		return { needsConfig: true, configPrUrl };
 	} catch {
 		return { needsConfig: false };
@@ -827,7 +827,7 @@ export function registerBrainTools(
 			// "needs setup" flag recommends, so without the guard a wrong flag would
 			// replace it with a whole-repo index. Show what is there and require the
 			// replacement to be asked for by name.
-			const current = await ctx.store.readFile(ctx.repoArgs, CONFIG_PATH);
+			const current = await ctx.store.readFile(ctx.locator, CONFIG_PATH);
 			if (current && !overwrite) {
 				return fail(
 					`${renamed ? `${renamed} ` : ''}This brain already has a ${CONFIG_PATH}, so nothing was written. Its current contents:\n\n${current.content.trim()}\n\nPass overwrite: true to replace it.`
@@ -835,7 +835,7 @@ export function registerBrainTools(
 			}
 
 			// Don't open a second PR if a configure PR is already pending (protected repo).
-			const pending = await ctx.store.findOpenConfigPr(ctx.repoArgs);
+			const pending = await ctx.store.findOpenConfigPr(ctx.locator);
 			if (pending) {
 				return {
 					content: [
@@ -852,8 +852,8 @@ export function registerBrainTools(
 			const body =
 				JSON.stringify({ paths: Object.fromEntries(roots.map((r) => [r, 'content'])) }, null, 2) +
 				'\n';
-			const head = await ctx.store.getHead(ctx.repoArgs, ctx.config.defaultBranch);
-			const outcome = await ctx.store.commitOrPR(ctx.repoArgs, {
+			const rev = await ctx.store.getRevision(ctx.locator, ctx.config.defaultBranch);
+			const outcome = await ctx.store.commitOrPR(ctx.locator, {
 				writeMode: ctx.config.writeMode,
 				defaultBranch: ctx.config.defaultBranch,
 				author: ctx.author,
@@ -861,7 +861,7 @@ export function registerBrainTools(
 				mergeMethod: ctx.config.mergeMethod,
 				message: 'Configure Isomorphic brain (.isomorphic.json)',
 				writes: [{ path: CONFIG_PATH, content: body }],
-				head,
+				base: rev,
 				branchPrefix: 'isomorphic/configure',
 				prTitle: 'Configure Isomorphic brain',
 				prBody: 'Adds .isomorphic.json so Isomorphic indexes this repo’s content.'
@@ -884,7 +884,7 @@ export function registerBrainTools(
 			// Live now → drop the cached (default) config and rebuild the index against the
 			// new roots (a config change needs a FULL rebuild — content blobs are unchanged,
 			// so an incremental reindex wouldn't pick up the newly in-scope pages).
-			invalidateConfig(ctx.repoArgs.owner, ctx.repoArgs.repo);
+			invalidateConfig(ctx.locator.owner, ctx.locator.repo);
 			await ctx.index.reset();
 			return {
 				content: [

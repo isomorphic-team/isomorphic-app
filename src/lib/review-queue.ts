@@ -9,7 +9,7 @@
 // Worker-safe: no node:* imports.
 
 import type { D1Database } from '@cloudflare/workers-types';
-import type { BrainStore, RepoRef, TreeEntry } from './brain-repo.ts';
+import type { BrainStore, BrainLocator, FileEntry } from './brain-repo.ts';
 import { findingKey, type Finding } from './findings.ts';
 import { roleAtLeast, type Role } from './orgs.ts';
 import { detectSensitive } from './policy-detectors.ts';
@@ -238,7 +238,7 @@ export async function deletePolicyDismissals(
 export interface PolicyTarget {
 	db: D1Database;
 	store: BrainStore;
-	repo: RepoRef;
+	repo: BrainLocator;
 	defaultBranch: string;
 	brainId: string;
 	secret?: string;
@@ -278,7 +278,7 @@ export async function dismissPolicyFinding(
 			 ON CONFLICT (brain_id, key) DO UPDATE SET
 			   fingerprints = ?3, file_sha = ?4, why = ?5, dismissed_by = ?6, dismissed_at = ?7`
 		)
-		.bind(t.brainId, key, JSON.stringify(fingerprints), file.sha, d.why, d.by ?? null, now)
+		.bind(t.brainId, key, JSON.stringify(fingerprints), file.version, d.why, d.by ?? null, now)
 		.run();
 	return null;
 }
@@ -585,11 +585,11 @@ export async function readReconciledFindings(t: PolicyTarget): Promise<QueueFind
 	const policy = rows.filter((f) => f.kind === 'policy');
 	if (!policy.length) return rows;
 
-	const head = await t.store.getHead(t.repo, t.defaultBranch);
-	const entries = await t.store.listTree(t.repo, head, { extension: '*' });
-	const tree = new Map(entries.map((e) => [e.path, e.sha]));
+	const rev = await t.store.getRevision(t.repo, t.defaultBranch);
+	const entries = await t.store.listTree(t.repo, rev, { extension: '*' });
+	const tree = new Map(entries.map((e) => [e.path, e.version]));
 	const dismissals = await readPolicyDismissals(t.db, t.brainId);
-	const changed: TreeEntry[] = [];
+	const changed: FileEntry[] = [];
 	for (const path of new Set(policy.map((f) => f.paths[0]))) {
 		const sha = tree.get(path);
 		if (!sha) continue;
@@ -599,7 +599,7 @@ export async function readReconciledFindings(t: PolicyTarget): Promise<QueueFind
 				f.pageShas[path] !== sha ||
 				(dismissals.has(f.key) && dismissals.get(f.key)?.fileSha !== sha)
 		);
-		if (moved) changed.push({ path, sha });
+		if (moved) changed.push({ path, version: sha });
 	}
 	const { pages } = changed.length
 		? await t.store.fetchPages(t.repo, changed.slice(0, POLICY_RESCAN_BUDGET))

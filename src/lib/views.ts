@@ -31,7 +31,7 @@
 // Worker-safe (no node:*). Callers MUST ensureFresh() before building a context.
 
 import type { BrainConfig } from './brain-config.ts';
-import type { RepoRef, BrainStore } from './brain-repo.ts';
+import type { BrainLocator, BrainStore } from './brain-repo.ts';
 import {
 	type ResolvedGraph,
 	type PageFields,
@@ -382,7 +382,7 @@ export interface RenderedViews {
 export interface ViewDeps {
 	index: BrainIndex;
 	store: BrainStore;
-	repoArgs: RepoRef;
+	locator: BrainLocator;
 	config: BrainConfig;
 }
 
@@ -393,7 +393,7 @@ export async function tryRenderViews(
 ): Promise<RenderedViews | null> {
 	if (!hasViews(content)) return null;
 	try {
-		await deps.index.ensureFresh(deps.store, deps.repoArgs, deps.config);
+		await deps.index.ensureFresh(deps.store, deps.locator, deps.config);
 		const ctx = await buildViewContext(deps.index, deps.config);
 		return await renderViews(content, pagePath, ctx);
 	} catch (err) {

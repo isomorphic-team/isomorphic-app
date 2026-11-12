@@ -1,7 +1,7 @@
 // The data-policy guard: a BrainStore wrapper that checks every file a write is
 // about to land. Wrapping the store rather than one tool is what makes it
 // complete, because every tool that writes (page writes, moves, media, the
-// importer, config) reaches storage through commitOrPR or commitFiles.
+// importer, config) reaches storage through commitOrPR or write.
 //
 // Shadow mode only, for now (docs/roadmap.md, "brain review", step 1): the guard
 // records what it finds and never blocks, changes or delays a write beyond
@@ -57,7 +57,7 @@ export function guardStore(store: BrainStore, opts: GuardOptions): BrainStore {
 
 	return {
 		...store,
-		commitFiles: (repo, o) => recordLanded(o.writes, () => store.commitFiles(repo, o)),
+		write: (repo, o) => recordLanded(o.writes, () => store.write(repo, o)),
 		commitOrPR: (repo, o) => recordLanded(o.writes, () => store.commitOrPR(repo, o))
 	};
 }

@@ -267,7 +267,7 @@ is described as a proposed change.
 # TODO: bulk page updates (batch field writes, and find/replace across pages)
 
 Every write tool targets one logical thing: one page, or one folder subtree. The
-underlying primitive does not have that limit, since `commitFiles` already lands N
+underlying primitive does not have that limit, since `write` already lands N
 files in one atomic commit. Three wants sit on the other side of that gap.
 
 **Batch field writes.** The case that produced issue #14: 44 archived todos, each
@@ -377,7 +377,7 @@ How template and schema changes reach every customer brain after they're scaffol
 **Recommended shape: versioned, idempotent migrations applied lazily on first touch.**
 
 - **Version markers.** Each brain records its `schema_version` (small `.brain-version` file at repo root: machine-readable, mostly invisible to users). Mirror it as a column in D1 so the Worker can check without a GitHub call. Platform ships `CURRENT_SCHEMA_VERSION` plus an ordered migration registry (`src/lib/migrations/NNN-name.ts`).
-- **Migration contract.** A migration is an idempotent async function `(store, repoArgs) => void` producing at most ONE atomic commit (commitFiles) plus a `wiki/log.md` entry, so the librarian visibly did maintenance, consistent with the no-git principle. Idempotent because a crashed run must be safely re-runnable; the version marker only advances after success.
+- **Migration contract.** A migration is an idempotent async function `(store, locator) => void` producing at most ONE atomic write (`write`) plus a `wiki/log.md` entry, so the librarian visibly did maintenance, consistent with the no-git principle. Idempotent because a crashed run must be safely re-runnable; the version marker only advances after success.
 - **Lazy application in `tenantContext()`.** After tenant resolution: if D1 `schema_version` < current, take a per-brain lock, run pending migrations in order, bump D1 and the in-repo marker. Dormant brains migrate on their next use; no fleet job needed. Budget-cap the work per request (Worker subrequest limits) so large data migrations chunk across successive touches ("migrate up to N pages per request until done").
 - **Eager batch runner (optional, later).** A cron Worker iterating D1 tenants for migrations that must land everywhere promptly (security fixes, breaking tool changes). Same migration functions, different driver.
 - **The clobber policy is the hard part.** Classify brain files:
@@ -697,7 +697,7 @@ Open, in rough order:
 
 # TODO: commit attribution niceties
 
-Writes are attributed to the person who made them (`author` on `commitFiles` /
+Writes are attributed to the person who made them (`author` on `write` /
 `commitOrPR`, resolved per request). Two niceties remain: put "Edited by <name>" in pull
 request bodies, and offer a per-brain noreply address for members who would rather not
 expose a real one.

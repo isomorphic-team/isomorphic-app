@@ -35,11 +35,11 @@ paths:
   merges itself on green only when auto-merge could be armed (`writes.autoMerge`, default true,
   and a repo that allows it). Never tell a caller a PR "will merge" unconditionally.
 - **A brain has at most one open Isomorphic PR at a time** (`pnpm test:pending-pr`). Every
-  write plans against `store.writeHead`, never `getHead`, and pins its reads to that head:
+  write plans against `store.writeBase`, never `getRevision`, and pins its reads to that revision:
   with an `isomorphic/` PR open (not `isomorphic/configure`, not reported as conflicting),
   that is the PR's branch, and `commitOrPR` fast-forwards it, retitles it
   (`coalescedPrText`), updates it when it is behind the default branch, and arms auto-merge
-  if needed. `edit_page` opens from the same head so the editor's sha matches. Reads,
+  if needed. `edit_page` opens from the same revision so the editor's sha matches. Reads,
   search and the index stay on the default branch.
 
 ## Frontmatter: `fields` and the properties panel
@@ -89,7 +89,7 @@ the BRAIN role at `editor`.
 ## The data-policy guard
 
 `guardStore` (`src/lib/policy-guard.ts`) wraps the `BrainStore` the Worker and the local
-runtime hand to every tool, so it sees every write that reaches `commitOrPR` or `commitFiles`.
+runtime hand to every tool, so it sees every write that reaches `commitOrPR` or `write`.
 `pnpm test:guard`. Roadmap: "brain review".
 
 - **On for every brain by default, and never blocking** (`shadow`, an internal name nothing

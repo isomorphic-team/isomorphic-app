@@ -101,7 +101,7 @@ const seedIndexRow = (id: string) =>
 
 // ---- the brain under test ----
 const brain = await scratchBrain('brain-librarian-e2e', 'Librarian E2E test, safe to delete');
-const { repoArgs, brainId, name, headSha, settledHead } = brain;
+const { locator, brainId, name, headSha, settledHead } = brain;
 // Swapped for a wrapper by the read-ordering probe; every tool reads it through getContext.
 let store: BrainStore = brain.store;
 // A second repo, existing but not yet a brain: what connect_brain adopts.
@@ -140,7 +140,7 @@ if (GITHUB_MODE) {
 					data: {
 						repositories: [...reachable].map((repo) => ({
 							name: repo,
-							owner: { login: repoArgs.owner }
+							owner: { login: locator.owner }
 						}))
 					}
 				})
@@ -151,7 +151,7 @@ if (GITHUB_MODE) {
 
 // ---- in-memory MCP client wired to the real handlers, with a full context ----
 const server = new McpServer({ name: 'librarian-e2e', version: '0.0.0' });
-// Counts writeHead calls: in PR mode it is what puts a write on the brain's open pull
+// Counts writeBase calls: in PR mode it is what puts a write on the brain's open pull
 // request, and a write tool that skips it plans against the default branch instead.
 let writeHeadCalls = 0;
 // The brain role every tool sees; flipped to prove a gate through the tool itself.
@@ -161,14 +161,14 @@ let consolidate: ConsolidationStep | undefined;
 // Wrapped in the guard as the Worker and the local runtime wrap it, so writes here raise
 // the same policy findings.
 const getContext = async () => {
-	const config = await loadBrainConfig(store, repoArgs);
+	const config = await loadBrainConfig(store, locator);
 	return {
 		store: guardStore(
 			{
 				...store,
-				writeHead: (...a: Parameters<BrainStore['writeHead']>) => {
+				writeBase: (...a: Parameters<BrainStore['writeBase']>) => {
 					writeHeadCalls++;
-					return store.writeHead(...a);
+					return store.writeBase(...a);
 				}
 			},
 			{
@@ -177,7 +177,7 @@ const getContext = async () => {
 					recordDetections(db, { brainId, mode: config.policyMode }, detections)
 			}
 		),
-		repoArgs,
+		locator,
 		role: callerRole,
 		orgRole: 'owner' as const,
 		config,
@@ -216,16 +216,16 @@ async function indexedSha(): Promise<string | null> {
 	return row?.indexed_commit_sha ?? null;
 }
 async function fileText(path: string): Promise<string | null> {
-	return (await store.readFile(repoArgs, path))?.content ?? null;
+	return (await store.readFile(locator, path))?.content ?? null;
 }
 // "The write landed as exactly ONE commit" is the atomic-bundle guarantee, and it
 // has to be asked in a way BOTH backends can answer. Counting commits does that.
-// Comparing revision identifiers would not: the fs backend's getHead reports a digest
+// Comparing revision identifiers would not: the fs backend's getRevision reports a digest
 // of the working tree (so an edit made outside our tools still invalidates the index)
 // while its listCommits reports real git shas, and those are two different identifier
 // spaces on purpose.
 async function commitCount(): Promise<number> {
-	return (await store.listCommits(repoArgs, { limit: 200 })).length;
+	return (await store.listCommits(locator, { limit: 200 })).length;
 }
 async function assertOneCommit(label: string, before: number) {
 	const n = await eventually(
@@ -339,7 +339,7 @@ try {
 	);
 
 	// The target blob must be read only after the write's head is captured. Delay
-	// writeHead so the formerly-parallel implementation deterministically starts
+	// writeBase so the formerly-parallel implementation deterministically starts
 	// readFile first and fails this assertion; ordered reads pass and pin the blob to
 	// that commit.
 	const underlyingStore = store;
@@ -348,10 +348,10 @@ try {
 	let targetReadRef: string | undefined;
 	store = {
 		...underlyingStore,
-		writeHead: async (repo, opts) => {
+		writeBase: async (repo, opts) => {
 			await sleep(30);
-			const head = await underlyingStore.writeHead(repo, opts);
-			capturedHead = head.commitSha;
+			const head = await underlyingStore.writeBase(repo, opts);
+			capturedHead = head.id;
 			return head;
 		},
 		readFile: async (repo, path, ref) => {
@@ -714,7 +714,7 @@ try {
 		content: '# Old Task\n\nDone long ago.\n'
 	});
 	// Folder markers on BOTH sides, written raw: no tool creates a dotfile.
-	await store.commitFiles(repoArgs, {
+	await store.write(locator, {
 		message: 'scaffold folder markers',
 		writes: [
 			{ path: 'wiki/todos/.gitkeep', content: '' },
@@ -780,7 +780,7 @@ try {
 	check('no phantom "folder has no files"', !/it has no files/.test(r.text), r.text);
 
 	// ══ delete_page on a non-page FILE: same routing, plus a reference check. ═══
-	await store.commitFiles(repoArgs, {
+	await store.write(locator, {
 		message: 'add an asset to delete',
 		writes: [{ path: 'wiki/assets/logo.svg', content: '<svg/>\n' }]
 	});
@@ -1094,7 +1094,7 @@ try {
 		const path = 'wiki/vendors/versioned.md';
 		await call('write_page', { path, content: '# Versioned\n\nFirst.\n', title: 'Versioned' });
 
-		const stored = await store.readFile(repoArgs, path);
+		const stored = await store.readFile(locator, path);
 		const read = await call('read_page', { path });
 		const viewed = await call('view_page', { path });
 		const structuredMarkdown = typeof read.sc.markdown === 'string' ? read.sc.markdown : '';
@@ -1104,7 +1104,11 @@ try {
 			JSON.stringify(read.sc)
 		);
 
-		check('read_page reports the page blob sha', read.sc.sha === stored?.sha, String(read.sc.sha));
+		check(
+			'read_page reports the page blob sha',
+			read.sc.sha === stored?.version,
+			String(read.sc.sha)
+		);
 		check(
 			'view_page reports the same sha for the same page',
 			!!viewed.sc.sha && viewed.sc.sha === read.sc.sha,
@@ -1147,7 +1151,7 @@ try {
 		);
 		check(
 			'and still matches what the store holds',
-			after.sc.sha === (await store.readFile(repoArgs, path))?.sha,
+			after.sc.sha === (await store.readFile(locator, path))?.version,
 			String(after.sc.sha)
 		);
 
@@ -1193,7 +1197,7 @@ try {
 		check('attach_media succeeds', !attach.isError, attach.text);
 
 		const assetPath = 'wiki/vendors/assets/acme-logo.png';
-		const stored = await store.readBinary(repoArgs, assetPath);
+		const stored = await store.readBinary(locator, assetPath);
 		check('the file is stored where it was placed', !!stored, assetPath);
 		// The assertion this block exists for.
 		check(
@@ -1275,7 +1279,7 @@ try {
 		);
 		check(
 			'the old path is gone',
-			(await store.readBinary(repoArgs, assetPath)) === null,
+			(await store.readBinary(locator, assetPath)) === null,
 			'old asset still present'
 		);
 
@@ -1283,7 +1287,7 @@ try {
 		for (const failure of ['missing', 'changed'] as const) {
 			const folder = `wiki/media-read-${failure}`;
 			const asset = `${folder}/logo.png`;
-			await store.commitFiles(repoArgs, {
+			await store.write(locator, {
 				message: 'seed attachment read guard',
 				writes: [{ path: asset, content: PNG_1PX, encoding: 'base64' }]
 			});
@@ -1294,7 +1298,7 @@ try {
 				readBinary: async (repo, path) => {
 					const file = await realStore.readBinary(repo, path);
 					if (path !== asset) return file;
-					return failure === 'missing' ? null : { ...file!, sha: 'changed-sha' };
+					return failure === 'missing' ? null : { ...file!, version: 'changed-version' };
 				}
 			};
 			try {
@@ -1309,7 +1313,7 @@ try {
 			);
 			check(
 				`${failure} attachment read leaves source bytes intact`,
-				(await store.readBinary(repoArgs, asset))?.contentBase64 === PNG_1PX
+				(await store.readBinary(locator, asset))?.contentBase64 === PNG_1PX
 			);
 		}
 
@@ -1323,7 +1327,7 @@ try {
 			title: 'Outside media move',
 			content: '# Outside\n\n![Logo](media-move/assets/logo.png)\n'
 		});
-		await store.commitFiles(repoArgs, {
+		await store.write(locator, {
 			message: 'seed folder attachment',
 			writes: [{ path: 'wiki/media-move/assets/logo.png', content: PNG_1PX, encoding: 'base64' }]
 		});
@@ -1335,7 +1339,7 @@ try {
 		check('an attachment-only folder moves', !assetFolderMove.isError, assetFolderMove.text);
 		check(
 			'attachment-only folder preserves binary bytes',
-			(await store.readBinary(repoArgs, 'wiki/media-move/images/logo.png'))?.contentBase64 ===
+			(await store.readBinary(locator, 'wiki/media-move/images/logo.png'))?.contentBase64 ===
 				PNG_1PX
 		);
 		check(
@@ -1361,7 +1365,7 @@ try {
 		await assertOneCommit('folder attachment move and link repairs', folderBefore);
 		check(
 			'mixed folder preserves binary bytes',
-			(await store.readBinary(repoArgs, 'wiki/archive/media-move/images/logo.png'))
+			(await store.readBinary(locator, 'wiki/archive/media-move/images/logo.png'))
 				?.contentBase64 === PNG_1PX
 		);
 		check(
@@ -1375,7 +1379,7 @@ try {
 		);
 		check(
 			'source attachment is removed',
-			(await store.readBinary(repoArgs, 'wiki/media-move/images/logo.png')) === null
+			(await store.readBinary(locator, 'wiki/media-move/images/logo.png')) === null
 		);
 
 		// And deleting one has to say who still shows it, since an image that vanishes
@@ -1388,7 +1392,7 @@ try {
 		check('and warns that a page still shows it', del.text.includes(host), del.text);
 		check(
 			'the file is actually gone',
-			(await store.readBinary(repoArgs, 'wiki/vendors/assets/logo.png')) === null
+			(await store.readBinary(locator, 'wiki/vendors/assets/logo.png')) === null
 		);
 
 		// A mime type outside the supported set is refused.
@@ -1450,13 +1454,13 @@ try {
 			clash.text.includes('wiki/vendors/assets/shared-2.png'),
 			clash.text
 		);
-		const original = await store.readBinary(repoArgs, firstPath);
+		const original = await store.readBinary(locator, firstPath);
 		check(
 			'the first file is untouched — its bytes, not the second upload',
 			original?.contentBase64 === PNG_1PX,
 			`${original?.contentBase64?.slice(0, 24)}…`
 		);
-		const variant = await store.readBinary(repoArgs, 'wiki/vendors/assets/shared-2.png');
+		const variant = await store.readBinary(locator, 'wiki/vendors/assets/shared-2.png');
 		check('and the second file is stored alongside it', variant?.contentBase64 === PNG_RED);
 		// The app inserts its link BEFORE uploading, so a rename it is not told about
 		// leaves the page pointing at a name nothing occupies.
@@ -1505,7 +1509,7 @@ try {
 		 VALUES (?1, ?2, 'customer', 1, ?3, ?4, '2026-01-01')`,
 		ORG_MAIN,
 		'Main Org',
-		repoArgs.owner,
+		locator.owner,
 		USER
 	);
 	await run(
@@ -1513,7 +1517,7 @@ try {
 		 VALUES (?1, ?2, 'customer', 2, ?3, ?4, '2026-02-01')`,
 		ORG_EMPTY,
 		'Contoso Group',
-		repoArgs.owner,
+		locator.owner,
 		USER
 	);
 	// Each customer org owns its own installation (connection), as in production.
@@ -1550,8 +1554,8 @@ try {
 		 VALUES (?1, ?2, ?3, ?4, ?5, 'org', '2026-01-02')`,
 		'b-e2e-main',
 		ORG_MAIN,
-		repoArgs.owner,
-		repoArgs.repo,
+		locator.owner,
+		locator.repo,
 		'Main'
 	);
 
@@ -1611,22 +1615,22 @@ try {
 	const candidates = ((br.sc.repos as { id: string }[] | undefined) ?? []).map((r) => r.id);
 	check(
 		'connect_brain with no repo lists connectable candidates',
-		!br.isError && candidates.includes(`${repoArgs.owner}/${adoptRepo}`),
+		!br.isError && candidates.includes(`${locator.owner}/${adoptRepo}`),
 		JSON.stringify(candidates)
 	);
 	check(
 		'...and excludes a repo that is already a brain',
-		!candidates.includes(`${repoArgs.owner}/${repoArgs.repo}`),
+		!candidates.includes(`${locator.owner}/${locator.repo}`),
 		JSON.stringify(candidates)
 	);
 
 	// THE REGRESSION. Adopting the first repo into an org that holds none. Before the
 	// org argument existed this call had no way to name ORG_EMPTY at all, because the
 	// only handle was a brain already inside it.
-	const adoptedId = brainIdFor(repoArgs.owner, adoptRepo);
+	const adoptedId = brainIdFor(locator.owner, adoptRepo);
 	seedIndexRow(adoptedId);
 	br = await callBrain('connect_brain', {
-		repo: `${repoArgs.owner}/${adoptRepo}`,
+		repo: `${locator.owner}/${adoptRepo}`,
 		org: 'Contoso Group',
 		name: 'Adopted'
 	});
@@ -1680,7 +1684,7 @@ try {
 
 	// Guardrails.
 	br = await callBrain('connect_brain', {
-		repo: `${repoArgs.owner}/${adoptRepo}`,
+		repo: `${locator.owner}/${adoptRepo}`,
 		org: 'Contoso Group'
 	});
 	check(
@@ -1689,7 +1693,7 @@ try {
 		br.text
 	);
 	br = await callBrain('connect_brain', {
-		repo: `${repoArgs.owner}/definitely-not-a-real-repo`,
+		repo: `${locator.owner}/definitely-not-a-real-repo`,
 		org: 'Contoso Group'
 	});
 	check(
@@ -1755,7 +1759,7 @@ try {
 		);
 		check(
 			'...and does not silently fall back to the default org',
-			!br.text.includes(repoArgs.owner),
+			!br.text.includes(locator.owner),
 			br.text
 		);
 	}
@@ -1874,8 +1878,8 @@ try {
 		check('dedupe: ...and neither wrote anything', (await commitCount()) === before);
 	}
 
-	// ---- every write plans against writeHead -----------------------------------
-	// The fs store's writeHead is its working tree, so this pins only the wiring:
+	// ---- every write plans against writeBase -----------------------------------
+	// The fs store's writeBase is its working tree, so this pins only the wiring:
 	// test:pending-pr and the protected phase below cover what the GitHub store returns.
 	{
 		const base = 'wiki/write-head-probe';
@@ -1883,7 +1887,7 @@ try {
 			const before = writeHeadCalls;
 			const res = await call(tool, args);
 			check(`${label} succeeds`, !res.isError, res.text);
-			check(`${label} plans against writeHead`, writeHeadCalls > before);
+			check(`${label} plans against writeBase`, writeHeadCalls > before);
 		};
 		await usesWriteHead('write_page create', 'write_page', {
 			path: `${base}/a.md`,
@@ -2274,7 +2278,7 @@ try {
 	if (brain.octokit) {
 		const gh = brain.octokit;
 		await gh.rest.repos.updateBranchProtection({
-			...repoArgs,
+			...locator,
 			branch: 'main',
 			required_status_checks: null,
 			enforce_admins: false,
@@ -2282,7 +2286,7 @@ try {
 			restrictions: null
 		});
 		const openPrs = async () =>
-			(await gh.rest.pulls.list({ ...repoArgs, state: 'open', per_page: 100 })).data.filter((p) =>
+			(await gh.rest.pulls.list({ ...locator, state: 'open', per_page: 100 })).data.filter((p) =>
 				p.head.ref.startsWith('isomorphic/')
 			);
 		const mainBefore = await settledHead();
@@ -2322,7 +2326,7 @@ try {
 			pr?.title
 		);
 		const atPr = async (path: string) =>
-			(await store.readFile(repoArgs, path, pr.head.ref))?.content ?? '';
+			(await store.readFile(locator, path, pr.head.ref))?.content ?? '';
 		const a = await eventually(
 			() => atPr(`${dir}/a.md`),
 			(t) => t.includes('second')

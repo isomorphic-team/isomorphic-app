@@ -92,7 +92,7 @@ export type PageWritePlan =
 export function planPageWrite(
 	args: PageWriteArgs,
 	target: string,
-	existing: { content: string; sha: string } | null,
+	existing: { content: string; version: string } | null,
 	config: PathPolicy
 ): PageWritePlan {
 	const patching = isPatching(args);
@@ -120,8 +120,8 @@ export function planPageWrite(
 			ok: false,
 			error: `A page already exists at ${target}. Use mode "update" or "upsert" to change it, or pick a different path.`
 		};
-	// The in-client editor passes the sha it opened; conversational callers pass none.
-	if (args.sha !== undefined && existing.sha !== args.sha)
+	// The in-client editor passes the version it opened as `sha`; conversational callers pass none.
+	if (args.sha !== undefined && existing.version !== args.sha)
 		return {
 			ok: false,
 			error:

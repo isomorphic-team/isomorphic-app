@@ -12,12 +12,12 @@ import { ensureGitRepo, fsBrainStore } from '../src/local/brain-store-fs.ts';
 import { INDEX_MIGRATIONS_DIR, localD1 } from '../src/local/d1-sqlite.ts';
 import { loadBrainConfig } from '../src/lib/brain-config.ts';
 import { ensureFresh } from '../src/lib/brain-index.ts';
-import type { BrainStore } from '../src/lib/brain-repo.ts';
+import type { BrainLocator, BrainStore } from '../src/lib/brain-repo.ts';
 
 export interface LocalBrain {
 	db: ReturnType<typeof localD1>['db'];
 	store: BrainStore;
-	repoArgs: { owner: string; repo: string };
+	locator: BrainLocator;
 	brainId: string;
 	config: Awaited<ReturnType<typeof loadBrainConfig>>;
 	cleanup: () => Promise<void>;
@@ -59,10 +59,10 @@ export async function openFolderAsBrain(
 		await ensureGitRepo(dir, { name: 'Report', email: 'report@localhost' });
 
 		const store = fsBrainStore({ dir, author: { name: 'Report', email: 'report@localhost' } });
-		const repoArgs = { owner: 'local', repo: basename(source) };
-		const brainId = `${repoArgs.owner}/${repoArgs.repo}`;
+		const locator = { owner: 'local', repo: basename(source) };
+		const brainId = `${locator.owner}/${locator.repo}`;
 		const { db } = opts.indexOnly ? localD1(':memory:', INDEX_MIGRATIONS_DIR) : localD1();
-		const config = await loadBrainConfig(store, repoArgs);
+		const config = await loadBrainConfig(store, locator);
 		// One read indexes at most REINDEX_PAGE_BUDGET pages and leaves the rest for the
 		// next read. A report is a single pass, so read until a pass adds nothing.
 		const count = async () =>
@@ -72,10 +72,10 @@ export async function openFolderAsBrain(
 				.first<{ n: number }>())!.n;
 		for (let before = -1, now = 0; now !== before;) {
 			before = now;
-			await ensureFresh(db, store, repoArgs, brainId, config);
+			await ensureFresh(db, store, locator, brainId, config);
 			now = await count();
 		}
-		return { db, store, repoArgs, brainId, config, cleanup };
+		return { db, store, locator, brainId, config, cleanup };
 	} catch (err) {
 		await cleanup();
 		throw err;

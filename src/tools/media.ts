@@ -129,7 +129,7 @@ export function registerMediaTools(
 		},
 		async ({ url, data, filename, mime_type, page, path, alt, brain }) => {
 			const ctx = await getContext({ requires: 'editor', brain });
-			const { store, repoArgs, config, author } = ctx;
+			const { store, locator, config, author } = ctx;
 
 			if (!page && !path) {
 				return fail('Give a `page` to attach the file to, or an explicit `path` to store it at.');
@@ -186,9 +186,9 @@ export function registerMediaTools(
 			// Never write over a file that is already there. One tree read rather than a
 			// blob read: existence is all this needs, and readBinary would pull down the
 			// whole of whatever it collided with.
-			const head = await store.writeHead(repoArgs, config);
+			const base = await store.writeBase(locator, config);
 			const taken = new Set(
-				(await store.listTree(repoArgs, head, { extension: '*' })).map((e) => e.path)
+				(await store.listTree(locator, base, { extension: '*' })).map((e) => e.path)
 			);
 			const target = uniqueAttachmentPath(desired, (p) => taken.has(p));
 			if (!target)
@@ -209,7 +209,7 @@ export function registerMediaTools(
 			// nothing references, which is exactly what an orphan-sweeper would delete.
 			let appendedTo = '';
 			if (pagePath) {
-				const existing = await store.readFile(repoArgs, pagePath, head.commitSha);
+				const existing = await store.readFile(locator, pagePath, base.id);
 				if (!existing) return fail(`No page at "${pagePath}".`);
 				const link = attachmentMarkdown(pagePath, target, alt?.trim() || name);
 				const body = existing.content.endsWith('\n')
@@ -220,7 +220,7 @@ export function registerMediaTools(
 			}
 
 			const today = todayIso();
-			const log = await store.readFile(repoArgs, logPathOf(config), head.commitSha);
+			const log = await store.readFile(locator, logPathOf(config), base.id);
 			if (log) {
 				writes.push({
 					path: logPathOf(config),
@@ -232,11 +232,11 @@ export function registerMediaTools(
 				});
 			}
 
-			const outcome = await store.commitOrPR(repoArgs, {
+			const outcome = await store.commitOrPR(locator, {
 				...commitOpts(config, author),
 				message: `Attach ${target}${appendedTo ? ` to ${appendedTo}` : ''}\n\n${formatBytes(bytes)} ${mime}${url ? `, fetched from ${url}` : ''}. Logged in the same change.`,
 				writes,
-				head,
+				base,
 				branchPrefix: 'isomorphic/attach',
 				prTitle: `Attach ${target}`,
 				prBody: `Add \`${target}\` (${formatBytes(bytes)})${appendedTo ? ` and reference it from \`${appendedTo}\`` : ''}. Proposed via the Isomorphic brain tools.`
@@ -291,7 +291,7 @@ export function registerMediaTools(
 			})
 		},
 		async ({ path, pages, include_data, brain }) => {
-			const { store, repoArgs, config, brainId, actorUserId } = await getContext({ brain });
+			const { store, locator, config, brainId, actorUserId } = await getContext({ brain });
 			const target = normalizePath(path);
 
 			const mimeType = mediaTypeOf(target);
@@ -304,7 +304,7 @@ export function registerMediaTools(
 				return fail(`"${target}" is outside this brain's content.`);
 			}
 
-			const file = await store.readBinary(repoArgs, target);
+			const file = await store.readBinary(locator, target);
 			if (!file) return fail(`No file at "${target}".`);
 
 			// The cap is a storage rule, but it protects reads too: something committed

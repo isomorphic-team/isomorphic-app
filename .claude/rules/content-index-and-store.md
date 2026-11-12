@@ -1,6 +1,6 @@
 ---
 paths:
-  - "src/lib/{brain-index,brain-repo,brain-config,brain-policy,brain-pass,links,wiki}.ts"
+  - "src/lib/{brain-index,brain-repo,brain-store-github,brain-config,brain-policy,brain-pass,links,wiki}.ts"
   - "src/local/**"
   - "src/db/index-schema.sql"
   - "scripts/test-{index,links,store}.ts"
@@ -12,16 +12,21 @@ paths:
 ## `BrainStore`: the storage seam
 
 `src/lib/brain-repo.ts` exports `BrainStore`, the only interface between tools and a brain's
-storage, plus `githubStore(octokit)`; `src/local/brain-store-fs.ts` is the git-on-disk twin.
+storage, and the neutral types it speaks. `githubStore(octokit)` is in
+`src/lib/brain-store-github.ts`; `src/local/brain-store-fs.ts` is the git-on-disk twin.
 
-- **Twelve operations:** `getHead`, `writeHead`, `branchCommitSha`, `repoWritePolicy`, `listTree`,
-  `fetchPages`, `readFile`, `readBinary`, `findOpenConfigPr`, `listCommits`, `commitFiles`,
+- **Twelve operations:** `getRevision`, `writeBase`, `branchRevision`, `repoWritePolicy`,
+  `listTree`, `fetchPages`, `readFile`, `readBinary`, `findOpenConfigPr`, `listCommits`, `write`,
   `commitOrPR`. It is what the tools do, not a general storage abstraction.
+- **Neutral vocabulary.** A brain is addressed by a `BrainLocator`; its state is a `Revision`
+  whose `id` is opaque (compare, never parse; a commit sha on GitHub, a working-tree digest on
+  fs) and whose `snapshot` is backend-private; a listed file is a `FileEntry` with an opaque
+  `version`, the same tag `readFile` and `readBinary` report for it. Keep git words (commit, tree, blob) inside the store implementations.
 - **Each store declares `capabilities`** (`StoreCapabilities`: `atomicWrite`, `proposals`,
   `history`). Branch on those, never on which store you hold. Every store is built through
   `defineStore`, which makes a store without `proposals` refuse pull-request mode.
-- **A write returns each file's version tag** (`CommitResult.versions`, and
-  `WriteOutcome.versions` beside `commitSha` on a direct write): the same value `listTree`
+- **A write returns each file's version tag** (`WriteResult.versions`, which a direct
+  `commitOrPR` reports as `WriteOutcome.landed` with the new revision): the same value `listTree`
   reports for that file afterwards. The GitHub store uses the blob id (`gitBlobSha`), the fs
   store a size and mtime token; a tag is opaque everywhere else. `pnpm test:store` runs this contract against every backend.
 - **If you reach for `ctx.octokit` while touching a brain's CONTENT, it belongs on the store.**
@@ -29,7 +34,7 @@ storage, plus `githubStore(octokit)`; `src/local/brain-store-fs.ts` is the git-o
   `octokit` stays on the context (optional) only for GitHub-as-platform calls in
   `src/tools/brains.ts` behind `githubClient(ctx)`: create a repo, list an installation's repos,
   check a repo exists.
-- **`commitFiles` atomicity is load-bearing.** "An edit batch is never half-applied" rests on
+- **`write` atomicity is load-bearing.** "An edit batch is never half-applied" rests on
   the ref not moving unless the whole bundle committed, which is why a local brain is a git repo.
 - `listTree` defaults to `.md` files; pass an extension filter deliberately.
 - `pnpm test:index` wraps its octokit stub in the REAL `githubStore` (so `fetchPages`'s GraphQL
@@ -102,5 +107,5 @@ a derived index in D1 (`src/lib/brain-index.ts`, schema in `migrations/`).
   `continuePass`, `savePass`), one row per brain per kind (`consolidation`, `policy-baseline`);
   don't add a table per pass. What a pass last checked, item by item, goes in
   `brain_pass_items` (`readPassItems`, `savePassItems`), so a later pass can skip unchanged items.
-- The local runtime's `getHead` reports a digest of the working tree; `listCommits` reports
+- The local runtime's `getRevision` reports a digest of the working tree; `listCommits` reports
   git shas.

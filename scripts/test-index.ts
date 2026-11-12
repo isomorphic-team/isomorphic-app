@@ -27,7 +27,8 @@ import {
 	REBUILD_PAGE_BUDGET,
 	REINDEX_PAGE_BUDGET
 } from '../src/lib/brain-index.ts';
-import { githubStore, gitBlobSha, MAX_SCAN_PAGES } from '../src/lib/brain-repo.ts';
+import { MAX_SCAN_PAGES } from '../src/lib/brain-repo.ts';
+import { githubStore, gitBlobSha } from '../src/lib/brain-store-github.ts';
 import { INDEX_MIGRATIONS_DIR, applyMigrations, replayMigrations } from '../src/local/d1-sqlite.ts';
 import { DEFAULT_BRAIN_CONFIG, type BrainConfig } from '../src/lib/brain-policy.ts';
 import { pageTitle } from '../src/lib/wiki.ts';
@@ -386,19 +387,19 @@ console.log('\nContent index — bounded, resumable ensureFresh\n');
 }
 
 // ---------------------------------------------------------------- scenario 6
-// getHead with a named branch: the write path's hottest call used to pay a
+// getRevision with a named branch: the write path's hottest call used to pay a
 // repos.get just to learn the default branch that config already holds.
 {
 	console.log('\ngetHead with a named branch');
 	const before = gh.calls.reposGet;
-	const h = await store.getHead(repo, 'main');
+	const h = await store.getRevision(repo, 'main');
 	check('named branch skips the repos.get discovery', gh.calls.reposGet === before);
 	check(
 		'named branch resolves head',
-		h.branch === 'main' && h.commitSha === gh.head && !!h.treeSha,
+		h.branch === 'main' && h.id === gh.head && !!h.snapshot,
 		JSON.stringify(h)
 	);
-	const h2 = await store.getHead(repo, 'missing');
+	const h2 = await store.getRevision(repo, 'missing');
 	check(
 		'a missing branch falls back to discovery',
 		gh.calls.reposGet === before + 1 && h2.branch === 'main',
