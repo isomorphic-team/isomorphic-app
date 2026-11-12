@@ -27,8 +27,8 @@ import {
 	REBUILD_PAGE_BUDGET,
 	REINDEX_PAGE_BUDGET
 } from '../src/lib/brain-index.ts';
-import { gitBlobSha, MAX_SCAN_PAGES } from '../src/lib/brain-repo.ts';
-import { githubStore } from '../src/lib/brain-store-github.ts';
+import { MAX_SCAN_PAGES } from '../src/lib/brain-repo.ts';
+import { githubStore, gitBlobSha } from '../src/lib/brain-store-github.ts';
 import { INDEX_MIGRATIONS_DIR, applyMigrations, replayMigrations } from '../src/local/d1-sqlite.ts';
 import { DEFAULT_BRAIN_CONFIG, type BrainConfig } from '../src/lib/brain-policy.ts';
 import { pageTitle } from '../src/lib/wiki.ts';

@@ -1104,7 +1104,11 @@ try {
 			JSON.stringify(read.sc)
 		);
 
-		check('read_page reports the page blob sha', read.sc.sha === stored?.sha, String(read.sc.sha));
+		check(
+			'read_page reports the page blob sha',
+			read.sc.sha === stored?.version,
+			String(read.sc.sha)
+		);
 		check(
 			'view_page reports the same sha for the same page',
 			!!viewed.sc.sha && viewed.sc.sha === read.sc.sha,
@@ -1147,7 +1151,7 @@ try {
 		);
 		check(
 			'and still matches what the store holds',
-			after.sc.sha === (await store.readFile(locator, path))?.sha,
+			after.sc.sha === (await store.readFile(locator, path))?.version,
 			String(after.sc.sha)
 		);
 
@@ -1294,7 +1298,7 @@ try {
 				readBinary: async (repo, path) => {
 					const file = await realStore.readBinary(repo, path);
 					if (path !== asset) return file;
-					return failure === 'missing' ? null : { ...file!, sha: 'changed-sha' };
+					return failure === 'missing' ? null : { ...file!, version: 'changed-version' };
 				}
 			};
 			try {

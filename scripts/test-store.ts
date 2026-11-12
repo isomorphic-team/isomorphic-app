@@ -18,15 +18,10 @@
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import {
-	defineStore,
-	gitBlobSha,
-	type BrainStore,
-	type StoreCapabilities
-} from '../src/lib/brain-repo.ts';
-import { githubStore } from '../src/lib/brain-store-github.ts';
+import { defineStore, type BrainStore, type StoreCapabilities } from '../src/lib/brain-repo.ts';
+import { githubStore, gitBlobSha } from '../src/lib/brain-store-github.ts';
 import { ensureGitRepo, fsBrainStore } from '../src/local/brain-store-fs.ts';
-import { checker, errorOf } from './check.ts';
+import { checker, errorOf, partialStore } from './check.ts';
 import { fakeGithub, realGitBlobSha } from './fake-github.ts';
 
 const { check, done } = checker('store checks');
@@ -70,13 +65,15 @@ const PR_REFUSAL = /configured for pull-request writes/;
 {
 	let reached = 0;
 	const declared = (proposals: boolean) =>
-		defineStore({
-			capabilities: { atomicWrite: true, proposals, history: true },
-			commitOrPR: async () => {
-				reached++;
-				return {};
-			}
-		} as unknown as BrainStore);
+		defineStore(
+			partialStore({
+				capabilities: { atomicWrite: true, proposals, history: true },
+				commitOrPR: async () => {
+					reached++;
+					return {};
+				}
+			})
+		);
 	const pr = { message: 'm', writeMode: 'pull-request' as const, defaultBranch: 'main' };
 	const refused = await errorOf(() => declared(false).commitOrPR(repo, pr));
 	check(

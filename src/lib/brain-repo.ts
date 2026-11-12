@@ -64,7 +64,7 @@ export interface FileWrite {
 // which decodes to a string: the whole point here is to never turn bytes into text.
 export interface BinaryContent {
 	contentBase64: string;
-	sha: string;
+	version: string;
 	size: number;
 }
 
@@ -126,13 +126,9 @@ export function githubNoreplyAuthor(
 	return { name, email: `${ghUserId}+${name}@users.noreply.github.com` };
 }
 
-// Upper bound on a single content scan. Not a subrequest limit: fetchPages batches
-// blob reads through GraphQL (see below), so a scan costs
-// ceil(pages / GRAPHQL_BLOB_BATCH) subrequests. The cap is a sanity ceiling on
-// memory/time for a pathologically huge brain; typical brains scan whole, and
-// truncation past it is surfaced to the caller. 5000 covers the largest brain
-// measured (~3,900 pages) at ~50 GraphQL subrequests for a full build;
-// incremental reindexes only fetch changed pages.
+// Upper bound on a single content scan: a sanity ceiling on memory and time for a
+// pathologically large brain. Typical brains scan whole; truncation past it is
+// surfaced to the caller. 5000 covers the largest brain measured (~3,900 pages).
 export const MAX_SCAN_PAGES = 5000;
 
 // ---------- the storage seam ----------
@@ -220,21 +216,6 @@ export function defineStore(store: BrainStore): BrainStore {
 	};
 }
 
-// A file's version tag on the git backends: the git blob id, the same value a tree
-// listing reports, so a page written through the index is not refetched on the next
-// diff. Worker-safe: Web Crypto SHA-1, no node:crypto.
-export async function gitBlobSha(content: string): Promise<string> {
-	const body = new TextEncoder().encode(content);
-	const header = new TextEncoder().encode(`blob ${body.byteLength}\0`);
-	const buf = new Uint8Array(header.byteLength + body.byteLength);
-	buf.set(header, 0);
-	buf.set(body, header.byteLength);
-	const digest = await crypto.subtle.digest('SHA-1', buf);
-	return Array.from(new Uint8Array(digest))
-		.map((b) => b.toString(16).padStart(2, '0'))
-		.join('');
-}
-
 // What a write landed: the brain's new revision, and the new version tag of every
 // file written, by path (the tag listTree reports for it from then on).
 export interface WriteResult {
@@ -248,6 +229,7 @@ export interface BrainStore {
 	// (callers pass config.defaultBranch), saving one round trip. Implementations
 	// fall back to discovery when the named branch does not exist.
 	getRevision(loc: BrainLocator, branch?: string): Promise<Revision>;
+	// The `id` of the revision a named branch is at: what the index freshness guard compares.
 	branchRevision(loc: BrainLocator, branch: string): Promise<string>;
 	repoWritePolicy(loc: BrainLocator): Promise<RepoWritePolicy>;
 	listTree(loc: BrainLocator, at: Revision, opts?: { extension?: string }): Promise<FileEntry[]>;
@@ -263,13 +245,14 @@ export interface BrainStore {
 		loc: BrainLocator,
 		opts: { defaultBranch: string; writeMode: 'direct' | 'pull-request' }
 	): Promise<Revision>;
-	// `ref` pins the read to one branch/commit. Write paths normally capture HEAD
-	// first so every blob they derive a commit from belongs to that revision.
+	// `version` is the tag listTree reports for the same file. `ref` pins the read to one
+	// branch or revision. Write paths capture the revision first
+	// so every file they derive a write from belongs to it.
 	readFile(
 		loc: BrainLocator,
 		path: string,
 		ref?: string
-	): Promise<{ content: string; sha: string } | null>;
+	): Promise<{ content: string; version: string } | null>;
 	// One file's raw bytes as base64. Backs read_media; null when absent. `ref` as
 	// for readFile.
 	readBinary(loc: BrainLocator, path: string, ref?: string): Promise<BinaryContent | null>;

@@ -49,7 +49,7 @@ const { check, done } = checker('import E2E checks');
 // A human curator editing the brain OUTSIDE our tools. Expressed through the store
 // so it works against either backend, and so these edits look exactly like the ones
 // the importer's no-resurrection rule has to respect.
-async function readPage(path: string): Promise<{ content: string; sha: string } | null> {
+async function readPage(path: string): Promise<{ content: string; version: string } | null> {
 	return store.readFile(locator, path);
 }
 async function humanWrite(path: string, content: string, message: string) {

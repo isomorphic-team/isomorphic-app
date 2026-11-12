@@ -162,8 +162,8 @@ export function registerImportTools(
 			const matchedPaths = new Set(
 				[...claimsByPath].filter(([, keys]) => keys.some((k) => recordKeys.has(k))).map(([p]) => p)
 			);
-			const head = await store.writeBase(locator, config);
-			const tree = await store.listTree(locator, head);
+			const base = await store.writeBase(locator, config);
+			const tree = await store.listTree(locator, base);
 			const treePaths = new Set(tree.map((e) => e.path));
 			const existingPaths = new Set([...treePaths].filter((p) => isContentPath(p, config)));
 			const adoptPaths = new Set<string>();
@@ -188,7 +188,7 @@ export function registerImportTools(
 				: undefined;
 
 			// The source's ledger — importer-owned state in the repo.
-			const ledgerFile = await store.readFile(locator, ledgerPath(source), head.id);
+			const ledgerFile = await store.readFile(locator, ledgerPath(source), base.id);
 			let ledger;
 			try {
 				ledger = parseLedger(ledgerFile?.content ?? null);
@@ -272,7 +272,7 @@ export function registerImportTools(
 			if (ledgerChanged) {
 				writes.push({ path: ledgerPath(source), content: serializeLedger(p.ledgerAfter) });
 			}
-			const log = await store.readFile(locator, logPathOf(config), head.id);
+			const log = await store.readFile(locator, logPathOf(config), base.id);
 			if (log && p.writes.length) {
 				writes.push({
 					path: logPathOf(config),
@@ -284,7 +284,7 @@ export function registerImportTools(
 				...commitOpts(config, author),
 				message: `Import from ${source}: ${summary}\n\nNon-destructive sync — source-owned fields only; deletions proposed, not applied.`,
 				writes,
-				base: head,
+				base,
 				branchPrefix: 'isomorphic/import',
 				prTitle: `Import from ${source}`,
 				prBody: `Upsert ${p.writes.length} page(s) from source \`${source}\` (${summary}). Human content untouched; deletions only proposed. Via the Isomorphic brain tools.`
@@ -414,8 +414,8 @@ export function registerImportTools(
 				);
 
 			if (reviewDecisions.length) {
-				const head = await store.writeBase(locator, config);
-				const raw = await store.readFile(locator, REVIEW_LEDGER_PATH, head.id);
+				const base = await store.writeBase(locator, config);
+				const raw = await store.readFile(locator, REVIEW_LEDGER_PATH, base.id);
 				let ledger;
 				try {
 					ledger = parseReviewLedger(raw?.content ?? null);
@@ -443,7 +443,7 @@ export function registerImportTools(
 					...commitOpts(config, author),
 					message: `Record validate decisions: ${summary}`,
 					writes: [{ path: REVIEW_LEDGER_PATH, content: serializeReviewLedger(ledger) }],
-					base: head,
+					base,
 					branchPrefix: 'isomorphic/resolve',
 					prTitle: 'Record validate decisions',
 					prBody: `${summary}. No page content changed — this records that a human decided, so validate stops re-reporting it.`
@@ -493,8 +493,8 @@ export function registerImportTools(
 			// Alias targets may carry no key claims yet — include them regardless.
 			for (const t of aliasTargets) relevant.add(t);
 
-			const head = await store.writeBase(locator, config);
-			const tree = await store.listTree(locator, head);
+			const base = await store.writeBase(locator, config);
+			const tree = await store.listTree(locator, base);
 			const { pages } = await store.fetchPages(
 				locator,
 				tree.filter((e) => relevant.has(e.path))
@@ -505,7 +505,7 @@ export function registerImportTools(
 				content: p.content
 			}));
 
-			const ledgerFile = await store.readFile(locator, ledgerPath(source), head.id);
+			const ledgerFile = await store.readFile(locator, ledgerPath(source), base.id);
 			let ledger;
 			try {
 				ledger = parseLedger(ledgerFile?.content ?? null);
@@ -532,7 +532,7 @@ export function registerImportTools(
 			if (serializeLedger(p.ledgerAfter) !== serializeLedger(ledger)) {
 				writes.push({ path: ledgerPath(source), content: serializeLedger(p.ledgerAfter) });
 			}
-			const log = await store.readFile(locator, logPathOf(config), head.id);
+			const log = await store.readFile(locator, logPathOf(config), base.id);
 			if (log) {
 				writes.push({
 					path: logPathOf(config),
@@ -549,7 +549,7 @@ export function registerImportTools(
 				message: `Resolve import decisions (${source}): ${p.applied.length} applied`,
 				writes,
 				deletes: p.deletes,
-				base: head,
+				base,
 				branchPrefix: 'isomorphic/import',
 				prTitle: `Resolve import decisions (${source})`,
 				prBody: `Apply ${p.applied.length} reconciliation decision(s) for source \`${source}\`. Via the Isomorphic brain tools.`

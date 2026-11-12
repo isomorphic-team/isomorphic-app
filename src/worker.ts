@@ -37,7 +37,7 @@ import { consolidationWire, runConsolidationStep } from '../ee/review/consolidat
 import { z } from 'zod';
 import type { OAuthHelpers } from '@cloudflare/workers-oauth-provider';
 import { installationOctokit, tokenOctokit, staticAuth, type AppCreds } from './lib/github.ts';
-import { commitAuthorFor, type BrainStore } from './lib/brain-repo.ts';
+import { commitAuthorFor, type BrainLocator, type BrainStore } from './lib/brain-repo.ts';
 import { githubStore } from './lib/brain-store-github.ts';
 import { platformInstall, provisionOrgForUser } from './lib/provision.ts';
 import { ensureStaticTenant, STATIC_USER_ID } from './lib/static-tenant.ts';
@@ -328,7 +328,7 @@ interface TenantContext {
 	// through this rather than the client above, which is what lets a non-GitHub
 	// backend serve the same tools. See src/lib/brain-repo.ts.
 	store: BrainStore;
-	locator: { owner: string; repo: string };
+	locator: BrainLocator;
 	// The caller's role ON THE RESOLVED BRAIN (effectiveBrainRole: an explicit
 	// grant or org visibility, whichever is higher). Read
 	// tools ignore it; write/configure/share tools gate on it. The single-tenant
@@ -599,10 +599,7 @@ class McpSession {
 	// one call (a tool plus custom-tool discovery) read .isomorphic.json once.
 	private configCache = new Map<string, BrainConfig>();
 
-	private async loadConfig(
-		store: BrainStore,
-		locator: { owner: string; repo: string }
-	): Promise<BrainConfig> {
+	private async loadConfig(store: BrainStore, locator: BrainLocator): Promise<BrainConfig> {
 		const key = `${locator.owner}/${locator.repo}`;
 		const cached = this.configCache.get(key);
 		if (cached) return cached;

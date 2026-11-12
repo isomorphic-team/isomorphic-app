@@ -75,8 +75,8 @@ export async function advanceBaseline(t: BaselineTarget, now = Date.now()): Prom
 	const existing = await readBaseline(db, scope.brainId);
 	const state = existing?.status === 'running' ? existing : await beginBaseline(db, scope, now);
 
-	const head = await store.getRevision(repo, config.defaultBranch);
-	const tree = await store.listTree(repo, head, { extension: '*' });
+	const rev = await store.getRevision(repo, config.defaultBranch);
+	const tree = await store.listTree(repo, rev, { extension: '*' });
 	const plan = planBaselineStep(tree, state.cursor);
 	const { pages } = plan.read.length
 		? await store.fetchPages(repo, plan.read)

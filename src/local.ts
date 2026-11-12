@@ -51,6 +51,7 @@ import { loadCustomToolDefs, registerCustomTools } from './tools/custom.ts';
 import { loadBrainConfig } from './lib/brain-config.ts';
 import { SERVER_INSTRUCTIONS } from './lib/server-instructions.ts';
 import { ensureGitRepo, fsBrainStore } from './local/brain-store-fs.ts';
+import type { BrainLocator } from './lib/brain-repo.ts';
 import { guardStore } from './lib/policy-guard.ts';
 import { recordDetections } from './lib/policy-store.ts';
 import { localD1 } from './local/d1-sqlite.ts';
@@ -92,7 +93,7 @@ const author = gitIdentity();
 interface LocalBrain {
 	dir: string;
 	store: ReturnType<typeof fsBrainStore>;
-	locator: { owner: string; repo: string };
+	locator: BrainLocator;
 	brainId: string;
 	label: string;
 	db: ReturnType<typeof localD1>['db'];

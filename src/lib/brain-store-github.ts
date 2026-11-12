@@ -10,13 +10,12 @@ import { coalescedPrText } from './change-record.ts';
 import { base64ToUtf8 } from './wiki.ts';
 import {
 	defineStore,
-	gitBlobSha,
 	MAX_SCAN_PAGES,
 	validCommitAuthor,
 	type BinaryContent,
 	type BrainStore,
-	type CommitAuthor,
 	type CommitEntry,
+	type CommitOrPROpts,
 	type WriteResult,
 	type FileWrite,
 	type Revision,
@@ -25,6 +24,7 @@ import {
 	type BrainLocator,
 	type RepoWritePolicy,
 	type FileEntry,
+	type WriteOpts,
 	type WriteOutcome
 } from './brain-repo.ts';
 
@@ -63,6 +63,21 @@ export function pendingPrCandidates(
 		.sort((a, b) => b.number - a.number);
 }
 
+// A file's version tag here: the git blob id, the same value a tree
+// listing reports, so a page written through the index is not refetched on the next
+// diff. Worker-safe: Web Crypto SHA-1, no node:crypto.
+export async function gitBlobSha(content: string): Promise<string> {
+	const body = new TextEncoder().encode(content);
+	const header = new TextEncoder().encode(`blob ${body.byteLength}\0`);
+	const buf = new Uint8Array(header.byteLength + body.byteLength);
+	buf.set(header, 0);
+	buf.set(body, header.byteLength);
+	const digest = await crypto.subtle.digest('SHA-1', buf);
+	return Array.from(new Uint8Array(digest))
+		.map((b) => b.toString(16).padStart(2, '0'))
+		.join('');
+}
+
 // How many blob texts to pull per GraphQL request. Each aliased `object` field is
 // cheap, but keep batches bounded so a single response stays a sane size and well
 // under GitHub's GraphQL node/complexity limits. ceil(pages / this) = subrequests.
@@ -83,7 +98,7 @@ export function githubStore(octokit: Octokit): BrainStore {
 		readBinary: (repo, path, ref) => readBinary(octokit, repo, path, ref),
 		findOpenConfigPr: (repo) => findOpenConfigPr(octokit, repo),
 		listCommits: (repo, opts) => listCommits(octokit, repo, opts),
-		write: (repo, opts) => commitFiles(octokit, repo, opts),
+		write: (repo, opts) => write(octokit, repo, opts),
 		commitOrPR: (repo, opts) => commitOrPR(octokit, repo, opts)
 	});
 }
@@ -243,7 +258,7 @@ async function listCommits(
 async function findOpenConfigPr(octokit: Octokit, repo: BrainLocator): Promise<string | undefined> {
 	try {
 		const { data } = await octokit.rest.pulls.list({ ...repo, state: 'open', per_page: 50 });
-		return data.find((p) => p.head?.ref?.startsWith('isomorphic/configure'))?.html_url;
+		return data.find((p) => p.head?.ref?.startsWith(CONFIG_PR_PREFIX))?.html_url;
 	} catch {
 		return undefined;
 	}
@@ -333,11 +348,11 @@ async function readFile(
 	repo: BrainLocator,
 	path: string,
 	ref?: string
-): Promise<{ content: string; sha: string } | null> {
+): Promise<{ content: string; version: string } | null> {
 	try {
 		const { data } = await octokit.rest.repos.getContent({ ...repo, path, ...(ref && { ref }) });
 		if (Array.isArray(data) || data.type !== 'file') return null;
-		return { content: base64ToUtf8(data.content), sha: data.sha };
+		return { content: base64ToUtf8(data.content), version: data.sha };
 	} catch (err) {
 		if ((err as { status?: number })?.status === 404) return null;
 		throw err;
@@ -363,14 +378,14 @@ async function readBinary(
 		size = data.size;
 		// `encoding` is 'none' when GitHub declined to inline the content.
 		if (data.encoding === 'base64' && data.content) {
-			return { contentBase64: data.content.replace(/\n/g, ''), sha, size };
+			return { contentBase64: data.content.replace(/\n/g, ''), version: sha, size };
 		}
 	} catch (err) {
 		if ((err as { status?: number })?.status === 404) return null;
 		throw err;
 	}
 	const { data: blob } = await octokit.rest.git.getBlob({ ...repo, file_sha: sha });
-	return { contentBase64: blob.content.replace(/\n/g, ''), sha, size };
+	return { contentBase64: blob.content.replace(/\n/g, ''), version: sha, size };
 }
 
 type TreeParam = NonNullable<Parameters<Octokit['rest']['git']['createTree']>[0]>['tree'][number];
@@ -413,18 +428,7 @@ async function buildTreeEntries(
 
 // One atomic commit: all writes and deletes land together or not at all.
 // `deletes` entries that don't exist in the tree are ignored by GitHub.
-// The returned sha is internal plumbing — never surface it to the user.
-async function commitFiles(
-	octokit: Octokit,
-	repo: BrainLocator,
-	opts: {
-		message: string;
-		writes?: FileWrite[];
-		deletes?: string[];
-		base?: Revision;
-		author?: CommitAuthor; // attribute the commit to the human, not the App
-	}
-): Promise<WriteResult> {
+async function write(octokit: Octokit, repo: BrainLocator, opts: WriteOpts): Promise<WriteResult> {
 	const base = opts.base ?? (await getRevision(octokit, repo));
 
 	const { tree, versions } = await buildTreeEntries(octokit, repo, opts.writes, opts.deletes);
@@ -505,26 +509,11 @@ async function armAutoMerge(
 async function commitOrPR(
 	octokit: Octokit,
 	repo: BrainLocator,
-	opts: {
-		writeMode: 'direct' | 'pull-request';
-		defaultBranch: string;
-		message: string;
-		writes?: FileWrite[];
-		deletes?: string[];
-		base?: Revision;
-		branchPrefix?: string; // PR branch name prefix, e.g. 'isomorphic/edit'
-		prTitle?: string;
-		prBody?: string;
-		// PR mode: arm auto-merge on the opened PR, with this merge method.
-		autoMerge?: boolean;
-		mergeMethod?: 'MERGE' | 'SQUASH' | 'REBASE';
-		// Attribute the commit to the human who made the change (both modes).
-		author?: CommitAuthor;
-	}
+	opts: CommitOrPROpts
 ): Promise<WriteOutcome> {
 	const base = opts.base ?? (await getRevision(octokit, repo, opts.defaultBranch));
 	if (opts.writeMode === 'direct') {
-		const landed = await commitFiles(octokit, repo, {
+		const landed = await write(octokit, repo, {
 			message: opts.message,
 			writes: opts.writes,
 			deletes: opts.deletes,
@@ -534,7 +523,7 @@ async function commitOrPR(
 		return { landed };
 	}
 
-	// PR mode: build the identical tree/commit as commitFiles, but land it on a new
+	// PR mode: build the identical tree/commit as write, but land it on a new
 	// branch and open a PR instead of moving the default ref.
 	const { tree } = await buildTreeEntries(octokit, repo, opts.writes, opts.deletes);
 	const { data: newTree } = await octokit.rest.git.createTree({
@@ -587,12 +576,7 @@ async function appendToPendingPr(
 	base: Revision,
 	pr: PendingPr,
 	commitSha: string,
-	opts: {
-		message: string;
-		prTitle?: string;
-		autoMerge?: boolean;
-		mergeMethod?: 'MERGE' | 'SQUASH' | 'REBASE';
-	}
+	opts: Pick<CommitOrPROpts, 'message' | 'prTitle' | 'autoMerge' | 'mergeMethod'>
 ): Promise<WriteOutcome> {
 	try {
 		await octokit.rest.git.updateRef({

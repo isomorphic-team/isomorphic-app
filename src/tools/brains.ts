@@ -852,7 +852,7 @@ export function registerBrainTools(
 			const body =
 				JSON.stringify({ paths: Object.fromEntries(roots.map((r) => [r, 'content'])) }, null, 2) +
 				'\n';
-			const head = await ctx.store.getRevision(ctx.locator, ctx.config.defaultBranch);
+			const rev = await ctx.store.getRevision(ctx.locator, ctx.config.defaultBranch);
 			const outcome = await ctx.store.commitOrPR(ctx.locator, {
 				writeMode: ctx.config.writeMode,
 				defaultBranch: ctx.config.defaultBranch,
@@ -861,7 +861,7 @@ export function registerBrainTools(
 				mergeMethod: ctx.config.mergeMethod,
 				message: 'Configure Isomorphic brain (.isomorphic.json)',
 				writes: [{ path: CONFIG_PATH, content: body }],
-				base: head,
+				base: rev,
 				branchPrefix: 'isomorphic/configure',
 				prTitle: 'Configure Isomorphic brain',
 				prBody: 'Adds .isomorphic.json so Isomorphic indexes this repo’s content.'

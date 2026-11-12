@@ -249,9 +249,9 @@ export async function ensureFresh(
 	// and recording that commit with rows derived under the prior config would make
 	// the mismatch look permanently fresh. This is one pinned blob read, not the old
 	// three-call config + write-policy reload.
-	const head = await store.getRevision(repo, config.defaultBranch);
-	const freshConfig = await loadIndexConfig(store, repo, head.id, config);
-	const entries = (await store.listTree(repo, head)).filter(
+	const rev = await store.getRevision(repo, config.defaultBranch);
+	const freshConfig = await loadIndexConfig(store, repo, rev.id, config);
+	const entries = (await store.listTree(repo, rev)).filter(
 		(e) => e.path.endsWith('.md') && isContentPath(e.path, freshConfig)
 	);
 	const truncated = entries.length > MAX_SCAN_PAGES;
@@ -265,7 +265,7 @@ export async function ensureFresh(
 	// NULL is meaningful here (the schema's "never built"), and is what an
 	// over-budget FIRST build leaves behind: rows exist, but they don't yet
 	// correspond to any commit, so the next read keeps reconciling.
-	let indexedSha: string | null = head.id;
+	let indexedSha: string | null = rev.id;
 
 	if (!meta) {
 		// First build. Bounded for the same reason the others are: a brain big enough
@@ -662,8 +662,8 @@ export async function detectNeedsConfig(
 	repo: BrainLocator,
 	config: BrainConfig
 ): Promise<boolean> {
-	const head = await store.getRevision(repo, config.defaultBranch);
-	const tree = await store.listTree(repo, head, { extension: '*' });
+	const rev = await store.getRevision(repo, config.defaultBranch);
+	const tree = await store.listTree(repo, rev, { extension: '*' });
 	if (tree.some((e) => e.path === CONFIG_PATH)) return false; // author configured it explicitly
 	const md = tree.filter((e) => e.path.endsWith('.md'));
 	if (md.length === 0) return false; // genuinely empty repo, not a misconfig
@@ -1082,7 +1082,7 @@ export function escapeLike(s: string): string {
  */
 export interface BrainIndex {
 	readonly brainId: string;
-	/** Reconcile with the branch head. MUST be awaited before any read below. */
+	/** Reconcile with the branch revision. MUST be awaited before any read below. */
 	ensureFresh(store: BrainStore, repo: BrainLocator, config: BrainConfig): Promise<IndexState>;
 	writeThrough(
 		config: BrainConfig,

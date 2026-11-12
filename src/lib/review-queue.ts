@@ -278,7 +278,7 @@ export async function dismissPolicyFinding(
 			 ON CONFLICT (brain_id, key) DO UPDATE SET
 			   fingerprints = ?3, file_sha = ?4, why = ?5, dismissed_by = ?6, dismissed_at = ?7`
 		)
-		.bind(t.brainId, key, JSON.stringify(fingerprints), file.sha, d.why, d.by ?? null, now)
+		.bind(t.brainId, key, JSON.stringify(fingerprints), file.version, d.why, d.by ?? null, now)
 		.run();
 	return null;
 }
@@ -585,8 +585,8 @@ export async function readReconciledFindings(t: PolicyTarget): Promise<QueueFind
 	const policy = rows.filter((f) => f.kind === 'policy');
 	if (!policy.length) return rows;
 
-	const head = await t.store.getRevision(t.repo, t.defaultBranch);
-	const entries = await t.store.listTree(t.repo, head, { extension: '*' });
+	const rev = await t.store.getRevision(t.repo, t.defaultBranch);
+	const entries = await t.store.listTree(t.repo, rev, { extension: '*' });
 	const tree = new Map(entries.map((e) => [e.path, e.version]));
 	const dismissals = await readPolicyDismissals(t.db, t.brainId);
 	const changed: FileEntry[] = [];

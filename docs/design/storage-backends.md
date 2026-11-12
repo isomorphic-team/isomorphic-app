@@ -189,7 +189,9 @@ Each step is its own pull request.
 3. **The Graph store**, tested against an in-memory fake that reproduces delta tokens, `410`
    resync, eTags and name uniqueness, plus an e2e battery against a scratch folder (the twin of
    the GitHub `--github` mode). A new connection kind and `create_brain` / `connect_brain`
-   options.
+   options. `Revision` keeps git detail only the stores read (`branch`, `snapshot`,
+   `pr`), and `PendingPr` sits in the neutral file; this step narrows `Revision` to an `id` plus
+   store-private detail, so a Graph store does not invent a branch.
 4. **Conflict copies and duplicate names in `validate`.**
 5. **The Drive store**, same pattern as step 3.
 6. **Proposals held by the coordinator** (section 5.3), when a customer on these backends needs

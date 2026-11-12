@@ -21,7 +21,7 @@ storage, and the neutral types it speaks. `githubStore(octokit)` is in
 - **Neutral vocabulary.** A brain is addressed by a `BrainLocator`; its state is a `Revision`
   whose `id` is opaque (compare, never parse; a commit sha on GitHub, a working-tree digest on
   fs) and whose `snapshot` is backend-private; a listed file is a `FileEntry` with an opaque
-  `version`. Keep git words (commit, tree, blob) inside the store implementations.
+  `version`, the same tag `readFile` and `readBinary` report for it. Keep git words (commit, tree, blob) inside the store implementations.
 - **Each store declares `capabilities`** (`StoreCapabilities`: `atomicWrite`, `proposals`,
   `history`). Branch on those, never on which store you hold. Every store is built through
   `defineStore`, which makes a store without `proposals` refuse pull-request mode.

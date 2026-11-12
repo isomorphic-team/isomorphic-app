@@ -256,7 +256,7 @@ async function commitBundle(ctx: BrainContext, opts: CommitOrPROpts): Promise<Wr
 	return outcome;
 }
 
-// The head a write plans against and commits onto (BrainStore.writeBase): in PR mode,
+// The revision a write plans against and commits onto (BrainStore.writeBase): in PR mode,
 // the brain's open pull request when there is one, so this write builds on the
 // changes still waiting there instead of on a default branch that lacks them.
 function writeBase(ctx: BrainContext): Promise<Revision> {
@@ -342,14 +342,14 @@ async function guardedWrite<R>(
 
 // Fetch only the pages that link to any of `targetPaths`, for repointing links when
 // those pages move or are renamed. Discovers the linkers via the content index
-// (backlinksTo), then reads just those pages' content at `head` (consistent with the
+// (backlinksTo), then reads just those pages' content at `base` (consistent with the
 // commit base). Bounded by inbound-link count rather than brain size, and uncapped
 // beyond what the index itself holds.
 // `exclude` drops linkers that are themselves in the moved set (they're handled as
 // moved pages, not outside linkers).
 async function fetchInboundLinkersForPaths(
 	ctx: BrainContext,
-	head: Revision,
+	base: Revision,
 	targetPaths: string[],
 	exclude: Set<string>,
 	// The caller often already fetched the tree (a collision check); reusing it
@@ -366,7 +366,7 @@ async function fetchInboundLinkersForPaths(
 		}
 	}
 	if (linkerPaths.size === 0) return { pages: [], truncated };
-	const entries = (tree ?? (await store.listTree(locator, head))).filter((e) =>
+	const entries = (tree ?? (await store.listTree(locator, base))).filter((e) =>
 		linkerPaths.has(e.path)
 	);
 	const { pages } = await store.fetchPages(locator, entries);
@@ -376,11 +376,11 @@ async function fetchInboundLinkersForPaths(
 // Single-target convenience wrapper (move_page, a write_page retitle, a file move).
 async function fetchInboundLinkers(
 	ctx: BrainContext,
-	head: Revision,
+	base: Revision,
 	targetPath: string,
 	tree?: FileEntry[]
 ): Promise<{ pages: PageContent[]; truncated: boolean }> {
-	return fetchInboundLinkersForPaths(ctx, head, [targetPath], new Set([targetPath]), tree);
+	return fetchInboundLinkersForPaths(ctx, base, [targetPath], new Set([targetPath]), tree);
 }
 
 // Count inbound references to a set of target pages, from the content index (no blob
@@ -428,7 +428,7 @@ async function withFreshSnapshots(ctx: BrainContext, path: string, content: stri
 // is inside the editable area (planPageWrite).
 async function createPageWrite(
 	ctx: BrainContext,
-	head: Revision,
+	base: Revision,
 	target: string,
 	args: Parameters<typeof composeCreate>[1]
 ) {
@@ -440,7 +440,7 @@ async function createPageWrite(
 	// independent, so they run together rather than back to back.
 	const [newContent, log] = await Promise.all([
 		withFreshSnapshots(ctx, target, composed.content),
-		store.readFile(locator, logPathOf(config), head.id)
+		store.readFile(locator, logPathOf(config), base.id)
 	]);
 	const rec = describeChange({
 		kind: 'create',
@@ -456,7 +456,7 @@ async function createPageWrite(
 		...commitOpts(config, author),
 		...rec.commit,
 		writes,
-		base: head
+		base
 	});
 	return landed(ctx, outcome, rec.done, rec.proposed);
 }
@@ -466,8 +466,8 @@ async function createPageWrite(
 // `existing` is the current blob; planPageWrite has already checked the sha.
 async function updatePageWrite(
 	ctx: BrainContext,
-	head: Revision,
-	existing: { content: string; sha: string },
+	base: Revision,
+	existing: { content: string; version: string },
 	args: Parameters<typeof composeUpdate>[2] & { path: string; sha?: string }
 ) {
 	const { store, locator, config, author } = ctx;
@@ -475,7 +475,7 @@ async function updatePageWrite(
 	// The changelog read is independent of everything below (snapshot refresh, link
 	// repointing), so it starts first and overlaps them. The detached catch keeps an
 	// early return below from leaving an unhandled rejection; the await still rethrows.
-	const logPromise = store.readFile(locator, logPathOf(config), head.id);
+	const logPromise = store.readFile(locator, logPathOf(config), base.id);
 	logPromise.catch(() => {});
 	const today = todayIso();
 	const composed = composeUpdate(path, existing.content, args, today, MAX_FIELD_KEYS_PER_PAGE);
@@ -489,7 +489,7 @@ async function updatePageWrite(
 	// pages that actually link to this one are fetched (via the index), so this is bounded
 	// by inbound-link count, not brain size.
 	if (composed.retitledFrom) {
-		const { pages, truncated } = await fetchInboundLinkers(ctx, head, path);
+		const { pages, truncated } = await fetchInboundLinkers(ctx, base, path);
 		let repointed = 0;
 		for (const page of pages) {
 			if (page.path === path || isToolMaintained(page.path, config)) continue;
@@ -519,7 +519,7 @@ async function updatePageWrite(
 		...commitOpts(config, author),
 		...rec.commit,
 		writes,
-		base: head
+		base
 	});
 	const res = landed(ctx, outcome, rec.done, rec.proposed);
 	// The in-client editor (which passes a sha) wants a fresh sha back so it can keep
@@ -528,7 +528,7 @@ async function updatePageWrite(
 	if (sha !== undefined) {
 		const unmerged = outcome.prUrl && !outcome.merged;
 		const saved = await store.readFile(locator, path, unmerged ? outcome.branchSha : undefined);
-		return { ...res, structuredContent: { path, sha: saved?.sha ?? '' } };
+		return { ...res, structuredContent: { path, sha: saved?.version ?? '' } };
 	}
 	return res;
 }
@@ -567,7 +567,7 @@ async function moveFolderWrite(
 	args: { path: string; new_path?: string; new_name?: string },
 	// The caller may already have paid for these while deciding this was a folder
 	// at all; re-fetching would cost a second round trip for the same answer.
-	pre?: { head: Revision; tree: FileEntry[] }
+	pre?: { base: Revision; tree: FileEntry[] }
 ) {
 	const { store, locator, config, author } = ctx;
 	const folder = normFolderPath(args.path);
@@ -579,8 +579,8 @@ async function moveFolderWrite(
 	if (!isContentPath(`${newFolder}/.gitkeep`, config))
 		return fail(`Can't move to "${newFolder}" — it's outside this brain's editable content.`);
 
-	const head = pre?.head ?? (await writeBase(ctx));
-	const tree = pre?.tree ?? (await store.listTree(locator, head, { extension: '*' }));
+	const base = pre?.base ?? (await writeBase(ctx));
+	const tree = pre?.tree ?? (await store.listTree(locator, base, { extension: '*' }));
 	const moved = tree.filter((e) => e.path.startsWith(`${folder}/`));
 	if (moved.length === 0) return fail(`No folder "${folder}" found (it has no files).`);
 	const refusal = folderWriteRefusal(folder, moved, config, 'moved');
@@ -615,16 +615,16 @@ async function moveFolderWrite(
 	const copiedNonMd = moved.filter(
 		(e) => !movedMd.has(e.path) && !supersededScaffolding.has(e.path)
 	);
-	// Four independent reads at the same head, run together: the moved pages' content
+	// Four independent reads at the same revision, run together: the moved pages' content
 	// (by known path, bounded by folder size, needed to rebase their outbound links),
 	// the non-markdown blobs, the outside linkers (discovered via the content index,
 	// bounded by inbound-link count and uncapped, reusing the tree above), and the
 	// changelog.
 	const [movedRes, nonMdFiles, linkersRes, log] = await Promise.all([
 		store.fetchPages(locator, movedMdEntries),
-		Promise.all(copiedNonMd.map((e) => store.readBinary(locator, e.path, head.id))),
-		fetchInboundLinkersForPaths(ctx, head, movedPaths, movedMd, tree),
-		store.readFile(locator, logPathOf(config), head.id)
+		Promise.all(copiedNonMd.map((e) => store.readBinary(locator, e.path, base.id))),
+		fetchInboundLinkersForPaths(ctx, base, movedPaths, movedMd, tree),
+		store.readFile(locator, logPathOf(config), base.id)
 	]);
 	const movedContent = new Map(movedRes.pages.map((p) => [p.path, p.content]));
 	const today = todayIso();
@@ -655,7 +655,7 @@ async function moveFolderWrite(
 	//    (contents fetched above); the superseded scaffolding is delete-only.
 	for (const [i, e] of copiedNonMd.entries()) {
 		const file = nonMdFiles[i];
-		if (!file || file.sha !== e.version)
+		if (!file || file.version !== e.version)
 			return fail(
 				`Can't move "${folder}" — "${e.path}" changed or couldn't be read. Refresh and try again.`
 			);
@@ -701,7 +701,7 @@ async function moveFolderWrite(
 		...rec.commit,
 		writes,
 		deletes,
-		base: head
+		base
 	});
 	return landed(ctx, outcome, rec.done, rec.proposed);
 }
@@ -715,7 +715,7 @@ async function moveFolderWrite(
 // files as `fileEdges`, so the pages displaying an attachment follow it.
 async function moveFileWrite(
 	ctx: BrainContext,
-	head: Revision,
+	base: Revision,
 	tree: FileEntry[],
 	args: { path: string; new_path?: string; new_name?: string }
 ) {
@@ -743,11 +743,11 @@ async function moveFileWrite(
 	// copy. readBinary plus a base64 FileWrite carries the bytes through untouched.
 	//
 	// The blob, the pages linking it, and the changelog are independent reads at the
-	// same head, so they run together (the linker fetch reuses the router's tree).
+	// same revision, so they run together (the linker fetch reuses the router's tree).
 	const [file, linkersRes, log] = await Promise.all([
-		store.readBinary(locator, path, head.id),
-		fetchInboundLinkers(ctx, head, path, tree),
-		store.readFile(locator, logPathOf(config), head.id)
+		store.readBinary(locator, path, base.id),
+		fetchInboundLinkers(ctx, base, path, tree),
+		store.readFile(locator, logPathOf(config), base.id)
 	]);
 	if (!file) return fail(`"${path}" does not exist.`);
 
@@ -780,7 +780,7 @@ async function moveFileWrite(
 		...rec.commit,
 		writes,
 		deletes: [path],
-		base: head
+		base
 	});
 	return landed(ctx, outcome, rec.done, rec.proposed);
 }
@@ -791,7 +791,7 @@ async function moveFileWrite(
 // Inbound references come from the SAME inboundRefs the page deleter uses (a link to
 // a non-page file is a fileEdge in the resolved graph), so the two cannot disagree,
 // and references from tool-maintained files such as the changelog do not count.
-async function deleteFileWrite(ctx: BrainContext, head: Revision, args: { path: string }) {
+async function deleteFileWrite(ctx: BrainContext, base: Revision, args: { path: string }) {
 	const { store, locator, config, author } = ctx;
 	const path = normPagePath(args.path);
 	const refusal = writeRefusal(path, config, 'deleted');
@@ -800,7 +800,7 @@ async function deleteFileWrite(ctx: BrainContext, head: Revision, args: { path: 
 	// The reference count and the changelog are independent reads, so they run together.
 	const [refsRes, log] = await Promise.all([
 		inboundRefs(ctx, [path]),
-		store.readFile(locator, logPathOf(config), head.id)
+		store.readFile(locator, logPathOf(config), base.id)
 	]);
 	const { refs, truncated } = refsRes;
 
@@ -815,7 +815,7 @@ async function deleteFileWrite(ctx: BrainContext, head: Revision, args: { path: 
 		...rec.commit,
 		writes,
 		deletes: [path],
-		base: head
+		base
 	});
 	return landed(ctx, outcome, rec.done, rec.proposed);
 }
@@ -825,14 +825,14 @@ async function deleteFolderWrite(
 	ctx: BrainContext,
 	args: { path: string },
 	// Already fetched by the router that decided this was a folder (see move's twin).
-	pre?: { head: Revision; tree: FileEntry[] }
+	pre?: { base: Revision; tree: FileEntry[] }
 ) {
 	const { store, locator, config, author } = ctx;
 	const folder = normFolderPath(args.path);
 	if (!folder) return fail('Give a folder path, e.g. "wiki/Projects".');
 
-	const head = pre?.head ?? (await writeBase(ctx));
-	const tree = pre?.tree ?? (await store.listTree(locator, head, { extension: '*' }));
+	const base = pre?.base ?? (await writeBase(ctx));
+	const tree = pre?.tree ?? (await store.listTree(locator, base, { extension: '*' }));
 	const doomed = tree.filter((e) => e.path.startsWith(`${folder}/`));
 	if (doomed.length === 0) return fail(`No folder "${folder}" found.`);
 	const refusal = folderWriteRefusal(folder, doomed, config, 'deleted');
@@ -844,7 +844,7 @@ async function deleteFolderWrite(
 	// changelog read is independent — run them together.
 	const [refsRes, log] = await Promise.all([
 		inboundRefs(ctx, [...doomedMd]),
-		store.readFile(locator, logPathOf(config), head.id)
+		store.readFile(locator, logPathOf(config), base.id)
 	]);
 	const { refs, truncated } = refsRes;
 
@@ -865,7 +865,7 @@ async function deleteFolderWrite(
 		...rec.commit,
 		writes,
 		deletes: doomed.map((e) => e.path),
-		base: head
+		base
 	});
 	return landed(ctx, outcome, rec.done, rec.proposed);
 }
@@ -1009,12 +1009,12 @@ export function registerLibrarianTools(
 				// Capture the commit base before reading authoritative content. If the
 				// branch moves afterwards, updateRef rejects this write instead of letting
 				// content read from an older revision overwrite the newer commit.
-				const head = await writeBase(ctx);
-				const existing = await store.readFile(locator, target, head.id);
+				const base = await writeBase(ctx);
+				const existing = await store.readFile(locator, target, base.id);
 				const plan = planPageWrite(args, target, existing, config);
 				if (!plan.ok) return fail(plan.error);
 				if (plan.kind === 'create')
-					return createPageWrite(ctx, head, target, {
+					return createPageWrite(ctx, base, target, {
 						content,
 						title,
 						type,
@@ -1023,7 +1023,7 @@ export function registerLibrarianTools(
 						fields,
 						sources
 					});
-				return updatePageWrite(ctx, head, existing!, {
+				return updatePageWrite(ctx, base, existing!, {
 					path: target,
 					content,
 					rawBody: plan.rawBody,
@@ -1078,16 +1078,16 @@ export function registerLibrarianTools(
 				// fits. The tree answers this for EVERY non-page file, attachments included.
 				if (!path.endsWith('.md')) {
 					const cleaned = normFolderPath(path);
-					const head = await writeBase(ctx);
-					const tree = await ctx.store.listTree(ctx.locator, head, { extension: '*' });
+					const base = await writeBase(ctx);
+					const tree = await ctx.store.listTree(ctx.locator, base, { extension: '*' });
 					const kind = nonPageKind(cleaned, tree);
 					if (kind === 'file')
-						return moveFileWrite(ctx, head, tree, { path: cleaned, new_path, new_name: new_title });
+						return moveFileWrite(ctx, base, tree, { path: cleaned, new_path, new_name: new_title });
 					if (kind === 'folder')
 						return moveFolderWrite(
 							ctx,
 							{ path: cleaned, new_path, new_name: new_title },
-							{ head, tree }
+							{ base, tree }
 						);
 					return fail(`No file or folder "${cleaned}" found.`);
 				}
@@ -1098,8 +1098,8 @@ export function registerLibrarianTools(
 				if (!resolved.ok) return fail(resolved.error);
 				const newPath = resolved.target;
 
-				const head = await writeBase(ctx);
-				const existing = await store.readFile(locator, path, head.id);
+				const base = await writeBase(ctx);
+				const existing = await store.readFile(locator, path, base.id);
 				if (!existing) return fail(`"${path}" does not exist.`);
 
 				const { frontmatter, body } = parseFrontmatter(existing.content);
@@ -1112,7 +1112,7 @@ export function registerLibrarianTools(
 				const newTitle = new_title ?? oldTitle;
 				if (newPath === path) return ok(`"${oldTitle}" is already at ${path} — nothing to move.`);
 
-				const tree = await store.listTree(locator, head);
+				const tree = await store.listTree(locator, base);
 				if (tree.some((e) => e.path === newPath)) {
 					return fail(`Can't move to ${newPath} — a page already exists there.`);
 				}
@@ -1121,8 +1121,8 @@ export function registerLibrarianTools(
 				// content index), not the whole brain — bounded by inbound-link count. The
 				// linker fetch reuses the tree above, and runs alongside the changelog read.
 				const [linkersRes, log] = await Promise.all([
-					fetchInboundLinkers(ctx, head, path, tree),
-					store.readFile(locator, logPathOf(config), head.id)
+					fetchInboundLinkers(ctx, base, path, tree),
+					store.readFile(locator, logPathOf(config), base.id)
 				]);
 				const { pages, truncated } = linkersRes;
 				const today = todayIso();
@@ -1180,7 +1180,7 @@ export function registerLibrarianTools(
 					...rec.commit,
 					writes,
 					deletes: [path],
-					base: head
+					base
 				});
 				return landed(ctx, outcome, rec.done, rec.proposed);
 			});
@@ -1212,26 +1212,26 @@ export function registerLibrarianTools(
 				// says which, for the same reason it does in move_page.
 				if (!path.endsWith('.md')) {
 					const cleaned = normFolderPath(path);
-					const head = await writeBase(ctx);
-					const tree = await ctx.store.listTree(ctx.locator, head, { extension: '*' });
+					const base = await writeBase(ctx);
+					const tree = await ctx.store.listTree(ctx.locator, base, { extension: '*' });
 					const kind = nonPageKind(cleaned, tree);
-					if (kind === 'file') return deleteFileWrite(ctx, head, { path: cleaned });
-					if (kind === 'folder') return deleteFolderWrite(ctx, { path: cleaned }, { head, tree });
+					if (kind === 'file') return deleteFileWrite(ctx, base, { path: cleaned });
+					if (kind === 'folder') return deleteFolderWrite(ctx, { path: cleaned }, { base, tree });
 					return fail(`No file or folder "${cleaned}" found.`);
 				}
 				const { store, locator, config, author } = ctx;
 				const refusal = writeRefusal(path, config, 'deleted');
 				if (refusal) return fail(refusal);
 
-				const head = await writeBase(ctx);
-				const existing = await store.readFile(locator, path, head.id);
+				const base = await writeBase(ctx);
+				const existing = await store.readFile(locator, path, base.id);
 				if (!existing) return fail(`"${path}" does not exist.`);
 
 				const title = pageTitle(path, existing.content);
 				// The reference count and the changelog are independent, so they run together.
 				const [refsRes, log] = await Promise.all([
 					inboundRefs(ctx, [path]),
-					store.readFile(locator, logPathOf(config), head.id)
+					store.readFile(locator, logPathOf(config), base.id)
 				]);
 				const { refs, truncated } = refsRes;
 
@@ -1246,7 +1246,7 @@ export function registerLibrarianTools(
 					...rec.commit,
 					writes,
 					deletes: [path],
-					base: head
+					base
 				});
 				return landed(ctx, outcome, rec.done, rec.proposed);
 			});
@@ -1359,9 +1359,9 @@ export function registerLibrarianTools(
 			const pendingSections: string[] = [];
 			const importFindingsList: Finding[] = [];
 			try {
-				const head = await store.getRevision(locator, config.defaultBranch);
+				const rev = await store.getRevision(locator, config.defaultBranch);
 				// listTree defaults to .md — ledgers are .json.
-				const tree = await store.listTree(locator, head, { extension: '.json' });
+				const tree = await store.listTree(locator, rev, { extension: '.json' });
 				const ledgers = tree.filter((e) => /^\.isomorphic\/imports\/[^/]+\.json$/.test(e.path));
 				for (const entry of ledgers) {
 					const source = entry.path

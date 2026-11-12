@@ -12,12 +12,12 @@ import { ensureGitRepo, fsBrainStore } from '../src/local/brain-store-fs.ts';
 import { INDEX_MIGRATIONS_DIR, localD1 } from '../src/local/d1-sqlite.ts';
 import { loadBrainConfig } from '../src/lib/brain-config.ts';
 import { ensureFresh } from '../src/lib/brain-index.ts';
-import type { BrainStore } from '../src/lib/brain-repo.ts';
+import type { BrainLocator, BrainStore } from '../src/lib/brain-repo.ts';
 
 export interface LocalBrain {
 	db: ReturnType<typeof localD1>['db'];
 	store: BrainStore;
-	locator: { owner: string; repo: string };
+	locator: BrainLocator;
 	brainId: string;
 	config: Awaited<ReturnType<typeof loadBrainConfig>>;
 	cleanup: () => Promise<void>;

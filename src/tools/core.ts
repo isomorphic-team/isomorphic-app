@@ -93,8 +93,8 @@ export function registerCoreTools(
 
 			// A prefix can target anything (including non-content like raw/), which the
 			// index doesn't hold, so keep the live tree walk for that case.
-			const head = await store.getRevision(locator, config.defaultBranch);
-			const paths = (await store.listTree(locator, head))
+			const rev = await store.getRevision(locator, config.defaultBranch);
+			const paths = (await store.listTree(locator, rev))
 				.map((e) => e.path)
 				.filter((p) => p.startsWith(prefix))
 				.sort();
@@ -154,7 +154,7 @@ export function registerCoreTools(
 			const markdown = views?.snapshotted ?? text;
 			return {
 				content: [{ type: 'text' as const, text: markdown }],
-				structuredContent: { path, markdown, sha: file.sha } satisfies ReadPageWire
+				structuredContent: { path, markdown, sha: file.version } satisfies ReadPageWire
 			};
 		}
 	);

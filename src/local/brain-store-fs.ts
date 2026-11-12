@@ -271,7 +271,7 @@ export function fsBrainStore(opts: FsStoreOptions): BrainStore {
 			if (!s.isFile()) return null;
 			return {
 				content: await readFile(full, 'utf8'),
-				sha: statToken(s)
+				version: statToken(s)
 			};
 		},
 
@@ -283,7 +283,7 @@ export function fsBrainStore(opts: FsStoreOptions): BrainStore {
 			const bytes = await readFile(full);
 			return {
 				contentBase64: bytes.toString('base64'),
-				sha: statToken(s),
+				version: statToken(s),
 				size: s.size
 			};
 		},

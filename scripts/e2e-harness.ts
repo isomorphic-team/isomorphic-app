@@ -20,7 +20,7 @@ import { Client } from '@modelcontextprotocol/client';
 import { InMemoryTransport, type McpServer } from '@modelcontextprotocol/server';
 import { installationOctokit } from '../src/lib/github.ts';
 import { createAndScaffoldBrain, buildScaffoldFiles } from '../src/lib/scaffold-core.ts';
-import type { BrainStore } from '../src/lib/brain-repo.ts';
+import type { BrainLocator, BrainStore } from '../src/lib/brain-repo.ts';
 import { githubStore } from '../src/lib/brain-store-github.ts';
 import { ensureGitRepo, fsBrainStore } from '../src/local/brain-store-fs.ts';
 import { readDevVars } from '../src/persist.ts';
@@ -51,7 +51,7 @@ export async function eventually<T>(
 
 export interface ScratchBrain {
 	store: BrainStore;
-	locator: { owner: string; repo: string };
+	locator: BrainLocator;
 	brainId: string;
 	// The repo name, or the temp directory's basename offline.
 	name: string;

@@ -32,7 +32,7 @@
 
 import { localD1 } from '../src/local/d1-sqlite.ts';
 import type { D1Database } from '@cloudflare/workers-types';
-import type { BrainStore, FileWrite } from '../src/lib/brain-repo.ts';
+import type { FileWrite } from '../src/lib/brain-repo.ts';
 import { detectSensitive, luhn, type DetectionKind } from '../src/lib/policy-detectors.ts';
 import {
 	guardStore,
@@ -76,7 +76,7 @@ import {
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 
-import { checker } from './check.ts';
+import { checker, partialStore } from './check.ts';
 
 const { check, done } = checker('guard checks');
 
@@ -203,7 +203,7 @@ console.log('\nscanWrites: text only, per path (5)');
 // A stub store: records what reached it, and can be told to fail.
 function stubStore(opts: { fail?: boolean } = {}) {
 	const calls: string[] = [];
-	const store = {
+	const store = partialStore({
 		async commitOrPR() {
 			calls.push('commitOrPR');
 			if (opts.fail) throw new Error('write failed');
@@ -214,7 +214,7 @@ function stubStore(opts: { fail?: boolean } = {}) {
 			if (opts.fail) throw new Error('write failed');
 			return { revision: { id: 'abc', branch: 'main', snapshot: 'def' }, versions: {} };
 		}
-	} as unknown as BrainStore;
+	});
 	return { store, calls };
 }
 
@@ -287,14 +287,14 @@ console.log('\nguardStore and config: on unless turned off (4)');
 	check('the default config is on (shadow)', DEFAULT_BRAIN_CONFIG.policyMode === 'shadow');
 
 	const withConfig = (content: string | null) =>
-		({
+		partialStore({
 			async readFile() {
-				return content === null ? null : { content, sha: 'x' };
+				return content === null ? null : { content, version: 'x' };
 			},
 			async repoWritePolicy() {
 				return { defaultBranch: 'main', branchProtected: false, mergeMethod: 'MERGE' };
 			}
-		}) as unknown as BrainStore;
+		});
 	const modeOf = async (content: string | null) =>
 		(await loadBrainConfig(withConfig(content), repo)).policyMode;
 
@@ -657,19 +657,21 @@ console.log('\nbaseline scan: the real migrations, a stub store (8)');
 		'wiki/unknown.dat': 'binary, no text from the store',
 		'zz-last.md': 'SSN 123-45-6789'
 	};
-	const store = {
+	const store = partialStore({
 		getRevision: async () => ({ id: 'h', branch: 'main', snapshot: 't' }),
 		listTree: async () =>
 			Object.keys(files).map((path) => ({ path, version: stubSha(path, files[path]) })),
 		readFile: async (_r: unknown, path: string) =>
-			files[path] === undefined ? null : { content: files[path], sha: stubSha(path, files[path]) },
+			files[path] === undefined
+				? null
+				: { content: files[path], version: stubSha(path, files[path]) },
 		fetchPages: async (_r: unknown, entries: { path: string }[]) => ({
 			pages: entries
 				.filter((e) => !e.path.endsWith('.dat'))
 				.map((e) => ({ path: e.path, content: files[e.path] })),
 			truncated: false
 		})
-	} as unknown as BrainStore;
+	});
 	const target = {
 		db,
 		store,
@@ -792,14 +794,14 @@ console.log('\nbaseline scan: the real migrations, a stub store (8)');
 	const bigTarget = {
 		...target,
 		scope: { brainId: 'b2' },
-		store: {
+		store: partialStore({
 			...store,
 			listTree: async () => Object.keys(big).map((path) => ({ path, version: path })),
 			fetchPages: async (_r: unknown, entries: { path: string }[]) => ({
 				pages: entries.map((e) => ({ path: e.path, content: big[e.path] })),
 				truncated: false
 			})
-		} as unknown as BrainStore
+		})
 	};
 	const one = await advanceBaseline(bigTarget, now);
 	check(
@@ -888,14 +890,14 @@ console.log('\nbaseline state in brain_passes, and the move from policy_baseline
 		JSON.stringify(fromPasses)
 	);
 
-	const store = {
-		getRevision: async () => 'head',
+	const store = partialStore({
+		getRevision: async () => ({ id: 'h', branch: 'main', snapshot: 't' }),
 		listTree: async () => [{ path: 'wiki/a.md', version: 's1' }],
 		fetchPages: async () => ({
 			pages: [{ path: 'wiki/a.md', content: 'nothing sensitive' }],
 			truncated: false
 		})
-	} as unknown as BrainStore;
+	});
 	const target = {
 		db,
 		store,

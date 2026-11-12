@@ -53,8 +53,8 @@ export async function listNonPagePaths(
 	repo: BrainLocator,
 	config: BrainConfig
 ): Promise<{ assets: string[]; hidden: string[] }> {
-	const head = await store.getRevision(repo, config.defaultBranch);
-	const tree = await store.listTree(repo, head, { extension: '*' });
+	const rev = await store.getRevision(repo, config.defaultBranch);
+	const tree = await store.listTree(repo, rev, { extension: '*' });
 	const assets: string[] = [];
 	const hidden: string[] = [];
 	for (const { path } of tree) {

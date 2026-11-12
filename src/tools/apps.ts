@@ -279,7 +279,7 @@ export function registerBrainApp(
 					// The blob sha of what this render is OF, so the viewer can tell a
 					// current render from one the branch has moved past. readFile already
 					// returns it, so it costs nothing extra to send.
-					sha: file.sha,
+					sha: file.version,
 					config: editPolicy(config),
 					activeBrain
 				} satisfies PageViewWire
@@ -534,8 +534,8 @@ export function registerBrainApp(
 			// Opened where write_page will save it (BrainStore.writeBase): with an open
 			// pull request, the page as that pull request holds it, so the sha guard
 			// matches and the save keeps the changes already waiting there.
-			const head = await store.writeBase(locator, config);
-			const file = await store.readFile(locator, path, head.id);
+			const base = await store.writeBase(locator, config);
+			const file = await store.readFile(locator, path, base.id);
 			if (!file) return fail(`"${path}" does not exist.`);
 			// Derived views: the editor gets the okf-view fences but NOT the generated
 			// snapshot regions — generated content must never round-trip through
@@ -554,7 +554,7 @@ export function registerBrainApp(
 					view: 'edit',
 					path,
 					markdown: editable,
-					sha: file.sha,
+					sha: file.version,
 					config: editPolicy(config),
 					activeBrain
 				} satisfies EditViewWire
