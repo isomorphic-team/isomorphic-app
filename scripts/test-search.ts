@@ -1025,6 +1025,67 @@ function brain(id: string, name: string): AccessibleBrain {
 		JSON.stringify(cmp)
 	);
 	check('shadow: two empty results agree', compareSearch(result([]), result([])).top1Same === true);
+	check(
+		"shadow: each engine's first page is placed in the other's results, 0 when absent",
+		cmp.ftsTopInCurrent === 2 &&
+			cmp.currentTopInFts === 2 &&
+			compareSearch(current, result(['x.md'])).ftsTopInCurrent === 0 &&
+			compareSearch(result([]), result(['x.md'])).currentTopInFts === 0,
+		JSON.stringify(cmp)
+	);
+
+	// One at a time, in either order: the engines share a database that runs one query
+	// at a time, so overlapping them would put each one's wait into the other's time.
+	for (const ftsFirst of [false, true]) {
+		let clock = 0;
+		let running = 0;
+		let overlapped = false;
+		const order: string[] = [];
+		const engine = (name: string, cost: number, r: SearchResult) => async () => {
+			if (running++ > 0) overlapped = true;
+			order.push(name);
+			await Promise.resolve();
+			clock += cost;
+			running--;
+			return r;
+		};
+		const timed: ShadowLog[] = [];
+		const answer = await shadowSearch(
+			{ current: engine('current', 30, current), fts: engine('fts', 70, result(['a.md'])) },
+			(l) => void timed.push(l),
+			{ ftsFirst, now: () => clock }
+		);
+		const line = timed[0];
+		check(
+			`shadow: ${ftsFirst ? 'FTS5' : 'the current engine'} first, the engines never overlap`,
+			!overlapped &&
+				order.join() === (ftsFirst ? 'fts,current' : 'current,fts') &&
+				answer === current,
+			order.join()
+		);
+		check(
+			`shadow: ${ftsFirst ? 'FTS5' : 'the current engine'} first, each time is that engine's alone`,
+			line?.outcome === 'compared' &&
+				line.msCurrent === 30 &&
+				line.msFts === 70 &&
+				line.first === (ftsFirst ? 'fts' : 'current'),
+			JSON.stringify(line)
+		);
+	}
+	{
+		const timed: ShadowLog[] = [];
+		const never = { current: async () => current, fts: () => new Promise<SearchResult>(() => {}) };
+		await shadowSearch(never, (l) => void timed.push(l), { budgetMs: 5, ftsFirst: true });
+		await shadowSearch(never, (l) => void timed.push(l), { budgetMs: 5, ftsFirst: false });
+		check(
+			'shadow: after a timeout with FTS5 first, no time is reported for the current engine',
+			timed[0]?.outcome === 'timeout' &&
+				timed[0].msCurrent === undefined &&
+				timed[1]?.outcome === 'timeout' &&
+				timed[1].msCurrent !== undefined,
+			JSON.stringify(timed)
+		);
+	}
 
 	let got = await shadowSearch(
 		{ current: async () => current, fts: async () => result(['a.md']) },
