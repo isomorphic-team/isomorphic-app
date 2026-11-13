@@ -93,7 +93,13 @@
 		// It does record what a NAMED person in your organization did, per day, and
 		// only your org admins can read it. If that is not something you want to
 		// collect, set this to "false" and nothing is written.
-		"USAGE_ANALYTICS": "__USAGE_ANALYTICS__"
+		"USAGE_ANALYTICS": "__USAGE_ANALYTICS__",
+		// Where create_brain puts a new brain when the caller does not say, in an
+		// organization on the platform's shared GitHub installation: "github" (a
+		// private repository in the platform organization) or "isomorphic" (a Durable
+		// Object per brain in the objects Worker, with no repository). An organization
+		// that connected its own GitHub account gets a repository there either way.
+		"BRAIN_STORAGE": "__BRAIN_STORAGE__"
 		// PLATFORM_ORG and PLATFORM_INSTALLATION_ID are deliberately NOT here.
 		// They are per-deployment values written to `.dev.vars` by bootstrap
 		// (local) and uploaded with `wrangler secret put` (prod). The installation

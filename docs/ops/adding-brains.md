@@ -130,6 +130,10 @@ Adopting through it would let any org claim a repository another org's brain lef
 behind in the platform account. Those orgs create brains with `create_brain`, or
 receive them by a move (`connect_brain` naming an existing brain).
 
+`create_brain` makes a repository, or with `storage: "isomorphic"` a brain the deployment
+holds itself with no repository. `BRAIN_STORAGE` sets which one these orgs get when the
+caller does not say ([self-hosting](../self-hosting.md)).
+
 A `brains` row written by hand (step 3 above) needs no `storage_connection_id`: a NULL
 binding resolves through the org's installation, exactly as before migration 0010.
 

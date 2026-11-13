@@ -118,6 +118,13 @@ const SETTINGS = [
 		oneOf: ['true', 'false']
 	},
 	{
+		key: 'BRAIN_STORAGE',
+		placeholder: '__BRAIN_STORAGE__',
+		default: 'github',
+		help: 'Where a new brain goes in an org on the platform\'s GitHub installation: "github" (a repository there) or "isomorphic" (held by this deployment, no repository).',
+		oneOf: ['github', 'isomorphic']
+	},
+	{
 		key: 'D1_DATABASE_NAME',
 		placeholder: '__D1_DATABASE_NAME__',
 		default: 'platform-db',

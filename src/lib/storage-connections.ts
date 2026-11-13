@@ -22,7 +22,7 @@ export const GITHUB_TOKEN_KIND = 'github-token';
 // Files the platform holds itself, one Durable Object per brain. One connection row
 // serves every such brain, written when the first brain moves onto it.
 export const PLATFORM_FILES_KIND = 'platform-files';
-const PLATFORM_FILES_CONNECTION_ID = 'platform-files';
+export const PLATFORM_FILES_CONNECTION_ID = 'platform-files';
 
 // How to reach a brain's storage, from its binding. Pure, so the choice between a
 // token, an installation and the platform's own files is pinned by a test rather than
@@ -126,15 +126,43 @@ export function bindingStatement(
 // copied the files (src/lib/brain-relocate.ts).
 export function platformFilesBinding(db: D1Database, brainId: string): D1PreparedStatement[] {
 	return [
-		db
-			.prepare(
-				`INSERT OR IGNORE INTO storage_connections
-				   (connection_id, provider, kind, external_id, account, owner_org_id)
-				 VALUES (?1, 'platform', ?2, 'files', 'Isomorphic', NULL)`
-			)
-			.bind(PLATFORM_FILES_CONNECTION_ID, PLATFORM_FILES_KIND),
+		platformFilesConnectionStatement(db),
 		bindingStatement(db, brainId, PLATFORM_FILES_CONNECTION_ID)
 	];
+}
+
+// Writes the one platform-files connection row if it is not there yet.
+export function platformFilesConnectionStatement(db: D1Database): D1PreparedStatement {
+	return db
+		.prepare(
+			`INSERT OR IGNORE INTO storage_connections
+			   (connection_id, provider, kind, external_id, account, owner_org_id)
+			 VALUES (?1, 'platform', ?2, 'files', 'Isomorphic', NULL)`
+		)
+		.bind(PLATFORM_FILES_CONNECTION_ID, PLATFORM_FILES_KIND);
+}
+
+// Where a new brain's files go.
+export type BrainStorageChoice = 'github' | 'isomorphic';
+
+// Where create_brain puts a new brain, or why it cannot go where it was asked to. Pure.
+// What the caller asked for wins. Otherwise the deployment's default applies only to an
+// org on platform-owned storage: an org that connected its own GitHub account chose
+// GitHub.
+export function chooseBrainStorage(o: {
+	requested?: BrainStorageChoice;
+	deploymentDefault: BrainStorageChoice;
+	// The org's connection is platform-owned (owner_org_id NULL).
+	platformOwned: boolean;
+	// This deployment has files objects to hold a brain in.
+	canHold: boolean;
+}): { storage: BrainStorageChoice } | { problem: string } {
+	if (o.requested === 'isomorphic' && !o.canHold) {
+		return { problem: 'This deployment cannot hold a brain itself, so no brain was created.' };
+	}
+	if (o.requested) return { storage: o.requested };
+	const preferred = o.platformOwned ? o.deploymentDefault : 'github';
+	return { storage: preferred === 'isomorphic' && o.canHold ? 'isomorphic' : 'github' };
 }
 
 // The GitHub connection that reaches an account's repositories, or null. A brain that

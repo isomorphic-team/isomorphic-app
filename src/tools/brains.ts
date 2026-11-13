@@ -42,18 +42,22 @@ import {
 	getOrgById,
 	activeAfterDisconnect
 } from '../lib/orgs.ts';
-import { createAndScaffoldBrain, ensureRepository } from '../lib/scaffold-core.ts';
+import { createAndScaffoldBrain, ensureRepository, scaffoldInto } from '../lib/scaffold-core.ts';
 import { forgetBrain } from '../lib/brain-forget.ts';
 import {
+	PLATFORM_FILES_CONNECTION_ID,
 	bindingStatement,
+	chooseBrainStorage,
 	githubConnectionForAccount,
+	platformFilesConnectionStatement,
+	type BrainStorageChoice,
 	platformFilesBinding,
 	platformHoldsFiles,
 	getConnection,
 	type StorageConnection,
 	orgAdministersConnection
 } from '../lib/storage-connections.ts';
-import { relocateBrain, type CopyStep } from '../lib/brain-relocate.ts';
+import { hasRelocated, relocateBrain, type CopyStep } from '../lib/brain-relocate.ts';
 import type { BrainStore, StoreCapabilities } from '../lib/brain-repo.ts';
 import {
 	countPendingBrainInvites,
@@ -241,6 +245,8 @@ export function registerBrainTools(
 		// A GitHub client holding a connection's credential, for moving a brain back
 		// into a repository under that connection's account.
 		githubFor?: (conn: StorageConnection) => Promise<Octokit>;
+		// Where create_brain puts a brain when the caller does not say (BRAIN_STORAGE).
+		defaultStorage?: BrainStorageChoice;
 	}
 ) {
 	const {
@@ -257,7 +263,8 @@ export function registerBrainTools(
 		openIndex,
 		webBaseUrl,
 		platformFiles,
-		githubFor
+		githubFor,
+		defaultStorage
 	} = deps;
 	// `people`: whether this deployment has anyone to share with, invite, or count.
 	// The nav offers Sharing, Members, Analytics and brain management only when it
@@ -402,7 +409,7 @@ export function registerBrainTools(
 			{
 				...toolAnnotations('Create a new brain', 'additive'),
 				description:
-					'Create a NEW, empty knowledge base ("brain") with a name the user chooses, and switch to it. Call create_brain whenever the user wants to START a new brain / knowledge base / wiki, including their very first one. This SCAFFOLDS a fresh repo; it does not adopt an existing one. Any editor can create a brain. The new brain is PRIVATE to its creator until it is shared.',
+					'Create a NEW, empty knowledge base ("brain") with a name the user chooses, and switch to it. Call create_brain whenever the user wants to START a new brain / knowledge base / wiki, including their very first one. This SCAFFOLDS a fresh brain; it does not adopt an existing repository. Any editor can create a brain. The new brain is PRIVATE to its creator until it is shared.',
 				inputSchema: z.object({
 					name: z
 						.string()
@@ -414,10 +421,16 @@ export function registerBrainTools(
 						.optional()
 						.describe(
 							'Which organization to create it in, by name or GitHub owner. Defaults to the organization of the brain you are in.'
+						),
+					storage: z
+						.enum(['isomorphic', 'github'])
+						.optional()
+						.describe(
+							'Where the brain’s files are kept. "isomorphic": held by Isomorphic itself. "github": a new private repository under the organization’s GitHub account. Leave unset for the deployment’s default.'
 						)
 				})
 			},
-			async ({ name, org }) => {
+			async ({ name, org, storage }) => {
 				// Org-scope + role gate. Rejects single-tenant connections ("product
 				// accounts only") and callers below `editor`.
 				let ctx: OrgScope;
@@ -429,18 +442,53 @@ export function registerBrainTools(
 				const display = name.trim();
 				if (!display) return fail('Please give the brain a name.');
 
+				const chosen = chooseBrainStorage({
+					requested: storage,
+					deploymentDefault: defaultStorage ?? 'github',
+					platformOwned: ctx.storage.owner_org_id === null,
+					canHold: !!platformFiles
+				});
+				if ('problem' in chosen) return fail(chosen.problem);
+
 				const owner = ctx.storage.account;
 				const base = slugName(display) || 'brain';
-				// Scaffold a fresh repo; on a name collision (repo already exists, brain or not)
-				// try the next `base-N` slug. repo_name is the immutable slug; `display` is the name.
+				// On a name collision try the next `base-N` slug. repo_name is the immutable
+				// slug; `display` is the name.
 				let repo = base;
-				let created: Awaited<ReturnType<typeof createAndScaffoldBrain>>;
+				let created: { owner: string; name: string };
+				let connectionId = ctx.storage.connection_id;
 				for (let attempt = 1; ; attempt++) {
 					// A name a brain already holds is taken even when GitHub has no such
 					// repository: creating it would hand this caller that brain.
 					if (attempt < 25 && (await brainNameTaken(ctx.db, owner, repo))) {
 						repo = `${base}-${attempt + 1}`;
 						continue;
+					}
+					if (chosen.storage === 'isomorphic') {
+						// No repository: the files go in the brain's own object, named by the
+						// id the brain is about to get. The owner and name stay on the row as
+						// its locator and as where a later move to GitHub would put it.
+						const files = platformFiles!(brainIdFor(owner, repo));
+						const locator = { owner, repo };
+						try {
+							const held = await files.listTree(locator, await files.getRevision(locator), {
+								extension: '*'
+							});
+							// Files with no brain row: an earlier attempt's. Leave them be.
+							if (held.length > 0 && attempt < 25) {
+								repo = `${base}-${attempt + 1}`;
+								continue;
+							}
+							await scaffoldInto(files, locator, ctx.author);
+						} catch (err) {
+							return fail(
+								`Couldn't create the brain: ${err instanceof Error ? err.message : String(err)}`
+							);
+						}
+						await platformFilesConnectionStatement(ctx.db).run();
+						connectionId = PLATFORM_FILES_CONNECTION_ID;
+						created = { owner, name: repo };
+						break;
 					}
 					try {
 						created = await createAndScaffoldBrain(githubClient(ctx), {
@@ -476,7 +524,7 @@ export function registerBrainTools(
 					name: display,
 					created_by: ctx.actorUserId,
 					visibility: 'private',
-					storage_connection_id: ctx.storage.connection_id
+					storage_connection_id: connectionId
 				});
 				// Never grant on a row this call did not write: it is another brain's.
 				if (!inserted) {
@@ -936,11 +984,19 @@ export function registerBrainTools(
 						);
 					}
 					const octokit = await githubFor(conn);
-					await ensureRepository(octokit, {
+					const { created } = await ensureRepository(octokit, {
 						owner: target.repo_owner,
 						name: target.repo_name,
 						description: `${label} — Isomorphic brain`
 					});
+					// A brain created on the platform's own files never had a repository, so
+					// one that exists under its name is somebody else's, and the copy would
+					// remove its files.
+					if (!created && !(await hasRelocated(ctx.db, ctx.brainId))) {
+						return fail(
+							`A repository named ${repository} already exists and ${label} did not come from it, so nothing was written there. Rename or remove that repository and try again.`
+						);
+					}
 					step = await relocateBrain(
 						ctx.db,
 						scope,

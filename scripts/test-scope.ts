@@ -33,6 +33,7 @@ import { bindFixtureStorage } from './fixture-storage.ts';
 import { PLATFORM_FILES_KIND, orgStorage } from '../src/lib/storage-connections.ts';
 import {
 	assertRole,
+	brainIdFor,
 	listStewardedBrains,
 	type Role,
 	type TenantOpts,
@@ -48,6 +49,9 @@ import { registerOrgOnboardingTools, type OrgOnboardingEnv } from '../src/tools/
 import { registerLibrarianTools, type BrainContext } from '../src/tools/librarian.ts';
 
 import { checker } from './check.ts';
+import type { BrainStore } from '../src/lib/brain-repo.ts';
+import { sqlBrainStore, sqlFiles } from '../src/lib/brain-store-sql.ts';
+import { sqliteDatabase } from './sqlite-database.ts';
 
 const { check, done } = checker('scope checks');
 
@@ -285,6 +289,9 @@ function toolsFor(
 		held?: string;
 		// The GitHub client org-scope tools get, in place of the trap.
 		github?: unknown;
+		// Real stores for platform-held brains, by brain_id, in place of the trap.
+		files?: (brainId: string) => BrainStore;
+		defaultStorage?: 'github' | 'isomorphic';
 	} = {
 		webBaseUrl: 'https://brain.example'
 	}
@@ -383,8 +390,9 @@ function toolsFor(
 		analyticsEnabled: true,
 		openIndex: d1Index(db),
 		webBaseUrl: deployment.webBaseUrl,
-		platformFiles: deployment.noFilesObjects ? undefined : () => filesStore,
-		githubFor: async () => octokit
+		platformFiles: deployment.noFilesObjects ? undefined : (deployment.files ?? (() => filesStore)),
+		defaultStorage: deployment.defaultStorage,
+		githubFor: async () => (deployment.github as never) ?? octokit
 	});
 	return handlers;
 }
@@ -1455,6 +1463,170 @@ console.log('\nA single-user deployment: only the tools that can answer');
 		`${asked.join()} ${made.detail}`
 	);
 	check('and grants nothing on the brain that holds the name', grants() === before);
+}
+
+{
+	console.log('\ncreate_brain on storage the platform holds');
+	// One store per brain id, as the files objects are. The GitHub client is the trap:
+	// creating such a brain must not touch GitHub at all.
+	const objects = new Map<string, BrainStore>();
+	const files = (id: string) => {
+		if (!objects.has(id)) objects.set(id, sqlBrainStore(sqlFiles(sqliteDatabase())));
+		return objects.get(id)!;
+	};
+	const row = (name: string) =>
+		sqlite
+			.prepare(
+				`SELECT b.brain_id, b.repo_owner, b.repo_name, b.visibility, c.kind
+				   FROM brains b JOIN storage_connections c ON c.connection_id = b.storage_connection_id
+				  WHERE b.name = ?`
+			)
+			.get(name) as
+			| {
+					brain_id: string;
+					repo_owner: string;
+					repo_name: string;
+					visibility: string;
+					kind: string;
+			  }
+			| undefined;
+	const loc = { owner: 'northwind', repo: 'x' };
+	const paths = async (id: string) =>
+		(await files(id).listTree(loc, await files(id).getRevision(loc), { extension: '*' })).map(
+			(e) => e.path
+		);
+
+	const made = await attempt(
+		writer,
+		'create_brain',
+		{ name: 'Held', storage: 'isomorphic' },
+		{
+			files
+		}
+	);
+	const held = row('Held');
+	check(
+		'an editor creates one without GitHub being touched',
+		made.outcome === 'allowed' && held?.kind === PLATFORM_FILES_KIND,
+		made.detail
+	);
+	check(
+		'it is private, with an admin grant for its creator, like any new brain',
+		held?.visibility === 'private' &&
+			(
+				sqlite
+					.prepare('SELECT role FROM brain_memberships WHERE brain_id = ? AND user_id = ?')
+					.get(held.brain_id, writer.userId) as { role?: string } | undefined
+			)?.role === 'admin'
+	);
+	const scaffold = held ? await paths(held.brain_id) : [];
+	check(
+		'its files object holds the scaffold',
+		['.isomorphic.json', 'AGENTS.md', 'wiki/log.md'].every((p) => scaffold.includes(p)),
+		scaffold.join()
+	);
+	const second = await attempt(
+		writer,
+		'create_brain',
+		{ name: 'Held', storage: 'isomorphic' },
+		{
+			files
+		}
+	);
+	const rows = sqlite
+		.prepare(`SELECT repo_name FROM brains WHERE name = 'Held' ORDER BY repo_name`)
+		.all() as { repo_name: string }[];
+	check(
+		'a second brain of the same name gets the next slug, not the first one’s files',
+		second.outcome === 'allowed' && rows.map((r) => r.repo_name).join() === 'held,held-2',
+		rows.map((r) => r.repo_name).join() + second.detail
+	);
+
+	// Files under an id no brain row holds: an earlier attempt that never got its row.
+	await files(brainIdFor('northwind', 'orphan')).write(loc, {
+		message: 'Left behind',
+		writes: [{ path: 'wiki/theirs.md', content: 'x' }]
+	});
+	const beside = await attempt(
+		writer,
+		'create_brain',
+		{ name: 'Orphan', storage: 'isomorphic' },
+		{ files }
+	);
+	check(
+		'files left under a name are not adopted: the new brain takes the next slug',
+		beside.outcome === 'allowed' &&
+			row('Orphan')?.repo_name === 'orphan-2' &&
+			(await paths(brainIdFor('northwind', 'orphan'))).join() === 'wiki/theirs.md',
+		`${row('Orphan')?.repo_name} ${beside.detail}`
+	);
+
+	const byDefault = await attempt(
+		writer,
+		'create_brain',
+		{ name: 'Defaulted', org: 'Hosted Co' },
+		{
+			files,
+			defaultStorage: 'isomorphic'
+		}
+	);
+	check(
+		'with the deployment default set, an org on platform-owned storage gets one unasked',
+		byDefault.outcome === 'allowed' && row('Defaulted')?.kind === PLATFORM_FILES_KIND,
+		byDefault.detail
+	);
+	const customer = await attempt(
+		writer,
+		'create_brain',
+		{ name: 'Customer' },
+		{
+			files,
+			defaultStorage: 'isomorphic'
+		}
+	);
+	check(
+		'an org with its own GitHub account still goes to GitHub',
+		customer.detail.includes('octokit.') && row('Customer') === undefined,
+		customer.detail
+	);
+	const none = await attempt(
+		writer,
+		'create_brain',
+		{ name: 'Nowhere', storage: 'isomorphic' },
+		{
+			noFilesObjects: true
+		}
+	);
+	check(
+		'a deployment with no files objects refuses the request and creates nothing',
+		none.outcome === 'denied' && none.detail.includes('cannot hold a brain') && !row('Nowhere'),
+		none.detail
+	);
+
+	// A brain created there never had a repository, so one under its name is not its own.
+	const both: Persona = {
+		label: 'admin of both',
+		userId: 'u-boss',
+		orgRole: 'admin',
+		role: 'admin'
+	};
+	const exists = { rest: { repos: { get: async () => ({ data: {} }) } } };
+	const foreign = await attempt(
+		both,
+		'configure_brain',
+		{ storage: 'github', confirm: true },
+		{
+			held: 'b-main',
+			github: exists
+		}
+	);
+	check(
+		'moving to GitHub refuses a repository the brain did not come from',
+		foreign.outcome === 'denied' && foreign.detail.includes('did not come from it'),
+		foreign.detail
+	);
+	sqlite.exec(`DELETE FROM brain_memberships WHERE brain_id IN (SELECT brain_id FROM brains WHERE name IN ('Held', 'Defaulted', 'Orphan'));
+		DELETE FROM brains WHERE name IN ('Held', 'Defaulted', 'Orphan');`);
 }
 
 {

@@ -15,6 +15,7 @@
 // the auto-init commit — no partial state.
 
 import type { Octokit } from 'octokit';
+import type { BrainLocator, BrainStore, CommitAuthor } from './brain-repo.ts';
 import {
 	AGENTS_MD,
 	README_MD,
@@ -52,6 +53,17 @@ export function buildScaffoldFiles(): FileEntry[] {
 		// GitHub); .gitkeep because git doesn't track empty dirs.
 		{ path: 'source/.gitkeep', content: '' }
 	];
+}
+
+const SCAFFOLD_MESSAGE = 'Scaffold brain: AGENTS.md, README, .isomorphic.json, wiki/ and source/';
+
+// The scaffold as one write through a store, for a brain with no repository.
+export async function scaffoldInto(
+	store: BrainStore,
+	locator: BrainLocator,
+	author?: CommitAuthor
+): Promise<void> {
+	await store.write(locator, { message: SCAFFOLD_MESSAGE, writes: buildScaffoldFiles(), author });
 }
 
 export interface CreatedBrain {
@@ -98,7 +110,7 @@ export async function scaffoldExistingRepo(
 	const { data: commit } = await octokit.rest.git.createCommit({
 		owner,
 		repo,
-		message: 'Scaffold brain: AGENTS.md, README, .isomorphic.json, wiki/ and source/',
+		message: SCAFFOLD_MESSAGE,
 		tree: newTree.sha,
 		parents: [parentSha]
 	});
