@@ -419,7 +419,8 @@ account, and records the reporter privately in D1 (`feedback_reports`) keyed by 
 report id printed in the issue. A per-user cap of ten reports a day bounds abuse.
 
 **Brains in Google Drive (optional).** A member can keep a brain in their own Google Drive
-instead of a repository: `create_brain` with `storage: "google-drive"`. It needs
+instead of a repository: `create_brain` with `storage: "google-drive"`. `configure_brain`
+with `storage` moves an existing brain into a Drive or out of one. It needs
 `AUTH_MODE=oauth`, `PUBLIC_BASE_URL`, the objects Worker, and one OAuth client for the
 deployment. In the Google Cloud console, create a project, enable the Google Drive API,
 configure the consent screen with the single scope
@@ -434,7 +435,10 @@ pnpm exec wrangler secret put GOOGLE_CLIENT_SECRET
 While the consent screen's publishing status is "Testing", only the test users you list can
 connect, and Google expires each connection after seven days. With `drive.file` the
 deployment reaches only the files it created: a file someone adds to a brain's folder by
-hand is not part of the brain. Each member's refresh token is stored encrypted under a key
+hand is not part of the brain. A Drive keeps no history of a brain's changes, so
+`view_activity` has nothing to list for one, and a page opened and saved in Google's own
+editor comes back with its markdown rewritten (escaped characters, `&nbsp;` lines): change
+pages through Isomorphic. Each member's refresh token is stored encrypted under a key
 derived from `AUTH_SECRET`, so changing `AUTH_SECRET` disconnects every Drive, and each is
 connected again from the link `create_brain` gives.
 

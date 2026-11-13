@@ -305,3 +305,22 @@ export function coalescedPrText(
 		body: `Changes proposed via the Isomorphic brain tools:\n\n${items.map((i) => `- ${i}`).join('\n')}\n\n${CHANGE_LIST_END}\n`
 	};
 }
+
+/**
+ * view_activity's text. A store without `history` keeps no record to list, which is a
+ * different answer from a brain nothing has changed yet.
+ */
+export function activityText(opts: {
+	entries: { date: string; authorName: string; message: string; shortSha: string }[];
+	scope: string;
+	history: boolean;
+	logPath: string;
+}): string {
+	if (!opts.history) {
+		return `This brain's storage keeps no change history, so there is nothing to list or roll back to. ${opts.logPath} records what the tools changed.`;
+	}
+	if (opts.entries.length === 0) return `No recorded changes for ${opts.scope} yet.`;
+	return `Recent changes to ${opts.scope}:\n${opts.entries
+		.map((e) => `- ${e.date.slice(0, 10)} — ${e.authorName}: ${e.message} (${e.shortSha})`)
+		.join('\n')}`;
+}

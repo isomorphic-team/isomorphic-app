@@ -241,6 +241,9 @@ export interface BrainStore {
 	getRevision(loc: BrainLocator, branch?: string): Promise<Revision>;
 	// The `id` of the revision a named branch is at: what the index freshness guard compares.
 	branchRevision(loc: BrainLocator, branch: string): Promise<string>;
+	// Forget what this store has read, so the next call asks the storage again. Only a
+	// store that answers from an earlier read has one.
+	refresh?(): void;
 	repoWritePolicy(loc: BrainLocator): Promise<RepoWritePolicy>;
 	listTree(loc: BrainLocator, at: Revision, opts?: { extension?: string }): Promise<FileEntry[]>;
 	fetchPages(

@@ -50,15 +50,26 @@ import {
 	chooseBrainStorage,
 	githubConnectionForAccount,
 	platformFilesConnectionStatement,
-	GOOGLE_DRIVE_KIND,
+	storageOf,
 	platformFilesBinding,
 	platformHoldsFiles,
 	getConnection,
 	type StorageConnection,
 	orgAdministersConnection
 } from '../lib/storage-connections.ts';
-import { hasRelocated, relocateBrain, type CopyStep } from '../lib/brain-relocate.ts';
-import { DRIVE_HOME_FOLDER, createBrainFolder, type DriveApi } from '../lib/brain-store-drive.ts';
+import {
+	MoveRefused,
+	moveProblem,
+	relocateBrain,
+	type CopyStep,
+	type MoveTarget
+} from '../lib/brain-relocate.ts';
+import {
+	DRIVE_CAPABILITIES,
+	DRIVE_HOME_FOLDER,
+	createBrainFolder,
+	type DriveApi
+} from '../lib/brain-store-drive.ts';
 import { DriveReconnectError, driveConnectionFor } from '../lib/drive-connection.ts';
 import type { BrainStore, StoreCapabilities } from '../lib/brain-repo.ts';
 import {
@@ -68,7 +79,7 @@ import {
 	moveBrain,
 	planBrainMove
 } from '../lib/brain-move.ts';
-import { githubStore } from '../lib/brain-store-github.ts';
+import { GITHUB_CAPABILITIES, githubStore } from '../lib/brain-store-github.ts';
 import { detectNeedsConfig, type OpenIndex } from '../lib/brain-index.ts';
 import { CONFIG_PATH, DEFAULT_BRAIN_CONFIG } from '../lib/brain-config.ts';
 import { fail } from './shared.ts';
@@ -177,25 +188,6 @@ async function detectRowSetup(
 	} catch {
 		return { needsConfig: false };
 	}
-}
-
-// Why a brain cannot move onto the platform's own storage, or null when it can. Pure.
-export function relocationProblem(o: {
-	// What the storage it would move to can do; undefined when this deployment has none.
-	destination: StoreCapabilities | undefined;
-	// The brain's files are already there.
-	held: boolean;
-	writeMode: 'direct' | 'pull-request';
-	label: string;
-}): string | null {
-	if (!o.destination) return 'This deployment cannot hold a brain itself, so nothing was changed.';
-	if (o.held) return `${o.label} is already held by Isomorphic. Nothing was changed.`;
-	// A pull request still open would be left behind, and no later change could be held
-	// for review.
-	if (o.writeMode === 'pull-request' && !o.destination.proposals) {
-		return `${o.label} takes its changes as pull requests, which storage held by Isomorphic cannot do yet. Nothing was changed.`;
-	}
-	return null;
 }
 
 // What create_brain needs to put a brain in a Google Drive.
@@ -413,20 +405,28 @@ export function registerBrainTools(
 		}
 	);
 
-	// The reply that sends the caller to connect their Drive. Nothing was created.
-	const connectDriveReply = async (ctx: OrgScope, why?: string) => {
-		const url = await drive!.connectLink({ userId: ctx.actorUserId, orgId: ctx.org.org_id });
+	// The reply that sends the caller to connect their Drive. Nothing was done.
+	const connectDriveReply = async (
+		pending: { userId: string; orgId: string },
+		o: { why?: string; nothing: string; again: string }
+	) => {
+		const url = await drive!.connectLink(pending);
 		return {
 			content: [
 				{
 					type: 'text' as const,
 					text:
-						`${why ? `${why} ` : ''}No brain was created yet. Open this link, sign in to Isomorphic if asked, and allow access to Google Drive:\n\n${url}\n\n` +
-						`Isomorphic can reach only the files it creates in that Drive. When you're back, ask for the brain again.\n\n(The link works once, for you only, and expires in 1 hour.)`
+						`${o.why ? `${o.why} ` : ''}${o.nothing} Open this link, sign in to Isomorphic if asked, and allow access to Google Drive:\n\n${url}\n\n` +
+						`Isomorphic can reach only the files it creates in that Drive. When you're back, ${o.again}.\n\n(The link works once, for you only, and expires in 1 hour.)`
 				}
 			]
 		};
 	};
+	const connectForNewBrain = (ctx: OrgScope, why?: string) =>
+		connectDriveReply(
+			{ userId: ctx.actorUserId, orgId: ctx.org.org_id },
+			{ why, nothing: 'No brain was created yet.', again: 'ask for the brain again' }
+		);
 
 	// ---------- create_brain (editor+) ----------
 	// Stand up a NEW, empty brain (scaffolds a fresh repo), distinct from connect_brain,
@@ -485,7 +485,7 @@ export function registerBrainTools(
 				let driveConn: StorageConnection | null = null;
 				if (chosen.storage === 'google-drive') {
 					driveConn = await driveConnectionFor(ctx.db, ctx.org.org_id, ctx.actorUserId);
-					if (!driveConn) return connectDriveReply(ctx);
+					if (!driveConn) return connectForNewBrain(ctx);
 				}
 
 				const owner = ctx.storage.account;
@@ -516,7 +516,7 @@ export function registerBrainTools(
 							);
 						} catch (err) {
 							if (err instanceof DriveReconnectError) {
-								return connectDriveReply(ctx, err.message);
+								return connectForNewBrain(ctx, err.message);
 							}
 							return fail(
 								`Couldn't create the brain in Google Drive: ${err instanceof Error ? err.message : String(err)}`
@@ -613,7 +613,7 @@ export function registerBrainTools(
 					content: [
 						{
 							type: 'text' as const,
-							text: `Created "${display}" and switched to it.${driveConn ? ` Its files are in the Google Drive of ${driveConn.account}, in the folder ${DRIVE_HOME_FOLDER}/${display}.` : ''} It's private to you: share it with share_brain, or make it visible to your whole organization.`
+							text: `Created "${display}" and switched to it.${driveConn ? ` Its files are in the Google Drive of ${driveConn.account}, in the folder ${DRIVE_HOME_FOLDER}/${display}. Change its pages through Isomorphic: Google's own editor rewrites a page's markdown when it saves.` : ''} It's private to you: share it with share_brain, or make it visible to your whole organization.`
 						}
 					],
 					structuredContent: {
@@ -954,10 +954,10 @@ export function registerBrainTools(
 						'Replace an existing .isomorphic.json. Without this, a repo that already has one is left alone and its current config is shown.'
 					),
 				storage: z
-					.enum(['isomorphic', 'github'])
+					.enum(['isomorphic', 'github', 'google-drive'])
 					.optional()
 					.describe(
-						'Move the brain’s files to this storage. "isomorphic": held by Isomorphic itself, with no GitHub repository behind it. "github": back into the brain’s GitHub repository.'
+						'Move the brain’s files to this storage, from whichever one holds them now. "isomorphic": held by Isomorphic itself. "github": a GitHub repository under the organization’s account. "google-drive": a new folder in the caller’s own Google Drive; if that Drive is not connected yet, the reply is a link that connects it.'
 					),
 				confirm: z
 					.boolean()
@@ -995,48 +995,46 @@ export function registerBrainTools(
 				if (!target) return fail('That brain could not be resolved.');
 				const label = brainLabel(target);
 				const repository = `${target.repo_owner}/${target.repo_name}`;
-				if (target.storage_kind === GOOGLE_DRIVE_KIND) {
-					return fail(
-						`${label} is kept in Google Drive, and moving a brain out of a Drive is not built yet. Nothing was changed.`
-					);
-				}
-				const held = platformHoldsFiles(target);
-				const source = { store: ctx.store, locator: ctx.locator };
-				const scope = { brainId: ctx.brainId, orgId: ctx.orgId, actorUserId: ctx.actorUserId };
-				const copyOpts = { branch: ctx.config.defaultBranch, author: ctx.author };
-				const preview = (text: string) => ({
-					content: [{ type: 'text' as const, text: `Nothing has changed yet. ${text}` }]
-				});
-				let step: CopyStep;
-				let moved: string;
-
-				if (storage === 'isomorphic') {
-					// A single-user deployment's binding follows its config, so nothing can move.
-					const destination = multiUser ? platformFiles?.(ctx.brainId) : undefined;
-					const problem = relocationProblem({
-						destination: destination?.capabilities,
-						held,
+				const from = storageOf(target);
+				const refuse = (destination: StoreCapabilities | undefined) =>
+					moveProblem({
+						from,
+						to: storage,
+						destination,
 						writeMode: ctx.config.writeMode,
 						label
 					});
+
+				// The destination: where the files would be, how it is made ready, and what a
+				// failure there should reply with. Everything after this is the same for every
+				// pair of storages.
+				let plan: {
+					// "the current files are copied into ..."
+					into: string;
+					note?: string;
+					history: boolean;
+					target: MoveTarget;
+					recover?: (err: unknown) => ReturnType<typeof connectDriveReply> | undefined;
+				};
+				if (storage === 'isomorphic') {
+					// A single-user deployment's binding follows its config, so nothing can move.
+					const destination = multiUser ? platformFiles?.(ctx.brainId) : undefined;
+					const problem = refuse(destination?.capabilities);
 					if (problem || !destination) return fail(problem ?? 'Nothing was changed.');
-					if (!confirm) {
-						return preview(
-							`This would copy the current files of ${label} out of its GitHub repository (${repository}) into storage Isomorphic holds itself, and serve the brain from there. Its pages, links, sharing and address stay the same. The repository is left exactly as it is, with its history, and is no longer read or written: anything pushed to it afterwards will not appear in the brain. History before the move stays in the repository and is not shown in the brain's activity. configure_brain with storage: "github" moves it back. Call configure_brain again with confirm: true to go ahead.`
-						);
-					}
-					step = await relocateBrain(
-						ctx.db,
-						scope,
-						source,
-						{ store: destination, locator: ctx.locator },
-						platformFilesBinding(ctx.db, ctx.brainId),
-						copyOpts
-					);
-					moved = `its ${step.total} files are now held by Isomorphic, and the brain is served from there. The GitHub repository ${repository} is unchanged and no longer used; archive or delete it when you are satisfied.`;
-				} else {
-					if (!held)
-						return fail(`${label} is already in a GitHub repository. Nothing was changed.`);
+					plan = {
+						into: 'storage Isomorphic holds itself',
+						history: destination.capabilities.history,
+						target: {
+							key: 'isomorphic',
+							open: async () => ({
+								end: { store: destination, locator: ctx.locator },
+								binding: platformFilesBinding(ctx.db, ctx.brainId)
+							})
+						}
+					};
+				} else if (storage === 'github') {
+					const problem = refuse(GITHUB_CAPABILITIES);
+					if (problem) return fail(problem);
 					// The connection that reaches the account the brain's repository is under.
 					const conn = multiUser
 						? await githubConnectionForAccount(ctx.db, target.repo_owner)
@@ -1046,35 +1044,119 @@ export function registerBrainTools(
 							`No GitHub connection on this deployment reaches ${target.repo_owner}, so ${label} cannot move there. Nothing was changed.`
 						);
 					}
-					if (!confirm) {
-						return preview(
-							`This would copy the current files of ${label} into the GitHub repository ${repository}, and serve the brain from there again. If the repository no longer exists it is created, private. Files in the repository that the brain does not have are removed from it, as new commits on top of its history. Its pages, links, sharing and address stay the same. The files Isomorphic holds are left as they are and no longer used, and the brain's activity since it left GitHub is not carried over. Call configure_brain again with confirm: true to go ahead.`
-						);
-					}
-					const octokit = await githubFor(conn);
-					const { created } = await ensureRepository(octokit, {
-						owner: target.repo_owner,
-						name: target.repo_name,
-						description: `${label} — Isomorphic brain`
-					});
-					// A brain created on the platform's own files never had a repository, so
-					// one that exists under its name is somebody else's, and the copy would
-					// remove its files.
-					if (!created && !(await hasRelocated(ctx.db, ctx.brainId))) {
-						return fail(
-							`A repository named ${repository} already exists and ${label} did not come from it, so nothing was written there. Rename or remove that repository and try again.`
-						);
-					}
+					plan = {
+						into: `the GitHub repository ${repository}`,
+						note: 'If the repository does not exist it is created, private. Files in the repository that the brain does not have are removed from it, as new commits on top of its history.',
+						history: GITHUB_CAPABILITIES.history,
+						target: {
+							key: conn.connection_id,
+							open: async (token, brain) => {
+								const octokit = await githubFor(conn);
+								// Only the first step asks: a later one finds the repository this
+								// move made.
+								if (token === null) {
+									const { created } = await ensureRepository(octokit, {
+										owner: target.repo_owner,
+										name: target.repo_name,
+										description: `${label} — Isomorphic brain`
+									});
+									// A brain that never lived in a repository has none of its own,
+									// so one that exists under its name is somebody else's, and the
+									// copy would remove its files.
+									if (!created && !brain.leftRepository) {
+										throw new MoveRefused(
+											`A repository named ${repository} already exists and ${label} did not come from it, so nothing was written there. Rename or remove that repository and try again.`
+										);
+									}
+								}
+								return {
+									end: { store: githubStore(octokit), locator: ctx.locator },
+									binding: [bindingStatement(ctx.db, ctx.brainId, conn.connection_id)],
+									token: 'ready'
+								};
+							}
+						}
+					};
+				} else {
+					const reach =
+						multiUser && drive && ctx.orgId && ctx.actorUserId
+							? { drive, pending: { userId: ctx.actorUserId, orgId: ctx.orgId } }
+							: undefined;
+					const problem = refuse(reach && DRIVE_CAPABILITIES);
+					if (problem || !reach) return fail(problem ?? 'Nothing was changed.');
+					const connect = (why?: string) =>
+						connectDriveReply(reach.pending, {
+							why,
+							nothing: `${label} has not moved.`,
+							again: 'ask for the move again'
+						});
+					// A Drive brain goes in a Drive the caller connected themselves.
+					const conn = await driveConnectionFor(ctx.db, reach.pending.orgId, reach.pending.userId);
+					if (!conn) return connect();
+					const api = reach.drive.api(conn.connection_id);
+					plan = {
+						into: `a new folder in your own Google Drive (${conn.account}), ${DRIVE_HOME_FOLDER}/${label}`,
+						note: 'Everyone the brain is shared with keeps reaching it through Isomorphic, for as long as that Drive stays connected.',
+						history: DRIVE_CAPABILITIES.history,
+						target: {
+							key: conn.connection_id,
+							open: async (token) => {
+								const folderId = token ?? (await createBrainFolder(api, label));
+								return {
+									end: {
+										store: reach.drive.store(ctx.brainId, api, folderId),
+										locator: ctx.locator
+									},
+									binding: [bindingStatement(ctx.db, ctx.brainId, conn.connection_id, folderId)],
+									token: folderId
+								};
+							}
+						},
+						recover: (err) =>
+							err instanceof DriveReconnectError ? connect(err.message) : undefined
+					};
+				}
+
+				// What stays behind, by where the brain is now.
+				const left = {
+					github: `The GitHub repository ${repository} is left exactly as it is, with its history, and is no longer read or written: anything pushed to it afterwards will not appear in the brain.`,
+					isomorphic: 'The files Isomorphic holds are left as they are and no longer used.',
+					'google-drive':
+						'The folder in Google Drive is left as it is and no longer used: a file changed there afterwards will not appear in the brain.'
+				}[from];
+				if (!confirm) {
+					const unlisted = plan.history
+						? ''
+						: ' That storage keeps no history of changes, so the brain’s activity will have nothing to list.';
+					return {
+						content: [
+							{
+								type: 'text' as const,
+								text: `Nothing has changed yet. This would copy the current files of ${label} into ${plan.into}, and serve the brain from there once the copy is complete. Its pages, links, sharing and address stay the same.${plan.note ? ` ${plan.note}` : ''}${unlisted} ${left} The brain's activity before the move is not carried over. configure_brain with storage: "${from}" moves it back. Call configure_brain again with confirm: true to go ahead.`
+							}
+						]
+					};
+				}
+				let step: CopyStep;
+				try {
 					step = await relocateBrain(
 						ctx.db,
-						scope,
-						source,
-						{ store: githubStore(octokit), locator: ctx.locator },
-						[bindingStatement(ctx.db, ctx.brainId, conn.connection_id)],
-						copyOpts
+						{ brainId: ctx.brainId, orgId: ctx.orgId, actorUserId: ctx.actorUserId },
+						{ store: ctx.store, locator: ctx.locator },
+						plan.target,
+						{
+							branch: ctx.config.defaultBranch,
+							author: ctx.author,
+							fromRepository: from === 'github'
+						}
 					);
-					moved = `its ${step.total} files are in the GitHub repository ${repository}, and the brain is served from there.`;
+				} catch (err) {
+					if (err instanceof MoveRefused) return fail(err.message);
+					const reply = await plan.recover?.(err);
+					if (reply) return reply;
+					throw err;
 				}
+				const moved = `its ${step.total} files are in ${plan.into}, and the brain is served from there. ${left}`;
 
 				if (!step.done) {
 					return {
