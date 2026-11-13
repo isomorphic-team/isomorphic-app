@@ -444,7 +444,6 @@ const connectionId = await saveDriveConnection(db, key, {
 
 	const choose = (o: Partial<Parameters<typeof chooseBrainStorage>[0]>) =>
 		chooseBrainStorage({
-			deploymentDefault: 'isomorphic',
 			platformOwned: true,
 			canHold: true,
 			...o

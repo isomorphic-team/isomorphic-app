@@ -69,8 +69,8 @@ instead:
   with `wrangler deploy`. Every Preview shares it, so it runs the base branch's objects code:
   a pull request that changes `src/objects/` previews against the base branch's classes until
   it merges.
-- New brains go there (`BRAIN_STORAGE=isomorphic`), so they stop accumulating as
-  repositories in the throwaway organization.
+- New brains go there, as on any deployment that binds files objects, so they stop
+  accumulating as repositories in the throwaway organization.
 
 Without the variable, the block is dropped: a Preview has no objects, its `/health` skips the
 ping, and a new brain is a repository.
@@ -89,7 +89,7 @@ reports and, if it differs, redeploys once with `--var PUBLIC_BASE_URL:<actual>`
 ### Sign-in
 
 A Preview signs anyone in as any email address they type, with no email sent
-(`AUTH_SIGN_IN=open`). It is still Auth.js's own flow: the sign-in POST is answered with a
+(`AUTH_SIGN_IN=open` with `PREVIEW=true`). It is still Auth.js's own flow: the sign-in POST is answered with a
 redirect to the link Auth.js minted instead of an email carrying it, so the verification
 token, the session cookie and the return through `callbackUrl` are the ones production uses.
 The `preview-email` label on a pull request (or `-f email=true` on a dispatch) switches that
@@ -98,9 +98,9 @@ the pull request says which mode is on.
 
 Open sign-in means anyone with the URL can sign in as anyone. That reaches only the pull
 request's own database and the throwaway organization's GitHub App; the worst a stranger can
-do is create repositories there. `AUTH_SIGN_IN` defaults to `email`, `deploy.yml` never sets it
-(`pnpm test:preview` pins both), `pnpm setup:config` warns when it is `open`, and the Worker
-logs a warning when it serves with it.
+do is create repositories there. Open sign-in needs both vars, and `previewConfig` is their
+only writer: no setting, template entry or `deploy.yml` line sets either (`pnpm test:preview`
+pins it). The Worker logs a warning when it serves with it.
 
 ### Forks
 

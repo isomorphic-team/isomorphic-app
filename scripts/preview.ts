@@ -12,8 +12,8 @@
 //
 // Inputs come from the environment: PR_NUMBER, PREVIEW_WORKER_NAME,
 // PREVIEW_WORKERS_SUBDOMAIN, PREVIEW_D1_DATABASE_NAME, and for `comment` also
-// PREVIEW_ORIGIN, PREVIEW_SHA, PREVIEW_SMOKE (success | failure), PREVIEW_RUN_URL,
-// PREVIEW_SIGN_IN (open | email).
+// PREVIEW_ORIGIN, PREVIEW_SHA, PREVIEW_SMOKE (success | failure), PREVIEW_RUN_URL;
+// PREVIEW_SIGN_IN (open | email) for `config` and `comment`.
 
 import { readFileSync, writeFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
@@ -118,10 +118,14 @@ export interface PreviewObjects {
  * that Worker's one namespace. Without `objects` they are dropped, and the Preview runs
  * with no objects at all. With it they are carried, provided every one names the preview
  * objects Worker, and the Preview's object names are scoped to it.
+ *
+ * It is the one writer of `PREVIEW` and `AUTH_SIGN_IN`: open sign-in needs both, so only
+ * a Preview can have it.
  */
 export function previewConfig(
 	{ durable_objects, ...config }: WranglerConfig,
-	objects?: PreviewObjects
+	objects?: PreviewObjects,
+	signIn: 'open' | 'email' = 'email'
 ): WranglerConfig {
 	const bound = objects ? (durable_objects?.bindings ?? []) : [];
 	const elsewhere = bound.filter((b) => b.script_name !== objects?.worker);
@@ -130,7 +134,12 @@ export function previewConfig(
 			`Durable Object bindings must name the preview objects Worker ${objects?.worker}, found ${elsewhere.map((b) => `${String(b.name)} -> ${String(b.script_name)}`).join(', ')}`
 		);
 	const carried = bound.length > 0 ? { durable_objects: { bindings: bound } } : {};
-	const vars = { ...config.vars, ...(objects ? { OBJECTS_SCOPE: objects.scope } : {}) };
+	const vars = {
+		...config.vars,
+		PREVIEW: 'true',
+		AUTH_SIGN_IN: signIn,
+		...(objects ? { OBJECTS_SCOPE: objects.scope } : {})
+	};
 	const databases = config.d1_databases ?? [];
 	const bindings = databases.map((d) => String(d.binding)).join(', ');
 	// The pull request's two databases and nothing else: a binding this does not know
@@ -253,7 +262,11 @@ function main(argv: string[]): void {
 			// Set only once the preview objects Worker exists (the one-time setup).
 			const worker = process.env.PREVIEW_OBJECTS_WORKER_NAME?.trim();
 			const objects = worker ? { worker, scope: planPreview(inputsFromEnv()).name } : undefined;
-			writeFileSync(output, JSON.stringify(previewConfig(config, objects), null, '\t') + '\n');
+			const signIn = process.env.PREVIEW_SIGN_IN === 'open' ? 'open' : 'email';
+			writeFileSync(
+				output,
+				JSON.stringify(previewConfig(config, objects, signIn), null, '\t') + '\n'
+			);
 			return;
 		}
 		case 'database-id': {

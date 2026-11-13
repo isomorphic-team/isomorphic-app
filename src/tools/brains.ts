@@ -248,8 +248,6 @@ export function registerBrainTools(
 		// A GitHub client holding a connection's credential, for moving a brain back
 		// into a repository under that connection's account.
 		githubFor?: (conn: StorageConnection) => Promise<Octokit>;
-		// Where create_brain puts a brain when the caller does not say (BRAIN_STORAGE).
-		defaultStorage?: 'github' | 'isomorphic';
 		// Reaching a Google Drive. Absent when the deployment has no Google OAuth client.
 		drive?: DriveTools;
 	}
@@ -269,7 +267,6 @@ export function registerBrainTools(
 		webBaseUrl,
 		platformFiles,
 		githubFor,
-		defaultStorage,
 		drive
 	} = deps;
 	// `people`: whether this deployment has anyone to share with, invite, or count.
@@ -473,7 +470,6 @@ export function registerBrainTools(
 
 				const chosen = chooseBrainStorage({
 					requested: storage,
-					deploymentDefault: defaultStorage ?? 'github',
 					platformOwned: ctx.storage.owner_org_id === null,
 					canHold: !!platformFiles,
 					canDrive: !!drive

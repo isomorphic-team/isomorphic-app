@@ -349,14 +349,13 @@ bootstrap did not (it only does so when `PUBLIC_BASE_URL` was set at the time).
 Set it to `false` for an invite-only instance: an unknown user gets an error instead, and
 you add people with `invite_member`.
 
-`BRAIN_STORAGE` decides where `create_brain` puts a new brain in an organization that uses
-your platform GitHub installation (a personal organization, or one made by `create_org`
-without `github`). `github`, the default, creates a private repository in the platform
-organization. `isomorphic` keeps the brain's files in a Durable Object in the objects
-Worker, with no repository, so no content sits in the platform organization. A caller can
-ask for either with `create_brain`'s `storage`, and `configure_brain` moves an existing brain
-between them. An organization that connected its own GitHub account gets a repository there
-unless the caller asks otherwise.
+In an organization that uses your platform GitHub installation (a personal organization, or
+one made by `create_org` without `github`), `create_brain` keeps a new brain's files in a
+Durable Object in the objects Worker, with no repository, so no content sits in the platform
+organization. A caller can ask for a repository instead with `create_brain`'s
+`storage: "github"`, and `configure_brain` moves an existing brain between the two. An
+organization that connected its own GitHub account gets a repository there unless the caller
+asks otherwise.
 
 ### 3c. Your own account
 
@@ -486,8 +485,7 @@ see what a pass would find before deploying anything, run it over a local copy:
 `pnpm consolidate:report <folder> --models --cap 1`.
 
 **Backups.** A brain on GitHub is a git repository, so it is already backed up everywhere it
-is cloned. A brain the deployment holds itself (`BRAIN_STORAGE=isomorphic`, or
-`storage: "isomorphic"`) is not: set `BACKUP_BUCKET` and `BACKUP_PUBLIC_KEY` and each one is
+is cloned. A brain the deployment holds itself is not: set `BACKUP_BUCKET` and `BACKUP_PUBLIC_KEY` and each one is
 backed up to an R2 bucket, encrypted, after it changes
 ([`docs/ops/backups.md`](ops/backups.md)). The D1 database holds only derived data plus org and membership rows. Losing the
 index costs a rebuild; losing the org tables costs re-inviting people. Neither loses content.

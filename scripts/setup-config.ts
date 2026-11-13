@@ -82,13 +82,6 @@ const SETTINGS = [
 		help: 'Reply-To on the magic-link email, e.g. a support address. Empty sends no Reply-To.'
 	},
 	{
-		key: 'AUTH_SIGN_IN',
-		placeholder: '__AUTH_SIGN_IN__',
-		default: 'email',
-		help: '"email" (the magic link). "open" lets anyone sign in as any address with no email: preview deployments only.',
-		oneOf: ['email', 'open']
-	},
-	{
 		key: 'AUTO_PROVISION',
 		placeholder: '__AUTO_PROVISION__',
 		default: 'false',
@@ -116,13 +109,6 @@ const SETTINGS = [
 		default: 'true',
 		help: '"true" records per-day usage counters and shows the org Analytics tab. Set "false" to disable.',
 		oneOf: ['true', 'false']
-	},
-	{
-		key: 'BRAIN_STORAGE',
-		placeholder: '__BRAIN_STORAGE__',
-		default: 'github',
-		help: 'Where a new brain goes in an org on the platform\'s GitHub installation: "github" (a repository there) or "isomorphic" (held by this deployment, no repository).',
-		oneOf: ['github', 'isomorphic']
 	},
 	{
 		key: 'BACKUP_BUCKET',
@@ -466,13 +452,6 @@ async function main(): Promise<void> {
 
 		await writeFile(at(c.output), header + out, 'utf8');
 		console.log(`\nWrote ${c.output}`);
-	}
-
-	if (resolved.get('AUTH_SIGN_IN')!.value === 'open') {
-		console.warn(
-			'\nWARNING: AUTH_SIGN_IN=open. Anyone who can reach this deployment can sign in as\n' +
-				'any email address, with no email sent. Use it only for a preview deployment.'
-		);
 	}
 
 	if (usingFakeIds) {

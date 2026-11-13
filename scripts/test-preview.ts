@@ -184,8 +184,11 @@ console.log('\nthe previews block carries every binding the template declares');
 			throws(() => previewConfig(template, objects), 'preview-objects')
 	);
 	check(
-		'vars match the top level',
-		JSON.stringify(previews.vars) === JSON.stringify(template.vars)
+		'vars match the top level, and keep every var the template declares',
+		JSON.stringify(previews.vars) === JSON.stringify(config.vars) &&
+			Object.entries(template.vars as Record<string, string>).every(
+				([k, v]) => (previews.vars as Record<string, string>)[k] === v
+			)
 	);
 	const d1 = (previews.d1_databases as Record<string, unknown>[])[0];
 	check(
@@ -374,21 +377,33 @@ console.log('\nopen sign-in is a preview setting and nothing else');
 	);
 	check(
 		'the config step takes the decided mode',
-		/AUTH_SIGN_IN: \$\{\{ needs\.resolve\.outputs\.signin \}\}/.test(yaml)
+		/PREVIEW_SIGN_IN: \$\{\{ needs\.resolve\.outputs\.signin \}\}/.test(yaml)
 	);
+	const vars = (signIn?: 'open' | 'email') =>
+		(
+			previewConfig(
+				{ d1_databases: [{ binding: 'PLATFORM_DB' }, { binding: 'INDEX_DB' }] },
+				undefined,
+				signIn
+			).previews as { vars: Record<string, string> }
+		).vars;
 	check(
-		'deploy.yml never sets AUTH_SIGN_IN',
-		!readFileSync('.github/workflows/deploy.yml', 'utf8').includes('AUTH_SIGN_IN')
+		'previewConfig writes the mode and the preview marker, email unless told open',
+		vars('open').AUTH_SIGN_IN === 'open' &&
+			vars('open').PREVIEW === 'true' &&
+			vars().AUTH_SIGN_IN === 'email',
+		JSON.stringify(vars('open'))
 	);
+	const nowhere = [
+		'.github/workflows/deploy.yml',
+		'scripts/setup-config.ts',
+		'wrangler.template.jsonc',
+		'.dev.vars.example'
+	].filter((f) => /AUTH_SIGN_IN|PREVIEW\b/.test(readFileSync(f, 'utf8')));
 	check(
-		'setup-config defaults it to email',
-		/key: 'AUTH_SIGN_IN',[\s\S]*?default: 'email'/.test(
-			readFileSync('scripts/setup-config.ts', 'utf8')
-		)
-	);
-	check(
-		'the template fills it from setup-config',
-		readFileSync('wrangler.template.jsonc', 'utf8').includes('"AUTH_SIGN_IN": "__AUTH_SIGN_IN__"')
+		'no deployment config or setting writes AUTH_SIGN_IN or PREVIEW',
+		nowhere.length === 0,
+		nowhere.join(', ')
 	);
 }
 
