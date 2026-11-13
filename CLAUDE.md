@@ -107,7 +107,7 @@ notes); see the OKF rules file.
 
 ## State of the repo
 
-Not built: webhooks, Google sign-in, storage on Microsoft Graph or Drive, invitation emails.
+Not built: webhooks, Google sign-in, storage on Microsoft Graph, connecting a Drive, invitation emails.
 [`docs/roadmap.md`](docs/roadmap.md) is the public plan: when the user references a roadmap
 item, check the code before assuming it exists or does not.
 
