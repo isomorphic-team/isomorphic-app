@@ -6,7 +6,7 @@
 // key for BACKUP_PUBLIC_KEY. The private key opens every backup sealed to this pair and
 // is needed only to restore one: keep it off the deployment and out of any repository.
 
-import { existsSync, writeFileSync } from 'node:fs';
+import { writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { repoRelative } from './agent-hooks.ts';
@@ -23,13 +23,15 @@ if (repoRelative(root, target) !== null) {
 	console.error('Write the private key outside this repository.');
 	process.exit(1);
 }
-if (existsSync(target)) {
+const keys = await generateBackupKeys();
+try {
+	// Created, never overwritten: a new key cannot open backups sealed to the old one.
+	writeFileSync(target, keys.privateKey + '\n', { mode: 0o600, flag: 'wx' });
+} catch (e) {
+	if ((e as NodeJS.ErrnoException).code !== 'EEXIST') throw e;
 	console.error(`${target} exists. A new key cannot open backups sealed to the old one.`);
 	process.exit(1);
 }
-
-const keys = await generateBackupKeys();
-writeFileSync(target, keys.privateKey + '\n', { mode: 0o600 });
 console.log(`Private key written to ${target}. Without it no backup can be restored.\n`);
 console.log('Public key, for the deployment:\n');
 console.log(`  gh variable set BACKUP_PUBLIC_KEY --body '${keys.publicKey}'\n`);
