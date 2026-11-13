@@ -738,6 +738,20 @@ needs two matches touching it, and hubs pass declared relations only. Needs noth
 storage change. Before shipping: stop loading the whole page list per search to resolve
 wikilinks.
 
+# TODO: code mode
+
+[`design/code-mode.md`](design/code-mode.md). One tool, `run_script`, runs a script the model
+writes against typed `brain` and `org` APIs inside a Dynamic Worker with no network, so a
+multi-step read costs one call and only its result reaches the model. Writes are staged by the
+script and committed by one destructive `apply_changes` call, atomically, after the person
+approves a summary the server wrote. Brain-authored tools become saved scripts, and the rarely
+called admin tools leave the model's tool list while staying callable by the app.
+
+In order, each its own pull request: `run_script`, read-only, behind `CODE_MODE`; a measurement
+on a real host, which decides the rest; saved scripts in place of brain-authored tools; staged
+writes; `org` methods and app-only tools. The last needs code mode on in every deployment,
+which makes Workers Paid a self-hosting requirement.
+
 # TODO: content index, optional work
 
 The derived D1 index is built and is what every read tool queries (see CLAUDE.md, "Content
