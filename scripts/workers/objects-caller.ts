@@ -1,22 +1,30 @@
-// A stand-in for the MCP Worker in pnpm test:objects. It reaches the coordinator object
-// the way the MCP Worker does (a Durable Object binding by script_name, through
-// objectWriteCoordinator) and gives it a FileBackend whose files live in the test
-// process, over HTTP, so they outlive a restart of workerd.
+// A stand-in for the MCP Worker in pnpm test:objects. It reaches the objects Worker's
+// classes the way the MCP Worker does, through Durable Object bindings by script_name:
+// the coordinator through objectWriteCoordinator, with a FileBackend whose files live in
+// the test process, over HTTP, so they outlive a restart of workerd; and a brain's files
+// object through sqlBrainStore.
 //
 //   POST /write  { brainId, storage, drive, bundle }  -> { result } | { error }
+//   POST /files  { brainId, op, args }                -> { result } | { error }
+//                one BrainStore call on the brain's files object, through sqlBrainStore
 //   GET  /health                                     -> 200 when the object answers ping()
 
-import { WriteConflictError } from '../../src/lib/brain-repo.ts';
+import { WriteConflictError, type BrainStore } from '../../src/lib/brain-repo.ts';
+import { sqlBrainStore } from '../../src/lib/brain-store-sql.ts';
 import {
 	objectWriteCoordinator,
 	type CoordinatedWrite,
 	type FileBackend
 } from '../../src/lib/write-coordinator.ts';
-import type { WriteCoordinatorObject } from '../../src/objects/worker.ts';
+import type { BrainFilesObject, WriteCoordinatorObject } from '../../src/objects/worker.ts';
 
 interface Env {
 	WRITE_COORDINATOR: DurableObjectNamespace<WriteCoordinatorObject>;
+	BRAIN_FILES: DurableObjectNamespace<BrainFilesObject>;
 }
+
+const LOC = { owner: 'example-org', repo: 'brain' };
+type StoreCall = (loc: typeof LOC, ...args: unknown[]) => Promise<unknown>;
 
 // The test process answers 409 { path } for a failed precondition and 503 when the drive
 // is down.
@@ -43,6 +51,21 @@ export default {
 		if (url.pathname === '/health') {
 			const ok = (await ns.get(ns.idFromName('health')).ping()) === 'ok';
 			return new Response(ok ? 'ok' : 'no answer', { status: ok ? 200 : 503 });
+		}
+		if (url.pathname === '/files') {
+			const { brainId, op, args } = (await request.json()) as {
+				brainId: string;
+				op: keyof BrainStore;
+				args: unknown[];
+			};
+			const store = sqlBrainStore(env.BRAIN_FILES.get(env.BRAIN_FILES.idFromName(brainId)));
+			try {
+				const call = store[op];
+				if (typeof call !== 'function') throw new Error(`${op} is not a store operation`);
+				return Response.json({ result: (await (call as StoreCall)(LOC, ...args)) ?? null });
+			} catch (e) {
+				return Response.json({ error: (e as Error).message });
+			}
 		}
 		const { brainId, storage, drive, bundle } = (await request.json()) as {
 			brainId: string;

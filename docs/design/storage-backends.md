@@ -1,7 +1,7 @@
 # Design: brains on storage that is not git
 
 Status: **in implementation** (2026-11-12). Steps 1 and 2 of the order of work are built, and
-the first part of step 3.
+the first two parts of step 3.
 
 - Author: Jon Hansing (via Claude)
 - Related: [`storage-and-tenancy.md`](storage-and-tenancy.md) (connections, bindings, step 5's
@@ -246,7 +246,8 @@ Each step is its own pull request.
    1. The storage and its `BrainStore`, on the contract battery. Built: `sqlFiles` and
       `sqlBrainStore` in `src/lib/brain-store-sql.ts`, `pnpm test:store`.
    2. The object: a class in the objects Worker exposing `SqlFilesApi` over RPC, bound in the
-      MCP Worker, run in workerd by `pnpm test:objects`. A class change, so it merges alone.
+      MCP Worker. Built: `BrainFilesObject` in `src/objects/worker.ts`, the `BRAIN_FILES`
+      binding, run in workerd by `pnpm test:objects`.
    3. A brain's storage kind in the platform database, and the Worker choosing its store by it.
    4. Scaffolding through the store (`scaffold-core.ts` calls octokit), and `create_brain`
       able to make a brain here.
