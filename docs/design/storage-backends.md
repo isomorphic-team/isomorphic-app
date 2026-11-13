@@ -1,6 +1,6 @@
 # Design: brains on storage that is not git
 
-Status: **proposed** (2026-11-12).
+Status: **in implementation** (2026-11-12). Step 1 of the order of work is built, and step 2 up to the Durable Object.
 
 - Author: Jon Hansing (via Claude)
 - Related: [`storage-and-tenancy.md`](storage-and-tenancy.md) (connections, bindings, step 5's
@@ -97,10 +97,17 @@ object from `brain-index-storage.md` and reached the same way (`script_name`, RP
 
 - **It serializes Isomorphic's writes to one brain.** Two tool calls cannot interleave their
   file writes.
-- **It journals a write before applying it**: the intended files, their expected prior version
-  tags, and progress. A write interrupted halfway resumes from the journal on the next call to
-  that brain, or rolls back the files it already wrote to their recorded prior content. A
-  journal entry is deleted once the write completes.
+- **It journals a write before applying it**: each file's prior and intended content. A write
+  that fails partway rolls back the files it already wrote. One interrupted outright is found by
+  the next call to that brain, which rereads every file in the entry and compares it with both:
+  it completes the write when the files it had not reached are unchanged, and otherwise rolls
+  back, leaving any file someone else changed as they left it. Comparing content rather than
+  recording progress makes this correct wherever the interruption fell, including during a
+  rollback. A journal entry is deleted once the write completes or rolls back.
+- **The journal outgrows one stored value.** A Durable Object's SQLite storage caps a value at
+  2 MB, and an attachment (`MAX_ATTACHMENT_BYTES`, 5 MB) rewritten over another holds about
+  13 MB of base64 in its entry. The object stores content across rows, or stages large files
+  on the backend and journals a reference.
 - **It is a separate class from the index object.** The index object holds only derived state
   and is purged with `deleteAll()`; the journal is not derived and must survive an index rebuild.
 - GitHub and fs brains do not use it.
@@ -185,7 +192,9 @@ Each step is its own pull request.
    capability test that a backend without `proposals` refuses pull-request mode.
 2. **The coordinator object**, in the Durable Object Worker, behind an interface in `src/lib/`
    with an in-memory implementation for tests and the local runtime. A battery pins serialization,
-   journal replay after an interrupted write, and rollback.
+   journal replay after an interrupted write, and rollback. The interface, the in-memory
+   implementation and `pnpm test:coordinator` are built (`src/lib/write-coordinator.ts`); the
+   object and its Worker are not.
 3. **The Graph store**, tested against an in-memory fake that reproduces delta tokens, `410`
    resync, eTags and name uniqueness, plus an e2e battery against a scratch folder (the twin of
    the GitHub `--github` mode). A new connection kind and `create_brain` / `connect_brain`
@@ -211,5 +220,14 @@ the current files. History stays behind in the source repository.
   listing of a large folder needs the same budget and resume rule as any whole-brain index pass.
 - **Media.** `read_media` and attachments read binary files through the store. Confirm Graph and
   Drive downloads fit the Worker's memory and response limits for the media sizes already allowed.
+- **How the coordinator object reaches the files.** `WriteCoordinator.write` takes a
+  `FileBackend` per call. Across Workers RPC that is a stub calling back into the caller for
+  every file, and nothing ties a brain's journal to the storage it describes. Before the object
+  ships, decide whether it builds its own backend from the brain's connection or is bound per
+  brain.
+- **Where a store's coordinated write puts what the coordinator reports.** `WriteOpts` carries
+  no per-file `expected` versions, so the Graph store has none to pass and each file is checked
+  only against what the coordinator reads at the start; and `WriteResult` has no place for a
+  recovered earlier bundle. Both land with the Graph store, the first caller.
 - **Proposals at launch.** Whether the first Graph customer needs protected brains (step 6) before
   or after direct writes.

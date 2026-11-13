@@ -198,6 +198,13 @@ export interface StoreCapabilities {
 // Thrown by a store asked for a write it cannot perform as configured.
 export class UnsupportedWriteError extends Error {}
 
+// Thrown when a file was not at the version a write was planned against.
+export class WriteConflictError extends Error {
+	constructor(readonly path: string) {
+		super(`${path} changed since it was read. Read it again and retry the change.`);
+	}
+}
+
 // Every store is built through this, so what a store declares is enforced for it: a
 // store without `proposals` refuses a pull-request write before its own commitOrPR
 // runs. Committing anyway would land a change the brain's config says needs review.

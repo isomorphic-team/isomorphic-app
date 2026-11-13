@@ -1,9 +1,9 @@
 ---
 paths:
-  - "src/lib/{brain-index,brain-repo,brain-store-github,brain-config,brain-policy,brain-pass,links,wiki}.ts"
+  - "src/lib/{brain-index,brain-repo,brain-store-github,brain-config,brain-policy,brain-pass,links,wiki,write-coordinator}.ts"
   - "src/local/**"
   - "src/db/index-schema.sql"
-  - "scripts/test-{index,links,store}.ts"
+  - "scripts/test-{index,links,store,coordinator}.ts"
   - "scripts/e2e-librarian.ts"
 ---
 
@@ -36,6 +36,11 @@ storage, and the neutral types it speaks. `githubStore(octokit)` is in
   check a repo exists.
 - **`write` atomicity is load-bearing.** "An edit batch is never half-applied" rests on
   the ref not moving unless the whole bundle committed, which is why a local brain is a git repo.
+  A store without `atomicWrite` lands its bundles through the write coordinator
+  (`src/lib/write-coordinator.ts`, `pnpm test:coordinator`): one bundle at a time per brain,
+  journaled with each file's prior and intended content, rolled back on failure, and settled by
+  the next call after an interruption. Only the in-memory implementation exists; no store uses it
+  yet.
 - `listTree` defaults to `.md` files; pass an extension filter deliberately.
 - `pnpm test:index` wraps its octokit stub in the REAL `githubStore` (so `fetchPages`'s GraphQL
   batching is covered). `pnpm test:e2e-librarian --github` is the only coverage of the GitHub
