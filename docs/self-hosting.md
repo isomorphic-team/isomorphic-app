@@ -461,8 +461,11 @@ zero-data-retention endpoints. A page holding a credential or card number is nev
 see what a pass would find before deploying anything, run it over a local copy:
 `pnpm consolidate:report <folder> --models --cap 1`.
 
-**Backups.** Your knowledge is in a git repository, so it is already backed up everywhere it
-is cloned. The D1 database holds only derived data plus org and membership rows. Losing the
+**Backups.** A brain on GitHub is a git repository, so it is already backed up everywhere it
+is cloned. A brain the deployment holds itself (`BRAIN_STORAGE=isomorphic`, or
+`storage: "isomorphic"`) is not: set `BACKUP_BUCKET` and `BACKUP_PUBLIC_KEY` and each one is
+backed up to an R2 bucket, encrypted, after it changes
+([`docs/ops/backups.md`](ops/backups.md)). The D1 database holds only derived data plus org and membership rows. Losing the
 index costs a rebuild; losing the org tables costs re-inviting people. Neither loses content.
 
 **Upgrading.** Pull, `pnpm install`, `pnpm setup:config --force` (in case the template

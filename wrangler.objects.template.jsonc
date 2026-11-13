@@ -27,11 +27,25 @@
 			{ "name": "BRAIN_FILES", "class_name": "BrainFilesObject" }
 		]
 	},
+	"vars": {
+		// Backups of the brains this deployment holds (src/lib/brain-backup.ts). The
+		// PUBLIC half of a key pair from `pnpm backup:keygen`, as base64: a backup is
+		// sealed to it, and only the private half, which is never deployed, opens one.
+		// Empty, or with no BACKUP_BUCKET, nothing is backed up.
+		"BACKUP_PUBLIC_KEY": "__BACKUP_PUBLIC_KEY__",
+		// A brain is backed up at most this often, and only after it changes.
+		"BACKUP_INTERVAL_HOURS": "__BACKUP_INTERVAL_HOURS__"
+	},
 	// Append-only, by Cloudflare's rules: a class is added or deleted with a new tag,
 	// and no entry is ever removed. A deploy that adds an entry cannot be rolled back
 	// (docs/ops/deploy-and-rollback.md), so merge it on its own.
 	"migrations": [
 		{ "tag": "v1", "new_sqlite_classes": ["WriteCoordinatorObject"] },
 		{ "tag": "v2", "new_sqlite_classes": ["BrainFilesObject"] }
-	]
+	],
+	// The R2 bucket backups are written to. `pnpm setup:config` keeps this block only
+	// when BACKUP_BUCKET is set; the bucket must exist before the deploy.
+	// backups:start
+	"r2_buckets": [{ "binding": "BACKUPS", "bucket_name": "__BACKUP_BUCKET__" }]
+	// backups:end
 }

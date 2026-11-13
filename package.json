@@ -22,6 +22,8 @@
 		"try": "tsx src/local.ts",
 		"setup:config": "tsx scripts/setup-config.ts",
 		"bootstrap": "tsx src/bootstrap.ts",
+		"backup:keygen": "tsx scripts/backup-keygen.ts",
+		"backup:restore": "tsx scripts/backup-restore.ts",
 		"onboard-org": "tsx scripts/onboard-org.ts",
 		"entitle": "tsx scripts/entitle.ts",
 		"sso": "tsx scripts/sso.ts",

@@ -264,6 +264,56 @@ export function sqlFiles(db: SqlDatabase): SqlFilesSync {
 	};
 }
 
+// One file of a snapshot: text as written, bytes as base64, and its size as stored.
+export interface SnapshotFile {
+	path: string;
+	content: string;
+	binary: boolean;
+	size: number;
+}
+
+// The files a brain held at revision `at`, in path order after `after`: as many as fit in
+// `maxBytes` as stored, and always at least one while any remain. For a backup, which
+// reads a whole revision a page at a time (src/lib/brain-backup.ts). `db` is a database
+// sqlFiles has opened.
+export function snapshotPage(
+	db: SqlDatabase,
+	at: string,
+	after: string | null,
+	maxBytes: number
+): SnapshotFile[] {
+	const rows = (query: string, ...bindings: (string | number | null)[]) =>
+		db.sql.exec(query, ...bindings).toArray() as Row[];
+	// Sizes first, so that only the bodies that fit are read.
+	const listed = rows(
+		`SELECT v.path, v.seq, v.size FROM versions v
+		 WHERE v.path > ? AND v.body IS NOT NULL
+		   AND v.seq = (SELECT MAX(seq) FROM versions WHERE path = v.path AND seq <= ?)
+		 ORDER BY v.path LIMIT 500`,
+		after ?? '',
+		Number(at)
+	);
+	const files: SnapshotFile[] = [];
+	let bytes = 0;
+	for (const r of listed) {
+		const size = Number(r.size);
+		if (files.length > 0 && bytes + size > maxBytes) break;
+		const body = rows(
+			'SELECT body, binary FROM versions WHERE path = ? AND seq = ?',
+			String(r.path),
+			Number(r.seq)
+		)[0];
+		files.push({
+			path: String(r.path),
+			content: String(body.body),
+			binary: body.binary === 1,
+			size
+		});
+		bytes += size;
+	}
+	return files;
+}
+
 const revisionOf = (id: string): Revision => ({ id, branch: BRANCH, snapshot: id });
 
 // A ref that names a revision pins a read to it; a branch name reads what is there now.

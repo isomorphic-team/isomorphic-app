@@ -270,6 +270,24 @@ check(
 	);
 }
 
+// The objects template's backup bucket, the same way.
+{
+	const { optionalBlock } = await import('./optional-block.ts');
+	const template = readFileSync(new URL('wrangler.objects.template.jsonc', root), 'utf8');
+	const config = (keep: boolean) =>
+		JSON.parse(
+			optionalBlock(template, 'backups', keep)
+				.replace(/^\s*\/\/.*$/gm, '')
+				.replace(/"__[A-Z0-9_]+__"/g, '"x"')
+		) as { r2_buckets?: { binding: string }[]; vars: Record<string, string> };
+	console.log(`\nthe objects template's backup bucket is optional`);
+	check('kept, the config binds BACKUPS', config(true).r2_buckets?.[0].binding === 'BACKUPS');
+	check(
+		'dropped, it binds no bucket and is still a config',
+		config(false).r2_buckets === undefined && 'BACKUP_PUBLIC_KEY' in config(false).vars
+	);
+}
+
 // ---------- tools reach the content index only through BrainIndex ----------
 
 // The functions in src/lib/brain-index.ts that take a database are the D1 implementation
