@@ -27,14 +27,8 @@ import {
 	type WriteResult
 } from './brain-repo.ts';
 import { base64FromBytes } from './media.ts';
-import type { SqlRunner } from './write-coordinator.ts';
+import type { SqlDatabase } from './sql-storage.ts';
 import { base64ToUtf8 } from './wiki.ts';
-
-export interface SqlDatabase {
-	sql: SqlRunner;
-	// Runs `fn` so that its statements land together or not at all.
-	transaction<T>(fn: () => T): T;
-}
 
 // The most one file may hold, as stored (text as UTF-8, bytes as base64). A Durable Object
 // caps a row at 8 MB; MAX_ATTACHMENT_BYTES of base64 is under this.
@@ -65,16 +59,23 @@ export interface SqlFile {
 	size: number;
 }
 
-// The operations sqlBrainStore needs, as sqlFiles provides them directly and as a Durable
-// Object provides them over RPC.
-export interface SqlFilesApi {
-	revision(): string | Promise<string>;
-	list(extension: string): FileEntry[] | Promise<FileEntry[]>;
-	read(path: string, at?: string): SqlFile | null | Promise<SqlFile | null>;
-	readMany(paths: string[]): ReadBatch | Promise<ReadBatch>;
-	write(opts: SqlWrite): SqlWriteResult | Promise<SqlWriteResult>;
-	history(limit: number, path?: string): CommitEntry[] | Promise<CommitEntry[]>;
+// What the storage does.
+export interface SqlFilesSync {
+	revision(): string;
+	list(extension: string): FileEntry[];
+	read(path: string, at?: string): SqlFile | null;
+	readMany(paths: string[]): ReadBatch;
+	write(opts: SqlWrite): SqlWriteResult;
+	history(limit: number, path?: string): CommitEntry[];
 }
+
+// The same operations where each may answer later, which is what sqlBrainStore takes: the
+// storage directly, or a Durable Object holding it, over RPC.
+export type SqlFilesApi = {
+	[K in keyof SqlFilesSync]: (
+		...args: Parameters<SqlFilesSync[K]>
+	) => ReturnType<SqlFilesSync[K]> | Promise<ReturnType<SqlFilesSync[K]>>;
+};
 
 export interface ReadBatch {
 	pages: PageContent[];
@@ -98,23 +99,22 @@ function checkPath(path: string): void {
 	if (!ok) throw new Error(`Not a path inside the brain: ${JSON.stringify(path)}`);
 }
 
-function checkSize(w: FileWrite): number {
-	// Units is a floor on the stored size and three bytes a unit a ceiling; encode only
-	// when the answer lies between.
-	const units = w.content.length;
-	const size =
-		w.encoding === 'base64' || units * 3 <= MAX_FILE_BYTES ? units : utf8Bytes(w.content);
+// The file's size as stored, or a refusal when it is over the limit.
+function storedSize(w: FileWrite): number {
+	const size = w.encoding === 'base64' ? w.content.length : utf8Bytes(w.content);
 	if (size > MAX_FILE_BYTES) {
 		throw new Error(
 			`${w.path} is ${(size / (1024 * 1024)).toFixed(1)} MB as stored, and a file holds at most ${MAX_FILE_BYTES / (1024 * 1024)} MB.`
 		);
 	}
-	return w.encoding === 'base64' ? units : utf8Bytes(w.content);
+	return size;
 }
+
+const textOf = (file: SqlFile): string => (file.binary ? base64ToUtf8(file.content) : file.content);
 
 type Row = Record<string, string | number | null>;
 
-export function sqlFiles(db: SqlDatabase): SqlFilesApi {
+export function sqlFiles(db: SqlDatabase): SqlFilesSync {
 	const rows = (query: string, ...bindings: (string | number | null)[]) =>
 		db.sql.exec(query, ...bindings).toArray() as Row[];
 
@@ -140,8 +140,9 @@ export function sqlFiles(db: SqlDatabase): SqlFilesApi {
 			)`
 		);
 		// The files that exist now, each at the commit that last changed it.
-		rows('CREATE TABLE IF NOT EXISTS files (path TEXT PRIMARY KEY, seq INTEGER NOT NULL)');
-		rows('CREATE INDEX IF NOT EXISTS versions_by_seq ON versions (seq)');
+		rows(
+			'CREATE TABLE IF NOT EXISTS files (path TEXT PRIMARY KEY, seq INTEGER NOT NULL) WITHOUT ROWID'
+		);
 	});
 
 	const revision = (): string =>
@@ -157,25 +158,17 @@ export function sqlFiles(db: SqlDatabase): SqlFilesApi {
 				}
 			: null;
 
-	const read = (path: string, at?: string): SqlFile | null => {
-		if (at === undefined) {
-			return fileOf(
-				rows(
-					`SELECT v.seq, v.body, v.binary, v.size FROM files f
-					 JOIN versions v ON v.path = f.path AND v.seq = f.seq WHERE f.path = ?`,
-					path
-				)[0]
-			);
-		}
-		return fileOf(
+	// The newest version at or before `at` (default: now). A delete is a version with no
+	// body, so a file that is gone reads as null from then on.
+	const read = (path: string, at?: string): SqlFile | null =>
+		fileOf(
 			rows(
 				`SELECT seq, body, binary, size FROM versions
 				 WHERE path = ? AND seq <= ? ORDER BY seq DESC LIMIT 1`,
 				path,
-				Number(at)
+				at === undefined ? Number.MAX_SAFE_INTEGER : Number(at)
 			)[0]
 		);
-	};
 
 	return {
 		revision,
@@ -199,7 +192,7 @@ export function sqlFiles(db: SqlDatabase): SqlFilesApi {
 					return { pages, rest: paths.slice(i) };
 				}
 				bytes += file.size;
-				pages.push({ path, content: file.binary ? base64ToUtf8(file.content) : file.content });
+				pages.push({ path, content: textOf(file) });
 			}
 			return { pages, rest: [] };
 		},
@@ -208,7 +201,7 @@ export function sqlFiles(db: SqlDatabase): SqlFilesApi {
 			const writes = opts.writes ?? [];
 			const deletes = opts.deletes ?? [];
 			for (const w of writes) checkPath(w.path);
-			const sizes = writes.map(checkSize);
+			const sizes = writes.map(storedSize);
 			return db.transaction(() => {
 				const head = revision();
 				if (opts.base !== undefined && opts.base !== head) {
@@ -239,9 +232,8 @@ export function sqlFiles(db: SqlDatabase): SqlFilesApi {
 					versions[w.path] = String(seq);
 				}
 				for (const path of deletes) {
-					if (rows('SELECT 1 AS found FROM files WHERE path = ?', path).length === 0) continue;
+					if (rows('DELETE FROM files WHERE path = ? RETURNING path', path).length === 0) continue;
 					rows('INSERT OR REPLACE INTO versions (path, seq, body) VALUES (?, ?, NULL)', path, seq);
-					rows('DELETE FROM files WHERE path = ?', path);
 					delete versions[path];
 				}
 				return { revision: String(seq), versions };
@@ -251,8 +243,9 @@ export function sqlFiles(db: SqlDatabase): SqlFilesApi {
 		history(limit, path) {
 			const found = path
 				? rows(
-						`SELECT c.seq, c.message, c.author_name, c.at FROM commits c
-						 JOIN versions v ON v.seq = c.seq WHERE v.path = ? ORDER BY c.seq DESC LIMIT ?`,
+						// Ordered by the versions key, so the scan stops at `limit`.
+						`SELECT c.seq, c.message, c.author_name, c.at FROM versions v
+						 JOIN commits c ON c.seq = v.seq WHERE v.path = ? ORDER BY v.seq DESC LIMIT ?`,
 						path,
 						limit
 					)
@@ -322,10 +315,7 @@ export function sqlBrainStore(
 		readFile: async (_loc, path, ref) => {
 			const file = await files.read(path, pinned(ref));
 			if (!file) return null;
-			return {
-				content: file.binary ? base64ToUtf8(file.content) : file.content,
-				version: file.version
-			};
+			return { content: textOf(file), version: file.version };
 		},
 
 		readBinary: async (_loc, path, ref): Promise<BinaryContent | null> => {
@@ -335,7 +325,11 @@ export function sqlBrainStore(
 				return {
 					contentBase64: file.content,
 					version: file.version,
-					size: Math.floor((file.content.replace(/=+$/, '').length * 3) / 4)
+					// `size` is the base64's length; the bytes are three for every four characters,
+					// less the padding.
+					size:
+						Math.floor((file.size * 3) / 4) -
+						(file.content.endsWith('==') ? 2 : file.content.endsWith('=') ? 1 : 0)
 				};
 			}
 			const bytes = new TextEncoder().encode(file.content);

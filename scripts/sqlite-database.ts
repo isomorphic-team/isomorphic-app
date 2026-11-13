@@ -1,8 +1,8 @@
 // An in-memory SQLite database shaped like a Durable Object's storage, for the batteries
-// that run src/lib/ code written against it (brain-store-sql.ts) under Node.
+// that run src/lib/ code written against it (src/lib/sql-storage.ts) under Node.
 
 import { DatabaseSync } from 'node:sqlite';
-import type { SqlDatabase } from '../src/lib/brain-store-sql.ts';
+import type { SqlDatabase } from '../src/lib/sql-storage.ts';
 
 export function sqliteDatabase(): SqlDatabase {
 	const db = new DatabaseSync(':memory:');

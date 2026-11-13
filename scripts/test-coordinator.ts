@@ -29,7 +29,6 @@
 //
 // pnpm test:objects runs the same coordinator in the Durable Object, over real RPC.
 
-import { DatabaseSync } from 'node:sqlite';
 import { isDeepStrictEqual } from 'node:util';
 import { WriteConflictError } from '../src/lib/brain-repo.ts';
 import {
@@ -42,11 +41,11 @@ import {
 	recoverJournal,
 	sqlJournal,
 	type FileBackend,
-	type JournalEntry,
-	type SqlRunner
+	type JournalEntry
 } from '../src/lib/write-coordinator.ts';
 import { checker, errorOf } from './check.ts';
 import { fakeDrive, gate } from './fake-drive.ts';
+import { sqliteDatabase } from './sqlite-database.ts';
 
 const { check, done } = checker('coordinator checks');
 
@@ -515,16 +514,7 @@ async function interrupted() {
 }
 
 // ---------- 5. the SQL journal ----------
-function sqlite(): SqlRunner {
-	const db = new DatabaseSync(':memory:');
-	return {
-		// Eager, as a Durable Object's exec is: the statement runs before the cursor is read.
-		exec: (query, ...bindings) => {
-			const rows = db.prepare(query).all(...bindings);
-			return { toArray: () => rows };
-		}
-	};
-}
+const sqlite = () => sqliteDatabase().sql;
 
 {
 	check(

@@ -26,6 +26,7 @@ import { join } from 'node:path';
 import { defineStore, type BrainStore, type StoreCapabilities } from '../src/lib/brain-repo.ts';
 import { githubStore, gitBlobSha } from '../src/lib/brain-store-github.ts';
 import { MAX_FILE_BYTES, sqlBrainStore, sqlFiles } from '../src/lib/brain-store-sql.ts';
+import { MAX_ATTACHMENT_BYTES } from '../src/lib/media.ts';
 import { ensureGitRepo, fsBrainStore } from '../src/local/brain-store-fs.ts';
 import { checker, errorOf, partialStore } from './check.ts';
 import { fakeGithub, realGitBlobSha } from './fake-github.ts';
@@ -247,9 +248,9 @@ for (const backend of BACKENDS) {
 		String(stale)
 	);
 
-	// The third statement that touches a file fails: the bundle's commit and its first
-	// file are already written inside the transaction.
-	let failAt = 0;
+	// The bundle's second file fails: its commit and its first file are already written
+	// inside the transaction.
+	let failAt = 2;
 	const failing = sqlBrainStore(
 		sqlFiles({
 			...db,
@@ -261,7 +262,6 @@ for (const backend of BACKENDS) {
 			}
 		})
 	);
-	failAt = 2;
 	const torn = await errorOf(() =>
 		failing.write(repo, {
 			message: 'Fails on its second file',
@@ -295,6 +295,13 @@ for (const backend of BACKENDS) {
 		'sql: history for a path is the commits that touched it, a delete included',
 		one.length === 1 && one[0].message === 'Add pages' && dropped.length === 2
 	);
+	const newest = await store.listCommits(repo, { limit: 1, path: 'wiki/empty.md' });
+	check(
+		'sql: newest first, and within its limit',
+		dropped[0].message.startsWith('Edit alpha') &&
+			newest.length === 1 &&
+			newest[0].sha === dropped[0].sha
+	);
 	check(
 		'sql: history honours its limit',
 		(await store.listCommits(repo, { limit: 1 })).length === 1
@@ -313,6 +320,10 @@ for (const backend of BACKENDS) {
 		'sql: a file over the size limit is refused with the whole bundle',
 		tooBig?.includes('big.bin') === true && (await store.readFile(repo, 'wiki/ok.md')) === null,
 		String(tooBig).slice(0, 120)
+	);
+	check(
+		'sql: a full-size attachment fits in one file as base64',
+		Math.ceil(MAX_ATTACHMENT_BYTES / 3) * 4 <= MAX_FILE_BYTES
 	);
 	for (const bad of ['', '/abs.md', 'wiki/../x.md', 'wiki//x.md', 'wiki\\x.md']) {
 		const err = await errorOf(() =>

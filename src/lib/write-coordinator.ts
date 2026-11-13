@@ -19,6 +19,7 @@
 // object in workerd.
 
 import { WriteConflictError, type FileWrite, type WriteOpts } from './brain-repo.ts';
+import type { SqlRunner } from './sql-storage.ts';
 
 type Encoding = NonNullable<FileWrite['encoding']>;
 type FileBody = Omit<FileWrite, 'path'>;
@@ -314,12 +315,6 @@ export function inMemoryWriteCoordinator(
 			return lane(() => landBundle(journal, files, bundle));
 		}
 	};
-}
-
-// The SQL a journal is kept in: a Durable Object's `ctx.storage.sql`, or node:sqlite in
-// the tests.
-export interface SqlRunner {
-	exec(query: string, ...bindings: (string | number | null)[]): { toArray(): unknown[] };
 }
 
 // A Durable Object caps one string or row at 8 MB. The journal is stored one row per chunk
