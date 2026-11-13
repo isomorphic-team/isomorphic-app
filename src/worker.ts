@@ -27,8 +27,9 @@
 //   - PLATFORM_DB (D1) holds the org model and usage counters. Schema is `migrations/`.
 //   - INDEX_DB (D1, optional) holds the content index. Schema is `migrations-index/`.
 //     Without it the index is in PLATFORM_DB.
-//   - WRITE_COORDINATOR is a Durable Object per brain, implemented in the objects Worker
-//     (src/objects/worker.ts) and bound by script_name. This Worker implements none.
+//   - WRITE_COORDINATOR and BRAIN_FILES are a Durable Object per brain each, implemented
+//     in the objects Worker (src/objects/worker.ts) and bound by script_name. This Worker
+//     implements none. Nothing here calls BRAIN_FILES yet.
 
 import { McpServer, type RegisteredTool } from '@modelcontextprotocol/server';
 import { indexFor, indexRefs, type BrainIndex, type OpenIndex } from './lib/brain-index.ts';

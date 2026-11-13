@@ -3,7 +3,8 @@
 // pnpm test:store.
 //
 // `sqlFiles` is the storage, synchronous over a SqlDatabase: a Durable Object's
-// `ctx.storage` deployed, node:sqlite in the tests. `sqlBrainStore` is the BrainStore over
+// `ctx.storage` deployed (BrainFilesObject, src/objects/worker.ts), node:sqlite in the
+// tests. `sqlBrainStore` is the BrainStore over
 // it, and takes the same operations as promises so that it can sit on the other side of
 // Workers RPC from the object.
 //

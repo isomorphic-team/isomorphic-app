@@ -140,11 +140,18 @@
 	//
 	// WRITE_COORDINATOR: one object per brain, which lands multi-file writes on storage
 	// that writes one file at a time (src/lib/write-coordinator.ts).
+	// BRAIN_FILES: one object per brain the platform holds, which is that brain's files
+	// (src/lib/brain-store-sql.ts).
 	"durable_objects": {
 		"bindings": [
 			{
 				"name": "WRITE_COORDINATOR",
 				"class_name": "WriteCoordinatorObject",
+				"script_name": "__OBJECTS_WORKER_NAME__"
+			},
+			{
+				"name": "BRAIN_FILES",
+				"class_name": "BrainFilesObject",
 				"script_name": "__OBJECTS_WORKER_NAME__"
 			}
 		]

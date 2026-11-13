@@ -17,6 +17,11 @@
 //      next call after workerd restarts, from the object's SQLite storage.
 //   5. CONTENT THAT DOES NOT FIT. A bundle replacing a full-size attachment
 //      (MAX_ATTACHMENT_BYTES) is journaled and recovered byte for byte.
+//   6. A FILES OBJECT THAT IS NOT A STORE (pnpm test:store pins the storage's own logic).
+//      sqlBrainStore over the BrainFilesObject binding writes, lists, reads back bytes and
+//      pinned revisions, and reports history; its refusals cross RPC with their message;
+//      concurrent requests each land whole; one brain cannot see another; and the files
+//      survive a restart of workerd.
 
 import { spawn, type ChildProcess } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
@@ -28,7 +33,13 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { MAX_ATTACHMENT_BYTES } from '../src/lib/media.ts';
 import type { CoordinatedResult, CoordinatedWrite } from '../src/lib/write-coordinator.ts';
-import { WriteConflictError } from '../src/lib/brain-repo.ts';
+import {
+	WriteConflictError,
+	type BinaryContent,
+	type CommitEntry,
+	type FileEntry,
+	type WriteResult
+} from '../src/lib/brain-repo.ts';
 import { checker } from './check.ts';
 import { fakeDrive, gate } from './fake-drive.ts';
 import { optionalBlock } from './optional-block.ts';
@@ -82,17 +93,24 @@ const mcp = parseJsonc(optionalBlock(fill('wrangler.template.jsonc'), 'index-db'
 {
 	const exported = (objects.durable_objects as { bindings: { class_name: string }[] }).bindings;
 	const bound = mcp.durable_objects.bindings;
+	const names = (list: { class_name: string }[]) =>
+		list
+			.map((b) => b.class_name)
+			.sort()
+			.join();
 	check(
-		"the MCP Worker binds the objects Worker's class, by its name",
-		bound.length === 1 &&
-			bound[0].script_name === OBJECTS &&
-			exported.some((e) => e.class_name === bound[0].class_name) &&
+		'the MCP Worker binds every class the objects Worker exports, by its name',
+		names(bound) === names(exported) &&
+			bound.every((b) => b.script_name === OBJECTS) &&
 			objects.name === OBJECTS,
 		JSON.stringify({ bound, exported })
 	);
+	const sqlite = (objects.migrations as { new_sqlite_classes?: string[] }[]).flatMap(
+		(m) => m.new_sqlite_classes ?? []
+	);
 	check(
-		'the class is SQLite-backed',
-		JSON.stringify(objects.migrations).includes(`"new_sqlite_classes":["${bound[0].class_name}"]`),
+		'every class is SQLite-backed, added by one migration',
+		bound.every((b) => sqlite.filter((c) => c === b.class_name).length === 1),
 		JSON.stringify(objects.migrations)
 	);
 }
@@ -106,7 +124,7 @@ writeFileSync(
 	join(dir, 'caller.jsonc'),
 	JSON.stringify({
 		name: 'test-caller',
-		main: join(root, 'scripts/workers/coordinator-caller.ts'),
+		main: join(root, 'scripts/workers/objects-caller.ts'),
 		compatibility_date: objects.compatibility_date,
 		durable_objects: mcp.durable_objects
 	})
@@ -160,6 +178,19 @@ const write = async (brainId: string, bundle: CoordinatedWrite, storage = 'drive
 			body: JSON.stringify({ brainId, storage, drive: driveUrl, bundle })
 		})
 	).json()) as Reply;
+
+// One BrainStore call on a brain's files object. JSON carries a missing argument as null,
+// which the store reads as absent.
+const filesCall = async <T>(brainId: string, op: string, ...args: unknown[]) =>
+	(await (
+		await fetch(`${origin}/files`, {
+			method: 'POST',
+			body: JSON.stringify({ brainId, op, args })
+		})
+	).json()) as { result?: T; error?: string };
+
+const sameBytes = (read: { result?: BinaryContent }, bytes: Buffer): boolean =>
+	Buffer.from(read.result?.contentBase64 ?? '', 'base64').equals(bytes);
 
 const until = async (cond: () => boolean) => {
 	for (let i = 0; i < 200 && !cond(); i++) await new Promise((r) => setTimeout(r, 25));
@@ -297,6 +328,110 @@ try {
 		);
 	}
 
+	// ---------- 6. the files object, as a store ----------
+	const image = randomBytes(MAX_ATTACHMENT_BYTES);
+	{
+		const first = await filesCall<WriteResult>('f-main', 'write', {
+			message: 'Add a page and an image',
+			writes: [
+				{ path: 'wiki/a.md', content: '# A\n\ncafé 東京\n' },
+				{ path: 'assets/img.png', content: image.toString('base64'), encoding: 'base64' }
+			],
+			author: { name: 'Ada', email: 'ada@example.com' }
+		});
+		check(
+			'a bundle with a full-size attachment lands in the files object',
+			first.result?.revision.id === '1' && first.result.versions['wiki/a.md'] === '1',
+			JSON.stringify(first.error ?? first.result?.revision)
+		);
+		const listed = await filesCall<FileEntry[]>('f-main', 'listTree', first.result?.revision, {
+			extension: '*'
+		});
+		check(
+			'and is listed with the tags the write returned',
+			listed.result?.map((e) => `${e.path}@${e.version}`).join() === 'assets/img.png@1,wiki/a.md@1',
+			JSON.stringify(listed)
+		);
+		const bin = await filesCall<BinaryContent>('f-main', 'readBinary', 'assets/img.png');
+		check(
+			'the attachment reads back byte for byte',
+			sameBytes(bin, image) && bin.result?.size === MAX_ATTACHMENT_BYTES
+		);
+
+		const edit = await filesCall<WriteResult>('f-main', 'write', {
+			message: 'Edit A',
+			writes: [{ path: 'wiki/a.md', content: '# A\n\nEdited.\n' }],
+			base: first.result?.revision
+		});
+		const then = await filesCall<{ content: string }>('f-main', 'readFile', 'wiki/a.md', '1');
+		const now = await filesCall<{ content: string }>('f-main', 'readFile', 'wiki/a.md');
+		check(
+			'a read pinned to a revision sees that revision',
+			edit.result?.revision.id === '2' &&
+				then.result?.content === '# A\n\ncafé 東京\n' &&
+				now.result?.content === '# A\n\nEdited.\n',
+			JSON.stringify([edit.error, then, now])
+		);
+
+		const stale = await filesCall<WriteResult>('f-main', 'write', {
+			message: 'Planned against revision 1',
+			writes: [{ path: 'wiki/stale.md', content: 'x' }],
+			base: first.result?.revision
+		});
+		check(
+			'a write onto a revision the brain has moved past is refused, with its message',
+			stale.error?.includes('changed since') === true,
+			JSON.stringify(stale)
+		);
+		const refused = await filesCall<WriteResult>('f-main', 'commitOrPR', {
+			message: 'Needs review',
+			writeMode: 'pull-request',
+			defaultBranch: 'main',
+			writes: [{ path: 'wiki/review.md', content: 'x' }]
+		});
+		const head = await filesCall<string>('f-main', 'branchRevision', 'main');
+		check(
+			'pull-request mode is refused, and neither refusal wrote anything',
+			refused.error?.includes('pull-request writes') === true && head.result === '2',
+			JSON.stringify([refused, head])
+		);
+
+		const log = await filesCall<CommitEntry[]>('f-main', 'listCommits', { limit: 10 });
+		check(
+			'history is newest first, with the author',
+			log.result?.map((c) => `${c.message}/${c.authorName}`).join() ===
+				'Edit A/Isomorphic,Add a page and an image/Ada',
+			JSON.stringify(log)
+		);
+
+		const other = await filesCall<FileEntry[]>('f-other', 'listTree', null, { extension: '*' });
+		check("another brain's object holds none of it", other.result?.length === 0);
+
+		// Twenty requests at once, each a two-file bundle to the same brain.
+		const landed = await Promise.all(
+			Array.from({ length: 20 }, (_, i) =>
+				filesCall<WriteResult>('f-busy', 'write', {
+					message: `bundle ${i}`,
+					writes: [
+						{ path: `p${i}/one.md`, content: `${i}` },
+						{ path: `p${i}/two.md`, content: `${i}` }
+					]
+				})
+			)
+		);
+		const revisions = landed.map((r) => Number(r.result?.revision.id)).sort((a, b) => a - b);
+		const busy = await filesCall<FileEntry[]>('f-busy', 'listTree', null);
+		check(
+			'concurrent requests each land whole, one revision apiece',
+			revisions.join() === Array.from({ length: 20 }, (_, i) => i + 1).join() &&
+				busy.result?.length === 40 &&
+				landed.every(
+					(r, i) => r.result?.versions[`p${i}/one.md`] === r.result?.versions[`p${i}/two.md`]
+				),
+			revisions.join()
+		);
+	}
+
 	// ---------- 4. the journal survives a restart ----------
 	{
 		reset();
@@ -328,6 +463,14 @@ try {
 			JSON.stringify(res)
 		);
 		check('without rewriting the file that landed', !calls.includes('put r1.md'), calls.join(', '));
+
+		const bin = await filesCall<BinaryContent>('f-main', 'readBinary', 'assets/img.png');
+		const head = await filesCall<string>('f-main', 'branchRevision', 'main');
+		check(
+			"the files object's brain is as it was after the restart",
+			head.result === '2' && sameBytes(bin, image),
+			JSON.stringify(head)
+		);
 	}
 } catch (e) {
 	check(`the battery ran: ${(e as Error).message}`, false, log.slice(-4000));

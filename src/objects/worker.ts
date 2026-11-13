@@ -7,6 +7,7 @@
 // It has no public URL (workers_dev is off) and serves nothing over HTTP.
 
 import { DurableObject } from 'cloudflare:workers';
+import { sqlFiles, type SqlFilesApi, type SqlWrite } from '../lib/brain-store-sql.ts';
 import {
 	backendFromRpc,
 	landBundle,
@@ -39,6 +40,38 @@ export class WriteCoordinatorObject extends DurableObject implements Coordinator
 	// For the MCP Worker's /health: the binding reaches a running object. Touches no storage.
 	ping(): string {
 		return 'ok';
+	}
+}
+
+// One per brain the platform holds, named by brain_id: the brain's files, every version
+// of them, and its history, in the object's SQLite (src/lib/brain-store-sql.ts). The MCP
+// Worker reaches it as the `files` of a sqlBrainStore.
+//
+// Every method is synchronous over local storage, so calls to one brain cannot interleave
+// and a write is one transaction.
+export class BrainFilesObject extends DurableObject implements SqlFilesApi {
+	private readonly files = sqlFiles({
+		sql: this.ctx.storage.sql,
+		transaction: (fn) => this.ctx.storage.transactionSync(fn)
+	});
+
+	revision() {
+		return this.files.revision();
+	}
+	list(extension: string) {
+		return this.files.list(extension);
+	}
+	read(path: string, at?: string) {
+		return this.files.read(path, at);
+	}
+	readMany(paths: string[]) {
+		return this.files.readMany(paths);
+	}
+	write(opts: SqlWrite) {
+		return this.files.write(opts);
+	}
+	history(limit: number, path?: string) {
+		return this.files.history(limit, path);
 	}
 }
 
