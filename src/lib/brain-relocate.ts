@@ -8,10 +8,10 @@
 // not copied.
 
 import type { D1Database } from '@cloudflare/workers-types';
+import type { D1PreparedStatement } from '@cloudflare/workers-types';
 import { continuePass, readPass, savePassStatement } from './brain-pass.ts';
 import type { BrainLocator, BrainStore, CommitAuthor, FileWrite } from './brain-repo.ts';
 import { bytesFromBase64 } from './media.ts';
-import { platformFilesBinding } from './storage-connections.ts';
 
 // brain_passes kind for a relocation's run state (src/lib/brain-pass.ts).
 export const RELOCATION_KIND = 'relocation';
@@ -141,15 +141,16 @@ export async function copyStep(
 	return { progress, copied: total, total, done: true, restarted };
 }
 
-// One step of moving a brain onto the platform's own files: copy within the budget, keep
-// the place in `brain_passes`, and bind the brain to the new storage, in the same batch
-// as the finished pass, once the copy is complete. Until then the brain is served from
-// where it was.
-export async function relocateToPlatformFiles(
+// One step of moving a brain onto other storage: copy within the budget, keep the place
+// in `brain_passes`, and run `binding` (the statements that bind the brain to the new
+// storage) in the same batch as the finished pass once the copy is complete. Until then
+// the brain is served from where it was.
+export async function relocateBrain(
 	db: D1Database,
 	scope: { brainId: string; orgId?: string; actorUserId?: string },
 	from: StoreEnd,
 	to: StoreEnd,
+	binding: D1PreparedStatement[],
 	opts: { branch?: string; budget?: number; author?: CommitAuthor; now?: number } = {}
 ): Promise<CopyStep> {
 	const now = opts.now ?? Date.now();
@@ -165,7 +166,7 @@ export async function relocateToPlatformFiles(
 		: null;
 	const step = await copyStep(from, to, prior, opts);
 	await db.batch([
-		...(step.done ? platformFilesBinding(db, scope.brainId) : []),
+		...(step.done ? binding : []),
 		savePassStatement(
 			db,
 			{ ...scope, kind: RELOCATION_KIND },

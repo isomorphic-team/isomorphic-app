@@ -110,6 +110,17 @@ export function platformHoldsFiles(brain: { storage_kind?: string | null }): boo
 	return brain.storage_kind === PLATFORM_FILES_KIND;
 }
 
+// Bind a brain to a connection: it is read and written through that from now on.
+export function bindingStatement(
+	db: D1Database,
+	brainId: string,
+	connectionId: string
+): D1PreparedStatement {
+	return db
+		.prepare(`UPDATE brains SET storage_connection_id = ?1 WHERE brain_id = ?2`)
+		.bind(connectionId, brainId);
+}
+
 // The statements that serve a brain from the platform's own files from now on, for one
 // batch: the connection row exists before the brain names it. The caller has already
 // copied the files (src/lib/brain-relocate.ts).
@@ -122,8 +133,22 @@ export function platformFilesBinding(db: D1Database, brainId: string): D1Prepare
 				 VALUES (?1, 'platform', ?2, 'files', 'Isomorphic', NULL)`
 			)
 			.bind(PLATFORM_FILES_CONNECTION_ID, PLATFORM_FILES_KIND),
-		db
-			.prepare(`UPDATE brains SET storage_connection_id = ?1 WHERE brain_id = ?2`)
-			.bind(PLATFORM_FILES_CONNECTION_ID, brainId)
+		bindingStatement(db, brainId, PLATFORM_FILES_CONNECTION_ID)
 	];
+}
+
+// The GitHub connection that reaches an account's repositories, or null. A brain that
+// left its repository for the platform's own files goes back through this.
+export async function githubConnectionForAccount(
+	db: D1Database,
+	account: string
+): Promise<StorageConnection | null> {
+	return await db
+		.prepare(
+			`SELECT * FROM storage_connections
+			  WHERE provider = 'github' AND account = ?1 COLLATE NOCASE
+			  ORDER BY created_at ASC, connection_id ASC LIMIT 1`
+		)
+		.bind(account)
+		.first<StorageConnection>();
 }

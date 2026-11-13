@@ -35,9 +35,15 @@ import {
 	RELOCATION_KIND,
 	copyStep,
 	fileWriteFor,
-	relocateToPlatformFiles
+	relocateBrain
 } from '../src/lib/brain-relocate.ts';
-import { PLATFORM_FILES_KIND, credentialFor } from '../src/lib/storage-connections.ts';
+import {
+	PLATFORM_FILES_KIND,
+	bindingStatement,
+	credentialFor,
+	githubConnectionForAccount,
+	platformFilesBinding
+} from '../src/lib/storage-connections.ts';
 import { localD1 } from '../src/local/d1-sqlite.ts';
 import { bindFixtureStorage } from './fixture-storage.ts';
 import { listAccessibleBrains } from '../src/lib/orgs.ts';
@@ -517,7 +523,9 @@ for (const backend of BACKENDS) {
 	await index.ensureFresh(source, repo, DEFAULT_BRAIN_CONFIG);
 	const indexed = async () => (await index.listPages()).map((p) => p.path).sort();
 	const before = await indexed();
-	const part = await relocateToPlatformFiles(db, scope, from, to3, { budget: 3 });
+	const part = await relocateBrain(db, scope, from, to3, platformFilesBinding(db, 'b1'), {
+		budget: 3
+	});
 	check(
 		'relocate: an unfinished copy leaves the brain where it was, and keeps its place',
 		!part.done &&
@@ -526,7 +534,9 @@ for (const backend of BACKENDS) {
 			pass()?.cursor === part.progress.after,
 		JSON.stringify([part, await binding(), pass()])
 	);
-	const rest = await relocateToPlatformFiles(db, scope, from, to3, { budget: 3 });
+	const rest = await relocateBrain(db, scope, from, to3, platformFilesBinding(db, 'b1'), {
+		budget: 3
+	});
 	check(
 		'relocate: the next call resumes, and the finished copy binds the brain to its new storage',
 		rest.done &&
@@ -554,6 +564,36 @@ for (const backend of BACKENDS) {
 		'relocate: and follows a write made there',
 		(await indexed()).includes('wiki/after-move.md'),
 		(await indexed()).join()
+	);
+
+	// And back: into a repository that has moved on since the brain left it.
+	const conn = await githubConnectionForAccount(db, 'Example-Org');
+	check(
+		'relocate: the connection for the brain’s account is found, whatever its case',
+		conn?.connection_id === 'github-app:7' &&
+			(await githubConnectionForAccount(db, 'nobody')) === null,
+		JSON.stringify(conn)
+	);
+	const back = await relocateBrain(
+		db,
+		scope,
+		{ store: dest3, locator: repo },
+		from,
+		[bindingStatement(db, 'b1', conn!.connection_id)],
+		{}
+	);
+	check(
+		'relocate: moving back binds the brain to its GitHub connection again',
+		back.done &&
+			(await binding()) === 'github-app-installation' &&
+			credentialFor(await reached()).kind === 'installation',
+		JSON.stringify([back, await binding()])
+	);
+	check(
+		'relocate: and the repository holds what the brain held, the page written since included',
+		(await listed(source)).sort().join() === (await listed(dest3)).join() &&
+			(await source.readFile(repo, 'wiki/after-move.md'))?.content === '# After\n',
+		(await listed(source)).sort().join()
 	);
 }
 
