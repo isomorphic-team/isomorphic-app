@@ -462,10 +462,9 @@ export function driveBrainStore(
 		capabilities: DRIVE_CAPABILITIES,
 		getRevision: revision,
 		writeBase: revision,
-		// The folder as it is now: a listing already held may be behind it.
-		branchRevision: async () => {
-			if (current) current = null;
-			return (await listing()).id;
+		branchRevision: async () => (await listing()).id,
+		refresh: () => {
+			current = null;
 		},
 		repoWritePolicy: async () => ({
 			defaultBranch: BRANCH,

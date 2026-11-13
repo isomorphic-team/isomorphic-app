@@ -71,11 +71,12 @@ import {
 import {
 	RELOCATION_KIND,
 	copyStep,
-	cameFromRepository,
+	MoveRefused,
 	fileWriteFor,
 	relocateBrain,
 	type MoveTarget
 } from '../src/lib/brain-relocate.ts';
+import { driveConnectionId } from '../src/lib/drive-connection.ts';
 import {
 	PLATFORM_FILES_KIND,
 	bindingStatement,
@@ -534,18 +535,19 @@ for (const backend of BACKENDS) {
 			'wiki/deep/pic.png'
 	);
 	{
-		// The head is asked of Drive each time: a copy out of a Drive ends by checking that
-		// nothing changed while it ran.
+		// A store answers from its one listing until told to forget it: a copy out of a
+		// Drive ends by checking that nothing changed while it ran.
 		const watcher = open();
 		const seenAt = (await watcher.getRevision(repo)).id;
-		const steady = await watcher.branchRevision(repo, 'main');
 		drive.edit('wiki/alpha.md', '# Alpha\n\nChanged in Drive.\n');
+		const held = await watcher.branchRevision(repo, 'main');
+		watcher.refresh?.();
 		const moved = await watcher.branchRevision(repo, 'main');
 		drive.edit('wiki/alpha.md', writes[0].content);
 		check(
-			'drive: branchRevision reports a change made in Drive after the store listed it',
-			steady === seenAt && moved !== seenAt,
-			JSON.stringify([seenAt, steady, moved])
+			'drive: after refresh the store reports a change made in Drive since it listed',
+			held === seenAt && moved !== seenAt,
+			JSON.stringify([seenAt, held, moved])
 		);
 	}
 	const pages = await later.fetchPages(repo, listed);
@@ -884,6 +886,25 @@ for (const backend of BACKENDS) {
 		JSON.stringify(raced)
 	);
 
+	{
+		const order: string[] = [];
+		const watched: BrainStore = {
+			...source,
+			refresh: () => void order.push('refresh'),
+			branchRevision: async (loc, branch) => {
+				order.push('head');
+				return source.branchRevision(loc, branch);
+			}
+		};
+		const fresh = { store: sqlBrainStore(sqlFiles(sqliteDatabase())), locator: repo };
+		const whole = await copyStep({ store: watched, locator: repo }, fresh, null);
+		check(
+			'copy: the source is told to forget what it read before its head is checked',
+			whole.done && order.join() === 'refresh,head',
+			order.join()
+		);
+	}
+
 	// The brain's binding moves only when the copy is complete.
 	const { db, sqlite } = localD1();
 	sqlite.exec(`
@@ -980,7 +1001,7 @@ for (const backend of BACKENDS) {
 		(await listed(source)).sort().join()
 	);
 	// Into a Google Drive and out again: the same move with a third storage.
-	const DRIVE_CONN = 'google-drive:o1:perm-1';
+	const DRIVE_CONN = driveConnectionId('o1', 'perm-1');
 	sqlite
 		.prepare(
 			`INSERT INTO storage_connections (connection_id, provider, kind, external_id, account, owner_org_id)
@@ -1070,14 +1091,25 @@ for (const backend of BACKENDS) {
 		fromDrive(),
 		heldAt('isomorphic', sqlBrainStore(sqlFiles(sqliteDatabase())))
 	);
+	// What a target is told about the brain it is opened for.
+	const leftRepository = async (brainId: string) => {
+		let told: boolean | undefined;
+		await relocateBrain(db, { ...scope, brainId }, fromDrive(), {
+			key: 'probe',
+			open: async (_token, brain) => {
+				told = brain.leftRepository;
+				throw new MoveRefused('probe');
+			}
+		}).catch(() => {});
+		return told;
+	};
 	check(
 		'relocate: a brain that left a repository is known to have, through later moves and in rows written before moves named their target',
-		(await cameFromRepository(db, 'b1')) && (await cameFromRepository(db, 'b3')),
-		JSON.stringify([await cameFromRepository(db, 'b1'), await cameFromRepository(db, 'b3')])
+		(await leftRepository('b1')) === true && (await leftRepository('b3')) === true
 	);
 	check(
 		'relocate: a brain that only moved between other storages never had one',
-		!(await cameFromRepository(db, 'b2')) && !(await cameFromRepository(db, 'never-moved'))
+		(await leftRepository('b2')) === false && (await leftRepository('never-moved')) === false
 	);
 }
 

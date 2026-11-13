@@ -278,8 +278,9 @@ of a brain in pull-request mode to a store without `proposals`. A move into a Dr
 only a Drive the caller connected. `repo_owner` and `repo_name` stay on the row as the
 brain's locator and its claim on the name, and a move to GitHub goes to that repository
 through `githubConnectionForAccount`, creating it if it is gone (`ensureRepository`); a
-brain that never left a repository (`cameFromRepository` false) refuses one that already
-exists under its name, which is someone else's. History stays where it was made. `disconnect_brain` refuses a
+brain that never left a repository (`leftRepository` false, which `relocateBrain` keeps in
+the pass and tells the target's `open`) refuses one that already exists under its name,
+which is someone else's (`MoveRefused`). History stays where it was made. `disconnect_brain` refuses a
 platform-held brain: it has no repository to leave behind. **Don't re-add `update_brain` and don't collapse these into a
 `manage_*` tool**: hosts grant approval per tool (design doc §6).
 

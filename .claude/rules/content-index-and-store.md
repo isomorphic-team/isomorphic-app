@@ -18,7 +18,9 @@ storage, and the neutral types it speaks. `githubStore(octokit)` is in
 
 - **Twelve operations:** `getRevision`, `writeBase`, `branchRevision`, `repoWritePolicy`,
   `listTree`, `fetchPages`, `readFile`, `readBinary`, `findOpenConfigPr`, `listCommits`, `write`,
-  `commitOrPR`. It is what the tools do, not a general storage abstraction.
+  `commitOrPR`. It is what the tools do, not a general storage abstraction. A store that
+  answers from an earlier read (the Drive store's one listing) also has `refresh`, which
+  `copyStep` calls before its last look at the source.
 - **Neutral vocabulary.** A brain is addressed by a `BrainLocator`; its state is a `Revision`
   whose `id` is opaque (compare, never parse; a commit sha on GitHub, a working-tree digest on
   fs) and whose `snapshot` is backend-private; a listed file is a `FileEntry` with an opaque

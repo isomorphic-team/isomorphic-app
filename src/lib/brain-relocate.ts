@@ -17,7 +17,7 @@ import type {
 	FileWrite,
 	StoreCapabilities
 } from './brain-repo.ts';
-import type { BrainStorageChoice } from './storage-connections.ts';
+import { STORAGE_PLACE, type BrainStorageChoice } from './storage-connections.ts';
 import { bytesFromBase64 } from './media.ts';
 
 // brain_passes kind for a relocation's run state (src/lib/brain-pass.ts).
@@ -119,6 +119,7 @@ export async function copyStep(
 	if (end < total) return { progress, copied: end, total, done: false, restarted };
 
 	// Everything is across. The copy counts only if the source did not move meanwhile.
+	from.store.refresh?.();
 	const [held, head] = await Promise.all([
 		to.store
 			.getRevision(to.locator)
@@ -155,18 +156,28 @@ export interface MoveTarget {
 	key: string;
 	// Makes the destination ready and says how the brain is bound to it. `token` is what
 	// an earlier step of this move returned (a folder made for it), null on the first.
-	open(token: string | null): Promise<{
+	// Throws MoveRefused when the destination is not one this brain may be copied into.
+	open(
+		token: string | null,
+		brain: { leftRepository: boolean }
+	): Promise<{
 		end: StoreEnd;
 		binding: D1PreparedStatement[];
 		token?: string;
 	}>;
 }
 
+// A destination that turned out, once reached, not to be one this brain may be copied
+// into. Nothing was written there.
+export class MoveRefused extends Error {}
+
 interface MoveCounters {
 	revision: string;
 	target?: string;
 	token?: string | null;
-	// The brain has been served from a GitHub repository under its own name.
+	// The brain has been served from a GitHub repository under its own name and moved out
+	// of it. False for a brain created on other storage, whose name on GitHub, if a
+	// repository holds it, is somebody else's.
 	leftRepository?: boolean;
 }
 
@@ -183,11 +194,7 @@ export function moveProblem(o: {
 	writeMode: 'direct' | 'pull-request';
 	label: string;
 }): string | null {
-	const place = {
-		isomorphic: 'held by Isomorphic',
-		github: 'in a GitHub repository',
-		'google-drive': 'kept in Google Drive'
-	};
+	const place = STORAGE_PLACE;
 	if (o.from === o.to) return `${o.label} is already ${place[o.to]}. Nothing was changed.`;
 	if (!o.destination) {
 		return o.to === 'isomorphic'
@@ -227,7 +234,7 @@ export async function relocateBrain(
 	// A copy toward somewhere else is abandoned where it stands.
 	const sameTarget = existing?.counters.target === target.key;
 	const pass = continuePass(sameTarget ? existing : null, defaults, () => crypto.randomUUID(), now);
-	const opened = await target.open(pass.counters.token ?? null);
+	const opened = await target.open(pass.counters.token ?? null, { leftRepository: left });
 	const prior = pass.counters.revision
 		? { revision: pass.counters.revision, after: pass.cursor }
 		: null;
@@ -252,13 +259,4 @@ export async function relocateBrain(
 		)
 	]);
 	return step;
-}
-
-// Whether this brain has been served from a GitHub repository under its own name and
-// moved out of it. False for a brain created on other storage, whose name on GitHub, if
-// a repository holds it, is somebody else's.
-export async function cameFromRepository(db: D1Database, brainId: string): Promise<boolean> {
-	return leftRepository(
-		await readPass<MoveCounters>(db, brainId, RELOCATION_KIND, { revision: '' })
-	);
 }
