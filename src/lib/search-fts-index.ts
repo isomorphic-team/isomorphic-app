@@ -49,14 +49,6 @@ export async function checkFtsIndex(db: D1Database): Promise<void> {
 
 const PAGES = `${FTS_TABLE} JOIN brain_pages p ON p.id = ${FTS_TABLE}.rowid`;
 
-async function matchingPaths(db: D1Database, brainId: string, match: string): Promise<Set<string>> {
-	const rows = await db
-		.prepare(`SELECT p.path FROM ${PAGES} WHERE ${FTS_TABLE} MATCH ?1 AND p.brain_id = ?2`)
-		.bind(match, brainId)
-		.all<{ path: string }>();
-	return new Set(rows.results.map((r) => r.path));
-}
-
 /** The same contract as searchIndex, answered by FTS5. */
 export async function searchIndexFts(
 	db: D1Database,
@@ -79,21 +71,29 @@ export async function searchIndexFts(
 	if (terms.length === 0) return empty;
 
 	const any = terms.map(ftsQuote).join(' OR ');
-	const rows = await db
-		.prepare(
-			`SELECT p.path, p.title, bm25(${FTS_TABLE}, ${BM25_WEIGHTS}) AS score
-			 FROM ${PAGES} WHERE ${FTS_TABLE} MATCH ?1 AND p.brain_id = ?2`
-		)
-		.bind(any, brainId)
-		.all<{ path: string; title: string | null; score: number }>();
-	const inScope = rows.results.filter((r) => !prefix || r.path.startsWith(prefix));
-	if (inScope.length === 0) return empty;
-
-	// Coverage needs to know which terms each page holds: one MATCH per term (at most six).
-	const perTerm = await Promise.all(terms.map((t) => matchingPaths(db, brainId, ftsQuote(t))));
 	const words = q.phrase.split(/[^\p{L}\p{N}]+/u).filter(Boolean);
-	const phrase =
-		words.length > 1 ? await matchingPaths(db, brainId, ftsQuote(words.join(' '))) : new Set();
+	const paths = (match: string) =>
+		db
+			.prepare(`SELECT p.path FROM ${PAGES} WHERE ${FTS_TABLE} MATCH ?1 AND p.brain_id = ?2`)
+			.bind(match, brainId);
+	// One batch, so one round trip to the database: the pages holding any term with
+	// their bm25, then, for coverage, the pages holding each term (at most six), then the
+	// pages holding the whole phrase. Sent one by one these were up to eight round trips.
+	const [scored, ...sets] = await db.batch<{ path: string; title: string | null; score: number }>([
+		db
+			.prepare(
+				`SELECT p.path, p.title, bm25(${FTS_TABLE}, ${BM25_WEIGHTS}) AS score
+					 FROM ${PAGES} WHERE ${FTS_TABLE} MATCH ?1 AND p.brain_id = ?2`
+			)
+			.bind(any, brainId),
+		...terms.map((t) => paths(ftsQuote(t))),
+		...(words.length > 1 ? [paths(ftsQuote(words.join(' ')))] : [])
+	]);
+	const inScope = scored.results.filter((r) => !prefix || r.path.startsWith(prefix));
+	if (inScope.length === 0) return empty;
+	const pathSets = sets.map((r) => new Set(r.results.map((row) => row.path)));
+	const perTerm = pathSets.slice(0, terms.length);
+	const phrase = pathSets[terms.length] ?? new Set<string>();
 
 	const signals: FtsSignal[] = inScope.map((r) => ({
 		path: r.path,
