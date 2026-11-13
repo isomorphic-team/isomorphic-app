@@ -44,6 +44,11 @@ ORDERS or DROPS a result is in the pure `src/lib/search.ts` (`pnpm test:search`)
   never a query, a path or a brain. Its ordering is pure (`rankFtsPages` in
   `src/lib/search-fts.ts`: coverage, phrase, `bm25()`, path). Compare the engines on a folder
   with `pnpm search:compare <folder> <probes.json>`.
+- **A search's cost on D1 is its round trips, not its queries.** `searchIndexFts` sends its
+  ranking statements (any term with `bm25()`, each term, the phrase) as one `db.batch` and
+  the lines as a second statement: two round trips, pinned by `pnpm test:index`. Sent one by
+  one it measured about three times slower than `searchIndex` on a deployment. A new
+  statement in a search goes in a batch.
 - **Probe against a real brain before believing a ranking change.** `pnpm probe:report <folder>
   <probes.json>` runs probes through the real `searchIndex` offline and reports how many
   landed in the top band and the mean reciprocal rank (`summarizeProbes`), the numbers to

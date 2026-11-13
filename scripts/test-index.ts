@@ -71,11 +71,15 @@ applyMigrations(sqlite, INDEX_MIGRATIONS_DIR);
 
 let stmtCount = 0; // statements executed since the last resetCounters()
 let batchCount = 0;
+// Trips to the database: a batch is one, however many statements it carries.
+let roundTrips = 0;
+let inBatch = false;
 let failBatchStatement: number | null = null;
 let beforeBatch: (() => void) | null = null;
 function resetCounters() {
 	stmtCount = 0;
 	batchCount = 0;
+	roundTrips = 0;
 }
 
 function shimStatement(sql: string, params: unknown[] = []): any {
@@ -83,16 +87,24 @@ function shimStatement(sql: string, params: unknown[] = []): any {
 		bind: (...p: unknown[]) => shimStatement(sql, p),
 		first: async () => {
 			stmtCount++;
+			roundTrips++;
 			return sqlite.prepare(sql).get(...(params as [])) ?? null;
 		},
 		all: async () => {
 			stmtCount++;
+			roundTrips++;
 			return { results: sqlite.prepare(sql).all(...(params as [])) };
 		},
 		run: async () => {
 			stmtCount++;
-			const result = sqlite.prepare(sql).run(...(params as []));
-			return { success: true, meta: { changes: Number(result.changes) } };
+			if (!inBatch) roundTrips++;
+			const prepared = sqlite.prepare(sql);
+			if (prepared.columns().length > 0) {
+				const results = prepared.all(...(params as []));
+				return { success: true, meta: { changes: 0 }, results };
+			}
+			const result = prepared.run(...(params as []));
+			return { success: true, meta: { changes: Number(result.changes) }, results: [] };
 		}
 	};
 }
@@ -100,10 +112,12 @@ const db = {
 	prepare: (sql: string) => shimStatement(sql),
 	batch: async (stmts: { run: () => Promise<unknown> }[]) => {
 		batchCount++;
+		roundTrips++;
 		beforeBatch?.();
 		beforeBatch = null;
 		const results: unknown[] = [];
 		sqlite.exec('BEGIN');
+		inBatch = true;
 		try {
 			for (let i = 0; i < stmts.length; i++) {
 				if (i === failBatchStatement) throw new Error('injected batch failure');
@@ -114,6 +128,8 @@ const db = {
 		} catch (err) {
 			sqlite.exec('ROLLBACK');
 			throw err;
+		} finally {
+			inBatch = false;
 		}
 	}
 } as never;
@@ -869,6 +885,22 @@ console.log('\nContent index — bounded, resumable ensureFresh\n');
 		(await paths('wombat')).join() === gh.pages[1].path
 	);
 	check('fts: the index matches brain_pages after every write path', await consistent());
+
+	// Each statement sent alone is a round trip to the database, and that, not the
+	// query, is what a search costs on D1. Six terms and a phrase are nine statements.
+	resetCounters();
+	const long = await searchIndexFts(
+		db,
+		brainId,
+		'quokka wombat page victim outside edit',
+		undefined,
+		50
+	);
+	check(
+		'fts: a six-term search is two round trips, one for ranking and one for lines',
+		long.hits.length > 0 && roundTrips === 2 && stmtCount === 9,
+		`roundTrips=${roundTrips} statements=${stmtCount}`
+	);
 
 	const incremental = await paths('quokka wombat page');
 	await rebuildFtsIndex(db);
