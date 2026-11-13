@@ -249,9 +249,10 @@ invites, and leaves the binding alone. The preview,
 **`configure_brain` with `storage: "isomorphic"` moves a brain's files off GitHub**
 (`relocateToPlatformFiles`, `src/lib/brain-relocate.ts`, `pnpm test:store`): a budgeted copy
 of the current files per call, its place kept in `brain_passes`, and the binding changed
-(`bindBrainToPlatformFiles`) only when the copy matches the repository's head. Gated at brain
-admin AND org admin (`relocationProblem`, `pnpm test:scope`); refused on a single-user
-deployment, where the binding follows config, and for a brain in pull-request mode.
+(`platformFilesBinding`, in the batch that marks the pass done) only when the copy matches the repository's head. Gated at brain
+admin AND org admin (`requires` and `requiresOrg`, `pnpm test:scope`); `relocationProblem`
+refuses on a single-user deployment, where the binding follows config, and a brain in
+pull-request mode moving to a store without `proposals`.
 `repo_owner` and `repo_name` stay on the row as the brain's locator and its claim on the
 name. History and the repository stay behind; nothing moves a brain back, so
 `disconnect_brain` refuses one. **Don't re-add `update_brain` and don't collapse these into a

@@ -30,7 +30,7 @@ import { readFileSync, readdirSync } from 'node:fs';
 import { d1Index, indexRefs } from '../src/lib/brain-index.ts';
 import { localD1 } from '../src/local/d1-sqlite.ts';
 import { bindFixtureStorage } from './fixture-storage.ts';
-import { orgStorage } from '../src/lib/storage-connections.ts';
+import { PLATFORM_FILES_KIND, orgStorage } from '../src/lib/storage-connections.ts';
 import {
 	assertRole,
 	listStewardedBrains,
@@ -172,6 +172,11 @@ const trap = (name: string) =>
 	) as never;
 const octokit = trap('octokit');
 const store = trap('store');
+// The platform's own storage: it says what it can do, and any use of it is the trap.
+const filesStore = new Proxy(
+	{ capabilities: { atomicWrite: true, proposals: false, history: true } },
+	{ get: (t, prop) => (prop in t ? t[prop as keyof typeof t] : (store as never)[prop]) }
+) as never;
 
 // Which brain each context resolution named. A resolution is not free (in the
 // Worker it mints an installation token and reads the brain's config), so a tool
@@ -359,7 +364,7 @@ function toolsFor(
 				installation_id: 1,
 				storage_account: 'northwind',
 				storage_connection_id: 'github-app:1',
-				...(b.brain_id === deployment.held ? { storage_kind: 'platform-files' } : {}),
+				...(b.brain_id === deployment.held ? { storage_kind: PLATFORM_FILES_KIND } : {}),
 				visibility: b.brain_id === 'b-main' ? 'private' : 'org',
 				repo_owner: 'northwind',
 				role: p.role,
@@ -376,7 +381,7 @@ function toolsFor(
 		analyticsEnabled: true,
 		openIndex: d1Index(db),
 		webBaseUrl: deployment.webBaseUrl,
-		platformFiles: deployment.noFilesObjects ? undefined : () => store
+		platformFiles: deployment.noFilesObjects ? undefined : () => filesStore
 	});
 	return handlers;
 }
@@ -1295,6 +1300,12 @@ console.log('\nA single-user deployment: only the tools that can answer');
 {
 	console.log('\nconfigure_brain moves storage at BRAIN admin AND org admin');
 	const go = { storage: 'isomorphic', confirm: true };
+	const movable = {
+		destination: { atomicWrite: true, proposals: false, history: true },
+		held: false,
+		writeMode: 'direct' as const,
+		label: 'Main'
+	};
 	const both: Persona = {
 		label: 'org admin holding brain admin',
 		userId: 'u-boss',
@@ -1304,7 +1315,7 @@ console.log('\nA single-user deployment: only the tools that can answer');
 	const shared = await attempt(sharedAdmin, 'configure_brain', go);
 	check(
 		'a brain admin who is only an org viewer cannot move its storage',
-		shared.outcome === 'denied' && shared.detail.includes('organization admin'),
+		shared.outcome === 'denied' && !shared.detail.includes(STORE_MARKER),
 		shared.detail
 	);
 	check(
@@ -1349,16 +1360,14 @@ console.log('\nA single-user deployment: only the tools that can answer');
 	);
 	check(
 		'a brain that takes its changes as pull requests is refused',
-		/pull requests/.test(
+		/pull requests/.test(relocationProblem({ ...movable, writeMode: 'pull-request' }) ?? '') &&
+			relocationProblem(movable) === null &&
+			// A destination that can hold a change for review takes such a brain.
 			relocationProblem({
-				canHold: true,
-				orgRole: 'owner',
+				...movable,
 				writeMode: 'pull-request',
-				label: 'Main'
-			}) ?? ''
-		) &&
-			relocationProblem({ canHold: true, orgRole: 'owner', writeMode: 'direct', label: 'Main' }) ===
-				null
+				destination: { ...movable.destination, proposals: true }
+			}) === null
 	);
 	const stranded = await attempt(
 		both,

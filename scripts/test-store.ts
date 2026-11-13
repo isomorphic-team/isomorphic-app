@@ -39,6 +39,7 @@ import {
 } from '../src/lib/brain-relocate.ts';
 import { PLATFORM_FILES_KIND, credentialFor } from '../src/lib/storage-connections.ts';
 import { localD1 } from '../src/local/d1-sqlite.ts';
+import { bindFixtureStorage } from './fixture-storage.ts';
 import { listAccessibleBrains } from '../src/lib/orgs.ts';
 import { d1Index, indexRefs } from '../src/lib/brain-index.ts';
 import { DEFAULT_BRAIN_CONFIG } from '../src/lib/brain-policy.ts';
@@ -391,16 +392,17 @@ for (const backend of BACKENDS) {
 	const b64 = (bytes: number[]) => Buffer.from(bytes).toString('base64');
 	const png = b64([0x89, 0x50, 0x4e, 0x47, 0x00, 0xff, 0xfe]);
 	const bom = '\ufeff# With a byte order mark\n';
+	const text = fileWriteFor('a.md', Buffer.from(bom).toString('base64'));
 	check(
 		'copy: UTF-8 is carried as text, byte order mark included',
-		fileWriteFor('a.md', Buffer.from(bom).toString('base64')).content === bom &&
-			fileWriteFor('a.md', Buffer.from(bom).toString('base64')).encoding === undefined
+		text.content === bom && text.encoding === undefined
 	);
+	const nul = fileWriteFor('a.bin', b64([0x61, 0x00, 0x62]));
 	check(
 		'copy: bytes that are not UTF-8, or hold a NUL, are carried as bytes',
 		fileWriteFor('a.png', png).encoding === 'base64' &&
-			fileWriteFor('a.bin', b64([0x61, 0x00, 0x62])).encoding === 'base64' &&
-			fileWriteFor('a.bin', b64([0x61, 0x00, 0x62])).content === b64([0x61, 0x00, 0x62])
+			nul.encoding === 'base64' &&
+			nul.content === b64([0x61, 0x00, 0x62])
 	);
 
 	const dir = mkdtempSync(join(tmpdir(), 'iso-copy-'));
@@ -429,7 +431,7 @@ for (const backend of BACKENDS) {
 	check(
 		'copy: a step stops at its budget and says where',
 		!one.done &&
-			one.progress.copied === budget &&
+			one.copied === budget &&
 			one.total === total &&
 			one.progress.after === (await listed(source)).sort()[budget - 1],
 		JSON.stringify(one)
@@ -438,7 +440,7 @@ for (const backend of BACKENDS) {
 	const three = await copyStep(from, to, two.progress, { budget });
 	check(
 		'copy: later steps resume after it and finish',
-		!two.done && three.done && three.progress.copied === total,
+		!two.done && three.done && three.copied === total,
 		JSON.stringify([two, three])
 	);
 	check(
@@ -465,7 +467,7 @@ for (const backend of BACKENDS) {
 	const again = await copyStep(from, to2, started.progress, { budget: 3 });
 	check(
 		'copy: a source that moved starts the copy again from its new revision',
-		again.restarted && !again.done && again.progress.copied === 3,
+		again.restarted && !again.done && again.copied === 3,
 		JSON.stringify(again)
 	);
 	const finished = await copyStep(from, to2, again.progress, { budget: 3 });
@@ -496,11 +498,10 @@ for (const backend of BACKENDS) {
 		INSERT INTO orgs (org_id, name, model, installation_id, brain_owner, created_by, created_at)
 			VALUES ('o1', 'Acme', 'hosted', 7, 'example-org', 'ann', '2026-01-01');
 		INSERT INTO memberships (org_id, user_id, role) VALUES ('o1', 'ann', 'owner');
-		INSERT INTO storage_connections (connection_id, provider, kind, external_id, account)
-			VALUES ('github-app:7', 'github', 'github-app-installation', '7', 'example-org');
-		INSERT INTO brains (brain_id, org_id, repo_owner, repo_name, name, visibility, created_at, storage_connection_id)
-			VALUES ('b1', 'o1', 'example-org', 'brain', 'Brain', 'org', '2026-01-01', 'github-app:7');
+		INSERT INTO brains (brain_id, org_id, repo_owner, repo_name, name, visibility, created_at)
+			VALUES ('b1', 'o1', 'example-org', 'brain', 'Brain', 'org', '2026-01-01');
 	`);
+	bindFixtureStorage(sqlite);
 	// What the Worker chooses a store by: the brain as its member reaches it.
 	const reached = async () => (await listAccessibleBrains(db, ['ann']))[0];
 	const binding = async () => (await reached()).storage_kind;
@@ -529,7 +530,7 @@ for (const backend of BACKENDS) {
 	check(
 		'relocate: the next call resumes, and the finished copy binds the brain to its new storage',
 		rest.done &&
-			rest.progress.copied === rest.total &&
+			rest.copied === rest.total &&
 			(await binding()) === PLATFORM_FILES_KIND &&
 			pass()?.status === 'done' &&
 			credentialFor(await reached()).kind === 'platform-files' &&

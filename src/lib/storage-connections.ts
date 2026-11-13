@@ -11,7 +11,7 @@
 // to the one `platform-files` connection, which carries no credential: its files are
 // in a Durable Object named by the brain's id (src/lib/brain-store-sql.ts).
 
-import type { D1Database } from '@cloudflare/workers-types';
+import type { D1Database, D1PreparedStatement } from '@cloudflare/workers-types';
 import type { Org } from './orgs.ts';
 
 export const GITHUB_APP_KIND = 'github-app-installation';
@@ -22,7 +22,7 @@ export const GITHUB_TOKEN_KIND = 'github-token';
 // Files the platform holds itself, one Durable Object per brain. One connection row
 // serves every such brain, written when the first brain moves onto it.
 export const PLATFORM_FILES_KIND = 'platform-files';
-export const PLATFORM_FILES_CONNECTION_ID = 'platform-files';
+const PLATFORM_FILES_CONNECTION_ID = 'platform-files';
 
 // How to reach a brain's storage, from its binding. Pure, so the choice between a
 // token, an installation and the platform's own files is pinned by a test rather than
@@ -35,7 +35,7 @@ export function credentialFor(brain: {
 	installation_id: number;
 }): BrainCredential {
 	if (brain.storage_kind === GITHUB_TOKEN_KIND) return { kind: 'token' };
-	if (brain.storage_kind === PLATFORM_FILES_KIND) return { kind: 'platform-files' };
+	if (platformHoldsFiles(brain)) return { kind: 'platform-files' };
 	return { kind: 'installation', installationId: brain.installation_id };
 }
 
@@ -104,11 +104,17 @@ export function orgAdministersConnection(
 	return conn.owner_org_id === org.org_id;
 }
 
-// Serve a brain from the platform's own files from now on. One batch: the connection
-// row exists before the brain names it. The caller has already copied the files
-// (src/lib/brain-relocate.ts).
-export async function bindBrainToPlatformFiles(db: D1Database, brainId: string): Promise<void> {
-	await db.batch([
+// Whether a brain's files are in the platform's own storage, with no repository behind
+// them.
+export function platformHoldsFiles(brain: { storage_kind?: string | null }): boolean {
+	return brain.storage_kind === PLATFORM_FILES_KIND;
+}
+
+// The statements that serve a brain from the platform's own files from now on, for one
+// batch: the connection row exists before the brain names it. The caller has already
+// copied the files (src/lib/brain-relocate.ts).
+export function platformFilesBinding(db: D1Database, brainId: string): D1PreparedStatement[] {
+	return [
 		db
 			.prepare(
 				`INSERT OR IGNORE INTO storage_connections
@@ -119,5 +125,5 @@ export async function bindBrainToPlatformFiles(db: D1Database, brainId: string):
 		db
 			.prepare(`UPDATE brains SET storage_connection_id = ?1 WHERE brain_id = ?2`)
 			.bind(PLATFORM_FILES_CONNECTION_ID, brainId)
-	]);
+	];
 }

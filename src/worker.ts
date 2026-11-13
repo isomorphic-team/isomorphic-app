@@ -315,11 +315,11 @@ async function githubClientFor(env: Env, credential: GithubCredential): Promise<
 		: installationOctokit(appCreds(env), credential.installationId);
 }
 
-// The store for a brain the platform holds itself, or undefined when this deployment
-// binds no files objects.
-function platformFilesStore(env: Env, brainId: string): BrainStore | undefined {
+// Opens the store of a brain the platform holds itself, by brain_id, or undefined when
+// this deployment binds no files objects.
+function platformFiles(env: Env): ((brainId: string) => BrainStore) | undefined {
 	const ns = env.BRAIN_FILES;
-	return ns && sqlBrainStore(ns.get(ns.idFromName(brainId)));
+	return ns && ((brainId) => sqlBrainStore(ns.get(ns.idFromName(brainId))));
 }
 
 // A brain's storage, chosen by its binding (credentialFor): a GitHub repository through
@@ -330,7 +330,7 @@ async function openStorage(
 ): Promise<{ store: BrainStore; octokit?: GithubClient }> {
 	const credential = credentialFor(target);
 	if (credential.kind === 'platform-files') {
-		const store = platformFilesStore(env, target.brain_id);
+		const store = platformFiles(env)?.(target.brain_id);
 		if (!store) {
 			throw new Error('This brain is held in storage this deployment does not bind (BRAIN_FILES).');
 		}
@@ -1187,9 +1187,7 @@ class McpSession {
 			analyticsEnabled: this.usageEnabled(),
 			openIndex: indexFor(this.env),
 			webBaseUrl: this.webBase(),
-			platformFiles: this.env.BRAIN_FILES
-				? (brainId) => platformFilesStore(this.env, brainId)!
-				: undefined
+			platformFiles: platformFiles(this.env)
 		});
 
 		// ---------- user-defined tools (brain-tools) ----------

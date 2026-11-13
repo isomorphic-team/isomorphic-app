@@ -44,12 +44,12 @@ import {
 import { createAndScaffoldBrain } from '../lib/scaffold-core.ts';
 import { forgetBrain } from '../lib/brain-forget.ts';
 import {
-	PLATFORM_FILES_KIND,
+	platformHoldsFiles,
 	getConnection,
 	orgAdministersConnection
 } from '../lib/storage-connections.ts';
 import { relocateToPlatformFiles } from '../lib/brain-relocate.ts';
-import type { BrainStore } from '../lib/brain-repo.ts';
+import type { BrainStore, StoreCapabilities } from '../lib/brain-repo.ts';
 import {
 	countPendingBrainInvites,
 	describeMove,
@@ -170,24 +170,18 @@ async function detectRowSetup(
 
 // Why a brain cannot move onto the platform's own storage, or null when it can. Pure.
 export function relocationProblem(o: {
-	// The deployment has files objects and an org model to hold the binding.
-	canHold: boolean;
-	storageKind?: string | null;
-	orgRole: Role | null;
+	// What the storage it would move to can do; undefined when this deployment has none.
+	destination: StoreCapabilities | undefined;
+	// The brain's files are already there.
+	held: boolean;
 	writeMode: 'direct' | 'pull-request';
 	label: string;
 }): string | null {
-	if (!o.canHold) return 'This deployment cannot hold a brain itself, so nothing was changed.';
-	if (o.storageKind === PLATFORM_FILES_KIND) {
-		return `${o.label} is already held by Isomorphic. Nothing was changed.`;
-	}
-	// Where an org's brains are stored is the org's decision, not only the brain's.
-	if (!o.orgRole || !roleAtLeast(o.orgRole, 'admin')) {
-		return `You need organization admin access to move where ${o.label} is stored.`;
-	}
-	// The new storage cannot hold a change for review, and a pull request still open
-	// would be left behind.
-	if (o.writeMode === 'pull-request') {
+	if (!o.destination) return 'This deployment cannot hold a brain itself, so nothing was changed.';
+	if (o.held) return `${o.label} is already held by Isomorphic. Nothing was changed.`;
+	// A pull request still open would be left behind, and no later change could be held
+	// for review.
+	if (o.writeMode === 'pull-request' && !o.destination.proposals) {
 		return `${o.label} takes its changes as pull requests, which storage held by Isomorphic cannot do yet. Nothing was changed.`;
 	}
 	return null;
@@ -849,7 +843,12 @@ export function registerBrainTools(
 			baseline_scan,
 			consolidate
 		}) => {
-			const ctx = await getContext({ requires: 'admin', brain });
+			// Where an org's brains are stored is the org's decision as well as the brain's.
+			const ctx = await getContext({
+				requires: 'admin',
+				requiresOrg: storage === undefined ? undefined : 'admin',
+				brain
+			});
 
 			if (storage !== undefined) {
 				if (name !== undefined || content_roots !== undefined || overwrite !== undefined) {
@@ -858,14 +857,15 @@ export function registerBrainTools(
 				const target = (await listBrains()).find((b) => b.brain_id === ctx.brainId);
 				if (!target) return fail('That brain could not be resolved.');
 				const label = brainLabel(target);
+				// A single-user deployment's binding follows its config, so nothing can move.
+				const destination = multiUser ? platformFiles?.(ctx.brainId) : undefined;
 				const problem = relocationProblem({
-					canHold: multiUser && !!platformFiles,
-					storageKind: target.storage_kind,
-					orgRole: target.org_role,
+					destination: destination?.capabilities,
+					held: platformHoldsFiles(target),
 					writeMode: ctx.config.writeMode,
 					label
 				});
-				if (problem) return fail(problem);
+				if (problem || !destination) return fail(problem ?? 'Nothing was changed.');
 				const repository = `${target.repo_owner}/${target.repo_name}`;
 				if (!confirm) {
 					return {
@@ -881,7 +881,7 @@ export function registerBrainTools(
 					ctx.db,
 					{ brainId: ctx.brainId, orgId: ctx.orgId, actorUserId: ctx.actorUserId },
 					{ store: ctx.store, locator: ctx.locator },
-					{ store: platformFiles!(ctx.brainId), locator: ctx.locator },
+					{ store: destination, locator: ctx.locator },
 					{ branch: ctx.config.defaultBranch, author: ctx.author }
 				);
 				if (!step.done) {
@@ -889,10 +889,10 @@ export function registerBrainTools(
 						content: [
 							{
 								type: 'text' as const,
-								text: `${step.restarted ? 'The brain changed while it was being copied, so the copy began again. ' : ''}Copied ${step.progress.copied} of ${step.total} files. ${label} is still served from GitHub. Call configure_brain again with the same arguments to continue.`
+								text: `${step.restarted ? 'The brain changed while it was being copied, so the copy began again. ' : ''}Copied ${step.copied} of ${step.total} files. ${label} is still served from GitHub. Call configure_brain again with the same arguments to continue.`
 							}
 						],
-						structuredContent: { moved: false, copied: step.progress.copied, total: step.total }
+						structuredContent: { moved: false, copied: step.copied, total: step.total }
 					};
 				}
 				// Version tags and the revision are the new store's from here on.
@@ -905,7 +905,7 @@ export function registerBrainTools(
 							text: `Moved ${label}: its ${step.total} files are now held by Isomorphic, and the brain is served from there. The GitHub repository ${repository} is unchanged and no longer used; archive or delete it when you are satisfied.`
 						}
 					],
-					structuredContent: { moved: true, copied: step.progress.copied, total: step.total }
+					structuredContent: { moved: true, copied: step.copied, total: step.total }
 				};
 			}
 
@@ -1048,7 +1048,7 @@ export function registerBrainTools(
 				}
 				// Its files are in no repository, so disconnecting would leave them where
 				// nothing can reach them.
-				if (target.storage_kind === PLATFORM_FILES_KIND) {
+				if (platformHoldsFiles(target)) {
 					return fail(
 						`${brainLabel(target)} is held by Isomorphic itself, with no repository behind it, so disconnecting it would strand its files. It cannot be disconnected until a brain can be exported.`
 					);
