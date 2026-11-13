@@ -113,6 +113,27 @@ function stepsOf(bundle: CoordinatedWrite): PlannedStep[] {
 	return steps;
 }
 
+// The most file content one bundle may hold: what it writes plus what it replaces. The
+// bundle crosses Workers RPC in one call, which is capped at 32 MiB, and the journal entry
+// is built whole in the coordinator object's memory. Text counts two bytes per UTF-16
+// unit, the most a string takes in either place; base64 counts one.
+export const MAX_BUNDLE_BYTES = 16 * 1024 * 1024;
+
+const bytesOf = (file: { content: string; encoding?: Encoding } | null): number =>
+	file ? file.content.length * (file.encoding === 'base64' ? 1 : 2) : 0;
+
+const writtenBytes = (bundle: CoordinatedWrite): number =>
+	(bundle.writes ?? []).reduce((n, file) => n + bytesOf(file), 0);
+
+const mb = (bytes: number): string => (bytes / (1024 * 1024)).toFixed(1);
+
+function mustFit(bytes: number, what: string): void {
+	if (bytes <= MAX_BUNDLE_BYTES) return;
+	throw new Error(
+		`${what} ${mb(bytes)} MB of file content, and one write takes at most ${mb(MAX_BUNDLE_BYTES)} MB. Split it into smaller writes.`
+	);
+}
+
 const encodingOf = (step: PlannedStep): Encoding =>
 	step.intended?.encoding ?? (step.intended ? 'utf-8' : 'base64');
 
@@ -163,8 +184,15 @@ async function coordinateWrite(
 	bundle: CoordinatedWrite
 ): Promise<Record<string, string>> {
 	const planned = stepsOf(bundle);
+	const written = writtenBytes(bundle);
+	mustFit(written, 'This write holds');
 	const current = await Promise.all(planned.map((s) => files.read(s.path, encodingOf(s))));
 	const at = current.map((f) => f?.version ?? null);
+	const replaced = current.reduce(
+		(n, f, i) => n + bytesOf(f && { content: f.content, encoding: encodingOf(planned[i]) }),
+		0
+	);
+	mustFit(written + replaced, 'This write and the files it replaces hold');
 	const steps: JournalStep[] = planned.map((s, i) => {
 		const expected = bundle.expected?.[s.path];
 		if (expected !== undefined && at[i] !== expected) throw new WriteConflictError(s.path);
@@ -376,6 +404,10 @@ export function objectWriteCoordinator(
 	objectFor: (brainId: string) => CoordinatorObject
 ): WriteCoordinator {
 	return {
-		write: conflictsRebuilt((brainId, files, bundle) => objectFor(brainId).land(files, bundle))
+		write: conflictsRebuilt(async (brainId, files, bundle) => {
+			// Before the call: over the RPC cap it would fail without saying why.
+			mustFit(writtenBytes(bundle), 'This write holds');
+			return objectFor(brainId).land(files, bundle);
+		})
 	};
 }

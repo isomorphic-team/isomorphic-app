@@ -163,6 +163,17 @@ Non-obvious things confirmed against the sources above (with the "why it bit us"
   the row cap (a 2.1 MB string stored fine under wrangler 4.160), so only the documented number
   bounds `sqlJournal`'s chunks.
 
+- **One Workers RPC call is capped at 32 MiB serialized.** Checked 2026-11-12 against
+  https://developers.cloudflare.com/workers/runtime-apis/rpc/ (Limitations). A write bundle
+  crosses to the coordinator object as one argument, so `MAX_BUNDLE_BYTES`
+  (`src/lib/write-coordinator.ts`) stays under it.
+
+- **A Worker cannot be rolled back across a Durable Object class change.** Checked 2026-11-12
+  against https://developers.cloudflare.com/workers/versions-and-deployments/rollbacks/
+  (Bindings): a rollback is refused when a class was created, deleted, renamed or transferred
+  between the live version and the target. So `deploy.yml`'s rollback of the objects Worker is
+  refused after a deploy that added a class, and the step carries on to the re-check.
+
 - **Over Workers RPC, functions in a plain object cross as stubs, and a thrown error loses its
   class.** Verified 2026-11-13 under wrangler 4.160 (workerd 1.20261110) between two Workers
   bound by `script_name`, now pinned by `pnpm test:objects`. An object literal whose properties

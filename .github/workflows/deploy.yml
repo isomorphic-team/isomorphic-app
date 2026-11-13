@@ -59,7 +59,8 @@ name: Deploy Worker
 #   6. `versions deploy <id>@100%` to promote
 #   7. smoke check the production origin
 #   8. on failure: `wrangler rollback <recorded id>` for both Workers, re-check, and fail
-#      the run red
+#      the run red. The objects Worker stays where it is when the deploy added a Durable
+#      Object class, which Cloudflare will not roll back across
 #
 # The checks are in scripts/smoke.ts and are covered by `pnpm test:smoke`. They are
 # deliberately testable rather than inline shell: this is the logic that decides
@@ -385,17 +386,27 @@ jobs:
       # Any failure after the objects Worker deployed returns it to its recorded version too,
       # so production goes back to the pair that last passed. Before the verify step below,
       # which checks that pair.
+      #
+      # Cloudflare refuses a rollback across a Durable Object class change (a new entry in
+      # `migrations`), so a deploy that added a class leaves the new objects Worker in
+      # place. That pair is supported: the objects Worker's RPC methods and tables only
+      # grow. `continue-on-error` keeps a refused rollback from skipping the verify step,
+      # which smoke checks whichever pair is live. The run is red by this point either way.
       - name: Roll back the objects Worker
         id: objects_rollback
         if: ${{ !cancelled() && steps.objects.outcome == 'success' && steps.live.outputs.objects_previous != '' && (failure() || steps.smoke.outcome == 'failure') }}
+        continue-on-error: true
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
         run: |
           echo "::error::Rolling the objects Worker back to ${{ steps.live.outputs.objects_previous }}."
-          pnpm exec wrangler rollback "${{ steps.live.outputs.objects_previous }}" -c wrangler.objects.jsonc \
+          if ! pnpm exec wrangler rollback "${{ steps.live.outputs.objects_previous }}" -c wrangler.objects.jsonc \
             --message "Automated rollback: deploy of ${GITHUB_SHA::7} failed" \
-            --yes
+            --yes; then
+            echo "::error::The objects Worker was NOT rolled back and is still on ${GITHUB_SHA::7}. Cloudflare refuses a rollback across a Durable Object class change; if this deploy added one, that is why, and the previous MCP Worker runs against the new objects Worker."
+            exit 1
+          fi
 
       # Rolling back and then not checking would be a guess, and the failure mode it
       # hides is the worst one available: production down, pipeline reporting that it

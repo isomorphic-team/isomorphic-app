@@ -25,6 +25,7 @@
 		"bindings": [{ "name": "WRITE_COORDINATOR", "class_name": "WriteCoordinatorObject" }]
 	},
 	// Append-only, by Cloudflare's rules: a class is added or deleted with a new tag,
-	// and no entry is ever removed.
+	// and no entry is ever removed. A deploy that adds an entry cannot be rolled back
+	// (docs/ops/deploy-and-rollback.md), so merge it on its own.
 	"migrations": [{ "tag": "v1", "new_sqlite_classes": ["WriteCoordinatorObject"] }]
 }

@@ -40,7 +40,8 @@ storage, and the neutral types it speaks. `githubStore(octokit)` is in
   A store without `atomicWrite` lands its bundles through the write coordinator
   (`src/lib/write-coordinator.ts`, `pnpm test:coordinator`): one bundle at a time per brain,
   journaled with each file's prior and intended content, rolled back on failure, and settled by
-  the next call after an interruption. Deployed, it is a Durable Object per brain in the objects
+  the next call after an interruption. A bundle holds at most `MAX_BUNDLE_BYTES` of content,
+  counting what it replaces, and a larger one is refused before anything is written. Deployed, it is a Durable Object per brain in the objects
   Worker (`src/objects/worker.ts`, journal in its SQLite via `sqlJournal`, `pnpm test:objects`),
   reached through `objectWriteCoordinator` over the `WRITE_COORDINATOR` binding; locally,
   `inMemoryWriteCoordinator`.

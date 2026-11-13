@@ -24,6 +24,13 @@ Splitting them is what makes an automated rollback possible, so the job does thi
 | 7    | `smoke.ts <production url>`            | triggers step 8                                        |
 | 8    | `rollback <recorded id>`, both Workers | re-checked, and the run goes red either way            |
 
+"Objects Worker rolled back" has one exception: Cloudflare refuses a rollback across a Durable
+Object class change, so a deploy that added a class (a new `migrations` entry in
+`wrangler.objects.template.jsonc`) leaves the new objects Worker live. The step reports that
+and the job carries on to the re-check, with the previous MCP Worker calling the new objects
+Worker. Merge a class change on its own, so the deploy that cannot be undone carries nothing
+else.
+
 Step 2 records both Workers' rollback targets before anything changes, so the job never has
 to work out where to return to from inside a failure.
 

@@ -71,7 +71,9 @@ brain. `pnpm test:wiring` fails on a class or a value import of `src/objects/` a
   MCP Worker passes each call the functions that reach a brain's files.
 - **It deploys first, with `wrangler deploy`**, which is the only command that applies its
   Durable Object `migrations` (append-only, like the MCP Worker's). `deploy.yml` records its
-  live version, deploys it, and rolls it back with the MCP Worker on any later failure;
+  live version, deploys it, and rolls it back with the MCP Worker on any later failure,
+  except across a class change (a new `migrations` entry), which Cloudflare will not roll
+  back: the new objects Worker stays, so merge a class change on its own;
   `pnpm worker:deploy` deploys both in order. It gets no preview URL, so nothing checks it
   before it takes traffic. `/health` pings it, so the smoke checks reach it afterwards.
 - **So its RPC methods and stored tables only ever grow.** The MCP Worker version live during a

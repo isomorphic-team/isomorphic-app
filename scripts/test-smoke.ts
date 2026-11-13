@@ -568,6 +568,17 @@ check('the workflow parsed into steps', steps.length > 5, `got ${steps.length}`)
 			/steps\.live\.outputs\.objects_previous\s*!=\s*''/.test(back?.if ?? ''),
 		back?.if
 	);
+	// Cloudflare refuses a rollback across a Durable Object class change. A step that
+	// failed there without continue-on-error would skip the verify step after it.
+	check(
+		'a refused objects rollback does not skip the verification',
+		back?.continueOnError === true
+	);
+	check(
+		'and says the objects Worker was not rolled back',
+		/if ! pnpm exec wrangler rollback[\s\S]*NOT rolled back[\s\S]*exit 1/.test(back?.body ?? ''),
+		back?.body
+	);
 	check(
 		'to its recorded version, before the rollback is verified',
 		/steps\.live\.outputs\.objects_previous.*-c wrangler\.objects\.jsonc/.test(back?.body ?? '') &&

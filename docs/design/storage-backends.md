@@ -110,6 +110,11 @@ The index object from `brain-index-storage.md` joins the same Worker when it shi
   (`MAX_ATTACHMENT_BYTES`, 5 MB) rewritten over another holds about 13 MB of base64 in its
   entry. `sqlJournal` keeps one row per step and each step's prior and intended content in
   chunks of at most 6 MB.
+- **A bundle has a size limit.** It crosses Workers RPC in one call, capped at 32 MiB
+  (Cloudflare's RPC page, checked 2026-11-12), and its journal entry is built whole in the
+  object's memory. `MAX_BUNDLE_BYTES` (16 MiB) bounds what a bundle writes plus what it
+  replaces, which fits one full-size attachment written over another. A larger bundle is
+  refused before a file is written, and before the call to the object.
 - **The object holds no credential.** The MCP Worker passes each call a `FileBackend`, a plain
   object whose functions cross RPC as stubs, so every read and write of a file runs in the MCP
   Worker with the brain's connection, and the object only serializes and journals. The backend

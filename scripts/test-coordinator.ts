@@ -23,6 +23,9 @@
 //      on a chunk boundary, and an interrupted bundle recovers from it.
 //   6. A BUNDLE SETTLED ON THE WRONG STORAGE. A journal entry is only settled through a
 //      backend reaching the storage it was written against.
+//   7. A BUNDLE TOO LARGE TO CROSS RPC OR TO JOURNAL. One over MAX_BUNDLE_BYTES, counting
+//      what it replaces, is refused before a file is written, and before the call to the
+//      coordinator object is made.
 //
 // pnpm test:objects runs the same coordinator in the Durable Object, over real RPC.
 
@@ -33,6 +36,7 @@ import {
 	backendFromRpc,
 	chunked,
 	inMemoryWriteCoordinator,
+	MAX_BUNDLE_BYTES,
 	memoryJournal,
 	objectWriteCoordinator,
 	recoverJournal,
@@ -617,6 +621,91 @@ function sqlite(): SqlRunner {
 	check(
 		'which leaves the files and the journal as they were',
 		drive.text('b.md') === 'b' && journal.entry?.message === 'Edit a and b'
+	);
+}
+
+// ---------- 7. a bundle has a size ----------
+{
+	// Text counts two bytes a unit, so this many units is exactly the cap.
+	const atCap = 'x'.repeat(MAX_BUNDLE_BYTES / 2);
+	const journal = memoryJournal();
+	const coord = inMemoryWriteCoordinator(() => journal);
+
+	const drive = fakeDrive();
+	const fits = await coord.write('b', drive.backend, {
+		message: 'at the cap',
+		writes: [{ path: 'big.md', content: atCap }]
+	});
+	check('a bundle exactly at the cap lands', 'big.md' in fits.versions);
+
+	const empty = fakeDrive();
+	let reads = 0;
+	const counting: FileBackend = {
+		...empty.backend,
+		read: (path, encoding) => (reads++, empty.backend.read(path, encoding))
+	};
+	const over = await errorOf(() =>
+		coord.write('b', counting, {
+			message: 'over the cap',
+			writes: [
+				{ path: 'big.md', content: atCap },
+				{ path: 'one-more.md', content: 'x' }
+			]
+		})
+	);
+	check(
+		'a bundle over the cap is refused',
+		over?.includes('at most 16.0 MB') === true,
+		String(over)
+	);
+	check('before a file is read or written', reads === 0 && empty.calls.length === 0);
+
+	// Base64 counts one byte a unit: the same number of units is half the cap.
+	const binary = fakeDrive();
+	const b64 = await coord.write('b', binary.backend, {
+		message: 'bytes',
+		writes: [
+			{ path: 'a.bin', content: 'A'.repeat(MAX_BUNDLE_BYTES / 2), encoding: 'base64' },
+			{ path: 'b.bin', content: 'A'.repeat(MAX_BUNDLE_BYTES / 2), encoding: 'base64' }
+		]
+	});
+	check('base64 content counts one byte a unit', 'b.bin' in b64.versions);
+
+	// What a write replaces is journaled with it.
+	const full = fakeDrive({ 'big.md': atCap });
+	const replacing = await errorOf(() =>
+		coord.write('b', full.backend, {
+			message: 'small over large',
+			writes: [{ path: 'big.md', content: 'x' }]
+		})
+	);
+	check(
+		'a small write over a file that fills the cap is refused',
+		replacing?.includes('the files it replaces') === true,
+		String(replacing)
+	);
+	check(
+		'with nothing written and no journal left',
+		full.calls.length === 0 && full.text('big.md') === atCap && journal.entry === null
+	);
+
+	let landed = 0;
+	const remote = objectWriteCoordinator(() => ({
+		land: async () => (landed++, { versions: {} })
+	}));
+	const refused = await errorOf(() =>
+		remote.write('b', empty.backend, {
+			message: 'over the cap',
+			writes: [
+				{ path: 'big.md', content: atCap },
+				{ path: 'one-more.md', content: 'x' }
+			]
+		})
+	);
+	check(
+		'an oversized bundle is refused before the call to the coordinator object',
+		refused?.includes('at most 16.0 MB') === true && landed === 0,
+		`${refused} / ${landed}`
 	);
 }
 
