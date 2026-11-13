@@ -586,7 +586,28 @@ export function brainIdFor(owner: string, repo: string): string {
 		.replace(/^-|-$/g, '')}`;
 }
 
+// Whether a brain already holds this repository name, or the id derived from it. A
+// brain's row can outlive its repository (deleted on GitHub, or the brain moved onto
+// other storage), so a repository name being free on GitHub does not make it free here.
+export async function brainNameTaken(
+	db: D1Database,
+	repoOwner: string,
+	repoName: string
+): Promise<boolean> {
+	const row = await db
+		.prepare(
+			`SELECT 1 AS taken FROM brains
+			  WHERE brain_id = ?1
+			     OR (repo_owner = ?2 COLLATE NOCASE AND repo_name = ?3 COLLATE NOCASE)
+			  LIMIT 1`
+		)
+		.bind(brainIdFor(repoOwner, repoName), repoOwner, repoName)
+		.first();
+	return row !== null;
+}
+
 // Inserts the brain in the batch that clears rows an earlier brain left under its id.
+// False when a brain already holds the repository or the id, and nothing was written.
 export async function createBrain(
 	db: D1Database,
 	b: {
@@ -599,15 +620,15 @@ export async function createBrain(
 		visibility?: string;
 		storage_connection_id?: string | null;
 	}
-): Promise<void> {
-	await db.batch([
+): Promise<boolean> {
+	const results = await db.batch([
 		...clearBrainResidueStatements(db, b.brain_id),
 		db
 			.prepare(
 				`INSERT INTO brains (brain_id, org_id, repo_owner, repo_name, name, created_by, visibility,
 			                     storage_connection_id)
        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
-       ON CONFLICT(repo_owner, repo_name) DO NOTHING`
+       ON CONFLICT DO NOTHING`
 			)
 			.bind(
 				b.brain_id,
@@ -620,6 +641,7 @@ export async function createBrain(
 				b.storage_connection_id ?? null
 			)
 	]);
+	return (results[results.length - 1].meta.changes ?? 0) > 0;
 }
 
 // The brain for a given repo, or null. Used by connect_brain to detect a repo that's

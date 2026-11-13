@@ -240,6 +240,9 @@ interface Env {
 	// mention the key records nothing, so collecting starts only when a config says so.
 	// See src/lib/usage.ts and src/tools/analytics.ts.
 	USAGE_ANALYTICS?: string;
+	// Where create_brain puts a new brain in an org on platform-owned storage when the
+	// caller does not say: "github" (default) or "isomorphic" (chooseBrainStorage).
+	BRAIN_STORAGE?: string;
 }
 
 // Identity surfaced via OAuth `props` (read from `ctx.props`). Empty in static mode.
@@ -1196,6 +1199,7 @@ class McpSession {
 			openIndex: indexFor(this.env),
 			webBaseUrl: this.webBase(),
 			platformFiles: platformFiles(this.env),
+			defaultStorage: this.env.BRAIN_STORAGE === 'isomorphic' ? 'isomorphic' : 'github',
 			githubFor: async (conn) => {
 				const credential = credentialForConnection(conn);
 				if (credential.kind === 'platform-files') {

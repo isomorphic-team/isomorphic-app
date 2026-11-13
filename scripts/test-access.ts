@@ -278,7 +278,7 @@ import {
 	BRAIN_UNLINKED_TABLES,
 	forgetBrain
 } from '../src/lib/brain-forget.ts';
-import { createBrain } from '../src/lib/orgs.ts';
+import { brainIdFor, brainNameTaken, createBrain } from '../src/lib/orgs.ts';
 import { bindFixtureStorage } from './fixture-storage.ts';
 import { brainSlug } from '../src/lib/brain-slug.ts';
 import { DatabaseSync } from 'node:sqlite';
@@ -286,6 +286,7 @@ import { planBrainMove, loadMovePeople, describeMove, moveBrain } from '../src/l
 import { connectCustomerOrg } from '../src/lib/org-connect.ts';
 import { ensureStaticTenant, STATIC_USER_ID } from '../src/lib/static-tenant.ts';
 import {
+	chooseBrainStorage,
 	credentialFor,
 	credentialForConnection,
 	orgStorage,
@@ -1523,6 +1524,36 @@ console.log('\nA single-user (static) deployment runs the org model (ensureStati
 	);
 }
 
+console.log('\nchooseBrainStorage: where a new brain goes');
+{
+	const base = { deploymentDefault: 'isomorphic' as const, platformOwned: true, canHold: true };
+	const where = (o: Parameters<typeof chooseBrainStorage>[0]) => {
+		const c = chooseBrainStorage(o);
+		return 'storage' in c ? c.storage : `problem: ${c.problem}`;
+	};
+	check(
+		'an org on platform-owned storage gets the deployment default',
+		where(base) === 'isomorphic' && where({ ...base, deploymentDefault: 'github' }) === 'github'
+	);
+	check(
+		'an org that connected its own GitHub account gets a repository there, whatever the default',
+		where({ ...base, platformOwned: false }) === 'github'
+	);
+	check(
+		'what the caller asks for wins, in either kind of org',
+		where({ ...base, requested: 'github' }) === 'github' &&
+			where({ ...base, platformOwned: false, requested: 'isomorphic' }) === 'isomorphic'
+	);
+	check(
+		'a deployment with no files objects falls back to GitHub by default',
+		where({ ...base, canHold: false }) === 'github'
+	);
+	check(
+		'...and refuses a caller who asked for storage it does not have',
+		where({ ...base, canHold: false, requested: 'isomorphic' }).startsWith('problem:')
+	);
+}
+
 console.log('\ncredentialFor: which credential reads a brain');
 check(
 	'a row with no storage kind: the installation id it carries',
@@ -1670,6 +1701,46 @@ console.log('\nforgetting a brain: what disconnect deletes, and what it keeps');
 		repo_name: 'live'
 	});
 	check('...and clears nothing under an id a live brain holds', liveIntact());
+
+	// A name a brain holds stays taken whether or not a repository still exists for it.
+	check(
+		'brainNameTaken: a repository a brain holds, in any letter case',
+		(await brainNameTaken(fdb, 'acme', 'old')) && (await brainNameTaken(fdb, 'ACME', 'Old'))
+	);
+	check(
+		'brainNameTaken: a different repository whose name derives the same brain id',
+		brainIdFor('acme-old', 'x') === brainIdFor('acme', 'old-x') &&
+			(await createBrain(fdb, {
+				brain_id: brainIdFor('acme', 'old-x'),
+				org_id: 'fo',
+				repo_owner: 'acme',
+				repo_name: 'old-x'
+			})) &&
+			(await brainNameTaken(fdb, 'acme-old', 'x'))
+	);
+	check(
+		'brainNameTaken: a repository held under an id not derived from it, in any letter case',
+		await brainNameTaken(fdb, 'ACME', 'Live')
+	);
+	check('brainNameTaken: a free name is free', !(await brainNameTaken(fdb, 'acme', 'unused')));
+	check(
+		'createBrain says when it wrote nothing: the repository is held',
+		!(await createBrain(fdb, {
+			brain_id: 'brain-other-id',
+			org_id: 'fo',
+			repo_owner: 'acme',
+			repo_name: 'old'
+		}))
+	);
+	check(
+		'createBrain says when it wrote nothing: the id is held by another repository',
+		!(await createBrain(fdb, {
+			brain_id: brainIdFor('acme-old', 'x'),
+			org_id: 'fo',
+			repo_owner: 'acme-old',
+			repo_name: 'x'
+		}))
+	);
 
 	// The migration that deletes what earlier disconnects left behind.
 	seedResidue('b-older');
