@@ -174,7 +174,9 @@ behind.
 
 ### Create and adopt
 
-`create_brain` creates on the org's default connection and writes the binding.
+`create_brain` creates on the org's default connection and writes the binding, or creates a
+brain the platform holds itself and binds it to the `platform-files` connection
+([`storage-backends.md`](storage-backends.md) section 5.6).
 `connect_brain` adopts a repository through the org's connection and writes the binding,
 and refuses to adopt when that connection is platform-owned, since adopting through the
 shared platform account would let any org claim repositories it does not own. Moving a

@@ -109,8 +109,13 @@ brain-scope resolution throws `NoBrainError` and the app shows the create-first-
 (`app/views/AddBrainView.tsx`). Org-scope actions resolve via `orgContext()`, which needs no
 brain and refuses on a static connection, where the org-scope tools are not registered.
 
-**Brains are created explicitly.** `create_brain` (org `editor`+) scaffolds via
-`createAndScaffoldBrain`, writes a `brains` row with a user-given `name`, and switches to it.
+**Brains are created explicitly.** `create_brain` (org `editor`+) scaffolds a repository via
+`createAndScaffoldBrain`, or a platform-held brain via `scaffoldInto` on its files object with
+no GitHub call, writes a `brains` row with a user-given `name`, and switches to it.
+`chooseBrainStorage` (pure, `pnpm test:access`) picks: the caller's `storage`, else
+`BRAIN_STORAGE` for an org on a platform-owned connection, else GitHub. **A name is taken when
+a brain row holds it** (`brainNameTaken`), whatever GitHub says: a row outlives its
+repository, and `createBrain` returns false, with no grant to follow, when it wrote nothing.
 `create_brain` AND `connect_brain` default to `visibility='private'` plus an admin grant for
 the caller; older brains keep `'org'`.
 
@@ -256,7 +261,8 @@ single-user deployment, where the binding follows config. `relocationProblem` al
 brain in pull-request mode moving to a store without `proposals`. `repo_owner` and
 `repo_name` stay on the row as the brain's locator and its claim on the name, and the way
 back goes to that repository through `githubConnectionForAccount`, creating it if it is
-gone (`ensureRepository`). History stays where it was made. `disconnect_brain` refuses a
+gone (`ensureRepository`); a brain created on the platform's files (`hasRelocated` false)
+refuses a repository that already exists under its name, which is someone else's. History stays where it was made. `disconnect_brain` refuses a
 platform-held brain: it has no repository to leave behind. **Don't re-add `update_brain` and don't collapse these into a
 `manage_*` tool**: hosts grant approval per tool (design doc §6).
 

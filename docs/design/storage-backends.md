@@ -254,7 +254,9 @@ Each step is its own pull request.
       (`storage: "isomorphic"`), a resumable copy of its current files
       (`src/lib/brain-relocate.ts`).
    4. Scaffolding through the store (`scaffold-core.ts` calls octokit), and `create_brain`
-      able to make a brain here.
+      able to make a brain here. Built: `scaffoldInto`, `create_brain`'s `storage`, and the
+      deployment's `BRAIN_STORAGE` default for orgs on platform-owned storage
+      (`chooseBrainStorage`).
    5. An objects Worker for Worker Previews, which bind none today.
    6. Export to a GitHub repository, and the reverse: relocation
       (`storage-and-tenancy.md` step 5). Built as a move in both directions:

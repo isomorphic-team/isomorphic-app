@@ -349,6 +349,15 @@ bootstrap did not (it only does so when `PUBLIC_BASE_URL` was set at the time).
 Set it to `false` for an invite-only instance: an unknown user gets an error instead, and
 you add people with `invite_member`.
 
+`BRAIN_STORAGE` decides where `create_brain` puts a new brain in an organization that uses
+your platform GitHub installation (a personal organization, or one made by `create_org`
+without `github`). `github`, the default, creates a private repository in the platform
+organization. `isomorphic` keeps the brain's files in a Durable Object in the objects
+Worker, with no repository, so no content sits in the platform organization. A caller can
+ask for either with `create_brain`'s `storage`, and `configure_brain` moves an existing brain
+between them. An organization that connected its own GitHub account gets a repository there
+unless the caller asks otherwise.
+
 ### 3c. Your own account
 
 Auto-provision gives a first-time user a new organization with no brain in it, which is

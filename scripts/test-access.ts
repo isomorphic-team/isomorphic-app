@@ -286,6 +286,7 @@ import { planBrainMove, loadMovePeople, describeMove, moveBrain } from '../src/l
 import { connectCustomerOrg } from '../src/lib/org-connect.ts';
 import { ensureStaticTenant, STATIC_USER_ID } from '../src/lib/static-tenant.ts';
 import {
+	chooseBrainStorage,
 	credentialFor,
 	credentialForConnection,
 	orgStorage,
@@ -1520,6 +1521,36 @@ console.log('\nA single-user (static) deployment runs the org model (ensureStati
 		'an existing row for the configured repo is adopted, not a constraint failure',
 		failure === null && reached.length === 1 && reached[0].brain_id === 'b-legacy-id',
 		String(failure)
+	);
+}
+
+console.log('\nchooseBrainStorage: where a new brain goes');
+{
+	const base = { deploymentDefault: 'isomorphic' as const, platformOwned: true, canHold: true };
+	const where = (o: Parameters<typeof chooseBrainStorage>[0]) => {
+		const c = chooseBrainStorage(o);
+		return 'storage' in c ? c.storage : `problem: ${c.problem}`;
+	};
+	check(
+		'an org on platform-owned storage gets the deployment default',
+		where(base) === 'isomorphic' && where({ ...base, deploymentDefault: 'github' }) === 'github'
+	);
+	check(
+		'an org that connected its own GitHub account gets a repository there, whatever the default',
+		where({ ...base, platformOwned: false }) === 'github'
+	);
+	check(
+		'what the caller asks for wins, in either kind of org',
+		where({ ...base, requested: 'github' }) === 'github' &&
+			where({ ...base, platformOwned: false, requested: 'isomorphic' }) === 'isomorphic'
+	);
+	check(
+		'a deployment with no files objects falls back to GitHub by default',
+		where({ ...base, canHold: false }) === 'github'
+	);
+	check(
+		'...and refuses a caller who asked for storage it does not have',
+		where({ ...base, canHold: false, requested: 'isomorphic' }).startsWith('problem:')
 	);
 }
 

@@ -181,3 +181,9 @@ export async function relocateBrain(
 	]);
 	return step;
 }
+
+// Whether a relocation has ever run for this brain, which is true of a brain that came
+// out of a GitHub repository and false of one created on the platform's own files.
+export async function hasRelocated(db: D1Database, brainId: string): Promise<boolean> {
+	return (await readPass(db, brainId, RELOCATION_KIND, {})) !== null;
+}
