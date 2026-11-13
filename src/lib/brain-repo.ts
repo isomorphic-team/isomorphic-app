@@ -8,7 +8,7 @@
 //
 // Implementations: githubStore (brain-store-github.ts), the fs/git adapter
 // (src/local/brain-store-fs.ts), and sqlBrainStore (brain-store-sql.ts) over the
-// BrainFilesObject, which no brain is served from yet.
+// BrainFilesObject, for a brain the platform holds itself.
 
 // Where one brain's files live, within the backend its store talks to. A GitHub
 // repository today; a backend that is not addressed by owner and name adds its own

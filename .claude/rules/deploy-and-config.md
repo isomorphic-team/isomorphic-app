@@ -64,8 +64,8 @@ deployment's identity).
 The MCP Worker implements no Durable Object (below). The classes live in the **objects Worker**
 (`src/objects/worker.ts`, `wrangler.objects.template.jsonc`, name `OBJECTS_WORKER_NAME`), which
 the MCP Worker binds by `script_name`: `WRITE_COORDINATOR`, the write coordinator per brain,
-and `BRAIN_FILES` (`BrainFilesObject`), the files of a brain the platform holds, which
-nothing calls yet. `pnpm test:wiring` fails on a class or a value import of `src/objects/` anywhere else;
+and `BRAIN_FILES` (`BrainFilesObject`), the files of a brain the platform holds (`openStorage`
+in `worker.ts`; a Worker Preview binds neither, so such a brain cannot be opened in one). `pnpm test:wiring` fails on a class or a value import of `src/objects/` anywhere else;
 `pnpm test:objects` runs both Workers in workerd.
 
 - **It has no public URL** (`workers_dev` and `preview_urls` off) and holds no credential: the

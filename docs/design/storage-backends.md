@@ -249,6 +249,10 @@ Each step is its own pull request.
       MCP Worker. Built: `BrainFilesObject` in `src/objects/worker.ts`, the `BRAIN_FILES`
       binding, run in workerd by `pnpm test:objects`.
    3. A brain's storage kind in the platform database, and the Worker choosing its store by it.
+      Built: the `platform-files` connection kind (`src/lib/storage-connections.ts`) and
+      `openStorage` in `src/worker.ts`. An existing brain moves onto it with `configure_brain`
+      (`storage: "isomorphic"`), a resumable copy of its current files
+      (`src/lib/brain-relocate.ts`), one way until step 6.
    4. Scaffolding through the store (`scaffold-core.ts` calls octokit), and `create_brain`
       able to make a brain here.
    5. An objects Worker for Worker Previews, which bind none today.
