@@ -66,7 +66,7 @@ Walkthrough: [`docs/architecture.md`](docs/architecture.md).
    answers the same POST with JSON (no SSE, no session), in either protocol era via `serveMcp`
    (`src/lib/mcp-serve.ts`). The per-request `McpSession` holds brain resolution and all tool
    registration (`buildServer()`). It also serves the web app (`/b/...`), `/health`, OAuth and
-   Auth.js, and the GitHub install callback. It binds Durable Objects; it implements none.
+   Auth.js, and the install callback. It binds Durable Objects; `src/objects/` implements them.
 3. **Local runtime** (`src/local.ts`): Node, `pnpm try <folder>`. The same content tools over a
    **git repository on disk** through the fs `BrainStore` (`src/local/brain-store-fs.ts`), D1
    shimmed over `node:sqlite` (`src/local/d1-sqlite.ts`). Loopback only, no auth, no members,
@@ -157,7 +157,7 @@ agent that opens this repo. When they drift, an agent acts on the drift with con
 | -------------------------------------- | ---------------------------------------------------------------------------------------------- |
 | `org-model-and-permissions.md`         | identity, orgs, roles, `effectiveBrainRole`, sharing, guests, storage connections, static mode |
 | `github-app-auth.md`                   | App JWT and installation tokens, manifest permissions, PKCS#8                                  |
-| `deploy-and-config.md`                 | `wrangler.jsonc` generation, versioned deploys and rollback, Dependabot, CodeQL                |
+| `deploy-and-config.md`                 | Wrangler config generation, the objects Worker, deploys and rollback, Dependabot, CodeQL       |
 | `testing.md`                           | `test:ui`, visual baselines, the e2e batteries                                                 |
 | `web-app.md`                           | `/b/` web host, cookie `/mcp` + CSRF gate, `WEB_TOOL_ROUTING`                                  |
 | `app-widget.md`                        | the `ui://` bundle, `tool-payloads.ts`, `pickShownBrain`, `features`                           |

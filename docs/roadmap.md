@@ -717,16 +717,15 @@ expose a real one.
 
 [`design/brain-index-storage.md`](design/brain-index-storage.md). The content index and the
 state derived from it move out of the platform database into one SQLite-backed Durable Object
-per brain, implemented in a separate index Worker that this Worker binds to (which keeps
-version URLs and the pre-promotion smoke). Then `search_pages` moves to FTS5 inside that
+per brain, implemented in the objects Worker (`src/objects/worker.ts`) that the MCP Worker
+binds to (which keeps version URLs and the pre-promotion smoke). Then `search_pages` moves to FTS5 inside that
 object: on 130 probe questions over four real brains a prototype put the right page first 103
 times against 86 today, and searched a 5,380-page brain about three times faster.
 
 In order, each its own pull request: an index interface in `src/lib/` with today's tables
-behind it; the index Worker and per-brain object, with the local runtime and previews covered;
+behind it; the per-brain object in the objects Worker, with the local runtime and previews covered;
 a backfill from git; FTS5 in shadow, with disagreements logged; then the switch. Open before
-the second step: whether SQLite-backed Durable Objects are on the Workers free plan, and how
-`scope: "all"` performs as one call per brain.
+the second step: how `scope: "all"` performs as one call per brain.
 
 # TODO: related pages in search results
 

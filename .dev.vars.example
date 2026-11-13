@@ -73,9 +73,9 @@ AUTH_ENTRA_CLIENT_SECRET=
 # ======================================================================
 # Deployment identity — consumed by `pnpm setup:config` to generate wrangler.jsonc
 # ======================================================================
-# wrangler.jsonc is generated and gitignored, because it holds ONE deployment's
-# identity rather than something shared by everyone who deploys this repo. These are
-# the values it is generated from. Every one has a working local default, so you can
+# wrangler.jsonc and wrangler.objects.jsonc are generated and gitignored, because they
+# hold ONE deployment's identity rather than something shared by everyone who deploys
+# this repo. These are the values they are generated from. Every one has a working local default, so you can
 # leave this whole block empty until you deploy.
 #
 # `pnpm setup:config --help` documents each one. `--provision` creates the Cloudflare
@@ -84,6 +84,10 @@ AUTH_ENTRA_CLIENT_SECRET=
 
 # Cloudflare Worker name. Must be unique within your account.
 WORKER_NAME=
+
+# Name of the objects Worker, which implements the Durable Objects the MCP Worker binds.
+# Unique within your account. Default: isomorphic-objects.
+OBJECTS_WORKER_NAME=
 
 # "static" (one bearer token) or "oauth" (multi-tenant orgs, roles, members).
 AUTH_MODE=

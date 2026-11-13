@@ -211,7 +211,7 @@ The run summary records which model served each request.
 - **Incrementally:** on the push webhook (roadmap step 4), for pages changed since the last run.
 - **In full:** on an admin's request.
 
-The Worker has no Durable Object and no cron trigger, so a pass is a cursor in D1 that each invocation advances within its budget, under the whole-brain pass rule.
+The Worker implements no Durable Object and has no cron trigger, so a pass is a cursor in D1 that each invocation advances within its budget, under the whole-brain pass rule.
 
 ### Part 3: consolidation findings in the unified queue
 

@@ -149,8 +149,6 @@ Related pages ships independently of all of this.
 
 ## 7. Open questions
 
-- **Are SQLite-backed Durable Objects available on the Workers free plan?** The README promises
-  a small team the free tier.
 - **Cross-brain search becomes one call per brain.** Measure `scope: "all"` over a few dozen
   objects before step 2.
 - **`%` and `_`.** The FTS5 tokenizer drops them, so `50%` searches for `50`; `searchIndex`

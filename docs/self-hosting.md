@@ -8,8 +8,8 @@ modified source. See [`docs/licensing.md`](licensing.md) for the detail, includi
 copyleft does not reach (your brain content, and any MCP client).
 
 **The one-line version:** for one person on one machine you need Node 24 and git, and nothing
-else (path 0). For anyone else to reach it you need a Cloudflare account (Workers, D1, KV; the
-free tier is enough for a small team), a GitHub repository for the brain, and a GitHub token or
+else (path 0). For anyone else to reach it you need a Cloudflare account (Workers, Durable
+Objects, D1, KV; the free tier is enough for a small team), a GitHub repository for the brain, and a GitHub token or
 GitHub App. There is no Docker image and no Postgres path.
 
 This guide has four paths. Pick the smallest one that does what you need.
@@ -49,8 +49,8 @@ And one thing you own that is not code:
   readable and editable without any of this software. If you stop using Isomorphic, you still
   have a git repo full of markdown.
 
-Cloudflare is the only supported deploy target for a SHARED instance. Workers, D1, and KV are used
-directly rather than through an abstraction layer, so porting to another runtime is real
+Cloudflare is the only supported deploy target for a SHARED instance. Workers, Durable Objects,
+D1, and KV are used directly rather than through an abstraction layer, so porting to another runtime is real
 work rather than a config change. The free tier is enough for a small team.
 
 ---
@@ -117,12 +117,14 @@ option A of path 2's first step and takes a couple of minutes. You can then poin
 Desktop, Claude Code, or the MCP Inspector at it. Run `pnpm doctor` if you are unsure what
 your checkout is still missing.
 
-### Why `wrangler.jsonc` is generated
+### Why the Wrangler configs are generated
 
-`wrangler.jsonc` is gitignored. It holds one deployment's identity: the Worker name, the
-public URL, and the Cloudflare KV and D1 resource ids. Those are per-deployment, not
-per-repository, and Wrangler will not interpolate environment variables into resource
-bindings, so the file is generated from `wrangler.template.jsonc` by `pnpm setup:config`.
+`wrangler.jsonc` (the MCP Worker) and `wrangler.objects.jsonc` (the objects Worker) are
+gitignored. They hold one deployment's identity: the two Worker names, the public URL, and the
+Cloudflare KV and D1 resource ids. Those are per-deployment, not per-repository, and Wrangler
+will not interpolate environment variables into resource bindings, so `pnpm setup:config`
+generates each file from its template (`wrangler.template.jsonc`,
+`wrangler.objects.template.jsonc`).
 
 The default profile writes obviously-fake ids. That is correct for local work:
 `wrangler dev` and `wrangler d1 migrations apply --local` run against Miniflare, which
@@ -229,7 +231,9 @@ PUBLIC_BASE_URL=https://my-brain.<your-subdomain>.workers.dev \
 ```
 
 `--provision` creates the KV namespace and the D1 database if they do not exist, finds them
-if they do, and writes their real ids into `wrangler.jsonc`. Then upload the secrets, which
+if they do, and writes their real ids into `wrangler.jsonc`. The objects Worker is named
+`isomorphic-objects` unless you also set `OBJECTS_WORKER_NAME`; two deployments in one
+Cloudflare account need different names. Then upload the secrets, which
 are deliberately not in `wrangler.jsonc` and never committed:
 
 If you took **option A** (a token), that is two secrets:
@@ -278,12 +282,15 @@ The template says this too.
 ### 2d. Automate the deploy (optional)
 
 `.github/workflows/deploy.yml` deploys on push to `main`. It needs one secret and a set of
-variables, because `wrangler.jsonc` is not committed and has to be regenerated in CI:
+variables, because the Wrangler configs are not committed and have to be regenerated in CI:
 
 ```sh
 gh secret set CLOUDFLARE_API_TOKEN     # "Edit Cloudflare Workers" template, plus D1 edit
 pnpm setup:config --print-ci           # prints the gh variable set commands, then run them
 ```
+
+The token must be able to deploy both Workers. One scoped to the MCP Worker alone fails at
+the objects Worker's step.
 
 Without them the job skips with a warning rather than deploying something misconfigured.
 

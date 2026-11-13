@@ -30,7 +30,7 @@ with `claude mcp add --transport http isomorphic-local http://127.0.0.1:8788/mcp
 `http://127.0.0.1:8788/b/local/notes` in a browser for the same viewer and editor with no
 MCP host at all.
 
-**To self-host for a team you need:** a Cloudflare account (Workers, D1, KV; the free tier is
+**To self-host for a team you need:** a Cloudflare account (Workers, Durable Objects, D1, KV; the free tier is
 enough for a small team), a GitHub repository for the brain, and a GitHub token or GitHub App.
 For one person on one machine, `pnpm try` above needs only Node 24 and git. There is no Docker
 image and no Postgres path; Cloudflare is the only supported deploy target for a shared

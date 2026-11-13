@@ -125,6 +125,17 @@ pnpm exec wrangler versions list                # the 10 most recent versions
 pnpm exec wrangler rollback <version-id> --message "why" --yes
 ```
 
+The objects Worker has its own versions, read and rolled back with its own config:
+
+```sh
+pnpm exec wrangler deployments status --json -c wrangler.objects.jsonc
+pnpm exec wrangler versions list -c wrangler.objects.jsonc
+pnpm exec wrangler rollback <version-id> -c wrangler.objects.jsonc --message "why" --yes
+```
+
+Cloudflare refuses that rollback when a Durable Object class was added or deleted between the
+live version and the target. Past such a change the way back is forward: deploy a fix.
+
 Then confirm, rather than assuming:
 
 ```sh
@@ -173,8 +184,9 @@ pnpm exec wrangler versions deploy "$live@100%" --message "end of drill" --yes
 pnpm exec tsx scripts/smoke.ts https://<production origin>   # expect green
 ```
 
-What this proves: the rollback command works on this account, with this token, on this
-Worker, and that the origin recovers. What it does not prove is the workflow's own step
+What this proves: the rollback command works on this account, with this token, on the MCP
+Worker, and that the origin recovers. The objects Worker's rollback is not part of the drill
+and has not been run. What it does not prove is the workflow's own step
 conditions, which have no test and are read rather than run. That is the residual risk in
 removing the approval gate, and it is bounded: the worst case is a bad version that stays up
 until someone reads the red run.
