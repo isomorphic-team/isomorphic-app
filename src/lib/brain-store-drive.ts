@@ -377,6 +377,20 @@ function driveBackend(api: DriveApi, root: DriveRoot, listing: DriveListing): Fi
 	};
 }
 
+// The folder in a connected Drive that holds every brain kept there.
+export const DRIVE_HOME_FOLDER = 'Isomorphic';
+
+// Makes the folder a new brain's files go in: `<home>/<name>` at the top of the Drive,
+// making the home folder the first time. Always a new folder, so a second brain of the
+// same name never shares the first one's files. Returns its id.
+export async function createBrainFolder(api: DriveApi, name: string): Promise<string> {
+	const home =
+		(await api.children(['root'])).find(
+			(i) => i.name === DRIVE_HOME_FOLDER && i.mimeType === FOLDER_TYPE
+		) ?? (await api.createFolder('root', DRIVE_HOME_FOLDER));
+	return (await api.createFolder(home.id, name)).id;
+}
+
 const revisionOf = (id: string): Revision => ({ id, branch: BRANCH, snapshot: id });
 
 // The BrainStore for one brain. The locator selects nothing: `root` already is the brain.

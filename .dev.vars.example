@@ -70,6 +70,12 @@ AUTH_RESEND_KEY=
 AUTH_ENTRA_CLIENT_ID=
 AUTH_ENTRA_CLIENT_SECRET=
 
+# Optional: brains kept in a member's Google Drive (create_brain storage: "google-drive").
+# One Google Cloud OAuth client (type "Web application") for the whole deployment, with the
+# drive.file scope and the redirect URI <PUBLIC_BASE_URL>/google/callback. oauth mode only.
+GOOGLE_CLIENT_ID=
+GOOGLE_CLIENT_SECRET=
+
 # ======================================================================
 # Deployment identity — consumed by `pnpm setup:config` to generate wrangler.jsonc
 # ======================================================================

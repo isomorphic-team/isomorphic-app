@@ -418,6 +418,26 @@ issue text and requires an explicit confirmation before posting, publishes nothi
 account, and records the reporter privately in D1 (`feedback_reports`) keyed by the opaque
 report id printed in the issue. A per-user cap of ten reports a day bounds abuse.
 
+**Brains in Google Drive (optional).** A member can keep a brain in their own Google Drive
+instead of a repository: `create_brain` with `storage: "google-drive"`. It needs
+`AUTH_MODE=oauth`, `PUBLIC_BASE_URL`, the objects Worker, and one OAuth client for the
+deployment. In the Google Cloud console, create a project, enable the Google Drive API,
+configure the consent screen with the single scope
+`https://www.googleapis.com/auth/drive.file`, and create a client of type "Web application"
+whose redirect URI is `<your origin>/google/callback`. Then:
+
+```sh
+pnpm exec wrangler secret put GOOGLE_CLIENT_ID
+pnpm exec wrangler secret put GOOGLE_CLIENT_SECRET
+```
+
+While the consent screen's publishing status is "Testing", only the test users you list can
+connect, and Google expires each connection after seven days. With `drive.file` the
+deployment reaches only the files it created: a file someone adds to a brain's folder by
+hand is not part of the brain. Each member's refresh token is stored encrypted under a key
+derived from `AUTH_SECRET`, so changing `AUTH_SECRET` disconnects every Drive, and each is
+connected again from the link `create_brain` gives.
+
 **Directory sign-in (enterprise, optional).** An organization's people can sign in with its
 Microsoft Entra directory instead of a magic link. It runs only for an organization with the
 `enterprise` entitlement, and needs one multi-tenant Entra application for the deployment, with

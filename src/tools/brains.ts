@@ -50,7 +50,7 @@ import {
 	chooseBrainStorage,
 	githubConnectionForAccount,
 	platformFilesConnectionStatement,
-	type BrainStorageChoice,
+	GOOGLE_DRIVE_KIND,
 	platformFilesBinding,
 	platformHoldsFiles,
 	getConnection,
@@ -58,6 +58,8 @@ import {
 	orgAdministersConnection
 } from '../lib/storage-connections.ts';
 import { hasRelocated, relocateBrain, type CopyStep } from '../lib/brain-relocate.ts';
+import { DRIVE_HOME_FOLDER, createBrainFolder, type DriveApi } from '../lib/brain-store-drive.ts';
+import { DriveReconnectError, driveConnectionFor } from '../lib/drive-connection.ts';
 import type { BrainStore, StoreCapabilities } from '../lib/brain-repo.ts';
 import {
 	countPendingBrainInvites,
@@ -196,6 +198,15 @@ export function relocationProblem(o: {
 	return null;
 }
 
+// What create_brain needs to put a brain in a Google Drive.
+export interface DriveTools {
+	// The Drive API as one connection's account.
+	api(connectionId: string): DriveApi;
+	store(brainId: string, api: DriveApi, folderId: string): BrainStore;
+	// A link that connects this person's Drive for this org.
+	connectLink(pending: { userId: string; orgId: string }): Promise<string>;
+}
+
 export function registerBrainTools(
 	server: McpServer,
 	deps: {
@@ -246,7 +257,9 @@ export function registerBrainTools(
 		// into a repository under that connection's account.
 		githubFor?: (conn: StorageConnection) => Promise<Octokit>;
 		// Where create_brain puts a brain when the caller does not say (BRAIN_STORAGE).
-		defaultStorage?: BrainStorageChoice;
+		defaultStorage?: 'github' | 'isomorphic';
+		// Reaching a Google Drive. Absent when the deployment has no Google OAuth client.
+		drive?: DriveTools;
 	}
 ) {
 	const {
@@ -264,7 +277,8 @@ export function registerBrainTools(
 		webBaseUrl,
 		platformFiles,
 		githubFor,
-		defaultStorage
+		defaultStorage,
+		drive
 	} = deps;
 	// `people`: whether this deployment has anyone to share with, invite, or count.
 	// The nav offers Sharing, Members, Analytics and brain management only when it
@@ -399,6 +413,21 @@ export function registerBrainTools(
 		}
 	);
 
+	// The reply that sends the caller to connect their Drive. Nothing was created.
+	const connectDriveReply = async (ctx: OrgScope, why?: string) => {
+		const url = await drive!.connectLink({ userId: ctx.actorUserId, orgId: ctx.org.org_id });
+		return {
+			content: [
+				{
+					type: 'text' as const,
+					text:
+						`${why ? `${why} ` : ''}No brain was created yet. Open this link, sign in to Isomorphic if asked, and allow access to Google Drive:\n\n${url}\n\n` +
+						`Isomorphic can reach only the files it creates in that Drive. When you're back, ask for the brain again.\n\n(The link works once, for you only, and expires in 1 hour.)`
+				}
+			]
+		};
+	};
+
 	// ---------- create_brain (editor+) ----------
 	// Stand up a NEW, empty brain (scaffolds a fresh repo), distinct from connect_brain,
 	// which adopts an EXISTING repo. Org-scope: works even when the caller has no brain
@@ -423,10 +452,10 @@ export function registerBrainTools(
 							'Which organization to create it in, by name or GitHub owner. Defaults to the organization of the brain you are in.'
 						),
 					storage: z
-						.enum(['isomorphic', 'github'])
+						.enum(['isomorphic', 'github', 'google-drive'])
 						.optional()
 						.describe(
-							'Where the brain’s files are kept. "isomorphic": held by Isomorphic itself. "github": a new private repository under the organization’s GitHub account. Leave unset for the deployment’s default.'
+							'Where the brain’s files are kept. "isomorphic": held by Isomorphic itself. "github": a new private repository under the organization’s GitHub account. "google-drive": a new folder in the caller’s own Google Drive; the first time, the reply is a link to connect that Drive, and nothing is created until create_brain is called again afterwards. Leave unset for the deployment’s default.'
 						)
 				})
 			},
@@ -446,9 +475,18 @@ export function registerBrainTools(
 					requested: storage,
 					deploymentDefault: defaultStorage ?? 'github',
 					platformOwned: ctx.storage.owner_org_id === null,
-					canHold: !!platformFiles
+					canHold: !!platformFiles,
+					canDrive: !!drive
 				});
 				if ('problem' in chosen) return fail(chosen.problem);
+
+				// A Drive brain goes in a Drive the caller connected themselves. Without one,
+				// the reply is the link that connects it, and nothing is created.
+				let driveConn: StorageConnection | null = null;
+				if (chosen.storage === 'google-drive') {
+					driveConn = await driveConnectionFor(ctx.db, ctx.org.org_id, ctx.actorUserId);
+					if (!driveConn) return connectDriveReply(ctx);
+				}
 
 				const owner = ctx.storage.account;
 				const base = slugName(display) || 'brain';
@@ -457,12 +495,36 @@ export function registerBrainTools(
 				let repo = base;
 				let created: { owner: string; name: string };
 				let connectionId = ctx.storage.connection_id;
+				let storageRoot: string | undefined;
 				for (let attempt = 1; ; attempt++) {
 					// A name a brain already holds is taken even when GitHub has no such
 					// repository: creating it would hand this caller that brain.
 					if (attempt < 25 && (await brainNameTaken(ctx.db, owner, repo))) {
 						repo = `${base}-${attempt + 1}`;
 						continue;
+					}
+					if (driveConn) {
+						// No repository: a new folder in the connected Drive, under one
+						// "Isomorphic" folder. The owner and name stay on the row as its locator.
+						try {
+							const api = drive!.api(driveConn.connection_id);
+							storageRoot = await createBrainFolder(api, display);
+							await scaffoldInto(
+								drive!.store(brainIdFor(owner, repo), api, storageRoot),
+								{ owner, repo },
+								ctx.author
+							);
+						} catch (err) {
+							if (err instanceof DriveReconnectError) {
+								return connectDriveReply(ctx, err.message);
+							}
+							return fail(
+								`Couldn't create the brain in Google Drive: ${err instanceof Error ? err.message : String(err)}`
+							);
+						}
+						connectionId = driveConn.connection_id;
+						created = { owner, name: repo };
+						break;
 					}
 					if (chosen.storage === 'isomorphic') {
 						// No repository: the files go in the brain's own object, named by the
@@ -524,7 +586,8 @@ export function registerBrainTools(
 					name: display,
 					created_by: ctx.actorUserId,
 					visibility: 'private',
-					storage_connection_id: connectionId
+					storage_connection_id: connectionId,
+					storage_root: storageRoot
 				});
 				// Never grant on a row this call did not write: it is another brain's.
 				if (!inserted) {
@@ -550,7 +613,7 @@ export function registerBrainTools(
 					content: [
 						{
 							type: 'text' as const,
-							text: `Created "${display}" and switched to it. It's private to you: share it with share_brain, or make it visible to your whole organization.`
+							text: `Created "${display}" and switched to it.${driveConn ? ` Its files are in the Google Drive of ${driveConn.account}, in the folder ${DRIVE_HOME_FOLDER}/${display}.` : ''} It's private to you: share it with share_brain, or make it visible to your whole organization.`
 						}
 					],
 					structuredContent: {
@@ -932,6 +995,11 @@ export function registerBrainTools(
 				if (!target) return fail('That brain could not be resolved.');
 				const label = brainLabel(target);
 				const repository = `${target.repo_owner}/${target.repo_name}`;
+				if (target.storage_kind === GOOGLE_DRIVE_KIND) {
+					return fail(
+						`${label} is kept in Google Drive, and moving a brain out of a Drive is not built yet. Nothing was changed.`
+					);
+				}
 				const held = platformHoldsFiles(target);
 				const source = { store: ctx.store, locator: ctx.locator };
 				const scope = { brainId: ctx.brainId, orgId: ctx.orgId, actorUserId: ctx.actorUserId };

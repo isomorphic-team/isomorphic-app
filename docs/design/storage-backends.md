@@ -207,11 +207,15 @@ the default for a hosted brain.
   2026-11-13). The store checks each file against the revision the write was planned on,
   then reads its metadata just before the upload.
 - A delete moves the file to the trash.
-- Credential, not built. A service account has no storage of its own and can only create
-  files in a shared drive, which needs Google Workspace. OAuth with the `drive.file` scope
+- Credential: OAuth with the `drive.file` scope (`src/lib/drive-connection.ts`), which
   reaches the files the app itself created, in a personal or a Workspace Drive, and is the
   one Drive scope Google does not class as restricted (Drive's scope guide, checked
   2026-11-13). Under it a file someone adds to the folder by hand is invisible to the store.
+  A service account was not used: it has no storage of its own and can only create files in
+  a shared drive, which needs Google Workspace.
+- A connection is one person's Google account for one org. Its refresh token is stored
+  sealed under a key derived from the deployment's secret, and a brain is created only in a
+  Drive its creator connected.
 
 Both are network adapters with no git; neither needs `node:*`, so both run in the Worker.
 
@@ -287,8 +291,10 @@ Each step is its own pull request.
    store-private detail, so a Graph store does not invent a branch.
 5. **Conflict copies and duplicate names in `validate`.**
 6. **The Drive store**, same pattern as step 4. The store is built, on the contract battery
-   over a fake Drive (`scripts/fake-google-drive.ts`). Not built: the connection kind and its
-   OAuth, `create_brain` / `connect_brain` options, and a battery against real Drive.
+   over a fake Drive (`scripts/fake-google-drive.ts`), and so are the connection, its OAuth
+   and `create_brain`'s `storage: "google-drive"` (`pnpm test:drive`). Not built: a battery
+   against real Drive, moving a brain into or out of a Drive, adopting an existing folder,
+   and removing a connection.
 7. **Proposals held by the coordinator** (section 5.3), when a customer on these backends needs
    review.
 

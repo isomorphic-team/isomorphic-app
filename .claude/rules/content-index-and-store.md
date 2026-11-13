@@ -46,7 +46,7 @@ storage, and the neutral types it speaks. `githubStore(octokit)` is in
   Worker (`src/objects/worker.ts`, journal in its SQLite via `sqlJournal`, `pnpm test:objects`),
   reached through `objectWriteCoordinator` over the `WRITE_COORDINATOR` binding; locally,
   `inMemoryWriteCoordinator`.
-  The Drive store is the one store that uses it.
+  The Drive store is the one store that uses it, through `driveAccess` in `worker.ts`.
 - **A `FileBackend` crosses Workers RPC.** Pass a plain object (its functions become stubs that
   call back into the MCP Worker, so the object holds no credential) with a `storage` naming what
   it reaches; a journal entry is settled only through the same storage. A thrown error crosses
@@ -54,7 +54,8 @@ storage, and the neutral types it speaks. `githubStore(octokit)` is in
   `objectWriteCoordinator` (outside) rebuild a `WriteConflictError` from it, so the coordinator
   between them tests with `instanceof`.
 - **The Drive store** (`driveBrainStore`, `src/lib/brain-store-drive.ts`) keeps a brain in a
-  Google Drive folder. Nothing in the Worker opens one yet: there is no Drive connection kind.
+  Google Drive folder (`brains.storage_root`), opened by `openStorage` for a brain bound to
+  a `google-drive` connection.
   Drive is addressed by id and lets a folder hold two files of one name, so the store lists
   the folder tree once per store (`listDrive`, build a store per request) and resolves paths
   through that; the oldest file holds a contested path and the rest are `duplicates`. Its
