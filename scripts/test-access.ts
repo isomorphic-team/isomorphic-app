@@ -774,6 +774,22 @@ check('by GitHub owner', matchOrg(daveOrgs, 'contoso-io').org?.org.org_id === 'o
 check('by substring', matchOrg(daveOrgs, 'ontoso').org?.org.org_id === 'org2');
 check('a miss returns neither an org nor candidates', !matchOrg(daveOrgs, 'acme').org);
 check('an empty handle never silently picks one', !matchOrg(daveOrgs, '   ').org);
+{
+	// A personal organization is shown as "Personal" while its stored name is an address.
+	const personal = {
+		...daveOrgs[0],
+		org: {
+			...daveOrgs[0].org,
+			org_id: 'p-own',
+			name: 'dave@example.com',
+			model: 'platform' as const
+		}
+	};
+	check(
+		'by the label a personal organization is shown under',
+		matchOrg([...daveOrgs, personal], 'Personal').org?.org.org_id === 'p-own'
+	);
+}
 
 console.log('\nactiveAfterDisconnect: the brain a disconnect leaves you in');
 // disconnect_brain moved the pointer to a survivor and then reported the brain it
@@ -1526,17 +1542,17 @@ console.log('\nA single-user (static) deployment runs the org model (ensureStati
 
 console.log('\nchooseBrainStorage: where a new brain goes');
 {
-	const base = { deploymentDefault: 'isomorphic' as const, platformOwned: true, canHold: true };
+	const base = { platformOwned: true, canHold: true };
 	const where = (o: Parameters<typeof chooseBrainStorage>[0]) => {
 		const c = chooseBrainStorage(o);
 		return 'storage' in c ? c.storage : `problem: ${c.problem}`;
 	};
 	check(
-		'an org on platform-owned storage gets the deployment default',
-		where(base) === 'isomorphic' && where({ ...base, deploymentDefault: 'github' }) === 'github'
+		'an org on platform-owned storage gets a brain the deployment holds',
+		where(base) === 'isomorphic'
 	);
 	check(
-		'an org that connected its own GitHub account gets a repository there, whatever the default',
+		'an org that connected its own GitHub account gets a repository there',
 		where({ ...base, platformOwned: false }) === 'github'
 	);
 	check(

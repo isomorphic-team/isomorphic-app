@@ -24,6 +24,7 @@ import {
 	type BrainLocator,
 	type RepoWritePolicy,
 	type FileEntry,
+	type StoreCapabilities,
 	type WriteOpts,
 	type WriteOutcome
 } from './brain-repo.ts';
@@ -83,11 +84,17 @@ export async function gitBlobSha(content: string): Promise<string> {
 // under GitHub's GraphQL node/complexity limits. ceil(pages / this) = subrequests.
 const GRAPHQL_BLOB_BATCH = 100;
 
+export const GITHUB_CAPABILITIES: StoreCapabilities = {
+	atomicWrite: true,
+	proposals: true,
+	history: true
+};
+
 // The GitHub implementation: the functions below, bound to one authenticated Octokit.
 // An App installation token and a plain access token work the same here.
 export function githubStore(octokit: Octokit): BrainStore {
 	return defineStore({
-		capabilities: { atomicWrite: true, proposals: true, history: true },
+		capabilities: GITHUB_CAPABILITIES,
 		getRevision: (repo, branch) => getRevision(octokit, repo, branch),
 		writeBase: (repo, opts) => writeBase(octokit, repo, opts),
 		branchRevision: (repo, branch) => branchRevision(octokit, repo, branch),

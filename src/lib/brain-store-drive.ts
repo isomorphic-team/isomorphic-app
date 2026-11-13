@@ -24,6 +24,7 @@ import {
 	type FileEntry,
 	type PageContent,
 	type Revision,
+	type StoreCapabilities,
 	type WriteOpts,
 	type WriteResult
 } from './brain-repo.ts';
@@ -391,6 +392,14 @@ export async function createBrainFolder(api: DriveApi, name: string): Promise<st
 	return (await api.createFolder(home.id, name)).id;
 }
 
+// Drive writes one file at a time, holds nothing for review, and its versions are per
+// file.
+export const DRIVE_CAPABILITIES: StoreCapabilities = {
+	atomicWrite: false,
+	proposals: false,
+	history: false
+};
+
 const revisionOf = (id: string): Revision => ({ id, branch: BRANCH, snapshot: id });
 
 // The BrainStore for one brain. The locator selects nothing: `root` already is the brain.
@@ -450,12 +459,13 @@ export function driveBrainStore(
 	};
 
 	return defineStore({
-		// Drive writes one file at a time, holds nothing for review, and its versions are
-		// per file.
-		capabilities: { atomicWrite: false, proposals: false, history: false },
+		capabilities: DRIVE_CAPABILITIES,
 		getRevision: revision,
 		writeBase: revision,
 		branchRevision: async () => (await listing()).id,
+		refresh: () => {
+			current = null;
+		},
 		repoWritePolicy: async () => ({
 			defaultBranch: BRANCH,
 			branchProtected: false,
@@ -466,7 +476,9 @@ export function driveBrainStore(
 			const extension = o?.extension ?? '.md';
 			const entries: FileEntry[] = [];
 			for (const [path, f] of (await listing()).files) {
-				if (path.endsWith(extension)) entries.push({ path, version: f.version });
+				if (extension === '*' || path.endsWith(extension)) {
+					entries.push({ path, version: f.version });
+				}
 			}
 			return entries.sort((a, b) => a.path.localeCompare(b.path));
 		},

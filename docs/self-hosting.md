@@ -349,14 +349,13 @@ bootstrap did not (it only does so when `PUBLIC_BASE_URL` was set at the time).
 Set it to `false` for an invite-only instance: an unknown user gets an error instead, and
 you add people with `invite_member`.
 
-`BRAIN_STORAGE` decides where `create_brain` puts a new brain in an organization that uses
-your platform GitHub installation (a personal organization, or one made by `create_org`
-without `github`). `github`, the default, creates a private repository in the platform
-organization. `isomorphic` keeps the brain's files in a Durable Object in the objects
-Worker, with no repository, so no content sits in the platform organization. A caller can
-ask for either with `create_brain`'s `storage`, and `configure_brain` moves an existing brain
-between them. An organization that connected its own GitHub account gets a repository there
-unless the caller asks otherwise.
+In an organization that uses your platform GitHub installation (a personal organization, or
+one made by `create_org` without `github`), `create_brain` keeps a new brain's files in a
+Durable Object in the objects Worker, with no repository, so no content sits in the platform
+organization. A caller can ask for a repository instead with `create_brain`'s
+`storage: "github"`, and `configure_brain` moves an existing brain between the two. An
+organization that connected its own GitHub account gets a repository there unless the caller
+asks otherwise.
 
 ### 3c. Your own account
 
@@ -419,7 +418,8 @@ account, and records the reporter privately in D1 (`feedback_reports`) keyed by 
 report id printed in the issue. A per-user cap of ten reports a day bounds abuse.
 
 **Brains in Google Drive (optional).** A member can keep a brain in their own Google Drive
-instead of a repository: `create_brain` with `storage: "google-drive"`. It needs
+instead of a repository: `create_brain` with `storage: "google-drive"`. `configure_brain`
+with `storage` moves an existing brain into a Drive or out of one. It needs
 `AUTH_MODE=oauth`, `PUBLIC_BASE_URL`, the objects Worker, and one OAuth client for the
 deployment. In the Google Cloud console, create a project, enable the Google Drive API,
 configure the consent screen with the single scope
@@ -434,7 +434,10 @@ pnpm exec wrangler secret put GOOGLE_CLIENT_SECRET
 While the consent screen's publishing status is "Testing", only the test users you list can
 connect, and Google expires each connection after seven days. With `drive.file` the
 deployment reaches only the files it created: a file someone adds to a brain's folder by
-hand is not part of the brain. Each member's refresh token is stored encrypted under a key
+hand is not part of the brain. A Drive keeps no history of a brain's changes, so
+`view_activity` has nothing to list for one, and a page opened and saved in Google's own
+editor comes back with its markdown rewritten (escaped characters, `&nbsp;` lines): change
+pages through Isomorphic. Each member's refresh token is stored encrypted under a key
 derived from `AUTH_SECRET`, so changing `AUTH_SECRET` disconnects every Drive, and each is
 connected again from the link `create_brain` gives.
 
@@ -482,8 +485,7 @@ see what a pass would find before deploying anything, run it over a local copy:
 `pnpm consolidate:report <folder> --models --cap 1`.
 
 **Backups.** A brain on GitHub is a git repository, so it is already backed up everywhere it
-is cloned. A brain the deployment holds itself (`BRAIN_STORAGE=isomorphic`, or
-`storage: "isomorphic"`) is not: set `BACKUP_BUCKET` and `BACKUP_PUBLIC_KEY` and each one is
+is cloned. A brain the deployment holds itself is not: set `BACKUP_BUCKET` and `BACKUP_PUBLIC_KEY` and each one is
 backed up to an R2 bucket, encrypted, after it changes
 ([`docs/ops/backups.md`](ops/backups.md)). The D1 database holds only derived data plus org and membership rows. Losing the
 index costs a rebuild; losing the org tables costs re-inviting people. Neither loses content.

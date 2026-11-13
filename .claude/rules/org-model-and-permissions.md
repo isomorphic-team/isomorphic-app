@@ -25,10 +25,10 @@ Full RFCs: `docs/design/org-roles-permissions.md`, `docs/design/brain-level-perm
 The Worker is an OAuth 2.1 server to Claude via `@cloudflare/workers-oauth-provider`. The human
 sign-in behind `/authorize` is Auth.js (`src/oauth/auth-handler.ts` + `src/auth/config.ts`,
 `@auth/core` + `@auth/d1-adapter`) with a Resend magic link; users need no GitHub account. Token
-props `{ user_id, email }`. `AUTH_SIGN_IN=open` (preview deployments only, set by
-`preview.yml`; default `email`) signs anyone in as any address they type: `handleAuthRequest`
-redirects the sign-in POST to the link Auth.js minted instead of emailing it, so the session
-is a real Auth.js one. Only the exact value `open` opens it. `pnpm test:signin` drives both
+props `{ user_id, email }`. Open sign-in (`PREVIEW_SIGN_IN=open`, written only by
+`previewConfig` in `scripts/preview.ts`, never by a setting) signs anyone in as any address
+they type: `handleAuthRequest` redirects the sign-in POST to the link
+Auth.js minted instead of emailing it, so the session is a real Auth.js one. Only the exact value `open` opens it. `pnpm test:signin` drives both
 modes through real Auth.js over `node:sqlite`. Google/OIDC is the recommended future primary provider (not built).
 GitHub sign-in (`IDENTITY_MODE=github`, the per-user `tenants` table, `brain-<login>`
 auto-provisioning) was removed on 2026-09-23; `/authorize` answers 501 if it is still set.
@@ -113,8 +113,9 @@ brain and refuses on a static connection, where the org-scope tools are not regi
 `createAndScaffoldBrain`, or a platform-held brain via `scaffoldInto` on its files object with
 no GitHub call, or a folder in the caller's Google Drive (`createBrainFolder`), writes a
 `brains` row with a user-given `name`, and switches to it.
-`chooseBrainStorage` (pure, `pnpm test:access`) picks: the caller's `storage`, else
-`BRAIN_STORAGE` for an org on a platform-owned connection, else GitHub. A Drive is only ever
+`chooseBrainStorage` (pure, `pnpm test:access`) picks: the caller's `storage`, else a brain
+the deployment holds for an org on a platform-owned connection when the deployment binds
+files objects, else GitHub. A Drive is only ever
 asked for. **A name is taken when
 a brain row holds it** (`brainNameTaken`), whatever GitHub says: a row outlives its
 repository, and `createBrain` returns false, with no grant to follow, when it wrote nothing.
@@ -244,8 +245,7 @@ folder. `create_brain` with `storage: "google-drive"` uses only a Drive the call
 (`driveConnectionFor`), and otherwise replies with a link (`startDriveConnect`) to
 `/google/connect`, which with `/google/callback` requires a browser signed in as that person
 (`pendingDriveConnect`). The scope is `drive.file`: never widen it without Google's
-restricted-scope review. `configure_brain` refuses to move a Drive brain; nothing removes a
-connection or its credential yet.
+restricted-scope review. Nothing removes a connection or its credential yet.
 `listAccessibleBrains` JOINS the binding: there is no fallback to the org, and a brain
 without a binding is not listed. **An org names its storage too:** `orgs.default_connection_id`
 (migration 0013) is where its new brains are created and what org-scope work (create, list
@@ -263,18 +263,25 @@ invites, and leaves the binding alone. The preview,
 `planBrainMove`, runs `effectiveBrainRole` once per org rather than restating it. Renaming is
 `configure_brain`'s `name`.
 
-**`configure_brain` with `storage` moves a brain's files**: `"isomorphic"` off GitHub into
-its own Durable Object, `"github"` back (`relocateBrain`, `src/lib/brain-relocate.ts`,
-`pnpm test:store`). A budgeted copy of the current files per call, its place kept in
-`brain_passes`, and the binding changed (`platformFilesBinding` or `bindingStatement`, in the
-batch that marks the pass done) only when the copy matches the source's head. Gated at brain
-admin AND org admin (`requires` and `requiresOrg`, `pnpm test:scope`); refused on a
-single-user deployment, where the binding follows config. `relocationProblem` also refuses a
-brain in pull-request mode moving to a store without `proposals`. `repo_owner` and
-`repo_name` stay on the row as the brain's locator and its claim on the name, and the way
-back goes to that repository through `githubConnectionForAccount`, creating it if it is
-gone (`ensureRepository`); a brain created on the platform's files (`hasRelocated` false)
-refuses a repository that already exists under its name, which is someone else's. History stays where it was made. `disconnect_brain` refuses a
+**`configure_brain` with `storage` moves a brain's files** between any two of `"github"`,
+`"isomorphic"` and `"google-drive"`, by one path (`relocateBrain`,
+`src/lib/brain-relocate.ts`, `pnpm test:store`). A destination is a `MoveTarget`: a `key`
+naming it and an `open` that makes it ready and returns the store, the binding statements
+and a token kept for later steps (the Drive folder made for the move). Adding a storage
+means adding a target, not a direction. Each call copies a budget of the current files, its
+place and target kept in `brain_passes`; a copy begun toward another target starts again;
+the binding (`platformFilesBinding`, or `bindingStatement` with the folder as
+`storage_root`) changes in the batch that marks the pass done, only when the copy matches
+the source's head. Gated at brain admin AND org admin (`requires` and `requiresOrg`,
+`pnpm test:scope`). `moveProblem` refuses a move to where the brain already is, to storage
+the deployment lacks (a single-user deployment has none, its binding follows config), and
+of a brain in pull-request mode to a store without `proposals`. A move into a Drive uses
+only a Drive the caller connected. `repo_owner` and `repo_name` stay on the row as the
+brain's locator and its claim on the name, and a move to GitHub goes to that repository
+through `githubConnectionForAccount`, creating it if it is gone (`ensureRepository`); a
+brain that never left a repository (`leftRepository` false, which `relocateBrain` keeps in
+the pass and tells the target's `open`) refuses one that already exists under its name,
+which is someone else's (`MoveRefused`). History stays where it was made. `disconnect_brain` refuses a
 platform-held brain: it has no repository to leave behind. **Don't re-add `update_brain` and don't collapse these into a
 `manage_*` tool**: hosts grant approval per tool (design doc §6).
 

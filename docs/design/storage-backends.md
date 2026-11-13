@@ -270,8 +270,8 @@ Each step is its own pull request.
       (`storage: "isomorphic"`), a resumable copy of its current files
       (`src/lib/brain-relocate.ts`).
    4. Scaffolding through the store (`scaffold-core.ts` calls octokit), and `create_brain`
-      able to make a brain here. Built: `scaffoldInto`, `create_brain`'s `storage`, and the
-      deployment's `BRAIN_STORAGE` default for orgs on platform-owned storage
+      able to make a brain here. Built: `scaffoldInto`, `create_brain`'s `storage`, and a brain
+      the deployment holds as the default for orgs on platform-owned storage
       (`chooseBrainStorage`).
    5. An objects Worker for Worker Previews. Built: a shared preview objects Worker and a
       name scope per pull request (`preview-environments.md`), opt-in by
@@ -292,9 +292,10 @@ Each step is its own pull request.
 5. **Conflict copies and duplicate names in `validate`.**
 6. **The Drive store**, same pattern as step 4. The store is built, on the contract battery
    over a fake Drive (`scripts/fake-google-drive.ts`), and so are the connection, its OAuth
-   and `create_brain`'s `storage: "google-drive"` (`pnpm test:drive`). Not built: a battery
-   against real Drive, moving a brain into or out of a Drive, adopting an existing folder,
-   and removing a connection.
+   and `create_brain`'s `storage: "google-drive"` (`pnpm test:drive`). `configure_brain`'s `storage` moves a
+   brain into or out of a Drive through the same copy as every other pair
+   (`relocateBrain` and a `MoveTarget`). Not built: a battery against real Drive, adopting
+   an existing folder, and removing a connection.
 7. **Proposals held by the coordinator** (section 5.3), when a customer on these backends needs
    review.
 

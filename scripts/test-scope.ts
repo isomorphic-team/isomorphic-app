@@ -43,7 +43,8 @@ import { registerMemberTools } from '../src/tools/members.ts';
 import { registerBrainAccessTools } from '../src/tools/brain-access.ts';
 import { registerMediaTools } from '../src/tools/media.ts';
 import { DEFAULT_BRAIN_CONFIG } from '../src/lib/brain-policy.ts';
-import { registerBrainTools, relocationProblem } from '../src/tools/brains.ts';
+import { registerBrainTools } from '../src/tools/brains.ts';
+import { moveProblem } from '../src/lib/brain-relocate.ts';
 import { registerAnalyticsTools } from '../src/tools/analytics.ts';
 import { registerOrgOnboardingTools, type OrgOnboardingEnv } from '../src/tools/org-onboarding.ts';
 import { registerLibrarianTools, type BrainContext } from '../src/tools/librarian.ts';
@@ -291,7 +292,6 @@ function toolsFor(
 		github?: unknown;
 		// Real stores for platform-held brains, by brain_id, in place of the trap.
 		files?: (brainId: string) => BrainStore;
-		defaultStorage?: 'github' | 'isomorphic';
 	} = {
 		webBaseUrl: 'https://brain.example'
 	}
@@ -391,7 +391,6 @@ function toolsFor(
 		openIndex: d1Index(db),
 		webBaseUrl: deployment.webBaseUrl,
 		platformFiles: deployment.noFilesObjects ? undefined : (deployment.files ?? (() => filesStore)),
-		defaultStorage: deployment.defaultStorage,
 		githubFor: async () => (deployment.github as never) ?? octokit
 	});
 	return handlers;
@@ -1313,7 +1312,8 @@ console.log('\nA single-user deployment: only the tools that can answer');
 	const go = { storage: 'isomorphic', confirm: true };
 	const movable = {
 		destination: { atomicWrite: true, proposals: false, history: true },
-		held: false,
+		from: 'github' as const,
+		to: 'isomorphic' as const,
 		writeMode: 'direct' as const,
 		label: 'Main'
 	};
@@ -1371,14 +1371,36 @@ console.log('\nA single-user deployment: only the tools that can answer');
 	);
 	check(
 		'a brain that takes its changes as pull requests is refused',
-		/pull requests/.test(relocationProblem({ ...movable, writeMode: 'pull-request' }) ?? '') &&
-			relocationProblem(movable) === null &&
+		/pull requests/.test(moveProblem({ ...movable, writeMode: 'pull-request' }) ?? '') &&
+			moveProblem(movable) === null &&
 			// A destination that can hold a change for review takes such a brain.
-			relocationProblem({
+			moveProblem({
 				...movable,
 				writeMode: 'pull-request',
 				destination: { ...movable.destination, proposals: true }
 			}) === null
+	);
+	check(
+		'the refusal is the same rule for every pair of storages',
+		/already kept in Google Drive/.test(
+			moveProblem({ ...movable, from: 'google-drive', to: 'google-drive' }) ?? ''
+		) &&
+			/not set up/.test(
+				moveProblem({ ...movable, to: 'google-drive', destination: undefined }) ?? ''
+			) &&
+			moveProblem({ ...movable, from: 'google-drive', to: 'github' }) === null &&
+			/pull requests/.test(
+				moveProblem({ ...movable, to: 'google-drive', writeMode: 'pull-request' }) ?? ''
+			)
+	);
+	const toDrive = await attempt(both, 'configure_brain', {
+		storage: 'google-drive',
+		confirm: true
+	});
+	check(
+		'a deployment with no Google client refuses a move into a Drive',
+		toDrive.outcome === 'denied' && toDrive.detail.includes('not set up'),
+		toDrive.detail
 	);
 	const back = { storage: 'github', confirm: true };
 	const notHeld = await attempt(both, 'configure_brain', back);
@@ -1565,25 +1587,14 @@ console.log('\nA single-user deployment: only the tools that can answer');
 		writer,
 		'create_brain',
 		{ name: 'Defaulted', org: 'Hosted Co' },
-		{
-			files,
-			defaultStorage: 'isomorphic'
-		}
+		{ files }
 	);
 	check(
-		'with the deployment default set, an org on platform-owned storage gets one unasked',
+		'an org on platform-owned storage gets a brain the deployment holds, unasked',
 		byDefault.outcome === 'allowed' && row('Defaulted')?.kind === PLATFORM_FILES_KIND,
 		byDefault.detail
 	);
-	const customer = await attempt(
-		writer,
-		'create_brain',
-		{ name: 'Customer' },
-		{
-			files,
-			defaultStorage: 'isomorphic'
-		}
-	);
+	const customer = await attempt(writer, 'create_brain', { name: 'Customer' }, { files });
 	check(
 		'an org with its own GitHub account still goes to GitHub',
 		customer.detail.includes('octokit.') && row('Customer') === undefined,

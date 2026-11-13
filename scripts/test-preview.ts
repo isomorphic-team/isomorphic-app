@@ -183,10 +183,7 @@ console.log('\nthe previews block carries every binding the template declares');
 		throws(() => previewConfig(named('isomorphic-objects'), objects), 'preview-objects') &&
 			throws(() => previewConfig(template, objects), 'preview-objects')
 	);
-	check(
-		'vars match the top level',
-		JSON.stringify(previews.vars) === JSON.stringify(template.vars)
-	);
+	check('vars match the top level', JSON.stringify(previews.vars) === JSON.stringify(config.vars));
 	const d1 = (previews.d1_databases as Record<string, unknown>[])[0];
 	check(
 		'both databases are carried, the index one included',
@@ -374,21 +371,32 @@ console.log('\nopen sign-in is a preview setting and nothing else');
 	);
 	check(
 		'the config step takes the decided mode',
-		/AUTH_SIGN_IN: \$\{\{ needs\.resolve\.outputs\.signin \}\}/.test(yaml)
+		/PREVIEW_SIGN_IN: \$\{\{ needs\.resolve\.outputs\.signin \}\}/.test(yaml)
 	);
+	const vars = (open: boolean) =>
+		(
+			previewConfig(
+				{ d1_databases: [{ binding: 'PLATFORM_DB' }, { binding: 'INDEX_DB' }] },
+				undefined,
+				open
+			).previews as { vars: Record<string, string> }
+		).vars;
+	const open = vars(true);
 	check(
-		'deploy.yml never sets AUTH_SIGN_IN',
-		!readFileSync('.github/workflows/deploy.yml', 'utf8').includes('AUTH_SIGN_IN')
+		'previewConfig writes PREVIEW_SIGN_IN=open only when told to',
+		open.PREVIEW_SIGN_IN === 'open' && !('PREVIEW_SIGN_IN' in vars(false)),
+		JSON.stringify(open)
 	);
+	const nowhere = [
+		'.github/workflows/deploy.yml',
+		'scripts/setup-config.ts',
+		'wrangler.template.jsonc',
+		'.dev.vars.example'
+	].filter((f) => /SIGN_IN/.test(readFileSync(f, 'utf8')));
 	check(
-		'setup-config defaults it to email',
-		/key: 'AUTH_SIGN_IN',[\s\S]*?default: 'email'/.test(
-			readFileSync('scripts/setup-config.ts', 'utf8')
-		)
-	);
-	check(
-		'the template fills it from setup-config',
-		readFileSync('wrangler.template.jsonc', 'utf8').includes('"AUTH_SIGN_IN": "__AUTH_SIGN_IN__"')
+		'no deployment config or setting sets a sign-in mode',
+		nowhere.length === 0,
+		nowhere.join(', ')
 	);
 }
 
