@@ -49,11 +49,12 @@ import { ensureStaticTenant, STATIC_USER_ID } from './lib/static-tenant.ts';
 import {
 	credentialFor,
 	credentialForConnection,
+	isGithubCredential,
 	orgStorage,
 	type GithubCredential
 } from './lib/storage-connections.ts';
 import { filesObjectName, sqlBrainStore } from './lib/brain-store-sql.ts';
-import { driveApi, driveBrainStore, type DriveApi } from './lib/brain-store-drive.ts';
+import { driveApi, driveBrainStore } from './lib/brain-store-drive.ts';
 import {
 	DRIVE_CALLBACK_PATH,
 	DRIVE_CONNECT_PATH,
@@ -354,33 +355,36 @@ function platformFiles(env: Env): ((brainId: string) => BrainStore) | undefined 
 // What reaching a Google Drive takes: the OAuth client, the key stored tokens are sealed
 // under, and the write coordinator a Drive store lands its bundles through. Undefined
 // when this deployment lacks any of them.
-interface DriveAccess {
+interface DriveAccess extends DriveTools {
 	client: GoogleClient;
-	key: Promise<CryptoKey>;
-	// The Drive API as one connection's account.
-	api(connectionId: string): DriveApi;
-	store(brainId: string, api: DriveApi, folderId: string): BrainStore;
+	key(): Promise<CryptoKey>;
+	fetcher: typeof fetch;
 }
 
 let driveKeyMemo: { secret: string; key: Promise<CryptoKey> } | undefined;
 
 function driveAccess(env: Env): DriveAccess | undefined {
-	const client = googleClient(env);
-	const secret = env.AUTH_MODE === 'oauth' ? deploymentSecret(env) : undefined;
+	const base = webBaseUrl({ authMode: env.AUTH_MODE, publicBaseUrl: env.PUBLIC_BASE_URL });
+	const client = googleClient(env, base);
+	const secret = deploymentSecret(env);
 	const ns = env.WRITE_COORDINATOR;
-	if (!client || !secret || !ns) return undefined;
-	if (driveKeyMemo?.secret !== secret) driveKeyMemo = { secret, key: credentialKey(secret) };
-	const key = driveKeyMemo.key;
+	if (!base || !client || !secret || !ns) return undefined;
+	// Derived when a Drive is first reached, then kept for the isolate.
+	const key = (): Promise<CryptoKey> => {
+		if (driveKeyMemo?.secret !== secret) driveKeyMemo = { secret, key: credentialKey(secret) };
+		return driveKeyMemo.key;
+	};
 	// Called as a bare function: a Worker's fetch refuses any other receiver.
 	const fetcher: typeof fetch = (input, init) => fetch(input, init);
 	const coordinator = objectWriteCoordinator((name) => ns.get(ns.idFromName(name)));
 	return {
 		client,
 		key,
+		fetcher,
 		api: (connectionId) => {
-			let token: Promise<() => Promise<string>> | undefined;
+			let source: Promise<() => Promise<string>> | undefined;
 			return driveApi(fetcher, async () => {
-				token ??= key.then((k) =>
+				source ??= key().then((k) =>
 					driveTokenSource({
 						db: env.PLATFORM_DB,
 						cache: env.OAUTH_KV,
@@ -390,7 +394,7 @@ function driveAccess(env: Env): DriveAccess | undefined {
 						fetcher
 					})
 				);
-				return (await token)();
+				return (await source)();
 			});
 		},
 		// The coordinator object is named as the brain's files object would be, scope included.
@@ -400,7 +404,8 @@ function driveAccess(env: Env): DriveAccess | undefined {
 				{ folderId },
 				coordinator,
 				filesObjectName(brainId, env.OBJECTS_SCOPE?.trim())
-			)
+			),
+		connectLink: (pending) => startDriveConnect(env.OAUTH_KV, base, pending)
 	};
 }
 
@@ -417,17 +422,16 @@ async function openStorage(
 	const credential = credentialFor(target);
 	if (credential.kind === 'google-drive') {
 		const drive = driveAccess(env);
-		if (!drive || !target.storage_root) {
+		if (!drive) {
 			throw new Error(
 				'This brain is kept in Google Drive, which this deployment is not set up to reach (GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, WRITE_COORDINATOR).'
 			);
 		}
+		if (!credential.connectionId || !credential.folderId) {
+			throw new Error('This brain is kept in Google Drive, but its record names no folder there.');
+		}
 		return {
-			store: drive.store(
-				target.brain_id,
-				drive.api(target.storage_connection_id),
-				target.storage_root
-			)
+			store: drive.store(target.brain_id, drive.api(credential.connectionId), credential.folderId)
 		};
 	}
 	if (credential.kind === 'platform-files') {
@@ -636,19 +640,6 @@ class McpSession {
 	}
 
 	/** Whether this deployment records usage at all. Off unless explicitly enabled. */
-	// What create_brain needs to put a brain in a Google Drive, or undefined when this
-	// deployment cannot reach one or has no address for the connect link.
-	private driveForTools(): DriveTools | undefined {
-		const drive = driveAccess(this.env);
-		const base = this.env.PUBLIC_BASE_URL?.trim();
-		if (!drive || !base) return undefined;
-		return {
-			api: drive.api,
-			store: drive.store,
-			connectLink: (pending) => startDriveConnect(this.env.OAUTH_KV, base, pending)
-		};
-	}
-
 	private usageEnabled(): boolean {
 		return this.env.USAGE_ANALYTICS === 'true';
 	}
@@ -985,7 +976,7 @@ class McpSession {
 		assertRole(membership.role, opts?.requires);
 		const storage = await orgStorage(env.PLATFORM_DB, membership.org);
 		const credential = credentialForConnection(storage);
-		if (credential.kind === 'platform-files' || credential.kind === 'google-drive') {
+		if (!isGithubCredential(credential)) {
 			throw new Error(`Org ${membership.org.org_id} has no GitHub connection to create brains on.`);
 		}
 		const octokit = await githubClientFor(env, credential);
@@ -1305,12 +1296,12 @@ class McpSession {
 			defaultStorage: this.env.BRAIN_STORAGE === 'isomorphic' ? 'isomorphic' : 'github',
 			githubFor: async (conn) => {
 				const credential = credentialForConnection(conn);
-				if (credential.kind === 'platform-files' || credential.kind === 'google-drive') {
+				if (!isGithubCredential(credential)) {
 					throw new Error(`${conn.connection_id} is not a GitHub connection.`);
 				}
 				return githubClientFor(this.env, credential);
 			},
-			drive: this.driveForTools()
+			drive: driveAccess(this.env)
 		});
 
 		// ---------- user-defined tools (brain-tools) ----------
@@ -1613,9 +1604,9 @@ async function handleDriveConnect(request: Request, url: URL, env: Env): Promise
 	const done = await completeDriveConnect({
 		db: env.PLATFORM_DB,
 		kv: env.OAUTH_KV,
-		key: await drive.key,
+		key: await drive.key(),
 		client: drive.client,
-		fetcher: (input, init) => fetch(input, init),
+		fetcher: drive.fetcher,
 		state,
 		code: url.searchParams.get('code'),
 		sessionUserIds

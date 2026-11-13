@@ -8,6 +8,7 @@
 // files this deployment created, and nothing else in the account.
 
 import type { D1Database } from '@cloudflare/workers-types';
+import { base64FromBytes, bytesFromBase64 } from './media.ts';
 import { GOOGLE_DRIVE_KIND, type StorageConnection } from './storage-connections.ts';
 
 export const DRIVE_SCOPE = 'https://www.googleapis.com/auth/drive.file';
@@ -28,14 +29,13 @@ export interface GoogleClient {
 export const DRIVE_CALLBACK_PATH = '/google/callback';
 
 // The client from a deployment's settings, or undefined when it has not registered one.
-export function googleClient(env: {
-	GOOGLE_CLIENT_ID?: string;
-	GOOGLE_CLIENT_SECRET?: string;
-	PUBLIC_BASE_URL?: string;
-}): GoogleClient | undefined {
+// `base` is the deployment's origin, with no trailing slash.
+export function googleClient(
+	env: { GOOGLE_CLIENT_ID?: string; GOOGLE_CLIENT_SECRET?: string },
+	base: string | undefined
+): GoogleClient | undefined {
 	const clientId = env.GOOGLE_CLIENT_ID?.trim();
 	const clientSecret = env.GOOGLE_CLIENT_SECRET?.trim();
-	const base = env.PUBLIC_BASE_URL?.trim().replace(/\/+$/, '');
 	if (!clientId || !clientSecret || !base) return undefined;
 	return { clientId, clientSecret, redirectUri: `${base}${DRIVE_CALLBACK_PATH}` };
 }
@@ -78,7 +78,7 @@ async function tokenRequest(
 	fetcher: typeof fetch,
 	client: GoogleClient,
 	grant: Record<string, string>
-): Promise<TokenResponse> {
+): Promise<TokenResponse & { access_token: string }> {
 	const res = await fetcher(TOKEN_ENDPOINT, {
 		method: 'POST',
 		headers: { 'content-type': 'application/x-www-form-urlencoded' },
@@ -94,13 +94,12 @@ async function tokenRequest(
 		// Google's error code only: the body can echo the request.
 		throw new Error(`Google refused the token request (${body.error ?? res.status}).`);
 	}
-	return body;
+	return { ...body, access_token: body.access_token };
 }
 
 export interface DriveGrant {
 	refreshToken: string;
 	accessToken: string;
-	expiresIn: number;
 }
 
 // Trades the code Google sent to the callback for tokens.
@@ -119,11 +118,7 @@ export async function exchangeCode(
 		throw new Error('Google Drive access was not granted, so nothing was connected.');
 	}
 	if (!body.refresh_token) throw new Error('Google returned no refresh token.');
-	return {
-		refreshToken: body.refresh_token,
-		accessToken: body.access_token!,
-		expiresIn: body.expires_in ?? 0
-	};
+	return { refreshToken: body.refresh_token, accessToken: body.access_token };
 }
 
 export async function refreshAccessToken(
@@ -135,7 +130,7 @@ export async function refreshAccessToken(
 		grant_type: 'refresh_token',
 		refresh_token: refreshToken
 	});
-	return { accessToken: body.access_token!, expiresIn: body.expires_in ?? 0 };
+	return { accessToken: body.access_token, expiresIn: body.expires_in ?? 0 };
 }
 
 // Which Google account a token belongs to: Drive's own stable id for it, and its address.
@@ -158,14 +153,6 @@ export async function driveAccount(
 // ---- sealing ----
 
 const encoder = new TextEncoder();
-
-const toBase64 = (bytes: Uint8Array): string => btoa(String.fromCharCode(...bytes));
-const fromBase64 = (s: string): Uint8Array<ArrayBuffer> => {
-	const binary = atob(s);
-	const bytes = new Uint8Array(binary.length);
-	for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-	return bytes;
-};
 
 // The key storage credentials are sealed under, derived from the deployment's secret.
 // Changing that secret orphans every stored credential: each Drive is connected again.
@@ -202,7 +189,7 @@ export async function sealCredential(
 		key,
 		encoder.encode(secret)
 	);
-	return `v1.${toBase64(iv)}.${toBase64(new Uint8Array(sealed))}`;
+	return `v1.${base64FromBytes(iv)}.${base64FromBytes(new Uint8Array(sealed))}`;
 }
 
 export async function openCredential(
@@ -213,9 +200,13 @@ export async function openCredential(
 	const [version, iv, body] = sealed.split('.');
 	if (version !== 'v1' || !iv || !body) throw new Error('Unreadable storage credential.');
 	const plain = await crypto.subtle.decrypt(
-		{ name: 'AES-GCM', iv: fromBase64(iv), additionalData: encoder.encode(bound) },
+		{
+			name: 'AES-GCM',
+			iv: bytesFromBase64(iv) as BufferSource,
+			additionalData: encoder.encode(bound)
+		},
 		key,
-		fromBase64(body)
+		bytesFromBase64(body) as BufferSource
 	);
 	return new TextDecoder().decode(plain);
 }
@@ -270,18 +261,16 @@ export async function saveDriveConnection(
 export async function driveConnectionFor(
 	db: D1Database,
 	orgId: string,
-	userIds: string[]
+	userId: string
 ): Promise<StorageConnection | null> {
-	if (userIds.length === 0) return null;
-	const marks = userIds.map((_, i) => `?${i + 3}`).join(', ');
 	return await db
 		.prepare(
 			`SELECT c.* FROM storage_connections c
 			   JOIN storage_credentials k ON k.connection_id = c.connection_id
-			  WHERE c.kind = ?1 AND c.owner_org_id = ?2 AND k.connected_by IN (${marks})
+			  WHERE c.kind = ?1 AND c.owner_org_id = ?2 AND k.connected_by = ?3
 			  ORDER BY k.updated_at DESC, c.connection_id ASC LIMIT 1`
 		)
-		.bind(GOOGLE_DRIVE_KIND, orgId, ...userIds)
+		.bind(GOOGLE_DRIVE_KIND, orgId, userId)
 		.first<StorageConnection>();
 }
 
@@ -307,13 +296,11 @@ export function driveTokenSource(o: {
 	fetcher: typeof fetch;
 }): () => Promise<string> {
 	const cacheKey = `drive_access:${o.connectionId}`;
-	let held: string | undefined;
-	return async () => {
-		if (held) return held;
+	const load = async (): Promise<string> => {
 		const cached = await o.cache.get(cacheKey);
 		if (cached) {
 			try {
-				return (held = await openCredential(o.key, cached, cacheKey));
+				return await openCredential(o.key, cached, cacheKey);
 			} catch {
 				// Sealed under an earlier secret: mint another.
 			}
@@ -335,8 +322,15 @@ export function driveTokenSource(o: {
 				})
 				.catch(() => {});
 		}
-		return (held = minted.accessToken);
+		return minted.accessToken;
 	};
+	// One lookup however many requests ask at once; a failed one is tried again.
+	let held: Promise<string> | undefined;
+	return () =>
+		(held ??= load().catch((e) => {
+			held = undefined;
+			throw e;
+		}));
 }
 
 // ---- the connect flow ----
@@ -361,6 +355,7 @@ export interface PendingStore extends TokenCache {
 }
 
 // Stashes who is connecting a Drive for which org, and returns the link to give them.
+// `base` is the deployment's origin, with no trailing slash.
 export async function startDriveConnect(
 	kv: PendingStore,
 	base: string,
@@ -368,7 +363,7 @@ export async function startDriveConnect(
 ): Promise<string> {
 	const state = crypto.randomUUID();
 	await kv.put(pendingKey(state), JSON.stringify(pending), { expirationTtl: PENDING_TTL_SECONDS });
-	return `${base.replace(/\/+$/, '')}${DRIVE_CONNECT_PATH}?state=${state}`;
+	return `${base}${DRIVE_CONNECT_PATH}?state=${state}`;
 }
 
 // The stashed request a state names, when the signed-in person is the one it was made

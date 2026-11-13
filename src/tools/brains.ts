@@ -413,18 +413,20 @@ export function registerBrainTools(
 		}
 	);
 
-	const driveLink = (ctx: OrgScope): Promise<string> =>
-		drive!.connectLink({ userId: ctx.actorUserId, orgId: ctx.org.org_id });
-	const connectDriveReply = (url: string, why?: string) => ({
-		content: [
-			{
-				type: 'text' as const,
-				text:
-					`${why ? `${why} ` : ''}No brain was created yet. Open this link, sign in to Isomorphic if asked, and allow access to Google Drive:\n\n${url}\n\n` +
-					`Isomorphic can reach only the files it creates in that Drive. When you're back, ask for the brain again.\n\n(The link works once, for you only, and expires in 1 hour.)`
-			}
-		]
-	});
+	// The reply that sends the caller to connect their Drive. Nothing was created.
+	const connectDriveReply = async (ctx: OrgScope, why?: string) => {
+		const url = await drive!.connectLink({ userId: ctx.actorUserId, orgId: ctx.org.org_id });
+		return {
+			content: [
+				{
+					type: 'text' as const,
+					text:
+						`${why ? `${why} ` : ''}No brain was created yet. Open this link, sign in to Isomorphic if asked, and allow access to Google Drive:\n\n${url}\n\n` +
+						`Isomorphic can reach only the files it creates in that Drive. When you're back, ask for the brain again.\n\n(The link works once, for you only, and expires in 1 hour.)`
+				}
+			]
+		};
+	};
 
 	// ---------- create_brain (editor+) ----------
 	// Stand up a NEW, empty brain (scaffolds a fresh repo), distinct from connect_brain,
@@ -482,8 +484,8 @@ export function registerBrainTools(
 				// the reply is the link that connects it, and nothing is created.
 				let driveConn: StorageConnection | null = null;
 				if (chosen.storage === 'google-drive') {
-					driveConn = await driveConnectionFor(ctx.db, ctx.org.org_id, [ctx.actorUserId]);
-					if (!driveConn) return connectDriveReply(await driveLink(ctx));
+					driveConn = await driveConnectionFor(ctx.db, ctx.org.org_id, ctx.actorUserId);
+					if (!driveConn) return connectDriveReply(ctx);
 				}
 
 				const owner = ctx.storage.account;
@@ -514,7 +516,7 @@ export function registerBrainTools(
 							);
 						} catch (err) {
 							if (err instanceof DriveReconnectError) {
-								return connectDriveReply(await driveLink(ctx), err.message);
+								return connectDriveReply(ctx, err.message);
 							}
 							return fail(
 								`Couldn't create the brain in Google Drive: ${err instanceof Error ? err.message : String(err)}`

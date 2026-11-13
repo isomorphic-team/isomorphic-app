@@ -33,15 +33,32 @@ export const GOOGLE_DRIVE_KIND = 'google-drive';
 // buried in the Worker.
 export type GithubCredential = { kind: 'token' } | { kind: 'installation'; installationId: number };
 export type BrainCredential =
-	GithubCredential | { kind: 'platform-files' } | { kind: 'google-drive' };
+	| GithubCredential
+	| { kind: 'platform-files' }
+	// `folderId` is absent on a connection read without a brain, and on a brain row that
+	// lost its folder.
+	| { kind: 'google-drive'; connectionId?: string; folderId?: string };
+
+// Narrows to a credential a GitHub client is built from.
+export function isGithubCredential(c: BrainCredential): c is GithubCredential {
+	return c.kind === 'token' || c.kind === 'installation';
+}
 
 export function credentialFor(brain: {
 	storage_kind?: string | null;
 	installation_id: number;
+	storage_connection_id?: string | null;
+	storage_root?: string | null;
 }): BrainCredential {
 	if (brain.storage_kind === GITHUB_TOKEN_KIND) return { kind: 'token' };
 	if (platformHoldsFiles(brain)) return { kind: 'platform-files' };
-	if (brain.storage_kind === GOOGLE_DRIVE_KIND) return { kind: 'google-drive' };
+	if (brain.storage_kind === GOOGLE_DRIVE_KIND) {
+		return {
+			kind: 'google-drive',
+			connectionId: brain.storage_connection_id ?? undefined,
+			folderId: brain.storage_root ?? undefined
+		};
+	}
 	return { kind: 'installation', installationId: brain.installation_id };
 }
 

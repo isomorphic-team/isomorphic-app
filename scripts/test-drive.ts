@@ -48,7 +48,8 @@ import {
 import {
 	GOOGLE_DRIVE_KIND,
 	chooseBrainStorage,
-	credentialFor
+	credentialFor,
+	isGithubCredential
 } from '../src/lib/storage-connections.ts';
 import { inMemoryWriteCoordinator } from '../src/lib/write-coordinator.ts';
 import { localD1 } from '../src/local/d1-sqlite.ts';
@@ -57,12 +58,9 @@ import { fakeGoogleDrive } from './fake-google-drive.ts';
 
 const { check, done } = checker('drive checks');
 
-const env = {
-	GOOGLE_CLIENT_ID: 'client-id',
-	GOOGLE_CLIENT_SECRET: 'client-secret',
-	PUBLIC_BASE_URL: 'https://brain.example/'
-};
-const client = googleClient(env)!;
+const env = { GOOGLE_CLIENT_ID: 'client-id', GOOGLE_CLIENT_SECRET: 'client-secret' };
+const base = 'https://brain.example';
+const client = googleClient(env, base)!;
 
 // ---------- 1. the consent ----------
 {
@@ -73,9 +71,9 @@ const client = googleClient(env)!;
 	);
 	check(
 		'a deployment missing the id, the secret or its origin has no client',
-		!googleClient({ ...env, GOOGLE_CLIENT_ID: ' ' }) &&
-			!googleClient({ ...env, GOOGLE_CLIENT_SECRET: undefined }) &&
-			!googleClient({ ...env, PUBLIC_BASE_URL: '' })
+		!googleClient({ ...env, GOOGLE_CLIENT_ID: ' ' }, base) &&
+			!googleClient({ ...env, GOOGLE_CLIENT_SECRET: undefined }, base) &&
+			!googleClient(env, undefined)
 	);
 	const url = new URL(driveAuthUrl(client, 'state-1'));
 	const q = url.searchParams;
@@ -230,15 +228,13 @@ const connectionId = await saveDriveConnection(db, key, {
 	);
 
 	check(
-		'a person is offered the Drive they connected, through any of their accounts',
-		(await driveConnectionFor(db, 'o1', ['ann']))?.connection_id === connectionId &&
-			(await driveConnectionFor(db, 'o1', ['other', 'ann']))?.connection_id === connectionId
+		'a person is offered the Drive they connected',
+		(await driveConnectionFor(db, 'o1', 'ann'))?.connection_id === connectionId
 	);
 	check(
 		"a colleague is not offered it, and nobody is offered another org's",
-		(await driveConnectionFor(db, 'o1', ['bo'])) === null &&
-			(await driveConnectionFor(db, 'o1', [])) === null &&
-			(await driveConnectionFor(db, 'o2', ['ann']))?.connection_id === elsewhere
+		(await driveConnectionFor(db, 'o1', 'bo')) === null &&
+			(await driveConnectionFor(db, 'o2', 'ann'))?.connection_id === elsewhere
 	);
 }
 
@@ -267,6 +263,11 @@ const connectionId = await saveDriveConnection(db, key, {
 	await first();
 	await source()();
 	check('and reused, within a request and by the next one', google.tokenRequests.length === 1);
+	kv.clear();
+	const together = source();
+	await Promise.all([together(), together(), together()]);
+	check('requests asking at once share one lookup', google.tokenRequests.length === 2);
+	google.tokenRequests.length = 1;
 	check(
 		'the cached token is sealed, and expires before Google expires it',
 		kv.size === 1 && ![...kv.values()][0].includes('test-token') && ttls[0] < 3599 && ttls[0] > 3000
@@ -335,7 +336,7 @@ const connectionId = await saveDriveConnection(db, key, {
 		completeDriveConnect({ db, kv, key, client, fetcher: flow.fetch, state, code, sessionUserIds });
 	const stateOf = (link: string) => new URL(link).searchParams.get('state');
 
-	const link = await startDriveConnect(kv, 'https://brain.example/', { userId: 'bo', orgId: 'o1' });
+	const link = await startDriveConnect(kv, 'https://brain.example', { userId: 'bo', orgId: 'o1' });
 	const state = stateOf(link);
 	check(
 		'the link is to this deployment, with a state and nothing else',
@@ -362,8 +363,8 @@ const connectionId = await saveDriveConnection(db, key, {
 		'the callback records the Drive for that person and org',
 		!('problem' in connected) &&
 			connected.email === 'bo@drive.example' &&
-			(await driveConnectionFor(db, 'o1', ['bo']))?.connection_id === connected.connectionId &&
-			(await driveConnectionFor(db, 'o1', ['ann']))?.connection_id === connectionId
+			(await driveConnectionFor(db, 'o1', 'bo'))?.connection_id === connected.connectionId &&
+			(await driveConnectionFor(db, 'o1', 'ann'))?.connection_id === connectionId
 	);
 	const replayed = await complete(state, 'auth-code', ['bo']);
 	check(
@@ -381,7 +382,7 @@ const connectionId = await saveDriveConnection(db, key, {
 		'problem' in refused &&
 			/was not granted/.test(refused.problem) &&
 			held.size === 0 &&
-			(await driveConnectionFor(db, 'o2', ['bo'])) === null
+			(await driveConnectionFor(db, 'o2', 'bo')) === null
 	);
 	const bad = await startDriveConnect(kv, 'https://brain.example', { userId: 'bo', orgId: 'o2' });
 	const failed = await complete(stateOf(bad), 'stale-code', ['bo']);
@@ -426,9 +427,19 @@ const connectionId = await saveDriveConnection(db, key, {
 			listed.storage_root === a &&
 			listed.storage_connection_id === connectionId
 	);
+	const opened = listed && credentialFor(listed);
 	check(
-		'and is opened as a Drive, not as a repository',
-		!!listed && credentialFor(listed).kind === 'google-drive'
+		'and is opened as that Drive folder, not as a repository',
+		opened?.kind === 'google-drive' &&
+			opened.connectionId === connectionId &&
+			opened.folderId === a &&
+			!isGithubCredential(opened)
+	);
+	check(
+		'only a token or an installation is a GitHub credential',
+		isGithubCredential({ kind: 'token' }) &&
+			isGithubCredential({ kind: 'installation', installationId: 7 }) &&
+			!isGithubCredential({ kind: 'platform-files' })
 	);
 
 	const choose = (o: Partial<Parameters<typeof chooseBrainStorage>[0]>) =>
