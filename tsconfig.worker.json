@@ -15,5 +15,11 @@
 		"allowImportingTsExtensions": true,
 		"verbatimModuleSyntax": true
 	},
-	"include": ["src/worker.ts", "src/lib/**/*.ts", "ee/**/*.ts"]
+	"include": [
+		"src/worker.ts",
+		"src/objects/**/*.ts",
+		"scripts/workers/**/*.ts",
+		"src/lib/**/*.ts",
+		"ee/**/*.ts"
+	]
 }

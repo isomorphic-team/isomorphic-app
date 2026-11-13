@@ -511,12 +511,21 @@ check('the workflow parsed into steps', steps.length > 5, `got ${steps.length}`)
 	// it no longer calls `wrangler deploy`, and matching prose that says a thing is not
 	// done is how a wiring test ends up asserting the opposite of what it means. Note the
 	// word boundary too: `wrangler deployments status` is a read and must not trip this.
+	//
+	// The objects Worker is the one exception: Durable Object migrations apply only through
+	// `wrangler deploy`. So every `wrangler deploy` must target its config, by `-c`.
 	const commands = deployYml
 		.split('\n')
 		.filter((line) => !/^\s*#/.test(line))
 		.join('\n');
-	const usesPlainDeploy = /wrangler deploy\b/.test(commands) || /pnpm worker:deploy/.test(commands);
-	check('it does not call `wrangler deploy`', !usesPlainDeploy);
+	const deploys = [...commands.matchAll(/wrangler deploy\b([^\n&;|]*)/g)].map((m) => m[1]);
+	check(
+		'every `wrangler deploy` targets the objects Worker, never the MCP Worker',
+		deploys.length > 0 &&
+			deploys.every((args) => /(^|\s)-c wrangler\.objects\.jsonc(\s|$)/.test(args)) &&
+			!/pnpm worker:deploy/.test(commands),
+		JSON.stringify(deploys)
+	);
 	check('it uploads a version', /wrangler versions upload/.test(deployYml));
 	check('it promotes explicitly', /wrangler versions deploy/.test(deployYml));
 	check('it can roll back', /wrangler rollback/.test(deployYml));
@@ -527,6 +536,55 @@ check('the workflow parsed into steps', steps.length > 5, `got ${steps.length}`)
 	const upload = byId('upload');
 	check('the rollback target is recorded', live !== undefined);
 	check('and recorded BEFORE the upload', steps.indexOf(live!) < steps.indexOf(upload!));
+}
+
+{
+	// The objects Worker implements the classes the uploaded version binds, so it is live
+	// first, and its rollback target is read before it changes.
+	const live = byId('live');
+	const objects = byId('objects');
+	const upload = byId('upload');
+	check(
+		'the objects Worker deploys before the version that binds it is uploaded',
+		objects !== undefined && steps.indexOf(objects) < steps.indexOf(upload!)
+	);
+	check(
+		'with its own config',
+		/wrangler deploy -c wrangler\.objects\.jsonc/.test(objects?.body ?? ''),
+		objects?.body
+	);
+	check(
+		'after its live version is recorded',
+		live !== undefined &&
+			/objects_previous=/.test(live.body) &&
+			steps.indexOf(live) < steps.indexOf(objects!)
+	);
+	const back = byId('objects_rollback');
+	check(
+		'any failure after it deployed rolls it back, a failed production smoke included',
+		/failure\(\)/.test(back?.if ?? '') &&
+			/steps\.smoke\.outcome\s*==\s*'failure'/.test(back?.if ?? '') &&
+			/steps\.objects\.outcome\s*==\s*'success'/.test(back?.if ?? '') &&
+			/steps\.live\.outputs\.objects_previous\s*!=\s*''/.test(back?.if ?? ''),
+		back?.if
+	);
+	// Cloudflare refuses a rollback across a Durable Object class change. A step that
+	// failed there without continue-on-error would skip the verify step after it.
+	check(
+		'a refused objects rollback does not skip the verification',
+		back?.continueOnError === true
+	);
+	check(
+		'and says the objects Worker was not rolled back',
+		/if ! pnpm exec wrangler rollback[\s\S]*NOT rolled back[\s\S]*exit 1/.test(back?.body ?? ''),
+		back?.body
+	);
+	check(
+		'to its recorded version, before the rollback is verified',
+		/steps\.live\.outputs\.objects_previous.*-c wrangler\.objects\.jsonc/.test(back?.body ?? '') &&
+			steps.indexOf(back!) < steps.findIndex((s) => /steps\.rollback\.outcome/.test(s.if ?? '')),
+		back?.body
+	);
 }
 
 {

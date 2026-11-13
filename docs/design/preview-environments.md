@@ -54,6 +54,10 @@ only, and deletes the Preview and its database.
 
 ### The config
 
+A Preview does not bind the objects Worker: `scripts/preview.ts config` drops the
+`durable_objects` block, because a Preview's binding would reach the production namespace
+(`docs/references.md`). A Preview has no write coordinator, and its `/health` skips the ping.
+
 A Preview inherits no vars and no bindings: `wrangler preview` reads only the config's
 `previews` block, which is one per Worker. `deploy` generates `wrangler.jsonc` from the
 preview profile with `pnpm setup:config` (the `PREVIEW_*` variables mapped onto the usual

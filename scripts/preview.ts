@@ -103,8 +103,13 @@ type WranglerConfig = Record<string, unknown> & {
  * INSTEAD of the top level: a Preview inherits no vars or bindings. The workflow generates
  * the top level from the preview profile, with the pull request's own database, so the
  * block repeats it.
+ *
+ * Durable Object bindings are dropped, not carried: they name the objects Worker by
+ * `script_name`, and a Preview has no objects Worker of its own, so it would reach
+ * whichever Worker in the account has that name. A Preview runs without the write
+ * coordinator.
  */
-export function previewConfig(config: WranglerConfig): WranglerConfig {
+export function previewConfig({ durable_objects: _, ...config }: WranglerConfig): WranglerConfig {
 	const databases = config.d1_databases ?? [];
 	const bindings = databases.map((d) => String(d.binding)).join(', ');
 	// The pull request's two databases and nothing else: a binding this does not know

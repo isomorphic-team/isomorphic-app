@@ -200,6 +200,7 @@ export class UnsupportedWriteError extends Error {}
 
 // Thrown when a file was not at the version a write was planned against.
 export class WriteConflictError extends Error {
+	override readonly name = 'WriteConflictError';
 	constructor(readonly path: string) {
 		super(`${path} changed since it was read. Read it again and retry the change.`);
 	}

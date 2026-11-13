@@ -12,9 +12,11 @@
 // with the prior and intended content, so it is correct wherever the interruption fell,
 // including during a rollback.
 //
-// inMemoryWriteCoordinator is the implementation for tests and the local runtime. The
-// Durable Object (docs/design/storage-backends.md section 5.2) runs the same landBundle
-// with its own WriteJournal inside a serialized() lane.
+// Two implementations run the same landBundle inside a serialized() lane:
+// inMemoryWriteCoordinator, for tests and the local runtime, and the coordinator Durable
+// Object (src/objects/worker.ts, one per brain, journaling with sqlJournal), which the
+// deployed Worker reaches through objectWriteCoordinator. pnpm test:objects runs the
+// object in workerd.
 
 import { WriteConflictError, type FileWrite, type WriteOpts } from './brain-repo.ts';
 
@@ -25,7 +27,13 @@ type FileBody = Omit<FileWrite, 'path'>;
 // file must still be at (null: the file must not exist); a backend that can enforce it
 // throws WriteConflictError when it does not hold. One that cannot ignores it, and the
 // coordinator's own check just before is the only guard.
+//
+// Pass a plain object, not a class instance: it crosses Workers RPC to the coordinator
+// object, where its functions become stubs that call back into the caller.
 export interface FileBackend {
+	// Which files this backend reaches (for example a drive and folder id). A journal entry
+	// is only settled through a backend reaching the same storage.
+	readonly storage: string;
 	read(path: string, encoding: Encoding): Promise<{ content: string; version: string } | null>;
 	// Returns the file's new version tag.
 	put(path: string, file: FileBody, ifVersion: string | null): Promise<string>;
@@ -47,6 +55,7 @@ export interface JournalStep {
 }
 
 export interface JournalEntry {
+	storage: string;
 	message: string;
 	steps: JournalStep[];
 }
@@ -104,6 +113,27 @@ function stepsOf(bundle: CoordinatedWrite): PlannedStep[] {
 	return steps;
 }
 
+// The most file content one bundle may hold: what it writes plus what it replaces. The
+// bundle crosses Workers RPC in one call, which is capped at 32 MiB, and the journal entry
+// is built whole in the coordinator object's memory. Text counts two bytes per UTF-16
+// unit, the most a string takes in either place; base64 counts one.
+export const MAX_BUNDLE_BYTES = 16 * 1024 * 1024;
+
+const bytesOf = (file: { content: string; encoding?: Encoding } | null): number =>
+	file ? file.content.length * (file.encoding === 'base64' ? 1 : 2) : 0;
+
+const writtenBytes = (bundle: CoordinatedWrite): number =>
+	(bundle.writes ?? []).reduce((n, file) => n + bytesOf(file), 0);
+
+const mb = (bytes: number): string => (bytes / (1024 * 1024)).toFixed(1);
+
+function mustFit(bytes: number, what: string): void {
+	if (bytes <= MAX_BUNDLE_BYTES) return;
+	throw new Error(
+		`${what} ${mb(bytes)} MB of file content, and one write takes at most ${mb(MAX_BUNDLE_BYTES)} MB. Split it into smaller writes.`
+	);
+}
+
 const encodingOf = (step: PlannedStep): Encoding =>
 	step.intended?.encoding ?? (step.intended ? 'utf-8' : 'base64');
 
@@ -154,15 +184,22 @@ async function coordinateWrite(
 	bundle: CoordinatedWrite
 ): Promise<Record<string, string>> {
 	const planned = stepsOf(bundle);
+	const written = writtenBytes(bundle);
+	mustFit(written, 'This write holds');
 	const current = await Promise.all(planned.map((s) => files.read(s.path, encodingOf(s))));
 	const at = current.map((f) => f?.version ?? null);
+	const replaced = current.reduce(
+		(n, f, i) => n + bytesOf(f && { content: f.content, encoding: encodingOf(planned[i]) }),
+		0
+	);
+	mustFit(written + replaced, 'This write and the files it replaces hold');
 	const steps: JournalStep[] = planned.map((s, i) => {
 		const expected = bundle.expected?.[s.path];
 		if (expected !== undefined && at[i] !== expected) throw new WriteConflictError(s.path);
 		const was = current[i];
 		return { ...s, prior: was ? { content: was.content, encoding: encodingOf(s) } : null };
 	});
-	await journal.open({ message: bundle.message, steps });
+	await journal.open({ storage: files.storage, message: bundle.message, steps });
 
 	const applied: Applied[] = [];
 	const versions: Record<string, string> = {};
@@ -196,6 +233,11 @@ export async function recoverJournal(
 ): Promise<Recovery | undefined> {
 	const entry = await journal.read();
 	if (!entry) return undefined;
+	if (entry.storage !== files.storage) {
+		throw new Error(
+			`An interrupted write to this brain ("${entry.message}") is recorded against ${entry.storage}, not ${files.storage}. Settle it there before writing here.`
+		);
+	}
 	const found = await Promise.all(entry.steps.map((s) => files.read(s.path, encodingOf(s))));
 	const states = entry.steps.map((s, i) =>
 		holds(found[i], s.intended) ? 'applied' : holds(found[i], s.prior) ? 'pending' : 'foreign'
@@ -271,5 +313,101 @@ export function inMemoryWriteCoordinator(
 			const { lane, journal } = brain;
 			return lane(() => landBundle(journal, files, bundle));
 		}
+	};
+}
+
+// The SQL a journal is kept in: a Durable Object's `ctx.storage.sql`, or node:sqlite in
+// the tests.
+export interface SqlRunner {
+	exec(query: string, ...bindings: (string | number | null)[]): { toArray(): unknown[] };
+}
+
+// A Durable Object caps one string or row at 8 MB. The journal is stored one row per chunk
+// of this many UTF-16 units, at most 6 MB as UTF-8, so an entry holding attachments fits.
+const CHUNK_UNITS = 2_000_000;
+
+// Splits `s` into pieces of at most `size` units, never between the halves of a surrogate
+// pair: a lone half does not survive being stored as text.
+export function chunked(s: string, size: number): string[] {
+	const out: string[] = [];
+	for (let at = 0; at < s.length;) {
+		let end = Math.min(at + size, s.length);
+		const last = s.charCodeAt(end - 1);
+		if (end < s.length && end - at > 1 && last >= 0xd800 && last <= 0xdbff) end--;
+		out.push(s.slice(at, end));
+		at = end;
+	}
+	return out;
+}
+
+// The journal in one SQL table: the entry as JSON, in chunks. In a Durable Object the
+// statements of open() and close() run with no await between them, so each commits as one
+// transaction.
+export function sqlJournal(sql: SqlRunner, chunkUnits = CHUNK_UNITS): WriteJournal {
+	sql.exec('CREATE TABLE IF NOT EXISTS journal (seq INTEGER PRIMARY KEY, data TEXT NOT NULL)');
+	return {
+		async read() {
+			const rows = sql.exec('SELECT data FROM journal ORDER BY seq').toArray() as {
+				data: string;
+			}[];
+			return rows.length ? (JSON.parse(rows.map((r) => r.data).join('')) as JournalEntry) : null;
+		},
+		async open(entry) {
+			sql.exec('DELETE FROM journal');
+			for (const [seq, data] of chunked(JSON.stringify(entry), chunkUnits).entries()) {
+				sql.exec('INSERT INTO journal (seq, data) VALUES (?, ?)', seq, data);
+			}
+		},
+		async close() {
+			sql.exec('DELETE FROM journal');
+		}
+	};
+}
+
+// Across Workers RPC a thrown error arrives as a plain Error that keeps its `name` and own
+// properties but not its class. Both ends of the coordinator object's calls rebuild a
+// WriteConflictError from that, so the coordinator itself tests with instanceof.
+function conflictsRebuilt<A extends unknown[], R>(
+	call: (...args: A) => Promise<R>
+): (...args: A) => Promise<R> {
+	return async (...args) => {
+		try {
+			return await call(...args);
+		} catch (e) {
+			const path = (e as { path?: unknown }).path;
+			if (e instanceof Error && e.name === 'WriteConflictError' && typeof path === 'string') {
+				throw new WriteConflictError(path);
+			}
+			throw e;
+		}
+	};
+}
+
+// The FileBackend the coordinator object receives: the caller's, as RPC stubs.
+export function backendFromRpc(files: FileBackend): FileBackend {
+	return {
+		storage: files.storage,
+		read: (path, encoding) => files.read(path, encoding),
+		put: conflictsRebuilt((path, file, ifVersion) => files.put(path, file, ifVersion)),
+		remove: conflictsRebuilt((path, ifVersion) => files.remove(path, ifVersion))
+	};
+}
+
+// The coordinator object's RPC surface (src/objects/worker.ts).
+export interface CoordinatorObject {
+	land(files: FileBackend, bundle: CoordinatedWrite): Promise<CoordinatedResult>;
+}
+
+// The coordinator as the Worker reaches it: one object per brain serializes and journals,
+// while every read and write of a file runs here, called back through the backend's stubs.
+export function objectWriteCoordinator(
+	objectFor: (brainId: string) => CoordinatorObject
+): WriteCoordinator {
+	return {
+		write: conflictsRebuilt(async (brainId, files, bundle) => {
+			// Before the call: over the RPC cap it would fail without saying why.
+			mustFit(writtenBytes(bundle), 'This write holds');
+			return objectFor(brainId).land(files, bundle);
+		})
 	};
 }

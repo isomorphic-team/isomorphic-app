@@ -1,9 +1,10 @@
 ---
 paths:
   - "src/lib/{brain-index,brain-repo,brain-store-github,brain-config,brain-policy,brain-pass,links,wiki,write-coordinator}.ts"
+  - "src/objects/**"
   - "src/local/**"
   - "src/db/index-schema.sql"
-  - "scripts/test-{index,links,store,coordinator}.ts"
+  - "scripts/test-{index,links,store,coordinator,objects}.ts"
   - "scripts/e2e-librarian.ts"
 ---
 
@@ -39,8 +40,18 @@ storage, and the neutral types it speaks. `githubStore(octokit)` is in
   A store without `atomicWrite` lands its bundles through the write coordinator
   (`src/lib/write-coordinator.ts`, `pnpm test:coordinator`): one bundle at a time per brain,
   journaled with each file's prior and intended content, rolled back on failure, and settled by
-  the next call after an interruption. Only the in-memory implementation exists; no store uses it
-  yet.
+  the next call after an interruption. A bundle holds at most `MAX_BUNDLE_BYTES` of content,
+  counting what it replaces, and a larger one is refused before anything is written. Deployed, it is a Durable Object per brain in the objects
+  Worker (`src/objects/worker.ts`, journal in its SQLite via `sqlJournal`, `pnpm test:objects`),
+  reached through `objectWriteCoordinator` over the `WRITE_COORDINATOR` binding; locally,
+  `inMemoryWriteCoordinator`.
+  No store uses it yet.
+- **A `FileBackend` crosses Workers RPC.** Pass a plain object (its functions become stubs that
+  call back into the MCP Worker, so the object holds no credential) with a `storage` naming what
+  it reaches; a journal entry is settled only through the same storage. A thrown error crosses
+  as a plain `Error` keeping `name` and own properties; `backendFromRpc` (inside the object) and
+  `objectWriteCoordinator` (outside) rebuild a `WriteConflictError` from it, so the coordinator
+  between them tests with `instanceof`.
 - `listTree` defaults to `.md` files; pass an extension filter deliberately.
 - `pnpm test:index` wraps its octokit stub in the REAL `githubStore` (so `fetchPages`'s GraphQL
   batching is covered). `pnpm test:e2e-librarian --github` is the only coverage of the GitHub

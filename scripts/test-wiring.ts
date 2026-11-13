@@ -311,4 +311,30 @@ check(
 	offenders.join('\n')
 );
 
+// ---------- the MCP Worker implements no Durable Object ----------
+//
+// A Worker that implements a Durable Object class gets no preview URLs, and deploy.yml's
+// check of each version before it takes traffic needs one. The classes live in the
+// objects Worker (src/objects/), which the MCP Worker reaches by binding. Nothing else in
+// src/ or ee/ may define a class or load that folder's code: a type import is erased,
+// any other import would bundle the class into the MCP Worker.
+const objectOffenders = sourceFiles
+	.filter((f) => !f.startsWith('src/objects/'))
+	.flatMap((f) =>
+		readFileSync(new URL(f, root), 'utf8')
+			.split('\n')
+			.filter(
+				(line) =>
+					/\bextends\s+DurableObject\b/.test(line) ||
+					(/\bfrom\s+['"][^'"]*\/objects\//.test(line) && !/^\s*import\s+type\b/.test(line))
+			)
+			.map((line) => `${f}: ${line.trim()}`)
+	);
+console.log('\nthe MCP Worker implements no Durable Object');
+check(
+	'only src/objects/ defines a Durable Object, and nothing loads it',
+	objectOffenders.length === 0,
+	objectOffenders.join('\n')
+);
+
 done();

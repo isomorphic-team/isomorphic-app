@@ -30,5 +30,5 @@
 		"src/lib/**/*.ts",
 		"ee/**/*.ts"
 	],
-	"exclude": ["scripts/test-roundtrip.ts", "scripts/test-policy.ts"]
+	"exclude": ["scripts/test-roundtrip.ts", "scripts/test-policy.ts", "scripts/workers/**"]
 }

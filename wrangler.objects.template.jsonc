@@ -1,0 +1,31 @@
+{
+	// ======================================================================
+	// TEMPLATE for the objects Worker. `wrangler.objects.jsonc` is GENERATED from
+	// this file by `pnpm setup:config`, alongside `wrangler.jsonc`, and is gitignored.
+	//
+	// The objects Worker implements the Durable Object classes the MCP Worker binds
+	// by `script_name`. It is a separate Worker because a Worker that implements a
+	// Durable Object gets no preview URLs, and the MCP Worker's deploy checks each
+	// version on its preview URL before promoting it.
+	//
+	// Deploy it before the MCP Worker: `pnpm worker:deploy` does both, in order, and
+	// so does .github/workflows/deploy.yml.
+	// ======================================================================
+	"$schema": "node_modules/wrangler/config-schema.json",
+	"name": "__OBJECTS_WORKER_NAME__",
+	"main": "src/objects/worker.ts",
+	"compatibility_date": "2026-04-26",
+	"observability": {
+		"enabled": true
+	},
+	// Reached only through the MCP Worker's binding: no public URL.
+	"workers_dev": false,
+	"preview_urls": false,
+	"durable_objects": {
+		"bindings": [{ "name": "WRITE_COORDINATOR", "class_name": "WriteCoordinatorObject" }]
+	},
+	// Append-only, by Cloudflare's rules: a class is added or deleted with a new tag,
+	// and no entry is ever removed. A deploy that adds an entry cannot be rolled back
+	// (docs/ops/deploy-and-rollback.md), so merge it on its own.
+	"migrations": [{ "tag": "v1", "new_sqlite_classes": ["WriteCoordinatorObject"] }]
+}

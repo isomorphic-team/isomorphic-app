@@ -19,7 +19,7 @@ Proposed:
 
 1. **The system of record stays in D1** (`PLATFORM_DB`), unchanged.
 2. **Each brain's derived index moves to its own SQLite-backed Durable Object,** keyed by
-   `brain_id`, implemented in a separate Worker that this Worker binds to.
+   `brain_id`, implemented in the objects Worker that this Worker binds to.
 3. **Index access goes through one interface in `src/lib/`,** as content access goes through
    `BrainStore`, so the storage behind it can change and the local runtime keeps `node:sqlite`.
 4. **Search moves to SQLite FTS5 inside that object,** after running in shadow next to the
@@ -119,7 +119,8 @@ several matches share. It reads only `brain_links` and needs none of the storage
 - **Purge is `deleteAll()`,** atomic, run before the brains row goes, so a repository connected
   again (same `brain_id`) starts empty.
 - **Whole-brain passes run on alarms,** still budgeted and resumable, instead of inside a read.
-- **The object's class lives in an index Worker;** this Worker binds to it with `script_name` and
+- **The object's class lives in the objects Worker** (`src/objects/worker.ts`, built for the
+  write coordinator); this Worker binds to it with `script_name` and
   never implements one, keeping version URLs and the smoke (`CLAUDE.md`).
 - **Data residency:** an object can be created in a jurisdiction. If that holds, residency becomes
   an org setting applied when a brain's object is created. Not verified.
@@ -140,7 +141,7 @@ because the index is rebuildable, moving it into objects later is a backfill.
    `shadowSearch`. Read the `search-shadow` lines in Workers Logs before step 4.
 4. **Switch `search_pages`,** keeping `expect` able to explain a rank.
 5. **Drop the index tables from the platform database,** once every deployment binds `INDEX_DB`.
-6. **The index Worker and per-brain object,** when a limit calls for it: a brain near D1's size
+6. **The per-brain index object, in the objects Worker,** when a limit calls for it: a brain near D1's size
    cap, write budget contention between brains, or data residency. Measure `scope: "all"` over a
    few dozen objects first.
 
@@ -148,8 +149,6 @@ Related pages ships independently of all of this.
 
 ## 7. Open questions
 
-- **Are SQLite-backed Durable Objects available on the Workers free plan?** The README promises
-  a small team the free tier.
 - **Cross-brain search becomes one call per brain.** Measure `scope: "all"` over a few dozen
   objects before step 2.
 - **`%` and `_`.** The FTS5 tokenizer drops them, so `50%` searches for `50`; `searchIndex`
