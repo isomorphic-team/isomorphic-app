@@ -21,15 +21,46 @@
 //      only when the destination holds exactly the source's files at a revision the
 //      source is still at; bytes and text arrive as they were; the brain is bound to the
 //      new storage only then.
+//   6. A BACKUP THAT CANNOT BE RESTORED, OR CAN BE READ (backupStep, readBackup, pnpm
+//      backup:restore). A backup is the files of one revision, in parts, and reads back
+//      byte for byte with the private key and not without it; a step that fails resumes;
+//      a brain is due only after it changes, at most once an interval; old backups are
+//      pruned; the bucket holds no path and no content in the clear.
+//   7. A DRIVE STORE THAT MISPLACES A FILE OR WRITES OVER SOMEONE'S EDIT (driveBrainStore,
+//      over a fake Google Drive). A path resolves to one file though Drive allows two of
+//      a name; folders are made once; the revision moves when a file under the folder
+//      does, and only then; a write planned before someone else's edit to the same file
+//      is a conflict and writes nothing; a bundle that fails partway is rolled back; a
+//      throttled request is retried.
 //   3. A REVIEW-REQUIRED WRITE THAT LANDS ANYWAY. A store without `proposals` refuses
 //      `writeMode: 'pull-request'` and writes nothing, enforced by defineStore before
 //      the store's own commitOrPR runs.
 
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { defineStore, type BrainStore, type StoreCapabilities } from '../src/lib/brain-repo.ts';
 import { githubStore, gitBlobSha } from '../src/lib/brain-store-github.ts';
+import {
+	driveApi,
+	driveBrainStore,
+	driveStorageName,
+	listDrive
+} from '../src/lib/brain-store-drive.ts';
+import { inMemoryWriteCoordinator } from '../src/lib/write-coordinator.ts';
+import {
+	BACKUPS_KEPT,
+	backupDue,
+	backupIntervalMs,
+	backupPrefix,
+	backupStep,
+	generateBackupKeys,
+	importBackupPrivateKey,
+	importBackupPublicKey,
+	openPart,
+	readBackup,
+	type BackupBucket
+} from '../src/lib/brain-backup.ts';
 import {
 	MAX_FILE_BYTES,
 	filesObjectName,
@@ -58,6 +89,8 @@ import { MAX_ATTACHMENT_BYTES } from '../src/lib/media.ts';
 import { ensureGitRepo, fsBrainStore } from '../src/local/brain-store-fs.ts';
 import { checker, errorOf, partialStore } from './check.ts';
 import { fakeGithub, realGitBlobSha } from './fake-github.ts';
+import { fakeGoogleDrive, md5 } from './fake-google-drive.ts';
+import { folderReader, restoreInto } from './backup-restore.ts';
 import { sqliteDatabase } from './sqlite-database.ts';
 
 const { check, done } = checker('store checks');
@@ -76,6 +109,20 @@ interface Backend {
 }
 
 const tmpDirs: string[] = [];
+
+// The Drive store over a fake Drive. A new store on the same fake reads what an earlier
+// one wrote, as a later request would.
+function driveFixture(opts: { pageSize?: number } = {}) {
+	const drive = fakeGoogleDrive(opts);
+	const api = driveApi(
+		drive.fetch,
+		async () => 'test-token',
+		async () => {}
+	);
+	const root = { folderId: drive.rootId };
+	const coordinator = inMemoryWriteCoordinator();
+	return { drive, api, root, open: () => driveBrainStore(api, root, coordinator, 'brain-1') };
+}
 
 const BACKENDS: Backend[] = [
 	{
@@ -97,6 +144,11 @@ const BACKENDS: Backend[] = [
 		name: 'sql',
 		expected: { atomicWrite: true, proposals: false, history: true },
 		open: async () => sqlBrainStore(sqlFiles(sqliteDatabase()))
+	},
+	{
+		name: 'drive',
+		expected: { atomicWrite: false, proposals: false, history: false },
+		open: async () => driveFixture().open()
 	}
 ];
 
@@ -405,6 +457,289 @@ for (const backend of BACKENDS) {
 	);
 }
 
+// ---- Drive only ----
+{
+	console.log('\ndrive store');
+	const { drive, api, root, open } = driveFixture({ pageSize: 2 });
+	const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x00, 0xff, 0xfe, 0x0d, 0x0a]);
+	const store = open();
+	const first = await store.write(repo, {
+		message: 'Add pages',
+		writes: [
+			...writes,
+			{ path: 'wiki/deep/pic.png', content: png.toString('base64'), encoding: 'base64' }
+		]
+	});
+	check(
+		'drive: files land at their paths, bytes as written',
+		drive.tree()['wiki/deep/beta.md'] === writes[1].content &&
+			drive.find('wiki/deep/pic.png')?.bytes?.equals(png) === true &&
+			drive.tree()['wiki/empty.md'] === ''
+	);
+	check(
+		'drive: a version tag is the md5 of the bytes',
+		first.versions['wiki/deep/beta.md'] === md5(writes[1].content) &&
+			first.versions['wiki/deep/pic.png'] === md5(png)
+	);
+	await store.write(repo, {
+		message: 'Add gamma',
+		writes: [{ path: 'wiki/deep/gamma.md', content: '# Gamma\n' }]
+	});
+	check(
+		'drive: a folder is made once',
+		JSON.stringify(drive.folders().sort()) === JSON.stringify(['wiki', 'wiki/deep'])
+	);
+
+	// A later request: a new store, a new listing (three pages of two at the deepest level).
+	const later = open();
+	const head = await later.getRevision(repo);
+	check(
+		'drive: a new store reports the revision the last write returned',
+		head.id === (await store.getRevision(repo)).id && head.id !== first.revision.id
+	);
+	const listed = await later.listTree(repo, head);
+	check(
+		'drive: listTree lists pages across result pages, with the tags written',
+		listed.map((e) => e.path).join() ===
+			'wiki/alpha.md,wiki/deep/beta.md,wiki/deep/gamma.md,wiki/empty.md' &&
+			listed[1].version === first.versions['wiki/deep/beta.md']
+	);
+	check(
+		'drive: listTree takes another extension',
+		(await later.listTree(repo, head, { extension: '.png' })).map((e) => e.path).join() ===
+			'wiki/deep/pic.png'
+	);
+	const pages = await later.fetchPages(repo, listed);
+	check(
+		'drive: fetchPages reads every page',
+		pages.pages.length === 4 &&
+			pages.pages.find((p) => p.path === 'wiki/deep/beta.md')?.content === writes[1].content
+	);
+	const bin = await later.readBinary(repo, 'wiki/deep/pic.png');
+	check(
+		'drive: bytes read back exactly',
+		bin?.contentBase64 === png.toString('base64') && bin.size === png.length
+	);
+	check(
+		'drive: a missing file reads as null',
+		(await later.readFile(repo, 'wiki/nope.md')) === null &&
+			(await later.readBinary(repo, 'wiki/nope.png')) === null
+	);
+
+	// Someone else's edits.
+	drive.edit('wiki/alpha.md', '# Alpha\n\nEdited in Drive.\n');
+	const moved = await open().getRevision(repo);
+	check('drive: an edit from outside moves the revision', moved.id !== head.id);
+	check(
+		'drive: and the same store keeps answering from its one listing',
+		(await later.getRevision(repo)).id === head.id
+	);
+	const conflict = await errorOf(() =>
+		later.write(repo, {
+			message: 'Edit alpha',
+			base: head,
+			writes: [
+				{ path: 'wiki/empty.md', content: 'no longer empty\n' },
+				{ path: 'wiki/alpha.md', content: '# Alpha\n\nMine.\n' }
+			]
+		})
+	);
+	check(
+		'drive: a write over an edit made since it was planned is a conflict',
+		!!conflict && /wiki\/alpha\.md changed since it was read/.test(conflict),
+		String(conflict)
+	);
+	check(
+		'drive: and the bundle wrote nothing',
+		drive.tree()['wiki/alpha.md'] === '# Alpha\n\nEdited in Drive.\n' &&
+			drive.tree()['wiki/empty.md'] === ''
+	);
+	const fresh = open();
+	const base = await fresh.getRevision(repo);
+	drive.edit('wiki/deep/gamma.md', '# Gamma\n\nEdited in Drive.\n');
+	const landed = await fresh.commitOrPR(repo, {
+		message: 'Edit alpha',
+		writeMode: 'direct',
+		defaultBranch: 'main',
+		base,
+		writes: [{ path: 'wiki/alpha.md', content: '# Alpha\n\nMine.\n' }]
+	});
+	check(
+		"drive: someone else's edit to another file does not block a write",
+		drive.tree()['wiki/alpha.md'] === '# Alpha\n\nMine.\n' &&
+			landed.landed?.versions['wiki/alpha.md'] === md5('# Alpha\n\nMine.\n')
+	);
+	const unknown = await errorOf(() =>
+		open().write(repo, {
+			message: 'Stale',
+			base: head,
+			writes: [{ path: 'wiki/stale.md', content: 'x' }]
+		})
+	);
+	check(
+		'drive: a write planned on a revision this store never read is refused',
+		!!unknown &&
+			/changed since this write was planned/.test(unknown) &&
+			!drive.find('wiki/stale.md')
+	);
+
+	// Deletes go to the trash, and the path is free again.
+	const deleting = open();
+	const afterDelete = await deleting.write(repo, {
+		message: 'Move gamma',
+		writes: [{ path: 'wiki/moved/gamma.md', content: '# Gamma\n' }],
+		deletes: ['wiki/deep/gamma.md']
+	});
+	check(
+		'drive: a delete trashes the file',
+		!drive.find('wiki/deep/gamma.md') &&
+			drive.trashed().includes('wiki/deep/gamma.md') &&
+			drive.tree()['wiki/moved/gamma.md'] === '# Gamma\n'
+	);
+	check(
+		'drive: the revision a write returns is the one a new store lists',
+		afterDelete.revision.id === (await open().getRevision(repo)).id
+	);
+
+	// Two of a name, Drive's own document types, and a name no path can hold.
+	drive.put('wiki/alpha.md', '# A second alpha\n');
+	drive.put('wiki/Meeting notes', '', 'application/vnd.google-apps.document');
+	drive.named('wiki', 'a/b.md', 'unreachable\n');
+	const dup = await listDrive(api, root);
+	check(
+		'drive: the oldest of two files with one name holds the path, and the other is reported',
+		dup.duplicates.join() === 'wiki/alpha.md' &&
+			dup.files.get('wiki/alpha.md')?.version === md5('# Alpha\n\nMine.\n')
+	);
+	check(
+		"drive: Drive's own document types, and a name holding a slash, are not files",
+		!dup.files.has('wiki/Meeting notes') && !dup.files.has('wiki/a/b.md') && dup.files.size === 5,
+		[...dup.files.keys()].join()
+	);
+	check(
+		'drive: the storage is named by its folder',
+		driveStorageName(root) === `google-drive:${root.folderId}`
+	);
+
+	// A level wider than one query holds.
+	const wide = driveFixture();
+	for (let i = 0; i < 45; i++) wide.drive.put(`wiki/f${i}/page.md`, `# ${i}\n`);
+	wide.drive.calls.length = 0;
+	const wideListing = await listDrive(wide.api, wide.root);
+	check(
+		'drive: a wide level is listed in batches of folders, not one query each',
+		wideListing.files.size === 45 && wide.drive.calls.length === 4,
+		`${wideListing.files.size} files, ${wide.drive.calls.length} calls`
+	);
+}
+
+// ---- Drive: failures ----
+{
+	console.log('\ndrive failures');
+	const { drive, open } = driveFixture();
+	await open().write(repo, {
+		message: 'Seed',
+		writes: [{ path: 'wiki/alpha.md', content: 'one\n' }]
+	});
+
+	// Throttled twice, then served.
+	drive.failures.push({ match: /^PATCH \/upload/, status: 429, times: 2 });
+	await open().write(repo, {
+		message: 'Edit',
+		writes: [{ path: 'wiki/alpha.md', content: 'two\n' }]
+	});
+	check('drive: a throttled request is retried', drive.tree()['wiki/alpha.md'] === 'two\n');
+	drive.failures.push({
+		match: /^PATCH \/upload/,
+		status: 403,
+		body: '{"error":{"errors":[{"reason":"userRateLimitExceeded"}]}}',
+		times: 1
+	});
+	await open().write(repo, {
+		message: 'Edit',
+		writes: [{ path: 'wiki/alpha.md', content: 'three\n' }]
+	});
+	check('drive: a rate-limit 403 is retried too', drive.tree()['wiki/alpha.md'] === 'three\n');
+	drive.failures.push({ match: /^PATCH \/upload/, status: 403, body: 'forbidden', times: 1 });
+	const forbidden = await errorOf(() =>
+		open().write(repo, { message: 'Edit', writes: [{ path: 'wiki/alpha.md', content: 'four\n' }] })
+	);
+	check(
+		'drive: any other 403 is an error, not retried',
+		!!forbidden && /answered 403/.test(forbidden) && drive.tree()['wiki/alpha.md'] === 'three\n',
+		String(forbidden)
+	);
+
+	// The second file of a bundle fails for good: the first is put back.
+	const store = open();
+	drive.failures.push({ match: /^POST \/upload/, status: 500, times: 99 });
+	const failed = await errorOf(() =>
+		store.write(repo, {
+			message: 'Half',
+			writes: [
+				{ path: 'wiki/alpha.md', content: 'half\n' },
+				{ path: 'wiki/new.md', content: 'new\n' }
+			]
+		})
+	);
+	drive.failures.length = 0;
+	check(
+		'drive: a bundle that fails partway is rolled back',
+		!!failed &&
+			/answered 500/.test(failed) &&
+			drive.tree()['wiki/alpha.md'] === 'three\n' &&
+			!drive.find('wiki/new.md'),
+		JSON.stringify(drive.tree())
+	);
+	await store.write(repo, {
+		message: 'After',
+		writes: [{ path: 'wiki/new.md', content: 'new\n' }]
+	});
+	check(
+		'drive: and the store lists again before its next write',
+		drive.tree()['wiki/new.md'] === 'new\n' &&
+			(await store.getRevision(repo)).id === (await open().getRevision(repo)).id
+	);
+
+	// Edited by someone else after the bundle read it and before its upload.
+	const racing = open();
+	await racing.getRevision(repo);
+	drive.before = async (call) => {
+		if (call.startsWith('PATCH /upload')) return;
+		if (call.startsWith('GET') && call.endsWith('media')) {
+			drive.before = async () => {};
+			await Promise.resolve();
+			drive.edit('wiki/alpha.md', 'theirs\n');
+		}
+	};
+	const raced = await errorOf(() =>
+		racing.write(repo, { message: 'Race', writes: [{ path: 'wiki/alpha.md', content: 'mine\n' }] })
+	);
+	check(
+		'drive: an edit between the read and the upload is a conflict, and is kept',
+		!!raced &&
+			/changed since it was read/.test(raced) &&
+			drive.tree()['wiki/alpha.md'] === 'theirs\n',
+		`${raced} / ${drive.tree()['wiki/alpha.md']}`
+	);
+
+	check(
+		'drive: after a conflict the store lists again, so a retry plans on what is there',
+		(await racing.getRevision(repo)).id === (await open().getRevision(repo)).id
+	);
+
+	// A wrong token is an error with Drive's status.
+	const denied = fakeGoogleDrive();
+	const bad = driveBrainStore(
+		driveApi(denied.fetch, async () => 'wrong'),
+		{ folderId: denied.rootId },
+		inMemoryWriteCoordinator(),
+		'brain-1'
+	);
+	const authError = await errorOf(() => bad.getRevision(repo));
+	check('drive: a refused token is an error', !!authError && /answered 401/.test(authError));
+}
+
 // ---- copying a brain from one store into another ----
 {
 	console.log('\ncopy');
@@ -607,6 +942,208 @@ for (const backend of BACKENDS) {
 		(await listed(source)).sort().join() === (await listed(dest3)).join() &&
 			(await source.readFile(repo, 'wiki/after-move.md'))?.content === '# After\n',
 		(await listed(source)).sort().join()
+	);
+}
+
+// ---- backing a held brain up, and reading the backup back ----
+{
+	console.log('\nbackup');
+	const HOUR = 60 * 60 * 1000;
+	const db = sqliteDatabase();
+	const files = sqlFiles(db);
+	const store = sqlBrainStore(files);
+	// An R2 bucket, as much of one as a backup uses.
+	const held = new Map<string, Uint8Array>();
+	const bucket: BackupBucket & { failOn?: string } = {
+		async put(key, value) {
+			if (bucket.failOn && key.includes(bucket.failOn)) throw new Error('bucket down');
+			held.set(key, typeof value === 'string' ? new TextEncoder().encode(value) : value);
+		},
+		async list({ prefix }) {
+			const keys = [...held.keys()].filter((k) => k.startsWith(prefix)).sort();
+			return { objects: keys.map((key) => ({ key })), truncated: false };
+		},
+		async delete(keys) {
+			for (const k of keys) held.delete(k);
+		}
+	};
+	const keys = await generateBackupKeys();
+	const publicKey = await importBackupPublicKey(keys.publicKey);
+	const get = async (key: string) => held.get(key) ?? null;
+	const privateKey = await importBackupPrivateKey(keys.privateKey);
+	const restored = async (id?: string) => {
+		const backup = await readBackup(get, privateKey, 'b1', id);
+		const out = new Map<string, string>();
+		for await (const f of backup.files()) out.set(f.path, Buffer.from(f.bytes).toString('base64'));
+		return { manifest: backup.manifest, out };
+	};
+
+	check(
+		'backup: an empty brain is never due',
+		backupDue(db, files.revision(), 0, 24 * HOUR) === null
+	);
+
+	const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x00, 0xff, 0xfe]).toString('base64');
+	// Three files of 3 MiB each, so the brain spans more than one 4 MiB part.
+	const big = 'x'.repeat(3 * 1024 * 1024);
+	await store.write(repo, {
+		message: 'Seed',
+		writes: [
+			{ path: 'wiki/a.md', content: '# A\n' },
+			{ path: 'wiki/gone.md', content: 'x' },
+			{ path: 'assets/dot.png', content: png, encoding: 'base64' },
+			...[1, 2, 3].map((n) => ({ path: `big/${n}.md`, content: big }))
+		]
+	});
+	await store.write(repo, { message: 'Delete', deletes: ['wiki/gone.md'] });
+	const rev = files.revision();
+
+	const t0 = 1_000_000_000_000;
+	check(
+		'backup: a changed brain is due once its writes have settled',
+		backupDue(db, rev, t0, 24 * HOUR) === t0 + 10 * 60 * 1000 && backupDue(db, rev, t0, 0) === t0
+	);
+
+	// The second part fails: the run keeps its place.
+	bucket.failOn = 'part-00002';
+	const failed = await errorOf(() => backupStep(db, files, bucket, publicKey, 'b1', rev, t0));
+	check(
+		'backup: a step that fails leaves no manifest, and the brain due at once',
+		failed !== undefined &&
+			![...held.keys()].some((k) => k.endsWith('.json')) &&
+			backupDue(db, rev, t0 + 5, 24 * HOUR) === t0 + 5
+	);
+	// A write lands before the retry. The backup is of the revision it began on.
+	await store.write(repo, {
+		message: 'Later',
+		writes: [{ path: 'wiki/later.md', content: 'later' }]
+	});
+	bucket.failOn = undefined;
+	const step = await backupStep(db, files, bucket, publicKey, 'b1', files.revision(), t0 + 10);
+	const first = await restored();
+	check(
+		'backup: the retry finishes the same backup, in more than one part',
+		step !== null && step.parts > 1 && step.revision === rev,
+		JSON.stringify(step)
+	);
+	check(
+		'backup: read back, it is the files of that revision, byte for byte',
+		[...first.out.keys()].sort().join() === 'assets/dot.png,big/1.md,big/2.md,big/3.md,wiki/a.md' &&
+			first.out.get('assets/dot.png') === png &&
+			Buffer.from(first.out.get('wiki/a.md')!, 'base64').toString() === '# A\n' &&
+			first.out.get('big/3.md') === Buffer.from(big).toString('base64') &&
+			first.manifest.files === 5,
+		[...first.out.keys()].sort().join()
+	);
+	const stored = [...held.entries()].filter(([k]) => k.includes('/part-'));
+	check(
+		'backup: nothing a file holds, and no path, is readable in the bucket',
+		stored.length > 1 &&
+			[...held.entries()].every(([k, v]) => {
+				const text = Buffer.from(v).toString('latin1');
+				return !k.includes('wiki') && !text.includes('wiki/a.md') && !text.includes('xxxxxxxx');
+			})
+	);
+	const [partName, partBytes] = stored[0];
+	check(
+		'backup: a part does not open under another name, or with a byte changed',
+		(await errorOf(() => openPart(privateKey, stored[1][0], partBytes))) !== undefined &&
+			(await errorOf(() =>
+				openPart(
+					privateKey,
+					partName,
+					partBytes.map((b, i) => (i === partBytes.length - 1 ? b ^ 1 : b))
+				)
+			)) !== undefined &&
+			(await openPart(privateKey, partName, partBytes)).length > 0
+	);
+
+	const t1 = t0 + 10;
+	check(
+		'backup: the write that landed meanwhile is due a day after the last backup',
+		backupDue(db, files.revision(), t1 + 1, 24 * HOUR) === t1 + 24 * HOUR
+	);
+	const second = await backupStep(
+		db,
+		files,
+		bucket,
+		publicKey,
+		'b1',
+		files.revision(),
+		t1 + 24 * HOUR
+	);
+	check(
+		'backup: the next backup has it, and the brain is not due again until it changes',
+		second !== null &&
+			(await restored()).out.has('wiki/later.md') &&
+			!(await restored(first.manifest.id)).out.has('wiki/later.md') &&
+			backupDue(db, files.revision(), t1 + 72 * HOUR, 24 * HOUR) === null
+	);
+
+	// Sixteen more backups: only the newest BACKUPS_KEPT stay, another brain's untouched.
+	held.set('brains/b10/x/manifest.json', new Uint8Array());
+	for (let i = 1; i <= 16; i++) {
+		await store.write(repo, {
+			message: `Edit ${i}`,
+			writes: [{ path: 'wiki/a.md', content: `${i}` }]
+		});
+		await backupStep(
+			db,
+			files,
+			bucket,
+			publicKey,
+			'b1',
+			files.revision(),
+			t1 + (24 + i) * HOUR * 24
+		);
+	}
+	const kept = [...held.keys()].filter(
+		(k) => k.startsWith(backupPrefix('b1')) && k.endsWith('/manifest.json')
+	);
+	check(
+		'backup: old backups are pruned to the newest few, whole',
+		kept.length === BACKUPS_KEPT &&
+			(await errorOf(() => restored(first.manifest.id))) !== undefined &&
+			Buffer.from((await restored()).out.get('wiki/a.md')!, 'base64').toString() === '16' &&
+			held.has('brains/b10/x/manifest.json'),
+		String(kept.length)
+	);
+
+	// The restore script, over a folder that holds the bucket's objects.
+	const bucketDir = mkdtempSync(join(tmpdir(), 'iso-backup-'));
+	const outDir = join(mkdtempSync(join(tmpdir(), 'iso-restore-')), 'brain');
+	tmpDirs.push(bucketDir, dirname(outDir));
+	for (const [k, v] of held) {
+		mkdirSync(dirname(join(bucketDir, k)), { recursive: true });
+		writeFileSync(join(bucketDir, k), v);
+	}
+	const done = await restoreInto(folderReader(bucketDir), keys.privateKey, 'b1', outDir);
+	check(
+		'restore: the folder holds the brain, bytes included',
+		done.files === 6 &&
+			readFileSync(join(outDir, 'wiki/a.md'), 'utf8') === '16' &&
+			readFileSync(join(outDir, 'assets/dot.png')).toString('base64') === png
+	);
+	check(
+		'restore: it will not write into a folder that holds something, or without the right key',
+		(await errorOf(() => restoreInto(folderReader(bucketDir), keys.privateKey, 'b1', outDir))) !==
+			undefined &&
+			(await errorOf(async () =>
+				restoreInto(
+					folderReader(bucketDir),
+					(await generateBackupKeys()).privateKey,
+					'b1',
+					join(dirname(outDir), 'other')
+				)
+			)) !== undefined
+	);
+	check(
+		'backup: BACKUP_INTERVAL_HOURS is hours, and anything else the default',
+		backupIntervalMs('6') === 6 * HOUR &&
+			backupIntervalMs('0') === 0 &&
+			backupIntervalMs('') === 24 * HOUR &&
+			backupIntervalMs('-1') === 24 * HOUR &&
+			backupIntervalMs('soon') === 24 * HOUR
 	);
 }
 

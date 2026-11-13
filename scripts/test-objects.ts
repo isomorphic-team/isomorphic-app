@@ -22,6 +22,9 @@
 //      pinned revisions, and reports history; its refusals cross RPC with their message;
 //      concurrent requests each land whole; one brain cannot see another; and the files
 //      survive a restart of workerd.
+//   7. A BACKUP THAT NEVER RUNS (pnpm test:store pins the backup's own logic). A write to
+//      a files object sets its alarm, the alarm writes a backup to the R2 bucket under
+//      the object's name, and that backup opens with the private key.
 
 import { spawn, type ChildProcess } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
@@ -31,6 +34,13 @@ import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import {
+	backupPrefix,
+	generateBackupKeys,
+	importBackupPrivateKey,
+	latestKey,
+	readBackup
+} from '../src/lib/brain-backup.ts';
 import { MAX_ATTACHMENT_BYTES } from '../src/lib/media.ts';
 import type { CoordinatedResult, CoordinatedWrite } from '../src/lib/write-coordinator.ts';
 import {
@@ -83,9 +93,23 @@ const driveUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
 
 // ---------- the two Workers, from the real templates ----------
 const OBJECTS = 'test-objects';
+const BUCKET = 'test-backups';
+// Backups are sealed to this pair's public half; the private half stays in this process.
+const backupKeys = await generateBackupKeys();
 const fill = (template: string) =>
-	readFileSync(join(root, template), 'utf8').split('__OBJECTS_WORKER_NAME__').join(OBJECTS);
-const objects = parseJsonc(fill('wrangler.objects.template.jsonc')) as Record<string, unknown>;
+	Object.entries({
+		__OBJECTS_WORKER_NAME__: OBJECTS,
+		__BACKUP_BUCKET__: BUCKET,
+		__BACKUP_PUBLIC_KEY__: backupKeys.publicKey,
+		// Due as soon as a brain changes.
+		__BACKUP_INTERVAL_HOURS__: '0'
+	}).reduce(
+		(text, [token, value]) => text.split(token).join(value),
+		readFileSync(join(root, template), 'utf8')
+	);
+const objects = parseJsonc(
+	optionalBlock(fill('wrangler.objects.template.jsonc'), 'backups', true)
+) as Record<string, unknown>;
 const mcp = parseJsonc(optionalBlock(fill('wrangler.template.jsonc'), 'index-db', false)) as {
 	durable_objects: { bindings: { name: string; class_name: string; script_name: string }[] };
 };
@@ -126,7 +150,9 @@ writeFileSync(
 		name: 'test-caller',
 		main: join(root, 'scripts/workers/objects-caller.ts'),
 		compatibility_date: objects.compatibility_date,
-		durable_objects: mcp.durable_objects
+		durable_objects: mcp.durable_objects,
+		// The objects Worker's bucket, so the battery can read what a backup wrote.
+		r2_buckets: objects.r2_buckets
 	})
 );
 
@@ -188,6 +214,16 @@ const filesCall = async <T>(brainId: string, op: string, ...args: unknown[]) =>
 			body: JSON.stringify({ brainId, op, args })
 		})
 	).json()) as { result?: T; error?: string };
+
+// The backup bucket: its keys under a prefix, or one object's bytes.
+const bucketKeys = async (prefix: string) =>
+	(await (
+		await fetch(`${origin}/backups?prefix=${encodeURIComponent(prefix)}`)
+	).json()) as string[];
+const bucketObject = async (key: string): Promise<Uint8Array | null> => {
+	const res = await fetch(`${origin}/backups?key=${encodeURIComponent(key)}`);
+	return res.ok ? new Uint8Array(await res.arrayBuffer()) : null;
+};
 
 const sameBytes = (read: { result?: BinaryContent }, bytes: Buffer): boolean =>
 	Buffer.from(read.result?.contentBase64 ?? '', 'base64').equals(bytes);
@@ -430,6 +466,49 @@ try {
 				),
 			revisions.join()
 		);
+	}
+
+	// ---------- 7. a files object backs its brain up ----------
+	{
+		await filesCall<WriteResult>('f-backup', 'write', {
+			message: 'Seed',
+			writes: [
+				{ path: 'wiki/a.md', content: '# A\n' },
+				{ path: 'assets/img.png', content: image.toString('base64'), encoding: 'base64' }
+			]
+		});
+		const latest = latestKey('f-backup');
+		let keys: string[] = [];
+		for (let i = 0; i < 200 && !keys.includes(latest); i++) {
+			await new Promise((r) => setTimeout(r, 50));
+			keys = await bucketKeys(backupPrefix('f-backup'));
+		}
+		check(
+			'a write is followed by a backup under the name the object was reached by',
+			keys.includes(latest) && keys.some((k) => k.endsWith('/part-00001')),
+			keys.join(', ')
+		);
+		const backup = await readBackup(
+			bucketObject,
+			await importBackupPrivateKey(backupKeys.privateKey),
+			'f-backup'
+		).catch((e: Error) => e);
+		const out = new Map<string, Buffer>();
+		if (!(backup instanceof Error)) {
+			for await (const f of backup.files()) out.set(f.path, Buffer.from(f.bytes));
+		}
+		check(
+			'which opens with the private key into the files that were written',
+			out.size === 2 &&
+				out.get('wiki/a.md')?.toString() === '# A\n' &&
+				out.get('assets/img.png')?.equals(image) === true,
+			backup instanceof Error ? backup.message : [...out.keys()].join()
+		);
+		// Read again without a change: no second backup.
+		await filesCall<FileEntry[]>('f-backup', 'listTree', null);
+		await new Promise((r) => setTimeout(r, 500));
+		const after = await bucketKeys(backupPrefix('f-backup'));
+		check('an unchanged brain is not backed up again', after.join() === keys.join(), after.join());
 	}
 
 	// ---------- 4. the journal survives a restart ----------

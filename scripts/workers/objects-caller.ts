@@ -7,6 +7,7 @@
 //   POST /write  { brainId, storage, drive, bundle }  -> { result } | { error }
 //   POST /files  { brainId, op, args }                -> { result } | { error }
 //                one BrainStore call on the brain's files object, through sqlBrainStore
+//   GET  /backups?prefix= | ?key=                    -> the backup bucket's keys, or one object
 //   GET  /health                                     -> 200 when the object answers ping()
 
 import { WriteConflictError, type BrainStore } from '../../src/lib/brain-repo.ts';
@@ -21,6 +22,8 @@ import type { BrainFilesObject, WriteCoordinatorObject } from '../../src/objects
 interface Env {
 	WRITE_COORDINATOR: DurableObjectNamespace<WriteCoordinatorObject>;
 	BRAIN_FILES: DurableObjectNamespace<BrainFilesObject>;
+	// The bucket the objects Worker backs brains up to.
+	BACKUPS: R2Bucket;
 }
 
 const LOC = { owner: 'example-org', repo: 'brain' };
@@ -51,6 +54,15 @@ export default {
 		if (url.pathname === '/health') {
 			const ok = (await ns.get(ns.idFromName('health')).ping()) === 'ok';
 			return new Response(ok ? 'ok' : 'no answer', { status: ok ? 200 : 503 });
+		}
+		if (url.pathname === '/backups') {
+			const key = url.searchParams.get('key');
+			if (key) {
+				const object = await env.BACKUPS.get(key);
+				return object ? new Response(object.body) : new Response('absent', { status: 404 });
+			}
+			const listed = await env.BACKUPS.list({ prefix: url.searchParams.get('prefix') ?? '' });
+			return Response.json(listed.objects.map((o) => o.key));
 		}
 		if (url.pathname === '/files') {
 			const { brainId, op, args } = (await request.json()) as {

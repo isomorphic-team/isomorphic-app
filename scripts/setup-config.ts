@@ -125,6 +125,24 @@ const SETTINGS = [
 		oneOf: ['github', 'isomorphic']
 	},
 	{
+		key: 'BACKUP_BUCKET',
+		placeholder: '__BACKUP_BUCKET__',
+		default: '',
+		help: 'R2 bucket for backups of the brains this deployment holds. Create it first (`wrangler r2 bucket create <name>`). Empty backs nothing up.'
+	},
+	{
+		key: 'BACKUP_PUBLIC_KEY',
+		placeholder: '__BACKUP_PUBLIC_KEY__',
+		default: '',
+		help: 'Public key backups are sealed to, from `pnpm backup:keygen`. The private key is never deployed.'
+	},
+	{
+		key: 'BACKUP_INTERVAL_HOURS',
+		placeholder: '__BACKUP_INTERVAL_HOURS__',
+		default: '24',
+		help: 'A brain is backed up at most this often, and only after it changes.'
+	},
+	{
 		key: 'D1_DATABASE_NAME',
 		placeholder: '__D1_DATABASE_NAME__',
 		default: 'platform-db',

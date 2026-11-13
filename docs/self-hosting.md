@@ -418,6 +418,26 @@ issue text and requires an explicit confirmation before posting, publishes nothi
 account, and records the reporter privately in D1 (`feedback_reports`) keyed by the opaque
 report id printed in the issue. A per-user cap of ten reports a day bounds abuse.
 
+**Brains in Google Drive (optional).** A member can keep a brain in their own Google Drive
+instead of a repository: `create_brain` with `storage: "google-drive"`. It needs
+`AUTH_MODE=oauth`, `PUBLIC_BASE_URL`, the objects Worker, and one OAuth client for the
+deployment. In the Google Cloud console, create a project, enable the Google Drive API,
+configure the consent screen with the single scope
+`https://www.googleapis.com/auth/drive.file`, and create a client of type "Web application"
+whose redirect URI is `<your origin>/google/callback`. Then:
+
+```sh
+pnpm exec wrangler secret put GOOGLE_CLIENT_ID
+pnpm exec wrangler secret put GOOGLE_CLIENT_SECRET
+```
+
+While the consent screen's publishing status is "Testing", only the test users you list can
+connect, and Google expires each connection after seven days. With `drive.file` the
+deployment reaches only the files it created: a file someone adds to a brain's folder by
+hand is not part of the brain. Each member's refresh token is stored encrypted under a key
+derived from `AUTH_SECRET`, so changing `AUTH_SECRET` disconnects every Drive, and each is
+connected again from the link `create_brain` gives.
+
 **Directory sign-in (enterprise, optional).** An organization's people can sign in with its
 Microsoft Entra directory instead of a magic link. It runs only for an organization with the
 `enterprise` entitlement, and needs one multi-tenant Entra application for the deployment, with
@@ -461,8 +481,11 @@ zero-data-retention endpoints. A page holding a credential or card number is nev
 see what a pass would find before deploying anything, run it over a local copy:
 `pnpm consolidate:report <folder> --models --cap 1`.
 
-**Backups.** Your knowledge is in a git repository, so it is already backed up everywhere it
-is cloned. The D1 database holds only derived data plus org and membership rows. Losing the
+**Backups.** A brain on GitHub is a git repository, so it is already backed up everywhere it
+is cloned. A brain the deployment holds itself (`BRAIN_STORAGE=isomorphic`, or
+`storage: "isomorphic"`) is not: set `BACKUP_BUCKET` and `BACKUP_PUBLIC_KEY` and each one is
+backed up to an R2 bucket, encrypted, after it changes
+([`docs/ops/backups.md`](ops/backups.md)). The D1 database holds only derived data plus org and membership rows. Losing the
 index costs a rebuild; losing the org tables costs re-inviting people. Neither loses content.
 
 **Upgrading.** Pull, `pnpm install`, `pnpm setup:config --force` (in case the template

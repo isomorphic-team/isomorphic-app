@@ -111,9 +111,11 @@ brain and refuses on a static connection, where the org-scope tools are not regi
 
 **Brains are created explicitly.** `create_brain` (org `editor`+) scaffolds a repository via
 `createAndScaffoldBrain`, or a platform-held brain via `scaffoldInto` on its files object with
-no GitHub call, writes a `brains` row with a user-given `name`, and switches to it.
+no GitHub call, or a folder in the caller's Google Drive (`createBrainFolder`), writes a
+`brains` row with a user-given `name`, and switches to it.
 `chooseBrainStorage` (pure, `pnpm test:access`) picks: the caller's `storage`, else
-`BRAIN_STORAGE` for an org on a platform-owned connection, else GitHub. **A name is taken when
+`BRAIN_STORAGE` for an org on a platform-owned connection, else GitHub. A Drive is only ever
+asked for. **A name is taken when
 a brain row holds it** (`brainNameTaken`), whatever GitHub says: a row outlives its
 repository, and `createBrain` returns false, with no grant to follow, when it wrote nothing.
 `create_brain` AND `connect_brain` default to `visibility='private'` plus an admin grant for
@@ -234,7 +236,17 @@ and `configure_brain` refuses to replace an existing config without `overwrite: 
 `github-token:env` on a single-user deployment); `brains.storage_connection_id` binds a brain
 to one. The one `platform-files` row (`PLATFORM_FILES_KIND`) is no credential: a brain bound
 to it has its files in its own Durable Object, and `credentialFor` is what `openStorage` in
-`worker.ts` chooses the store by. `listAccessibleBrains` JOINS the binding: there is no fallback to the org, and a brain
+`worker.ts` chooses the store by. A `google-drive` connection (`GOOGLE_DRIVE_KIND`, `src/lib/drive-connection.ts`,
+`pnpm test:drive`) is one Google account connected by one person for one org
+(`driveConnectionId`), its refresh token sealed in `storage_credentials` under a key derived
+from `AUTH_SECRET` (`credentialKey`); a brain on one also carries `brains.storage_root`, its
+folder. `create_brain` with `storage: "google-drive"` uses only a Drive the caller connected
+(`driveConnectionFor`), and otherwise replies with a link (`startDriveConnect`) to
+`/google/connect`, which with `/google/callback` requires a browser signed in as that person
+(`pendingDriveConnect`). The scope is `drive.file`: never widen it without Google's
+restricted-scope review. `configure_brain` refuses to move a Drive brain; nothing removes a
+connection or its credential yet.
+`listAccessibleBrains` JOINS the binding: there is no fallback to the org, and a brain
 without a binding is not listed. **An org names its storage too:** `orgs.default_connection_id`
 (migration 0013) is where its new brains are created and what org-scope work (create, list
 repos) reads through; `orgStorage` resolves it and `OrgScope.storage` carries it. `createOrg`

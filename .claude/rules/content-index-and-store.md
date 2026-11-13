@@ -30,7 +30,7 @@ storage, and the neutral types it speaks. `githubStore(octokit)` is in
   `commitOrPR` reports as `WriteOutcome.landed` with the new revision): the same value `listTree`
   reports for that file afterwards. The GitHub store uses the blob id (`gitBlobSha`), the fs
   store a size and mtime token, the SQL store (`sqlBrainStore`, `src/lib/brain-store-sql.ts`,
-  over `BrainFilesObject` in the objects Worker) the sequence number of the commit that last changed the file; a tag is opaque everywhere else. `pnpm test:store` runs this contract against every backend.
+  over `BrainFilesObject` in the objects Worker) the sequence number of the commit that last changed the file, the Drive store the md5 Drive reports; a tag is opaque everywhere else. `pnpm test:store` runs this contract against every backend.
 - **If you reach for `ctx.octokit` while touching a brain's CONTENT, it belongs on the store.**
   A raw octokit call in a content path compiles and fails at runtime on the fs backend.
   `octokit` stays on the context (optional) only for GitHub-as-platform calls in
@@ -46,13 +46,23 @@ storage, and the neutral types it speaks. `githubStore(octokit)` is in
   Worker (`src/objects/worker.ts`, journal in its SQLite via `sqlJournal`, `pnpm test:objects`),
   reached through `objectWriteCoordinator` over the `WRITE_COORDINATOR` binding; locally,
   `inMemoryWriteCoordinator`.
-  No store uses it yet.
+  The Drive store is the one store that uses it, through `driveAccess` in `worker.ts`.
 - **A `FileBackend` crosses Workers RPC.** Pass a plain object (its functions become stubs that
   call back into the MCP Worker, so the object holds no credential) with a `storage` naming what
   it reaches; a journal entry is settled only through the same storage. A thrown error crosses
   as a plain `Error` keeping `name` and own properties; `backendFromRpc` (inside the object) and
   `objectWriteCoordinator` (outside) rebuild a `WriteConflictError` from it, so the coordinator
   between them tests with `instanceof`.
+- **The Drive store** (`driveBrainStore`, `src/lib/brain-store-drive.ts`) keeps a brain in a
+  Google Drive folder (`brains.storage_root`), opened by `openStorage` for a brain bound to
+  a `google-drive` connection.
+  Drive is addressed by id and lets a folder hold two files of one name, so the store lists
+  the folder tree once per store (`listDrive`, build a store per request) and resolves paths
+  through that; the oldest file holds a contested path and the rest are `duplicates`. Its
+  revision is a digest of the listing. Drive has no conditional write: a write checks each
+  file against the revision it was planned on, then again by a metadata read just before the
+  upload. `pnpm test:store` runs it over `scripts/fake-google-drive.ts`; nothing has run it
+  against real Drive.
 - `listTree` defaults to `.md` files; pass an extension filter deliberately.
 - `pnpm test:index` wraps its octokit stub in the REAL `githubStore` (so `fetchPages`'s GraphQL
   batching is covered). `pnpm test:e2e-librarian --github` is the only coverage of the GitHub
@@ -122,7 +132,8 @@ a derived index in D1 (`src/lib/brain-index.ts`, schema in `migrations/`).
   forever). **Any new whole-brain pass: budget, cursor, advance the marker only when done.**
   Its run state goes in `brain_passes` through `src/lib/brain-pass.ts` (`readPass`,
   `continuePass`, `savePass`), one row per brain per kind (`consolidation`, `policy-baseline`);
-  don't add a table per pass. What a pass last checked, item by item, goes in
+  don't add a table per pass. (A files object's backup keeps its place in the object's own
+  SQLite, `src/lib/brain-backup.ts`: the objects Worker has no D1.) What a pass last checked, item by item, goes in
   `brain_pass_items` (`readPassItems`, `savePassItems`), so a later pass can skip unchanged items.
 - The local runtime's `getRevision` reports a digest of the working tree; `listCommits` reports
   git shas.

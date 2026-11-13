@@ -24,18 +24,41 @@ export const GITHUB_TOKEN_KIND = 'github-token';
 export const PLATFORM_FILES_KIND = 'platform-files';
 export const PLATFORM_FILES_CONNECTION_ID = 'platform-files';
 
+// A folder in a Google Drive someone connected for the org (src/lib/drive-connection.ts).
+// One connection per org and Google account; its refresh token is in storage_credentials.
+export const GOOGLE_DRIVE_KIND = 'google-drive';
+
 // How to reach a brain's storage, from its binding. Pure, so the choice between a
 // token, an installation and the platform's own files is pinned by a test rather than
 // buried in the Worker.
 export type GithubCredential = { kind: 'token' } | { kind: 'installation'; installationId: number };
-export type BrainCredential = GithubCredential | { kind: 'platform-files' };
+export type BrainCredential =
+	| GithubCredential
+	| { kind: 'platform-files' }
+	// `folderId` is absent on a connection read without a brain, and on a brain row that
+	// lost its folder.
+	| { kind: 'google-drive'; connectionId?: string; folderId?: string };
+
+// Narrows to a credential a GitHub client is built from.
+export function isGithubCredential(c: BrainCredential): c is GithubCredential {
+	return c.kind === 'token' || c.kind === 'installation';
+}
 
 export function credentialFor(brain: {
 	storage_kind?: string | null;
 	installation_id: number;
+	storage_connection_id?: string | null;
+	storage_root?: string | null;
 }): BrainCredential {
 	if (brain.storage_kind === GITHUB_TOKEN_KIND) return { kind: 'token' };
 	if (platformHoldsFiles(brain)) return { kind: 'platform-files' };
+	if (brain.storage_kind === GOOGLE_DRIVE_KIND) {
+		return {
+			kind: 'google-drive',
+			connectionId: brain.storage_connection_id ?? undefined,
+			folderId: brain.storage_root ?? undefined
+		};
+	}
 	return { kind: 'installation', installationId: brain.installation_id };
 }
 
@@ -143,7 +166,7 @@ export function platformFilesConnectionStatement(db: D1Database): D1PreparedStat
 }
 
 // Where a new brain's files go.
-export type BrainStorageChoice = 'github' | 'isomorphic';
+export type BrainStorageChoice = 'github' | 'isomorphic' | 'google-drive';
 
 // Where create_brain puts a new brain, or why it cannot go where it was asked to. Pure.
 // What the caller asked for wins. Otherwise the deployment's default applies only to an
@@ -151,12 +174,21 @@ export type BrainStorageChoice = 'github' | 'isomorphic';
 // GitHub.
 export function chooseBrainStorage(o: {
 	requested?: BrainStorageChoice;
-	deploymentDefault: BrainStorageChoice;
+	// A Drive is one person's, so it is only ever asked for, never a default.
+	deploymentDefault: 'github' | 'isomorphic';
 	// The org's connection is platform-owned (owner_org_id NULL).
 	platformOwned: boolean;
 	// This deployment has files objects to hold a brain in.
 	canHold: boolean;
+	// This deployment has a Google OAuth client to reach a Drive with.
+	canDrive?: boolean;
 }): { storage: BrainStorageChoice } | { problem: string } {
+	if (o.requested === 'google-drive' && !o.canDrive) {
+		return {
+			problem:
+				'This deployment is not set up to keep a brain in Google Drive, so no brain was created.'
+		};
+	}
 	if (o.requested === 'isomorphic' && !o.canHold) {
 		return { problem: 'This deployment cannot hold a brain itself, so no brain was created.' };
 	}

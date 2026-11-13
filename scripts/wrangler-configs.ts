@@ -19,7 +19,11 @@ export const WRANGLER_CONFIGS: WranglerConfig[] = [
 			{ name: 'code-mode', setting: 'CODE_MODE' }
 		]
 	},
-	{ template: 'wrangler.objects.template.jsonc', output: 'wrangler.objects.jsonc', blocks: [] }
+	{
+		template: 'wrangler.objects.template.jsonc',
+		output: 'wrangler.objects.jsonc',
+		blocks: [{ name: 'backups', setting: 'BACKUP_BUCKET' }]
+	}
 ];
 
 export const GENERATED_CONFIGS = WRANGLER_CONFIGS.map((c) => c.output);

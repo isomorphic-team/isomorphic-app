@@ -70,6 +70,12 @@ AUTH_RESEND_KEY=
 AUTH_ENTRA_CLIENT_ID=
 AUTH_ENTRA_CLIENT_SECRET=
 
+# Optional: brains kept in a member's Google Drive (create_brain storage: "google-drive").
+# One Google Cloud OAuth client (type "Web application") for the whole deployment, with the
+# drive.file scope and the redirect URI <PUBLIC_BASE_URL>/google/callback. oauth mode only.
+GOOGLE_CLIENT_ID=
+GOOGLE_CLIENT_SECRET=
+
 # ======================================================================
 # Deployment identity — consumed by `pnpm setup:config` to generate wrangler.jsonc
 # ======================================================================
@@ -110,6 +116,12 @@ AUTO_PROVISION=
 # Where a new brain goes in an org on the platform's GitHub installation: "github" (a
 # repository there, the default) or "isomorphic" (held by this deployment, no repository).
 BRAIN_STORAGE=
+
+# Backups of the brains this deployment holds, sealed to a public key and written to an
+# R2 bucket (docs/ops/backups.md). All empty: nothing is backed up.
+BACKUP_BUCKET=
+BACKUP_PUBLIC_KEY=
+BACKUP_INTERVAL_HOURS=
 
 # Cloudflare resource ids. Leave empty for local development: the generated config
 # gets placeholder ids, and Miniflare simulates KV and D1 on disk without ever

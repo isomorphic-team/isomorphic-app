@@ -123,6 +123,8 @@ jobs:
       - run: pnpm test:index
       # The BrainStore contract on every backend: capabilities, version tags, PR-mode refusal.
       - run: pnpm test:store
+      # connecting a Google Drive: the consent, sealed tokens, who a connection is offered to
+      - run: pnpm test:drive
       # the write coordinator: one bundle at a time per brain, rollback, journal recovery
       - run: pnpm test:coordinator
       # the coordinator Durable Object in workerd (wrangler dev, no account): binding, RPC, restart

@@ -1,8 +1,8 @@
 # Design: code mode
 
-Status: **proposed** (2026-11-13). Phase 0, a read-only `run_script`, is built on this branch
-and pinned by `pnpm test:code-mode`. Everything after it is proposed. Phase 1 decides whether
-the rest goes ahead.
+Status: **proposed** (2026-11-13). Phase 0, a read-only `run_script`, is built on the
+experimental `code-mode` branch (draft pull request #211) and pinned by `pnpm test:code-mode`
+there; nothing is on `main`. Phase 1 decides whether the rest goes ahead.
 
 ## The problem
 
@@ -48,7 +48,7 @@ Dynamic Worker, and route both rare actions and multi-step work through it:
 The pattern is Cloudflare's Code Mode (https://blog.cloudflare.com/code-mode). The runtime
 facts it rests on are in `docs/references.md` under Dynamic Workers.
 
-## Phase 0: read-only `run_script` (built)
+## Phase 0: read-only `run_script` (built on the `code-mode` branch)
 
 `src/lib/code-mode.ts`, `src/tools/code-mode.ts`, `.claude/rules/code-mode.md`.
 

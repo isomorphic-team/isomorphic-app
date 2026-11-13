@@ -49,10 +49,25 @@ import { ensureStaticTenant, STATIC_USER_ID } from './lib/static-tenant.ts';
 import {
 	credentialFor,
 	credentialForConnection,
+	isGithubCredential,
 	orgStorage,
 	type GithubCredential
 } from './lib/storage-connections.ts';
 import { filesObjectName, sqlBrainStore } from './lib/brain-store-sql.ts';
+import { driveApi, driveBrainStore } from './lib/brain-store-drive.ts';
+import {
+	DRIVE_CALLBACK_PATH,
+	DRIVE_CONNECT_PATH,
+	completeDriveConnect,
+	credentialKey,
+	driveAuthUrl,
+	driveTokenSource,
+	googleClient,
+	pendingDriveConnect,
+	startDriveConnect,
+	type GoogleClient
+} from './lib/drive-connection.ts';
+import { objectWriteCoordinator } from './lib/write-coordinator.ts';
 import { claimPendingInvites } from './lib/invites.ts';
 import {
 	getAppUser,
@@ -98,7 +113,7 @@ import { registerMediaTools } from './tools/media.ts';
 import { registerMemberTools } from './tools/members.ts';
 import { registerBrainAccessTools, type AccessContext } from './tools/brain-access.ts';
 import { registerConnectedAccountTools } from './tools/connected-accounts.ts';
-import { registerBrainTools } from './tools/brains.ts';
+import { registerBrainTools, type DriveTools } from './tools/brains.ts';
 import { registerOrgOnboardingTools } from './tools/org-onboarding.ts';
 import { registerFeedbackTools } from './tools/feedback.ts';
 import { registerAnalyticsTools } from './tools/analytics.ts';
@@ -226,6 +241,10 @@ interface Env {
 	// Prefixed to every files object's name (filesObjectName). Set only where several
 	// deployments share one objects Worker: a Worker Preview, to its own name.
 	OBJECTS_SCOPE?: string;
+	// The OAuth client registered with Google, for brains kept in a Google Drive
+	// (src/lib/drive-connection.ts). Without both, no Drive can be connected or read.
+	GOOGLE_CLIENT_ID?: string;
+	GOOGLE_CLIENT_SECRET?: string;
 
 	// Product feedback (submit_feedback). FEEDBACK_REPO is the "owner/repo" of the
 	// tracker that receives reports; FEEDBACK_TOKEN is a separate narrowly scoped
@@ -338,13 +357,88 @@ function platformFiles(env: Env): ((brainId: string) => BrainStore) | undefined 
 	);
 }
 
+// What reaching a Google Drive takes: the OAuth client, the key stored tokens are sealed
+// under, and the write coordinator a Drive store lands its bundles through. Undefined
+// when this deployment lacks any of them.
+interface DriveAccess extends DriveTools {
+	client: GoogleClient;
+	key(): Promise<CryptoKey>;
+	fetcher: typeof fetch;
+}
+
+let driveKeyMemo: { secret: string; key: Promise<CryptoKey> } | undefined;
+
+function driveAccess(env: Env): DriveAccess | undefined {
+	const base = webBaseUrl({ authMode: env.AUTH_MODE, publicBaseUrl: env.PUBLIC_BASE_URL });
+	const client = googleClient(env, base);
+	const secret = deploymentSecret(env);
+	const ns = env.WRITE_COORDINATOR;
+	if (!base || !client || !secret || !ns) return undefined;
+	// Derived when a Drive is first reached, then kept for the isolate.
+	const key = (): Promise<CryptoKey> => {
+		if (driveKeyMemo?.secret !== secret) driveKeyMemo = { secret, key: credentialKey(secret) };
+		return driveKeyMemo.key;
+	};
+	// Called as a bare function: a Worker's fetch refuses any other receiver.
+	const fetcher: typeof fetch = (input, init) => fetch(input, init);
+	const coordinator = objectWriteCoordinator((name) => ns.get(ns.idFromName(name)));
+	return {
+		client,
+		key,
+		fetcher,
+		api: (connectionId) => {
+			let source: Promise<() => Promise<string>> | undefined;
+			return driveApi(fetcher, async () => {
+				source ??= key().then((k) =>
+					driveTokenSource({
+						db: env.PLATFORM_DB,
+						cache: env.OAUTH_KV,
+						key: k,
+						client,
+						connectionId,
+						fetcher
+					})
+				);
+				return (await source)();
+			});
+		},
+		// The coordinator object is named as the brain's files object would be, scope included.
+		store: (brainId, api, folderId) =>
+			driveBrainStore(
+				api,
+				{ folderId },
+				coordinator,
+				filesObjectName(brainId, env.OBJECTS_SCOPE?.trim())
+			),
+		connectLink: (pending) => startDriveConnect(env.OAUTH_KV, base, pending)
+	};
+}
+
 // A brain's storage, chosen by its binding (credentialFor): a GitHub repository through
-// a client holding its credential, or the brain's own files object.
+// a client holding its credential, the brain's own files object, or a folder in a
+// connected Google Drive.
 async function openStorage(
 	env: Env,
-	target: Pick<AccessibleBrain, 'brain_id' | 'storage_kind' | 'installation_id'>
+	target: Pick<
+		AccessibleBrain,
+		'brain_id' | 'storage_kind' | 'installation_id' | 'storage_connection_id' | 'storage_root'
+	>
 ): Promise<{ store: BrainStore; octokit?: GithubClient }> {
 	const credential = credentialFor(target);
+	if (credential.kind === 'google-drive') {
+		const drive = driveAccess(env);
+		if (!drive) {
+			throw new Error(
+				'This brain is kept in Google Drive, which this deployment is not set up to reach (GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, WRITE_COORDINATOR).'
+			);
+		}
+		if (!credential.connectionId || !credential.folderId) {
+			throw new Error('This brain is kept in Google Drive, but its record names no folder there.');
+		}
+		return {
+			store: drive.store(target.brain_id, drive.api(credential.connectionId), credential.folderId)
+		};
+	}
 	if (credential.kind === 'platform-files') {
 		const store = platformFiles(env)?.(target.brain_id);
 		if (!store) {
@@ -887,7 +981,7 @@ class McpSession {
 		assertRole(membership.role, opts?.requires);
 		const storage = await orgStorage(env.PLATFORM_DB, membership.org);
 		const credential = credentialForConnection(storage);
-		if (credential.kind === 'platform-files') {
+		if (!isGithubCredential(credential)) {
 			throw new Error(`Org ${membership.org.org_id} has no GitHub connection to create brains on.`);
 		}
 		const octokit = await githubClientFor(env, credential);
@@ -1210,11 +1304,12 @@ class McpSession {
 			defaultStorage: this.env.BRAIN_STORAGE === 'isomorphic' ? 'isomorphic' : 'github',
 			githubFor: async (conn) => {
 				const credential = credentialForConnection(conn);
-				if (credential.kind === 'platform-files') {
+				if (!isGithubCredential(credential)) {
 					throw new Error(`${conn.connection_id} is not a GitHub connection.`);
 				}
 				return githubClientFor(this.env, credential);
-			}
+			},
+			drive: driveAccess(this.env)
 		});
 
 		// ---------- user-defined tools (brain-tools) ----------
@@ -1488,6 +1583,50 @@ function connectedOrgPage(result: {
 	);
 }
 
+// Both ends of connecting a Google Drive (src/lib/drive-connection.ts). Each needs a
+// browser signed in as the person the link was made for.
+async function handleDriveConnect(request: Request, url: URL, env: Env): Promise<Response> {
+	const drive = driveAccess(env);
+	if (!drive || request.method !== 'GET') return new Response('Not found', { status: 404 });
+	const problem = (text: string) =>
+		cardPage('!', 'Google Drive was not connected', `<p>${escapeHtml(text)}</p>`);
+	const session = await getAuthSession(request, env);
+	const state = url.searchParams.get('state');
+	const starting = url.pathname === DRIVE_CONNECT_PATH;
+	if (!session?.user?.id) {
+		// Signing in comes back to the link. The callback is not resumed: its code is
+		// Google's, single use, and does not belong in a sign-in round trip.
+		return starting
+			? Response.redirect(
+					new URL(signInRedirect(url.pathname, url.search), url.origin).toString(),
+					302
+				)
+			: problem('You were signed out along the way. Sign in and open the link again.');
+	}
+	const sessionUserIds = await linkedUserIds(env.PLATFORM_DB, session.user.id);
+	if (starting) {
+		const pending = await pendingDriveConnect(env.OAUTH_KV, state, sessionUserIds);
+		if ('problem' in pending) return problem(pending.problem);
+		return Response.redirect(driveAuthUrl(drive.client, state!), 302);
+	}
+	const done = await completeDriveConnect({
+		db: env.PLATFORM_DB,
+		kv: env.OAUTH_KV,
+		key: await drive.key(),
+		client: drive.client,
+		fetcher: drive.fetcher,
+		state,
+		code: url.searchParams.get('code'),
+		sessionUserIds
+	});
+	if ('problem' in done) return problem(done.problem);
+	return cardPage(
+		'✓',
+		'Google Drive connected',
+		`<p>Isomorphic can now keep brains in the Google Drive of <code>${escapeHtml(done.email)}</code>. It can reach only the files it creates there.</p><p>Back in your AI assistant, ask for the brain again.</p>`
+	);
+}
+
 // Resolve a self-serve install → customer org + owner membership. Unknown/expired
 // state falls back to the generic confirmation (no identity to attribute).
 async function handleOrgConnectCallback(
@@ -1556,6 +1695,12 @@ export default {
 		// installer here with ?installation_id=…&setup_action=…. (The manifest
 		// registers the local bootstrap server's route for first setup; a deployed
 		// App's Setup URL points here.)
+		// Connecting a Google Drive: the link create_brain hands out, and Google's
+		// redirect back. Ahead of the OAuth provider, like the install callback.
+		if (url.pathname === DRIVE_CONNECT_PATH || url.pathname === DRIVE_CALLBACK_PATH) {
+			return handleDriveConnect(request, url, env);
+		}
+
 		if (url.pathname === '/github/install-callback') {
 			// Self-serve create_org (github: true) carries a `state` we stashed in KV,
 			// and completes into a customer org + owner membership. Without one (a

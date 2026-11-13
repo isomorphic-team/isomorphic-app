@@ -64,6 +64,15 @@ CREATE TABLE IF NOT EXISTS storage_connections (
   UNIQUE (provider, kind, external_id)
 );
 
+-- The secret a connection reads its storage with (a Google refresh token), sealed with a
+-- key the database never holds. A GitHub connection has no row.
+CREATE TABLE IF NOT EXISTS storage_credentials (
+  connection_id TEXT PRIMARY KEY REFERENCES storage_connections(connection_id),
+  sealed        TEXT NOT NULL,              -- ciphertext; never the secret itself
+  connected_by  TEXT,                       -- app_users.user_id of who connected it
+  updated_at    TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
 -- Brains owned by an org (more than one per org).
 CREATE TABLE IF NOT EXISTS brains (
   brain_id   TEXT PRIMARY KEY,
@@ -79,6 +88,7 @@ CREATE TABLE IF NOT EXISTS brains (
   read_only  INTEGER NOT NULL DEFAULT 0, -- caps the resolved role at viewer, for everyone
   storage_connection_id TEXT REFERENCES storage_connections(connection_id),
                                          -- the credential for this brain; NULL = use the org's
+  storage_root TEXT,                     -- where its files start in that storage (a Drive folder id)
   UNIQUE (repo_owner, repo_name)
 );
 
