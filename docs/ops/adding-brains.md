@@ -117,6 +117,10 @@ its org. The content index (`ensureFresh`) self-builds on the first read — no 
   It copies the brain's current files into the repository the brain is named for, through the
   connection that reaches that account, creating the repository (private) if it is gone and
   removing files there that the brain does not have.
+- **Move into or out of Google Drive:** `configure_brain` with `storage: "google-drive"` puts
+  the brain in a new folder in the caller's own connected Drive (the reply is a link to
+  connect one when there is none); `storage: "isomorphic"` or `"github"` brings a Drive brain
+  out. Same gates and shape. The folder left behind is not removed.
 - **Move to another org:** `connect_brain` with the brain's name or id as `repo` and the
   destination `org`, then again with `confirm: true` (org admin in both orgs). The first call previews whose access changes. The brain
   keeps its storage binding, so it stays in the same GitHub account and is read

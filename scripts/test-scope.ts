@@ -43,7 +43,8 @@ import { registerMemberTools } from '../src/tools/members.ts';
 import { registerBrainAccessTools } from '../src/tools/brain-access.ts';
 import { registerMediaTools } from '../src/tools/media.ts';
 import { DEFAULT_BRAIN_CONFIG } from '../src/lib/brain-policy.ts';
-import { registerBrainTools, relocationProblem } from '../src/tools/brains.ts';
+import { registerBrainTools } from '../src/tools/brains.ts';
+import { moveProblem } from '../src/lib/brain-relocate.ts';
 import { registerAnalyticsTools } from '../src/tools/analytics.ts';
 import { registerOrgOnboardingTools, type OrgOnboardingEnv } from '../src/tools/org-onboarding.ts';
 import { registerLibrarianTools, type BrainContext } from '../src/tools/librarian.ts';
@@ -1313,7 +1314,8 @@ console.log('\nA single-user deployment: only the tools that can answer');
 	const go = { storage: 'isomorphic', confirm: true };
 	const movable = {
 		destination: { atomicWrite: true, proposals: false, history: true },
-		held: false,
+		from: 'github' as const,
+		to: 'isomorphic' as const,
 		writeMode: 'direct' as const,
 		label: 'Main'
 	};
@@ -1371,14 +1373,36 @@ console.log('\nA single-user deployment: only the tools that can answer');
 	);
 	check(
 		'a brain that takes its changes as pull requests is refused',
-		/pull requests/.test(relocationProblem({ ...movable, writeMode: 'pull-request' }) ?? '') &&
-			relocationProblem(movable) === null &&
+		/pull requests/.test(moveProblem({ ...movable, writeMode: 'pull-request' }) ?? '') &&
+			moveProblem(movable) === null &&
 			// A destination that can hold a change for review takes such a brain.
-			relocationProblem({
+			moveProblem({
 				...movable,
 				writeMode: 'pull-request',
 				destination: { ...movable.destination, proposals: true }
 			}) === null
+	);
+	check(
+		'the refusal is the same rule for every pair of storages',
+		/already kept in Google Drive/.test(
+			moveProblem({ ...movable, from: 'google-drive', to: 'google-drive' }) ?? ''
+		) &&
+			/not set up/.test(
+				moveProblem({ ...movable, to: 'google-drive', destination: undefined }) ?? ''
+			) &&
+			moveProblem({ ...movable, from: 'google-drive', to: 'github' }) === null &&
+			/pull requests/.test(
+				moveProblem({ ...movable, to: 'google-drive', writeMode: 'pull-request' }) ?? ''
+			)
+	);
+	const toDrive = await attempt(both, 'configure_brain', {
+		storage: 'google-drive',
+		confirm: true
+	});
+	check(
+		'a deployment with no Google client refuses a move into a Drive',
+		toDrive.outcome === 'denied' && toDrive.detail.includes('not set up'),
+		toDrive.detail
 	);
 	const back = { storage: 'github', confirm: true };
 	const notHeld = await attempt(both, 'configure_brain', back);

@@ -133,15 +133,31 @@ export function platformHoldsFiles(brain: { storage_kind?: string | null }): boo
 	return brain.storage_kind === PLATFORM_FILES_KIND;
 }
 
-// Bind a brain to a connection: it is read and written through that from now on.
+// Bind a brain to a connection: it is read and written through that from now on. `root`
+// is where in that storage it sits (a Drive folder), null for storage that needs none.
 export function bindingStatement(
 	db: D1Database,
 	brainId: string,
-	connectionId: string
+	connectionId: string,
+	root: string | null = null
 ): D1PreparedStatement {
 	return db
-		.prepare(`UPDATE brains SET storage_connection_id = ?1 WHERE brain_id = ?2`)
-		.bind(connectionId, brainId);
+		.prepare(`UPDATE brains SET storage_connection_id = ?1, storage_root = ?3 WHERE brain_id = ?2`)
+		.bind(connectionId, brainId, root);
+}
+
+// Which storage a brain is on, in the words a tool takes.
+export function storageOf(brain: Parameters<typeof credentialFor>[0]): BrainStorageChoice {
+	const kind = credentialFor(brain).kind;
+	switch (kind) {
+		case 'platform-files':
+			return 'isomorphic';
+		case 'google-drive':
+			return 'google-drive';
+		case 'token':
+		case 'installation':
+			return 'github';
+	}
 }
 
 // The statements that serve a brain from the platform's own files from now on, for one
@@ -167,6 +183,13 @@ export function platformFilesConnectionStatement(db: D1Database): D1PreparedStat
 
 // Where a new brain's files go.
 export type BrainStorageChoice = 'github' | 'isomorphic' | 'google-drive';
+
+// Each as the end of "the brain is ...".
+export const STORAGE_PLACE: Record<BrainStorageChoice, string> = {
+	isomorphic: 'held by Isomorphic',
+	github: 'in a GitHub repository',
+	'google-drive': 'kept in Google Drive'
+};
 
 // Where create_brain puts a new brain, or why it cannot go where it was asked to. Pure.
 // What the caller asked for wins. Otherwise the deployment's default applies only to an

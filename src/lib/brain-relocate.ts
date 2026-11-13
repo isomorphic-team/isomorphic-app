@@ -10,7 +10,14 @@
 import type { D1Database } from '@cloudflare/workers-types';
 import type { D1PreparedStatement } from '@cloudflare/workers-types';
 import { continuePass, readPass, savePassStatement } from './brain-pass.ts';
-import type { BrainLocator, BrainStore, CommitAuthor, FileWrite } from './brain-repo.ts';
+import type {
+	BrainLocator,
+	BrainStore,
+	CommitAuthor,
+	FileWrite,
+	StoreCapabilities
+} from './brain-repo.ts';
+import { STORAGE_PLACE, type BrainStorageChoice } from './storage-connections.ts';
 import { bytesFromBase64 } from './media.ts';
 
 // brain_passes kind for a relocation's run state (src/lib/brain-pass.ts).
@@ -112,6 +119,7 @@ export async function copyStep(
 	if (end < total) return { progress, copied: end, total, done: false, restarted };
 
 	// Everything is across. The copy counts only if the source did not move meanwhile.
+	from.store.refresh?.();
 	const [held, head] = await Promise.all([
 		to.store
 			.getRevision(to.locator)
@@ -141,32 +149,98 @@ export async function copyStep(
 	return { progress, copied: total, total, done: true, restarted };
 }
 
+// Where a brain is moving to.
+export interface MoveTarget {
+	// Names this destination, connection included. A copy under way toward another one
+	// is not continued.
+	key: string;
+	// Makes the destination ready and says how the brain is bound to it. `token` is what
+	// an earlier step of this move returned (a folder made for it), null on the first.
+	// Throws MoveRefused when the destination is not one this brain may be copied into.
+	open(
+		token: string | null,
+		brain: { leftRepository: boolean }
+	): Promise<{
+		end: StoreEnd;
+		binding: D1PreparedStatement[];
+		token?: string;
+	}>;
+}
+
+// A destination that turned out, once reached, not to be one this brain may be copied
+// into. Nothing was written there.
+export class MoveRefused extends Error {}
+
+interface MoveCounters {
+	revision: string;
+	target?: string;
+	token?: string | null;
+	// The brain has been served from a GitHub repository under its own name and moved out
+	// of it. False for a brain created on other storage, whose name on GitHub, if a
+	// repository holds it, is somebody else's.
+	leftRepository?: boolean;
+}
+
+// A row written before moves recorded their target is a move out of a repository.
+const leftRepository = (pass: { counters: MoveCounters } | null): boolean =>
+	!!pass && (pass.counters.leftRepository ?? pass.counters.target === undefined);
+
+// Why a brain cannot move to `to`, or null when it can. Pure.
+export function moveProblem(o: {
+	from: BrainStorageChoice;
+	to: BrainStorageChoice;
+	// What the storage it would move to can do; undefined when this deployment has none.
+	destination: StoreCapabilities | undefined;
+	writeMode: 'direct' | 'pull-request';
+	label: string;
+}): string | null {
+	const place = STORAGE_PLACE;
+	if (o.from === o.to) return `${o.label} is already ${place[o.to]}. Nothing was changed.`;
+	if (!o.destination) {
+		return o.to === 'isomorphic'
+			? 'This deployment cannot hold a brain itself, so nothing was changed.'
+			: `This deployment is not set up to move a brain to storage ${place[o.to]}, so nothing was changed.`;
+	}
+	// A pull request still open would be left behind, and no later change could be held
+	// for review.
+	if (o.writeMode === 'pull-request' && !o.destination.proposals) {
+		return `${o.label} takes its changes as pull requests, which storage ${place[o.to]} cannot do yet. Nothing was changed.`;
+	}
+	return null;
+}
+
 // One step of moving a brain onto other storage: copy within the budget, keep the place
-// in `brain_passes`, and run `binding` (the statements that bind the brain to the new
-// storage) in the same batch as the finished pass once the copy is complete. Until then
-// the brain is served from where it was.
+// in `brain_passes`, and run the target's binding (the statements that bind the brain to
+// the new storage) in the same batch as the finished pass once the copy is complete.
+// Until then the brain is served from where it was.
 export async function relocateBrain(
 	db: D1Database,
 	scope: { brainId: string; orgId?: string; actorUserId?: string },
 	from: StoreEnd,
-	to: StoreEnd,
-	binding: D1PreparedStatement[],
-	opts: { branch?: string; budget?: number; author?: CommitAuthor; now?: number } = {}
+	target: MoveTarget,
+	opts: {
+		branch?: string;
+		budget?: number;
+		author?: CommitAuthor;
+		now?: number;
+		// The source is the brain's GitHub repository.
+		fromRepository?: boolean;
+	} = {}
 ): Promise<CopyStep> {
 	const now = opts.now ?? Date.now();
-	const defaults = { revision: '' };
-	const pass = continuePass(
-		await readPass(db, scope.brainId, RELOCATION_KIND, defaults),
-		defaults,
-		() => crypto.randomUUID(),
-		now
-	);
+	const defaults: MoveCounters = { revision: '' };
+	const existing = await readPass<MoveCounters>(db, scope.brainId, RELOCATION_KIND, defaults);
+	const left = leftRepository(existing);
+	// A copy toward somewhere else is abandoned where it stands.
+	const sameTarget = existing?.counters.target === target.key;
+	const pass = continuePass(sameTarget ? existing : null, defaults, () => crypto.randomUUID(), now);
+	const opened = await target.open(pass.counters.token ?? null, { leftRepository: left });
 	const prior = pass.counters.revision
 		? { revision: pass.counters.revision, after: pass.cursor }
 		: null;
-	const step = await copyStep(from, to, prior, opts);
+	const step = await copyStep(from, opened.end, prior, opts);
 	await db.batch([
-		...(step.done ? binding : []),
+		...(step.done ? opened.binding : []),
 		savePassStatement(
 			db,
 			{ ...scope, kind: RELOCATION_KIND },
@@ -174,16 +248,15 @@ export async function relocateBrain(
 				...pass,
 				status: step.done ? 'done' : 'running',
 				cursor: step.progress.after,
-				counters: { revision: step.progress.revision }
+				counters: {
+					revision: step.progress.revision,
+					target: target.key,
+					token: opened.token ?? null,
+					leftRepository: left || (step.done && !!opts.fromRepository)
+				}
 			},
 			now
 		)
 	]);
 	return step;
-}
-
-// Whether a relocation has ever run for this brain, which is true of a brain that came
-// out of a GitHub repository and false of one created on the platform's own files.
-export async function hasRelocated(db: D1Database, brainId: string): Promise<boolean> {
-	return (await readPass(db, brainId, RELOCATION_KIND, {})) !== null;
 }
