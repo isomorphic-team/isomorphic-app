@@ -254,7 +254,9 @@ Each step is its own pull request.
       (`storage: "isomorphic"`), a resumable copy of its current files
       (`src/lib/brain-relocate.ts`).
    4. Scaffolding through the store (`scaffold-core.ts` calls octokit), and `create_brain`
-      able to make a brain here.
+      able to make a brain here. Built: `scaffoldInto`, `create_brain`'s `storage`, and the
+      deployment's `BRAIN_STORAGE` default for orgs on platform-owned storage
+      (`chooseBrainStorage`).
    5. An objects Worker for Worker Previews. Built: a shared preview objects Worker and a
       name scope per pull request (`preview-environments.md`), opt-in by
       `PREVIEW_OBJECTS_WORKER_NAME`.
