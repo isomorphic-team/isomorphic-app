@@ -1,7 +1,7 @@
 # Design: brains on storage that is not git
 
-Status: **in implementation** (2026-11-12). Steps 1 and 2 of the order of work are built, and
-the first two parts of step 3.
+Status: **in implementation** (2026-11-13). Steps 1 to 3 of the order of work are built, and
+the store of step 6 (Google Drive), which is being built before step 4 (Microsoft Graph).
 
 - Author: Jon Hansing (via Claude)
 - Related: [`storage-and-tenancy.md`](storage-and-tenancy.md) (connections, bindings, step 5's
@@ -194,12 +194,24 @@ the default for a hosted brain.
   named sites (`Sites.Selected`) with admin consent, not per-user delegated tokens. That is a new
   connection kind in `storage_connections`.
 
-**Google Drive second.**
+**Google Drive** (`src/lib/brain-store-drive.ts`).
 
 - Id-addressed: resolving a path walks folders, and two files in one folder can share a name.
-  The adapter resolves paths through the id-to-path map, and `validate` reports a duplicate
-  name as a defect.
-- Credential: a service account with access to a shared drive, or OAuth for a personal Drive.
+  The store resolves paths through a listing of the folder tree, read once per request, a
+  level at a time with many folders to a query. The oldest file holds a contested path, and
+  the listing reports the others; `validate` does not report them yet (step 5).
+- A revision is a digest of the listing, and a file's version tag is the md5 Drive reports.
+  The change feed (`changes.list`) is not used: its token covers the whole account and has to
+  be kept between requests.
+- No conditional write: `files.update` takes no precondition (Drive's reference, checked
+  2026-11-13). The store checks each file against the revision the write was planned on,
+  then reads its metadata just before the upload.
+- A delete moves the file to the trash.
+- Credential, not built. A service account has no storage of its own and can only create
+  files in a shared drive, which needs Google Workspace. OAuth with the `drive.file` scope
+  reaches the files the app itself created, in a personal or a Workspace Drive, and is the
+  one Drive scope Google does not class as restricted (Drive's scope guide, checked
+  2026-11-13). Under it a file someone adds to the folder by hand is invisible to the store.
 
 Both are network adapters with no git; neither needs `node:*`, so both run in the Worker.
 
@@ -274,7 +286,9 @@ Each step is its own pull request.
    `pr`), and `PendingPr` sits in the neutral file; this step narrows `Revision` to an `id` plus
    store-private detail, so a Graph store does not invent a branch.
 5. **Conflict copies and duplicate names in `validate`.**
-6. **The Drive store**, same pattern as step 4.
+6. **The Drive store**, same pattern as step 4. The store is built, on the contract battery
+   over a fake Drive (`scripts/fake-google-drive.ts`). Not built: the connection kind and its
+   OAuth, `create_brain` / `connect_brain` options, and a battery against real Drive.
 7. **Proposals held by the coordinator** (section 5.3), when a customer on these backends needs
    review.
 
@@ -283,9 +297,15 @@ the current files. History stays behind in the source repository.
 
 ## 10. Open questions
 
-- **Conditional writes.** Graph's simple upload page documents no `If-Match` precondition, and
-  Drive v3 documents none for content updates. Which write paths actually honour one decides how
-  much of section 7 is prevention and how much is detection. Spike before step 4.
+- **Conditional writes.** Graph's simple upload page documents no `If-Match` precondition.
+  Which write paths actually honour one decides how much of section 7 is prevention and how
+  much is detection. Spike before step 4. Drive has none (section 6).
+- **A Drive listing per request.** Every request to a Drive brain lists its folder tree: one
+  query per level of folders, 100 quota units each. Measure it on a real brain; the remedy is
+  the change feed with its token kept between requests.
+- **Drive downloads cost 200 quota units each**, against 325,000 a minute per user (Drive's
+  usage limits, checked 2026-11-13), so a first index of a large brain is throttled across
+  several reads. The store retries a throttled request.
 - **Change-token cost on remote calls.** A delta call per read is one round trip, as `getRef` is
   today. Measure against Graph and Drive throttling limits for a brain read many times a minute.
 - **Large brains.** Graph's delta and Drive's change list page through results. A first full
@@ -302,10 +322,10 @@ the current files. History stays behind in the source repository.
   5 MB attachment moves about 13 MB and waiting bundles sit in the object's memory. Measure
   with the Graph store; the remedies are batching the reads, applying writes in parallel, and
   having `put` name the step rather than carry its content.
-- **Where a store's coordinated write puts what the coordinator reports.** `WriteOpts` carries
-  no per-file `expected` versions, so the Graph store has none to pass and each file is checked
-  only against what the coordinator reads at the start; and `WriteResult` has no place for a
-  recovered earlier bundle. Both land with the Graph store, the first caller.
+- **Where a store's coordinated write puts what the coordinator reports.** `WriteResult` has
+  no place for a recovered earlier bundle, so the Drive store drops it. `WriteOpts` carries
+  no per-file `expected` versions: the Drive store derives them from the listing it took at
+  the write's `base` revision.
 - **Proposals at launch.** Whether the first Graph customer needs protected brains (step 7) before
   or after direct writes.
 - **Restoring a backup in place.** A backup (`docs/ops/backups.md`) restores to a folder,
