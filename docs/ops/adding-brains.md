@@ -112,8 +112,11 @@ its org. The content index (`ensureFresh`) self-builds on the first read — no 
 - **Move off GitHub:** `configure_brain` with `storage: "isomorphic"` (brain admin and org
   admin) copies the brain's current files into a Durable Object the deployment holds and
   serves it from there. A preview until `confirm: true`; a large brain takes several calls.
-  The repository is left as it is and no longer read. There is no way back yet, and such a
-  brain cannot be disconnected.
+  The repository is left as it is and no longer read. Such a brain cannot be disconnected.
+- **Move back to GitHub:** `configure_brain` with `storage: "github"`, same gates and shape.
+  It copies the brain's current files into the repository the brain is named for, through the
+  connection that reaches that account, creating the repository (private) if it is gone and
+  removing files there that the brain does not have.
 - **Move to another org:** `connect_brain` with the brain's name or id as `repo` and the
   destination `org`, then again with `confirm: true` (org admin in both orgs). The first call previews whose access changes. The brain
   keeps its storage binding, so it stays in the same GitHub account and is read

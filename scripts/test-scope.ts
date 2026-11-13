@@ -383,7 +383,8 @@ function toolsFor(
 		analyticsEnabled: true,
 		openIndex: d1Index(db),
 		webBaseUrl: deployment.webBaseUrl,
-		platformFiles: deployment.noFilesObjects ? undefined : () => filesStore
+		platformFiles: deployment.noFilesObjects ? undefined : () => filesStore,
+		githubFor: async () => octokit
 	});
 	return handlers;
 }
@@ -1370,6 +1371,45 @@ console.log('\nA single-user deployment: only the tools that can answer');
 				writeMode: 'pull-request',
 				destination: { ...movable.destination, proposals: true }
 			}) === null
+	);
+	const back = { storage: 'github', confirm: true };
+	const notHeld = await attempt(both, 'configure_brain', back);
+	check(
+		'a brain in a GitHub repository has nowhere to move back to',
+		notHeld.outcome === 'denied' && notHeld.detail.includes('already in a GitHub repository'),
+		notHeld.detail
+	);
+	check(
+		'moving back is gated the same way: a brain admin who is only an org viewer cannot',
+		await denies(sharedAdmin, 'configure_brain', back)
+	);
+	const backPreview = await attempt(
+		both,
+		'configure_brain',
+		{ storage: 'github' },
+		{
+			held: 'b-main'
+		}
+	);
+	check(
+		'without confirm it only describes the move back',
+		backPreview.outcome === 'allowed' && backPreview.text.startsWith('Nothing has changed yet.'),
+		backPreview.detail + backPreview.text
+	);
+	const backGo = await attempt(both, 'configure_brain', back, { held: 'b-main' });
+	check(
+		'with confirm, an admin of both gets as far as the repository',
+		backGo.detail.includes('octokit.') && backGo.detail.includes(STORE_MARKER),
+		backGo.detail
+	);
+	const backSolo = await attempt(both, 'configure_brain', back, {
+		held: 'b-main',
+		multiUser: false
+	});
+	check(
+		'a single-user deployment refuses the move back too',
+		backSolo.outcome === 'denied' && backSolo.detail.includes('No GitHub connection'),
+		backSolo.detail
 	);
 	const stranded = await attempt(
 		both,
