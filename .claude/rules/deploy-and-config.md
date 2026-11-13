@@ -65,7 +65,7 @@ The MCP Worker implements no Durable Object (below). The classes live in the **o
 (`src/objects/worker.ts`, `wrangler.objects.template.jsonc`, name `OBJECTS_WORKER_NAME`), which
 the MCP Worker binds by `script_name`: `WRITE_COORDINATOR`, the write coordinator per brain,
 and `BRAIN_FILES` (`BrainFilesObject`), the files of a brain the platform holds (`openStorage`
-in `worker.ts`; a Worker Preview binds neither, so such a brain cannot be opened in one). `pnpm test:wiring` fails on a class or a value import of `src/objects/` anywhere else;
+in `worker.ts`). `pnpm test:wiring` fails on a class or a value import of `src/objects/` anywhere else;
 `pnpm test:objects` runs both Workers in workerd.
 
 - **It has no public URL** (`workers_dev` and `preview_urls` off) and holds no credential: the
@@ -79,9 +79,12 @@ in `worker.ts`; a Worker Preview binds neither, so such a brain cannot be opened
   before it takes traffic. `/health` pings it, so the smoke checks reach it afterwards.
 - **So its RPC methods and stored tables only ever grow.** The MCP Worker version live during a
   deploy, and the one a rollback returns to, call the new objects Worker.
-- **Worker Previews do not bind it** (`previewConfig` drops `durable_objects`): a Preview's
-  binding would reach the production namespace. A Preview runs without the write coordinator,
-  and its `/health` skips the ping.
+- **Worker Previews never bind it**: a binding reaches the named Worker's one namespace.
+  With `PREVIEW_OBJECTS_WORKER_NAME` set they bind a shared preview objects Worker, deployed
+  by `preview.yml` from the base branch, and `previewConfig` carries the bindings (refusing
+  any that name another Worker) and sets `OBJECTS_SCOPE`, which `filesObjectName` prefixes
+  to each files object's name. Any new per-brain object must be named through the same scope.
+  Without it `previewConfig` drops `durable_objects`, and a Preview's `/health` skips the ping.
 
 ## Deploys are versioned, and roll themselves back
 

@@ -96,7 +96,17 @@ type WranglerConfig = Record<string, unknown> & {
 	vars?: Record<string, string>;
 	d1_databases?: Record<string, unknown>[];
 	kv_namespaces?: Record<string, unknown>[];
+	durable_objects?: { bindings?: Record<string, unknown>[] };
 };
+
+/** The objects Worker every Preview shares, and this Preview's own corner of it. */
+export interface PreviewObjects {
+	// The preview objects Worker's name. Every Durable Object binding must name it.
+	worker: string;
+	// Prefixed to each object's name (OBJECTS_SCOPE), so two pull requests never
+	// address the same object.
+	scope: string;
+}
 
 /**
  * The generated config plus a `previews` block, which `wrangler preview` requires and reads
@@ -104,12 +114,23 @@ type WranglerConfig = Record<string, unknown> & {
  * the top level from the preview profile, with the pull request's own database, so the
  * block repeats it.
  *
- * Durable Object bindings are dropped, not carried: they name the objects Worker by
- * `script_name`, and a Preview has no objects Worker of its own, so it would reach
- * whichever Worker in the account has that name. A Preview runs without the write
- * coordinator.
+ * Durable Object bindings name the objects Worker by `script_name`, and a binding reaches
+ * that Worker's one namespace. Without `objects` they are dropped, and the Preview runs
+ * with no objects at all. With it they are carried, provided every one names the preview
+ * objects Worker, and the Preview's object names are scoped to it.
  */
-export function previewConfig({ durable_objects: _, ...config }: WranglerConfig): WranglerConfig {
+export function previewConfig(
+	{ durable_objects, ...config }: WranglerConfig,
+	objects?: PreviewObjects
+): WranglerConfig {
+	const bound = objects ? (durable_objects?.bindings ?? []) : [];
+	const elsewhere = bound.filter((b) => b.script_name !== objects?.worker);
+	if (elsewhere.length > 0)
+		throw new Error(
+			`Durable Object bindings must name the preview objects Worker ${objects?.worker}, found ${elsewhere.map((b) => `${String(b.name)} -> ${String(b.script_name)}`).join(', ')}`
+		);
+	const carried = bound.length > 0 ? { durable_objects: { bindings: bound } } : {};
+	const vars = { ...config.vars, ...(objects ? { OBJECTS_SCOPE: objects.scope } : {}) };
 	const databases = config.d1_databases ?? [];
 	const bindings = databases.map((d) => String(d.binding)).join(', ');
 	// The pull request's two databases and nothing else: a binding this does not know
@@ -120,10 +141,13 @@ export function previewConfig({ durable_objects: _, ...config }: WranglerConfig)
 		);
 	return {
 		...config,
+		...carried,
+		vars,
 		previews: {
-			vars: { ...config.vars },
+			vars: { ...vars },
 			d1_databases: databases.map((d) => ({ ...d })),
-			kv_namespaces: (config.kv_namespaces ?? []).map((kv) => ({ ...kv }))
+			kv_namespaces: (config.kv_namespaces ?? []).map((kv) => ({ ...kv })),
+			...carried
 		}
 	};
 }
@@ -226,7 +250,10 @@ function main(argv: string[]): void {
 			const [input, output] = args;
 			if (!input || !output) throw new Error('usage: preview.ts config <in.jsonc> <out.json>');
 			const config = parseJsonc(readFileSync(input, 'utf8')) as WranglerConfig;
-			writeFileSync(output, JSON.stringify(previewConfig(config), null, '\t') + '\n');
+			// Set only once the preview objects Worker exists (the one-time setup).
+			const worker = process.env.PREVIEW_OBJECTS_WORKER_NAME?.trim();
+			const objects = worker ? { worker, scope: planPreview(inputsFromEnv()).name } : undefined;
+			writeFileSync(output, JSON.stringify(previewConfig(config, objects), null, '\t') + '\n');
 			return;
 		}
 		case 'database-id': {

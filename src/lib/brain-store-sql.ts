@@ -264,6 +264,13 @@ export function sqlFiles(db: SqlDatabase): SqlFilesSync {
 	};
 }
 
+// The name of a brain's files object. A deployment that shares its objects Worker with
+// others (a pull request's Preview) sets a scope, so two of them never address the same
+// object.
+export function filesObjectName(brainId: string, scope?: string): string {
+	return scope ? `${scope}:${brainId}` : brainId;
+}
+
 const revisionOf = (id: string): Revision => ({ id, branch: BRANCH, snapshot: id });
 
 // A ref that names a revision pins a read to it; a branch name reads what is there now.

@@ -52,7 +52,7 @@ import {
 	orgStorage,
 	type GithubCredential
 } from './lib/storage-connections.ts';
-import { sqlBrainStore } from './lib/brain-store-sql.ts';
+import { filesObjectName, sqlBrainStore } from './lib/brain-store-sql.ts';
 import { claimPendingInvites } from './lib/invites.ts';
 import {
 	getAppUser,
@@ -215,8 +215,12 @@ interface Env {
 	// objects Worker. Unset in a Worker Preview, whose config carries no Durable Object.
 	WRITE_COORDINATOR?: DurableObjectNamespace<WriteCoordinatorObject>;
 	// The files of a brain the platform holds, one object per brain named by its
-	// brain_id (src/lib/brain-store-sql.ts). Unset in a Worker Preview.
+	// brain_id (src/lib/brain-store-sql.ts). Unset in a Worker Preview with no preview
+	// objects Worker.
 	BRAIN_FILES?: DurableObjectNamespace<BrainFilesObject>;
+	// Prefixed to every files object's name (filesObjectName). Set only where several
+	// deployments share one objects Worker: a Worker Preview, to its own name.
+	OBJECTS_SCOPE?: string;
 
 	// Product feedback (submit_feedback). FEEDBACK_REPO is the "owner/repo" of the
 	// tracker that receives reports; FEEDBACK_TOKEN is a separate narrowly scoped
@@ -319,7 +323,11 @@ async function githubClientFor(env: Env, credential: GithubCredential): Promise<
 // this deployment binds no files objects.
 function platformFiles(env: Env): ((brainId: string) => BrainStore) | undefined {
 	const ns = env.BRAIN_FILES;
-	return ns && ((brainId) => sqlBrainStore(ns.get(ns.idFromName(brainId))));
+	return (
+		ns &&
+		((brainId) =>
+			sqlBrainStore(ns.get(ns.idFromName(filesObjectName(brainId, env.OBJECTS_SCOPE?.trim())))))
+	);
 }
 
 // A brain's storage, chosen by its binding (credentialFor): a GitHub repository through
