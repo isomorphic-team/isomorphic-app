@@ -1187,7 +1187,14 @@ class McpSession {
 			analyticsEnabled: this.usageEnabled(),
 			openIndex: indexFor(this.env),
 			webBaseUrl: this.webBase(),
-			platformFiles: platformFiles(this.env)
+			platformFiles: platformFiles(this.env),
+			githubFor: async (conn) => {
+				const credential = credentialForConnection(conn);
+				if (credential.kind === 'platform-files') {
+					throw new Error(`${conn.connection_id} is not a GitHub connection.`);
+				}
+				return githubClientFor(this.env, credential);
+			}
 		});
 
 		// ---------- user-defined tools (brain-tools) ----------

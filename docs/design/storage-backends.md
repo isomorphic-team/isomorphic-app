@@ -252,12 +252,15 @@ Each step is its own pull request.
       Built: the `platform-files` connection kind (`src/lib/storage-connections.ts`) and
       `openStorage` in `src/worker.ts`. An existing brain moves onto it with `configure_brain`
       (`storage: "isomorphic"`), a resumable copy of its current files
-      (`src/lib/brain-relocate.ts`), one way until step 6.
+      (`src/lib/brain-relocate.ts`).
    4. Scaffolding through the store (`scaffold-core.ts` calls octokit), and `create_brain`
       able to make a brain here.
    5. An objects Worker for Worker Previews, which bind none today.
    6. Export to a GitHub repository, and the reverse: relocation
-      (`storage-and-tenancy.md` step 5).
+      (`storage-and-tenancy.md` step 5). Built as a move in both directions:
+      `configure_brain` with `storage: "github"` copies a platform-held brain into its
+      repository and binds it there. A copy out that leaves the brain where it is (an
+      archive to download, a scheduled backup) is not built.
    7. The default for a hosted brain, and moving the existing ones.
 4. **The Graph store**, tested against an in-memory fake that reproduces delta tokens, `410`
    resync, eTags and name uniqueness, plus an e2e battery against a scratch folder (the twin of

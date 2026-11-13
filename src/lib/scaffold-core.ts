@@ -144,3 +144,28 @@ export async function createAndScaffoldBrain(
 		commitSha
 	};
 }
+
+// Make sure a private repository exists for a brain's files to be written into, and say
+// whether this call created it. A new one gets a default branch from `auto_init`.
+export async function ensureRepository(
+	octokit: Octokit,
+	opts: { owner: string; name: string; description?: string }
+): Promise<{ created: boolean }> {
+	try {
+		await octokit.rest.repos.get({ owner: opts.owner, repo: opts.name });
+		return { created: false };
+	} catch (err) {
+		if ((err as { status?: number })?.status !== 404) throw err;
+	}
+	await octokit.rest.repos.createInOrg({
+		org: opts.owner,
+		name: opts.name,
+		description: opts.description ?? 'Brain — LLM-maintained knowledge base',
+		private: true,
+		auto_init: true,
+		has_issues: true,
+		has_projects: false,
+		has_wiki: false
+	});
+	return { created: true };
+}

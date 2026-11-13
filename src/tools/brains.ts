@@ -41,14 +41,18 @@ import {
 	getOrgById,
 	activeAfterDisconnect
 } from '../lib/orgs.ts';
-import { createAndScaffoldBrain } from '../lib/scaffold-core.ts';
+import { createAndScaffoldBrain, ensureRepository } from '../lib/scaffold-core.ts';
 import { forgetBrain } from '../lib/brain-forget.ts';
 import {
+	bindingStatement,
+	githubConnectionForAccount,
+	platformFilesBinding,
 	platformHoldsFiles,
 	getConnection,
+	type StorageConnection,
 	orgAdministersConnection
 } from '../lib/storage-connections.ts';
-import { relocateToPlatformFiles } from '../lib/brain-relocate.ts';
+import { relocateBrain, type CopyStep } from '../lib/brain-relocate.ts';
 import type { BrainStore, StoreCapabilities } from '../lib/brain-repo.ts';
 import {
 	countPendingBrainInvites,
@@ -233,6 +237,9 @@ export function registerBrainTools(
 		// The store for a brain the platform holds itself, by brain_id. Absent when the
 		// deployment binds no files objects, where no brain can move onto them.
 		platformFiles?: (brainId: string) => BrainStore;
+		// A GitHub client holding a connection's credential, for moving a brain back
+		// into a repository under that connection's account.
+		githubFor?: (conn: StorageConnection) => Promise<Octokit>;
 	}
 ) {
 	const {
@@ -248,7 +255,8 @@ export function registerBrainTools(
 		analyticsEnabled,
 		openIndex,
 		webBaseUrl,
-		platformFiles
+		platformFiles,
+		githubFor
 	} = deps;
 	// `people`: whether this deployment has anyone to share with, invite, or count.
 	// The nav offers Sharing, Members, Analytics and brain management only when it
@@ -796,7 +804,7 @@ export function registerBrainTools(
 				'destructive'
 			),
 			description:
-				"A brain's own settings. RENAME: pass `name` alone to change what the brain is called; nothing in its repository changes. STORAGE: pass `storage: \"isomorphic\"` to move a brain out of its GitHub repository into storage Isomorphic holds itself; the reply is a preview until `confirm: true`, a large brain takes several calls with the same arguments, and it also needs admin in the brain's organization. CONTENT LAYOUT: set up an adopted repo so its pages appear, by writing a .isomorphic.json describing where its content lives; use when a connected brain shows no pages because its markdown isn't under the default 'wiki/' layout. Defaults to indexing the whole repo. If the repo already has a .isomorphic.json, this refuses and shows the current one; pass `overwrite: true` to replace it deliberately. Needs admin on the brain. configure_brain never moves a brain between organizations.",
+				"A brain's own settings. RENAME: pass `name` alone to change what the brain is called; nothing in its repository changes. STORAGE: pass `storage: \"isomorphic\"` to move a brain out of its GitHub repository into storage Isomorphic holds itself, or `storage: \"github\"` to move such a brain back into a GitHub repository; the reply is a preview until `confirm: true`, a large brain takes several calls with the same arguments, and it also needs admin in the brain's organization. CONTENT LAYOUT: set up an adopted repo so its pages appear, by writing a .isomorphic.json describing where its content lives; use when a connected brain shows no pages because its markdown isn't under the default 'wiki/' layout. Defaults to indexing the whole repo. If the repo already has a .isomorphic.json, this refuses and shows the current one; pass `overwrite: true` to replace it deliberately. Needs admin on the brain. configure_brain never moves a brain between organizations.",
 			inputSchema: z.object({
 				brain: z
 					.string()
@@ -817,10 +825,10 @@ export function registerBrainTools(
 						'Replace an existing .isomorphic.json. Without this, a repo that already has one is left alone and its current config is shown.'
 					),
 				storage: z
-					.enum(['isomorphic'])
+					.enum(['isomorphic', 'github'])
 					.optional()
 					.describe(
-						'Move the brain’s files to this storage. "isomorphic": held by Isomorphic itself, with no GitHub repository behind it.'
+						'Move the brain’s files to this storage. "isomorphic": held by Isomorphic itself, with no GitHub repository behind it. "github": back into the brain’s GitHub repository.'
 					),
 				confirm: z
 					.boolean()
@@ -857,39 +865,81 @@ export function registerBrainTools(
 				const target = (await listBrains()).find((b) => b.brain_id === ctx.brainId);
 				if (!target) return fail('That brain could not be resolved.');
 				const label = brainLabel(target);
-				// A single-user deployment's binding follows its config, so nothing can move.
-				const destination = multiUser ? platformFiles?.(ctx.brainId) : undefined;
-				const problem = relocationProblem({
-					destination: destination?.capabilities,
-					held: platformHoldsFiles(target),
-					writeMode: ctx.config.writeMode,
-					label
-				});
-				if (problem || !destination) return fail(problem ?? 'Nothing was changed.');
 				const repository = `${target.repo_owner}/${target.repo_name}`;
-				if (!confirm) {
-					return {
-						content: [
-							{
-								type: 'text' as const,
-								text: `Nothing has changed yet. This would copy the current files of ${label} out of its GitHub repository (${repository}) into storage Isomorphic holds itself, and serve the brain from there. Its pages, links, sharing and address stay the same. The repository is left exactly as it is, with its history, and is no longer read or written: anything pushed to it afterwards will not appear in the brain. History before the move stays in the repository and is not shown in the brain's activity. There is no tool yet to move a brain back to GitHub. Call configure_brain again with confirm: true to go ahead.`
-							}
-						]
-					};
+				const held = platformHoldsFiles(target);
+				const source = { store: ctx.store, locator: ctx.locator };
+				const scope = { brainId: ctx.brainId, orgId: ctx.orgId, actorUserId: ctx.actorUserId };
+				const copyOpts = { branch: ctx.config.defaultBranch, author: ctx.author };
+				const preview = (text: string) => ({
+					content: [{ type: 'text' as const, text: `Nothing has changed yet. ${text}` }]
+				});
+				let step: CopyStep;
+				let moved: string;
+
+				if (storage === 'isomorphic') {
+					// A single-user deployment's binding follows its config, so nothing can move.
+					const destination = multiUser ? platformFiles?.(ctx.brainId) : undefined;
+					const problem = relocationProblem({
+						destination: destination?.capabilities,
+						held,
+						writeMode: ctx.config.writeMode,
+						label
+					});
+					if (problem || !destination) return fail(problem ?? 'Nothing was changed.');
+					if (!confirm) {
+						return preview(
+							`This would copy the current files of ${label} out of its GitHub repository (${repository}) into storage Isomorphic holds itself, and serve the brain from there. Its pages, links, sharing and address stay the same. The repository is left exactly as it is, with its history, and is no longer read or written: anything pushed to it afterwards will not appear in the brain. History before the move stays in the repository and is not shown in the brain's activity. configure_brain with storage: "github" moves it back. Call configure_brain again with confirm: true to go ahead.`
+						);
+					}
+					step = await relocateBrain(
+						ctx.db,
+						scope,
+						source,
+						{ store: destination, locator: ctx.locator },
+						platformFilesBinding(ctx.db, ctx.brainId),
+						copyOpts
+					);
+					moved = `its ${step.total} files are now held by Isomorphic, and the brain is served from there. The GitHub repository ${repository} is unchanged and no longer used; archive or delete it when you are satisfied.`;
+				} else {
+					if (!held)
+						return fail(`${label} is already in a GitHub repository. Nothing was changed.`);
+					// The connection that reaches the account the brain's repository is under.
+					const conn = multiUser
+						? await githubConnectionForAccount(ctx.db, target.repo_owner)
+						: null;
+					if (!conn || !githubFor) {
+						return fail(
+							`No GitHub connection on this deployment reaches ${target.repo_owner}, so ${label} cannot move there. Nothing was changed.`
+						);
+					}
+					if (!confirm) {
+						return preview(
+							`This would copy the current files of ${label} into the GitHub repository ${repository}, and serve the brain from there again. If the repository no longer exists it is created, private. Files in the repository that the brain does not have are removed from it, as new commits on top of its history. Its pages, links, sharing and address stay the same. The files Isomorphic holds are left as they are and no longer used, and the brain's activity since it left GitHub is not carried over. Call configure_brain again with confirm: true to go ahead.`
+						);
+					}
+					const octokit = await githubFor(conn);
+					await ensureRepository(octokit, {
+						owner: target.repo_owner,
+						name: target.repo_name,
+						description: `${label} — Isomorphic brain`
+					});
+					step = await relocateBrain(
+						ctx.db,
+						scope,
+						source,
+						{ store: githubStore(octokit), locator: ctx.locator },
+						[bindingStatement(ctx.db, ctx.brainId, conn.connection_id)],
+						copyOpts
+					);
+					moved = `its ${step.total} files are in the GitHub repository ${repository}, and the brain is served from there.`;
 				}
-				const step = await relocateToPlatformFiles(
-					ctx.db,
-					{ brainId: ctx.brainId, orgId: ctx.orgId, actorUserId: ctx.actorUserId },
-					{ store: ctx.store, locator: ctx.locator },
-					{ store: destination, locator: ctx.locator },
-					{ branch: ctx.config.defaultBranch, author: ctx.author }
-				);
+
 				if (!step.done) {
 					return {
 						content: [
 							{
 								type: 'text' as const,
-								text: `${step.restarted ? 'The brain changed while it was being copied, so the copy began again. ' : ''}Copied ${step.copied} of ${step.total} files. ${label} is still served from GitHub. Call configure_brain again with the same arguments to continue.`
+								text: `${step.restarted ? 'The brain changed while it was being copied, so the copy began again. ' : ''}Copied ${step.copied} of ${step.total} files. ${label} is still served from where it was. Call configure_brain again with the same arguments to continue.`
 							}
 						],
 						structuredContent: { moved: false, copied: step.copied, total: step.total }
@@ -899,12 +949,7 @@ export function registerBrainTools(
 				invalidateConfig(ctx.locator.owner, ctx.locator.repo);
 				await ctx.index.reset();
 				return {
-					content: [
-						{
-							type: 'text' as const,
-							text: `Moved ${label}: its ${step.total} files are now held by Isomorphic, and the brain is served from there. The GitHub repository ${repository} is unchanged and no longer used; archive or delete it when you are satisfied.`
-						}
-					],
+					content: [{ type: 'text' as const, text: `Moved ${label}: ${moved}` }],
 					structuredContent: { moved: true, copied: step.copied, total: step.total }
 				};
 			}
@@ -1050,7 +1095,7 @@ export function registerBrainTools(
 				// nothing can reach them.
 				if (platformHoldsFiles(target)) {
 					return fail(
-						`${brainLabel(target)} is held by Isomorphic itself, with no repository behind it, so disconnecting it would strand its files. It cannot be disconnected until a brain can be exported.`
+						`${brainLabel(target)} is held by Isomorphic itself, with no repository behind it, so disconnecting it would strand its files. Move it to GitHub first with configure_brain (storage: "github").`
 					);
 				}
 				// The brain, its grants and every derived row in one batch. A row left behind
