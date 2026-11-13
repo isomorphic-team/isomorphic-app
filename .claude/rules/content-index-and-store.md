@@ -29,7 +29,8 @@ storage, and the neutral types it speaks. `githubStore(octokit)` is in
 - **A write returns each file's version tag** (`WriteResult.versions`, which a direct
   `commitOrPR` reports as `WriteOutcome.landed` with the new revision): the same value `listTree`
   reports for that file afterwards. The GitHub store uses the blob id (`gitBlobSha`), the fs
-  store a size and mtime token; a tag is opaque everywhere else. `pnpm test:store` runs this contract against every backend.
+  store a size and mtime token, the SQL store (`sqlBrainStore`, `src/lib/brain-store-sql.ts`)
+  the sequence number of the commit that last changed the file; a tag is opaque everywhere else. `pnpm test:store` runs this contract against every backend.
 - **If you reach for `ctx.octokit` while touching a brain's CONTENT, it belongs on the store.**
   A raw octokit call in a content path compiles and fails at runtime on the fs backend.
   `octokit` stays on the context (optional) only for GitHub-as-platform calls in
