@@ -34,6 +34,7 @@ import {
 	roleLabel,
 	roleAtLeast,
 	createBrain,
+	brainNameTaken,
 	setBrainGrant,
 	setBrainName,
 	getBrainByRepo,
@@ -427,6 +428,12 @@ export function registerBrainTools(
 				let repo = base;
 				let created: Awaited<ReturnType<typeof createAndScaffoldBrain>>;
 				for (let attempt = 1; ; attempt++) {
+					// A name a brain already holds is taken even when GitHub has no such
+					// repository: creating it would hand this caller that brain.
+					if (attempt < 25 && (await brainNameTaken(ctx.db, owner, repo))) {
+						repo = `${base}-${attempt + 1}`;
+						continue;
+					}
 					try {
 						created = await createAndScaffoldBrain(githubClient(ctx), {
 							org: owner,
@@ -453,7 +460,7 @@ export function registerBrainTools(
 				const newBrainId = brainIdFor(created.owner, created.name);
 				// An earlier brain under this id may have left index rows (see brain-forget.ts).
 				await openIndex(newBrainId).reset();
-				await createBrain(ctx.db, {
+				const inserted = await createBrain(ctx.db, {
 					brain_id: newBrainId,
 					org_id: ctx.org.org_id,
 					repo_owner: created.owner,
@@ -463,6 +470,12 @@ export function registerBrainTools(
 					visibility: 'private',
 					storage_connection_id: ctx.storage.connection_id
 				});
+				// Never grant on a row this call did not write: it is another brain's.
+				if (!inserted) {
+					return fail(
+						`Another brain already holds ${created.owner}/${created.name}, so no brain was created. Try again with a different name.`
+					);
+				}
 				if (ctx.actorUserId) {
 					await setBrainGrant(ctx.db, {
 						brain_id: newBrainId,
@@ -641,6 +654,11 @@ export function registerBrainTools(
 							? `${owner}/${name} is already a brain here.`
 							: `${owner}/${name} is already connected to another organization.`
 					);
+				}
+				// The same repository under another spelling, or a different one whose name
+				// derives the same brain id: adopting it would grant on that other brain.
+				if (await brainNameTaken(ctx.db, owner, name)) {
+					return fail(`${owner}/${name} collides with a brain that already exists.`);
 				}
 
 				// PRIVATE BY DEFAULT, the same as create_brain. Not org-wide, though adopting
