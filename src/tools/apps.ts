@@ -28,6 +28,8 @@ import {
 	RESOURCE_MIME_TYPE
 } from '@modelcontextprotocol/ext-apps/server';
 import { z } from 'zod';
+import { activityText } from '../lib/change-record.ts';
+import { logPathOf } from '../lib/brain-policy.ts';
 import { BRAIN_APP_HTML } from '../lib/app-bundle.generated.ts';
 import { MAX_SCAN_PAGES, type BrainLocator, type BrainStore } from '../lib/brain-repo.ts';
 import { detectNeedsConfig, type BrainIndex } from '../lib/brain-index.ts';
@@ -385,12 +387,12 @@ export function registerBrainApp(
 					url: c.url
 				};
 			});
-			const scopeLabel = path ? `"${path}"` : 'the brain';
-			const text = entries.length
-				? `Recent changes to ${scopeLabel}:\n${entries
-						.map((e) => `- ${e.date.slice(0, 10)} — ${e.authorName}: ${e.message} (${e.shortSha})`)
-						.join('\n')}`
-				: `No recorded changes for ${scopeLabel} yet.`;
+			const text = activityText({
+				entries,
+				scope: path ? `"${path}"` : 'the brain',
+				history: store.capabilities.history,
+				logPath: logPathOf(config)
+			});
 			return {
 				content: [
 					{ type: 'text' as const, text: withLink(text, 'view_activity', activeBrain.id, path) }
