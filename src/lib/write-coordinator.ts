@@ -13,12 +13,13 @@
 // including during a rollback.
 //
 // inMemoryWriteCoordinator is the implementation for tests and the local runtime. The
-// Durable Object (docs/design/storage-backends.md section 5.2) runs the same
-// coordinateWrite and recoverJournal with its own WriteJournal and a serialized() lane.
+// Durable Object (docs/design/storage-backends.md section 5.2) runs the same landBundle
+// with its own WriteJournal inside a serialized() lane.
 
-import type { FileWrite } from './brain-repo.ts';
+import { WriteConflictError, type FileWrite, type WriteOpts } from './brain-repo.ts';
 
-type Encoding = 'utf-8' | 'base64';
+type Encoding = NonNullable<FileWrite['encoding']>;
+type FileBody = Omit<FileWrite, 'path'>;
 
 // The per-file operations a non-atomic backend provides. `ifVersion` is the version the
 // file must still be at (null: the file must not exist); a backend that can enforce it
@@ -27,21 +28,11 @@ type Encoding = 'utf-8' | 'base64';
 export interface FileBackend {
 	read(path: string, encoding: Encoding): Promise<{ content: string; version: string } | null>;
 	// Returns the file's new version tag.
-	put(path: string, file: Omit<FileWrite, 'path'>, ifVersion: string | null): Promise<string>;
+	put(path: string, file: FileBody, ifVersion: string | null): Promise<string>;
 	remove(path: string, ifVersion: string): Promise<void>;
 }
 
-// A file was not at the version the write was planned against.
-export class WriteConflictError extends Error {
-	constructor(readonly path: string) {
-		super(`${path} changed since it was read. Read it again and retry the change.`);
-	}
-}
-
-export interface CoordinatedWrite {
-	message: string;
-	writes?: FileWrite[];
-	deletes?: string[];
+export interface CoordinatedWrite extends Pick<WriteOpts, 'message' | 'writes' | 'deletes'> {
 	// Per path, the version the caller read the file at (null: it did not exist). A path
 	// left out is checked against what the coordinator reads when the bundle starts.
 	expected?: Record<string, string | null>;
@@ -51,13 +42,12 @@ export interface CoordinatedWrite {
 // file did not exist before the bundle.
 export interface JournalStep {
 	path: string;
-	intended: Omit<FileWrite, 'path'> | null;
+	intended: FileBody | null;
 	prior: { content: string; encoding: Encoding } | null;
 }
 
 export interface JournalEntry {
 	message: string;
-	startedAt: string;
 	steps: JournalStep[];
 }
 
@@ -97,12 +87,12 @@ export function serialized(): <T>(task: () => Promise<T>) => Promise<T> {
 	};
 }
 
-const now = (): string => new Date().toISOString();
-
 // The steps of a bundle, writes before deletes: a move interrupted between them leaves
 // the page in both places rather than in neither.
-function stepsOf(bundle: CoordinatedWrite): Array<Omit<JournalStep, 'prior'>> {
-	const steps: Array<Omit<JournalStep, 'prior'>> = [
+type PlannedStep = Omit<JournalStep, 'prior'>;
+
+function stepsOf(bundle: CoordinatedWrite): PlannedStep[] {
+	const steps: PlannedStep[] = [
 		...(bundle.writes ?? []).map(({ path, ...file }) => ({ path, intended: file })),
 		...(bundle.deletes ?? []).map((path) => ({ path, intended: null }))
 	];
@@ -114,7 +104,7 @@ function stepsOf(bundle: CoordinatedWrite): Array<Omit<JournalStep, 'prior'>> {
 	return steps;
 }
 
-const encodingOf = (step: Omit<JournalStep, 'prior'>): Encoding =>
+const encodingOf = (step: PlannedStep): Encoding =>
 	step.intended?.encoding ?? (step.intended ? 'utf-8' : 'base64');
 
 // Writes one step and returns the new version, or null for a delete.
@@ -157,31 +147,28 @@ async function rollBack(files: FileBackend, applied: Applied[]): Promise<string[
 	return untouched;
 }
 
-// Lands one bundle. The caller holds the brain's lane and has run recoverJournal.
-export async function coordinateWrite(
+// Lands one bundle; recoverJournal has run.
+async function coordinateWrite(
 	journal: WriteJournal,
 	files: FileBackend,
 	bundle: CoordinatedWrite
 ): Promise<Record<string, string>> {
 	const planned = stepsOf(bundle);
 	const current = await Promise.all(planned.map((s) => files.read(s.path, encodingOf(s))));
-	planned.forEach((s, i) => {
-		const expected = bundle.expected?.[s.path];
-		if (expected !== undefined && (current[i]?.version ?? null) !== expected) {
-			throw new WriteConflictError(s.path);
-		}
-	});
+	const at = current.map((f) => f?.version ?? null);
 	const steps: JournalStep[] = planned.map((s, i) => {
+		const expected = bundle.expected?.[s.path];
+		if (expected !== undefined && at[i] !== expected) throw new WriteConflictError(s.path);
 		const was = current[i];
 		return { ...s, prior: was ? { content: was.content, encoding: encodingOf(s) } : null };
 	});
-	await journal.open({ message: bundle.message, startedAt: now(), steps });
+	await journal.open({ message: bundle.message, steps });
 
 	const applied: Applied[] = [];
 	const versions: Record<string, string> = {};
 	try {
 		for (const [i, step] of steps.entries()) {
-			const version = await apply(files, step, current[i]?.version ?? null);
+			const version = await apply(files, step, at[i]);
 			applied.push({ step, version });
 			if (version !== null) versions[step.path] = version;
 		}
@@ -198,8 +185,6 @@ export async function coordinateWrite(
 	return versions;
 }
 
-type State = 'applied' | 'pending' | 'foreign';
-
 const holds = (file: { content: string } | null, want: { content: string } | null): boolean =>
 	file === null ? want === null : want !== null && file.content === want.content;
 
@@ -212,13 +197,9 @@ export async function recoverJournal(
 	const entry = await journal.read();
 	if (!entry) return undefined;
 	const found = await Promise.all(entry.steps.map((s) => files.read(s.path, encodingOf(s))));
-	const state = (i: number): State =>
-		holds(found[i], entry.steps[i].intended)
-			? 'applied'
-			: holds(found[i], entry.steps[i].prior)
-				? 'pending'
-				: 'foreign';
-	const states = entry.steps.map((_, i) => state(i));
+	const states = entry.steps.map((s, i) =>
+		holds(found[i], s.intended) ? 'applied' : holds(found[i], s.prior) ? 'pending' : 'foreign'
+	);
 	const reached: Applied[] = entry.steps
 		.map((step, i) => ({ step, version: found[i]?.version ?? null }))
 		.filter((_, i) => states[i] === 'applied');
@@ -242,14 +223,31 @@ export async function recoverJournal(
 	return { message: entry.message, outcome: 'rolled-back', untouched };
 }
 
+// Settles any bundle an earlier call left, then lands this one. The caller holds the
+// brain's lane.
+export async function landBundle(
+	journal: WriteJournal,
+	files: FileBackend,
+	bundle: CoordinatedWrite
+): Promise<CoordinatedResult> {
+	const recovered = await recoverJournal(journal, files);
+	return { versions: await coordinateWrite(journal, files, bundle), recovered };
+}
+
+// Copies the entry's structure, not its content: strings are immutable.
+const copyEntry = (e: JournalEntry): JournalEntry => ({
+	...e,
+	steps: e.steps.map((s) => ({ ...s }))
+});
+
 export function memoryJournal(): WriteJournal & { entry: JournalEntry | null } {
 	return {
 		entry: null,
 		async read() {
-			return this.entry ? structuredClone(this.entry) : null;
+			return this.entry ? copyEntry(this.entry) : null;
 		},
 		async open(entry) {
-			this.entry = structuredClone(entry);
+			this.entry = copyEntry(entry);
 		},
 		async close() {
 			this.entry = null;
@@ -271,11 +269,7 @@ export function inMemoryWriteCoordinator(
 				brains.set(brainId, brain);
 			}
 			const { lane, journal } = brain;
-			return lane(async () => {
-				const recovered = await recoverJournal(journal, files);
-				const versions = await coordinateWrite(journal, files, bundle);
-				return recovered ? { versions, recovered } : { versions };
-			});
+			return lane(() => landBundle(journal, files, bundle));
 		}
 	};
 }

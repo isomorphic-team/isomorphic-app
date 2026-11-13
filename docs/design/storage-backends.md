@@ -220,5 +220,14 @@ the current files. History stays behind in the source repository.
   listing of a large folder needs the same budget and resume rule as any whole-brain index pass.
 - **Media.** `read_media` and attachments read binary files through the store. Confirm Graph and
   Drive downloads fit the Worker's memory and response limits for the media sizes already allowed.
+- **How the coordinator object reaches the files.** `WriteCoordinator.write` takes a
+  `FileBackend` per call. Across Workers RPC that is a stub calling back into the caller for
+  every file, and nothing ties a brain's journal to the storage it describes. Before the object
+  ships, decide whether it builds its own backend from the brain's connection or is bound per
+  brain.
+- **Where a store's coordinated write puts what the coordinator reports.** `WriteOpts` carries
+  no per-file `expected` versions, so the Graph store has none to pass and each file is checked
+  only against what the coordinator reads at the start; and `WriteResult` has no place for a
+  recovered earlier bundle. Both land with the Graph store, the first caller.
 - **Proposals at launch.** Whether the first Graph customer needs protected brains (step 6) before
   or after direct writes.

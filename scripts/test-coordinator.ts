@@ -18,11 +18,11 @@
 //      conflict before anything is written, and a backend's own precondition failure
 //      mid-bundle rolls back.
 
+import { WriteConflictError } from '../src/lib/brain-repo.ts';
 import {
 	inMemoryWriteCoordinator,
 	memoryJournal,
 	recoverJournal,
-	WriteConflictError,
 	type FileBackend
 } from '../src/lib/write-coordinator.ts';
 import { checker, errorOf } from './check.ts';
@@ -39,6 +39,12 @@ function fakeDrive(initial: Record<string, string | Buffer> = {}) {
 		return version;
 	};
 	for (const [p, c] of Object.entries(initial)) set(p, Buffer.from(c));
+	// Every put and remove: recorded, then the test's hook, then the outage check.
+	const enter = async (op: string, path: string): Promise<void> => {
+		drive.calls.push(`${op} ${path}`);
+		await drive.before(op, path);
+		if (drive.down) throw new Error('drive unavailable');
+	};
 	const drive = {
 		files,
 		calls: [] as string[],
@@ -59,9 +65,7 @@ function fakeDrive(initial: Record<string, string | Buffer> = {}) {
 				};
 			},
 			async put(path, file, ifVersion) {
-				drive.calls.push(`put ${path}`);
-				await drive.before('put', path);
-				if (drive.down) throw new Error('drive unavailable');
+				await enter('put', path);
 				if ((files.get(path)?.version ?? null) !== ifVersion) throw new WriteConflictError(path);
 				return set(
 					path,
@@ -69,9 +73,7 @@ function fakeDrive(initial: Record<string, string | Buffer> = {}) {
 				);
 			},
 			async remove(path, ifVersion) {
-				drive.calls.push(`remove ${path}`);
-				await drive.before('remove', path);
-				if (drive.down) throw new Error('drive unavailable');
+				await enter('remove', path);
 				if (files.get(path)?.version !== ifVersion) throw new WriteConflictError(path);
 				files.delete(path);
 			}
@@ -446,7 +448,6 @@ async function interrupted() {
 	const journal = memoryJournal();
 	await journal.open({
 		message: 'half rolled back',
-		startedAt: new Date().toISOString(),
 		steps: [
 			{ path: 'a.md', intended: { content: 'A' }, prior: { content: 'a', encoding: 'utf-8' } },
 			{ path: 'b.md', intended: { content: 'B' }, prior: { content: 'b', encoding: 'utf-8' } },
@@ -458,7 +459,9 @@ async function interrupted() {
 	check(
 		'a bundle interrupted mid-rollback is settled whole',
 		recovered?.outcome === 'completed' &&
-			['A', 'B', 'C'].every((c, i) => drive.text(`${'abc'[i]}.md`) === c)
+			drive.text('a.md') === 'A' &&
+			drive.text('b.md') === 'B' &&
+			drive.text('c.md') === 'C'
 	);
 }
 
