@@ -75,8 +75,11 @@ Speed, on `node:sqlite` locally, not on D1 or in a Durable Object:
 | knowledge base, 10 copies | 5,380 |           50.7 / 91.7 ms |  15.0 / 37.2 ms |
 | editorial brain           | 3,902 |            7.9 / 16.2 ms |   5.8 / 34.0 ms |
 
-The prototype issues up to nine statements per search. Against D1 each is a round trip; inside
-a Durable Object they are synchronous calls on local storage.
+On D1 a statement sent alone is a round trip, and round trips, not query time, set the cost
+of a search. Measured in shadow on a deployment, 137 searches, each engine timed alone: sending
+its nine statements one by one, FTS5 took a median 510 ms against `searchIndex`'s 189 ms (two
+or three statements), and passed one second on 31% of searches. `searchIndexFts` now sends
+eight of them as one batch, so a search is two round trips.
 
 ### Durable Objects and preview URLs
 
