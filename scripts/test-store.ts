@@ -42,6 +42,7 @@ import { dirname, join } from 'node:path';
 import { defineStore, type BrainStore, type StoreCapabilities } from '../src/lib/brain-repo.ts';
 import { githubStore, gitBlobSha } from '../src/lib/brain-store-github.ts';
 import {
+	createBrainFolder,
 	driveApi,
 	driveBrainStore,
 	driveStorageName,
@@ -70,8 +71,10 @@ import {
 import {
 	RELOCATION_KIND,
 	copyStep,
+	cameFromRepository,
 	fileWriteFor,
-	relocateBrain
+	relocateBrain,
+	type MoveTarget
 } from '../src/lib/brain-relocate.ts';
 import {
 	PLATFORM_FILES_KIND,
@@ -121,7 +124,8 @@ function driveFixture(opts: { pageSize?: number } = {}) {
 	);
 	const root = { folderId: drive.rootId };
 	const coordinator = inMemoryWriteCoordinator();
-	return { drive, api, root, open: () => driveBrainStore(api, root, coordinator, 'brain-1') };
+	const at = (folderId: string) => driveBrainStore(api, { folderId }, coordinator, 'brain-1');
+	return { drive, api, root, at, open: () => at(root.folderId) };
 }
 
 const BACKENDS: Backend[] = [
@@ -529,6 +533,21 @@ for (const backend of BACKENDS) {
 		(await later.listTree(repo, head, { extension: '.png' })).map((e) => e.path).join() ===
 			'wiki/deep/pic.png'
 	);
+	{
+		// The head is asked of Drive each time: a copy out of a Drive ends by checking that
+		// nothing changed while it ran.
+		const watcher = open();
+		const seenAt = (await watcher.getRevision(repo)).id;
+		const steady = await watcher.branchRevision(repo, 'main');
+		drive.edit('wiki/alpha.md', '# Alpha\n\nChanged in Drive.\n');
+		const moved = await watcher.branchRevision(repo, 'main');
+		drive.edit('wiki/alpha.md', writes[0].content);
+		check(
+			'drive: branchRevision reports a change made in Drive after the store listed it',
+			steady === seenAt && moved !== seenAt,
+			JSON.stringify([seenAt, steady, moved])
+		);
+	}
 	const pages = await later.fetchPages(repo, listed);
 	check(
 		'drive: fetchPages reads every page',
@@ -891,9 +910,11 @@ for (const backend of BACKENDS) {
 	await index.ensureFresh(source, repo, DEFAULT_BRAIN_CONFIG);
 	const indexed = async () => (await index.listPages()).map((p) => p.path).sort();
 	const before = await indexed();
-	const part = await relocateBrain(db, scope, from, to3, platformFilesBinding(db, 'b1'), {
-		budget: 3
-	});
+	const held3: MoveTarget = {
+		key: 'isomorphic',
+		open: async () => ({ end: to3, binding: platformFilesBinding(db, 'b1') })
+	};
+	const part = await relocateBrain(db, scope, from, held3, { budget: 3, fromRepository: true });
 	check(
 		'relocate: an unfinished copy leaves the brain where it was, and keeps its place',
 		!part.done &&
@@ -902,9 +923,7 @@ for (const backend of BACKENDS) {
 			pass()?.cursor === part.progress.after,
 		JSON.stringify([part, await binding(), pass()])
 	);
-	const rest = await relocateBrain(db, scope, from, to3, platformFilesBinding(db, 'b1'), {
-		budget: 3
-	});
+	const rest = await relocateBrain(db, scope, from, held3, { budget: 3, fromRepository: true });
 	check(
 		'relocate: the next call resumes, and the finished copy binds the brain to its new storage',
 		rest.done &&
@@ -942,14 +961,11 @@ for (const backend of BACKENDS) {
 			(await githubConnectionForAccount(db, 'nobody')) === null,
 		JSON.stringify(conn)
 	);
-	const back = await relocateBrain(
-		db,
-		scope,
-		{ store: dest3, locator: repo },
-		from,
-		[bindingStatement(db, 'b1', conn!.connection_id)],
-		{}
-	);
+	const repository: MoveTarget = {
+		key: conn!.connection_id,
+		open: async () => ({ end: from, binding: [bindingStatement(db, 'b1', conn!.connection_id)] })
+	};
+	const back = await relocateBrain(db, scope, { store: dest3, locator: repo }, repository);
 	check(
 		'relocate: moving back binds the brain to its GitHub connection again',
 		back.done &&
@@ -962,6 +978,106 @@ for (const backend of BACKENDS) {
 		(await listed(source)).sort().join() === (await listed(dest3)).join() &&
 			(await source.readFile(repo, 'wiki/after-move.md'))?.content === '# After\n',
 		(await listed(source)).sort().join()
+	);
+	// Into a Google Drive and out again: the same move with a third storage.
+	const DRIVE_CONN = 'google-drive:o1:perm-1';
+	sqlite
+		.prepare(
+			`INSERT INTO storage_connections (connection_id, provider, kind, external_id, account, owner_org_id)
+			 VALUES (?, 'google', 'google-drive', 'perm-1', 'person@drive.example', 'o1')`
+		)
+		.run(DRIVE_CONN);
+	const g = driveFixture();
+	const folders: string[] = [];
+	const driveTarget: MoveTarget = {
+		key: DRIVE_CONN,
+		open: async (token) => {
+			const folderId = token ?? (await createBrainFolder(g.api, 'Brain'));
+			if (!token) folders.push(folderId);
+			return {
+				end: { store: g.at(folderId), locator: repo },
+				binding: [bindingStatement(db, 'b1', DRIVE_CONN, folderId)],
+				token: folderId
+			};
+		}
+	};
+	const root = async () => (await reached()).storage_root ?? null;
+	const first = await relocateBrain(db, scope, from, driveTarget, {
+		budget: 3,
+		fromRepository: true
+	});
+	check(
+		'relocate: an unfinished copy into a Drive leaves the brain in its repository',
+		!first.done && (await binding()) === 'github-app-installation' && (await root()) === null,
+		JSON.stringify([first, await binding(), await root()])
+	);
+	let inDrive = first;
+	for (let i = 0; i < 20 && !inDrive.done; i++) {
+		inDrive = await relocateBrain(db, scope, from, driveTarget, {
+			budget: 3,
+			fromRepository: true
+		});
+	}
+	const driveStore = () => g.at(folders[0]);
+	check(
+		'relocate: later steps fill the folder the first one made, and the brain is bound to it',
+		inDrive.done &&
+			folders.length === 1 &&
+			(await binding()) === 'google-drive' &&
+			(await root()) === folders[0] &&
+			credentialFor(await reached()).kind === 'google-drive' &&
+			(await listed(driveStore())).sort().join() === (await listed(source)).sort().join(),
+		JSON.stringify([inDrive, folders, await binding(), await root()])
+	);
+
+	// A copy begun toward one storage is not continued toward another.
+	const dest4 = sqlBrainStore(sqlFiles(sqliteDatabase()));
+	const dest5 = sqlBrainStore(sqlFiles(sqliteDatabase()));
+	const heldAt = (key: string, store: BrainStore): MoveTarget => ({
+		key,
+		open: async () => ({
+			end: { store, locator: repo },
+			binding: platformFilesBinding(db, 'b1')
+		})
+	});
+	const fromDrive = () => ({ store: driveStore(), locator: repo });
+	const begun = await relocateBrain(db, scope, fromDrive(), heldAt('one', dest4), { budget: 3 });
+	const elsewhere = await relocateBrain(db, scope, fromDrive(), heldAt('other', dest5));
+	check(
+		'relocate: a move toward a different destination starts its copy from the beginning',
+		!begun.done &&
+			elsewhere.done &&
+			(await listed(dest5)).join() === (await listed(driveStore())).sort().join(),
+		(await listed(dest5)).join()
+	);
+	check(
+		'relocate: out of a Drive, the brain is held by the platform and names no folder',
+		(await binding()) === PLATFORM_FILES_KIND && (await root()) === null,
+		JSON.stringify([await binding(), await root()])
+	);
+
+	// Whether a repository under the brain's name is its own.
+	sqlite.exec(`
+		INSERT INTO brains (brain_id, org_id, repo_owner, repo_name, name, visibility, created_at)
+			VALUES ('b2', 'o1', 'example-org', 'made-elsewhere', 'Elsewhere', 'org', '2026-01-02'),
+			       ('b3', 'o1', 'example-org', 'older', 'Older', 'org', '2026-01-03');
+		INSERT INTO brain_passes (brain_id, kind, run_id, status, counters, started_at, updated_at)
+			VALUES ('b3', '${RELOCATION_KIND}', 'r', 'done', '{"revision":"abc"}', 1, 1);
+	`);
+	await relocateBrain(
+		db,
+		{ ...scope, brainId: 'b2' },
+		fromDrive(),
+		heldAt('isomorphic', sqlBrainStore(sqlFiles(sqliteDatabase())))
+	);
+	check(
+		'relocate: a brain that left a repository is known to have, through later moves and in rows written before moves named their target',
+		(await cameFromRepository(db, 'b1')) && (await cameFromRepository(db, 'b3')),
+		JSON.stringify([await cameFromRepository(db, 'b1'), await cameFromRepository(db, 'b3')])
+	);
+	check(
+		'relocate: a brain that only moved between other storages never had one',
+		!(await cameFromRepository(db, 'b2')) && !(await cameFromRepository(db, 'never-moved'))
 	);
 }
 

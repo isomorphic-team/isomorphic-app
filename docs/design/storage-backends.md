@@ -292,9 +292,10 @@ Each step is its own pull request.
 5. **Conflict copies and duplicate names in `validate`.**
 6. **The Drive store**, same pattern as step 4. The store is built, on the contract battery
    over a fake Drive (`scripts/fake-google-drive.ts`), and so are the connection, its OAuth
-   and `create_brain`'s `storage: "google-drive"` (`pnpm test:drive`). Not built: a battery
-   against real Drive, moving a brain into or out of a Drive, adopting an existing folder,
-   and removing a connection.
+   and `create_brain`'s `storage: "google-drive"` (`pnpm test:drive`). `configure_brain`'s `storage` moves a
+   brain into or out of a Drive through the same copy as every other pair
+   (`relocateBrain` and a `MoveTarget`). Not built: a battery against real Drive, adopting
+   an existing folder, and removing a connection.
 7. **Proposals held by the coordinator** (section 5.3), when a customer on these backends needs
    review.
 

@@ -244,8 +244,7 @@ folder. `create_brain` with `storage: "google-drive"` uses only a Drive the call
 (`driveConnectionFor`), and otherwise replies with a link (`startDriveConnect`) to
 `/google/connect`, which with `/google/callback` requires a browser signed in as that person
 (`pendingDriveConnect`). The scope is `drive.file`: never widen it without Google's
-restricted-scope review. `configure_brain` refuses to move a Drive brain; nothing removes a
-connection or its credential yet.
+restricted-scope review. Nothing removes a connection or its credential yet.
 `listAccessibleBrains` JOINS the binding: there is no fallback to the org, and a brain
 without a binding is not listed. **An org names its storage too:** `orgs.default_connection_id`
 (migration 0013) is where its new brains are created and what org-scope work (create, list
@@ -263,18 +262,24 @@ invites, and leaves the binding alone. The preview,
 `planBrainMove`, runs `effectiveBrainRole` once per org rather than restating it. Renaming is
 `configure_brain`'s `name`.
 
-**`configure_brain` with `storage` moves a brain's files**: `"isomorphic"` off GitHub into
-its own Durable Object, `"github"` back (`relocateBrain`, `src/lib/brain-relocate.ts`,
-`pnpm test:store`). A budgeted copy of the current files per call, its place kept in
-`brain_passes`, and the binding changed (`platformFilesBinding` or `bindingStatement`, in the
-batch that marks the pass done) only when the copy matches the source's head. Gated at brain
-admin AND org admin (`requires` and `requiresOrg`, `pnpm test:scope`); refused on a
-single-user deployment, where the binding follows config. `relocationProblem` also refuses a
-brain in pull-request mode moving to a store without `proposals`. `repo_owner` and
-`repo_name` stay on the row as the brain's locator and its claim on the name, and the way
-back goes to that repository through `githubConnectionForAccount`, creating it if it is
-gone (`ensureRepository`); a brain created on the platform's files (`hasRelocated` false)
-refuses a repository that already exists under its name, which is someone else's. History stays where it was made. `disconnect_brain` refuses a
+**`configure_brain` with `storage` moves a brain's files** between any two of `"github"`,
+`"isomorphic"` and `"google-drive"`, by one path (`relocateBrain`,
+`src/lib/brain-relocate.ts`, `pnpm test:store`). A destination is a `MoveTarget`: a `key`
+naming it and an `open` that makes it ready and returns the store, the binding statements
+and a token kept for later steps (the Drive folder made for the move). Adding a storage
+means adding a target, not a direction. Each call copies a budget of the current files, its
+place and target kept in `brain_passes`; a copy begun toward another target starts again;
+the binding (`platformFilesBinding`, or `bindingStatement` with the folder as
+`storage_root`) changes in the batch that marks the pass done, only when the copy matches
+the source's head. Gated at brain admin AND org admin (`requires` and `requiresOrg`,
+`pnpm test:scope`). `moveProblem` refuses a move to where the brain already is, to storage
+the deployment lacks (a single-user deployment has none, its binding follows config), and
+of a brain in pull-request mode to a store without `proposals`. A move into a Drive uses
+only a Drive the caller connected. `repo_owner` and `repo_name` stay on the row as the
+brain's locator and its claim on the name, and a move to GitHub goes to that repository
+through `githubConnectionForAccount`, creating it if it is gone (`ensureRepository`); a
+brain that never left a repository (`cameFromRepository` false) refuses one that already
+exists under its name, which is someone else's. History stays where it was made. `disconnect_brain` refuses a
 platform-held brain: it has no repository to leave behind. **Don't re-add `update_brain` and don't collapse these into a
 `manage_*` tool**: hosts grant approval per tool (design doc §6).
 

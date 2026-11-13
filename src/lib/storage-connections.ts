@@ -133,15 +133,23 @@ export function platformHoldsFiles(brain: { storage_kind?: string | null }): boo
 	return brain.storage_kind === PLATFORM_FILES_KIND;
 }
 
-// Bind a brain to a connection: it is read and written through that from now on.
+// Bind a brain to a connection: it is read and written through that from now on. `root`
+// is where in that storage it sits (a Drive folder), null for storage that needs none.
 export function bindingStatement(
 	db: D1Database,
 	brainId: string,
-	connectionId: string
+	connectionId: string,
+	root: string | null = null
 ): D1PreparedStatement {
 	return db
-		.prepare(`UPDATE brains SET storage_connection_id = ?1 WHERE brain_id = ?2`)
-		.bind(connectionId, brainId);
+		.prepare(`UPDATE brains SET storage_connection_id = ?1, storage_root = ?3 WHERE brain_id = ?2`)
+		.bind(connectionId, brainId, root);
+}
+
+// Which storage a brain is on, in the words a tool takes.
+export function storageOf(brain: { storage_kind?: string | null }): BrainStorageChoice {
+	if (platformHoldsFiles(brain)) return 'isomorphic';
+	return brain.storage_kind === GOOGLE_DRIVE_KIND ? 'google-drive' : 'github';
 }
 
 // The statements that serve a brain from the platform's own files from now on, for one

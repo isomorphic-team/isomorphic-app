@@ -419,7 +419,8 @@ account, and records the reporter privately in D1 (`feedback_reports`) keyed by 
 report id printed in the issue. A per-user cap of ten reports a day bounds abuse.
 
 **Brains in Google Drive (optional).** A member can keep a brain in their own Google Drive
-instead of a repository: `create_brain` with `storage: "google-drive"`. It needs
+instead of a repository: `create_brain` with `storage: "google-drive"`. `configure_brain`
+with `storage` moves an existing brain into a Drive or out of one. It needs
 `AUTH_MODE=oauth`, `PUBLIC_BASE_URL`, the objects Worker, and one OAuth client for the
 deployment. In the Google Cloud console, create a project, enable the Google Drive API,
 configure the consent screen with the single scope
