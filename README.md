@@ -130,8 +130,8 @@ merged pull request is never served stale. No webhook required.
   download link valid for 15 minutes.
 - **`configure_brain`**: tell an adopted repository where its content lives, for a repo whose
   markdown sits under `docs/` or elsewhere. Writes `.isomorphic.json`, which also holds the
-  optional list of frontmatter keys to index. Also renames a brain and runs the
-  [baseline scan](#guardrails).
+  optional list of frontmatter keys to index. Also renames a brain, and moves one out of its
+  GitHub repository into storage the deployment holds itself.
 
 Every write is one atomic commit, or a pull request when the default branch is protected,
 detected automatically. An identical retry inside ten minutes, the kind a client

@@ -227,7 +227,9 @@ and `configure_brain` refuses to replace an existing config without `overwrite: 
 **A brain's credential comes from its storage binding, not its org** (migration 0010).
 `storage_connections` holds one row per credential (`github-app:<installation id>`, or
 `github-token:env` on a single-user deployment); `brains.storage_connection_id` binds a brain
-to one. `listAccessibleBrains` JOINS the binding: there is no fallback to the org, and a brain
+to one. The one `platform-files` row (`PLATFORM_FILES_KIND`) is no credential: a brain bound
+to it has its files in its own Durable Object, and `credentialFor` is what `openStorage` in
+`worker.ts` chooses the store by. `listAccessibleBrains` JOINS the binding: there is no fallback to the org, and a brain
 without a binding is not listed. **An org names its storage too:** `orgs.default_connection_id`
 (migration 0013) is where its new brains are created and what org-scope work (create, list
 repos) reads through; `orgStorage` resolves it and `OrgScope.storage` carries it. `createOrg`
@@ -242,7 +244,18 @@ name) in another org moves it (org admin in BOTH orgs; a preview until `confirm:
 `moveBrain` (`src/lib/brain-move.ts`) is one batch that sets `org_id`, re-points pending brain
 invites, and leaves the binding alone. The preview,
 `planBrainMove`, runs `effectiveBrainRole` once per org rather than restating it. Renaming is
-`configure_brain`'s `name`. **Don't re-add `update_brain` and don't collapse these into a
+`configure_brain`'s `name`.
+
+**`configure_brain` with `storage: "isomorphic"` moves a brain's files off GitHub**
+(`relocateToPlatformFiles`, `src/lib/brain-relocate.ts`, `pnpm test:store`): a budgeted copy
+of the current files per call, its place kept in `brain_passes`, and the binding changed
+(`platformFilesBinding`, in the batch that marks the pass done) only when the copy matches the repository's head. Gated at brain
+admin AND org admin (`requires` and `requiresOrg`, `pnpm test:scope`); `relocationProblem`
+refuses on a single-user deployment, where the binding follows config, and a brain in
+pull-request mode moving to a store without `proposals`.
+`repo_owner` and `repo_name` stay on the row as the brain's locator and its claim on the
+name. History and the repository stay behind; nothing moves a brain back, so
+`disconnect_brain` refuses one. **Don't re-add `update_brain` and don't collapse these into a
 `manage_*` tool**: hosts grant approval per tool (design doc §6).
 
 ## Creating orgs

@@ -16,6 +16,11 @@
 //      revision the brain has moved past is refused; bytes round-trip; a read pinned to a
 //      revision sees that revision; history is per brain and per path; the files outlive
 //      the store object.
+//   5. A COPY THAT SERVES A BRAIN IT DID NOT FINISH (copyStep, relocateToPlatformFiles).
+//      A step copies within its budget and resumes where it stopped; the copy is done
+//      only when the destination holds exactly the source's files at a revision the
+//      source is still at; bytes and text arrive as they were; the brain is bound to the
+//      new storage only then.
 //   3. A REVIEW-REQUIRED WRITE THAT LANDS ANYWAY. A store without `proposals` refuses
 //      `writeMode: 'pull-request'` and writes nothing, enforced by defineStore before
 //      the store's own commitOrPR runs.
@@ -26,6 +31,18 @@ import { join } from 'node:path';
 import { defineStore, type BrainStore, type StoreCapabilities } from '../src/lib/brain-repo.ts';
 import { githubStore, gitBlobSha } from '../src/lib/brain-store-github.ts';
 import { MAX_FILE_BYTES, sqlBrainStore, sqlFiles } from '../src/lib/brain-store-sql.ts';
+import {
+	RELOCATION_KIND,
+	copyStep,
+	fileWriteFor,
+	relocateToPlatformFiles
+} from '../src/lib/brain-relocate.ts';
+import { PLATFORM_FILES_KIND, credentialFor } from '../src/lib/storage-connections.ts';
+import { localD1 } from '../src/local/d1-sqlite.ts';
+import { bindFixtureStorage } from './fixture-storage.ts';
+import { listAccessibleBrains } from '../src/lib/orgs.ts';
+import { d1Index, indexRefs } from '../src/lib/brain-index.ts';
+import { DEFAULT_BRAIN_CONFIG } from '../src/lib/brain-policy.ts';
 import { MAX_ATTACHMENT_BYTES } from '../src/lib/media.ts';
 import { ensureGitRepo, fsBrainStore } from '../src/local/brain-store-fs.ts';
 import { checker, errorOf, partialStore } from './check.ts';
@@ -366,6 +383,177 @@ for (const backend of BACKENDS) {
 		'sql: a store opened over the same database sees the same brain',
 		(await reopened.branchRevision(repo, 'main')) === (await store.branchRevision(repo, 'main')) &&
 			(await reopened.readFile(repo, 'wiki/direct.md'))?.content === 'd'
+	);
+}
+
+// ---- copying a brain from one store into another ----
+{
+	console.log('\ncopy');
+	const b64 = (bytes: number[]) => Buffer.from(bytes).toString('base64');
+	const png = b64([0x89, 0x50, 0x4e, 0x47, 0x00, 0xff, 0xfe]);
+	const bom = '\ufeff# With a byte order mark\n';
+	const text = fileWriteFor('a.md', Buffer.from(bom).toString('base64'));
+	check(
+		'copy: UTF-8 is carried as text, byte order mark included',
+		text.content === bom && text.encoding === undefined
+	);
+	const nul = fileWriteFor('a.bin', b64([0x61, 0x00, 0x62]));
+	check(
+		'copy: bytes that are not UTF-8, or hold a NUL, are carried as bytes',
+		fileWriteFor('a.png', png).encoding === 'base64' &&
+			nul.encoding === 'base64' &&
+			nul.content === b64([0x61, 0x00, 0x62])
+	);
+
+	const dir = mkdtempSync(join(tmpdir(), 'iso-copy-'));
+	tmpDirs.push(dir);
+	await ensureGitRepo(dir);
+	const source = fsBrainStore({ dir });
+	const from = { store: source, locator: repo };
+	await source.write(repo, {
+		message: 'Seed',
+		writes: [
+			...writes,
+			{ path: 'assets/dot.png', content: png, encoding: 'base64' },
+			{ path: '.isomorphic.json', content: '{}\n' }
+		]
+	});
+	const dest = sqlBrainStore(sqlFiles(sqliteDatabase()));
+	const to = { store: dest, locator: repo };
+	// Left by an earlier, abandoned copy of a file the source has since deleted.
+	await dest.write(repo, { message: 'Stale', writes: [{ path: 'wiki/gone.md', content: 'x' }] });
+	const listed = async (s: BrainStore) =>
+		(await s.listTree(repo, await s.getRevision(repo), { extension: '*' })).map((e) => e.path);
+
+	const total = (await listed(source)).length;
+	const budget = Math.ceil(total / 3);
+	const one = await copyStep(from, to, null, { budget });
+	check(
+		'copy: a step stops at its budget and says where',
+		!one.done &&
+			one.copied === budget &&
+			one.total === total &&
+			one.progress.after === (await listed(source)).sort()[budget - 1],
+		JSON.stringify(one)
+	);
+	const two = await copyStep(from, to, one.progress, { budget });
+	const three = await copyStep(from, to, two.progress, { budget });
+	check(
+		'copy: later steps resume after it and finish',
+		!two.done && three.done && three.copied === total,
+		JSON.stringify([two, three])
+	);
+	check(
+		'copy: the destination then holds exactly the source’s files',
+		(await listed(dest)).join() === (await listed(source)).sort().join(),
+		(await listed(dest)).join()
+	);
+	check(
+		'copy: text and bytes arrive as they were',
+		(await dest.readFile(repo, 'wiki/deep/beta.md'))?.content === writes[1].content &&
+			(await dest.readFile(repo, 'wiki/empty.md'))?.content === '' &&
+			(await dest.readBinary(repo, 'assets/dot.png'))?.contentBase64 === png
+	);
+
+	// The source moves between two steps of a copy.
+	const dest2 = sqlBrainStore(sqlFiles(sqliteDatabase()));
+	const to2 = { store: dest2, locator: repo };
+	const started = await copyStep(from, to2, null, { budget: 3 });
+	await source.write(repo, {
+		message: 'Edit during the copy',
+		writes: [{ path: '.isomorphic.json', content: '{"edited":true}\n' }],
+		deletes: ['wiki/empty.md']
+	});
+	const again = await copyStep(from, to2, started.progress, { budget: 3 });
+	check(
+		'copy: a source that moved starts the copy again from its new revision',
+		again.restarted && !again.done && again.copied === 3,
+		JSON.stringify(again)
+	);
+	const finished = await copyStep(from, to2, again.progress, { budget: 3 });
+	check(
+		'copy: and finishes with the edit and without the deleted file',
+		finished.done &&
+			(await dest2.readFile(repo, '.isomorphic.json'))?.content === '{"edited":true}\n' &&
+			(await listed(dest2)).join() === (await listed(source)).sort().join(),
+		(await listed(dest2)).join()
+	);
+
+	// A source that moves during the last step is not done.
+	const racing: BrainStore = {
+		...source,
+		branchRevision: async () => 'moved-on'
+	};
+	const raced = await copyStep({ store: racing, locator: repo }, to2, null);
+	check(
+		'copy: a source that moved during the final step is not done',
+		!raced.done && raced.restarted && raced.progress.revision === 'moved-on',
+		JSON.stringify(raced)
+	);
+
+	// The brain's binding moves only when the copy is complete.
+	const { db, sqlite } = localD1();
+	sqlite.exec(`
+		INSERT INTO app_users (user_id, email) VALUES ('ann', 'ann@example.com');
+		INSERT INTO orgs (org_id, name, model, installation_id, brain_owner, created_by, created_at)
+			VALUES ('o1', 'Acme', 'hosted', 7, 'example-org', 'ann', '2026-01-01');
+		INSERT INTO memberships (org_id, user_id, role) VALUES ('o1', 'ann', 'owner');
+		INSERT INTO brains (brain_id, org_id, repo_owner, repo_name, name, visibility, created_at)
+			VALUES ('b1', 'o1', 'example-org', 'brain', 'Brain', 'org', '2026-01-01');
+	`);
+	bindFixtureStorage(sqlite);
+	// What the Worker chooses a store by: the brain as its member reaches it.
+	const reached = async () => (await listAccessibleBrains(db, ['ann']))[0];
+	const binding = async () => (await reached()).storage_kind;
+	const pass = () =>
+		sqlite
+			.prepare(`SELECT status, cursor FROM brain_passes WHERE brain_id = 'b1' AND kind = ?`)
+			.get(RELOCATION_KIND) as { status: string; cursor: string | null } | undefined;
+	const dest3 = sqlBrainStore(sqlFiles(sqliteDatabase()));
+	const to3 = { store: dest3, locator: repo };
+	const scope = { brainId: 'b1', orgId: 'o1', actorUserId: 'ann' };
+	// The page index, built while the brain was in its repository.
+	const { index } = indexRefs(d1Index(db), 'b1');
+	await index.ensureFresh(source, repo, DEFAULT_BRAIN_CONFIG);
+	const indexed = async () => (await index.listPages()).map((p) => p.path).sort();
+	const before = await indexed();
+	const part = await relocateToPlatformFiles(db, scope, from, to3, { budget: 3 });
+	check(
+		'relocate: an unfinished copy leaves the brain where it was, and keeps its place',
+		!part.done &&
+			(await binding()) === 'github-app-installation' &&
+			pass()?.status === 'running' &&
+			pass()?.cursor === part.progress.after,
+		JSON.stringify([part, await binding(), pass()])
+	);
+	const rest = await relocateToPlatformFiles(db, scope, from, to3, { budget: 3 });
+	check(
+		'relocate: the next call resumes, and the finished copy binds the brain to its new storage',
+		rest.done &&
+			rest.copied === rest.total &&
+			(await binding()) === PLATFORM_FILES_KIND &&
+			pass()?.status === 'done' &&
+			credentialFor(await reached()).kind === 'platform-files' &&
+			(await reached()).brain_id === 'b1',
+		JSON.stringify([rest, await binding(), pass()])
+	);
+	// What configure_brain does next: the index starts again against the new store.
+	await index.reset();
+	for (let i = 0; i < 5; i++) await index.ensureFresh(dest3, repo, DEFAULT_BRAIN_CONFIG);
+	check(
+		'relocate: the index rebuilt from the new storage lists the same pages',
+		before.length > 0 && (await indexed()).join() === before.join(),
+		(await indexed()).join()
+	);
+	await dest3.write(repo, {
+		message: 'Add a page',
+		writes: [{ path: 'wiki/after-move.md', content: '# After\n' }]
+	});
+	await index.ensureFresh(dest3, repo, DEFAULT_BRAIN_CONFIG);
+	check(
+		'relocate: and follows a write made there',
+		(await indexed()).includes('wiki/after-move.md'),
+		(await indexed()).join()
 	);
 }
 

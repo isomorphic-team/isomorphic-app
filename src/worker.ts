@@ -29,7 +29,8 @@
 //     Without it the index is in PLATFORM_DB.
 //   - WRITE_COORDINATOR and BRAIN_FILES are a Durable Object per brain each, implemented
 //     in the objects Worker (src/objects/worker.ts) and bound by script_name. This Worker
-//     implements none. Nothing here calls BRAIN_FILES yet.
+//     implements none. BRAIN_FILES serves a brain bound to the platform-files
+//     connection (openStorage).
 
 import { McpServer, type RegisteredTool } from '@modelcontextprotocol/server';
 import { indexFor, indexRefs, type BrainIndex, type OpenIndex } from './lib/brain-index.ts';
@@ -41,11 +42,17 @@ import { z } from 'zod';
 import type { OAuthHelpers } from '@cloudflare/workers-oauth-provider';
 import { installationOctokit, tokenOctokit, staticAuth, type AppCreds } from './lib/github.ts';
 import { commitAuthorFor, type BrainLocator, type BrainStore } from './lib/brain-repo.ts';
-import type { WriteCoordinatorObject } from './objects/worker.ts';
+import type { BrainFilesObject, WriteCoordinatorObject } from './objects/worker.ts';
 import { githubStore } from './lib/brain-store-github.ts';
 import { platformInstall, provisionOrgForUser } from './lib/provision.ts';
 import { ensureStaticTenant, STATIC_USER_ID } from './lib/static-tenant.ts';
-import { credentialFor, credentialForConnection, orgStorage } from './lib/storage-connections.ts';
+import {
+	credentialFor,
+	credentialForConnection,
+	orgStorage,
+	type GithubCredential
+} from './lib/storage-connections.ts';
+import { sqlBrainStore } from './lib/brain-store-sql.ts';
 import { claimPendingInvites } from './lib/invites.ts';
 import {
 	getAppUser,
@@ -207,6 +214,9 @@ interface Env {
 	// The write coordinator, one object per brain (src/lib/write-coordinator.ts), in the
 	// objects Worker. Unset in a Worker Preview, whose config carries no Durable Object.
 	WRITE_COORDINATOR?: DurableObjectNamespace<WriteCoordinatorObject>;
+	// The files of a brain the platform holds, one object per brain named by its
+	// brain_id (src/lib/brain-store-sql.ts). Unset in a Worker Preview.
+	BRAIN_FILES?: DurableObjectNamespace<BrainFilesObject>;
 
 	// Product feedback (submit_feedback). FEEDBACK_REPO is the "owner/repo" of the
 	// tracker that receives reports; FEEDBACK_TOKEN is a separate narrowly scoped
@@ -297,6 +307,39 @@ async function assetLinkIssuer(env: Env): Promise<AssetLinkIssuer | undefined> {
 	return base && key ? { base, key: await key } : undefined;
 }
 
+type GithubClient = Awaited<ReturnType<typeof installationOctokit>>;
+
+async function githubClientFor(env: Env, credential: GithubCredential): Promise<GithubClient> {
+	return credential.kind === 'token'
+		? tokenOctokit(requireToken(env))
+		: installationOctokit(appCreds(env), credential.installationId);
+}
+
+// Opens the store of a brain the platform holds itself, by brain_id, or undefined when
+// this deployment binds no files objects.
+function platformFiles(env: Env): ((brainId: string) => BrainStore) | undefined {
+	const ns = env.BRAIN_FILES;
+	return ns && ((brainId) => sqlBrainStore(ns.get(ns.idFromName(brainId))));
+}
+
+// A brain's storage, chosen by its binding (credentialFor): a GitHub repository through
+// a client holding its credential, or the brain's own files object.
+async function openStorage(
+	env: Env,
+	target: Pick<AccessibleBrain, 'brain_id' | 'storage_kind' | 'installation_id'>
+): Promise<{ store: BrainStore; octokit?: GithubClient }> {
+	const credential = credentialFor(target);
+	if (credential.kind === 'platform-files') {
+		const store = platformFiles(env)?.(target.brain_id);
+		if (!store) {
+			throw new Error('This brain is held in storage this deployment does not bind (BRAIN_FILES).');
+		}
+		return { store };
+	}
+	const octokit = await githubClientFor(env, credential);
+	return { store: githubStore(octokit), octokit };
+}
+
 // The brain a signed link names, read with its own storage binding, but only while
 // the user it was issued to can still reach it: revoking access kills their links.
 async function openBrainForAssetLink(env: Env, claim: AssetClaim): Promise<OpenedBrain | null> {
@@ -306,12 +349,7 @@ async function openBrainForAssetLink(env: Env, claim: AssetClaim): Promise<Opene
 		await listAccessibleBrains(env.PLATFORM_DB, await linkedUserIds(env.PLATFORM_DB, claim.userId))
 	);
 	if (!target) return null;
-	const credential = credentialFor(target);
-	const octokit =
-		credential.kind === 'token'
-			? tokenOctokit(requireToken(env))
-			: await installationOctokit(appCreds(env), credential.installationId);
-	const store = githubStore(octokit);
+	const { store } = await openStorage(env, target);
 	const locator = { owner: target.repo_owner, repo: target.repo_name };
 	return { read: store.readBinary, locator, config: await loadBrainConfig(store, locator) };
 }
@@ -330,10 +368,12 @@ class NoBrainError extends Error {
 }
 
 interface TenantContext {
-	octokit: Awaited<ReturnType<typeof installationOctokit>>;
-	// The brain's storage, bound to that octokit. Every content read and write goes
-	// through this rather than the client above, which is what lets a non-GitHub
-	// backend serve the same tools. See src/lib/brain-repo.ts.
+	// The GitHub client holding the brain's credential; absent for a brain that is not
+	// in a GitHub repository.
+	octokit?: GithubClient;
+	// The brain's storage. Every content read and write goes through this rather than
+	// the client above, which is what lets a non-GitHub backend serve the same tools.
+	// See src/lib/brain-repo.ts.
 	store: BrainStore;
 	locator: BrainLocator;
 	// The caller's role ON THE RESOLVED BRAIN (effectiveBrainRole: an explicit
@@ -691,11 +731,7 @@ class McpSession {
 			}
 		}
 
-		const credential = credentialFor(target);
-		const octokit =
-			credential.kind === 'token'
-				? tokenOctokit(requireToken(env))
-				: await installationOctokit(appCreds(env), credential.installationId);
+		const { store, octokit } = await openStorage(env, target);
 		const locator = { owner: target.repo_owner, repo: target.repo_name };
 		// Attribute commits to the human. Prefer the app_users row (authoritative
 		// name + verified email); fall back to the token email. A member with no
@@ -710,7 +746,6 @@ class McpSession {
 				? undefined
 				: commitAuthorFor(await getAppUser(env.PLATFORM_DB, userId), email);
 		this.noteScope(target.org_id, target.brain_id);
-		const store = githubStore(octokit);
 		const config = await this.loadConfig(store, locator);
 		return {
 			octokit,
@@ -836,10 +871,10 @@ class McpSession {
 		assertRole(membership.role, opts?.requires);
 		const storage = await orgStorage(env.PLATFORM_DB, membership.org);
 		const credential = credentialForConnection(storage);
-		const octokit =
-			credential.kind === 'token'
-				? tokenOctokit(requireToken(env))
-				: await installationOctokit(appCreds(env), credential.installationId);
+		if (credential.kind === 'platform-files') {
+			throw new Error(`Org ${membership.org.org_id} has no GitHub connection to create brains on.`);
+		}
+		const octokit = await githubClientFor(env, credential);
 		const author = commitAuthorFor(await getAppUser(env.PLATFORM_DB, userId), email);
 		// Org scope resolves no brain, so usage rows for these calls carry ''.
 		this.noteScope(membership.org.org_id);
@@ -1151,7 +1186,8 @@ class McpSession {
 			invalidateConfig: (owner, repo) => this.invalidateConfig(owner, repo),
 			analyticsEnabled: this.usageEnabled(),
 			openIndex: indexFor(this.env),
-			webBaseUrl: this.webBase()
+			webBaseUrl: this.webBase(),
+			platformFiles: platformFiles(this.env)
 		});
 
 		// ---------- user-defined tools (brain-tools) ----------

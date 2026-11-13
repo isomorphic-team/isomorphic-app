@@ -167,6 +167,11 @@ history-preserving push from one remote to another. It runs as a job, not in the
 which cannot run git. The brain's identity is unchanged, so grants, links and URLs
 survive.
 
+One relocation is built, and it is not between two git remotes: `configure_brain` copies a
+brain's current files out of its repository into storage the platform holds
+([`storage-backends.md`](storage-backends.md) section 5.6), in the Worker, leaving history
+behind.
+
 ### Create and adopt
 
 `create_brain` creates on the org's default connection and writes the binding.

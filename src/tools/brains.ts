@@ -43,7 +43,13 @@ import {
 } from '../lib/orgs.ts';
 import { createAndScaffoldBrain } from '../lib/scaffold-core.ts';
 import { forgetBrain } from '../lib/brain-forget.ts';
-import { getConnection, orgAdministersConnection } from '../lib/storage-connections.ts';
+import {
+	platformHoldsFiles,
+	getConnection,
+	orgAdministersConnection
+} from '../lib/storage-connections.ts';
+import { relocateToPlatformFiles } from '../lib/brain-relocate.ts';
+import type { BrainStore, StoreCapabilities } from '../lib/brain-repo.ts';
 import {
 	countPendingBrainInvites,
 	describeMove,
@@ -162,6 +168,25 @@ async function detectRowSetup(
 	}
 }
 
+// Why a brain cannot move onto the platform's own storage, or null when it can. Pure.
+export function relocationProblem(o: {
+	// What the storage it would move to can do; undefined when this deployment has none.
+	destination: StoreCapabilities | undefined;
+	// The brain's files are already there.
+	held: boolean;
+	writeMode: 'direct' | 'pull-request';
+	label: string;
+}): string | null {
+	if (!o.destination) return 'This deployment cannot hold a brain itself, so nothing was changed.';
+	if (o.held) return `${o.label} is already held by Isomorphic. Nothing was changed.`;
+	// A pull request still open would be left behind, and no later change could be held
+	// for review.
+	if (o.writeMode === 'pull-request' && !o.destination.proposals) {
+		return `${o.label} takes its changes as pull requests, which storage held by Isomorphic cannot do yet. Nothing was changed.`;
+	}
+	return null;
+}
+
 export function registerBrainTools(
 	server: McpServer,
 	deps: {
@@ -205,6 +230,9 @@ export function registerBrainTools(
 		// no control. The widget builds the page's own URL from this with
 		// `webPathFor`, so the grammar stays in one place.
 		webBaseUrl?: string;
+		// The store for a brain the platform holds itself, by brain_id. Absent when the
+		// deployment binds no files objects, where no brain can move onto them.
+		platformFiles?: (brainId: string) => BrainStore;
 	}
 ) {
 	const {
@@ -219,7 +247,8 @@ export function registerBrainTools(
 		invalidateConfig,
 		analyticsEnabled,
 		openIndex,
-		webBaseUrl
+		webBaseUrl,
+		platformFiles
 	} = deps;
 	// `people`: whether this deployment has anyone to share with, invite, or count.
 	// The nav offers Sharing, Members, Analytics and brain management only when it
@@ -762,9 +791,12 @@ export function registerBrainTools(
 	server.registerTool(
 		'configure_brain',
 		{
-			...toolAnnotations('Configure a brain: rename it or set its layout', 'destructive'),
+			...toolAnnotations(
+				'Configure a brain: rename it, set its layout or move its storage',
+				'destructive'
+			),
 			description:
-				"A brain's own settings. RENAME: pass `name` alone to change what the brain is called; nothing in its repository changes. CONTENT LAYOUT: set up an adopted repo so its pages appear, by writing a .isomorphic.json describing where its content lives; use when a connected brain shows no pages because its markdown isn't under the default 'wiki/' layout. Defaults to indexing the whole repo. If the repo already has a .isomorphic.json, this refuses and shows the current one; pass `overwrite: true` to replace it deliberately. Needs admin on the brain. configure_brain never moves a brain between organizations.",
+				"A brain's own settings. RENAME: pass `name` alone to change what the brain is called; nothing in its repository changes. STORAGE: pass `storage: \"isomorphic\"` to move a brain out of its GitHub repository into storage Isomorphic holds itself; the reply is a preview until `confirm: true`, a large brain takes several calls with the same arguments, and it also needs admin in the brain's organization. CONTENT LAYOUT: set up an adopted repo so its pages appear, by writing a .isomorphic.json describing where its content lives; use when a connected brain shows no pages because its markdown isn't under the default 'wiki/' layout. Defaults to indexing the whole repo. If the repo already has a .isomorphic.json, this refuses and shows the current one; pass `overwrite: true` to replace it deliberately. Needs admin on the brain. configure_brain never moves a brain between organizations.",
 			inputSchema: z.object({
 				brain: z
 					.string()
@@ -784,6 +816,16 @@ export function registerBrainTools(
 					.describe(
 						'Replace an existing .isomorphic.json. Without this, a repo that already has one is left alone and its current config is shown.'
 					),
+				storage: z
+					.enum(['isomorphic'])
+					.optional()
+					.describe(
+						'Move the brain’s files to this storage. "isomorphic": held by Isomorphic itself, with no GitHub repository behind it.'
+					),
+				confirm: z
+					.boolean()
+					.optional()
+					.describe('With `storage`: carry out the move. Without it the reply only describes it.'),
 				// Retired: the review passes have their own tool. Still accepted so a call from an
 				// older conversation gets a pointer, instead of being stripped by the schema and
 				// read as a layout write with no arguments.
@@ -791,8 +833,81 @@ export function registerBrainTools(
 				consolidate: z.boolean().optional().describe('No longer used. Leave unset.')
 			})
 		},
-		async ({ brain, name, content_roots, overwrite, baseline_scan, consolidate }) => {
-			const ctx = await getContext({ requires: 'admin', brain });
+		async ({
+			brain,
+			name,
+			content_roots,
+			overwrite,
+			storage,
+			confirm,
+			baseline_scan,
+			consolidate
+		}) => {
+			// Where an org's brains are stored is the org's decision as well as the brain's.
+			const ctx = await getContext({
+				requires: 'admin',
+				requiresOrg: storage === undefined ? undefined : 'admin',
+				brain
+			});
+
+			if (storage !== undefined) {
+				if (name !== undefined || content_roots !== undefined || overwrite !== undefined) {
+					return fail('Move a brain’s storage in a call of its own. Nothing was changed.');
+				}
+				const target = (await listBrains()).find((b) => b.brain_id === ctx.brainId);
+				if (!target) return fail('That brain could not be resolved.');
+				const label = brainLabel(target);
+				// A single-user deployment's binding follows its config, so nothing can move.
+				const destination = multiUser ? platformFiles?.(ctx.brainId) : undefined;
+				const problem = relocationProblem({
+					destination: destination?.capabilities,
+					held: platformHoldsFiles(target),
+					writeMode: ctx.config.writeMode,
+					label
+				});
+				if (problem || !destination) return fail(problem ?? 'Nothing was changed.');
+				const repository = `${target.repo_owner}/${target.repo_name}`;
+				if (!confirm) {
+					return {
+						content: [
+							{
+								type: 'text' as const,
+								text: `Nothing has changed yet. This would copy the current files of ${label} out of its GitHub repository (${repository}) into storage Isomorphic holds itself, and serve the brain from there. Its pages, links, sharing and address stay the same. The repository is left exactly as it is, with its history, and is no longer read or written: anything pushed to it afterwards will not appear in the brain. History before the move stays in the repository and is not shown in the brain's activity. There is no tool yet to move a brain back to GitHub. Call configure_brain again with confirm: true to go ahead.`
+							}
+						]
+					};
+				}
+				const step = await relocateToPlatformFiles(
+					ctx.db,
+					{ brainId: ctx.brainId, orgId: ctx.orgId, actorUserId: ctx.actorUserId },
+					{ store: ctx.store, locator: ctx.locator },
+					{ store: destination, locator: ctx.locator },
+					{ branch: ctx.config.defaultBranch, author: ctx.author }
+				);
+				if (!step.done) {
+					return {
+						content: [
+							{
+								type: 'text' as const,
+								text: `${step.restarted ? 'The brain changed while it was being copied, so the copy began again. ' : ''}Copied ${step.copied} of ${step.total} files. ${label} is still served from GitHub. Call configure_brain again with the same arguments to continue.`
+							}
+						],
+						structuredContent: { moved: false, copied: step.copied, total: step.total }
+					};
+				}
+				// Version tags and the revision are the new store's from here on.
+				invalidateConfig(ctx.locator.owner, ctx.locator.repo);
+				await ctx.index.reset();
+				return {
+					content: [
+						{
+							type: 'text' as const,
+							text: `Moved ${label}: its ${step.total} files are now held by Isomorphic, and the brain is served from there. The GitHub repository ${repository} is unchanged and no longer used; archive or delete it when you are satisfied.`
+						}
+					],
+					structuredContent: { moved: true, copied: step.copied, total: step.total }
+				};
+			}
 
 			if (baseline_scan || consolidate) {
 				return fail(
@@ -930,6 +1045,13 @@ export function registerBrainTools(
 				}
 				if (all.filter((b) => b.org_id === target.org_id).length <= 1) {
 					return fail(`Can’t disconnect the organization’s only brain.`);
+				}
+				// Its files are in no repository, so disconnecting would leave them where
+				// nothing can reach them.
+				if (platformHoldsFiles(target)) {
+					return fail(
+						`${brainLabel(target)} is held by Isomorphic itself, with no repository behind it, so disconnecting it would strand its files. It cannot be disconnected until a brain can be exported.`
+					);
 				}
 				// The brain, its grants and every derived row in one batch. A row left behind
 				// would re-attach if the same repo is adopted again, since the id is derived

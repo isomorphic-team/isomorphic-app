@@ -30,7 +30,7 @@ import { readFileSync, readdirSync } from 'node:fs';
 import { d1Index, indexRefs } from '../src/lib/brain-index.ts';
 import { localD1 } from '../src/local/d1-sqlite.ts';
 import { bindFixtureStorage } from './fixture-storage.ts';
-import { orgStorage } from '../src/lib/storage-connections.ts';
+import { PLATFORM_FILES_KIND, orgStorage } from '../src/lib/storage-connections.ts';
 import {
 	assertRole,
 	listStewardedBrains,
@@ -42,7 +42,7 @@ import { registerMemberTools } from '../src/tools/members.ts';
 import { registerBrainAccessTools } from '../src/tools/brain-access.ts';
 import { registerMediaTools } from '../src/tools/media.ts';
 import { DEFAULT_BRAIN_CONFIG } from '../src/lib/brain-policy.ts';
-import { registerBrainTools } from '../src/tools/brains.ts';
+import { registerBrainTools, relocationProblem } from '../src/tools/brains.ts';
 import { registerAnalyticsTools } from '../src/tools/analytics.ts';
 import { registerOrgOnboardingTools, type OrgOnboardingEnv } from '../src/tools/org-onboarding.ts';
 import { registerLibrarianTools, type BrainContext } from '../src/tools/librarian.ts';
@@ -172,6 +172,11 @@ const trap = (name: string) =>
 	) as never;
 const octokit = trap('octokit');
 const store = trap('store');
+// The platform's own storage: it says what it can do, and any use of it is the trap.
+const filesStore = new Proxy(
+	{ capabilities: { atomicWrite: true, proposals: false, history: true } },
+	{ get: (t, prop) => (prop in t ? t[prop as keyof typeof t] : (store as never)[prop]) }
+) as never;
 
 // Which brain each context resolution named. A resolution is not free (in the
 // Worker it mints an installation token and reads the brain's config), so a tool
@@ -271,7 +276,14 @@ const onboardingEnv: OrgOnboardingEnv = {
 
 function toolsFor(
 	p: Persona,
-	deployment: { webBaseUrl?: string; multiUser?: boolean } = {
+	deployment: {
+		webBaseUrl?: string;
+		multiUser?: boolean;
+		// No files objects bound, so no brain can move onto the platform's own storage.
+		noFilesObjects?: boolean;
+		// A brain_id to list as already held by the platform.
+		held?: string;
+	} = {
 		webBaseUrl: 'https://brain.example'
 	}
 ): Map<string, Handler> {
@@ -352,6 +364,7 @@ function toolsFor(
 				installation_id: 1,
 				storage_account: 'northwind',
 				storage_connection_id: 'github-app:1',
+				...(b.brain_id === deployment.held ? { storage_kind: PLATFORM_FILES_KIND } : {}),
 				visibility: b.brain_id === 'b-main' ? 'private' : 'org',
 				repo_owner: 'northwind',
 				role: p.role,
@@ -367,7 +380,8 @@ function toolsFor(
 		invalidateConfig: () => {},
 		analyticsEnabled: true,
 		openIndex: d1Index(db),
-		webBaseUrl: deployment.webBaseUrl
+		webBaseUrl: deployment.webBaseUrl,
+		platformFiles: deployment.noFilesObjects ? undefined : () => filesStore
 	});
 	return handlers;
 }
@@ -375,8 +389,13 @@ function toolsFor(
 // Invoke a tool as a persona. Returns 'allowed' | 'denied'. Denial is either a thrown
 // authorization error (assertRole) or an isError result (an in-handler guard); both
 // are refusals, and a test that accepted only one would miss a gate moving between them.
-async function attempt(p: Persona, tool: string, args: Record<string, unknown> = {}) {
-	const handler = toolsFor(p).get(tool);
+async function attempt(
+	p: Persona,
+	tool: string,
+	args: Record<string, unknown> = {},
+	deployment?: Parameters<typeof toolsFor>[1]
+) {
+	const handler = toolsFor(p, deployment).get(tool);
 	if (!handler) {
 		return { outcome: 'missing' as const, detail: `tool ${tool} not registered`, text: '', sc: {} };
 	}
@@ -1278,6 +1297,93 @@ console.log('\nA single-user deployment: only the tools that can answer');
 // besides the operator can sign in. Where nobody can, the tools that add, move,
 // remove or switch brains, and the people and sharing tools, can only refuse, so
 // they are not registered, and the app is told through `features.people`.
+{
+	console.log('\nconfigure_brain moves storage at BRAIN admin AND org admin');
+	const go = { storage: 'isomorphic', confirm: true };
+	const movable = {
+		destination: { atomicWrite: true, proposals: false, history: true },
+		held: false,
+		writeMode: 'direct' as const,
+		label: 'Main'
+	};
+	const both: Persona = {
+		label: 'org admin holding brain admin',
+		userId: 'u-boss',
+		orgRole: 'admin',
+		role: 'admin'
+	};
+	const shared = await attempt(sharedAdmin, 'configure_brain', go);
+	check(
+		'a brain admin who is only an org viewer cannot move its storage',
+		shared.outcome === 'denied' && !shared.detail.includes(STORE_MARKER),
+		shared.detail
+	);
+	check(
+		'an org owner holding only brain viewer cannot either',
+		await denies(orgBoss, 'configure_brain', go)
+	);
+	const preview = await attempt(both, 'configure_brain', { storage: 'isomorphic' });
+	check(
+		'without confirm it only describes the move, and reads no storage',
+		preview.outcome === 'allowed' && preview.text.startsWith('Nothing has changed yet.'),
+		preview.detail + preview.text
+	);
+	const confirmed = await attempt(both, 'configure_brain', go);
+	check(
+		'with confirm, an admin of both gets as far as the copy',
+		confirmed.detail.includes(STORE_MARKER),
+		confirmed.detail
+	);
+	const unbound = await attempt(both, 'configure_brain', go, { noFilesObjects: true });
+	check(
+		'a deployment with no files objects refuses',
+		unbound.outcome === 'denied' && unbound.detail.includes('cannot hold a brain'),
+		unbound.detail
+	);
+	const solo = await attempt(both, 'configure_brain', go, { multiUser: false });
+	check(
+		'a single-user deployment refuses: its brain follows its config',
+		solo.outcome === 'denied' && solo.detail.includes('cannot hold a brain'),
+		solo.detail
+	);
+	const already = await attempt(both, 'configure_brain', go, { held: 'b-main' });
+	check(
+		'a brain already held there is left alone',
+		already.outcome === 'denied' && already.detail.includes('already held'),
+		already.detail
+	);
+	const mixed = await attempt(both, 'configure_brain', { ...go, name: 'Other name' });
+	check(
+		'a storage move rides with no other setting',
+		mixed.outcome === 'denied' && mixed.detail.includes('call of its own'),
+		mixed.detail
+	);
+	check(
+		'a brain that takes its changes as pull requests is refused',
+		/pull requests/.test(relocationProblem({ ...movable, writeMode: 'pull-request' }) ?? '') &&
+			relocationProblem(movable) === null &&
+			// A destination that can hold a change for review takes such a brain.
+			relocationProblem({
+				...movable,
+				writeMode: 'pull-request',
+				destination: { ...movable.destination, proposals: true }
+			}) === null
+	);
+	const stranded = await attempt(
+		both,
+		'disconnect_brain',
+		{ brain: 'northwind/other' },
+		{
+			held: 'b-other'
+		}
+	);
+	check(
+		'disconnect_brain refuses a brain with no repository behind it',
+		stranded.outcome === 'denied' && stranded.detail.includes('strand its files'),
+		stranded.detail
+	);
+}
+
 {
 	const solo = toolsFor(orgBoss, { multiUser: false });
 	for (const t of ['switch_brain', 'create_brain', 'connect_brain', 'disconnect_brain']) {
