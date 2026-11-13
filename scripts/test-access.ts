@@ -1552,7 +1552,7 @@ console.log('\nchooseBrainStorage: where a new brain goes');
 		where(base) === 'isomorphic'
 	);
 	check(
-		'an org that connected its own GitHub account gets a repository there, whatever the default',
+		'an org that connected its own GitHub account gets a repository there',
 		where({ ...base, platformOwned: false }) === 'github'
 	);
 	check(

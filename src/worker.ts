@@ -203,9 +203,8 @@ interface Env {
 	AUTH_EMAIL_FROM?: string;
 	// Reply-To on the magic-link email (e.g. a support address). Empty sends none.
 	AUTH_EMAIL_REPLY_TO?: string;
-	// Open sign-in on a preview, both written by previewConfig. See src/auth/config.ts.
-	AUTH_SIGN_IN?: string;
-	PREVIEW?: string;
+	// "open" on a Preview only, written by previewConfig. See src/auth/config.ts.
+	PREVIEW_SIGN_IN?: string;
 	// The deployment's multi-tenant Microsoft Entra application, for orgs that sign in through
 	// their own directory. Unset, no address is routed to a directory.
 	AUTH_ENTRA_CLIENT_ID?: string;

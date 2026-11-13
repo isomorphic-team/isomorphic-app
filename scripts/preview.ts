@@ -119,13 +119,12 @@ export interface PreviewObjects {
  * with no objects at all. With it they are carried, provided every one names the preview
  * objects Worker, and the Preview's object names are scoped to it.
  *
- * It is the one writer of `PREVIEW` and `AUTH_SIGN_IN`: open sign-in needs both, so only
- * a Preview can have it.
+ * It is the one writer of `PREVIEW_SIGN_IN`, so only a Preview can open sign-in.
  */
 export function previewConfig(
 	{ durable_objects, ...config }: WranglerConfig,
 	objects?: PreviewObjects,
-	signIn: 'open' | 'email' = 'email'
+	openSignIn = false
 ): WranglerConfig {
 	const bound = objects ? (durable_objects?.bindings ?? []) : [];
 	const elsewhere = bound.filter((b) => b.script_name !== objects?.worker);
@@ -136,8 +135,7 @@ export function previewConfig(
 	const carried = bound.length > 0 ? { durable_objects: { bindings: bound } } : {};
 	const vars = {
 		...config.vars,
-		PREVIEW: 'true',
-		AUTH_SIGN_IN: signIn,
+		...(openSignIn ? { PREVIEW_SIGN_IN: 'open' } : {}),
 		...(objects ? { OBJECTS_SCOPE: objects.scope } : {})
 	};
 	const databases = config.d1_databases ?? [];
@@ -235,6 +233,10 @@ function required(name: string): string {
 	return value;
 }
 
+// The decided sign-in mode, read the same way by `config` and `comment`: email unless "open".
+const signInFromEnv = (): 'open' | 'email' =>
+	required('PREVIEW_SIGN_IN') === 'open' ? 'open' : 'email';
+
 function inputsFromEnv(): PreviewInputs {
 	return {
 		pr: Number(required('PR_NUMBER')),
@@ -262,10 +264,10 @@ function main(argv: string[]): void {
 			// Set only once the preview objects Worker exists (the one-time setup).
 			const worker = process.env.PREVIEW_OBJECTS_WORKER_NAME?.trim();
 			const objects = worker ? { worker, scope: planPreview(inputsFromEnv()).name } : undefined;
-			const signIn = process.env.PREVIEW_SIGN_IN === 'open' ? 'open' : 'email';
+			const open = signInFromEnv() === 'open';
 			writeFileSync(
 				output,
-				JSON.stringify(previewConfig(config, objects, signIn), null, '\t') + '\n'
+				JSON.stringify(previewConfig(config, objects, open), null, '\t') + '\n'
 			);
 			return;
 		}
@@ -285,7 +287,7 @@ function main(argv: string[]): void {
 					sha: required('PREVIEW_SHA'),
 					smoke: required('PREVIEW_SMOKE') === 'success' ? 'success' : 'failure',
 					runUrl: required('PREVIEW_RUN_URL'),
-					signIn: required('PREVIEW_SIGN_IN') === 'email' ? 'email' : 'open'
+					signIn: signInFromEnv()
 				})
 			);
 			return;

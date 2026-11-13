@@ -276,7 +276,7 @@ jobs:
         env:
           WORKER_NAME: ${{ vars.PREVIEW_WORKER_NAME }}
           AUTH_MODE: oauth
-          # previewConfig writes it into the Preview's vars with PREVIEW, which open sign-in needs.
+          # previewConfig, its only writer, puts PREVIEW_SIGN_IN=open into the Preview's vars.
           PREVIEW_SIGN_IN: ${{ needs.resolve.outputs.signin }}
           AUTO_PROVISION: 'true'
           USAGE_ANALYTICS: 'true'

@@ -4,7 +4,7 @@
 //   pnpm test:signin
 //
 // It exists to catch:
-//   1. Open sign-in (AUTH_SIGN_IN=open, previews only) not producing a real session: the
+//   1. Open sign-in (PREVIEW_SIGN_IN=open, previews only) not producing a real session: the
 //      sign-in POST must land the browser on Auth.js's own callback, and that callback
 //      must leave a session `getAuthSession` reads back with the typed address.
 //   2. Email sign-in changing under the open mode's code path: it must still send through
@@ -85,26 +85,19 @@ function baseEnv(over: Partial<AuthEnv>): AuthEnv {
 console.log('\nthe mode is open only for the exact value');
 {
 	check('unset is email', signInMode({}) === 'email');
+	check('"open" is open', signInMode({ PREVIEW_SIGN_IN: 'open' }) === 'open');
+	check('"Open" is email', signInMode({ PREVIEW_SIGN_IN: 'Open' }) === 'email');
+	check('" open" is email', signInMode({ PREVIEW_SIGN_IN: ' open' }) === 'email');
+	check('"true" is email', signInMode({ PREVIEW_SIGN_IN: 'true' }) === 'email');
 	check(
-		'"open" on a preview is open',
-		signInMode({ AUTH_SIGN_IN: 'open', PREVIEW: 'true' }) === 'open'
+		'the retired AUTH_SIGN_IN=open opens nothing',
+		signInMode({ AUTH_SIGN_IN: 'open' } as never) === 'email'
 	);
-	check(
-		'"open" without the preview marker is email',
-		signInMode({ AUTH_SIGN_IN: 'open' }) === 'email'
-	);
-	check(
-		'"open" with any other marker is email',
-		signInMode({ AUTH_SIGN_IN: 'open', PREVIEW: '1' }) === 'email'
-	);
-	check('"Open" is email', signInMode({ AUTH_SIGN_IN: 'Open' }) === 'email');
-	check('" open" is email', signInMode({ AUTH_SIGN_IN: ' open' }) === 'email');
-	check('"true" is email', signInMode({ AUTH_SIGN_IN: 'true' }) === 'email');
 }
 
 console.log('\nopen sign-in ends in a real session for the typed address');
 {
-	const env = baseEnv({ AUTH_SIGN_IN: 'open', PREVIEW: 'true' });
+	const env = baseEnv({ PREVIEW_SIGN_IN: 'open' });
 	const warn = console.warn;
 	console.warn = () => {};
 	try {
@@ -364,15 +357,12 @@ console.log('\na connected domain signs in through its directory (4)');
 	console.error = () => {};
 	try {
 		// A member with a magic-link account from before the org connected its directory.
-		const before = await submitEmail(
-			ssoEnv(db, { AUTH_SIGN_IN: 'open', PREVIEW: 'true' }),
-			'grace@example.com'
-		);
+		const before = await submitEmail(ssoEnv(db, { PREVIEW_SIGN_IN: 'open' }), 'grace@example.com');
 		const used = await handleAuthRequest(
 			new Request(before.res.headers.get('location') ?? '', {
 				headers: { cookie: before.jar.header() }
 			}),
-			ssoEnv(db, { AUTH_SIGN_IN: 'open', PREVIEW: 'true' })
+			ssoEnv(db, { PREVIEW_SIGN_IN: 'open' })
 		);
 		before.jar.take(used);
 		const graceId = (await sessionOf(env, before.jar))?.user?.id;
@@ -598,7 +588,7 @@ console.log('\nan enforced domain refuses the magic link (4)');
 	console.error = () => {};
 	try {
 		// A link issued before the domain was enforced.
-		const open = ssoEnv(db, { AUTH_SIGN_IN: 'open', PREVIEW: 'true' });
+		const open = ssoEnv(db, { PREVIEW_SIGN_IN: 'open' });
 		const early = await submitEmail(open, 'ada@example.com');
 		const link = early.res.headers.get('location') ?? '';
 		check('a link exists from before', link.includes('/auth/callback/resend?'));
