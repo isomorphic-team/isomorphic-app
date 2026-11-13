@@ -257,7 +257,9 @@ Each step is its own pull request.
       able to make a brain here. Built: `scaffoldInto`, `create_brain`'s `storage`, and the
       deployment's `BRAIN_STORAGE` default for orgs on platform-owned storage
       (`chooseBrainStorage`).
-   5. An objects Worker for Worker Previews, which bind none today.
+   5. An objects Worker for Worker Previews. Built: a shared preview objects Worker and a
+      name scope per pull request (`preview-environments.md`), opt-in by
+      `PREVIEW_OBJECTS_WORKER_NAME`.
    6. Export to a GitHub repository, and the reverse: relocation
       (`storage-and-tenancy.md` step 5). Built as a move in both directions:
       `configure_brain` with `storage: "github"` copies a platform-held brain into its
@@ -289,10 +291,10 @@ the current files. History stays behind in the source repository.
   listing of a large folder needs the same budget and resume rule as any whole-brain index pass.
 - **Media.** `read_media` and attachments read binary files through the store. Confirm Graph and
   Drive downloads fit the Worker's memory and response limits for the media sizes already allowed.
-- **Coordinated writes in a Worker Preview.** A Preview does not bind the objects Worker,
-  because its binding would reach the production namespace (`docs/references.md`), so a
-  Preview has no coordinator and a Graph or Drive brain there cannot write. A preview objects
-  Worker, or an id prefix per pull request, would give it one.
+- **Coordinated writes in a Worker Preview.** A Preview binds the coordinator only when a
+  preview objects Worker is set up (`preview-environments.md`). Its object names are not
+  scoped per pull request yet: when a store first uses the coordinator, name its objects
+  through `OBJECTS_SCOPE` as the files objects are.
 - **Round trips per file, and content crossing twice.** Each file costs the object a call
   back to the MCP Worker on top of the backend's own request, steps run one at a time, and a
   written file's content crosses RPC twice (in the bundle, then back out through `put`), so a

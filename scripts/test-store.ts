@@ -30,7 +30,12 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { defineStore, type BrainStore, type StoreCapabilities } from '../src/lib/brain-repo.ts';
 import { githubStore, gitBlobSha } from '../src/lib/brain-store-github.ts';
-import { MAX_FILE_BYTES, sqlBrainStore, sqlFiles } from '../src/lib/brain-store-sql.ts';
+import {
+	MAX_FILE_BYTES,
+	filesObjectName,
+	sqlBrainStore,
+	sqlFiles
+} from '../src/lib/brain-store-sql.ts';
 import {
 	RELOCATION_KIND,
 	copyStep,
@@ -204,6 +209,14 @@ for (const backend of BACKENDS) {
 	const clock = () => `2026-01-01T00:00:0${tick++}.000Z`;
 	const store = sqlBrainStore(sqlFiles(db), clock);
 	const author = { name: 'Ada', email: 'ada@example.com' };
+
+	check(
+		'sql: a files object is named for its brain, within a scope when there is one',
+		filesObjectName('brain-a') === 'brain-a' &&
+			filesObjectName('brain-a', '') === 'brain-a' &&
+			filesObjectName('brain-a', 'pr-12') === 'pr-12:brain-a' &&
+			filesObjectName('brain-a', 'pr-12') !== filesObjectName('brain-a', 'pr-13')
+	);
 
 	const empty = await store.getRevision(repo);
 	check('sql: an empty brain has a revision and no files', empty.id === '0');
