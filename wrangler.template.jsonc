@@ -152,5 +152,11 @@
 				"script_name": "__OBJECTS_WORKER_NAME__"
 			}
 		]
-	}
+	},
+	// The Worker Loader (Dynamic Workers, Workers Paid plan only), which run_script runs
+	// model-written scripts in, with no network. `pnpm setup:config` keeps this block
+	// only when CODE_MODE is set.
+	// code-mode:start
+	"worker_loaders": [{ "binding": "LOADER" }]
+	// code-mode:end
 }
