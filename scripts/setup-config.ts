@@ -149,6 +149,12 @@ const SETTINGS = [
 		help: 'D1 database id for the content index. Empty keeps the index in the platform database; --provision creates one.'
 	},
 	{
+		key: 'CODE_MODE',
+		placeholder: '__CODE_MODE__',
+		default: '',
+		help: 'Any value binds the Worker Loader and registers run_script (needs the Workers Paid plan). Empty leaves both out.'
+	},
+	{
 		key: 'CF_OAUTH_KV_ID',
 		placeholder: '__OAUTH_KV_ID__',
 		default: 'local0dev0oauth0kv0namespace0id0',

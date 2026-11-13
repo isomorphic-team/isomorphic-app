@@ -54,6 +54,7 @@ import {
 } from '../src/lib/orgs.ts';
 import { registerMediaTools } from '../src/tools/media.ts';
 import { registerCoreTools } from '../src/tools/core.ts';
+import { brainApi } from '../src/tools/code-mode.ts';
 import { registerBrainApp } from '../src/tools/apps.ts';
 import { loadCustomToolDefs, registerCustomTools } from '../src/tools/custom.ts';
 import { loadBrainConfig } from '../src/lib/brain-config.ts';
@@ -1012,6 +1013,44 @@ try {
 		inv.text
 	);
 	await tools.close();
+
+	// ══ run_script's brain: the API a sandboxed script reads through ══
+	// brainApi over the real index and store. The sandbox around it is pnpm test:code-mode.
+	await call('write_page', {
+		path: 'wiki/kb/pointer.md',
+		title: 'Pointer',
+		fields: { owner: 'ana' },
+		content: 'See [the marker](marker.md).\n'
+	});
+	await settledHead();
+	const api = brainApi(await getContext());
+	const found = await api.search('zorptastic', { limit: 10 });
+	check(
+		'brain.search finds a page by a term',
+		found.some((h) => h.path === 'wiki/kb/marker.md'),
+		JSON.stringify(found)
+	);
+	const pointer = await api.read('wiki/kb/pointer.md');
+	check(
+		'brain.read returns title, frontmatter fields and body',
+		pointer?.title === 'Pointer' &&
+			pointer.fields?.owner === 'ana' &&
+			/the marker/.test(pointer.body),
+		JSON.stringify(pointer)
+	);
+	check('brain.read of a missing page is null', (await api.read('wiki/kb/nope.md')) === null);
+	const kbPaths = (await api.list('wiki/kb/')).map((p) => p.path);
+	check(
+		'brain.list filters by prefix',
+		kbPaths.includes('wiki/kb/pointer.md') && kbPaths.every((p) => p.startsWith('wiki/kb/')),
+		kbPaths.join()
+	);
+	const linkers = await api.inbound('wiki/kb/marker.md');
+	check(
+		'brain.inbound lists the pages linking to one',
+		linkers.includes('wiki/kb/pointer.md'),
+		linkers.join()
+	);
 
 	// ══ findings: validate surfaces, resolve records, validate stops re-raising ═══
 	// The whole point of keying findings. Driven end to end because the ledger is a

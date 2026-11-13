@@ -93,6 +93,7 @@ import { registerImportTools } from './tools/importer.ts';
 import { registerBrainApp } from './tools/apps.ts';
 import { composeInstructions, SERVER_INSTRUCTIONS } from './lib/server-instructions.ts';
 import { registerCoreTools } from './tools/core.ts';
+import { registerCodeModeTools } from './tools/code-mode.ts';
 import { registerMediaTools } from './tools/media.ts';
 import { registerMemberTools } from './tools/members.ts';
 import { registerBrainAccessTools, type AccessContext } from './tools/brain-access.ts';
@@ -129,6 +130,10 @@ import {
 import { toolAnnotations } from './lib/tool-annotations.ts';
 
 interface Env {
+	// The Worker Loader binding (Dynamic Workers), present when setup:config kept the
+	// `code-mode` block. Registers run_script.
+	LOADER?: WorkerLoader;
+
 	// Auth mode selector
 	AUTH_MODE: 'static' | 'oauth';
 
@@ -1047,6 +1052,9 @@ class McpSession {
 		// Defined in src/tools/core.ts so the local Node runtime registers the same
 		// two tools from the same source rather than a second copy.
 		registerCoreTools(server, (opts) => this.tenantContext(opts));
+		if (this.env.LOADER) {
+			registerCodeModeTools(server, (opts) => this.tenantContext(opts), this.env.LOADER);
+		}
 		registerMediaTools(server, (opts) => this.tenantContext(opts), {
 			assetLinks: () => assetLinkIssuer(this.env)
 		});

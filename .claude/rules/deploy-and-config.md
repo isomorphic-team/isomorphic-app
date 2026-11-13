@@ -48,6 +48,9 @@ deployment's identity).
   `// index-db:end`; `setup:config` keeps it only when `CF_INDEX_D1_DATABASE_ID` is set
   (`optionalBlock`, `scripts/optional-block.ts`, pinned by `pnpm test:wiring`), and
   `deploy.yml` applies its migrations only then. `pnpm db:migrate:index` applies them locally.
+- **The Worker Loader is optional too** (`// code-mode:start` ... `// code-mode:end`, kept when
+  `CODE_MODE` is set). Dynamic Workers need the Workers Paid plan, so a default config binds
+  none and `run_script` is not registered. See the code-mode rules file.
 - **Don't hardcode our deployment anywhere.** `src/manifest.ts` takes the OAuth callback origin
   as an argument (`PUBLIC_BASE_URL`); the install-callback page derives its host from the request.
 
