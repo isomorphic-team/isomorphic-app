@@ -1,7 +1,8 @@
 // A fake Google Drive for batteries that drive the REAL Drive store (driveApi, listDrive,
 // driveBrainStore) without a network. It implements the Drive v3 requests that store
 // makes, as a `fetch`: files.list by parent, files.get (metadata and alt=media), the
-// multipart create, the media update, folder creation and trashing.
+// multipart create, the media update, folder creation and trashing; and the two OAuth
+// requests a connection makes, the token endpoint and about.get.
 //
 // Like Drive it addresses files by id, lets one folder hold two items of one name, and
 // reports the md5 of a file's bytes, computed here with node:crypto so a battery checks
@@ -60,6 +61,8 @@ export function fakeGoogleDrive(opts: { token?: string; pageSize?: number } = {}
 		const parent = items.get(i.parent);
 		return parent && parent !== root ? `${pathOf(parent)}/${i.name}` : i.name;
 	};
+	// Drive's name for the top of the account's own Drive.
+	const aliased = (id: string): string => (id === 'root' ? root.id : id);
 	const json = (body: unknown, status = 200): Response =>
 		new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
 
@@ -111,9 +114,41 @@ export function fakeGoogleDrive(opts: { token?: string; pageSize?: number } = {}
 		folders: (): string[] =>
 			[...items.values()].filter((i) => i.mimeType === FOLDER && i !== root).map(pathOf),
 
+		// Google's OAuth side: the code a consent would send back, the refresh tokens it has
+		// issued, and whether the person granted the Drive scope.
+		code: 'auth-code',
+		refreshTokens: new Set<string>(),
+		grantsScope: true,
+		account: { permissionId: 'perm-1', emailAddress: 'person@drive.example' },
+		tokenRequests: [] as Record<string, string>[],
+
 		fetch: (async (input: RequestInfo | URL, init: RequestInit = {}): Promise<Response> => {
 			const url = new URL(String(input));
 			const method = init.method ?? 'GET';
+			if (url.hostname === 'oauth2.googleapis.com') {
+				const form = Object.fromEntries(new URLSearchParams(String(init.body)));
+				drive.tokenRequests.push(form);
+				if (form.client_secret !== 'client-secret') return json({ error: 'invalid_client' }, 401);
+				const granted = {
+					access_token: token,
+					expires_in: 3599,
+					scope: drive.grantsScope ? 'https://www.googleapis.com/auth/drive.file' : ''
+				};
+				if (form.grant_type === 'authorization_code') {
+					if (form.code !== drive.code) return json({ error: 'invalid_grant' }, 400);
+					const refresh = `refresh-${drive.refreshTokens.size + 1}`;
+					drive.refreshTokens.add(refresh);
+					return json({ ...granted, refresh_token: refresh });
+				}
+				return drive.refreshTokens.has(form.refresh_token)
+					? json(granted)
+					: json({ error: 'invalid_grant' }, 400);
+			}
+			if (url.pathname === '/drive/v3/about') {
+				return new Headers(init.headers).get('authorization') === `Bearer ${token}`
+					? json({ user: drive.account })
+					: json({ error: 'auth' }, 401);
+			}
 			const call = `${method} ${url.pathname}${url.searchParams.get('alt') === 'media' ? ' media' : ''}`;
 			drive.calls.push(call);
 			await drive.before(call);
@@ -136,7 +171,7 @@ export function fakeGoogleDrive(opts: { token?: string; pageSize?: number } = {}
 
 			if (method === 'GET' && !id) {
 				const q = url.searchParams.get('q') ?? '';
-				const parents = new Set([...q.matchAll(/'([^']+)' in parents/g)].map((m) => m[1]));
+				const parents = new Set([...q.matchAll(/'([^']+)' in parents/g)].map((m) => aliased(m[1])));
 				const found = [...items.values()].filter((i) => parents.has(i.parent) && !i.trashed);
 				const from = Number(url.searchParams.get('pageToken') ?? 0);
 				const size = Math.min(pageSize, Number(url.searchParams.get('pageSize') ?? pageSize));
@@ -170,7 +205,7 @@ export function fakeGoogleDrive(opts: { token?: string; pageSize?: number } = {}
 					parents: string[];
 					mimeType: string;
 				};
-				return json(view(add(meta.parents[0], meta.name, meta.mimeType, null)));
+				return json(view(add(aliased(meta.parents[0]), meta.name, meta.mimeType, null)));
 			}
 			const item = id ? items.get(id) : undefined;
 			if (!item) return json({ error: 'not found' }, 404);
