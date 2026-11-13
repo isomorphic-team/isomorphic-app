@@ -1687,6 +1687,10 @@ console.log('\nforgetting a brain: what disconnect deletes, and what it keeps');
 			})) &&
 			(await brainNameTaken(fdb, 'acme-old', 'x'))
 	);
+	check(
+		'brainNameTaken: a repository held under an id not derived from it, in any letter case',
+		await brainNameTaken(fdb, 'ACME', 'Live')
+	);
 	check('brainNameTaken: a free name is free', !(await brainNameTaken(fdb, 'acme', 'unused')));
 	check(
 		'createBrain says when it wrote nothing: the repository is held',
