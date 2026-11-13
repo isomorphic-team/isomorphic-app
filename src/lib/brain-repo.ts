@@ -7,8 +7,9 @@
 // as a unit. The unit of work is the bundle, never a single file.
 //
 // Implementations: githubStore (brain-store-github.ts), the fs/git adapter
-// (src/local/brain-store-fs.ts), and sqlBrainStore (brain-store-sql.ts) over the
-// BrainFilesObject, for a brain the platform holds itself.
+// (src/local/brain-store-fs.ts), sqlBrainStore (brain-store-sql.ts) over the
+// BrainFilesObject, for a brain the platform holds itself, and driveBrainStore
+// (brain-store-drive.ts) over a Google Drive folder.
 
 // Where one brain's files live, within the backend its store talks to. A GitHub
 // repository today; a backend that is not addressed by owner and name adds its own
