@@ -13,27 +13,36 @@ checks it runs are [`scripts/smoke.ts`](../../scripts/smoke.ts), covered offline
 `wrangler deploy` does two things at once: it uploads code and it points traffic at it.
 Splitting them is what makes an automated rollback possible, so the job does this instead:
 
-| Step | Command                        | If it fails                                      |
-| ---- | ------------------------------ | ------------------------------------------------ |
-| 1    | `d1 migrations apply --remote` | nothing else runs; prod stays on the old code    |
-| 2    | `deployments status --json`    | warns; a later failure goes red without rollback |
-| 3    | `versions upload`              | nothing has taken traffic; run goes red          |
-| 4    | `smoke.ts <preview url>`       | **stops before promoting**; nothing to undo      |
-| 5    | `versions deploy <id>@100%`    | run goes red, prod stays on the old version      |
-| 6    | `smoke.ts <production url>`    | triggers step 7                                  |
-| 7    | `rollback <recorded id>`       | re-checked, and the run goes red either way      |
+| Step | Command                                | If it fails                                            |
+| ---- | -------------------------------------- | ------------------------------------------------------ |
+| 1    | `d1 migrations apply --remote`         | nothing else runs; prod stays on the old code          |
+| 2    | `deployments status --json`, both      | warns; a later failure goes red without rollback       |
+| 3    | `deploy -c wrangler.objects.jsonc`     | the MCP Worker is untouched; run goes red              |
+| 4    | `versions upload`                      | objects Worker rolled back; run goes red               |
+| 5    | `smoke.ts <preview url>`               | **stops before promoting**; objects Worker rolled back |
+| 6    | `versions deploy <id>@100%`            | objects Worker rolled back; run goes red               |
+| 7    | `smoke.ts <production url>`            | triggers step 8                                        |
+| 8    | `rollback <recorded id>`, both Workers | re-checked, and the run goes red either way            |
 
-Step 2 records the rollback target before anything changes, so the job never has to work
-out where to return to from inside a failure.
+Step 2 records both Workers' rollback targets before anything changes, so the job never has
+to work out where to return to from inside a failure.
 
-Step 4 is the one worth having. A version that cannot boot is caught while it is serving
+Step 3 deploys the objects Worker, which implements the Durable Objects the MCP Worker binds.
+It uses `wrangler deploy` because that is the only command
+that applies Durable Object migrations, and it is not checked before taking traffic because a
+Worker implementing a Durable Object gets no preview URL. `/health` pings it, so every smoke
+check after it reaches it. Its RPC methods and tables only ever grow, since the MCP Worker
+version still live, and the one a rollback returns to, call it.
+
+Step 5 is the one worth having. A version that cannot boot is caught while it is serving
 nobody, and no rollback is needed because no rollout happened.
 
 It runs only when Cloudflare issues a preview URL for the version, reported on the upload as
 `metadata.has_preview`. **This Worker gets them.** Preview URLs are not issued for Workers
 that implement a Durable Object, and this repo still carries the append-only `migrations`
 array naming the deleted `IsomorphicMindMcp` class, which raised the question of whether
-that array alone disqualifies it. It does not: Cloudflare keys off the bindings, and every
+that array alone disqualifies it. It does not: Cloudflare keys off the classes a Worker
+implements, and binding one in the objects Worker does not count (checked 2026-11-09). Every
 version from number 77 onward (when `preview_urls: true` entered the config) reports
 `has_preview: true`. Confirmed on 2026-08-18 with:
 
@@ -42,8 +51,8 @@ pnpm exec wrangler versions list --json | jq '[.[] | {number, preview: .metadata
 ```
 
 The job still branches on the answer per run rather than assuming it, because the
-disqualifying condition is a binding away: adding a Durable Object would silently drop the
-pipeline onto the promote-then-roll-back path. It warns when that happens instead of going
+disqualifying condition is one class away: implementing a Durable Object here would silently
+drop the pipeline onto the promote-then-roll-back path. It warns when that happens instead of going
 quiet.
 
 ## What the checks assert

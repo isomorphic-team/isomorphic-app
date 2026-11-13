@@ -361,6 +361,7 @@ Three programs share one `src/`:
 - **The MCP Worker** (`src/worker.ts`) runs on Cloudflare Workers and is the product. Stateless
   Streamable HTTP: a fresh server and transport per request, answering on the same POST. D1 for
   the content index and the org tables, KV for OAuth state. It also serves the app as a web page.
+  It deploys with a small objects Worker (`src/objects/worker.ts`) holding its Durable Objects.
 - **The local runtime** (`src/local.ts`) is `pnpm try`: the same tools and the same app over a
   git repository on disk, on Node, with no accounts. One person, one machine, no org model.
 - **The bootstrap server** (`src/bootstrap.ts`) runs once on Node to register the GitHub App and

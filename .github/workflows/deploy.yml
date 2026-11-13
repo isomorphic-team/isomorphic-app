@@ -32,7 +32,7 @@ name: Deploy Worker
 #      of these are secret, and keeping them visible makes a misconfigured deploy
 #      diagnosable). `pnpm setup:config --print-ci` prints the exact commands from
 #      your local .dev.vars:
-#        gh variable set WORKER_NAME CF_OAUTH_KV_ID CF_OAUTH_KV_PREVIEW_ID \
+#        gh variable set WORKER_NAME OBJECTS_WORKER_NAME CF_OAUTH_KV_ID CF_OAUTH_KV_PREVIEW_ID \
 #                        CF_D1_DATABASE_ID D1_DATABASE_NAME PUBLIC_BASE_URL \
 #                        AUTH_MODE AUTO_PROVISION AUTH_EMAIL_FROM AUTH_EMAIL_REPLY_TO \
 #                        APP_SLUG USAGE_ANALYTICS
@@ -50,13 +50,16 @@ name: Deploy Worker
 # at it, so that a bad merge can be undone by the pipeline that shipped it:
 #
 #   1. apply D1 migrations (schema-first)
-#   2. record the currently-live version id, which is the rollback target
-#   3. `versions upload` -> new version, serving no traffic
-#   4. smoke check its preview URL, when Cloudflare issued one, and stop here if it
+#   2. deploy the objects Worker, which implements the Durable Objects this Worker binds,
+#      after recording its live version
+#   3. record the currently-live version id, which is the rollback target
+#   4. `versions upload` -> new version, serving no traffic
+#   5. smoke check its preview URL, when Cloudflare issued one, and stop here if it
 #      fails; nothing has taken traffic yet, so there is nothing to undo
-#   5. `versions deploy <id>@100%` to promote
-#   6. smoke check the production origin
-#   7. on failure: `wrangler rollback <recorded id>`, re-check, and fail the run red
+#   6. `versions deploy <id>@100%` to promote
+#   7. smoke check the production origin
+#   8. on failure: `wrangler rollback <recorded id>` for both Workers, re-check, and fail
+#      the run red
 #
 # The checks are in scripts/smoke.ts and are covered by `pnpm test:smoke`. They are
 # deliberately testable rather than inline shell: this is the logic that decides
@@ -167,11 +170,11 @@ jobs:
           fi
           echo "ready=$ready" >> "$GITHUB_OUTPUT"
 
-      # wrangler.jsonc is generated, not committed. Build it from this repo's
-      # variables so the deployed Worker carries this deployment's identity.
+      # wrangler.jsonc and wrangler.objects.jsonc are generated, not committed. Build them
+      # from this repo's variables so the deployed Workers carry this deployment's identity.
       # Unset variables fall back to the template defaults in scripts/setup-config.ts,
       # which is why the guard above insists on the two resource ids.
-      - name: Generate wrangler.jsonc for this deployment
+      - name: Generate the Wrangler configs for this deployment
         if: steps.guard.outputs.ready == 'true'
         env:
           WORKER_NAME: ${{ vars.WORKER_NAME }}
@@ -184,6 +187,7 @@ jobs:
           # GitHub rejects repository variables named GITHUB_*, so the CI-facing
           # name is APP_SLUG. setup-config maps it back. See scripts/setup-config.ts.
           APP_SLUG: ${{ vars.APP_SLUG }}
+          OBJECTS_WORKER_NAME: ${{ vars.OBJECTS_WORKER_NAME }}
           D1_DATABASE_NAME: ${{ vars.D1_DATABASE_NAME }}
           CF_D1_DATABASE_ID: ${{ vars.CF_D1_DATABASE_ID }}
           INDEX_D1_DATABASE_NAME: ${{ vars.INDEX_D1_DATABASE_NAME }}
@@ -222,7 +226,7 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
 
-      # THE ROLLBACK TARGET, read before anything changes.
+      # THE ROLLBACK TARGETS, read before anything changes: each Worker's live version.
       #
       # `wrangler rollback` with no argument picks the previous deployment itself, but
       # an explicit id is what makes the rollback auditable: the job log names the
@@ -230,9 +234,9 @@ jobs:
       # failure would mean reading state we no longer trust.
       #
       # A first-ever deploy has no live version. That is not an error; it just means
-      # there is nothing to roll back to, and the guard below turns a failed smoke
-      # check into a red run without a rollback attempt.
-      - name: Record the currently-live version
+      # there is nothing to roll back to, and the guards below turn a failure into a red
+      # run without a rollback attempt.
+      - name: Record the currently-live versions
         id: live
         if: steps.guard.outputs.ready == 'true'
         env:
@@ -240,14 +244,37 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
         run: |
-          status=$(pnpm exec wrangler deployments status --json 2>/dev/null || true)
-          previous=$(printf '%s' "$status" | jq -r '[.versions[]? | select(.percentage == 100) | .version_id] | first // empty' 2>/dev/null || true)
-          if [ -n "$previous" ]; then
-            echo "Rollback target: $previous"
-          else
-            echo "::warning::No currently-live version found (first deploy?). A failed smoke check will fail the run without rolling back."
+          live() {
+            pnpm exec wrangler deployments status --json "$@" 2>/dev/null \
+              | jq -r '[.versions[]? | select(.percentage == 100) | .version_id] | first // empty' 2>/dev/null || true
+          }
+          previous=$(live)
+          objects=$(live -c wrangler.objects.jsonc)
+          echo "Rollback targets: MCP Worker ${previous:-none}, objects Worker ${objects:-none}"
+          if [ -z "$previous" ] || [ -z "$objects" ]; then
+            echo "::warning::A Worker has no live version (first deploy?). A failure will fail the run without rolling that Worker back."
           fi
           echo "previous=$previous" >> "$GITHUB_OUTPUT"
+          echo "objects_previous=$objects" >> "$GITHUB_OUTPUT"
+
+      # THE OBJECTS WORKER, BEFORE THE VERSION THAT BINDS IT. It implements the Durable
+      # Objects this Worker binds by script_name (wrangler.objects.template.jsonc). It is
+      # deployed with `wrangler deploy`, not uploaded and promoted, because Durable Object
+      # migrations apply only through `wrangler deploy`; and it cannot be smoke checked
+      # before it takes traffic, because a Worker implementing a Durable Object gets no
+      # preview URL. The smoke checks below reach it through /health, which pings it.
+      #
+      # So the objects Worker's RPC methods and journal tables only ever grow: the MCP
+      # Worker version live while this runs, and the one a rollback returns to, call it.
+      - name: Deploy the objects Worker
+        id: objects
+        if: steps.guard.outputs.ready == 'true'
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          pnpm exec wrangler deploy -c wrangler.objects.jsonc \
+            --message "Deploy ${GITHUB_SHA::7} from ${GITHUB_REF_NAME}"
 
       # UPLOAD, DO NOT DEPLOY. `versions upload` publishes the code as a new version
       # that serves NO traffic. Secrets set with `wrangler secret put` carry over: they
@@ -301,9 +328,10 @@ jobs:
       # Workers implementing a Durable Object, and the append-only `migrations` array
       # naming the deleted IsomorphicMindMcp class turns out not to count, since every
       # version since number 77 reports has_preview true (checked 2026-08-18, see
-      # docs/ops/deploy-and-rollback.md). The branch stays because adding a Durable
-      # Object binding would silently take it away, and a pipeline that quietly stopped
-      # checking before promoting is worse than one that says so.
+      # docs/ops/deploy-and-rollback.md). Binding a class the objects Worker implements
+      # keeps them (checked 2026-11-09). The branch stays because implementing a class
+      # here would silently take them away, and a pipeline that quietly stopped checking
+      # before promoting is worse than one that says so.
       #
       # A preview URL of the PRODUCTION Worker shares production's bindings. That is
       # wrong for a feature preview and exactly right here: it is prod, one promotion
@@ -352,6 +380,21 @@ jobs:
           echo "::error::Production smoke check failed. Rolling back to ${{ steps.live.outputs.previous }}."
           pnpm exec wrangler rollback "${{ steps.live.outputs.previous }}" \
             --message "Automated rollback: smoke check failed for ${GITHUB_SHA::7}" \
+            --yes
+
+      # Any failure after the objects Worker deployed returns it to its recorded version too,
+      # so production goes back to the pair that last passed. Before the verify step below,
+      # which checks that pair.
+      - name: Roll back the objects Worker
+        id: objects_rollback
+        if: ${{ !cancelled() && steps.objects.outcome == 'success' && steps.live.outputs.objects_previous != '' && (failure() || steps.smoke.outcome == 'failure') }}
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          echo "::error::Rolling the objects Worker back to ${{ steps.live.outputs.objects_previous }}."
+          pnpm exec wrangler rollback "${{ steps.live.outputs.objects_previous }}" -c wrangler.objects.jsonc \
+            --message "Automated rollback: deploy of ${GITHUB_SHA::7} failed" \
             --yes
 
       # Rolling back and then not checking would be a guess, and the failure mode it

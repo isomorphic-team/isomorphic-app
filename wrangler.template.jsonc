@@ -37,9 +37,10 @@
 	"workers_dev": true,
 	"preview_urls": true,
 	// The MCP transport is stateless (per-request server + web-standard transport
-	// in src/worker.ts) — no Durable Object. The legacy IsomorphicMindMcp DO class
-	// is deleted by the v2 migration; v1 stays as history (DO migrations are
-	// append-only, so neither entry may be removed).
+	// in src/worker.ts), and this Worker implements no Durable Object: that would
+	// cost it its preview URLs. The legacy IsomorphicMindMcp DO class is deleted by
+	// the v2 migration; v1 stays as history (DO migrations are append-only, so
+	// neither entry may be removed).
 	"migrations": [
 		{ "tag": "v1", "new_sqlite_classes": ["IsomorphicMindMcp"] },
 		{ "tag": "v2", "deleted_classes": ["IsomorphicMindMcp"] }
@@ -132,5 +133,20 @@
 			"migrations_dir": "migrations-index"
 		}
 		// index-db:end
-	]
+	],
+	// Durable Objects implemented in the objects Worker (wrangler.objects.template.jsonc,
+	// src/objects/worker.ts). Binding a class in another Worker keeps this Worker's
+	// preview URLs; implementing one here would not.
+	//
+	// WRITE_COORDINATOR: one object per brain, which lands multi-file writes on storage
+	// that writes one file at a time (src/lib/write-coordinator.ts).
+	"durable_objects": {
+		"bindings": [
+			{
+				"name": "WRITE_COORDINATOR",
+				"class_name": "WriteCoordinatorObject",
+				"script_name": "__OBJECTS_WORKER_NAME__"
+			}
+		]
+	}
 }

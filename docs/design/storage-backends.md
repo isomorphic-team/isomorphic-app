@@ -1,6 +1,6 @@
 # Design: brains on storage that is not git
 
-Status: **in implementation** (2026-11-12). Step 1 of the order of work is built, and step 2 up to the Durable Object.
+Status: **in implementation** (2026-11-13). Steps 1 and 2 of the order of work are built.
 
 - Author: Jon Hansing (via Claude)
 - Related: [`storage-and-tenancy.md`](storage-and-tenancy.md) (connections, bindings, step 5's
@@ -92,8 +92,9 @@ Nothing in OKF, the tool surface or tool descriptions changes in this step.
 ### 5.2 A write coordinator per brain
 
 A backend without `atomicWrite` gets its multi-file writes through a coordinator: a
-SQLite-backed Durable Object per brain, named by `brain_id`, in the same Worker as the index
-object from `brain-index-storage.md` and reached the same way (`script_name`, RPC).
+SQLite-backed Durable Object per brain, named by `brain_id`, in the objects Worker
+(`src/objects/worker.ts`), which the MCP Worker binds by `script_name` and reaches over RPC.
+The index object from `brain-index-storage.md` joins the same Worker when it ships.
 
 - **It serializes Isomorphic's writes to one brain.** Two tool calls cannot interleave their
   file writes.
@@ -104,10 +105,21 @@ object from `brain-index-storage.md` and reached the same way (`script_name`, RP
   back, leaving any file someone else changed as they left it. Comparing content rather than
   recording progress makes this correct wherever the interruption fell, including during a
   rollback. A journal entry is deleted once the write completes or rolls back.
-- **The journal outgrows one stored value.** A Durable Object's SQLite storage caps a value at
-  2 MB, and an attachment (`MAX_ATTACHMENT_BYTES`, 5 MB) rewritten over another holds about
-  13 MB of base64 in its entry. The object stores content across rows, or stages large files
-  on the backend and journals a reference.
+- **The journal is stored across rows.** A Durable Object's SQLite storage caps a string or a
+  row at 8 MB (Cloudflare's limits page, checked 2026-11-13), and an attachment
+  (`MAX_ATTACHMENT_BYTES`, 5 MB) rewritten over another holds about 13 MB of base64 in its
+  entry. `sqlJournal` keeps one row per step and each step's prior and intended content in
+  chunks of at most 6 MB.
+- **The object holds no credential.** The MCP Worker passes each call a `FileBackend`, a plain
+  object whose functions cross RPC as stubs, so every read and write of a file runs in the MCP
+  Worker with the brain's connection, and the object only serializes and journals. The backend
+  names the storage it reaches, the journal records it, and an entry is settled only through
+  the same storage: a brain moved to other storage with a write still interrupted is refused
+  until that write is settled where it started. The cost is that an interrupted bundle waits
+  for the next write to its brain; the object cannot settle it alone.
+- **It serializes with an in-memory lane.** The object keeps serving calls while it awaits the
+  caller's stubs, so the lane is what queues a second bundle. If the object restarts, the lane
+  is gone and the journal is not, and the next call settles the bundle first.
 - **It is a separate class from the index object.** The index object holds only derived state
   and is purged with `deleteAll()`; the journal is not derived and must survive an index rebuild.
 - GitHub and fs brains do not use it.
@@ -175,12 +187,14 @@ Sync clients and other tools can change a file between Isomorphic's read and its
 
 ## 8. Alternatives considered
 
-| Option                                                                   | Decision                                                                                                                                                       |
-| :----------------------------------------------------------------------- | :------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Keep git as the system of record and mirror the folder to Drive or Graph | Rejected: two sources of truth, a sync engine to own, and the customer's boundary holds a copy rather than the record.                                         |
-| Store a git repository's objects inside the drive                        | Rejected: the files in the customer's storage are unreadable by anything but Isomorphic, which defeats the reason to use it.                                   |
-| Coordinate writes with lease rows in D1 instead of a Durable Object      | Workable fallback. Contended writes retry on a lease, the journal lives in the platform database next to the system of record, and every step is a round trip. |
-| Make every write single-file on these backends                           | Rejected: `move_page` repoints links in other pages, and a page write appends to `wiki/log.md`. The bundle is the unit of work (`brain-repo.ts`).              |
+| Option                                                                   | Decision                                                                                                                                                                                               |
+| :----------------------------------------------------------------------- | :----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Keep git as the system of record and mirror the folder to Drive or Graph | Rejected: two sources of truth, a sync engine to own, and the customer's boundary holds a copy rather than the record.                                                                                 |
+| Store a git repository's objects inside the drive                        | Rejected: the files in the customer's storage are unreadable by anything but Isomorphic, which defeats the reason to use it.                                                                           |
+| Coordinate writes with lease rows in D1 instead of a Durable Object      | Rejected (2026-11-13): contended writes retry on a lease that can expire under a slow holder, the journal lives in the platform database next to the system of record, and every step is a round trip. |
+| Implement the coordinator object in the MCP Worker                       | Rejected: a Worker implementing a Durable Object gets no preview URLs, and the deploy checks each version on one before promoting it.                                                                  |
+| The object builds each brain's backend itself, from its connection       | Rejected: the objects Worker would hold every storage credential and the code that uses them, twice over with the MCP Worker.                                                                          |
+| Make every write single-file on these backends                           | Rejected: `move_page` repoints links in other pages, and a page write appends to `wiki/log.md`. The bundle is the unit of work (`brain-repo.ts`).                                                      |
 
 ## 9. Order of work
 
@@ -194,7 +208,8 @@ Each step is its own pull request.
    with an in-memory implementation for tests and the local runtime. A battery pins serialization,
    journal replay after an interrupted write, and rollback. The interface, the in-memory
    implementation and `pnpm test:coordinator` are built (`src/lib/write-coordinator.ts`); the
-   object and its Worker are not.
+   object and its Worker are built too: `src/objects/worker.ts`, `wrangler.objects.template.jsonc`,
+   deployed first by `deploy.yml`, and run in workerd by `pnpm test:objects`.
 3. **The Graph store**, tested against an in-memory fake that reproduces delta tokens, `410`
    resync, eTags and name uniqueness, plus an e2e battery against a scratch folder (the twin of
    the GitHub `--github` mode). A new connection kind and `create_brain` / `connect_brain`
@@ -220,11 +235,16 @@ the current files. History stays behind in the source repository.
   listing of a large folder needs the same budget and resume rule as any whole-brain index pass.
 - **Media.** `read_media` and attachments read binary files through the store. Confirm Graph and
   Drive downloads fit the Worker's memory and response limits for the media sizes already allowed.
-- **How the coordinator object reaches the files.** `WriteCoordinator.write` takes a
-  `FileBackend` per call. Across Workers RPC that is a stub calling back into the caller for
-  every file, and nothing ties a brain's journal to the storage it describes. Before the object
-  ships, decide whether it builds its own backend from the brain's connection or is bound per
-  brain.
+- **Coordinated writes in a Worker Preview.** A Preview does not bind the objects Worker,
+  because its binding would reach the production namespace (`docs/references.md`), so a
+  Preview has no coordinator and a Graph or Drive brain there cannot write. A preview objects
+  Worker, or an id prefix per pull request, would give it one.
+- **Round trips per file, and content crossing twice.** Each file costs the object a call
+  back to the MCP Worker on top of the backend's own request, steps run one at a time, and a
+  written file's content crosses RPC twice (in the bundle, then back out through `put`), so a
+  5 MB attachment moves about 13 MB and waiting bundles sit in the object's memory. Measure
+  with the Graph store; the remedies are batching the reads, applying writes in parallel, and
+  having `put` name the step rather than carry its content.
 - **Where a store's coordinated write puts what the coordinator reports.** `WriteOpts` carries
   no per-file `expected` versions, so the Graph store has none to pass and each file is checked
   only against what the coordinator reads at the start; and `WriteResult` has no place for a

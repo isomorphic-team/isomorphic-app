@@ -16,77 +16,35 @@
 //      as they left it.
 //   4. A WRITE OVER SOMEONE ELSE'S CHANGE. A file not at the version the caller read is a
 //      conflict before anything is written, and a backend's own precondition failure
-//      mid-bundle rolls back.
+//      mid-bundle rolls back. A conflict that crossed Workers RPC, and so lost its class,
+//      is still a conflict.
+//   5. A JOURNAL THAT DOES NOT READ BACK. The SQL journal the coordinator object keeps
+//      returns what was written, byte for byte, across chunks, including a surrogate pair
+//      on a chunk boundary, and an interrupted bundle recovers from it.
+//   6. A BUNDLE SETTLED ON THE WRONG STORAGE. A journal entry is only settled through a
+//      backend reaching the storage it was written against.
+//
+// pnpm test:objects runs the same coordinator in the Durable Object, over real RPC.
 
+import { DatabaseSync } from 'node:sqlite';
+import { isDeepStrictEqual } from 'node:util';
 import { WriteConflictError } from '../src/lib/brain-repo.ts';
 import {
+	backendFromRpc,
+	chunked,
 	inMemoryWriteCoordinator,
 	memoryJournal,
+	objectWriteCoordinator,
 	recoverJournal,
-	type FileBackend
+	sqlJournal,
+	type FileBackend,
+	type JournalEntry,
+	type SqlRunner
 } from '../src/lib/write-coordinator.ts';
 import { checker, errorOf } from './check.ts';
+import { fakeDrive, gate } from './fake-drive.ts';
 
 const { check, done } = checker('coordinator checks');
-
-// A drive that writes one file at a time. Versions are a counter, as an eTag would be.
-function fakeDrive(initial: Record<string, string | Buffer> = {}) {
-	const files = new Map<string, { bytes: Buffer; version: string }>();
-	let n = 0;
-	const set = (path: string, bytes: Buffer): string => {
-		const version = `v${++n}`;
-		files.set(path, { bytes, version });
-		return version;
-	};
-	for (const [p, c] of Object.entries(initial)) set(p, Buffer.from(c));
-	// Every put and remove: recorded, then the test's hook, then the outage check.
-	const enter = async (op: string, path: string): Promise<void> => {
-		drive.calls.push(`${op} ${path}`);
-		await drive.before(op, path);
-		if (drive.down) throw new Error('drive unavailable');
-	};
-	const drive = {
-		files,
-		calls: [] as string[],
-		down: false,
-		// Runs before each put or remove, after the call is recorded.
-		before: async (_op: string, _path: string): Promise<void> => {},
-		text: (path: string): string | undefined => files.get(path)?.bytes.toString('utf-8'),
-		// An edit from outside Isomorphic.
-		edit: (path: string, content: string | Buffer): string => set(path, Buffer.from(content)),
-		backend: {
-			async read(path, encoding) {
-				if (drive.down) throw new Error('drive unavailable');
-				const f = files.get(path);
-				if (!f) return null;
-				return {
-					content: f.bytes.toString(encoding === 'base64' ? 'base64' : 'utf-8'),
-					version: f.version
-				};
-			},
-			async put(path, file, ifVersion) {
-				await enter('put', path);
-				if ((files.get(path)?.version ?? null) !== ifVersion) throw new WriteConflictError(path);
-				return set(
-					path,
-					Buffer.from(file.content, file.encoding === 'base64' ? 'base64' : 'utf-8')
-				);
-			},
-			async remove(path, ifVersion) {
-				await enter('remove', path);
-				if (files.get(path)?.version !== ifVersion) throw new WriteConflictError(path);
-				files.delete(path);
-			}
-		} satisfies FileBackend
-	};
-	return drive;
-}
-
-const gate = () => {
-	let open!: () => void;
-	const opened = new Promise<void>((r) => (open = r));
-	return { open, opened };
-};
 
 // ---------- 1. one bundle at a time ----------
 {
@@ -447,6 +405,7 @@ async function interrupted() {
 	const drive = fakeDrive({ 'a.md': 'a', 'b.md': 'B', 'c.md': 'c' });
 	const journal = memoryJournal();
 	await journal.open({
+		storage: 'drive:test',
 		message: 'half rolled back',
 		steps: [
 			{ path: 'a.md', intended: { content: 'A' }, prior: { content: 'a', encoding: 'utf-8' } },
@@ -478,6 +437,186 @@ async function interrupted() {
 	check(
 		'an empty journal recovers nothing',
 		(await recoverJournal(journal, fakeDrive().backend)) === undefined
+	);
+}
+
+// ---------- 4. conflicts across RPC ----------
+{
+	// What Workers RPC delivers for a thrown WriteConflictError: a plain Error that keeps
+	// its name and own properties.
+	const crossed = (path: string) =>
+		Object.assign(new Error(`${path} changed since it was read.`), {
+			name: 'WriteConflictError',
+			path
+		});
+	const drive = fakeDrive({ 'a.md': 'a', 'b.md': 'b' });
+	const put = drive.backend.put;
+	const backend: FileBackend = {
+		...drive.backend,
+		async put(path, file, ifVersion) {
+			try {
+				return await put(path, file, ifVersion);
+			} catch (e) {
+				throw e instanceof WriteConflictError ? crossed(e.path) : e;
+			}
+		}
+	};
+	drive.before = async (_op, path) => {
+		if (path === 'b.md') {
+			drive.edit('a.md', 'edited after ours');
+			drive.edit('b.md', 'edited too');
+		}
+	};
+	const journal = memoryJournal();
+	const err = await errorOf(() =>
+		// What the object does with the backend it receives.
+		inMemoryWriteCoordinator(() => journal).write('b', backendFromRpc(backend), {
+			message: 'conflicts over RPC',
+			writes: [
+				{ path: 'a.md', content: 'A' },
+				{ path: 'b.md', content: 'B' }
+			]
+		})
+	);
+	check(
+		'a conflict that lost its class still fails the write',
+		err?.includes('b.md') === true,
+		String(err)
+	);
+	check(
+		'and the rollback still leaves a newer edit in place',
+		drive.text('a.md') === 'edited after ours' && journal.entry === null
+	);
+
+	// The Worker's side of the object: a conflict from the object comes back as the class.
+	const remote = objectWriteCoordinator(() => ({
+		land: async () => {
+			throw crossed('x.md');
+		}
+	}));
+	let caught: unknown;
+	await remote.write('b', drive.backend, { message: 'm' }).catch((e) => (caught = e));
+	check(
+		"the object's conflict reaches the caller as a WriteConflictError",
+		caught instanceof WriteConflictError && caught.path === 'x.md'
+	);
+	const other = await errorOf(() =>
+		objectWriteCoordinator(() => ({
+			land: async () => {
+				throw new Error('object failed');
+			}
+		})).write('b', drive.backend, { message: 'm' })
+	);
+	check('any other error from the object passes through', other === 'object failed');
+}
+
+// ---------- 5. the SQL journal ----------
+function sqlite(): SqlRunner {
+	const db = new DatabaseSync(':memory:');
+	return {
+		// Eager, as a Durable Object's exec is: the statement runs before the cursor is read.
+		exec: (query, ...bindings) => {
+			const rows = db.prepare(query).all(...bindings);
+			return { toArray: () => rows };
+		}
+	};
+}
+
+{
+	check(
+		'content splits into chunks of the given size',
+		chunked('abcdefg', 3).join('|') === 'abc|def|g'
+	);
+	check('empty content is no chunks', chunked('', 3).length === 0);
+	check(
+		'a surrogate pair is never split',
+		chunked('ab\u{1F600}cd', 3).join('|') === 'ab|\u{1F600}c|d',
+		chunked('ab\u{1F600}cd', 3).join('|')
+	);
+
+	const journal = sqlJournal(sqlite(), 3);
+	const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0xff, 0x00, 0xfe, 0x80, 1, 2]).toString(
+		'base64'
+	);
+	const entry: JournalEntry = {
+		storage: 'drive:test',
+		message: 'every kind of step',
+		steps: [
+			{
+				path: 'a.md',
+				intended: { content: 'new text with \u{1F600} across chunks' },
+				prior: { content: 'old', encoding: 'utf-8' }
+			},
+			{ path: 'img.png', intended: { content: png, encoding: 'base64' }, prior: null },
+			{ path: 'empty.md', intended: { content: '' }, prior: { content: '', encoding: 'utf-8' } },
+			{ path: 'gone.png', intended: null, prior: { content: png, encoding: 'base64' } }
+		]
+	};
+	check('an empty SQL journal reads as none', (await journal.read()) === null);
+	await journal.open(entry);
+	const back = await journal.read();
+	check(
+		'the SQL journal reads back what was written',
+		isDeepStrictEqual(back, entry),
+		JSON.stringify(back)
+	);
+	await journal.open({ storage: 'drive:test', message: 'second', steps: [] });
+	check(
+		'opening replaces the entry before it',
+		(await journal.read())?.message === 'second' && (await journal.read())?.steps.length === 0
+	);
+	await journal.close();
+	check('closing empties it', (await journal.read()) === null);
+}
+
+{
+	// The interrupted bundle of section 3, journaled in SQL and recovered by a coordinator
+	// built over the same database, as the object is after a restart.
+	const sql = sqlite();
+	const drive = fakeDrive({ 'a.md': 'a', 'b.md': 'b' });
+	drive.before = async () => {
+		if (drive.calls.length === 2) drive.down = true;
+	};
+	await errorOf(() =>
+		inMemoryWriteCoordinator(() => sqlJournal(sql, 2)).write('b', drive.backend, {
+			message: 'Edit a and b',
+			writes: [
+				{ path: 'a.md', content: 'A \u{1F600}' },
+				{ path: 'b.md', content: 'B \u{1F600}' }
+			]
+		})
+	);
+	drive.down = false;
+	drive.before = async () => {};
+	check(
+		'the SQL journal holds the interrupted bundle',
+		(await sqlJournal(sql).read())?.message === 'Edit a and b'
+	);
+	const res = await inMemoryWriteCoordinator(() => sqlJournal(sql, 2)).write('b', drive.backend, {
+		message: 'next'
+	});
+	check(
+		'and a restarted coordinator completes it from there',
+		res.recovered?.outcome === 'completed' && drive.text('b.md') === 'B \u{1F600}'
+	);
+	check('then closes it', (await sqlJournal(sql).read()) === null);
+}
+
+// ---------- 6. the journal belongs to one storage ----------
+{
+	const { drive, journal } = await interrupted();
+	const elsewhere: FileBackend = { ...drive.backend, storage: 'drive:other' };
+	const err = await errorOf(() =>
+		inMemoryWriteCoordinator(() => journal).write('b', elsewhere, { message: 'next' })
+	);
+	check(
+		'an entry is not settled through a backend reaching other storage',
+		err?.includes('drive:test') === true && err.includes('drive:other'),
+		String(err)
+	);
+	check(
+		'which leaves the files and the journal as they were',
+		drive.text('b.md') === 'b' && journal.entry?.message === 'Edit a and b'
 	);
 }
 

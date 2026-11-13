@@ -33,7 +33,9 @@ Three programs from one `src/`:
 
 - **The MCP Worker** (`src/worker.ts`), a Cloudflare Worker. It serves MCP tools to Claude and
   serves the in-client app UI. Uses D1 for a derived content index and, in multi-tenant mode,
-  for orgs and members. Uses KV for OAuth state. This is paths 2 and 3.
+  for orgs and members. Uses KV for OAuth state. This is paths 2 and 3. It deploys with a
+  second Worker, the **objects Worker** (`src/objects/worker.ts`, named by
+  `OBJECTS_WORKER_NAME`), which holds its Durable Objects and has no public URL.
 - **The local runtime** (`src/local.ts`), a Node server that offers the same content tools over
   a git repository on disk, with no accounts and no cloud anything. This is path 0.
 - **The bootstrap server** (`src/bootstrap.ts`), a Node script you run once. It registers a
@@ -261,6 +263,9 @@ deploy:
 pnpm exec wrangler d1 migrations apply platform-db --remote
 pnpm worker:deploy
 ```
+
+`pnpm worker:deploy` deploys the objects Worker first and then the MCP Worker, which binds it.
+`pnpm setup:config` generates both configs (`wrangler.jsonc` and `wrangler.objects.jsonc`).
 
 Your MCP endpoint is `https://<worker>/mcp`. Hand that URL to your users;
 [`getting-started.md`](getting-started.md) is the page to point them at. If you put it on a

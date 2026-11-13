@@ -27,6 +27,8 @@
 //   - PLATFORM_DB (D1) holds the org model and usage counters. Schema is `migrations/`.
 //   - INDEX_DB (D1, optional) holds the content index. Schema is `migrations-index/`.
 //     Without it the index is in PLATFORM_DB.
+//   - WRITE_COORDINATOR is a Durable Object per brain, implemented in the objects Worker
+//     (src/objects/worker.ts) and bound by script_name. This Worker implements none.
 
 import { McpServer, type RegisteredTool } from '@modelcontextprotocol/server';
 import { indexFor, indexRefs, type BrainIndex, type OpenIndex } from './lib/brain-index.ts';
@@ -38,6 +40,7 @@ import { z } from 'zod';
 import type { OAuthHelpers } from '@cloudflare/workers-oauth-provider';
 import { installationOctokit, tokenOctokit, staticAuth, type AppCreds } from './lib/github.ts';
 import { commitAuthorFor, type BrainLocator, type BrainStore } from './lib/brain-repo.ts';
+import type { WriteCoordinatorObject } from './objects/worker.ts';
 import { githubStore } from './lib/brain-store-github.ts';
 import { platformInstall, provisionOrgForUser } from './lib/provision.ts';
 import { ensureStaticTenant, STATIC_USER_ID } from './lib/static-tenant.ts';
@@ -200,6 +203,9 @@ interface Env {
 	PLATFORM_DB: D1Database;
 	// The content index's own database. Optional: without it the index uses PLATFORM_DB.
 	INDEX_DB?: D1Database;
+	// The write coordinator, one object per brain (src/lib/write-coordinator.ts), in the
+	// objects Worker. Unset in a Worker Preview, whose config carries no Durable Object.
+	WRITE_COORDINATOR?: DurableObjectNamespace<WriteCoordinatorObject>;
 
 	// Product feedback (submit_feedback). FEEDBACK_REPO is the "owner/repo" of the
 	// tracker that receives reports; FEEDBACK_TOKEN is a separate narrowly scoped
@@ -1456,13 +1462,30 @@ async function handleOrgConnectCallback(
 	}
 }
 
+// The object /health pings. Its name is not a brain id, and ping() reads no storage.
+async function coordinatorReachable(
+	ns: DurableObjectNamespace<WriteCoordinatorObject> | undefined
+): Promise<boolean> {
+	if (!ns) return true;
+	try {
+		return (await ns.get(ns.idFromName('health')).ping()) === 'ok';
+	} catch {
+		return false;
+	}
+}
+
 export default {
 	async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
 		const url = new URL(request.url);
 
-		// Health check, no auth — useful for poking the deploy.
+		// Health check, no auth. The deploy smoke reads it, so it also checks that the
+		// write coordinator's binding reaches a running objects Worker.
 		if (url.pathname === '/health') {
-			return new Response('ok', { status: 200, headers: { 'content-type': 'text/plain' } });
+			const ok = await coordinatorReachable(env.WRITE_COORDINATOR);
+			return new Response(ok ? 'ok' : 'write coordinator unreachable', {
+				status: ok ? 200 : 503,
+				headers: { 'content-type': 'text/plain' }
+			});
 		}
 
 		// GitHub App post-install redirect (the App's Setup URL). GitHub sends the

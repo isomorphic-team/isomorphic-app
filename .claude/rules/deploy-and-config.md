@@ -1,6 +1,8 @@
 ---
 paths:
   - "wrangler.template.jsonc"
+  - "wrangler.objects.template.jsonc"
+  - "src/objects/**"
   - "scripts/{setup-config,smoke,test-smoke,preview,test-preview,regen-pr,doctor}.ts"
   - "src/persist.ts"
   - ".github/workflows/**"
@@ -23,8 +25,10 @@ Runbooks: `docs/ops/deploy-and-rollback.md`, `docs/ops/d1-migrations.md`.
 ## `wrangler.jsonc` is GENERATED
 
 `wrangler.jsonc` is **gitignored and generated** from the committed `wrangler.template.jsonc`
-by `pnpm setup:config` (`scripts/setup-config.ts`). Never edit it (it is overwritten, and
-the PreToolUse hook refuses the edit); never commit it (it is one deployment's identity).
+by `pnpm setup:config` (`scripts/setup-config.ts`), and so is `wrangler.objects.jsonc`, the
+objects Worker's, from `wrangler.objects.template.jsonc`. Never edit them (they are
+overwritten, and the PreToolUse hook refuses the edit); never commit them (they are one
+deployment's identity).
 
 - **Why:** Wrangler will not interpolate env vars into resource bindings, so a config carries
   literal KV/D1 ids. Committed, they leak one deployment's identity and send every fresh clone's
@@ -53,15 +57,36 @@ the PreToolUse hook refuses the edit); never commit it (it is one deployment's i
   entry with `custom_domain: true` makes `wrangler dev` rewrite `request.url`'s host and breaks
   the OAuth provider's host-based routing.
 - The DO `migrations` array (`v1` new / `v2` deleted `IsomorphicMindMcp`) is **append-only** by
-  Cloudflare's rules. Neither entry may be removed. There is no Durable Object binding.
+  Cloudflare's rules. Neither entry may be removed.
+
+## The objects Worker
+
+The MCP Worker implements no Durable Object (below). The classes live in the **objects Worker**
+(`src/objects/worker.ts`, `wrangler.objects.template.jsonc`, name `OBJECTS_WORKER_NAME`), which
+the MCP Worker binds by `script_name`: today `WRITE_COORDINATOR`, the write coordinator per
+brain. `pnpm test:wiring` fails on a class or a value import of `src/objects/` anywhere else;
+`pnpm test:objects` runs both Workers in workerd.
+
+- **It has no public URL** (`workers_dev` and `preview_urls` off) and holds no credential: the
+  MCP Worker passes each call the functions that reach a brain's files.
+- **It deploys first, with `wrangler deploy`**, which is the only command that applies its
+  Durable Object `migrations` (append-only, like the MCP Worker's). `deploy.yml` records its
+  live version, deploys it, and rolls it back with the MCP Worker on any later failure;
+  `pnpm worker:deploy` deploys both in order. It gets no preview URL, so nothing checks it
+  before it takes traffic. `/health` pings it, so the smoke checks reach it afterwards.
+- **So its RPC methods and stored tables only ever grow.** The MCP Worker version live during a
+  deploy, and the one a rollback returns to, call the new objects Worker.
+- **Worker Previews do not bind it** (`previewConfig` drops `durable_objects`): a Preview's
+  binding would reach the production namespace. A Preview runs without the write coordinator,
+  and its `/health` skips the ping.
 
 ## Deploys are versioned, and roll themselves back
 
-`deploy.yml` does **not** call `wrangler deploy` (it uploads and routes traffic in one step,
-leaving nothing to fall back to). It records the live version id, `versions upload`s (no
-traffic), smoke checks the version's preview URL, `versions deploy <id>@100%`, smoke checks
-production, and on failure `wrangler rollback`s to the recorded id and fails red. Migrations
-apply in the step before, schema first.
+`deploy.yml` does **not** call `wrangler deploy` for the MCP Worker (it uploads and routes
+traffic in one step, leaving nothing to fall back to). After the objects Worker, it records the
+live version id, `versions upload`s (no traffic), smoke checks the version's preview URL,
+`versions deploy <id>@100%`, smoke checks production, and on failure `wrangler rollback`s both
+Workers to their recorded ids and fails red. Migrations apply in the step before, schema first.
 
 - **The checks live in `scripts/smoke.ts`, pinned by `pnpm test:smoke`.** They decide whether a
   merge stays in production, and fail expensively in both directions. Five unauthenticated

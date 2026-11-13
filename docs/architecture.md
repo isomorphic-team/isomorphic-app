@@ -13,6 +13,11 @@ the reference. Read this first, then the rules file covering whatever you are ch
 | **The local runtime**    | Node               | `src/local.ts`     | One person, one brain on disk, no accounts    |
 | **The bootstrap server** | Node               | `src/bootstrap.ts` | One-shot GitHub App registration              |
 
+The MCP Worker deploys with the **objects Worker** (`src/objects/worker.ts`), which implements
+its Durable Objects: a Worker implementing one gets no preview URLs, and the deploy checks each
+version on its preview URL before promoting it. The MCP Worker binds the objects Worker's
+classes by `script_name`; today that is the write coordinator, one object per brain.
+
 `src/lib/` is imported by the Worker, so it may not import `node:*`. `pnpm typecheck` runs four
 tsconfigs (node, worker, app, tests) to catch a leak. Node-only code goes in `src/local/`,
 `src/bootstrap.ts`, or a Node-only sibling.

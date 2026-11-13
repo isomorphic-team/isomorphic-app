@@ -23,8 +23,8 @@ pnpm try <folder>       # START HERE: MCP over a git repo on disk, no accounts (
 pnpm doctor             # what this checkout has, what it is missing, what to run next
 pnpm web:dev            # seed the demo brains and serve the app as a web page (--reset re-seeds)
 pnpm app:dev            # the MCP App UI over the AppBridge harness, http://localhost:5175
-pnpm setup:config       # generate wrangler.jsonc (needed before worker:dev, worker:types, db:*)
-pnpm worker:dev         # `wrangler dev` for the MCP Worker, http://localhost:8787
+pnpm setup:config       # generate the wrangler configs (before worker:dev, worker:types, db:*)
+pnpm worker:dev         # `wrangler dev` for the MCP and objects Workers, http://localhost:8787
 pnpm bootstrap          # register the GitHub App and scaffold a brain (http://localhost:3000)
 pnpm gen:app            # codegen the ui:// app bundle (after editing app/ OR any src/lib/ file it imports)
 pnpm gen:templates      # codegen brain-template/ into src/lib/brain-template.generated.ts
@@ -65,8 +65,8 @@ Walkthrough: [`docs/architecture.md`](docs/architecture.md).
    Streamable HTTP. Each request builds a fresh `McpServer` behind the OAuth provider and
    answers the same POST with JSON (no SSE, no session), in either protocol era via `serveMcp`
    (`src/lib/mcp-serve.ts`). The per-request `McpSession` holds brain resolution and all tool
-   registration (`buildServer()`). The Worker also serves the web app (`/b/...`), `/health`,
-   the OAuth and Auth.js routes, and the GitHub install callback. There is no Durable Object.
+   registration (`buildServer()`). It also serves the web app (`/b/...`), `/health`, OAuth and
+   Auth.js, and the GitHub install callback. It binds Durable Objects; it implements none.
 3. **Local runtime** (`src/local.ts`): Node, `pnpm try <folder>`. The same content tools over a
    **git repository on disk** through the fs `BrainStore` (`src/local/brain-store-fs.ts`), D1
    shimmed over `node:sqlite` (`src/local/d1-sqlite.ts`). Loopback only, no auth, no members,
@@ -146,10 +146,10 @@ agent that opens this repo. When they drift, an agent acts on the drift with con
 ## Agent tooling
 
 - **Hooks** (`.claude/settings.json`, logic in `scripts/agent-hooks.ts`, pinned by
-  `pnpm test:hooks`). A PreToolUse hook refuses edits to `wrangler.jsonc`, to `*.generated.ts`
-  and to committed migrations, and refuses remote D1 writes and force-adding `.dev.vars` or
-  `wrangler.jsonc`. The Stop hook reruns `gen:app` / `gen:templates` when their sources changed
-  and hands the turn back if that changed a file. Reading `.dev.vars` is denied.
+  `pnpm test:hooks`). A PreToolUse hook refuses edits to the generated wrangler configs, to
+  `*.generated.ts` and to committed migrations, and refuses remote D1 writes and force-adding
+  `.dev.vars` or a generated config. The Stop hook reruns `gen:app` / `gen:templates` when
+  their sources changed and hands the turn back if that changed a file. `.dev.vars` is unreadable.
 - **Skills** (`.claude/skills/`): `add-tool`, `add-battery`, `new-migration`, `ui-baselines`,
   and the user-invoked `regen-pr`. `pnpm test:docs` checks them like the rules.
 
@@ -181,7 +181,7 @@ agent that opens this repo. When they drift, an agent acts on the drift with con
 Each is stated in full in its rules file; these hold even when that file has not loaded.
 
 - **Never implement a Durable Object class in this Worker** (it loses preview URLs and the
-  smoke; binding one in another Worker does not) or add a `routes` block to the template.
+  smoke): classes go in `src/objects/`, the objects Worker, which this one binds. No `routes` block.
 - **Never widen the platform App's permissions** in `src/manifest.ts`.
 - **Don't enable CodeQL default setup** in repository settings.
 - **Don't re-add `update_brain`, a `manage_*` tool, or `set_fields`**, and don't grow the tool

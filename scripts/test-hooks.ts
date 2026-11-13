@@ -29,13 +29,16 @@ import {
 	repoRelative
 } from './agent-hooks.ts';
 import { checker } from './check.ts';
+import { GENERATED_CONFIGS, WRANGLER_CONFIGS } from './wrangler-configs.ts';
 
 const { check, done } = checker('hooks checks');
 const root = fileURLToPath(new URL('..', import.meta.url));
 
 console.log('\nedits: generated files and committed migrations are refused');
-check('wrangler.jsonc', refuseEdit('wrangler.jsonc', false) !== null);
-check('the template is editable', refuseEdit('wrangler.template.jsonc', true) === null);
+for (const c of WRANGLER_CONFIGS) {
+	check(c.output, refuseEdit(c.output, false)?.includes(c.template) === true);
+	check(`${c.template} is editable`, refuseEdit(c.template, true) === null);
+}
 check('the app bundle', refuseEdit('src/lib/app-bundle.generated.ts', true) !== null);
 check('the view registry', refuseEdit('app/views/registry.generated.ts', true) !== null);
 check(
@@ -80,14 +83,17 @@ console.log('\npaths: refuseEdit sees the form git prints, on every platform');
 }
 
 console.log('\ncommands: remote D1 writes and force-added secrets are refused');
-const refused = [
+const refused: string[] = [
 	'wrangler d1 migrations apply platform-db --remote',
 	'pnpm exec wrangler d1 execute platform-db --remote --command "DELETE FROM x"',
 	'npx wrangler d1 execute platform-db --command "select 1" --remote',
 	'pnpm test && wrangler d1 migrations apply platform-db --remote',
-	'git add -f wrangler.jsonc',
 	'git add --force .dev.vars src/x.ts'
 ];
+refused.push(
+	...GENERATED_CONFIGS.map((f) => `${'git add -f'} ${f}`),
+	`${'git add -f'} ./${GENERATED_CONFIGS[1]}`
+);
 for (const c of refused) check(`refuses: ${c}`, refuseCommand(c) !== null);
 const allowed = [
 	'pnpm db:migrate',
@@ -96,6 +102,7 @@ const allowed = [
 	'wrangler d1 execute platform-db --local --command "select 1"',
 	'pnpm setup:config',
 	'git add wrangler.template.jsonc',
+	'git add wrangler.objects.template.jsonc',
 	'git add -f .claude/settings.json',
 	'git add -A && git commit -m "Generated wrangler.jsonc stays ignored"',
 	'grep -rn -- "--remote" docs/ops/d1-migrations.md'

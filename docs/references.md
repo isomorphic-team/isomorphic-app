@@ -93,6 +93,7 @@ We use `@modelcontextprotocol/ext-apps`: `/server` (registerAppTool / registerAp
 - Wrangler: https://developers.cloudflare.com/workers/wrangler/
 - **Gradual deployments / versions / rollback:** https://developers.cloudflare.com/workers/configuration/versions-and-deployments/
 - **Preview URLs:** https://developers.cloudflare.com/workers/configuration/previews/
+- **Durable Objects limits:** https://developers.cloudflare.com/durable-objects/platform/limits/
 - **D1 supported SQLite extensions:** https://developers.cloudflare.com/d1/sql-api/sql-statements/
 - **D1 import/export limits:** https://developers.cloudflare.com/d1/best-practices/import-export-data/
 
@@ -154,6 +155,22 @@ Non-obvious things confirmed against the sources above (with the "why it bit us"
   (https://developers.cloudflare.com/workers/versions-and-deployments/version-urls/). A
   Preview binding to the host reaches the host's production namespace, so isolating a pull
   request's objects takes a separate host or an id prefix.
+
+- **A SQLite-backed Durable Object caps one string, BLOB or row at 8 MB, not 2 MB.** Checked
+  2026-11-13 against https://developers.cloudflare.com/durable-objects/platform/limits/ (page
+  updated 2026-11-07): 8 MB per string, BLOB or row, and per key plus value; 100 KB per SQL
+  statement; 100 bound parameters per query; 10 GB per object. Local workerd does not enforce
+  the row cap (a 2.1 MB string stored fine under wrangler 4.160), so only the documented number
+  bounds `sqlJournal`'s chunks.
+
+- **Over Workers RPC, functions in a plain object cross as stubs, and a thrown error loses its
+  class.** Verified 2026-11-13 under wrangler 4.160 (workerd 1.20261110) between two Workers
+  bound by `script_name`, now pinned by `pnpm test:objects`. An object literal whose properties
+  are functions arrives with callable stubs that run in the caller; a string property arrives
+  by value. An error thrown on either side arrives as a plain `Error` that keeps `message`,
+  `name` and its own enumerable properties (`path` here) but fails `instanceof` its class. So a
+  conflict is rebuilt at both ends of the coordinator object's calls (`backendFromRpc`,
+  `objectWriteCoordinator`).
 
 - **Worker Previews (`wrangler preview`, open beta) are what `preview.yml` deploys, and they
   are not version URLs.** Verified against the docs and wrangler 4.142 on 2026-10-01:

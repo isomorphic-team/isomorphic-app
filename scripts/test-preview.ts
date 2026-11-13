@@ -137,10 +137,19 @@ console.log('\nthe previews block carries every binding the template declares');
 		'secrets_store_secrets',
 		'ratelimits'
 	];
-	const used = BINDING_KEYS.filter((key) => key in template);
+	// Not carried, deliberately: a Durable Object binding names the objects Worker, which a
+	// Preview does not have (previewConfig).
+	const DROPPED = ['durable_objects'];
+	const used = BINDING_KEYS.filter((key) => key in template && !DROPPED.includes(key));
 	const missing = used.filter((key) => !(key in previews));
 	check('the template parses and declares bindings', used.length > 0, JSON.stringify(used));
 	check('every one is carried into previews', missing.length === 0, JSON.stringify(missing));
+	check(
+		'the template binds a Durable Object, and the preview config drops it everywhere',
+		'durable_objects' in template &&
+			!('durable_objects' in config) &&
+			!('durable_objects' in previews)
+	);
 	check(
 		'vars match the top level',
 		JSON.stringify(previews.vars) === JSON.stringify(template.vars)
