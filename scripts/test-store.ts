@@ -630,21 +630,9 @@ for (const backend of BACKENDS) {
 			if (bucket.failOn && key.includes(bucket.failOn)) throw new Error('bucket down');
 			held.set(key, typeof value === 'string' ? new TextEncoder().encode(value) : value);
 		},
-		async list({ prefix, delimiter }) {
+		async list({ prefix }) {
 			const keys = [...held.keys()].filter((k) => k.startsWith(prefix)).sort();
-			if (!delimiter)
-				return { objects: keys.map((key) => ({ key })), delimitedPrefixes: [], truncated: false };
-			const direct = keys.filter((k) => !k.slice(prefix.length).includes(delimiter));
-			const below = new Set(
-				keys
-					.filter((k) => k.slice(prefix.length).includes(delimiter))
-					.map((k) => prefix + k.slice(prefix.length).split(delimiter)[0] + delimiter)
-			);
-			return {
-				objects: direct.map((key) => ({ key })),
-				delimitedPrefixes: [...below],
-				truncated: false
-			};
+			return { objects: keys.map((key) => ({ key })), truncated: false };
 		},
 		async delete(keys) {
 			for (const k of keys) held.delete(k);
@@ -653,8 +641,9 @@ for (const backend of BACKENDS) {
 	const keys = await generateBackupKeys();
 	const publicKey = await importBackupPublicKey(keys.publicKey);
 	const get = async (key: string) => held.get(key) ?? null;
+	const privateKey = await importBackupPrivateKey(keys.privateKey);
 	const restored = async (id?: string) => {
-		const backup = await readBackup(get, await importBackupPrivateKey(keys.privateKey), 'b1', id);
+		const backup = await readBackup(get, privateKey, 'b1', id);
 		const out = new Map<string, string>();
 		for await (const f of backup.files()) out.set(f.path, Buffer.from(f.bytes).toString('base64'));
 		return { manifest: backup.manifest, out };
@@ -688,7 +677,7 @@ for (const backend of BACKENDS) {
 
 	// The second part fails: the run keeps its place.
 	bucket.failOn = 'part-00002';
-	const failed = await errorOf(() => backupStep(db, bucket, publicKey, 'b1', rev, t0));
+	const failed = await errorOf(() => backupStep(db, files, bucket, publicKey, 'b1', rev, t0));
 	check(
 		'backup: a step that fails leaves no manifest, and the brain due at once',
 		failed !== undefined &&
@@ -701,11 +690,11 @@ for (const backend of BACKENDS) {
 		writes: [{ path: 'wiki/later.md', content: 'later' }]
 	});
 	bucket.failOn = undefined;
-	const step = await backupStep(db, bucket, publicKey, 'b1', files.revision(), t0 + 10);
+	const step = await backupStep(db, files, bucket, publicKey, 'b1', files.revision(), t0 + 10);
 	const first = await restored();
 	check(
 		'backup: the retry finishes the same backup, in more than one part',
-		step.done && step.manifest!.parts > 1 && step.manifest!.revision === rev,
+		step !== null && step.parts > 1 && step.revision === rev,
 		JSON.stringify(step)
 	);
 	check(
@@ -727,7 +716,6 @@ for (const backend of BACKENDS) {
 			})
 	);
 	const [partName, partBytes] = stored[0];
-	const privateKey = await importBackupPrivateKey(keys.privateKey);
 	check(
 		'backup: a part does not open under another name, or with a byte changed',
 		(await errorOf(() => openPart(privateKey, stored[1][0], partBytes))) !== undefined &&
@@ -746,10 +734,18 @@ for (const backend of BACKENDS) {
 		'backup: the write that landed meanwhile is due a day after the last backup',
 		backupDue(db, files.revision(), t1 + 1, 24 * HOUR) === t1 + 24 * HOUR
 	);
-	const second = await backupStep(db, bucket, publicKey, 'b1', files.revision(), t1 + 24 * HOUR);
+	const second = await backupStep(
+		db,
+		files,
+		bucket,
+		publicKey,
+		'b1',
+		files.revision(),
+		t1 + 24 * HOUR
+	);
 	check(
 		'backup: the next backup has it, and the brain is not due again until it changes',
-		second.done &&
+		second !== null &&
 			(await restored()).out.has('wiki/later.md') &&
 			!(await restored(first.manifest.id)).out.has('wiki/later.md') &&
 			backupDue(db, files.revision(), t1 + 72 * HOUR, 24 * HOUR) === null
@@ -762,10 +758,19 @@ for (const backend of BACKENDS) {
 			message: `Edit ${i}`,
 			writes: [{ path: 'wiki/a.md', content: `${i}` }]
 		});
-		await backupStep(db, bucket, publicKey, 'b1', files.revision(), t1 + (24 + i) * HOUR * 24);
+		await backupStep(
+			db,
+			files,
+			bucket,
+			publicKey,
+			'b1',
+			files.revision(),
+			t1 + (24 + i) * HOUR * 24
+		);
 	}
-	const kept = (await bucket.list({ prefix: backupPrefix('b1'), delimiter: '/' }))
-		.delimitedPrefixes;
+	const kept = [...held.keys()].filter(
+		(k) => k.startsWith(backupPrefix('b1')) && k.endsWith('/manifest.json')
+	);
 	check(
 		'backup: old backups are pruned to the newest few, whole',
 		kept.length === BACKUPS_KEPT &&
@@ -786,7 +791,7 @@ for (const backend of BACKENDS) {
 	const done = await restoreInto(folderReader(bucketDir), keys.privateKey, 'b1', outDir);
 	check(
 		'restore: the folder holds the brain, bytes included',
-		done.written === 6 &&
+		done.files === 6 &&
 			readFileSync(join(outDir, 'wiki/a.md'), 'utf8') === '16' &&
 			readFileSync(join(outDir, 'assets/dot.png')).toString('base64') === png
 	);

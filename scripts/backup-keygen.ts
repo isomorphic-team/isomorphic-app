@@ -7,8 +7,9 @@
 // is needed only to restore one: keep it off the deployment and out of any repository.
 
 import { existsSync, writeFileSync } from 'node:fs';
-import { relative, resolve } from 'node:path';
+import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { repoRelative } from './agent-hooks.ts';
 import { generateBackupKeys } from '../src/lib/brain-backup.ts';
 
 const [file] = process.argv.slice(2);
@@ -18,7 +19,7 @@ if (!file) {
 }
 const target = resolve(file);
 const root = fileURLToPath(new URL('..', import.meta.url));
-if (!relative(root, target).startsWith('..')) {
+if (repoRelative(root, target) !== null) {
 	console.error('Write the private key outside this repository.');
 	process.exit(1);
 }

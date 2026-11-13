@@ -273,13 +273,13 @@ check(
 // The objects template's backup bucket, the same way.
 {
 	const { optionalBlock } = await import('./optional-block.ts');
+	const { parseJsonc } = await import('./preview.ts');
 	const template = readFileSync(new URL('wrangler.objects.template.jsonc', root), 'utf8');
 	const config = (keep: boolean) =>
-		JSON.parse(
-			optionalBlock(template, 'backups', keep)
-				.replace(/^\s*\/\/.*$/gm, '')
-				.replace(/"__[A-Z0-9_]+__"/g, '"x"')
-		) as { r2_buckets?: { binding: string }[]; vars: Record<string, string> };
+		parseJsonc(optionalBlock(template, 'backups', keep)) as {
+			r2_buckets?: { binding: string }[];
+			vars: Record<string, string>;
+		};
 	console.log(`\nthe objects template's backup bucket is optional`);
 	check('kept, the config binds BACKUPS', config(true).r2_buckets?.[0].binding === 'BACKUPS');
 	check(

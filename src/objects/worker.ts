@@ -74,36 +74,37 @@ export class BrainFilesObject extends DurableObject<Env> implements SqlFilesApi 
 		sql: this.ctx.storage.sql,
 		transaction: (fn) => this.ctx.storage.transactionSync(fn)
 	};
-	private readonly files = sqlFiles(this.db);
+	private readonly store = sqlFiles(this.db);
 	// Whether this instance has looked at its alarm. An alarm wakes the object through
 	// the constructor and no method below, so arming here cannot push its own alarm back.
 	private armed = false;
 
-	revision() {
+	// The storage, for a call from the MCP Worker: the first one looks at the alarm.
+	private get files() {
 		this.arm();
+		return this.store;
+	}
+
+	revision() {
 		return this.files.revision();
 	}
 	list(extension: string) {
-		this.arm();
 		return this.files.list(extension);
 	}
 	read(path: string, at?: string) {
-		this.arm();
 		return this.files.read(path, at);
 	}
 	readMany(paths: string[]) {
-		this.arm();
 		return this.files.readMany(paths);
 	}
 	write(opts: SqlWrite) {
+		const result = this.store.write(opts);
 		// A write is what makes a backup due, so it always looks.
 		this.armed = false;
-		const result = this.files.write(opts);
 		this.arm();
 		return result;
 	}
 	history(limit: number, path?: string) {
-		this.arm();
 		return this.files.history(limit, path);
 	}
 
@@ -124,7 +125,7 @@ export class BrainFilesObject extends DurableObject<Env> implements SqlFilesApi 
 		this.armed = true;
 		const backups = this.backups;
 		if (!backups) return;
-		const due = backupDue(this.db, this.files.revision(), Date.now(), backups.intervalMs);
+		const due = backupDue(this.db, this.store.revision(), Date.now(), backups.intervalMs);
 		if (due === null) return;
 		this.ctx.waitUntil(
 			this.ctx.storage.getAlarm().then((set) => {
@@ -141,22 +142,21 @@ export class BrainFilesObject extends DurableObject<Env> implements SqlFilesApi 
 		const brain = this.ctx.id.name;
 		if (!backups || !brain) return;
 		const now = Date.now();
-		const revision = this.files.revision();
+		const revision = this.store.revision();
 		const due = backupDue(this.db, revision, now, backups.intervalMs);
 		if (due === null) return;
 		// Fired early or twice: wait for the time the backup is due.
 		if (due > now) return this.ctx.storage.setAlarm(due);
-		const step = await backupStep(
+		const finished = await backupStep(
 			this.db,
+			this.store,
 			backups.bucket,
 			await importBackupPublicKey(backups.publicKey),
 			brain,
 			revision,
 			now
 		);
-		if (!step.done) await this.ctx.storage.setAlarm(Date.now());
-		// Writes that landed while this ran are due their own backup.
-		else this.armed = false;
+		if (!finished) await this.ctx.storage.setAlarm(Date.now());
 	}
 }
 

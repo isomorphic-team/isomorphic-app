@@ -12,12 +12,12 @@
 //   latest.json           a copy of the newest manifest
 // The manifests are plain JSON and name no file.
 
-import { snapshotPage, type SnapshotFile } from './brain-store-sql.ts';
+import { EMPTY_REVISION, type SnapshotFile, type SqlFilesLocal } from './brain-store-sql.ts';
 import { base64FromBytes, bytesFromBase64 } from './media.ts';
 import type { SqlDatabase } from './sql-storage.ts';
 
 // A brain is backed up at most this often, and only when it has changed.
-export const BACKUP_INTERVAL_HOURS = 24;
+const BACKUP_INTERVAL_HOURS = 24;
 // How long after a change a backup waits, so a run of writes makes one backup.
 const SETTLE_MS = 10 * 60 * 1000;
 // Content per part, as stored.
@@ -31,17 +31,19 @@ const MAGIC = new TextEncoder().encode('ISOB1');
 const IV_BYTES = 12;
 const RSA = { name: 'RSA-OAEP', hash: 'SHA-256' } as const;
 
-// What the bucket must do: the part of an R2 bucket binding this uses.
+// What the bucket must do: the part of an R2 bucket binding this uses. It cannot read.
 export interface BackupBucket {
 	put(key: string, value: Uint8Array | string): Promise<unknown>;
-	list(opts: { prefix: string; delimiter?: string; cursor?: string }): Promise<{
+	list(opts: { prefix: string; cursor?: string }): Promise<{
 		objects: { key: string }[];
-		delimitedPrefixes: string[];
 		truncated: boolean;
 		cursor?: string;
 	}>;
 	delete(keys: string[]): Promise<unknown>;
 }
+
+// Reads one object of the bucket, or null when it is absent.
+export type BackupReader = (key: string) => Promise<Uint8Array | null>;
 
 export interface BackupManifest {
 	format: 1;
@@ -54,26 +56,17 @@ export interface BackupManifest {
 	bytes: number;
 }
 
-interface BackupRun {
-	id: string;
-	revision: string;
-	startedAt: string;
-	// Every file up to and including this path, in path order, is in a part.
-	after: string | null;
-	parts: number;
-	files: number;
-	bytes: number;
-}
-
 interface BackupState {
-	last?: { id: string; revision: string; at: number };
-	run?: BackupRun;
+	last?: { revision: string; at: number };
+	// The backup being written. Every file up to and including `after`, in path order,
+	// is in a part.
+	run?: { manifest: BackupManifest; after: string | null };
 }
 
 export const backupPrefix = (brain: string): string => `brains/${brain}/`;
-export const partKey = (brain: string, id: string, part: number): string =>
+const partKey = (brain: string, id: string, part: number): string =>
 	`${backupPrefix(brain)}${id}/part-${String(part).padStart(5, '0')}`;
-export const manifestKey = (brain: string, id: string): string =>
+const manifestKey = (brain: string, id: string): string =>
 	`${backupPrefix(brain)}${id}/manifest.json`;
 export const latestKey = (brain: string): string => `${backupPrefix(brain)}latest.json`;
 
@@ -119,7 +112,7 @@ export async function generateBackupKeys(): Promise<{ publicKey: string; private
 // Each part has an AES-256-GCM key of its own, wrapped to the public key. `name` (the
 // part's key in the bucket) is authenticated with it, so a part cannot stand in for
 // another.
-export async function sealPart(
+async function sealPart(
 	publicKey: CryptoKey,
 	name: string,
 	plain: Uint8Array
@@ -180,7 +173,7 @@ export async function openPart(
 }
 
 // The files of an opened part, each as its bytes.
-export function partFiles(plain: Uint8Array): { path: string; bytes: Uint8Array }[] {
+function partFiles(plain: Uint8Array): { path: string; bytes: Uint8Array }[] {
 	const { files } = JSON.parse(new TextDecoder().decode(plain)) as { files: SnapshotFile[] };
 	return files.map((f) => ({
 		path: f.path,
@@ -190,23 +183,20 @@ export function partFiles(plain: Uint8Array): { path: string; bytes: Uint8Array 
 
 // ---------- the run ----------
 
-function stateOf(db: SqlDatabase) {
+function readState(db: SqlDatabase): BackupState {
 	db.sql.exec(
 		'CREATE TABLE IF NOT EXISTS backup_state (id INTEGER PRIMARY KEY CHECK (id = 1), state TEXT NOT NULL)'
 	);
-	return {
-		read(): BackupState {
-			const row = db.sql.exec('SELECT state FROM backup_state WHERE id = 1').toArray()[0] as
-				{ state: string } | undefined;
-			return row ? (JSON.parse(row.state) as BackupState) : {};
-		},
-		save(state: BackupState): void {
-			db.sql.exec(
-				'INSERT OR REPLACE INTO backup_state (id, state) VALUES (1, ?)',
-				JSON.stringify(state)
-			);
-		}
-	};
+	const row = db.sql.exec('SELECT state FROM backup_state WHERE id = 1').toArray()[0] as
+		{ state: string } | undefined;
+	return row ? (JSON.parse(row.state) as BackupState) : {};
+}
+
+function saveState(db: SqlDatabase, state: BackupState): void {
+	db.sql.exec(
+		'INSERT OR REPLACE INTO backup_state (id, state) VALUES (1, ?)',
+		JSON.stringify(state)
+	);
 }
 
 // BACKUP_INTERVAL_HOURS as configured, in milliseconds. Anything that is not a number
@@ -224,9 +214,9 @@ export function backupDue(
 	now: number,
 	intervalMs: number
 ): number | null {
-	const state = stateOf(db).read();
+	const state = readState(db);
 	if (state.run) return now;
-	if (revision === '0' || state.last?.revision === revision) return null;
+	if (revision === EMPTY_REVISION || state.last?.revision === revision) return null;
 	const settled = now + Math.min(SETTLE_MS, intervalMs);
 	return state.last ? Math.max(settled, state.last.at + intervalMs) : settled;
 }
@@ -234,90 +224,87 @@ export function backupDue(
 const backupId = (now: number, revision: string): string =>
 	`${new Date(now).toISOString().replace(/[-:]|\.\d+/g, '')}-r${revision}`;
 
-// One step of backing up `brain` at the revision the run began on. Reads are pinned to
-// that revision, so writes that land between steps are not in this backup; the next one
-// has them. A step that fails is safe to run again: it rewrites the part it was on.
+// One step of backing up `brain` at the revision the run began on, and the manifest
+// once the backup is whole. Reads are pinned to that revision, so writes that land
+// between steps are not in this backup; the next one has them. A step that fails is safe
+// to run again: it rewrites the part it was on. `db` holds the run's place, in the
+// database `files` reads.
 export async function backupStep(
 	db: SqlDatabase,
+	files: Pick<SqlFilesLocal, 'snapshot'>,
 	bucket: BackupBucket,
 	publicKey: CryptoKey,
 	brain: string,
 	revision: string,
 	now: number
-): Promise<{ done: boolean; manifest?: BackupManifest }> {
-	const store = stateOf(db);
-	const state = store.read();
-	const run: BackupRun = state.run ?? {
-		id: backupId(now, revision),
-		revision,
-		startedAt: new Date(now).toISOString(),
-		after: null,
-		parts: 0,
-		files: 0,
-		bytes: 0
+): Promise<BackupManifest | null> {
+	const state = readState(db);
+	const run = state.run ?? {
+		manifest: {
+			format: 1 as const,
+			brain,
+			id: backupId(now, revision),
+			revision,
+			at: new Date(now).toISOString(),
+			parts: 0,
+			files: 0,
+			bytes: 0
+		},
+		after: null
 	};
+	const { manifest } = run;
 	for (let written = 0; written < PARTS_PER_STEP; written++) {
-		const files = snapshotPage(db, run.revision, run.after, PART_BYTES);
-		if (files.length === 0) {
-			const manifest: BackupManifest = {
-				format: 1,
-				brain,
-				id: run.id,
-				revision: run.revision,
-				at: run.startedAt,
-				parts: run.parts,
-				files: run.files,
-				bytes: run.bytes
-			};
+		const page = files.snapshot(manifest.revision, run.after, PART_BYTES);
+		if (page.length === 0) {
 			const text = JSON.stringify(manifest, null, '\t') + '\n';
-			await bucket.put(manifestKey(brain, run.id), text);
+			await bucket.put(manifestKey(brain, manifest.id), text);
 			await bucket.put(latestKey(brain), text);
-			store.save({ last: { id: run.id, revision: run.revision, at: now } });
+			saveState(db, { last: { revision: manifest.revision, at: now } });
 			await pruneBackups(bucket, brain);
-			return { done: true, manifest };
+			return manifest;
 		}
-		const name = partKey(brain, run.id, run.parts + 1);
-		const plain = new TextEncoder().encode(JSON.stringify({ files }));
+		const name = partKey(brain, manifest.id, manifest.parts + 1);
+		const plain = new TextEncoder().encode(JSON.stringify({ files: page }));
 		await bucket.put(name, await sealPart(publicKey, name, plain));
-		run.parts += 1;
-		run.files += files.length;
-		run.bytes += files.reduce((n, f) => n + f.size, 0);
-		run.after = files[files.length - 1].path;
-		store.save({ ...state, run });
+		manifest.parts += 1;
+		manifest.files += page.length;
+		manifest.bytes += page.reduce((n, f) => n + f.size, 0);
+		run.after = page[page.length - 1].path;
+		saveState(db, { ...state, run });
 	}
-	return { done: false };
+	return null;
 }
 
 // Deletes every backup of `brain` older than the newest BACKUPS_KEPT. Ids begin with
 // their time, so their order is their age.
-export async function pruneBackups(bucket: BackupBucket, brain: string): Promise<number> {
-	const listAll = async (prefix: string, delimiter?: string) => {
-		const keys: string[] = [];
-		const prefixes: string[] = [];
-		let cursor: string | undefined;
-		do {
-			const page = await bucket.list({ prefix, delimiter, cursor });
-			keys.push(...page.objects.map((o) => o.key));
-			prefixes.push(...page.delimitedPrefixes);
-			cursor = page.truncated ? page.cursor : undefined;
-		} while (cursor);
-		return { keys, prefixes };
-	};
-	const { prefixes } = await listAll(backupPrefix(brain), '/');
-	const old = prefixes.sort().slice(0, -BACKUPS_KEPT);
-	for (const prefix of old) {
-		const { keys } = await listAll(prefix);
-		for (let i = 0; i < keys.length; i += 1000) await bucket.delete(keys.slice(i, i + 1000));
-	}
-	return old.length;
+async function pruneBackups(bucket: BackupBucket, brain: string): Promise<void> {
+	const prefix = backupPrefix(brain);
+	const byId = new Map<string, string[]>();
+	let cursor: string | undefined;
+	do {
+		const page = await bucket.list({ prefix, cursor });
+		for (const { key } of page.objects) {
+			const rest = key.slice(prefix.length);
+			// `latest.json` sits beside the backups, not in one.
+			if (!rest.includes('/')) continue;
+			const id = rest.split('/')[0];
+			byId.set(id, [...(byId.get(id) ?? []), key]);
+		}
+		cursor = page.truncated ? page.cursor : undefined;
+	} while (cursor);
+	const old = [...byId.keys()]
+		.sort()
+		.slice(0, -BACKUPS_KEPT)
+		.flatMap((id) => byId.get(id)!);
+	for (let i = 0; i < old.length; i += 1000) await bucket.delete(old.slice(i, i + 1000));
 }
 
 // ---------- reading one back ----------
 
 // A backup's manifest (the newest when `id` is omitted) and its files, a part at a
-// time. `get` reads one object of the bucket, or null when it is absent.
+// time.
 export async function readBackup(
-	get: (key: string) => Promise<Uint8Array | null>,
+	get: BackupReader,
 	privateKey: CryptoKey,
 	brain: string,
 	id?: string

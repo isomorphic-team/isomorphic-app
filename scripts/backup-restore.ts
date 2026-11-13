@@ -20,21 +20,20 @@ import { promisify } from 'node:util';
 import {
 	importBackupPrivateKey,
 	readBackup,
-	type BackupManifest
+	type BackupManifest,
+	type BackupReader
 } from '../src/lib/brain-backup.ts';
 
 const exec = promisify(execFile);
 
-export type ObjectReader = (key: string) => Promise<Uint8Array | null>;
-
 export const folderReader =
-	(folder: string): ObjectReader =>
+	(folder: string): BackupReader =>
 	async (key) => {
 		const file = join(folder, key);
 		return existsSync(file) ? new Uint8Array(readFileSync(file)) : null;
 	};
 
-export function bucketReader(bucket: string): ObjectReader {
+function bucketReader(bucket: string): BackupReader {
 	const dir = mkdtempSync(join(tmpdir(), 'isomorphic-restore-'));
 	process.on('exit', () => rmSync(dir, { recursive: true, force: true }));
 	let n = 0;
@@ -51,18 +50,21 @@ export function bucketReader(bucket: string): ObjectReader {
 			if (/not exist|not found|NoSuchKey|404/i.test(output)) return null;
 			throw new Error(`Could not read ${bucket}/${key}:\n${output || (e as Error).message}`);
 		}
-		return existsSync(file) ? new Uint8Array(readFileSync(file)) : null;
+		if (!existsSync(file)) return null;
+		const bytes = new Uint8Array(readFileSync(file));
+		rmSync(file);
+		return bytes;
 	};
 }
 
 // Writes the backup's files under `out`, which must be empty or absent.
 export async function restoreInto(
-	get: ObjectReader,
+	get: BackupReader,
 	privateKeyBase64: string,
 	brain: string,
 	out: string,
 	id?: string
-): Promise<BackupManifest & { written: number }> {
+): Promise<BackupManifest> {
 	const root = resolve(out);
 	if (existsSync(root) && readdirSync(root).length > 0) {
 		throw new Error(`${root} is not empty.`);
@@ -82,7 +84,7 @@ export async function restoreInto(
 			`The backup lists ${backup.manifest.files} files and held ${written}. ${root} is incomplete.`
 		);
 	}
-	return { ...backup.manifest, written };
+	return backup.manifest;
 }
 
 async function main(argv: string[]): Promise<void> {
@@ -101,7 +103,7 @@ async function main(argv: string[]): Promise<void> {
 	const get = from ? folderReader(from) : bucketReader(bucket!);
 	const done = await restoreInto(get, readFileSync(key, 'utf8'), brain, out, arg('backup'));
 	console.log(
-		`Restored ${done.written} files of ${brain} at revision ${done.revision}, backed up ${done.at}, into ${resolve(out)}.`
+		`Restored ${done.files} files of ${brain} at revision ${done.revision}, backed up ${done.at}, into ${resolve(out)}.`
 	);
 }
 
