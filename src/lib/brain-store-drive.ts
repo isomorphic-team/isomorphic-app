@@ -466,7 +466,9 @@ export function driveBrainStore(
 			const extension = o?.extension ?? '.md';
 			const entries: FileEntry[] = [];
 			for (const [path, f] of (await listing()).files) {
-				if (path.endsWith(extension)) entries.push({ path, version: f.version });
+				if (extension === '*' || path.endsWith(extension)) {
+					entries.push({ path, version: f.version });
+				}
 			}
 			return entries.sort((a, b) => a.path.localeCompare(b.path));
 		},

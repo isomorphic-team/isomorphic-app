@@ -613,7 +613,7 @@ export function registerBrainTools(
 					content: [
 						{
 							type: 'text' as const,
-							text: `Created "${display}" and switched to it.${driveConn ? ` Its files are in the Google Drive of ${driveConn.account}, in the folder ${DRIVE_HOME_FOLDER}/${display}.` : ''} It's private to you: share it with share_brain, or make it visible to your whole organization.`
+							text: `Created "${display}" and switched to it.${driveConn ? ` Its files are in the Google Drive of ${driveConn.account}, in the folder ${DRIVE_HOME_FOLDER}/${display}. Change its pages through Isomorphic: Google's own editor rewrites a page's markdown when it saves.` : ''} It's private to you: share it with share_brain, or make it visible to your whole organization.`
 						}
 					],
 					structuredContent: {

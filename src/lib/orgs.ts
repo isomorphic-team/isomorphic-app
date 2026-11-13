@@ -1492,7 +1492,9 @@ export function matchOrg(
 	const q = query.trim().toLowerCase();
 	if (!q) return {};
 	const handles = (o: AccessibleOrg) =>
-		[o.org.org_id, o.org.name, o.storage_account ?? ''].filter(Boolean).map((s) => s.toLowerCase());
+		[o.org.org_id, o.org.name, orgLabel(o.org), o.storage_account ?? '']
+			.filter(Boolean)
+			.map((s) => s.toLowerCase());
 	const exact = orgs.find((o) => handles(o).includes(q));
 	if (exact) return { org: exact };
 	const subs = orgs.filter((o) => handles(o).some((h) => h.includes(q)));

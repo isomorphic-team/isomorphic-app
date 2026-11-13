@@ -22,6 +22,7 @@ import {
 	touchesToolsArea,
 	toolRosterNote,
 	refNote,
+	activityText,
 	MAX_REFS_LISTED,
 	describeChange,
 	type Change
@@ -490,5 +491,34 @@ check(
 		'1234+ada@users.noreply.github.com',
 	'a stricter email pattern here would silently unattribute every GitHub-identity commit'
 );
+
+{
+	const entry = {
+		date: '2026-01-02T03:04:05Z',
+		authorName: 'Ada',
+		message: 'Edit X',
+		shortSha: 'abc1234'
+	};
+	const base = { scope: 'the brain', logPath: 'wiki/log.md' };
+	const none = activityText({ ...base, entries: [], history: false });
+	check(
+		'activity: a store without history says so and points at the log',
+		/keeps no change history/.test(none) &&
+			none.includes('wiki/log.md') &&
+			!/No recorded/.test(none),
+		none
+	);
+	check(
+		'activity: a store with history and no changes says none are recorded',
+		activityText({ ...base, entries: [], history: true }) ===
+			'No recorded changes for the brain yet.'
+	);
+	check(
+		'activity: changes are listed by day and author',
+		activityText({ ...base, entries: [entry], history: true }).includes(
+			'- 2026-01-02 — Ada: Edit X (abc1234)'
+		)
+	);
+}
 
 done();

@@ -211,7 +211,27 @@ for (const backend of BACKENDS) {
 		);
 	}
 
-	// 3. pull-request mode without proposals
+	// Every store takes "*" for all files: folder moves and relocation list that way.
+	await store.write(repo, {
+		message: 'Add a non-page file',
+		writes: [{ path: 'wiki/assets/data.csv', content: 'a,b\n' }],
+		base: await store.getRevision(repo)
+	});
+	const everything = (
+		await store.listTree(repo, await store.getRevision(repo), { extension: '*' })
+	).map((e) => e.path);
+	check(
+		`${backend.name}: listTree with "*" lists pages and other files`,
+		everything.includes('wiki/assets/data.csv') && writes.every((w) => everything.includes(w.path)),
+		everything.join()
+	);
+	await store.write(repo, {
+		message: 'Remove it',
+		writes: [],
+		deletes: ['wiki/assets/data.csv'],
+		base: await store.getRevision(repo)
+	});
+
 	if (!store.capabilities.proposals) {
 		const before = await store.getRevision(repo);
 		const refused = await errorOf(() =>

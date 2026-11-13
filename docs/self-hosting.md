@@ -434,7 +434,10 @@ pnpm exec wrangler secret put GOOGLE_CLIENT_SECRET
 While the consent screen's publishing status is "Testing", only the test users you list can
 connect, and Google expires each connection after seven days. With `drive.file` the
 deployment reaches only the files it created: a file someone adds to a brain's folder by
-hand is not part of the brain. Each member's refresh token is stored encrypted under a key
+hand is not part of the brain. A Drive keeps no history of a brain's changes, so
+`view_activity` has nothing to list for one, and a page opened and saved in Google's own
+editor comes back with its markdown rewritten (escaped characters, `&nbsp;` lines): change
+pages through Isomorphic. Each member's refresh token is stored encrypted under a key
 derived from `AUTH_SECRET`, so changing `AUTH_SECRET` disconnects every Drive, and each is
 connected again from the link `create_brain` gives.
 
