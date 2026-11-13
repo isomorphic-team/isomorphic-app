@@ -77,6 +77,11 @@ in `worker.ts`). `pnpm test:wiring` fails on a class or a value import of `src/o
   back: the new objects Worker stays, so merge a class change on its own;
   `pnpm worker:deploy` deploys both in order. It gets no preview URL, so nothing checks it
   before it takes traffic. `/health` pings it, so the smoke checks reach it afterwards.
+- **Backups** (`docs/ops/backups.md`): with `BACKUP_BUCKET` and `BACKUP_PUBLIC_KEY` set, each
+  `BrainFilesObject` backs its brain up to the `BACKUPS` R2 bucket on an alarm after it
+  changes, sealed to the public key. The private key is never deployed, so the Worker still
+  holds nothing that reads a brain. The `r2_buckets` block is optional (`backups`, kept when
+  `BACKUP_BUCKET` is set), like `index-db` above.
 - **So its RPC methods and stored tables only ever grow.** The MCP Worker version live during a
   deploy, and the one a rollback returns to, call the new objects Worker.
 - **Worker Previews never bind it**: a binding reaches the named Worker's one namespace.

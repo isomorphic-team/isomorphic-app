@@ -16,7 +16,11 @@ export const WRANGLER_CONFIGS: WranglerConfig[] = [
 		output: 'wrangler.jsonc',
 		blocks: [{ name: 'index-db', setting: 'CF_INDEX_D1_DATABASE_ID' }]
 	},
-	{ template: 'wrangler.objects.template.jsonc', output: 'wrangler.objects.jsonc', blocks: [] }
+	{
+		template: 'wrangler.objects.template.jsonc',
+		output: 'wrangler.objects.jsonc',
+		blocks: [{ name: 'backups', setting: 'BACKUP_BUCKET' }]
+	}
 ];
 
 export const GENERATED_CONFIGS = WRANGLER_CONFIGS.map((c) => c.output);

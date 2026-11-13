@@ -21,15 +21,33 @@
 //      only when the destination holds exactly the source's files at a revision the
 //      source is still at; bytes and text arrive as they were; the brain is bound to the
 //      new storage only then.
+//   6. A BACKUP THAT CANNOT BE RESTORED, OR CAN BE READ (backupStep, readBackup, pnpm
+//      backup:restore). A backup is the files of one revision, in parts, and reads back
+//      byte for byte with the private key and not without it; a step that fails resumes;
+//      a brain is due only after it changes, at most once an interval; old backups are
+//      pruned; the bucket holds no path and no content in the clear.
 //   3. A REVIEW-REQUIRED WRITE THAT LANDS ANYWAY. A store without `proposals` refuses
 //      `writeMode: 'pull-request'` and writes nothing, enforced by defineStore before
 //      the store's own commitOrPR runs.
 
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { defineStore, type BrainStore, type StoreCapabilities } from '../src/lib/brain-repo.ts';
 import { githubStore, gitBlobSha } from '../src/lib/brain-store-github.ts';
+import {
+	BACKUPS_KEPT,
+	backupDue,
+	backupIntervalMs,
+	backupPrefix,
+	backupStep,
+	generateBackupKeys,
+	importBackupPrivateKey,
+	importBackupPublicKey,
+	openPart,
+	readBackup,
+	type BackupBucket
+} from '../src/lib/brain-backup.ts';
 import {
 	MAX_FILE_BYTES,
 	filesObjectName,
@@ -58,6 +76,7 @@ import { MAX_ATTACHMENT_BYTES } from '../src/lib/media.ts';
 import { ensureGitRepo, fsBrainStore } from '../src/local/brain-store-fs.ts';
 import { checker, errorOf, partialStore } from './check.ts';
 import { fakeGithub, realGitBlobSha } from './fake-github.ts';
+import { folderReader, restoreInto } from './backup-restore.ts';
 import { sqliteDatabase } from './sqlite-database.ts';
 
 const { check, done } = checker('store checks');
@@ -607,6 +626,208 @@ for (const backend of BACKENDS) {
 		(await listed(source)).sort().join() === (await listed(dest3)).join() &&
 			(await source.readFile(repo, 'wiki/after-move.md'))?.content === '# After\n',
 		(await listed(source)).sort().join()
+	);
+}
+
+// ---- backing a held brain up, and reading the backup back ----
+{
+	console.log('\nbackup');
+	const HOUR = 60 * 60 * 1000;
+	const db = sqliteDatabase();
+	const files = sqlFiles(db);
+	const store = sqlBrainStore(files);
+	// An R2 bucket, as much of one as a backup uses.
+	const held = new Map<string, Uint8Array>();
+	const bucket: BackupBucket & { failOn?: string } = {
+		async put(key, value) {
+			if (bucket.failOn && key.includes(bucket.failOn)) throw new Error('bucket down');
+			held.set(key, typeof value === 'string' ? new TextEncoder().encode(value) : value);
+		},
+		async list({ prefix }) {
+			const keys = [...held.keys()].filter((k) => k.startsWith(prefix)).sort();
+			return { objects: keys.map((key) => ({ key })), truncated: false };
+		},
+		async delete(keys) {
+			for (const k of keys) held.delete(k);
+		}
+	};
+	const keys = await generateBackupKeys();
+	const publicKey = await importBackupPublicKey(keys.publicKey);
+	const get = async (key: string) => held.get(key) ?? null;
+	const privateKey = await importBackupPrivateKey(keys.privateKey);
+	const restored = async (id?: string) => {
+		const backup = await readBackup(get, privateKey, 'b1', id);
+		const out = new Map<string, string>();
+		for await (const f of backup.files()) out.set(f.path, Buffer.from(f.bytes).toString('base64'));
+		return { manifest: backup.manifest, out };
+	};
+
+	check(
+		'backup: an empty brain is never due',
+		backupDue(db, files.revision(), 0, 24 * HOUR) === null
+	);
+
+	const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x00, 0xff, 0xfe]).toString('base64');
+	// Three files of 3 MiB each, so the brain spans more than one 4 MiB part.
+	const big = 'x'.repeat(3 * 1024 * 1024);
+	await store.write(repo, {
+		message: 'Seed',
+		writes: [
+			{ path: 'wiki/a.md', content: '# A\n' },
+			{ path: 'wiki/gone.md', content: 'x' },
+			{ path: 'assets/dot.png', content: png, encoding: 'base64' },
+			...[1, 2, 3].map((n) => ({ path: `big/${n}.md`, content: big }))
+		]
+	});
+	await store.write(repo, { message: 'Delete', deletes: ['wiki/gone.md'] });
+	const rev = files.revision();
+
+	const t0 = 1_000_000_000_000;
+	check(
+		'backup: a changed brain is due once its writes have settled',
+		backupDue(db, rev, t0, 24 * HOUR) === t0 + 10 * 60 * 1000 && backupDue(db, rev, t0, 0) === t0
+	);
+
+	// The second part fails: the run keeps its place.
+	bucket.failOn = 'part-00002';
+	const failed = await errorOf(() => backupStep(db, files, bucket, publicKey, 'b1', rev, t0));
+	check(
+		'backup: a step that fails leaves no manifest, and the brain due at once',
+		failed !== undefined &&
+			![...held.keys()].some((k) => k.endsWith('.json')) &&
+			backupDue(db, rev, t0 + 5, 24 * HOUR) === t0 + 5
+	);
+	// A write lands before the retry. The backup is of the revision it began on.
+	await store.write(repo, {
+		message: 'Later',
+		writes: [{ path: 'wiki/later.md', content: 'later' }]
+	});
+	bucket.failOn = undefined;
+	const step = await backupStep(db, files, bucket, publicKey, 'b1', files.revision(), t0 + 10);
+	const first = await restored();
+	check(
+		'backup: the retry finishes the same backup, in more than one part',
+		step !== null && step.parts > 1 && step.revision === rev,
+		JSON.stringify(step)
+	);
+	check(
+		'backup: read back, it is the files of that revision, byte for byte',
+		[...first.out.keys()].sort().join() === 'assets/dot.png,big/1.md,big/2.md,big/3.md,wiki/a.md' &&
+			first.out.get('assets/dot.png') === png &&
+			Buffer.from(first.out.get('wiki/a.md')!, 'base64').toString() === '# A\n' &&
+			first.out.get('big/3.md') === Buffer.from(big).toString('base64') &&
+			first.manifest.files === 5,
+		[...first.out.keys()].sort().join()
+	);
+	const stored = [...held.entries()].filter(([k]) => k.includes('/part-'));
+	check(
+		'backup: nothing a file holds, and no path, is readable in the bucket',
+		stored.length > 1 &&
+			[...held.entries()].every(([k, v]) => {
+				const text = Buffer.from(v).toString('latin1');
+				return !k.includes('wiki') && !text.includes('wiki/a.md') && !text.includes('xxxxxxxx');
+			})
+	);
+	const [partName, partBytes] = stored[0];
+	check(
+		'backup: a part does not open under another name, or with a byte changed',
+		(await errorOf(() => openPart(privateKey, stored[1][0], partBytes))) !== undefined &&
+			(await errorOf(() =>
+				openPart(
+					privateKey,
+					partName,
+					partBytes.map((b, i) => (i === partBytes.length - 1 ? b ^ 1 : b))
+				)
+			)) !== undefined &&
+			(await openPart(privateKey, partName, partBytes)).length > 0
+	);
+
+	const t1 = t0 + 10;
+	check(
+		'backup: the write that landed meanwhile is due a day after the last backup',
+		backupDue(db, files.revision(), t1 + 1, 24 * HOUR) === t1 + 24 * HOUR
+	);
+	const second = await backupStep(
+		db,
+		files,
+		bucket,
+		publicKey,
+		'b1',
+		files.revision(),
+		t1 + 24 * HOUR
+	);
+	check(
+		'backup: the next backup has it, and the brain is not due again until it changes',
+		second !== null &&
+			(await restored()).out.has('wiki/later.md') &&
+			!(await restored(first.manifest.id)).out.has('wiki/later.md') &&
+			backupDue(db, files.revision(), t1 + 72 * HOUR, 24 * HOUR) === null
+	);
+
+	// Sixteen more backups: only the newest BACKUPS_KEPT stay, another brain's untouched.
+	held.set('brains/b10/x/manifest.json', new Uint8Array());
+	for (let i = 1; i <= 16; i++) {
+		await store.write(repo, {
+			message: `Edit ${i}`,
+			writes: [{ path: 'wiki/a.md', content: `${i}` }]
+		});
+		await backupStep(
+			db,
+			files,
+			bucket,
+			publicKey,
+			'b1',
+			files.revision(),
+			t1 + (24 + i) * HOUR * 24
+		);
+	}
+	const kept = [...held.keys()].filter(
+		(k) => k.startsWith(backupPrefix('b1')) && k.endsWith('/manifest.json')
+	);
+	check(
+		'backup: old backups are pruned to the newest few, whole',
+		kept.length === BACKUPS_KEPT &&
+			(await errorOf(() => restored(first.manifest.id))) !== undefined &&
+			Buffer.from((await restored()).out.get('wiki/a.md')!, 'base64').toString() === '16' &&
+			held.has('brains/b10/x/manifest.json'),
+		String(kept.length)
+	);
+
+	// The restore script, over a folder that holds the bucket's objects.
+	const bucketDir = mkdtempSync(join(tmpdir(), 'iso-backup-'));
+	const outDir = join(mkdtempSync(join(tmpdir(), 'iso-restore-')), 'brain');
+	tmpDirs.push(bucketDir, dirname(outDir));
+	for (const [k, v] of held) {
+		mkdirSync(dirname(join(bucketDir, k)), { recursive: true });
+		writeFileSync(join(bucketDir, k), v);
+	}
+	const done = await restoreInto(folderReader(bucketDir), keys.privateKey, 'b1', outDir);
+	check(
+		'restore: the folder holds the brain, bytes included',
+		done.files === 6 &&
+			readFileSync(join(outDir, 'wiki/a.md'), 'utf8') === '16' &&
+			readFileSync(join(outDir, 'assets/dot.png')).toString('base64') === png
+	);
+	check(
+		'restore: it will not write into a folder that holds something, or without the right key',
+		(await errorOf(() => restoreInto(folderReader(bucketDir), keys.privateKey, 'b1', outDir))) !==
+			undefined &&
+			(await errorOf(async () =>
+				restoreInto(
+					folderReader(bucketDir),
+					(await generateBackupKeys()).privateKey,
+					'b1',
+					join(dirname(outDir), 'other')
+				)
+			)) !== undefined
+	);
+	check(
+		'backup: BACKUP_INTERVAL_HOURS is hours, and anything else the default',
+		backupIntervalMs('6') === 6 * HOUR &&
+			backupIntervalMs('0') === 0 &&
+			backupIntervalMs('') === 24 * HOUR &&
+			backupIntervalMs('-1') === 24 * HOUR &&
+			backupIntervalMs('soon') === 24 * HOUR
 	);
 }
 

@@ -70,6 +70,26 @@ export interface SqlFilesSync {
 	history(limit: number, path?: string): CommitEntry[];
 }
 
+// One file of a snapshot: text as written, bytes as base64, and its size as stored.
+export interface SnapshotFile {
+	path: string;
+	content: string;
+	binary: boolean;
+	size: number;
+}
+
+// The storage as the object that holds it sees it: the operations above, and one that
+// is not offered over RPC.
+export interface SqlFilesLocal extends SqlFilesSync {
+	// The files the brain held at revision `at`, in path order after `after`: as many as
+	// fit in `maxBytes` as stored, and always at least one while any remain. For a
+	// backup, which reads a whole revision a page at a time (src/lib/brain-backup.ts).
+	snapshot(at: string, after: string | null, maxBytes: number): SnapshotFile[];
+}
+
+// The revision of a brain with no commit.
+export const EMPTY_REVISION = '0';
+
 // The same operations where each may answer later, which is what sqlBrainStore takes: the
 // storage directly, or a Durable Object holding it, over RPC.
 export type SqlFilesApi = {
@@ -115,7 +135,7 @@ const textOf = (file: SqlFile): string => (file.binary ? base64ToUtf8(file.conte
 
 type Row = Record<string, string | number | null>;
 
-export function sqlFiles(db: SqlDatabase): SqlFilesSync {
+export function sqlFiles(db: SqlDatabase): SqlFilesLocal {
 	const rows = (query: string, ...bindings: (string | number | null)[]) =>
 		db.sql.exec(query, ...bindings).toArray() as Row[];
 
@@ -239,6 +259,44 @@ export function sqlFiles(db: SqlDatabase): SqlFilesSync {
 				}
 				return { revision: String(seq), versions };
 			});
+		},
+
+		snapshot(at, after, maxBytes) {
+			// At the head the current files are the snapshot. Behind it, each path's newest
+			// version at or before `at`, which walks every version of the paths it passes.
+			const page = (from: string, limit: number) =>
+				at === revision()
+					? rows('SELECT path, seq FROM files WHERE path > ? ORDER BY path LIMIT ?', from, limit)
+					: rows(
+							`SELECT v.path, v.seq FROM versions v
+							 WHERE v.path > ? AND v.body IS NOT NULL
+							   AND v.seq = (SELECT MAX(seq) FROM versions WHERE path = v.path AND seq <= ?)
+							 ORDER BY v.path LIMIT ?`,
+							from,
+							Number(at),
+							limit
+						);
+			const taken: SnapshotFile[] = [];
+			let bytes = 0;
+			let from = after ?? '';
+			// Listed a few at a time: a part of attachments holds one or two files.
+			for (let limit = 16; ; limit *= 2) {
+				const listed = page(from, limit);
+				for (const r of listed) {
+					const path = String(r.path);
+					const row = rows(
+						'SELECT seq, body, binary, size FROM versions WHERE path = ? AND seq = ?',
+						path,
+						Number(r.seq)
+					)[0];
+					const file = fileOf(row)!;
+					if (taken.length > 0 && bytes + file.size > maxBytes) return taken;
+					taken.push({ path, content: file.content, binary: file.binary, size: file.size });
+					bytes += file.size;
+					from = path;
+				}
+				if (listed.length < limit) return taken;
+			}
 		},
 
 		history(limit, path) {

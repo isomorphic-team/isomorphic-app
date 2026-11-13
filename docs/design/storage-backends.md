@@ -263,8 +263,9 @@ Each step is its own pull request.
    6. Export to a GitHub repository, and the reverse: relocation
       (`storage-and-tenancy.md` step 5). Built as a move in both directions:
       `configure_brain` with `storage: "github"` copies a platform-held brain into its
-      repository and binds it there. A copy out that leaves the brain where it is (an
-      archive to download, a scheduled backup) is not built.
+      repository and binds it there. A copy out that leaves the brain where it is: a
+      backup of each changed brain to an R2 bucket, sealed to a public key
+      (`docs/ops/backups.md`). An archive for a member to download is not built.
    7. The default for a hosted brain, and moving the existing ones.
 4. **The Graph store**, tested against an in-memory fake that reproduces delta tokens, `410`
    resync, eTags and name uniqueness, plus an e2e battery against a scratch folder (the twin of
@@ -307,8 +308,8 @@ the current files. History stays behind in the source repository.
   recovered earlier bundle. Both land with the Graph store, the first caller.
 - **Proposals at launch.** Whether the first Graph customer needs protected brains (step 7) before
   or after direct writes.
-- **Backup of a brain the platform holds.** A GitHub repository is a copy outside Cloudflare;
-  an object is not. What the object's point-in-time recovery covers, and whether a scheduled
-  export is needed on top, is not settled.
+- **Restoring a backup in place.** A backup (`docs/ops/backups.md`) restores to a folder,
+  which comes back as a brain through a repository. Writing one over a brain that still
+  exists, and backing up history, are not built.
 - **Old versions are kept forever.** A brain rewritten often grows toward the 10 GB an object
   holds. Whether to prune versions past an age needs a measured brain first.
