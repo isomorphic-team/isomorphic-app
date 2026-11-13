@@ -186,6 +186,8 @@ jobs:
       PREVIEW_WORKER_NAME: ${{ vars.PREVIEW_WORKER_NAME }}
       PREVIEW_WORKERS_SUBDOMAIN: ${{ vars.PREVIEW_WORKERS_SUBDOMAIN }}
       PREVIEW_D1_DATABASE_NAME: ${{ vars.PREVIEW_D1_DATABASE_NAME }}
+      # Optional. Unset, a Preview binds no Durable Object.
+      PREVIEW_OBJECTS_WORKER_NAME: ${{ vars.PREVIEW_OBJECTS_WORKER_NAME }}
     steps:
       # The default ref: the merge commit for a same-repository pull request, whose
       # author already has write access, and the dispatching branch for a fork's
@@ -286,9 +288,38 @@ jobs:
           CF_INDEX_D1_DATABASE_ID: ${{ steps.indexdb.outputs.id }}
           CF_OAUTH_KV_ID: ${{ vars.PREVIEW_CF_OAUTH_KV_ID }}
           CF_OAUTH_KV_PREVIEW_ID: ${{ vars.PREVIEW_CF_OAUTH_KV_ID }}
+          # The bindings name the preview objects Worker; `preview.ts config` carries
+          # them only when it is set, and refuses any that name another Worker.
+          OBJECTS_WORKER_NAME: ${{ vars.PREVIEW_OBJECTS_WORKER_NAME }}
+          # New brains go in the preview objects Worker when there is one, and in the
+          # throwaway organization otherwise.
+          BRAIN_STORAGE: isomorphic
         run: |
           pnpm setup:config --force
           pnpm exec tsx scripts/preview.ts config wrangler.jsonc wrangler.preview.json
+
+      # Every Preview shares one preview objects Worker, so it runs the BASE branch's
+      # objects code, never a pull request's: one pull request's class change would
+      # otherwise break the others. Each Preview's objects are kept apart by name
+      # (OBJECTS_SCOPE). `wrangler deploy` is the only command that applies Durable
+      # Object migrations.
+      - name: Check out the base branch for the objects Worker
+        if: steps.guard.outputs.ready == 'true' && vars.PREVIEW_OBJECTS_WORKER_NAME != ''
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.base.sha || github.sha }}
+          path: base
+          persist-credentials: false
+
+      - name: Deploy the preview objects Worker
+        if: steps.guard.outputs.ready == 'true' && vars.PREVIEW_OBJECTS_WORKER_NAME != ''
+        working-directory: base
+        env:
+          OBJECTS_WORKER_NAME: ${{ vars.PREVIEW_OBJECTS_WORKER_NAME }}
+        run: |
+          set -euo pipefail
+          "$GITHUB_WORKSPACE/node_modules/.bin/tsx" scripts/setup-config.ts --force
+          "$GITHUB_WORKSPACE/node_modules/.bin/wrangler" deploy -c wrangler.objects.jsonc
 
       # The branch's migrations, applied to the branch's database only. Schema first,
       # as deploy.yml does.

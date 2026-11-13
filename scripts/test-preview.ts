@@ -148,7 +148,40 @@ console.log('\nthe previews block carries every binding the template declares');
 		'the template binds a Durable Object, and the preview config drops it everywhere',
 		'durable_objects' in template &&
 			!('durable_objects' in config) &&
-			!('durable_objects' in previews)
+			!('durable_objects' in previews) &&
+			!('OBJECTS_SCOPE' in (previews.vars as object))
+	);
+
+	// With a preview objects Worker: as setup:config renders the bindings for it.
+	const named = (worker: string) => ({
+		...template,
+		durable_objects: {
+			bindings: (
+				(template.durable_objects as { bindings: Record<string, unknown>[] }).bindings ?? []
+			).map((b) => ({ ...b, script_name: worker }))
+		}
+	});
+	const objects = { worker: 'preview-objects', scope: 'pr-12' };
+	const withObjects = previewConfig(named('preview-objects'), objects);
+	const block = withObjects.previews as {
+		vars: Record<string, string>;
+		durable_objects?: { bindings: { name: string; script_name: string }[] };
+	};
+	check(
+		'with a preview objects Worker, every Durable Object binding is carried into previews',
+		block.durable_objects?.bindings.map((b) => b.name).join() === 'WRITE_COORDINATOR,BRAIN_FILES' &&
+			block.durable_objects.bindings.every((b) => b.script_name === 'preview-objects'),
+		JSON.stringify(block.durable_objects)
+	);
+	check(
+		'...and the Preview is given its own scope for object names',
+		block.vars.OBJECTS_SCOPE === 'pr-12' &&
+			(withObjects.vars as Record<string, string>).OBJECTS_SCOPE === 'pr-12'
+	);
+	check(
+		'a binding that names any other Worker is refused: it would reach that Worker’s objects',
+		throws(() => previewConfig(named('isomorphic-objects'), objects), 'preview-objects') &&
+			throws(() => previewConfig(template, objects), 'preview-objects')
 	);
 	check(
 		'vars match the top level',
@@ -270,7 +303,27 @@ console.log('\nthe workflow keeps secrets away from pull request code');
 		/persist-credentials: false/.test(job('build'))
 	);
 	check('build cannot write', /permissions:\n\s+contents: read\n\s+steps:/.test(job('build')));
-	check('deploy checks out the default ref', !/^\s+ref:/m.test(job('deploy')));
+	// The pull request's head never reaches the job that holds the token. The one named
+	// ref is the base branch, for the objects Worker every Preview shares.
+	const refs = [...job('deploy').matchAll(/^\s+ref:\s*(.+)$/gm)].map((m) => m[1]!.trim());
+	check(
+		'deploy checks out the default ref, and otherwise only the base branch',
+		refs.every((r) => r === '${{ github.event.pull_request.base.sha || github.sha }}') &&
+			refs.length <= 1,
+		refs.join(' | ')
+	);
+	const objectsStep = job('deploy').match(
+		/- name: Deploy the preview objects Worker\n([\s\S]*?)(?=\n {6}- name:|$)/
+	)?.[1];
+	check(
+		'the preview objects Worker is deployed from the base checkout, only when one is named',
+		!!objectsStep &&
+			/working-directory: base\n/.test(objectsStep) &&
+			/vars\.PREVIEW_OBJECTS_WORKER_NAME != ''/.test(objectsStep) &&
+			/deploy -c wrangler\.objects\.jsonc/.test(objectsStep) &&
+			!/artifact/.test(objectsStep),
+		objectsStep
+	);
 	const artifactUses = [...job('deploy').matchAll(/artifact\/(\S+?)["\s]/g)].map((m) => m[1]!);
 	check(
 		'deploy reads only the bundle and the SQL from the artifact',

@@ -32,6 +32,7 @@ Worker**, served at `https://pr-<number>-<preview worker>.<subdomain>.workers.de
 | D1         | `platform-db`           | `<PREVIEW_D1_DATABASE_NAME>-pr-<number>`, per PR       |
 | D1 (index) | `index-db`              | `<PREVIEW_D1_DATABASE_NAME>-pr-<number>-index`, per PR |
 | KV         | `OAUTH_KV`              | one shared preview namespace                           |
+| Objects    | the objects Worker      | `PREVIEW_OBJECTS_WORKER_NAME`, shared, scoped by name  |
 | Secrets    | the production Worker's | the preview Worker's Previews base config              |
 | GitHub App | the platform App        | a separate App on a throwaway organization             |
 | Feedback   | `FEEDBACK_TOKEN` set    | unset, so `submit_feedback` is not registered          |
@@ -54,9 +55,25 @@ only, and deletes the Preview and its database.
 
 ### The config
 
-A Preview does not bind the objects Worker: `scripts/preview.ts config` drops the
-`durable_objects` block, because a Preview's binding would reach the production namespace
-(`docs/references.md`). A Preview has no write coordinator, and its `/health` skips the ping.
+A Durable Object binding names a Worker by `script_name` and reaches that Worker's one
+namespace (`docs/references.md`), so a Preview never binds the production objects Worker.
+With `PREVIEW_OBJECTS_WORKER_NAME` set, every Preview binds a **preview objects Worker**
+instead:
+
+- `scripts/preview.ts config` carries the `durable_objects` block into `previews`, and
+  refuses a binding that names any other Worker.
+- It sets `OBJECTS_SCOPE` to the Preview's name (`pr-<number>`), which the Worker prefixes
+  to each files object's name (`filesObjectName`), so two pull requests never address the same
+  object.
+- `deploy` deploys the preview objects Worker from a second checkout of the **base branch**,
+  with `wrangler deploy`. Every Preview shares it, so it runs the base branch's objects code:
+  a pull request that changes `src/objects/` previews against the base branch's classes until
+  it merges.
+- New brains go there (`BRAIN_STORAGE=isomorphic`), so they stop accumulating as
+  repositories in the throwaway organization.
+
+Without the variable, the block is dropped: a Preview has no objects, its `/health` skips the
+ping, and a new brain is a repository.
 
 A Preview inherits no vars and no bindings: `wrangler preview` reads only the config's
 `previews` block, which is one per Worker. `deploy` generates `wrangler.jsonc` from the
@@ -208,6 +225,13 @@ None of this can be created from a workflow. Use a separate Cloudflare account i
    ```
    The sending domain may be production's; a distinct From address shows a reviewer which
    deployment mailed them.
+8. **Optional: a preview objects Worker**, for Previews that hold brains themselves. Deploy
+   it once, add it to the token's Workers beside the preview Worker (step 5), and name it:
+   ```sh
+   OBJECTS_WORKER_NAME=<preview objects worker> pnpm setup:config --force
+   pnpm exec wrangler deploy -c wrangler.objects.jsonc
+   gh variable set PREVIEW_OBJECTS_WORKER_NAME --body <preview objects worker>
+   ```
 
 ## Verified on the first live run
 
@@ -225,6 +249,9 @@ Cloudflare's docs left these open; the first deployed Preview (2026-10-01) settl
 
 Each has a visible failure, not a silent one:
 
+- **The preview objects Worker path.** `pnpm test:preview` pins the config and the workflow's
+  shape; no Preview has run with `PREVIEW_OBJECTS_WORKER_NAME` set. A token that cannot
+  deploy that Worker fails the step, red.
 - **Whether the Editor role can delete a Preview.** If not, `cleanup` logs a notice and still
   deletes the database; the Preview is evicted at the per-Worker limit.
 - **Pricing.** Unstated; presumably ordinary Workers usage.
@@ -242,6 +269,8 @@ Each has a visible failure, not a silent one:
   and re-run the workflow.
 - **A migration edited after it was applied** is not re-run on that pull request's database
   (D1 tracks applied migrations by name). Close and reopen the pull request to start clean.
+- **A closed pull request's objects are not deleted.** `cleanup` removes the Preview and its
+  databases; the files objects under its scope stay in the preview objects Worker.
 - **Fork previews are built from the fork's code but configured by the base branch's**
   template, so a fork that adds a binding previews without it.
 
