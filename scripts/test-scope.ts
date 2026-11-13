@@ -283,6 +283,8 @@ function toolsFor(
 		noFilesObjects?: boolean;
 		// A brain_id to list as already held by the platform.
 		held?: string;
+		// The GitHub client org-scope tools get, in place of the trap.
+		github?: unknown;
 	} = {
 		webBaseUrl: 'https://brain.example'
 	}
@@ -314,7 +316,7 @@ function toolsFor(
 			...(ORG_ROWS[opts?.org ?? ''] ?? ORG_ROWS.Northwind)
 		};
 		return {
-			octokit,
+			octokit: (deployment.github as never) ?? octokit,
 			org,
 			// The real row, which the fixture's bindFixtureStorage wrote.
 			storage: await orgStorage(db, org),
@@ -1422,6 +1424,37 @@ console.log('\nA single-user deployment: only the tools that can answer');
 		stranded.outcome === 'denied' && stranded.detail.includes('strand its files'),
 		stranded.detail
 	);
+}
+
+{
+	console.log('\ncreate_brain never takes a name a brain already holds');
+	// GitHub has no repository of that name here (the brain's was deleted, or the brain
+	// moved onto other storage), so only the platform database can say it is taken.
+	const asked: string[] = [];
+	const github = {
+		rest: {
+			repos: {
+				createInOrg: async (o: { name: string }) => {
+					asked.push(o.name);
+					throw new Error('stop here');
+				}
+			}
+		}
+	};
+	const grants = () =>
+		(
+			sqlite
+				.prepare(`SELECT COUNT(*) AS n FROM brain_memberships WHERE brain_id = 'b-main'`)
+				.get() as { n: number }
+		).n;
+	const before = grants();
+	const made = await attempt(writer, 'create_brain', { name: 'Main' }, { github });
+	check(
+		'it asks GitHub for the next free name, not the held one',
+		asked.join() === 'main-2',
+		`${asked.join()} ${made.detail}`
+	);
+	check('and grants nothing on the brain that holds the name', grants() === before);
 }
 
 {
