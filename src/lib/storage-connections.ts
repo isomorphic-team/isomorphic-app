@@ -192,13 +192,12 @@ export const STORAGE_PLACE: Record<BrainStorageChoice, string> = {
 };
 
 // Where create_brain puts a new brain, or why it cannot go where it was asked to. Pure.
-// What the caller asked for wins. Otherwise the deployment's default applies only to an
-// org on platform-owned storage: an org that connected its own GitHub account chose
-// GitHub.
+// What the caller asked for wins. Otherwise an org on platform-owned storage gets a brain
+// the deployment holds, when it has files objects to hold one in; an org that connected
+// its own GitHub account chose GitHub. A Drive is one person's, so it is only ever asked
+// for, never a default.
 export function chooseBrainStorage(o: {
 	requested?: BrainStorageChoice;
-	// A Drive is one person's, so it is only ever asked for, never a default.
-	deploymentDefault: 'github' | 'isomorphic';
 	// The org's connection is platform-owned (owner_org_id NULL).
 	platformOwned: boolean;
 	// This deployment has files objects to hold a brain in.
@@ -216,8 +215,7 @@ export function chooseBrainStorage(o: {
 		return { problem: 'This deployment cannot hold a brain itself, so no brain was created.' };
 	}
 	if (o.requested) return { storage: o.requested };
-	const preferred = o.platformOwned ? o.deploymentDefault : 'github';
-	return { storage: preferred === 'isomorphic' && o.canHold ? 'isomorphic' : 'github' };
+	return { storage: o.platformOwned && o.canHold ? 'isomorphic' : 'github' };
 }
 
 // The GitHub connection that reaches an account's repositories, or null. A brain that

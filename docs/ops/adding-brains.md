@@ -136,8 +136,8 @@ receive them by a move (`connect_brain` naming an existing brain).
 
 `create_brain` makes a repository, or with `storage: "isomorphic"` a brain the deployment
 holds itself with no repository, or with `storage: "google-drive"` a folder in the caller's
-own Google Drive (any org, once the deployment has a Google OAuth client). `BRAIN_STORAGE` sets which one these orgs get when the
-caller does not say ([self-hosting](../self-hosting.md)).
+own Google Drive (any org, once the deployment has a Google OAuth client). When the caller does not say, these orgs get a brain the
+deployment holds ([self-hosting](../self-hosting.md)).
 
 A `brains` row written by hand (step 3 above) needs no `storage_connection_id`: a NULL
 binding resolves through the org's installation, exactly as before migration 0010.

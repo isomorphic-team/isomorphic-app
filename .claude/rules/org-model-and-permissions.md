@@ -25,10 +25,10 @@ Full RFCs: `docs/design/org-roles-permissions.md`, `docs/design/brain-level-perm
 The Worker is an OAuth 2.1 server to Claude via `@cloudflare/workers-oauth-provider`. The human
 sign-in behind `/authorize` is Auth.js (`src/oauth/auth-handler.ts` + `src/auth/config.ts`,
 `@auth/core` + `@auth/d1-adapter`) with a Resend magic link; users need no GitHub account. Token
-props `{ user_id, email }`. `AUTH_SIGN_IN=open` (preview deployments only, set by
-`preview.yml`; default `email`) signs anyone in as any address they type: `handleAuthRequest`
-redirects the sign-in POST to the link Auth.js minted instead of emailing it, so the session
-is a real Auth.js one. Only the exact value `open` opens it. `pnpm test:signin` drives both
+props `{ user_id, email }`. Open sign-in (`PREVIEW_SIGN_IN=open`, written only by
+`previewConfig` in `scripts/preview.ts`, never by a setting) signs anyone in as any address
+they type: `handleAuthRequest` redirects the sign-in POST to the link
+Auth.js minted instead of emailing it, so the session is a real Auth.js one. Only the exact value `open` opens it. `pnpm test:signin` drives both
 modes through real Auth.js over `node:sqlite`. Google/OIDC is the recommended future primary provider (not built).
 GitHub sign-in (`IDENTITY_MODE=github`, the per-user `tenants` table, `brain-<login>`
 auto-provisioning) was removed on 2026-09-23; `/authorize` answers 501 if it is still set.
@@ -113,8 +113,9 @@ brain and refuses on a static connection, where the org-scope tools are not regi
 `createAndScaffoldBrain`, or a platform-held brain via `scaffoldInto` on its files object with
 no GitHub call, or a folder in the caller's Google Drive (`createBrainFolder`), writes a
 `brains` row with a user-given `name`, and switches to it.
-`chooseBrainStorage` (pure, `pnpm test:access`) picks: the caller's `storage`, else
-`BRAIN_STORAGE` for an org on a platform-owned connection, else GitHub. A Drive is only ever
+`chooseBrainStorage` (pure, `pnpm test:access`) picks: the caller's `storage`, else a brain
+the deployment holds for an org on a platform-owned connection when the deployment binds
+files objects, else GitHub. A Drive is only ever
 asked for. **A name is taken when
 a brain row holds it** (`brainNameTaken`), whatever GitHub says: a row outlives its
 repository, and `createBrain` returns false, with no grant to follow, when it wrote nothing.

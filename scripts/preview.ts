@@ -12,8 +12,8 @@
 //
 // Inputs come from the environment: PR_NUMBER, PREVIEW_WORKER_NAME,
 // PREVIEW_WORKERS_SUBDOMAIN, PREVIEW_D1_DATABASE_NAME, and for `comment` also
-// PREVIEW_ORIGIN, PREVIEW_SHA, PREVIEW_SMOKE (success | failure), PREVIEW_RUN_URL,
-// PREVIEW_SIGN_IN (open | email).
+// PREVIEW_ORIGIN, PREVIEW_SHA, PREVIEW_SMOKE (success | failure), PREVIEW_RUN_URL;
+// PREVIEW_SIGN_IN (open | email) for `config` and `comment`.
 
 import { readFileSync, writeFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
@@ -118,10 +118,13 @@ export interface PreviewObjects {
  * that Worker's one namespace. Without `objects` they are dropped, and the Preview runs
  * with no objects at all. With it they are carried, provided every one names the preview
  * objects Worker, and the Preview's object names are scoped to it.
+ *
+ * It is the one writer of `PREVIEW_SIGN_IN`, so only a Preview can open sign-in.
  */
 export function previewConfig(
 	{ durable_objects, ...config }: WranglerConfig,
-	objects?: PreviewObjects
+	objects?: PreviewObjects,
+	openSignIn = false
 ): WranglerConfig {
 	const bound = objects ? (durable_objects?.bindings ?? []) : [];
 	const elsewhere = bound.filter((b) => b.script_name !== objects?.worker);
@@ -130,7 +133,11 @@ export function previewConfig(
 			`Durable Object bindings must name the preview objects Worker ${objects?.worker}, found ${elsewhere.map((b) => `${String(b.name)} -> ${String(b.script_name)}`).join(', ')}`
 		);
 	const carried = bound.length > 0 ? { durable_objects: { bindings: bound } } : {};
-	const vars = { ...config.vars, ...(objects ? { OBJECTS_SCOPE: objects.scope } : {}) };
+	const vars = {
+		...config.vars,
+		...(openSignIn ? { PREVIEW_SIGN_IN: 'open' } : {}),
+		...(objects ? { OBJECTS_SCOPE: objects.scope } : {})
+	};
 	const databases = config.d1_databases ?? [];
 	const bindings = databases.map((d) => String(d.binding)).join(', ');
 	// The pull request's two databases and nothing else: a binding this does not know
@@ -226,6 +233,10 @@ function required(name: string): string {
 	return value;
 }
 
+// The decided sign-in mode, read the same way by `config` and `comment`: email unless "open".
+const signInFromEnv = (): 'open' | 'email' =>
+	required('PREVIEW_SIGN_IN') === 'open' ? 'open' : 'email';
+
 function inputsFromEnv(): PreviewInputs {
 	return {
 		pr: Number(required('PR_NUMBER')),
@@ -253,7 +264,11 @@ function main(argv: string[]): void {
 			// Set only once the preview objects Worker exists (the one-time setup).
 			const worker = process.env.PREVIEW_OBJECTS_WORKER_NAME?.trim();
 			const objects = worker ? { worker, scope: planPreview(inputsFromEnv()).name } : undefined;
-			writeFileSync(output, JSON.stringify(previewConfig(config, objects), null, '\t') + '\n');
+			const open = signInFromEnv() === 'open';
+			writeFileSync(
+				output,
+				JSON.stringify(previewConfig(config, objects, open), null, '\t') + '\n'
+			);
 			return;
 		}
 		case 'database-id': {
@@ -272,7 +287,7 @@ function main(argv: string[]): void {
 					sha: required('PREVIEW_SHA'),
 					smoke: required('PREVIEW_SMOKE') === 'success' ? 'success' : 'failure',
 					runUrl: required('PREVIEW_RUN_URL'),
-					signIn: required('PREVIEW_SIGN_IN') === 'email' ? 'email' : 'open'
+					signIn: signInFromEnv()
 				})
 			);
 			return;

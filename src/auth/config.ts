@@ -52,9 +52,9 @@ export interface AuthEnv {
 	AUTH_EMAIL_FROM?: string;
 	// Reply-To for the magic-link email, e.g. a support address. Empty sends none.
 	AUTH_EMAIL_REPLY_TO?: string;
-	// "open" signs anyone in as any email they type, with no email sent. For preview
-	// deployments only; anything else (unset included) is the emailed magic link.
-	AUTH_SIGN_IN?: string;
+	// "open" signs anyone in as any email they type, with no email sent. Written only by
+	// `previewConfig` (scripts/preview.ts), never by a setting, so only a Preview has it.
+	PREVIEW_SIGN_IN?: string;
 	// The deployment's multi-tenant Microsoft Entra application, for orgs that sign in
 	// through their own directory. Without both, no address is routed to a directory.
 	AUTH_ENTRA_CLIENT_ID?: string;
@@ -76,8 +76,8 @@ function entraApp(env: AuthEnv): { clientId: string; clientSecret: string } | nu
 export type SignInMode = 'email' | 'open';
 
 /** Only the exact value "open" opens sign-in; a typo or an unset var keeps email. */
-export function signInMode(env: Pick<AuthEnv, 'AUTH_SIGN_IN'>): SignInMode {
-	return env.AUTH_SIGN_IN === 'open' ? 'open' : 'email';
+export function signInMode(env: Pick<AuthEnv, 'PREVIEW_SIGN_IN'>): SignInMode {
+	return env.PREVIEW_SIGN_IN === 'open' ? 'open' : 'email';
 }
 
 // Auth.js owns every route under this prefix (signin, callback, session, csrf,
@@ -226,7 +226,7 @@ export async function handleAuthRequest(request: Request, env: AuthEnv): Promise
 	if (!warnedOpen) {
 		warnedOpen = true;
 		console.warn(
-			'AUTH_SIGN_IN=open: anyone can sign in as any email address. This is for preview deployments only.'
+			'PREVIEW_SIGN_IN=open: anyone can sign in as any email address. This is for preview deployments only.'
 		);
 	}
 	const url = new URL(request.url);

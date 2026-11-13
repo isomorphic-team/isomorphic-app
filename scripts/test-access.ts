@@ -1542,17 +1542,17 @@ console.log('\nA single-user (static) deployment runs the org model (ensureStati
 
 console.log('\nchooseBrainStorage: where a new brain goes');
 {
-	const base = { deploymentDefault: 'isomorphic' as const, platformOwned: true, canHold: true };
+	const base = { platformOwned: true, canHold: true };
 	const where = (o: Parameters<typeof chooseBrainStorage>[0]) => {
 		const c = chooseBrainStorage(o);
 		return 'storage' in c ? c.storage : `problem: ${c.problem}`;
 	};
 	check(
-		'an org on platform-owned storage gets the deployment default',
-		where(base) === 'isomorphic' && where({ ...base, deploymentDefault: 'github' }) === 'github'
+		'an org on platform-owned storage gets a brain the deployment holds',
+		where(base) === 'isomorphic'
 	);
 	check(
-		'an org that connected its own GitHub account gets a repository there, whatever the default',
+		'an org that connected its own GitHub account gets a repository there',
 		where({ ...base, platformOwned: false }) === 'github'
 	);
 	check(

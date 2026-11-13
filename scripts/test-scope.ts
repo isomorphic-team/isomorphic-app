@@ -292,7 +292,6 @@ function toolsFor(
 		github?: unknown;
 		// Real stores for platform-held brains, by brain_id, in place of the trap.
 		files?: (brainId: string) => BrainStore;
-		defaultStorage?: 'github' | 'isomorphic';
 	} = {
 		webBaseUrl: 'https://brain.example'
 	}
@@ -392,7 +391,6 @@ function toolsFor(
 		openIndex: d1Index(db),
 		webBaseUrl: deployment.webBaseUrl,
 		platformFiles: deployment.noFilesObjects ? undefined : (deployment.files ?? (() => filesStore)),
-		defaultStorage: deployment.defaultStorage,
 		githubFor: async () => (deployment.github as never) ?? octokit
 	});
 	return handlers;
@@ -1589,25 +1587,14 @@ console.log('\nA single-user deployment: only the tools that can answer');
 		writer,
 		'create_brain',
 		{ name: 'Defaulted', org: 'Hosted Co' },
-		{
-			files,
-			defaultStorage: 'isomorphic'
-		}
+		{ files }
 	);
 	check(
-		'with the deployment default set, an org on platform-owned storage gets one unasked',
+		'an org on platform-owned storage gets a brain the deployment holds, unasked',
 		byDefault.outcome === 'allowed' && row('Defaulted')?.kind === PLATFORM_FILES_KIND,
 		byDefault.detail
 	);
-	const customer = await attempt(
-		writer,
-		'create_brain',
-		{ name: 'Customer' },
-		{
-			files,
-			defaultStorage: 'isomorphic'
-		}
-	);
+	const customer = await attempt(writer, 'create_brain', { name: 'Customer' }, { files });
 	check(
 		'an org with its own GitHub account still goes to GitHub',
 		customer.detail.includes('octokit.') && row('Customer') === undefined,
