@@ -8,7 +8,7 @@ development and testing; production use needs a subscription. Why the line falls
 Every feature here checks a per-org entitlement and does nothing without one, so an unentitled
 org runs the core product unchanged.
 
-Not every enterprise feature lives here. Enterprise identity will check the same entitlement
+Not every enterprise feature lives here. Enterprise identity checks the same entitlement
 from the core, because every sign-in runs through it
 ([`docs/design/enterprise-identity.md`](../docs/design/enterprise-identity.md)). The
 entitlement read (`hasFeature`) is therefore in `src/lib/entitlements.ts`, under the AGPL, and

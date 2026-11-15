@@ -1,7 +1,8 @@
 # Design — org identity, roles & permissions
 
-Status: **built.** Phases 1 to 5 and 7 to 9 below are on `main` and live; phase 6 (Google and
-other SSO providers) is not built. Written as an RFC; three things have moved since, and the
+Status: **built.** Phases 1 to 5 and 7 to 9 below are on `main` and live. Of phase 6, per-org
+sign-in through Microsoft Entra is built ([`enterprise-identity.md`](./enterprise-identity.md));
+Google and a deployment-wide OIDC provider are not. Written as an RFC; three things have moved since, and the
 body is kept as written:
 
 - Model A no longer auto-provisions a brain (phase 8): a first-time user gets an org with no

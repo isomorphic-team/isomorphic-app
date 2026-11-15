@@ -2,6 +2,9 @@
 
 Status: **built** (S1 and S2 together). Engine: `src/lib/search.ts` (pure) wired into
 `searchIndex` in `src/lib/brain-index.ts`. Tests: `pnpm test:search`. No schema change.
+`searchIndex` serves every search. Where a deployment binds `INDEX_DB`, an FTS5 engine
+(`src/lib/search-fts.ts`) runs in shadow beside it; see
+[`brain-index-storage.md`](./brain-index-storage.md).
 
 `search_pages` is the highest-frequency read on the tool surface and the one an agent
 reaches for when it does not already know a path. It could not answer a question,
@@ -139,7 +142,7 @@ matches" from "these are the first 50".
 
 ### S2. Tokenized matching with relevance ordering
 
-**FTS5 was verified as available and deliberately not used.** Cloudflare's docs list the
+**FTS5 was verified as available and deliberately not used in the platform database.** Cloudflare's docs list the
 FTS5 module under supported SQLite extensions, so availability was never the constraint.
 Four things decided against it, recorded in full in
 [`docs/references.md`](../references.md):
@@ -296,8 +299,9 @@ widget.
 
 Answered by this change:
 
-- ~~Does D1 support FTS5?~~ **Yes**, and it is deliberately not used. See
-  [`docs/references.md`](../references.md) and "What was built" above.
+- ~~Does D1 support FTS5?~~ **Yes**, and it is deliberately not used in the platform
+  database. See [`docs/references.md`](../references.md), "What was built" above, and
+  [`brain-index-storage.md`](./brain-index-storage.md) for the FTS5 engine in shadow.
 - ~~Should the response say when results were capped?~~ **Yes**, it does now
   (`elisionNote`): lines elided by the per-page cap, and pages that matched but were
   not shown.

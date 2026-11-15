@@ -62,8 +62,8 @@ Why each disposition:
   would rewrite past totals. If keeping it becomes a problem, the fix is a retention window on
   the whole table.
 - **`feedback_reports`** is a report about the product, covered by its own privacy rules.
-- **Attached media is not in the database.** `attach_media` commits files to the brain's
-  repository, and downloads go through short-lived signed links (`src/lib/asset-link.ts`).
+- **Attached media is not in the database.** `attach_media` writes files to the brain's own
+  storage, and downloads go through short-lived signed links (`src/lib/asset-link.ts`).
 
 ## What was built
 
@@ -74,7 +74,12 @@ was.
 
 - **`forgetBrain`** deletes the purged rows and the `brains` row in one `db.batch()`, grants and
   invites before the row they reference. `disconnect_brain` calls it. One batch, so a failure
-  part way cannot remove the `brains` row and leave rows that nothing points at.
+  part way cannot remove the `brains` row and leave rows that nothing points at. Where the
+  index sits in its own database (`indexDatabase`, `INDEX_DB`), that batch does not reach
+  it: `disconnect_brain` resets the brain's index first, while the brain still exists.
+- **A brain the platform holds itself is not disconnected.** `disconnect_brain` refuses
+  one (`platformHoldsFiles`), since its files are in no repository, until it is moved to
+  GitHub with `configure_brain`.
 - **`createBrain`** runs `clearBrainResidueStatements` in the batch that inserts the brain,
   deleting rows under the new id in `BRAIN_UNLINKED_TABLES` (the purged tables with no foreign
   key to `brains`, the only ones residue can sit in). Every creation path goes through it, so

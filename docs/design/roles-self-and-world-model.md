@@ -54,7 +54,7 @@ instead.
 
 | Term         | Meaning                                                                                  |
 | ------------ | ---------------------------------------------------------------------------------------- |
-| Brain        | A repository of pages, as today                                                          |
+| Brain        | A set of pages in one store (a git repository, a Drive folder, or held by the platform)  |
 | Role         | What a brain is for: the facts it owns, the brains it watches, its standards, its stance |
 | Org self     | A computed view over an org's brains: ownership, open items, commitments, beliefs        |
 | World model  | Everything the org's brains say about the world, in three layers: state, theory, events  |

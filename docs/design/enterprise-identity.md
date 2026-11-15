@@ -34,15 +34,18 @@ An organization's IT function reviews a hosted product before its team uses it, 
 Only the fourth has an answer today: content is in the customer's GitHub repository, its
 commit history is the audit trail, and access metadata is in the deployment's own D1.
 
-There is one way in, an Auth.js email magic link. On a multi-tenant deployment that leaves no
-way to tell which org an address belongs to before sign-in, no way to refuse the magic link for
-an org that requires SSO, and no way to remove a person from outside the product.
+Without this design there is one way in, an Auth.js email magic link. On a multi-tenant
+deployment that leaves no way to tell which org an address belongs to before sign-in, no way to
+refuse the magic link for an org that requires SSO, and no way to remove a person from outside
+the product. The first is answered by what is built (see the Status above); enforcement has no
+switch yet, and nothing removes a person from outside the product.
 
 ## What exists
 
-- **One Auth.js provider.** `src/auth/config.ts` registers a Resend magic link. `D1Adapter`
+- **Two Auth.js providers.** `src/auth/config.ts` registers a Resend magic link, and the
+  per-org Entra provider (`src/auth/entra.ts`) for a sign-in routed to a directory. `D1Adapter`
   keeps users, sessions, accounts and verification tokens in the platform D1
-  (`migrations/0001_init.sql`). The accounts table is where a second provider's links go.
+  (`migrations/0001_init.sql`). The accounts table holds the Entra provider's links.
 - **The config is built per request.** `buildAuthConfig` runs on every call because D1
   bindings are request-scoped. So the provider list, and each provider's settings, can be
   chosen per request. This is what makes per-org SSO cheap here.

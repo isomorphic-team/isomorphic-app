@@ -54,9 +54,10 @@ on the same POST, never SSE. The Worker and the local runtime share it, and
 - **What may they do?** `role` is the caller's role on that brain, `orgRole` is their role in
   that brain's org. `effectiveBrainRole` in `src/lib/orgs.ts` is the authority on the first.
 - **How do we reach storage?** A `BrainStore`, below, built on the credential the brain is
-  bound to: its storage connection (`src/lib/storage-connections.ts`), a GitHub App
-  installation or, in static mode, `GITHUB_TOKEN`. The credential follows the brain rather than
-  the org, so moving a brain to another org leaves its storage where it was.
+  bound to: its storage connection (`src/lib/storage-connections.ts`), which is a GitHub App
+  installation, a Google Drive connection, the deployment's own files object or, in static
+  mode, `GITHUB_TOKEN`. The credential follows the brain rather than the org, so moving a brain
+  to another org leaves its storage where it was.
 
 A tool declares what it needs (`requires: 'editor'` for brain scope, `requiresOrg: 'admin'` for
 org scope) and resolution throws if the caller falls short. The two roles are separate so that an
@@ -67,10 +68,11 @@ Every read calls `ensureFresh` first, which compares the brain's current revisio
 index reflects and reindexes what changed. The index is a cache, never the source of truth, so an
 edit made on github.com or by another agent is picked up on the next read.
 
-**5. Writes go through one chokepoint.** `commitOrPR` in `src/lib/brain-repo.ts` lands a
-multi-file bundle (the page, the changelog, every repointed link) as one atomic commit, or as a
-pull request if the brain's branch is protected. `write_page`'s guarantee that an edit batch never
-half-applies rests on that atomicity.
+**5. Writes go through one chokepoint.** `commitOrPR` on the `BrainStore` interface
+(`src/lib/brain-repo.ts`), implemented by each store, lands a multi-file bundle (the page, the
+changelog, every repointed link) as one atomic write. On a GitHub brain whose branch is
+protected it opens a pull request instead; the other stores refuse pull-request mode.
+`write_page`'s guarantee that an edit batch never half-applies rests on that atomicity.
 
 **6. The result may carry a widget.** Tools that open the in-client app attach
 `_meta.ui.resourceUri`, and the app bundle is served as a `ui://` resource. The bundle is
@@ -80,12 +82,15 @@ deployed UI goes stale with no error.
 ## The storage seam
 
 `BrainStore` (`src/lib/brain-repo.ts`) is the only interface between the tool layer and where a
-brain physically lives. Two implementations:
+brain physically lives. Four implementations:
 
-- `githubStore(octokit)` for a GitHub repository.
-- `fsBrainStore({ dir })` for a git repository on disk (`src/local/brain-store-fs.ts`).
+- `githubStore` for a GitHub repository (`src/lib/brain-store-github.ts`).
+- `driveBrainStore` for a Google Drive folder (`src/lib/brain-store-drive.ts`).
+- `sqlBrainStore` for a brain the deployment holds itself, in a files object
+  (`src/lib/brain-store-sql.ts`).
+- `fsBrainStore` for a git repository on disk (`src/local/brain-store-fs.ts`).
 
-That is what lets `pnpm try ~/notes` serve the real tools with no accounts, and the write-path
+The last is what lets `pnpm try ~/notes` serve the real tools with no accounts, and the write-path
 e2e batteries run in CI with no network.
 
 If you reach for `ctx.octokit` while touching a brain's content, the operation belongs on the
