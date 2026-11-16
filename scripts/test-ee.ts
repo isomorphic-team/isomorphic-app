@@ -54,6 +54,7 @@ import {
 	advanceConsolidation,
 	blockShape,
 	consolidationStepText,
+	isDeprecated,
 	isOtherPage,
 	otherPageId,
 	pagePath,
@@ -1484,6 +1485,12 @@ console.log('\nconsolidation: one brain against another (12)');
 	await seed(homeSrc, 'misc/garden.md', '# Garden\n\nHOME-GARDEN Tomatoes and basil.\n');
 	await seed(otherSrc, 'agreements/acme.md', `# Acme engagement\n\nOTHER-RATES ${LOW}\n`);
 	await seed(otherSrc, 'misc/garden.md', '# Garden\n\nOTHER-GARDEN Tomatoes and basil.\n');
+	// An old copy that says so. It disagrees with everything current, by design.
+	await seed(
+		otherSrc,
+		'archive/acme.md',
+		'---\nstatus: deprecated\n---\n# Acme engagement terms\n\nOTHER-ARCHIVE The day rate for Acme engagement is $900 per day.\n'
+	);
 	const home = await openFolderAsBrain(homeSrc, 'wiki');
 	const other = await openFolderAsBrain(otherSrc, 'wiki');
 	const db = home.db as unknown as D1Database;
@@ -1547,6 +1554,20 @@ console.log('\nconsolidation: one brain against another (12)');
 				prompts.length > 0 &&
 				prompts.every((p) => sides(p).home === 1 && sides(p).other === 1),
 			JSON.stringify(prompts.map(sides))
+		);
+		check(
+			'a page marked deprecated is left out of the pass, and the reply counts it',
+			first.pagesDeprecated === 1 &&
+				prompts.every((p) => !p.includes('OTHER-ARCHIVE')) &&
+				consolidationStepText(first, 'x').includes('1 page(s) marked deprecated were left out.'),
+			consolidationStepText(first, 'x')
+		);
+		check(
+			'deprecated is read from the status field, whatever its case, and from nothing else',
+			isDeprecated(new Map([['status', ['Deprecated ']]])) &&
+				!isDeprecated(new Map([['status', ['stable']]])) &&
+				!isDeprecated(new Map([['type', ['deprecated']]])) &&
+				!isDeprecated(undefined)
 		);
 		check(
 			'a prompt names each page by its path, without the marker for the other brain',

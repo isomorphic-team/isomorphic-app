@@ -43,7 +43,9 @@ Licensed under `ee/LICENSE`, not the AGPL. Placement rule and history:
   and the check's own version (prompts, gates, models), so a later pass skips a pair whose
   fingerprint is unchanged and keeps its findings as they were; `fresh` starts a pass that
   ignores the memory. A page with a
-  high-severity detection never reaches the gateway. With an OpenRouter key, Jev screens each
+  high-severity detection never reaches the gateway. A page whose `status` field is
+  `deprecated` (`isDeprecated`) is left out and counted in the reply: an old copy is expected
+  to disagree with what replaced it. With an OpenRouter key, Jev screens each
   pair first at a 0.3 conflict score (`passesScreen`); a screen error lets the pair through. Claims are kept only when their quotes and
   values are on the pages word for word and, with Jev, that it scores 0.4 or more on whether a
   reader would be misled; a patch must also keep the page's block structure (`blockShape`).

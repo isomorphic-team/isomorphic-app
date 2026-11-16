@@ -285,6 +285,8 @@ Roadmap step 2 extends the `validate` / `resolve` pattern into one findings queu
   exhausted credits or an overload.
 - **Candidates** are each page's three best search hits on its title, plus the near-duplicate
   and same-identifier tensions. A pair over `MAX_PAIR_CHARS` is skipped and counted, never cut.
+  A page marked `status: deprecated` is left out and counted: on two real brains, 42 of 44
+  findings between them involved a deprecated copy of pages that had since moved on.
 - **The trigger** is `review_brain` with `check: "contradictions"`, admin only, a budgeted
   step per call. `validate` lists what it found and, for admins, when it last ran.
   `pnpm consolidate:report <folder> --models` runs the same pass over a local copy.

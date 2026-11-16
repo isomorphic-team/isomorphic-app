@@ -10,6 +10,7 @@
 // Stages per pair:
 //   1. Candidates: each page's RELATED_PER_PAGE best search hits on its title, plus the
 //      near-duplicate and same-identifier tensions.
+//      A page marked `status: deprecated` is no candidate and has none.
 //   2. Pre-scan: a page with a high-severity detection never reaches the gateway.
 //   3. Screen, when the gateway has Jev: a pair Jev scores under JEV_GATE for contradiction
 //      goes no further. A pair with a page over JEV_MAX_PAGE_CHARS skips the screen rather
@@ -226,6 +227,11 @@ export function planStep(
 	}
 	return { pairs, last, done: true };
 }
+
+// Whether a page says it is no longer current (OKF `status: deprecated`). Such a page is
+// expected to disagree with what replaced it, so the pass leaves it out.
+export const isDeprecated = (fields: ReadonlyMap<string, readonly string[]> | undefined) =>
+	(fields?.get('status') ?? []).some((v) => v.trim().toLowerCase() === 'deprecated');
 
 // Whether a page may be sent: a high-severity detection keeps it in the deployment.
 export const sendable = (content: string) =>
@@ -541,6 +547,8 @@ export interface ConsolidationState {
 	// Pairs skipped because neither page, nor the check itself, changed since they were
 	// last checked. Their findings stand as they were.
 	pairsUnchanged: number;
+	// Pages left out of this step because they are marked deprecated, both brains counted.
+	pagesDeprecated: number;
 	// A pass that ignores what earlier passes checked, set when it starts.
 	fresh: boolean;
 	findings: number;
@@ -555,6 +563,7 @@ type Counters = Pick<
 	| 'pairsSkipped'
 	| 'pairsScreened'
 	| 'pairsUnchanged'
+	| 'pagesDeprecated'
 	| 'fresh'
 	| 'findings'
 	| 'costUsd'
@@ -566,6 +575,7 @@ const noCounts = (): Counters => ({
 	pairsSkipped: 0,
 	pairsScreened: 0,
 	pairsUnchanged: 0,
+	pagesDeprecated: 0,
 	fresh: false,
 	findings: 0,
 	costUsd: 0,
@@ -647,14 +657,20 @@ export async function advanceConsolidation(
 		)
 	);
 
+	let deprecated = 0;
 	const contentPages = async (b: Pick<ComparedBrain, 'index' | 'store' | 'repo' | 'config'>) => {
 		await b.index.ensureFresh(b.store, b.repo, b.config);
-		return (await b.index.listPages()).filter(
+		const fields = await b.index.allFields();
+		const content = (await b.index.listPages()).filter(
 			(p) => isContentPath(p.path, b.config) && !isToolMaintained(p.path, b.config)
 		);
+		const current = content.filter((p) => !isDeprecated(fields.get(p.path)));
+		deprecated += content.length - current.length;
+		return { pages: current, fields };
 	};
-	const listed = await contentPages(t);
-	const otherListed = t.against ? await contentPages(t.against) : [];
+	const { pages: listed, fields: homeFields } = await contentPages(t);
+	const otherListed = t.against ? (await contentPages(t.against)).pages : [];
+	state.pagesDeprecated = deprecated;
 	if (listed.length + otherListed.length > MAX_DUP_PAGES) {
 		const stopped = {
 			...state,
@@ -686,7 +702,7 @@ export async function advanceConsolidation(
 				pages: listed,
 				edges: [],
 				contents,
-				fields: await t.index.allFields(),
+				fields: homeFields,
 				identityFields: t.config.identityFields,
 				isContent: (p) => isContentPath(p, t.config)
 			});
@@ -889,7 +905,10 @@ export function consolidationStepText(s: ConsolidationState, against?: string): 
 	const unchanged = s.pairsUnchanged
 		? ` ${s.pairsUnchanged} unchanged since their last check, not checked again.`
 		: '';
-	const counts = `${s.pairsChecked} page pair(s) checked${screened}, ${s.pairsSkipped} skipped, ${s.findings} conflict finding(s), ${cost} spent.${unchanged}`;
+	const deprecated = s.pagesDeprecated
+		? ` ${s.pagesDeprecated} page(s) marked deprecated were left out.`
+		: '';
+	const counts = `${s.pairsChecked} page pair(s) checked${screened}, ${s.pairsSkipped} skipped, ${s.findings} conflict finding(s), ${cost} spent.${unchanged}${deprecated}`;
 	if (s.status === 'done') return `${name} finished: ${counts} validate lists the findings.`;
 	if (s.status === 'stopped') {
 		const why = STOP_TEXT[s.stoppedReason ?? ''] ?? s.stoppedReason ?? 'unknown';

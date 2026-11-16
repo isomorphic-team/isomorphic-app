@@ -27,6 +27,7 @@ import { d1Index } from '../src/lib/brain-index.ts';
 import { entitlementSql } from '../ee/entitlements.ts';
 import { FEATURES } from '../src/lib/entitlements.ts';
 import {
+	isDeprecated,
 	otherPageId,
 	pagePath,
 	planStep,
@@ -130,8 +131,12 @@ async function pairPlan(other: ComparedBrain) {
 		b: Pick<ComparedBrain, 'index' | 'config'>,
 		id: (path: string) => string
 	): Promise<PageText[]> => {
+		const fields = await b.index.allFields();
 		const listed = (await b.index.listPages()).filter(
-			(p) => isContentPath(p.path, b.config) && !isToolMaintained(p.path, b.config)
+			(p) =>
+				isContentPath(p.path, b.config) &&
+				!isToolMaintained(p.path, b.config) &&
+				!isDeprecated(fields.get(p.path))
 		);
 		const contents = await b.index.pageContents(listed.map((p) => p.path));
 		return listed.map((p) => ({
