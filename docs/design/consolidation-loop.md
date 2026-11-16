@@ -93,24 +93,25 @@ because position is alphabetical.
 These files are on `main`. All pure, all offline, all covered by golden tests wired into
 `package.json` and `ci.yml`.
 
-| File                            | Exports                                                                                                                              | Test                                |
-| ------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------- |
-| `src/lib/consolidate.ts`        | `computeTensions`, `parseReviewLedger`, `serializeReviewLedger`, `filterDismissed`, `dismiss`, `REVIEW_LEDGER_PATH`, `MAX_DUP_PAGES` | `pnpm test:consolidate` (34 checks) |
-| `src/lib/probe.ts`              | `scoreProbe`, `summarizeProbes`, `diffProbeRuns`, `stripDeclaredProbes`                                                              | `pnpm test:probe`                   |
-| `scripts/local-brain.ts`        | `openFolderAsBrain`                                                                                                                  | exercised by both runners           |
-| `scripts/consolidate-report.ts` | `pnpm consolidate:report <folder>`                                                                                                   |                                     |
-| `scripts/probe-report.ts`       | `pnpm probe:report <folder> <probes.json> [--baseline <run.json>] [--json]`                                                          |                                     |
+| File                            | Exports                                                                                                                     | Test                                |
+| ------------------------------- | --------------------------------------------------------------------------------------------------------------------------- | ----------------------------------- |
+| `src/lib/consolidate.ts`        | `computeTensions`, `tensionFindings`, `MAX_DUP_PAGES`                                                                       | `pnpm test:consolidate` (34 checks) |
+| `src/lib/findings.ts`           | `parseReviewLedger`, `serializeReviewLedger`, `filterDismissed`, `dismissFinding`, `undismissFinding`, `REVIEW_LEDGER_PATH` | `pnpm test:consolidate`             |
+| `src/lib/probe.ts`              | `scoreProbe`, `summarizeProbes`, `diffProbeRuns`, `stripDeclaredProbes`                                                     | `pnpm test:probe`                   |
+| `scripts/local-brain.ts`        | `openFolderAsBrain`                                                                                                         | exercised by both runners           |
+| `scripts/consolidate-report.ts` | `pnpm consolidate:report <folder>`                                                                                          |                                     |
+| `scripts/probe-report.ts`       | `pnpm probe:report <folder> <probes.json> [--baseline <run.json>] [--json]`                                                 |                                     |
 
 Both runners copy a folder of markdown into a temp git repo, index it through the
 **real** content index on `node:sqlite`, and run the real engines. No network, no
 credentials, and the source folder is never written to. Use them to iterate: they are
 the fastest way to see what a change does to a real brain.
 
-`computeTensions` returns seven kinds, ranked by weight, each carrying a stable `key`,
+`computeTensions` returns eight kinds, ranked by weight, each carrying a stable `key`,
 the paths involved, evidence, and the suggested move:
 
 `island` · `orphan` · `note-less-folder` · `hollow-folder-note` ·
-`folder-note-convention` · `folder-echo-page` · `near-duplicate`
+`folder-note-convention` · `folder-echo-page` · `near-duplicate` · `same-identifier`
 
 `scoreProbe` returns five verdicts plus a truncation guard, keyed on the expected
 page's RANK: `owned` (first) · `outranked` (top band, beaten) · `buried` (present,
@@ -280,7 +281,7 @@ Do not reverse these without reading the reasoning above.
    inference anywhere in this loop. Judgment costs tokens in the caller's session.
    Model-powered consolidation lives in `ee/`, behind an entitlement and the model
    gateway ([`consistency-checks.md`](./consistency-checks.md)).
-2. **`validate` reports the count, never the findings.**
+2. **`validate` lists the findings, ranked and capped, and states how many it left out.**
 3. **Tension keys derive from kind plus paths, never from headline wording.**
 4. **Dismissals are durable, in the repo, and filter both queues.**
 5. **`absent` and `elsewhere` stay distinct verdicts.**

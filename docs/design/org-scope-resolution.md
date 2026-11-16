@@ -43,7 +43,7 @@ using its brains", and you can only ask from inside one.
 
 ## Why this is not a URL problem
 
-The web app now addresses these at `/b/<owner>/<repo>?view=members` and
+The web app now addresses these at `/b/<brain>?view=members` and
 `?view=analytics` (see `WEB_TOOL_ROUTING` in `src/lib/web-app.ts`), which reads as "the
 roster of the org that owns this brain" and is true. That is an **addressing** decision
 and it is settled. This document is about **resolution**, which is a correctness

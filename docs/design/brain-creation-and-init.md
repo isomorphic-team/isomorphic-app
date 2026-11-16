@@ -6,6 +6,12 @@ then shipped too, which changed one thing below: new brains are now **private** 
 creator rather than `visibility='org'` (see
 [`brain-level-permissions.md`](./brain-level-permissions.md)).
 
+The body below is the record of that slice and is not kept current. `create_brain` now also
+takes `storage`, so a new brain is a GitHub repository, files the platform holds, or a Google
+Drive folder ([`storage-backends.md`](./storage-backends.md)); and the legacy GitHub sign-in
+and `tenants` path named under _First-touch onboarding_ is removed
+([`storage-and-tenancy.md`](./storage-and-tenancy.md), steps 2b and 6).
+
 Extends [`org-roles-permissions.md`](./org-roles-permissions.md). A deliberately **narrow**
 slice of Phase 8: explicit, named brain creation, and decoupling a session from an
 auto-created brain. **Out of scope on purpose: org/brain membership and access.** The current

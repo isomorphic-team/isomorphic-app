@@ -225,9 +225,10 @@ blocking, consistent with every other `validate` check.
 pipeline; grouping by `actor` is what produces per-person activity. Both are the same
 operation over a link column.
 
-**FR-2c: Date-window predicates.** `filter` is a frontmatter equality match today. Every
-consequential view here needs `occurred_at` compared against a window: relative
-(`current_quarter`, `last_90_days`, `current_month`) and explicit ranges. This is the one
+**FR-2c: Date-window predicates.** `filter` already compares a frontmatter value against a
+number, a date, `today` or a day offset such as `-30d` (`<`, `<=`, `>`, `>=`, `!=`). Every
+consequential view here needs `occurred_at` compared against a window: named calendar
+periods (`current_quarter`, `current_month`) and explicit ranges. Named periods are the one
 genuinely new expression the engine needs. It belongs in the pure `view-directives.ts` layer
 with golden coverage, like every other directive.
 

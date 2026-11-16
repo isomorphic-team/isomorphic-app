@@ -47,8 +47,9 @@ core (below) no longer applies: the core is not kept incomplete for the people u
 An enterprise feature goes in `ee/` when it can be separated from the core, which most can.
 Until 2026-11-05 this document treated the two as one test, which put sign-in in the wrong place.
 
-In `ee/`: model-powered review (the data-policy guard's model stages and brain consolidation),
-the model gateway those use, and the operator's grant tooling (`entitlementSql`).
+In `ee/`: model-powered review (brain consolidation today; the data-policy guard's model stages
+are not built and belong here when they are), the model gateway it uses, and the operator's
+grant tooling (`entitlementSql`).
 
 Enterprise but in the core: enterprise identity (verified domains, a provider per org, SSO
 enforcement, just-in-time provisioning, SCIM), because every sign-in runs through it. It checks
@@ -85,8 +86,11 @@ the enterprise features.
   can enforce a cap. Nothing reports it anywhere; billing reads our own records.
 - **Self-hosted enterprise use.** Needs a subscription and an entitlement row. Signed offline
   license keys come when a self-hoster needs them (roadmap, "brain review", step 6).
-- **Sending content to a model provider.** Only the operator configures it, only to
-  zero-data-retention endpoints, and only for an entitled org. This is processing on the
+- **Sending content to a model provider.** Only the operator configures it, and only for an
+  entitled org. Every request goes through `ee/review/gateway.ts`: OpenRouter requests carry
+  the zero-data-retention routing flag (`ZDR_PROVIDER`); Anthropic requests, which serve Haiku
+  first, run under the operator's own Anthropic organization's retention, which is standard
+  unless the operator has arranged otherwise. This is processing on the
   operator's behalf, not telemetry.
 - **Our own operational runbooks and infrastructure state.** Not in this repository. Generic
   runbooks are (`docs/ops/`); anything naming a real customer, account, or resource is not.

@@ -153,7 +153,7 @@ Related pages ships independently of all of this.
 ## 7. Open questions
 
 - **Cross-brain search becomes one call per brain.** Measure `scope: "all"` over a few dozen
-  objects before step 2.
+  objects before step 6.
 - **`%` and `_`.** The FTS5 tokenizer drops them, so `50%` searches for `50`; `searchIndex`
   matches them literally.
 - **Explaining a rank.** `expect` can say why a page outranked another under `searchIndex`; a

@@ -8,8 +8,9 @@ fetching the file) followed on 2026-08-10. Document text and signed file links (
 proposed.
 
 The ask: let people upload images (and possibly other file types) into a brain, see them
-in the app, and have Claude actually look at them. The brain stays what it is: an ordinary
-git repository on GitHub.
+in the app, and have Claude actually look at them. The brain stays what it is: files in the
+brain's own storage (a GitHub repository, a Google Drive folder, or a files object the
+deployment holds).
 
 This document exists because the obvious implementation is wrong in a specific way, and
 the reason is worth writing down before anyone spends a week on it.
