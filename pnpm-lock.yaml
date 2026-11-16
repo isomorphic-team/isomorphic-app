@@ -12,8 +12,8 @@ importers:
   .:
     dependencies:
       '@anthropic-ai/sdk':
-        specifier: ^1.6.0
-        version: 1.6.0(zod@4.6.7)
+        specifier: ^1.8.0
+        version: 1.8.0(zod@4.6.7)
       '@auth/core':
         specifier: ^0.41.3
         version: 0.41.3
@@ -24,8 +24,8 @@ importers:
         specifier: ^1.2.4
         version: 1.2.4
       '@hono/node-server':
-        specifier: ^2.1.6
-        version: 2.1.6(hono@4.13.16)
+        specifier: ^2.1.8
+        version: 2.1.8(hono@4.13.18)
       '@modelcontextprotocol/client':
         specifier: 2.4.0
         version: 2.4.0
@@ -42,11 +42,11 @@ importers:
         specifier: ^0.8.3
         version: 0.8.3
       hono:
-        specifier: ^4.13.16
-        version: 4.13.16
+        specifier: ^4.13.18
+        version: 4.13.18
       marked:
-        specifier: ^18.1.3
-        version: 18.1.3
+        specifier: ^18.2.0
+        version: 18.2.0
       octokit:
         specifier: ^5.0.5
         version: 5.0.5
@@ -141,8 +141,8 @@ importers:
 
 packages:
 
-  '@anthropic-ai/sdk@1.6.0':
-    resolution: {integrity: sha512-XqiO/46n8S6So8jQ/6/uNCkHntyW6QHHs1gZ+hlwTx1fWDr929g4VmwIXfdMVk7SuBWNdQvAlwyi1G3t6SEIuQ==}
+  '@anthropic-ai/sdk@1.8.0':
+    resolution: {integrity: sha512-yDOArk2+Qpd/djEKmZjrv7JZ+pn5iBHARJ9PAdvfhGf4H5wNqTgY/2K0/yDKdQdm8G8hrNQchMlBAHpPK7yBfg==}
     hasBin: true
     peerDependencies:
       zod: ^3.25.0 || ^4.0.0
@@ -167,8 +167,8 @@ packages:
   '@auth/d1-adapter@1.11.3':
     resolution: {integrity: sha512-F71eQVTJzP0igCaPMFqE7EUp62sea6COGQs+6rF7kN1998KBRKy+I0xennOz00gnL/dMOM82PP0GvE5Vtpjm7g==}
 
-  '@babel/runtime@7.29.13':
-    resolution: {integrity: sha512-v+oN26xP4YIlQsbQ/CbTH1WG5m/l/DjKKZNy/Kp3f/AFvbgt7Em/D0FeMM3O2hX0YzeN2M16W8lOpyhIkfCBcQ==}
+  '@babel/runtime@7.29.14':
+    resolution: {integrity: sha512-Y5tqevQaUAZhhj82BpYMNC1ssvLQTVAfwKdm8iy8qwmhvC2/CpcAu8OC+QEtjM7pMk7knx83u1Qj8gzkicyelw==}
     engines: {node: '>=6.9.0'}
 
   '@cloudflare/kv-asset-handler@0.5.0':
@@ -383,8 +383,8 @@ packages:
     cpu: [x64]
     os: [win32]
 
-  '@hono/node-server@2.1.6':
-    resolution: {integrity: sha512-p/KH9MnfNcsm3sR6x4lNgm5j+QN4Et8srKredl9DZfXiyZ1UQ3aQ2YVpFLbqktYN5JI+DB+VZFKM2PqE5hLKjQ==}
+  '@hono/node-server@2.1.8':
+    resolution: {integrity: sha512-jdf7FHh6A1lzjpHHQUgxsg2GeER2vMetnAOfeActzcoli6jamlK+NAwL6Dsr5Fl3BS3tYUQzCdtZjU8Qxv7bEA==}
     engines: {node: '>=20'}
     peerDependencies:
       hono: ^4 || ^5.0.0-0
@@ -1151,8 +1151,8 @@ packages:
   graceful-fs@4.2.11:
     resolution: {integrity: sha512-RbJ5/jmFcNNCcDV5o9eTnBLJ/HszWV0P73bc+Ff4nS/rJj+YaS6IGyiOL0VoBYX+l1Wrl3k63h/KrH+nhJ0XvQ==}
 
-  hono@4.13.16:
-    resolution: {integrity: sha512-AOLOEhvrV+iH92xXCnFr/5+3KjPKcI3xP63XJtX5spAnkznPdHijlIsUTpi7/9EhWqrTCekw5c5zh1K+YsVw7A==}
+  hono@4.13.18:
+    resolution: {integrity: sha512-H9q/E1XizaWstJxUW881dmLxEj+t/TrGGnyxINkm4+sK0qUwsMtFdo2BWI9Vs3cIS19MU6b6iCijoUoEf4f3DA==}
     engines: {node: '>=16.9.0'}
 
   is-docker@3.0.0:
@@ -1294,8 +1294,8 @@ packages:
     resolution: {integrity: sha512-+Az7Ojz3iRGu8KYMvJ6xVhvrxP3eE+vEtJX75Ow88XBpcQNV/0lGX5ZynIIBftREo4DC2jsveAMDaeltmm8QvQ==}
     hasBin: true
 
-  marked@18.1.3:
-    resolution: {integrity: sha512-9ChMH8EVVgjgID49nsL6IWxWk5c6GtAsq/xw7U1ggkjkU5AGuv68oLTVlFRtvcUYZtpbNyjyvGo3YDu0fGapiw==}
+  marked@18.2.0:
+    resolution: {integrity: sha512-KaeL+tAbtvI930q7HE2PN5lYXYdT8EiSmxHlN6F3rsfb57wd5mp5W5TLazpdj4inTQBJdgjYwbs40W/0VUGU+Q==}
     engines: {node: '>= 20'}
     hasBin: true
 
@@ -1584,7 +1584,7 @@ packages:
 
 snapshots:
 
-  '@anthropic-ai/sdk@1.6.0(zod@4.6.7)':
+  '@anthropic-ai/sdk@1.8.0(zod@4.6.7)':
     dependencies:
       '@opentelemetry/api': 1.10.0
       json-schema-to-ts: 3.1.1
@@ -1608,7 +1608,7 @@ snapshots:
       - '@simplewebauthn/server'
       - nodemailer
 
-  '@babel/runtime@7.29.13': {}
+  '@babel/runtime@7.29.14': {}
 
   '@cloudflare/kv-asset-handler@0.5.0': {}
 
@@ -1724,9 +1724,9 @@ snapshots:
   '@esbuild/win32-x64@0.28.2':
     optional: true
 
-  '@hono/node-server@2.1.6(hono@4.13.16)':
+  '@hono/node-server@2.1.8(hono@4.13.18)':
     dependencies:
-      hono: 4.13.16
+      hono: 4.13.18
 
   '@img/colour@1.1.0': {}
 
@@ -2368,7 +2368,7 @@ snapshots:
 
   graceful-fs@4.2.11: {}
 
-  hono@4.13.16: {}
+  hono@4.13.18: {}
 
   is-docker@3.0.0: {}
 
@@ -2398,7 +2398,7 @@ snapshots:
 
   json-schema-to-ts@3.1.1:
     dependencies:
-      '@babel/runtime': 7.29.13
+      '@babel/runtime': 7.29.14
       ts-algebra: 2.0.0
 
   json-with-bigint@3.5.12: {}
@@ -2475,7 +2475,7 @@ snapshots:
       punycode.js: 2.3.1
       uc.micro: 3.0.0
 
-  marked@18.1.3: {}
+  marked@18.2.0: {}
 
   mdurl@2.1.0: {}
 
