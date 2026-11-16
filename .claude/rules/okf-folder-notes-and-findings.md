@@ -103,7 +103,7 @@ are in the list, with keys.
   `against` on `review_brain` compares the brain with another in the same organization
   (`againstRefusal`); the caller needs admin on the first and any access to the second.
   `against: "all"` compares it with every other brain of its organization the caller can open
-  (`brainsToCompare`), and names in its reply any it could not open.
+  (`brainsToCompare`), and names in its reply any it could not open (`resolveComparison`).
   `configure_brain` still accepts the old `baseline_scan` / `consolidate` arguments only to
   answer with a pointer: dropped from the schema, they would make the call a layout write.
 - `resolve` actions: `dismiss` / `undismiss` for structure, consolidation and policy findings

@@ -52,11 +52,10 @@ export const AGAINST_ALL = 'all';
 // Brains one pass compares against at most. Each is opened on every call.
 export const MAX_COMPARED_BRAINS = 20;
 
-// What a contradictions pass compares a brain against. `scope` names the pass's run
-// state (one other brain's id, or AGAINST_ALL) and `label` is what the caller passed.
+// What a contradictions pass compares a brain against: one named brain, or with `all`
+// every other brain of its organization the caller can open.
 export interface Comparison {
-	scope: string;
-	label: string;
+	all: boolean;
 	brains: ComparedBrain[];
 }
 
@@ -68,46 +67,13 @@ export type ConsolidationStep = (opts?: {
 	against?: Comparison;
 }) => Promise<{ text: string; wire: ConsolidationStepWire }>;
 
-// Which brains `against: "all"` covers for a brain: the others in its organization among
-// the brains the caller can open, in a stable order. Or why there is nothing to run.
-export function brainsToCompare(
-	check: ReviewCheck,
-	home: { brainId: string; orgId?: string },
-	reachable: readonly { brain_id: string; org_id: string; id: string }[] | undefined
-): { brains: { brainId: string; handle: string }[] } | { refusal: string } {
-	if (check !== 'contradictions') {
-		return { refusal: '`against` only applies to check "contradictions".' };
-	}
-	const brains = (reachable ?? [])
-		.filter((b) => !!home.orgId && b.org_id === home.orgId && b.brain_id !== home.brainId)
-		.map((b) => ({ brainId: b.brain_id, handle: b.id }))
-		.sort((a, b) => (a.brainId < b.brainId ? -1 : a.brainId > b.brainId ? 1 : 0));
-	if (!brains.length) {
-		return {
-			refusal:
-				'There is no other brain in this organization that you can open, so there is nothing to compare against.'
-		};
-	}
-	if (brains.length > MAX_COMPARED_BRAINS) {
-		return {
-			refusal: `You can open ${brains.length} other brains in this organization, and one pass compares against at most ${MAX_COMPARED_BRAINS}. Name one brain in \`against\` instead.`
-		};
-	}
-	return { brains };
-}
+type InOrg = { brainId: string; orgId?: string };
 
 // Why this brain cannot be checked against `other`, or null when it can. The caller has
 // already opened both, so reading the other brain is settled before this is asked. The
 // same organization is required because the other brain's pages go to the model under
 // this brain's organization's entitlement and spend, and are quoted in its queue.
-export function againstRefusal(
-	check: ReviewCheck,
-	home: { brainId: string; orgId?: string },
-	other: { brainId: string; orgId?: string }
-): string | null {
-	if (check !== 'contradictions') {
-		return '`against` only applies to check "contradictions".';
-	}
+export function againstRefusal(home: InOrg, other: InOrg): string | null {
 	if (home.brainId === other.brainId) {
 		return 'A brain is not compared against itself: leave `against` out to check it on its own.';
 	}
@@ -116,6 +82,78 @@ export function againstRefusal(
 	}
 	return null;
 }
+
+// The handles `against: "all"` covers for a brain: the brains the caller can open that it
+// may be compared against, in a stable order. Or why there is nothing to run.
+export function brainsToCompare(
+	home: InOrg,
+	reachable: readonly { brain_id: string; org_id: string; id: string }[] | undefined
+): { handles: string[] } | { refusal: string } {
+	const handles = (reachable ?? [])
+		.filter((b) => againstRefusal(home, { brainId: b.brain_id, orgId: b.org_id }) === null)
+		.sort((a, b) => (a.brain_id < b.brain_id ? -1 : a.brain_id > b.brain_id ? 1 : 0))
+		.map((b) => b.id);
+	if (!handles.length) {
+		return {
+			refusal:
+				'There is no other brain in this organization that you can open, so there is nothing to compare against.'
+		};
+	}
+	if (handles.length > MAX_COMPARED_BRAINS) {
+		return {
+			refusal: `You can open ${handles.length} other brains in this organization, and one pass compares against at most ${MAX_COMPARED_BRAINS}. Name one brain in \`against\` instead.`
+		};
+	}
+	return { handles };
+}
+
+const quoted = (names: readonly string[]) => names.map((n) => `"${n}"`).join(', ');
+
+// What a `review_brain` call compares its brain against, from what the caller passed as
+// `against`. `open` resolves a handle to a brain the caller can read, and throws when it
+// cannot. A named brain that does not open is the caller's error. Under "all", a brain
+// that does not open is left out and reported in `unopened`, since one unreachable brain
+// would otherwise block the pass for good.
+export async function resolveComparison(
+	check: ReviewCheck,
+	home: InOrg,
+	against: string,
+	deps: {
+		listBrains?: () => Promise<readonly { brain_id: string; org_id: string; id: string }[]>;
+		open: (handle: string) => Promise<ComparedBrain & { orgId?: string }>;
+	}
+): Promise<{ comparison: Comparison; unopened: string[] } | { refusal: string }> {
+	if (check !== 'contradictions') {
+		return { refusal: '`against` only applies to check "contradictions".' };
+	}
+	if (against.trim().toLowerCase() !== AGAINST_ALL) {
+		const other = await deps.open(against);
+		const refusal = againstRefusal(home, other);
+		return refusal ? { refusal } : { comparison: { all: false, brains: [other] }, unopened: [] };
+	}
+	const wanted = brainsToCompare(home, await deps.listBrains?.().catch(() => undefined));
+	if ('refusal' in wanted) return wanted;
+	const brains: ComparedBrain[] = [];
+	const unopened: string[] = [];
+	for (const handle of wanted.handles) {
+		try {
+			const other = await deps.open(handle);
+			if (againstRefusal(home, other) === null) brains.push(other);
+		} catch {
+			unopened.push(handle);
+		}
+	}
+	if (!brains.length) {
+		return {
+			refusal: `None of the other brains could be opened (${quoted(unopened)}), so nothing was compared.`
+		};
+	}
+	return { comparison: { all: true, brains }, unopened };
+}
+
+// What the reply adds about brains an "all" pass could not open.
+export const unopenedNote = (unopened: readonly string[]) =>
+	unopened.length ? ` Left out, could not be opened: ${quoted(unopened)}.` : '';
 
 // What `validate` needs from the contradictions pass's row.
 export interface ContradictionPass {

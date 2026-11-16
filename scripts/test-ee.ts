@@ -56,8 +56,8 @@ import {
 	consolidationStepText,
 	isDeprecated,
 	isOtherPage,
+	otherPage,
 	otherPageId,
-	pageBrain,
 	pagePath,
 	passesScreen,
 	planStep,
@@ -1429,8 +1429,8 @@ console.log('\nconsolidation: one brain against another (12)');
 	const both = [
 		page('rates.md', 'Acme rates', 'Acme rates are listed here.'),
 		page('terms.md', 'Acme terms', 'Acme rates and terms.'),
-		page(otherPageId('brain-b', 'rates.md'), 'Acme rates', 'Acme rates for partners.'),
-		page(otherPageId('brain-b', 'garden.md'), 'Garden', 'Tomatoes and basil.')
+		otherPage('brain-b', page('rates.md', 'Acme rates', 'Acme rates for partners.')),
+		otherPage('brain-b', page('garden.md', 'Garden', 'Tomatoes and basil.'))
 	];
 	const across = planStep(both, new Map(), null, 48, () => true, true);
 	check(
@@ -1455,12 +1455,8 @@ console.log('\nconsolidation: one brain against another (12)');
 	const hub = [
 		page('dinner.md', 'Harbor dinner format', 'The Harbor dinner is a curated format.'),
 		page('acme.md', 'Acme agreement', 'The Acme agreement was signed.'),
-		page(
-			otherPageId('brain-b', 'template.md'),
-			'Agreement template',
-			'This agreement has a format.'
-		),
-		page(otherPageId('brain-b', 'acme.md'), 'Acme', 'The Acme agreement sets the rate.')
+		otherPage('brain-b', page('template.md', 'Agreement template', 'This agreement has a format.')),
+		otherPage('brain-b', page('acme.md', 'Acme', 'The Acme agreement sets the rate.'))
 	];
 	const hubPairs = planStep(hub, new Map(), null, 48, () => true, true).pairs.map(({ pair }) =>
 		[...pair].sort().join('|')
@@ -1475,13 +1471,15 @@ console.log('\nconsolidation: one brain against another (12)');
 		'inside a brain one shared word is still enough',
 		relatedPages(hub[0], [hub[1], { ...hub[2], path: 't.md' }]).includes('t.md')
 	);
+	const elsewhere = otherPage('local/b', page('a/b.md', 'T', ''));
 	check(
-		'a page id gives back its path on either side, and its brain when it is another one',
-		pagePath(otherPageId('brain-b', 'a/b.md')) === 'a/b.md' &&
-			pagePath('a/b.md') === 'a/b.md' &&
-			pageBrain(otherPageId('local/b', 'a/b.md')) === 'local/b' &&
-			pagePath(otherPageId('local/b', 'a/b.md')) === 'a/b.md' &&
-			pageBrain('a/b.md') === null
+		"a page of another brain keeps its path there, under an id this brain's pages cannot have",
+		pagePath(elsewhere) === 'a/b.md' &&
+			elsewhere.other?.brainId === 'local/b' &&
+			isOtherPage(elsewhere.path) &&
+			elsewhere.path !== otherPage('local/c', page('a/b.md', 'T', '')).path &&
+			pagePath(page('a/b.md', 'T', '')) === 'a/b.md' &&
+			!isOtherPage('a/b.md')
 	);
 
 	const LOW = 'The day rate for Acme engagement is $1,200 per day.';
@@ -1550,7 +1548,7 @@ console.log('\nconsolidation: one brain against another (12)');
 			store: home.store,
 			repo: home.locator,
 			gateway,
-			against: { scope: other.brainId, label: against.handle, brains: [against] }
+			against: { all: false, brains: [against] }
 		};
 
 		const first = await advanceConsolidation({ ...base, newRunId: () => 'x1' }, NOW);
@@ -1680,8 +1678,7 @@ console.log('\nconsolidation: one brain against another (12)');
 		const third = await openFolderAsBrain(thirdSrc, 'wiki');
 		try {
 			const everyone = {
-				scope: AGAINST_ALL,
-				label: AGAINST_ALL,
+				all: true,
 				brains: [
 					against,
 					{
@@ -1726,6 +1723,37 @@ console.log('\nconsolidation: one brain against another (12)');
 				'that pass has its own run state, apart from a pass against one brain',
 				(await readRun(db, home.brainId, AGAINST_ALL))?.runId === 'all1' &&
 					(await readRun(db, home.brainId, other.brainId))?.runId === 'x3'
+			);
+			const named = async (sql: string, ...binds: string[]) =>
+				(
+					await db
+						.prepare(sql)
+						.bind(home.brainId, ...binds)
+						.all<{ other_brain_id: string | null }>()
+				).results.map((r) => r.other_brain_id);
+			const itemBrains = await named(
+				"SELECT DISTINCT other_brain_id FROM brain_pass_items WHERE brain_id = ?1 AND kind = 'consolidation:all'"
+			);
+			check(
+				'each pair it remembers records the other brain it is about, so it goes when that brain does',
+				itemBrains.length === 2 &&
+					itemBrains.includes(other.brainId) &&
+					itemBrains.includes(third.brainId),
+				JSON.stringify(itemBrains)
+			);
+			check(
+				'a pass against one brain records that brain, and a pass against all records none',
+				JSON.stringify(
+					await named(
+						'SELECT other_brain_id FROM brain_passes WHERE brain_id = ?1 AND kind = ?2',
+						`consolidation:${other.brainId}`
+					)
+				) === JSON.stringify([other.brainId]) &&
+					JSON.stringify(
+						await named(
+							"SELECT other_brain_id FROM brain_passes WHERE brain_id = ?1 AND kind = 'consolidation:all'"
+						)
+					) === JSON.stringify([null])
 			);
 			check(
 				'its reply says how to continue it',

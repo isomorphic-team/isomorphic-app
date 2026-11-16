@@ -49,6 +49,18 @@ export const BRAIN_PURGED_TABLES = [
 ] as const;
 
 /**
+ * Tables whose rows can also name a second brain (`other_brain_id`): what one brain holds
+ * about another, such as a finding quoting its page or a check run against it. Those rows
+ * go when either brain does. `pnpm test:access` fails on a table with the column that is
+ * not listed here.
+ */
+export const BRAIN_REFERENCING_TABLES = [
+	'review_findings',
+	'brain_passes',
+	'brain_pass_items'
+] as const;
+
+/**
  * Kept: `usage_daily` holds only counters and is the analytics history;
  * `feedback_reports` is a report about the product, not brain data.
  */
@@ -65,25 +77,8 @@ export function forgetBrainsStatements(
 	...binds: unknown[]
 ): D1PreparedStatement[] {
 	return [
-		// What other brains hold about these: findings quoting their pages, and the run state
-		// of checks made against them (kind `consolidation:<brain id>`, 14 characters in).
-		db.prepare(`DELETE FROM review_findings WHERE other_brain_id IN (${brainIds})`).bind(...binds),
-		// A check against every other brain remembers each pair under one kind, with the
-		// other brain's id inside the item (`//<brain id>//<path>`).
-		db
-			.prepare(
-				`WITH gone(id) AS (${brainIds})
-				 DELETE FROM brain_pass_items
-				 WHERE kind = 'consolidation:all'
-				   AND EXISTS (SELECT 1 FROM gone WHERE instr(item, '//' || gone.id || '//') > 0)`
-			)
-			.bind(...binds),
-		...['brain_passes', 'brain_pass_items'].map((t) =>
-			db
-				.prepare(
-					`DELETE FROM ${t} WHERE kind LIKE 'consolidation:%' AND substr(kind, 15) IN (${brainIds})`
-				)
-				.bind(...binds)
+		...BRAIN_REFERENCING_TABLES.map((t) =>
+			db.prepare(`DELETE FROM ${t} WHERE other_brain_id IN (${brainIds})`).bind(...binds)
 		),
 		...[...BRAIN_PURGED_TABLES, 'brains'].map((t) =>
 			db.prepare(`DELETE FROM ${t} WHERE brain_id IN (${brainIds})`).bind(...binds)

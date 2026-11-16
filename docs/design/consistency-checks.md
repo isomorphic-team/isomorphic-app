@@ -330,7 +330,9 @@ Roadmap step 2 extends the `validate` / `resolve` pattern into one findings queu
   each other. Each finding names the brain its other page is in. A brain that cannot be
   opened is left out and named in the reply. The pass keeps one cursor and pair memory
   (`consolidation:all`), all brains together stay under `MAX_DUP_PAGES`, and every brain's
-  pages are still loaded whole on each call. Repeating `--against` on
+  pages are still loaded whole on each call. Each pass row and remembered pair names the
+  other brain it is about (`other_brain_id`, migration 0029), which is how removing a brain
+  finds them. Repeating `--against` on
   `pnpm consolidate:report` runs it over local folders. Design context: [`roles-self-and-world-model.md`](./roles-self-and-world-model.md),
   section 11, step 3.
 - **Not yet:** the push trigger and background passes (C6), and the Review screen section (C7).

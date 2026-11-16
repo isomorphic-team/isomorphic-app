@@ -55,6 +55,9 @@ import {
 	MAX_COMPARED_BRAINS,
 	againstRefusal,
 	brainsToCompare,
+	resolveComparison,
+	unopenedNote,
+	type ComparedBrain,
 	contradictionCoverage,
 	reviewCheckRefusal
 } from '../src/lib/review-checks.ts';
@@ -1028,56 +1031,49 @@ console.log('\nclusters: findings about one fact, shown as one item');
 console.log('\nreview_brain: what may run, and what validate says about the contradictions pass');
 {
 	const legal = { brainId: 'brain-legal', orgId: 'o1' };
+	const handbook = { brainId: 'brain-handbook', orgId: 'o1' };
 	check(
 		'against: two brains in one organization can be compared',
-		againstRefusal('contradictions', legal, { brainId: 'brain-handbook', orgId: 'o1' }) === null
-	);
-	check(
-		'against: it applies to the contradictions check only',
-		/only applies/.test(
-			againstRefusal('sensitive-data', legal, { brainId: 'brain-handbook', orgId: 'o1' }) ?? ''
-		)
+		againstRefusal(legal, handbook) === null
 	);
 	check(
 		'against: a brain is not compared against itself',
-		/against itself/.test(againstRefusal('contradictions', legal, legal) ?? '')
+		/against itself/.test(againstRefusal(legal, legal) ?? '')
 	);
 	check(
 		'against: a brain in another organization is refused',
-		/same organization/.test(
-			againstRefusal('contradictions', legal, { brainId: 'brain-handbook', orgId: 'o2' }) ?? ''
-		)
+		/same organization/.test(againstRefusal(legal, { ...handbook, orgId: 'o2' }) ?? '')
 	);
+	check(
+		'against: where there is no organization to compare, it is refused',
+		/same organization/.test(againstRefusal({ brainId: 'a' }, { brainId: 'b' }) ?? '')
+	);
+
 	const reach = (id: string, org: string) => ({ brain_id: `brain-${id}`, org_id: org, id });
-	const everyone = brainsToCompare('contradictions', legal, [
+	const org = [
 		reach('ops', 'o1'),
 		reach('legal', 'o1'),
 		reach('handbook', 'o1'),
 		reach('elsewhere', 'o2')
-	]);
+	];
+	const everyone = brainsToCompare(legal, org);
 	check(
 		'against all: the other brains of the same organization the caller can open, in a stable order',
-		'brains' in everyone &&
-			JSON.stringify(everyone.brains) ===
-				JSON.stringify([
-					{ brainId: 'brain-handbook', handle: 'handbook' },
-					{ brainId: 'brain-ops', handle: 'ops' }
-				]),
+		'handles' in everyone &&
+			JSON.stringify(everyone.handles) === JSON.stringify(['handbook', 'ops']),
 		JSON.stringify(everyone)
 	);
-	const alone = brainsToCompare('contradictions', legal, [reach('legal', 'o1'), reach('x', 'o2')]);
+	const alone = brainsToCompare(legal, [reach('legal', 'o1'), reach('x', 'o2')]);
 	check(
 		'against all: with no other brain in the organization there is nothing to run',
 		'refusal' in alone && /no other brain/.test(alone.refusal)
 	);
-	const unknown = brainsToCompare('contradictions', legal, undefined);
-	const orgless = brainsToCompare('contradictions', { brainId: 'a' }, [reach('b', 'o1')]);
 	check(
 		'against all: nor without a brain list, or without an organization',
-		'refusal' in unknown && 'refusal' in orgless
+		'refusal' in brainsToCompare(legal, undefined) &&
+			'refusal' in brainsToCompare({ brainId: 'a' }, [reach('b', 'o1')])
 	);
 	const many = brainsToCompare(
-		'contradictions',
 		legal,
 		Array.from({ length: MAX_COMPARED_BRAINS + 1 }, (_, i) => reach(`b${i}`, 'o1'))
 	);
@@ -1085,16 +1081,74 @@ console.log('\nreview_brain: what may run, and what validate says about the cont
 		'against all: more brains than one pass compares is refused, naming the limit',
 		'refusal' in many && many.refusal.includes(`at most ${MAX_COMPARED_BRAINS}`)
 	);
-	const wrongCheck = brainsToCompare('sensitive-data', legal, [reach('ops', 'o1')]);
+
+	// What a call compares against, with the brains it opens faked.
+	const opened: string[] = [];
+	const open = (down: readonly string[] = []) => ({
+		listBrains: async () => org,
+		open: async (handle: string) => {
+			opened.push(handle);
+			if (down.includes(handle)) throw new Error(`${handle} is unreachable`);
+			const row = org.find((b) => b.id === handle);
+			if (!row) throw new Error(`No brain matching "${handle}".`);
+			return { brainId: row.brain_id, orgId: row.org_id, handle } as ComparedBrain & {
+				orgId: string;
+			};
+		}
+	});
+	const wrongCheck = await resolveComparison('sensitive-data', legal, 'handbook', open());
 	check(
-		'against all: it applies to the contradictions check only',
-		'refusal' in wrongCheck && /only applies/.test(wrongCheck.refusal)
+		'comparison: `against` applies to the contradictions check only, and opens nothing',
+		'refusal' in wrongCheck && /only applies/.test(wrongCheck.refusal) && opened.length === 0
+	);
+	const one = await resolveComparison('contradictions', legal, 'handbook', open());
+	check(
+		'comparison: a named brain is the one brain compared',
+		'comparison' in one &&
+			!one.comparison.all &&
+			one.comparison.brains.map((b) => b.handle).join() === 'handbook' &&
+			one.unopened.length === 0
+	);
+	const self = await resolveComparison('contradictions', legal, 'legal', open());
+	const foreign = await resolveComparison('contradictions', legal, 'elsewhere', open());
+	check(
+		'comparison: a named brain that is this one, or in another organization, is refused',
+		'refusal' in self &&
+			/against itself/.test(self.refusal) &&
+			'refusal' in foreign &&
+			/same organization/.test(foreign.refusal)
 	);
 	check(
-		'against: where there is no organization to compare, it is refused',
-		/same organization/.test(
-			againstRefusal('contradictions', { brainId: 'a' }, { brainId: 'b' }) ?? ''
+		'comparison: a named brain that does not open is an error, not a silent skip',
+		await resolveComparison('contradictions', legal, 'handbook', open(['handbook'])).then(
+			() => false,
+			(err: Error) => /unreachable/.test(err.message)
 		)
+	);
+	opened.length = 0;
+	const all = await resolveComparison('contradictions', legal, ' ALL ', open(['ops']));
+	check(
+		'comparison: "all" opens every other brain of the organization, and leaves out and names one that does not open',
+		'comparison' in all &&
+			all.comparison.all &&
+			all.comparison.brains.map((b) => b.handle).join() === 'handbook' &&
+			JSON.stringify(all.unopened) === JSON.stringify(['ops']) &&
+			JSON.stringify(opened) === JSON.stringify(['handbook', 'ops']),
+		JSON.stringify({ all, opened })
+	);
+	const none = await resolveComparison('contradictions', legal, 'all', open(['ops', 'handbook']));
+	check(
+		'comparison: "all" with no brain that opens runs nothing and says which',
+		'refusal' in none && none.refusal.includes('"handbook", "ops"')
+	);
+	const nolist = await resolveComparison('contradictions', legal, 'all', { open: open().open });
+	check(
+		'comparison: "all" without a brain list has nothing to compare',
+		'refusal' in nolist && /no other brain/.test(nolist.refusal)
+	);
+	check(
+		'comparison: the reply names the brains left out, and adds nothing when there are none',
+		unopenedNote(['ops']) === ' Left out, could not be opened: "ops".' && unopenedNote([]) === ''
 	);
 
 	const on = { policyMode: 'shadow' as const, contradictionsAvailable: true };

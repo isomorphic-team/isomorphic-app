@@ -121,10 +121,8 @@ import type { BaselineStepWire, SearchWire } from '../lib/tool-payloads.ts';
 import { advanceBaseline, baselineStepText } from '../lib/policy-baseline.ts';
 import {
 	REVIEW_CHECKS,
-	AGAINST_ALL,
-	againstRefusal,
-	brainsToCompare,
-	type ComparedBrain,
+	resolveComparison,
+	unopenedNote,
 	type Comparison,
 	type ConsolidationStep,
 	contradictionCoverage,
@@ -930,14 +928,12 @@ export async function reachableBrains(
 	const out = new Map<string, ReachableBrain>();
 	if (!brainIds.length || !deps?.listBrains) return out;
 	try {
-		for (const b of await deps.listBrains()) {
-			if (!brainIds.includes(b.brain_id)) continue;
-			out.set(b.brain_id, {
-				label: brainLabel(b),
-				handle: b.id,
-				shas: await openIndex(b.brain_id).pageShas()
-			});
-		}
+		const wanted = new Set(brainIds);
+		const brains = (await deps.listBrains()).filter((b) => wanted.has(b.brain_id));
+		const shas = await Promise.all(brains.map((b) => openIndex(b.brain_id).pageShas()));
+		brains.forEach((b, i) =>
+			out.set(b.brain_id, { label: brainLabel(b), handle: b.id, shas: shas[i] })
+		);
 	} catch {
 		return new Map();
 	}
@@ -1610,47 +1606,30 @@ export function registerLibrarianTools(
 			})
 		},
 		async ({ brain, check, fresh, against }) => {
-			let comparison: Comparison | undefined;
-			// Brains an "all" pass could not open. They are named in the reply, never dropped
-			// silently, and never stop the pass: one unreachable brain would block it for good.
-			const unopened: string[] = [];
+			let compared: { comparison: Comparison; unopened: string[] } | undefined;
 			if (against) {
-				const home = await getContext({ requires: 'admin', brain });
-				const all = against.trim().toLowerCase() === AGAINST_ALL;
-				const wanted = all
-					? brainsToCompare(check, home, await deps?.listBrains?.().catch(() => undefined))
-					: { brains: [{ brainId: '', handle: against }] };
-				if ('refusal' in wanted) return fail(wanted.refusal);
-				const brains: ComparedBrain[] = [];
-				for (const want of wanted.brains) {
-					let other: BrainContext;
-					try {
-						other = await getContext({ brain: want.handle });
-					} catch (err) {
-						if (!all) throw err;
-						unopened.push(want.handle);
-						continue;
+				const resolved = await resolveComparison(
+					check,
+					await getContext({ requires: 'admin', brain }),
+					against,
+					{
+						listBrains: deps?.listBrains,
+						open: async (handle) => {
+							const other = await getContext({ brain: handle });
+							return {
+								brainId: other.brainId,
+								orgId: other.orgId,
+								handle: other.activeBrain.id,
+								index: other.index,
+								store: other.store,
+								repo: other.locator,
+								config: other.config
+							};
+						}
 					}
-					const refusal = againstRefusal(check, home, other);
-					if (refusal && !all) return fail(refusal);
-					if (refusal) continue;
-					brains.push({
-						brainId: other.brainId,
-						handle: other.activeBrain.id,
-						index: other.index,
-						store: other.store,
-						repo: other.locator,
-						config: other.config
-					});
-				}
-				if (!brains.length) {
-					return fail(
-						`None of the other brains could be opened (${unopened.map((h) => `"${h}"`).join(', ')}), so nothing was compared.`
-					);
-				}
-				comparison = all
-					? { scope: AGAINST_ALL, label: AGAINST_ALL, brains }
-					: { scope: brains[0].brainId, label: brains[0].handle, brains };
+				);
+				if ('refusal' in resolved) return fail(resolved.refusal);
+				compared = resolved;
 			}
 			// Resolved last, so the call is counted against the brain it runs on.
 			const ctx = await getContext({ requires: 'admin', brain });
@@ -1660,12 +1639,11 @@ export function registerLibrarianTools(
 			});
 			if (refusal) return fail(refusal);
 			if (check === 'contradictions' && ctx.consolidate) {
-				const step = await ctx.consolidate({ fresh, against: comparison });
-				const note = unopened.length
-					? ` Left out, could not be opened: ${unopened.map((h) => `"${h}"`).join(', ')}.`
-					: '';
+				const step = await ctx.consolidate({ fresh, against: compared?.comparison });
 				return {
-					content: [{ type: 'text' as const, text: step.text + note }],
+					content: [
+						{ type: 'text' as const, text: step.text + unopenedNote(compared?.unopened ?? []) }
+					],
 					structuredContent: step.wire
 				};
 			}

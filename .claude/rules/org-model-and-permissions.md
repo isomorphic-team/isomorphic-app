@@ -153,7 +153,7 @@ org roster.
   `remove_member` → `deleteUserBrainGrantsInOrg`. `forgetBrain` (`src/lib/brain-forget.ts`)
   deletes the brain with its grants, pending brain invites, index, findings and policy rows in
   one batch, along with what other brains hold about it (findings quoting its pages, checks
-  run against it); `createBrain` clears residue under the new id in its insert batch, because
+  run against it: every table in `BRAIN_REFERENCING_TABLES`, by `other_brain_id`); `createBrain` clears residue under the new id in its insert batch, because
   `brain_id` is derived from the repo name (`brainIdFor`) and a reconnected repo gets the same
   id. A new table
   with a `brain_id` column goes in `BRAIN_PURGED_TABLES` or `BRAIN_KEPT_TABLES`;

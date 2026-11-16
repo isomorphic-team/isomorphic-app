@@ -27,18 +27,15 @@ import { d1Index } from '../src/lib/brain-index.ts';
 import { entitlementSql } from '../ee/entitlements.ts';
 import { FEATURES } from '../src/lib/entitlements.ts';
 import {
-	isDeprecated,
-	isOtherPage,
-	otherPageId,
-	pageBrain,
+	comparablePages,
 	pagePath,
+	pageTexts,
 	planStep,
 	runConsolidationStep,
 	type PageText,
 	type Proposal
 } from '../ee/review/consolidation.ts';
-import { isContentPath, isToolMaintained } from '../src/lib/brain-policy.ts';
-import { AGAINST_ALL, type ComparedBrain, type Comparison } from '../src/lib/review-checks.ts';
+import type { Comparison } from '../src/lib/review-checks.ts';
 import { basename, dirname } from 'node:path';
 import { readFindings } from '../src/lib/review-queue.ts';
 import { loadDevVarsIntoEnv } from '../src/persist.ts';
@@ -86,8 +83,7 @@ for (const folder of againstSources) {
 }
 const against: Comparison | undefined = otherBrains.length
 	? {
-			scope: otherBrains.length > 1 ? AGAINST_ALL : `local/${otherBrains[0].name}`,
-			label: otherBrains.length > 1 ? AGAINST_ALL : otherBrains[0].name,
+			all: otherBrains.length > 1,
 			brains: otherBrains.map(({ name, brain: b }) => ({
 				brainId: `local/${name}`,
 				handle: name,
@@ -133,42 +129,27 @@ try {
 
 // The page pairs a pass against the other brains would check, for no spend.
 async function pairPlan(others: Comparison) {
-	const pagesOf = async (
-		b: Pick<ComparedBrain, 'index' | 'config'>,
-		id: (path: string) => string
-	): Promise<PageText[]> => {
-		const fields = await b.index.allFields();
-		const listed = (await b.index.listPages()).filter(
-			(p) =>
-				isContentPath(p.path, b.config) &&
-				!isToolMaintained(p.path, b.config) &&
-				!isDeprecated(fields.get(p.path))
-		);
-		const contents = await b.index.pageContents(listed.map((p) => p.path));
-		return listed.map((p) => ({
-			path: id(p.path),
-			title: p.title,
-			content: contents.get(p.path) ?? ''
-		}));
+	const home = {
+		index: d1Index(brain.db as unknown as D1Database)(brain.brainId),
+		store: brain.store,
+		repo: brain.locator,
+		config: brain.config
 	};
-	const here = await pagesOf(
-		{ index: d1Index(brain.db as unknown as D1Database)(brain.brainId), config: brain.config },
-		(p) => p
-	);
+	const here = await pageTexts(home, (await comparablePages(home)).pages);
 	const there: PageText[] = [];
 	for (const b of others.brains) {
-		there.push(...(await pagesOf(b, (path) => otherPageId(b.brainId, path))));
+		there.push(...(await pageTexts(b, (await comparablePages(b)).pages, b.brainId)));
 	}
 	const plan = planStep([...here, ...there], new Map(), null, Infinity, () => true, true);
-	const title = new Map([...here, ...there].map((p) => [p.path, p.title]));
+	const byId = new Map([...here, ...there].map((p) => [p.path, p]));
 	const names = others.brains.map((b) => `"${b.handle}"`).join(', ');
 	console.log(
 		`\nAgainst ${names}: ${here.length} page(s) here, ${there.length} there, ${plan.pairs.length} pair(s) to check of ${here.length * there.length} possible.\n`
 	);
 	for (const { pair } of plan.pairs) {
-		const [a, b] = isOtherPage(pair[0]) ? [pair[1], pair[0]] : pair;
+		const [a, b] = pair.map((id) => byId.get(id)!).sort((x) => (x.other ? 1 : -1));
 		console.log(
-			`  ${a} ("${title.get(a)}")  <->  ${pageBrain(b)}: ${pagePath(b)} ("${title.get(b)}")`
+			`  ${a.path} ("${a.title}")  <->  ${b.other?.brainId}: ${pagePath(b)} ("${b.title}")`
 		);
 	}
 }
