@@ -64,9 +64,21 @@ export function forgetBrainsStatements(
 	brainIds: string,
 	...binds: unknown[]
 ): D1PreparedStatement[] {
-	return [...BRAIN_PURGED_TABLES, 'brains'].map((t) =>
-		db.prepare(`DELETE FROM ${t} WHERE brain_id IN (${brainIds})`).bind(...binds)
-	);
+	return [
+		// What other brains hold about these: findings quoting their pages, and the run state
+		// of checks made against them (kind `consolidation:<brain id>`, 14 characters in).
+		db.prepare(`DELETE FROM review_findings WHERE other_brain_id IN (${brainIds})`).bind(...binds),
+		...['brain_passes', 'brain_pass_items'].map((t) =>
+			db
+				.prepare(
+					`DELETE FROM ${t} WHERE kind LIKE 'consolidation:%' AND substr(kind, 15) IN (${brainIds})`
+				)
+				.bind(...binds)
+		),
+		...[...BRAIN_PURGED_TABLES, 'brains'].map((t) =>
+			db.prepare(`DELETE FROM ${t} WHERE brain_id IN (${brainIds})`).bind(...binds)
+		)
+	];
 }
 
 /**

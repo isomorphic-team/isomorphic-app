@@ -48,5 +48,12 @@ Licensed under `ee/LICENSE`, not the AGPL. Placement rule and history:
   values are on the pages word for word and, with Jev, that it scores 0.4 or more on whether a
   reader would be misled; a patch must also keep the page's block structure (`blockShape`).
   Nothing is written to the brain.
+- **With `against`, the same pass runs between two brains** of one organization
+  (`againstRefusal` in `src/lib/review-checks.ts`): both brains' pages in one list, the other
+  brain's behind `otherPageId`, and `planStep` then pairs a page only with the
+  other brain's. Run state and pair memory are per other brain (kind
+  `consolidation:<brain id>`), the two together stay under `MAX_DUP_PAGES`, and a finding
+  carries no patch. The other brain's pages go to the model under the first brain's
+  organization's entitlement and cap, which is why both must be in that organization.
 - **No outside contributions**, and no customer names here either: the public-repo hygiene rules
   apply to `ee/` exactly as to the core.

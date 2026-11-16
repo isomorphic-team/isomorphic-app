@@ -11,9 +11,12 @@
 // Worker-safe: no node:* imports.
 
 import type { D1Database } from '@cloudflare/workers-types';
+import type { BrainIndex } from './brain-index.ts';
 import { readPass, type PassStatus } from './brain-pass.ts';
-import type { PolicyMode } from './brain-policy.ts';
+import type { BrainConfig, PolicyMode } from './brain-policy.ts';
+import type { BrainLocator, BrainStore } from './brain-repo.ts';
 import { roleAtLeast, type Role } from './orgs.ts';
+import type { ConsolidationStepWire } from './tool-payloads.ts';
 
 export const REVIEW_CHECKS = ['sensitive-data', 'contradictions'] as const;
 export type ReviewCheck = (typeof REVIEW_CHECKS)[number];
@@ -28,6 +31,46 @@ export function reviewCheckRefusal(
 	}
 	if (check === 'contradictions' && !brain.contradictionsAvailable) {
 		return 'The contradictions check is an enterprise feature this deployment has not set up: it needs a model key.';
+	}
+	return null;
+}
+
+// Another brain the contradictions check compares this one against, as the caller reaches
+// it: its id, the handle a tool takes, and how to read its pages.
+export interface ComparedBrain {
+	brainId: string;
+	handle: string;
+	index: BrainIndex;
+	store: BrainStore;
+	repo: BrainLocator;
+	config: BrainConfig;
+}
+
+/** One step of the consolidation pass, as the Worker wires it into a brain's context. */
+export type ConsolidationStep = (opts?: {
+	// Start a new pass that checks every pair, ignoring what earlier passes checked.
+	fresh?: boolean;
+	// Compare this brain against another one instead of against itself.
+	against?: ComparedBrain;
+}) => Promise<{ text: string; wire: ConsolidationStepWire }>;
+
+// Why this brain cannot be checked against `other`, or null when it can. The caller has
+// already opened both, so reading the other brain is settled before this is asked. The
+// same organization is required because the other brain's pages go to the model under
+// this brain's organization's entitlement and spend, and are quoted in its queue.
+export function againstRefusal(
+	check: ReviewCheck,
+	home: { brainId: string; orgId?: string },
+	other: { brainId: string; orgId?: string }
+): string | null {
+	if (check !== 'contradictions') {
+		return '`against` only applies to check "contradictions".';
+	}
+	if (home.brainId === other.brainId) {
+		return 'A brain is not compared against itself: leave `against` out to check it on its own.';
+	}
+	if (!home.orgId || home.orgId !== other.orgId) {
+		return 'Two brains can be compared only when they belong to the same organization.';
 	}
 	return null;
 }

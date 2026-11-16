@@ -93,10 +93,12 @@ import { detectionSection } from '../lib/policy-guard.ts';
 import { readCoverage } from '../lib/policy-store.ts';
 import {
 	isPolicyKey,
+	otherBrainIds,
 	queueReport,
 	clusterFindings,
 	readReconciledFindings,
-	staleNote
+	staleNote,
+	type ReachableBrain
 } from '../lib/review-queue.ts';
 import { brainLabel, type TenantOpts, type Role, type AccessibleBrain } from '../lib/orgs.ts';
 import { brainArg, fail, ok } from './shared.ts';
@@ -115,10 +117,12 @@ import {
 	nonPageKind,
 	resolveMoveTarget
 } from '../lib/write-target.ts';
-import type { BaselineStepWire, ConsolidationStep, SearchWire } from '../lib/tool-payloads.ts';
+import type { BaselineStepWire, SearchWire } from '../lib/tool-payloads.ts';
 import { advanceBaseline, baselineStepText } from '../lib/policy-baseline.ts';
 import {
 	REVIEW_CHECKS,
+	againstRefusal,
+	type ConsolidationStep,
 	contradictionCoverage,
 	readContradictionPass,
 	reviewCheckRefusal
@@ -910,6 +914,32 @@ export async function searchTargets(
 	}
 }
 
+// The other brains a brain's findings quote, as far as this caller can open them. This
+// decides whose pages a report may quote: a brain missing from the result hides every
+// finding that has a page in it. Without the caller's brain list (the local runtime, a
+// single-user deployment) or on any failure, none is reachable.
+export async function reachableBrains(
+	brainIds: readonly string[],
+	deps: LibrarianDeps | undefined,
+	openIndex: BrainContext['openIndex']
+): Promise<Map<string, ReachableBrain>> {
+	const out = new Map<string, ReachableBrain>();
+	if (!brainIds.length || !deps?.listBrains) return out;
+	try {
+		for (const b of await deps.listBrains()) {
+			if (!brainIds.includes(b.brain_id)) continue;
+			out.set(b.brain_id, {
+				label: brainLabel(b),
+				handle: b.id,
+				shas: await openIndex(b.brain_id).pageShas()
+			});
+		}
+	} catch {
+		return new Map();
+	}
+	return out;
+}
+
 export function registerLibrarianTools(
 	server: McpServer,
 	getContext: (opts?: TenantOpts) => Promise<BrainContext>,
@@ -1341,7 +1371,8 @@ export function registerLibrarianTools(
 				role,
 				actorUserId,
 				policySecret,
-				consolidate
+				consolidate,
+				openIndex
 			} = await getContext({ brain });
 			const { truncated } = await index.ensureFresh(store, locator, config);
 			const resolved = await index.graph(config);
@@ -1454,10 +1485,12 @@ export function registerLibrarianTools(
 					secret: policySecret
 				}).catch(() => []);
 				if (rows.length) {
-					queued = queueReport(rows, await index.pageShas(), {
-						role,
-						userId: actorUserId
-					});
+					queued = queueReport(
+						rows,
+						await index.pageShas(),
+						{ role, userId: actorUserId },
+						await reachableBrains(otherBrainIds(rows), deps, openIndex)
+					);
 				}
 
 				const all: Finding[] = [
@@ -1550,7 +1583,7 @@ export function registerLibrarianTools(
 		{
 			...toolAnnotations('Run a deep review pass over a brain', 'destructive'),
 			description:
-				'review_brain runs one of a brain\'s deep review passes over everything already in it, one budgeted step per call: repeat the call until the reply says finished, and progress is saved between calls. check "sensitive-data" scans every text file in the repository for credentials, card numbers and health identifiers, with no model; it records kinds and locations, never values, and replaces the previous scan. check "contradictions" has a model compare related pages and records where they disagree about the same fact, each with quotes from both pages and a proposed fix or a note that a person must decide; it is an enterprise feature that spends model credits within the organization\'s monthly cap, and a later pass checks only pairs where a page changed since it was last checked. Neither changes anything in the repository: results are review findings, listed with keys by the brain\'s report. Needs admin on the brain.',
+				'review_brain runs one of a brain\'s deep review passes over everything already in it, one budgeted step per call: repeat the call until the reply says finished, and progress is saved between calls. check "sensitive-data" scans every text file in the repository for credentials, card numbers and health identifiers, with no model; it records kinds and locations, never values, and replaces the previous scan. check "contradictions" has a model compare related pages and records where they disagree about the same fact, each with quotes from both pages and a proposed fix or a note that a person must decide; it is an enterprise feature that spends model credits within the organization\'s monthly cap, and a later pass checks only pairs where a page changed since it was last checked. With `against`, "contradictions" compares this brain with another brain in the same organization instead: only pairs with one page in each are checked, so it finds a fact stated in one brain and restated differently in the other, and the findings land in this brain\'s report, shown only to people who can open both brains. Neither changes anything in the repository: results are review findings, listed with keys by the brain\'s report. Needs admin on the brain.',
 			inputSchema: z.object({
 				brain: brainArg,
 				fresh: z
@@ -1559,6 +1592,12 @@ export function registerLibrarianTools(
 					.describe(
 						'For "contradictions": start over and check every page pair, ignoring what earlier passes already checked. Leave unset to check only pairs whose pages changed since their last check.'
 					),
+				against: z
+					.string()
+					.optional()
+					.describe(
+						'For "contradictions": another brain to compare this one against, by its handle or name. It must be in the same organization and you must be able to open it. Pass it again on every call that continues the pass.'
+					),
 				check: z
 					.enum(REVIEW_CHECKS)
 					.describe(
@@ -1566,15 +1605,29 @@ export function registerLibrarianTools(
 					)
 			})
 		},
-		async ({ brain, check, fresh }) => {
+		async ({ brain, check, fresh, against }) => {
+			// The other brain resolves first, so the call is counted against the brain it runs on.
+			const other = against ? await getContext({ brain: against }) : undefined;
 			const ctx = await getContext({ requires: 'admin', brain });
-			const refusal = reviewCheckRefusal(check, {
-				policyMode: ctx.config.policyMode,
-				contradictionsAvailable: !!ctx.consolidate
-			});
+			const refusal =
+				(other && againstRefusal(check, ctx, other)) ??
+				reviewCheckRefusal(check, {
+					policyMode: ctx.config.policyMode,
+					contradictionsAvailable: !!ctx.consolidate
+				});
 			if (refusal) return fail(refusal);
 			if (check === 'contradictions' && ctx.consolidate) {
-				const step = await ctx.consolidate({ fresh });
+				const step = await ctx.consolidate({
+					fresh,
+					against: other && {
+						brainId: other.brainId,
+						handle: other.activeBrain.id,
+						index: other.index,
+						store: other.store,
+						repo: other.locator,
+						config: other.config
+					}
+				});
 				return {
 					content: [{ type: 'text' as const, text: step.text }],
 					structuredContent: step.wire

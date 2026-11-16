@@ -54,6 +54,9 @@ import {
 	advanceConsolidation,
 	blockShape,
 	consolidationStepText,
+	isOtherPage,
+	otherPageId,
+	pagePath,
 	passesScreen,
 	planStep,
 	readRun,
@@ -1409,6 +1412,231 @@ console.log('\nconsolidation: a pass remembers what it checked (11)');
 	} finally {
 		await brain.cleanup();
 		await rm(src, { recursive: true, force: true });
+	}
+}
+
+console.log('\nconsolidation: one brain against another (12)');
+{
+	const page = (path: string, title: string, content: string): PageText => ({
+		path,
+		title,
+		content
+	});
+	// Both brains hold a page at the same path, and each brain holds a related pair of its own.
+	const both = [
+		page('rates.md', 'Acme rates', 'Acme rates are listed here.'),
+		page('terms.md', 'Acme terms', 'Acme rates and terms.'),
+		page(otherPageId('rates.md'), 'Acme rates', 'Acme rates for partners.'),
+		page(otherPageId('garden.md'), 'Garden', 'Tomatoes and basil.')
+	];
+	const across = planStep(both, new Map(), null, 48, () => true, true);
+	check(
+		'against another brain, a plan pairs a page only with pages of the other brain',
+		across.pairs.length > 0 &&
+			across.pairs.every(({ pair }) => isOtherPage(pair[0]) !== isOtherPage(pair[1])),
+		JSON.stringify(across.pairs)
+	);
+	check(
+		'two pages at the same path in the two brains are a pair, not one page',
+		across.pairs.some(
+			({ pair }) => pair.includes('rates.md') && pair.includes(otherPageId('rates.md'))
+		)
+	);
+	check(
+		'without it, the same pages pair inside a brain too',
+		planStep(both, new Map(), null).pairs.some(
+			({ pair }) => !isOtherPage(pair[0]) && !isOtherPage(pair[1])
+		)
+	);
+	check(
+		'a page id gives back its path on either side',
+		pagePath(otherPageId('a/b.md')) === 'a/b.md' && pagePath('a/b.md') === 'a/b.md'
+	);
+
+	const LOW = 'The day rate for Acme engagement is $1,200 per day.';
+	const HIGH = 'As of 2026-01 the Acme engagement day rate is $1,500 per day.';
+	const homeSrc = await mkdtemp(join(tmpdir(), 'ee-home-'));
+	const otherSrc = await mkdtemp(join(tmpdir(), 'ee-other-'));
+	// The home brain disagrees with itself (HIGH against LOW) and with the other brain's
+	// page at the same path. Only the second is this pass's business.
+	await seed(homeSrc, 'agreements/acme.md', `# Acme engagement terms\n\nHOME-TERMS ${HIGH}\n`);
+	await seed(homeSrc, 'notes/acme.md', `# Acme engagement notes\n\nHOME-NOTES ${LOW}\n`);
+	await seed(homeSrc, 'misc/garden.md', '# Garden\n\nHOME-GARDEN Tomatoes and basil.\n');
+	await seed(otherSrc, 'agreements/acme.md', `# Acme engagement\n\nOTHER-RATES ${LOW}\n`);
+	await seed(otherSrc, 'misc/garden.md', '# Garden\n\nOTHER-GARDEN Tomatoes and basil.\n');
+	const home = await openFolderAsBrain(homeSrc, 'wiki');
+	const other = await openFolderAsBrain(otherSrc, 'wiki');
+	const db = home.db as unknown as D1Database;
+	const otherDb = other.db as unknown as D1Database;
+	try {
+		const prompts: string[] = [];
+		const gateway: Pick<Gateway, 'chatJson'> = {
+			async chatJson<T>(_system: string, user: string) {
+				prompts.push(user);
+				const highFirst = user.indexOf('$1,500') < user.indexOf('$1,200');
+				const claims =
+					user.includes('$1,200') && user.includes('$1,500')
+						? [
+								{
+									subject: 'Acme day rate',
+									fact: 'acme day rate',
+									quote_a: highFirst ? HIGH : LOW,
+									quote_b: highFirst ? LOW : HIGH,
+									value_a: highFirst ? '$1,500' : '$1,200',
+									value_b: highFirst ? '$1,200' : '$1,500',
+									explained: false,
+									stands: 'a',
+									// A patch that would pass every check inside one brain.
+									action: 'patch',
+									patch: { page: 'a', find: 'per day', replace: 'a day' },
+									why: 'The pages disagree.'
+								}
+							]
+						: [];
+				return { value: { claims } as T, model: HAIKU_MODEL, costUsd: 0.001 };
+			}
+		};
+		const against = {
+			brainId: other.brainId,
+			handle: 'handbook-1a2b3c',
+			index: d1Index(otherDb)(other.brainId),
+			store: other.store,
+			repo: other.locator,
+			config: other.config
+		};
+		const base = {
+			db,
+			index: d1Index(db)(home.brainId),
+			brainId: home.brainId,
+			orgId: 'o1',
+			config: home.config,
+			store: home.store,
+			repo: home.locator,
+			gateway,
+			against
+		};
+
+		const first = await advanceConsolidation({ ...base, newRunId: () => 'x1' }, NOW);
+		const sides = (prompt: string) => ({
+			home: (prompt.match(/HOME-[A-Z]+/g) ?? []).length,
+			other: (prompt.match(/OTHER-[A-Z]+/g) ?? []).length
+		});
+		check(
+			'the pass sends the model only pairs with one page from each brain',
+			first.status === 'done' &&
+				prompts.length > 0 &&
+				prompts.every((p) => sides(p).home === 1 && sides(p).other === 1),
+			JSON.stringify(prompts.map(sides))
+		);
+		check(
+			'a prompt names each page by its path, without the marker for the other brain',
+			prompts.every((p) => !p.includes('path="//'))
+		);
+
+		const rows = await readFindings(db, home.brainId);
+		const row = rows[0];
+		check(
+			'the disagreement between the brains is queued once, in the brain the pass ran from',
+			rows.length === 1 &&
+				row.kind === 'conflict' &&
+				(await readFindings(db, other.brainId)).length === 0 &&
+				(await readFindings(otherDb, other.brainId)).length === 0,
+			JSON.stringify(rows)
+		);
+		const otherShas = await against.index.pageShas();
+		check(
+			"it carries this brain's page as its path and the other brain's page beside it",
+			JSON.stringify(row?.paths) === JSON.stringify(['wiki/agreements/acme.md']) &&
+				row?.other?.brainId === other.brainId &&
+				row?.other?.path === 'wiki/agreements/acme.md' &&
+				row?.other?.sha === otherShas.get('wiki/agreements/acme.md') &&
+				JSON.stringify(Object.keys(row?.pageShas ?? {})) ===
+					JSON.stringify(['wiki/agreements/acme.md']),
+			JSON.stringify(row)
+		);
+		check(
+			'its evidence says which quote is from the other brain',
+			row?.evidence[0] === `wiki/agreements/acme.md: "${HIGH}"` &&
+				row?.evidence[1] === `In the other brain, wiki/agreements/acme.md: "${LOW}"`,
+			JSON.stringify(row?.evidence)
+		);
+		check(
+			'its key names the other page only by a digest',
+			!!row &&
+				row.key.startsWith('conflict:') &&
+				row.key.includes('x:') &&
+				!row.key.includes(other.brainId) &&
+				row.key.split('wiki/agreements/acme.md').length === 2,
+			row?.key
+		);
+		const proposal = row?.proposal as Proposal;
+		check(
+			'a finding between brains proposes no patch and waits for a person',
+			proposal.patch === null &&
+				proposal.tier === 'person' &&
+				proposal.action === 'person' &&
+				proposal.stands === null,
+			JSON.stringify(proposal)
+		);
+		check(
+			"it runs under its own pass, leaving the brain's own pass alone",
+			(await readRun(db, home.brainId, other.brainId))?.status === 'done' &&
+				(await readRun(db, home.brainId)) === null
+		);
+		check(
+			'the reply says how to continue against the same brain',
+			consolidationStepText({ ...first, status: 'running' }, against.handle).includes(
+				'and against "handbook-1a2b3c"'
+			) && consolidationStepText(first, against.handle).startsWith('The check against')
+		);
+
+		prompts.length = 0;
+		const again = await advanceConsolidation({ ...base, newRunId: () => 'x2' }, NOW);
+		check(
+			'a second pass checks nothing while neither brain has changed',
+			again.status === 'done' &&
+				again.pairsChecked === 0 &&
+				again.pairsUnchanged === first.pairsChecked &&
+				prompts.length === 0
+		);
+
+		await other.store.write(other.locator, {
+			message: 'Edit the other brain',
+			writes: [
+				{
+					path: 'wiki/agreements/acme.md',
+					content: `# Acme engagement\n\nOTHER-RATES ${LOW}\n\nReviewed.\n`
+				}
+			]
+		});
+		prompts.length = 0;
+		const edited = await advanceConsolidation({ ...base, newRunId: () => 'x3' }, NOW);
+		const refreshed = (await readFindings(db, home.brainId))[0];
+		check(
+			'an edit in the other brain sends its pairs back to the model and refreshes the finding',
+			edited.pairsChecked > 0 &&
+				prompts.length === edited.pairsChecked &&
+				prompts.every((p) => p.includes('OTHER-RATES')) &&
+				refreshed.key === row.key &&
+				refreshed.other?.sha !== row.other?.sha &&
+				refreshed.runId === 'x3',
+			JSON.stringify({ edited, refreshed })
+		);
+
+		const own = await advanceConsolidation(
+			{ ...base, against: undefined, newRunId: () => 'own' },
+			NOW
+		);
+		check(
+			'the brain checked on its own still finds its own disagreement',
+			own.status === 'done' &&
+				(await readFindings(db, home.brainId)).some((f) => !f.other && f.paths.length === 2)
+		);
+	} finally {
+		await home.cleanup();
+		await other.cleanup();
+		await rm(homeSrc, { recursive: true, force: true });
+		await rm(otherSrc, { recursive: true, force: true });
 	}
 }
 

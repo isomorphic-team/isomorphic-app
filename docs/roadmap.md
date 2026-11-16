@@ -93,8 +93,9 @@ Order:
    with a Jev screen and Haiku triage, writing `conflict` findings with proposals and no auto
    tier. Each step stops starting new pairs after 15 seconds, so a call ends well inside a
    host's tool timeout. Built: claim clusters (C5), from a fact label per claim, and a memory of each
-   checked pair, so a later pass checks only pairs whose pages changed. Left: the Review
-   screen section (C7).
+   checked pair, so a later pass checks only pairs whose pages changed. Built: the pass
+   between two brains of one organization (C8, `against` on `review_brain`), whose findings
+   are shown only to people who can open both. Left: the Review screen section (C7).
 6. **When a deployment needs it:** an entitlement writer driven by billing (outside this
    repository), and signed offline license keys for self-hosters.
 

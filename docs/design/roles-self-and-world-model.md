@@ -1,6 +1,7 @@
 # Design: roles, the org self, and the world model
 
-Status: **proposed** (2026-11-15). Nothing in this document is built. It is a vision document:
+Status: **proposed** (2026-11-15). Step 3 of section 11 is built in a first form; nothing else
+in this document is. It is a vision document:
 it names how pieces that are already built or already designed fit together, and the small
 number of new pieces that join them.
 
@@ -40,7 +41,8 @@ two different ways.
 
 **Brain against brain.** A day rate is stated in a legal agreement and restated on a handbook
 page. One is updated and the other is not. Both pages are well formed, so `validate` reports
-each brain clean. Consolidation never pairs them, because it compares pages inside one brain.
+each brain clean. A consolidation pass over one brain never pairs them, because it compares
+pages inside that brain.
 
 **World against brain.** An invoice goes out, a contract is signed, a certificate is sent,
 and nobody writes it down. No page contradicts the stale one, so no conflict check can see it.
@@ -81,7 +83,7 @@ the same defect at org scale. A restated fact is derived content.
 | An external source feeding a brain       | `sync_records`, with source-owned fields         | Built                                                      |
 | A reader who can reach both brains       | A link to the home page, not a copy              | Cross-brain search is built; cross-brain wikilinks are not |
 | A reader who cannot reach the home brain | Publishing: a declared, one-way, reconciled copy | Designed in [`brain-seams.md`](brain-seams.md), not built  |
-| A copy made by hand anyway               | Detection, after the fact                        | Consolidation, inside one brain only                       |
+| A copy made by hand anyway               | Detection, after the fact                        | Consolidation, inside a brain or between two               |
 
 Prevention comes first and detection covers what prevention misses. Publishing is the only
 case where a copy is correct, and it is a copy with a disclosure filter: the question it
@@ -229,18 +231,18 @@ can contradict is a self-image: the loop only works if outcomes are written down
 
 ## 9. How the platform's pieces fit
 
-| Piece                       | Design                                                                         | State                   | Part it plays here                                     |
-| --------------------------- | ------------------------------------------------------------------------------ | ----------------------- | ------------------------------------------------------ |
-| Data-policy guard           | [`privacy-checks.md`](privacy-checks.md)                                       | Built                   | Standards, and the backstop for the boundary           |
-| Consolidation               | [`consistency-checks.md`](consistency-checks.md), `ee/review/consolidation.ts` | Built, inside one brain | Drift detection; extended across brains                |
-| Review queue                | `src/lib/review-queue.ts`                                                      | Built                   | The open-item list                                     |
-| Passes                      | `src/lib/brain-pass.ts`                                                        | Built                   | How the self runs; extended to an org                  |
-| Live views                  | [`derived-views-and-sync-prd.md`](derived-views-and-sync-prd.md)               | Built                   | Derivation inside a brain; scorecards                  |
-| `sync_records`              | Same                                                                           | Built                   | Derivation from outside; the planner publishing reuses |
-| Cross-brain search          | [`brain-seams.md`](brain-seams.md)                                             | Built                   | Candidate pairs across brains                          |
-| Publishing                  | Same                                                                           | Not built               | Derivation across a disclosure boundary                |
-| Connections and attribution | [`multi-agent-surface.md`](multi-agent-surface.md)                             | Proposed                | Scoped actors                                          |
-| Records tables              | [`records-tables-prd.md`](records-tables-prd.md)                               | Draft                   | The events layer                                       |
+| Piece                       | Design                                                                         | State                  | Part it plays here                                     |
+| --------------------------- | ------------------------------------------------------------------------------ | ---------------------- | ------------------------------------------------------ |
+| Data-policy guard           | [`privacy-checks.md`](privacy-checks.md)                                       | Built                  | Standards, and the backstop for the boundary           |
+| Consolidation               | [`consistency-checks.md`](consistency-checks.md), `ee/review/consolidation.ts` | Built, between two too | Drift detection inside a brain and between two         |
+| Review queue                | `src/lib/review-queue.ts`                                                      | Built                  | The open-item list                                     |
+| Passes                      | `src/lib/brain-pass.ts`                                                        | Built                  | How the self runs; extended to an org                  |
+| Live views                  | [`derived-views-and-sync-prd.md`](derived-views-and-sync-prd.md)               | Built                  | Derivation inside a brain; scorecards                  |
+| `sync_records`              | Same                                                                           | Built                  | Derivation from outside; the planner publishing reuses |
+| Cross-brain search          | [`brain-seams.md`](brain-seams.md)                                             | Built                  | Candidate pairs across brains                          |
+| Publishing                  | Same                                                                           | Not built              | Derivation across a disclosure boundary                |
+| Connections and attribution | [`multi-agent-surface.md`](multi-agent-surface.md)                             | Proposed               | Scoped actors                                          |
+| Records tables              | [`records-tables-prd.md`](records-tables-prd.md)                               | Draft                  | The events layer                                       |
 
 ## 10. Where agents fit
 
@@ -270,7 +272,10 @@ Each step is useful without the ones after it.
 2. **Role declarations in `.isomorphic.json`,** with the `validate` checks in section 5.
 3. **Consolidation across brains.** Candidate pairs from cross-brain search, keys that
    include the brain, evidence filtered by what the reader can open, and the owner deciding
-   which side stands.
+   which side stands. Built in a first form: `review_brain` with `check: "contradictions"`
+   and `against` compares one brain with another in the same organization
+   ([`consistency-checks.md`](consistency-checks.md), C8). Left: more than one other brain in
+   a pass, and the owner deciding which side stands, which needs step 2.
 4. **The org view.** Review and open questions across an org's brains. The first visible
    form of the self.
 5. **More kinds of open item:** question, obligation, prediction due.
@@ -300,7 +305,9 @@ Steps 1 to 4 deliver roles and the self. Steps 5 to 7 make them maintain themsel
 - What is the grain of an ownership declaration: page types, path prefixes, named subjects,
   or a mix?
 - Where is a cross-brain finding stored, given the queue is keyed by brain, and who may see
-  it when its two sides have different readers?
+  it when its two sides have different readers? Today: in the queue of the brain the check
+  ran from, shown only to people who can open both brains. With ownership declared, the
+  copy's brain is the better home, with the other side pointed at and not quoted.
 - Should a brain cut by audience own anything, or only receive publications?
 - Which page types count as commitments, and is that per brain or per org?
 - Does the charter page need its own protection, given it steers every pass?

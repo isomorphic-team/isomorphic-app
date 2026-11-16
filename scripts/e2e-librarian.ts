@@ -43,7 +43,7 @@ import { d1Index, indexRefs, readPageShas } from '../src/lib/brain-index.ts';
 import { registerImportTools } from '../src/tools/importer.ts';
 import { registerLibrarianTools } from '../src/tools/librarian.ts';
 import { registerBrainTools } from '../src/tools/brains.ts';
-import type { ConsolidationStep } from '../src/lib/tool-payloads.ts';
+import type { ConsolidationStep } from '../src/lib/review-checks.ts';
 import { savePass } from '../src/lib/brain-pass.ts';
 import {
 	listAccessibleBrains,
@@ -2012,6 +2012,18 @@ try {
 		check(
 			'fresh reaches the pass, and is unset unless asked for',
 			!reviewed.isError && ran === 2 && askedFresh === true,
+			reviewed.text
+		);
+		reviewed = await call('review_brain', { check: 'contradictions', against: 'this-brain' });
+		check(
+			'review_brain refuses to compare a brain against itself, and runs nothing',
+			reviewed.isError && /against itself/.test(reviewed.text) && ran === 2,
+			reviewed.text
+		);
+		reviewed = await call('review_brain', { check: 'sensitive-data', against: 'this-brain' });
+		check(
+			'review_brain refuses `against` on any other check',
+			reviewed.isError && /only applies to check "contradictions"/.test(reviewed.text),
 			reviewed.text
 		);
 		const finished = Date.UTC(2026, 10, 2);
