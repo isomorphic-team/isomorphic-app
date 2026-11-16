@@ -31,6 +31,17 @@ export interface QueueFinding {
 	// gains and loses pages as they change, and a dismissal has to outlive that.
 	clusterId: string | null;
 	authorUserId: string | null;
+	// The page on the other side, when the finding is between this brain and another one.
+	// `paths` and `pageShas` then hold this brain's page only.
+	other?: OtherPage | null;
+}
+
+// A page in another brain: the brain's id, the page's path there, and its version tag
+// when the finding was made.
+export interface OtherPage {
+	brainId: string;
+	path: string;
+	sha: string;
 }
 
 // Rows per D1 batch.
@@ -68,6 +79,18 @@ export async function conflictKey(paths: string[], values: string[]): Promise<st
 	);
 	const hex = [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, '0')).join('');
 	return `${findingKey('conflict', [...new Set(paths)])}:${hex.slice(0, 16)}`;
+}
+
+// How a conflict key names a page in another brain: a digest, because the key is written
+// to this brain's dismissal ledger, where the other brain's id and path would be readable
+// by people who cannot open that brain.
+export async function otherPageRef(brainId: string, path: string): Promise<string> {
+	const digest = await crypto.subtle.digest(
+		'SHA-256',
+		new TextEncoder().encode(`${brainId}\0${path}`)
+	);
+	const hex = [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, '0')).join('');
+	return `x:${hex.slice(0, 16)}`;
 }
 
 // Whether every claimed value appears word for word on its page, so a key never rests
@@ -317,18 +340,39 @@ export function canDecideFinding(key: string, role: Role): boolean {
 
 // A finding is stale once any page it cites has changed or gone, since what it says was
 // true of those exact pages. A policy finding is rechecked instead (decidePolicyRescan).
-export function isStale(f: QueueFinding, current: ReadonlyMap<string, string>): boolean {
+// `otherShas` is the other brain's pages, for a finding that has a page there.
+export function isStale(
+	f: QueueFinding,
+	current: ReadonlyMap<string, string>,
+	otherShas?: ReadonlyMap<string, string>
+): boolean {
 	if (f.kind === 'policy') return false;
+	if (f.other && (!f.other.sha || otherShas?.get(f.other.path) !== f.other.sha)) return true;
 	return f.paths.some((p) => !f.pageShas[p] || current.get(p) !== f.pageShas[p]);
 }
 
-function toFinding(f: QueueFinding): Finding {
+// Another brain as one viewer reaches it: what to call it, the handle a tool takes, and
+// its pages' version tags. A brain the viewer cannot open is not in the map at all.
+export interface ReachableBrain {
+	label: string;
+	handle: string;
+	shas: ReadonlyMap<string, string>;
+}
+
+function toFinding(f: QueueFinding, other?: ReachableBrain): Finding {
 	const count = f.kind === 'policy' ? [`${f.scores?.detections ?? 1} detection(s).`] : [];
+	const where =
+		f.other && other ? [`The other brain is "${other.label}" (brain: "${other.handle}").`] : [];
 	return {
 		key: f.key,
 		weight: f.kind === 'policy' ? POLICY_WEIGHT : FINDING_WEIGHT,
-		headline: [`- ${f.headline}`, ...[...count, ...f.evidence].map((e) => `    ${e}`)].join('\n'),
-		...(f.kind === 'conflict' && f.clusterId ? { cluster: f.clusterId } : {})
+		headline: [
+			`- ${f.headline}`,
+			...[...count, ...f.evidence, ...where].map((e) => `    ${e}`)
+		].join('\n'),
+		// A finding with a page in another brain is never clustered: a cluster key answers
+		// every member, and its members would not all be visible to the same people.
+		...(f.kind === 'conflict' && f.clusterId && !f.other ? { cluster: f.clusterId } : {})
 	};
 }
 
@@ -407,7 +451,7 @@ export async function expandClusterDecisions<D extends { finding: string }>(
 			continue;
 		}
 		const label = clusterLabelOf(d.finding);
-		const members = rows.filter((r) => r.kind === 'conflict' && r.clusterId === label);
+		const members = rows.filter((r) => r.kind === 'conflict' && r.clusterId === label && !r.other);
 		if (!members.length)
 			return `"${d.finding}" names no findings: the cluster may have been answered already.`;
 		out.push(...members.map((m) => ({ ...d, finding: m.key })));
@@ -433,21 +477,33 @@ export async function readFactLabels(
 	return results.map((r) => r.cluster_id);
 }
 
-// The queue as one viewer's `validate` reports it.
+// The other brains a set of findings has pages in.
+export const otherBrainIds = (rows: readonly QueueFinding[]): string[] => [
+	...new Set(rows.flatMap((f) => (f.other ? [f.other.brainId] : [])))
+];
+
+// The queue as one viewer's `validate` reports it. A finding with a page in another brain
+// quotes that page, so it is reported only to a viewer who can open that brain too
+// (`others`, keyed by brain id).
 export function queueReport(
 	rows: readonly QueueFinding[],
 	current: ReadonlyMap<string, string>,
-	viewer: { role: Role; userId?: string }
+	viewer: { role: Role; userId?: string },
+	others: ReadonlyMap<string, ReachableBrain> = new Map()
 ): { open: Finding[]; stale: Finding[] } {
-	const visible = rows.filter((f) =>
-		canSeeFinding(f.kind, {
-			role: viewer.role,
-			isAuthor: !!viewer.userId && f.authorUserId === viewer.userId
-		})
+	const visible = rows.filter(
+		(f) =>
+			canSeeFinding(f.kind, {
+				role: viewer.role,
+				isAuthor: !!viewer.userId && f.authorUserId === viewer.userId
+			}) &&
+			(!f.other || others.has(f.other.brainId))
 	);
+	const other = (f: QueueFinding) => (f.other ? others.get(f.other.brainId) : undefined);
+	const stale = (f: QueueFinding) => isStale(f, current, other(f)?.shas);
 	return {
-		open: visible.filter((f) => !isStale(f, current)).map(toFinding),
-		stale: visible.filter((f) => isStale(f, current)).map(toFinding)
+		open: visible.filter((f) => !stale(f)).map((f) => toFinding(f, other(f))),
+		stale: visible.filter(stale).map((f) => toFinding(f, other(f)))
 	};
 }
 
@@ -487,12 +543,14 @@ export async function upsertFindings(
 	const stmt = db.prepare(
 		`INSERT INTO review_findings
 		   (brain_id, key, kind, paths, headline, evidence, proposal, scores, page_shas,
-		    run_id, cluster_id, author_user_id, created_at, updated_at)
-		 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?13)
+		    run_id, cluster_id, author_user_id, created_at, updated_at,
+		    other_brain_id, other_path, other_sha)
+		 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?13, ?14, ?15, ?16)
 		 ON CONFLICT (brain_id, key) DO UPDATE SET
 		   kind = ?3, paths = ?4, headline = ?5, evidence = ?6, proposal = ?7, scores = ?8,
 		   page_shas = ?9, run_id = ?10, cluster_id = ?11,
-		   author_user_id = COALESCE(?12, author_user_id), updated_at = ?13`
+		   author_user_id = COALESCE(?12, author_user_id), updated_at = ?13,
+		   other_brain_id = ?14, other_path = ?15, other_sha = ?16`
 	);
 	for (let i = 0; i < findings.length; i += WRITE_BATCH) {
 		await db.batch(
@@ -512,7 +570,10 @@ export async function upsertFindings(
 						f.runId,
 						f.clusterId,
 						f.authorUserId,
-						now
+						now,
+						f.other?.brainId ?? null,
+						f.other?.path ?? null,
+						f.other?.sha ?? null
 					)
 				)
 		);
@@ -531,6 +592,9 @@ interface FindingRow {
 	run_id: string;
 	cluster_id: string | null;
 	author_user_id: string | null;
+	other_brain_id: string | null;
+	other_path: string | null;
+	other_sha: string | null;
 }
 
 // One row that cannot be parsed is dropped, so it never costs the rest of the report.
@@ -547,7 +611,11 @@ function parseRow(r: FindingRow): QueueFinding | null {
 			pageShas: JSON.parse(r.page_shas) as Record<string, string>,
 			runId: r.run_id,
 			clusterId: r.cluster_id,
-			authorUserId: r.author_user_id
+			authorUserId: r.author_user_id,
+			other:
+				r.other_brain_id && r.other_path
+					? { brainId: r.other_brain_id, path: r.other_path, sha: r.other_sha ?? '' }
+					: null
 		};
 	} catch {
 		return null;
@@ -558,7 +626,7 @@ export async function readFindings(db: D1Database, brainId: string): Promise<Que
 	const { results } = await db
 		.prepare(
 			`SELECT key, kind, paths, headline, evidence, proposal, scores, page_shas, run_id,
-			        cluster_id, author_user_id
+			        cluster_id, author_user_id, other_brain_id, other_path, other_sha
 			 FROM review_findings WHERE brain_id = ?1`
 		)
 		.bind(brainId)

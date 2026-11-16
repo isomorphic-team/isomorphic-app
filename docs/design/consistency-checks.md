@@ -1,6 +1,6 @@
 # Design: consistency checks
 
-Status: **partly built** (2026-10-13). C1, C2, C3 and C5 are built. C4 and C4a are built as a prototype: a Jev screen, then Haiku triage (2026-11-02). C6 and C7 are not.
+Status: **partly built** (2026-10-13). C1, C2, C3 and C5 are built. C4 and C4a are built as a prototype: a Jev screen, then Haiku triage (2026-11-02). C6 and C7 are not. C8, the pass between two brains, is built (2026-11-16).
 
 This is the consolidation half of the roadmap's "brain review" (steps 2 and 5).
 
@@ -265,6 +265,7 @@ Roadmap step 2 extends the `validate` / `resolve` pattern into one findings queu
 | C5   | Built: claim clustering across pairs                                                          | `ee/`                    | pipeline, tests with a stubbed gateway                                        |
 | C6   | Runs: webhook-triggered incremental pass, admin full pass in the background, D1 cursor        | core trigger, `ee/` work | webhook (roadmap step 4), background driver, tests                            |
 | C7   | Consolidation section of the Review screen, approve and dismiss                               | core                     | `ReviewView.tsx`, browser tests                                               |
+| C8   | Built: the pass between two brains of one organization                                        | `ee/`, core queue        | `review_brain`'s `against`, D1 migration, tests with a stubbed gateway        |
 
 **How the C4 prototype differs from the plan above** (2026-11-02):
 
@@ -284,6 +285,8 @@ Roadmap step 2 extends the `validate` / `resolve` pattern into one findings queu
   exhausted credits or an overload.
 - **Candidates** are each page's three best search hits on its title, plus the near-duplicate
   and same-identifier tensions. A pair over `MAX_PAIR_CHARS` is skipped and counted, never cut.
+  A page marked `status: deprecated` is left out and counted: on two real brains, 42 of 44
+  findings between them involved a deprecated copy of pages that had since moved on.
 - **The trigger** is `review_brain` with `check: "contradictions"`, admin only, a budgeted
   step per call. `validate` lists what it found and, for admins, when it last ran.
   `pnpm consolidate:report <folder> --models` runs the same pass over a local copy.
@@ -303,6 +306,23 @@ Roadmap step 2 extends the `validate` / `resolve` pattern into one findings queu
   coverage line shows progress, and a gateway refusal still stops the pass as `stopped`. The push
   webhook and `review_brain` start the same job. The driver is a Cloudflare Queue or a cron
   trigger, not a Durable Object.
+- **Between two brains (C8).** `review_brain` with `check: "contradictions"` and `against`
+  runs the same pass over the pages of two brains in one organization, pairing a page only
+  with pages of the other brain: each page's three best search hits on its title there, in
+  both directions, counting only a page that holds every word of the title. Inside one brain
+  a single shared word is enough; between two it pairs a long page with everything.
+  `pnpm consolidate:report <folder> --against <other folder>` lists the pairs for no spend,
+  and with `--models` runs the pass. The caller is an admin of the brain the pass runs from and can open the
+  other. Findings land in the first brain's queue with the other brain's page beside them
+  (`other_brain_id`, `other_path`, `other_sha`, migration 0028), and `validate` reports one
+  only to a viewer who can open both brains, since it quotes both. A change to either page
+  makes it stale. Its key names the other page by a digest, because the key is written to
+  the first brain's dismissal ledger. It carries no patch and no "which side stands": between
+  brains a person decides. It is never clustered. The pass has its own cursor and pair memory
+  per other brain (`brain_passes` kind `consolidation:<brain id>`), and the two brains
+  together stay under `MAX_DUP_PAGES`. Removing a brain deletes what other brains hold about
+  it. Design context: [`roles-self-and-world-model.md`](./roles-self-and-world-model.md),
+  section 11, step 3.
 - **Not yet:** the push trigger and background passes (C6), and the Review screen section (C7).
 
 C1 and C2 stand alone and ship first. C3 is shared with the guard's own findings and belongs to roadmap step 2. C4 and C5 are the model work. C7 is where the value lands for people, because the review tier carries most of the work.
