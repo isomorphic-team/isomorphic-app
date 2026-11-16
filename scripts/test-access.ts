@@ -274,6 +274,7 @@ import { localD1, replayMigrations } from '../src/local/d1-sqlite.ts';
 import { readFileSync } from 'node:fs';
 import {
 	BRAIN_PURGED_TABLES,
+	BRAIN_REFERENCING_TABLES,
 	BRAIN_KEPT_TABLES,
 	BRAIN_UNLINKED_TABLES,
 	forgetBrain
@@ -1689,14 +1690,22 @@ console.log('\nforgetting a brain: what disconnect deletes, and what it keeps');
 			 VALUES ('b-third', ?, 'conflict', '[]', 'h', '[]', '{}', 'r', 1, 1, ?, 'p.md', 's')`
 		).run(`conflict:${about}`, about);
 		f.prepare(
-			`INSERT INTO brain_passes (brain_id, kind, run_id, status, counters, started_at, updated_at)
-			 VALUES ('b-third', ?, 'r', 'done', '{}', 1, 1)`
-		).run(`consolidation:${about}`);
+			`INSERT INTO brain_passes
+			   (brain_id, kind, run_id, status, counters, started_at, updated_at, other_brain_id)
+			 VALUES ('b-third', ?, 'r', 'done', '{}', 1, 1, ?)`
+		).run(`consolidation:${about}`, about);
 		f.prepare(
-			`INSERT INTO brain_pass_items (brain_id, kind, item, fingerprint, checked_at)
-			 VALUES ('b-third', ?, 'a|b', 'fp', 1)`
-		).run(`consolidation:${about}`);
+			`INSERT INTO brain_pass_items (brain_id, kind, item, fingerprint, checked_at, other_brain_id)
+			 VALUES ('b-third', 'consolidation:all', ?, 'fp', 1, ?)`
+		).run(`pair with ${about}`, about);
 	}
+	const referencing = tables.filter((t) => columns(t).some((c) => c.name === 'other_brain_id'));
+	check(
+		'every table that names a second brain is listed as referencing',
+		referencing.length === BRAIN_REFERENCING_TABLES.length &&
+			referencing.every((t) => (BRAIN_REFERENCING_TABLES as readonly string[]).includes(t)),
+		`with the column: ${referencing.join(', ')} (list it in src/lib/brain-forget.ts)`
+	);
 	const about = (table: string, column: string, value: string) =>
 		(
 			f.prepare(`SELECT COUNT(*) AS n FROM ${table} WHERE ${column} = ?`).get(value) as {
@@ -1709,15 +1718,11 @@ console.log('\nforgetting a brain: what disconnect deletes, and what it keeps');
 	await forgetBrain(fdb, 'b-gone');
 	check(
 		'forgetBrain deletes what other brains hold about it: findings quoting it and checks against it',
-		about('review_findings', 'other_brain_id', 'b-gone') === 0 &&
-			about('brain_passes', 'kind', 'consolidation:b-gone') === 0 &&
-			about('brain_pass_items', 'kind', 'consolidation:b-gone') === 0
+		BRAIN_REFERENCING_TABLES.every((t) => about(t, 'other_brain_id', 'b-gone') === 0)
 	);
 	check(
 		'...and leaves what they hold about a brain that stays',
-		about('review_findings', 'other_brain_id', 'b-live') === 1 &&
-			about('brain_passes', 'kind', 'consolidation:b-live') === 1 &&
-			about('brain_pass_items', 'kind', 'consolidation:b-live') === 1
+		BRAIN_REFERENCING_TABLES.every((t) => about(t, 'other_brain_id', 'b-live') === 1)
 	);
 	const left = BRAIN_PURGED_TABLES.filter((t) => count(t, 'b-gone') > 0);
 	check(

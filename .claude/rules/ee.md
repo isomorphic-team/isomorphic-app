@@ -50,12 +50,16 @@ Licensed under `ee/LICENSE`, not the AGPL. Placement rule and history:
   values are on the pages word for word and, with Jev, that it scores 0.4 or more on whether a
   reader would be misled; a patch must also keep the page's block structure (`blockShape`).
   Nothing is written to the brain.
-- **With `against`, the same pass runs between two brains** of one organization
-  (`againstRefusal` in `src/lib/review-checks.ts`): both brains' pages in one list, the other
-  brain's behind `otherPageId`, and `planStep` then pairs a page only with a page that holds every word of its title, among the
-  other brain's. Run state and pair memory are per other brain (kind
-  `consolidation:<brain id>`), the two together stay under `MAX_DUP_PAGES`, and a finding
-  carries no patch. The other brain's pages go to the model under the first brain's
+- **With `against`, the same pass runs between a brain and others** of its organization: one
+  named brain (`againstRefusal` in `src/lib/review-checks.ts`), or every other one the caller
+  can open for `AGAINST_ALL` (`brainsToCompare`); `resolveComparison` turns what the caller
+  passed into the brains to compare. Every brain's pages go in one list (`comparablePages`,
+  `pageTexts`), another brain's as an `otherPage` carrying its brain and its path there, and `planStep` pairs a page of the first
+  brain only with pages of the others that hold every word of its title, and the reverse.
+  Two other brains are never paired. Run state and pair memory are per scope (kind
+  `consolidation:<brain id>` or `consolidation:all`), each pass row and remembered pair names
+  the other brain it is about in `other_brain_id`, all brains together stay under
+  `MAX_DUP_PAGES`, and a finding carries no patch. The other brain's pages go to the model under the first brain's
   organization's entitlement and cap, which is why both must be in that organization.
 - **No outside contributions**, and no customer names here either: the public-repo hygiene rules
   apply to `ee/` exactly as to the core.

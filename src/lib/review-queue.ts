@@ -58,6 +58,15 @@ const POLICY_PREFIX = 'policy:';
 
 // ---------- keys ----------
 
+// The first 16 hex characters of a text's SHA-256.
+async function digest16(text: string): Promise<string> {
+	const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text));
+	return [...new Uint8Array(digest)]
+		.map((b) => b.toString(16).padStart(2, '0'))
+		.join('')
+		.slice(0, 16);
+}
+
 // The disputed value as a key compares it: rewording around a value leaves the key
 // alone, and changing the value makes a new disagreement.
 export function normalizeDisputedValue(value: string): string {
@@ -73,24 +82,14 @@ export function normalizeDisputedValue(value: string): string {
 // and dismissing one must not silence the other. One path is a page against itself.
 export async function conflictKey(paths: string[], values: string[]): Promise<string> {
 	const normalized = [...new Set(values.map(normalizeDisputedValue))].sort();
-	const digest = await crypto.subtle.digest(
-		'SHA-256',
-		new TextEncoder().encode(normalized.join('\0'))
-	);
-	const hex = [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, '0')).join('');
-	return `${findingKey('conflict', [...new Set(paths)])}:${hex.slice(0, 16)}`;
+	return `${findingKey('conflict', [...new Set(paths)])}:${await digest16(normalized.join('\0'))}`;
 }
 
 // How a conflict key names a page in another brain: a digest, because the key is written
 // to this brain's dismissal ledger, where the other brain's id and path would be readable
 // by people who cannot open that brain.
 export async function otherPageRef(brainId: string, path: string): Promise<string> {
-	const digest = await crypto.subtle.digest(
-		'SHA-256',
-		new TextEncoder().encode(`${brainId}\0${path}`)
-	);
-	const hex = [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, '0')).join('');
-	return `x:${hex.slice(0, 16)}`;
+	return `x:${await digest16(`${brainId}\0${path}`)}`;
 }
 
 // Whether every claimed value appears word for word on its page, so a key never rests
@@ -359,6 +358,11 @@ export interface ReachableBrain {
 	shas: ReadonlyMap<string, string>;
 }
 
+// The cluster a finding is shown and answered in. A finding with a page in another brain
+// has none: a cluster key answers every member, and its members would not all be visible
+// to the same people.
+const clusterOf = (f: QueueFinding) => (f.kind === 'conflict' && !f.other ? f.clusterId : null);
+
 function toFinding(f: QueueFinding, other?: ReachableBrain): Finding {
 	const count = f.kind === 'policy' ? [`${f.scores?.detections ?? 1} detection(s).`] : [];
 	const where =
@@ -370,9 +374,7 @@ function toFinding(f: QueueFinding, other?: ReachableBrain): Finding {
 			`- ${f.headline}`,
 			...[...count, ...f.evidence, ...where].map((e) => `    ${e}`)
 		].join('\n'),
-		// A finding with a page in another brain is never clustered: a cluster key answers
-		// every member, and its members would not all be visible to the same people.
-		...(f.kind === 'conflict' && f.clusterId && !f.other ? { cluster: f.clusterId } : {})
+		...(clusterOf(f) ? { cluster: clusterOf(f)! } : {})
 	};
 }
 
@@ -451,7 +453,7 @@ export async function expandClusterDecisions<D extends { finding: string }>(
 			continue;
 		}
 		const label = clusterLabelOf(d.finding);
-		const members = rows.filter((r) => r.kind === 'conflict' && r.clusterId === label && !r.other);
+		const members = rows.filter((r) => clusterOf(r) === label);
 		if (!members.length)
 			return `"${d.finding}" names no findings: the cluster may have been answered already.`;
 		out.push(...members.map((m) => ({ ...d, finding: m.key })));
