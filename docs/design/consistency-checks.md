@@ -307,7 +307,10 @@ Roadmap step 2 extends the `validate` / `resolve` pattern into one findings queu
 - **Between two brains (C8).** `review_brain` with `check: "contradictions"` and `against`
   runs the same pass over the pages of two brains in one organization, pairing a page only
   with pages of the other brain: each page's three best search hits on its title there, in
-  both directions. The caller is an admin of the brain the pass runs from and can open the
+  both directions, counting only a page that holds every word of the title. Inside one brain
+  a single shared word is enough; between two it pairs a long page with everything.
+  `pnpm consolidate:report <folder> --against <other folder>` lists the pairs for no spend,
+  and with `--models` runs the pass. The caller is an admin of the brain the pass runs from and can open the
   other. Findings land in the first brain's queue with the other brain's page beside them
   (`other_brain_id`, `other_path`, `other_sha`, migration 0028), and `validate` reports one
   only to a viewer who can open both brains, since it quotes both. A change to either page

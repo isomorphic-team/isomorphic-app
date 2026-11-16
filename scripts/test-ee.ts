@@ -1448,6 +1448,26 @@ console.log('\nconsolidation: one brain against another (12)');
 			({ pair }) => !isOtherPage(pair[0]) && !isOtherPage(pair[1])
 		)
 	);
+	// A long page of the other brain that shares one word with every title.
+	const hub = [
+		page('dinner.md', 'Harbor dinner format', 'The Harbor dinner is a curated format.'),
+		page('acme.md', 'Acme agreement', 'The Acme agreement was signed.'),
+		page(otherPageId('template.md'), 'Agreement template', 'This agreement has a format.'),
+		page(otherPageId('acme.md'), 'Acme', 'The Acme agreement sets the rate.')
+	];
+	const hubPairs = planStep(hub, new Map(), null, 48, () => true, true).pairs.map(({ pair }) =>
+		[...pair].sort().join('|')
+	);
+	check(
+		'between brains a page is a candidate only when it holds every word of the title',
+		JSON.stringify(hubPairs.sort()) ===
+			JSON.stringify([[otherPageId('acme.md'), 'acme.md'].sort().join('|')]),
+		JSON.stringify(hubPairs)
+	);
+	check(
+		'inside a brain one shared word is still enough',
+		relatedPages(hub[0], [hub[1], { ...hub[2], path: 't.md' }]).includes('t.md')
+	);
 	check(
 		'a page id gives back its path on either side',
 		pagePath(otherPageId('a/b.md')) === 'a/b.md' && pagePath('a/b.md') === 'a/b.md'

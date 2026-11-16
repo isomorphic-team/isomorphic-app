@@ -50,7 +50,7 @@ Licensed under `ee/LICENSE`, not the AGPL. Placement rule and history:
   Nothing is written to the brain.
 - **With `against`, the same pass runs between two brains** of one organization
   (`againstRefusal` in `src/lib/review-checks.ts`): both brains' pages in one list, the other
-  brain's behind `otherPageId`, and `planStep` then pairs a page only with the
+  brain's behind `otherPageId`, and `planStep` then pairs a page only with a page that holds every word of its title, among the
   other brain's. Run state and pair memory are per other brain (kind
   `consolidation:<brain id>`), the two together stay under `MAX_DUP_PAGES`, and a finding
   carries no patch. The other brain's pages go to the model under the first brain's

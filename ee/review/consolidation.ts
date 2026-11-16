@@ -143,14 +143,20 @@ export const pagePath = (id: string) => (isOtherPage(id) ? id.slice(OTHER.length
 
 // ---------- candidates ----------
 
-// The pages most like `page` by its title, best first, never itself.
-export function relatedPages(page: PageText, pages: readonly PageText[], k = RELATED_PER_PAGE) {
+// The pages most like `page` by its title, best first, never itself. With `everyTerm`, a
+// page counts only when it holds every word of the title, not just one of them.
+export function relatedPages(
+	page: PageText,
+	pages: readonly PageText[],
+	k = RELATED_PER_PAGE,
+	everyTerm = false
+) {
 	const q = tokenizeQuery(page.title);
 	if (!q.terms.length) return [];
 	const others = pages.filter((p) => p.path !== page.path);
 	const signals = others.map((p) => signalsFromContent(p, q));
 	return rankPages(signals, q.terms, q.bigrams)
-		.filter((s) => s.has.some(Boolean))
+		.filter((s) => (everyTerm ? s.has.every(Boolean) : s.has.some(Boolean)))
 		.slice(0, k)
 		.map((s) => s.path);
 }
@@ -191,7 +197,9 @@ export function planStep(
 		if (!set) {
 			const page = byPath.get(path);
 			set = new Set([
-				...(page ? relatedPages(page, candidates(page)) : []),
+				// Between brains the other brain is not about the same things, so one shared word
+				// pairs a long page with everything: the title's every word is required there.
+				...(page ? relatedPages(page, candidates(page), RELATED_PER_PAGE, acrossOnly) : []),
 				...(partners.get(path) ?? [])
 			]);
 			related.set(path, set);
