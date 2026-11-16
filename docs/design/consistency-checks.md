@@ -321,7 +321,17 @@ Roadmap step 2 extends the `validate` / `resolve` pattern into one findings queu
   brains a person decides. It is never clustered. The pass has its own cursor and pair memory
   per other brain (`brain_passes` kind `consolidation:<brain id>`), and the two brains
   together stay under `MAX_DUP_PAGES`. Removing a brain deletes what other brains hold about
-  it. Design context: [`roles-self-and-world-model.md`](./roles-self-and-world-model.md),
+  it.
+- **Against every other brain.** `against: "all"` runs one pass between a brain and every
+  other brain of its organization the caller can open (`brainsToCompare`, at most
+  `MAX_COMPARED_BRAINS`). A page of the first brain takes its three best hits across all the
+  others pooled, so its cost does not grow with the number of brains; a page of another
+  brain takes its hits in the first brain only, and two other brains are never compared with
+  each other. Each finding names the brain its other page is in. A brain that cannot be
+  opened is left out and named in the reply. The pass keeps one cursor and pair memory
+  (`consolidation:all`), all brains together stay under `MAX_DUP_PAGES`, and every brain's
+  pages are still loaded whole on each call. Repeating `--against` on
+  `pnpm consolidate:report` runs it over local folders. Design context: [`roles-self-and-world-model.md`](./roles-self-and-world-model.md),
   section 11, step 3.
 - **Not yet:** the push trigger and background passes (C6), and the Review screen section (C7).
 

@@ -52,7 +52,9 @@ import { localD1 } from '../src/local/d1-sqlite.ts';
 import type { D1Database } from '@cloudflare/workers-types';
 import type { Role } from '../src/lib/orgs.ts';
 import {
+	MAX_COMPARED_BRAINS,
 	againstRefusal,
+	brainsToCompare,
 	contradictionCoverage,
 	reviewCheckRefusal
 } from '../src/lib/review-checks.ts';
@@ -1045,6 +1047,48 @@ console.log('\nreview_brain: what may run, and what validate says about the cont
 		/same organization/.test(
 			againstRefusal('contradictions', legal, { brainId: 'brain-handbook', orgId: 'o2' }) ?? ''
 		)
+	);
+	const reach = (id: string, org: string) => ({ brain_id: `brain-${id}`, org_id: org, id });
+	const everyone = brainsToCompare('contradictions', legal, [
+		reach('ops', 'o1'),
+		reach('legal', 'o1'),
+		reach('handbook', 'o1'),
+		reach('elsewhere', 'o2')
+	]);
+	check(
+		'against all: the other brains of the same organization the caller can open, in a stable order',
+		'brains' in everyone &&
+			JSON.stringify(everyone.brains) ===
+				JSON.stringify([
+					{ brainId: 'brain-handbook', handle: 'handbook' },
+					{ brainId: 'brain-ops', handle: 'ops' }
+				]),
+		JSON.stringify(everyone)
+	);
+	const alone = brainsToCompare('contradictions', legal, [reach('legal', 'o1'), reach('x', 'o2')]);
+	check(
+		'against all: with no other brain in the organization there is nothing to run',
+		'refusal' in alone && /no other brain/.test(alone.refusal)
+	);
+	const unknown = brainsToCompare('contradictions', legal, undefined);
+	const orgless = brainsToCompare('contradictions', { brainId: 'a' }, [reach('b', 'o1')]);
+	check(
+		'against all: nor without a brain list, or without an organization',
+		'refusal' in unknown && 'refusal' in orgless
+	);
+	const many = brainsToCompare(
+		'contradictions',
+		legal,
+		Array.from({ length: MAX_COMPARED_BRAINS + 1 }, (_, i) => reach(`b${i}`, 'o1'))
+	);
+	check(
+		'against all: more brains than one pass compares is refused, naming the limit',
+		'refusal' in many && many.refusal.includes(`at most ${MAX_COMPARED_BRAINS}`)
+	);
+	const wrongCheck = brainsToCompare('sensitive-data', legal, [reach('ops', 'o1')]);
+	check(
+		'against all: it applies to the contradictions check only',
+		'refusal' in wrongCheck && /only applies/.test(wrongCheck.refusal)
 	);
 	check(
 		'against: where there is no organization to compare, it is refused',

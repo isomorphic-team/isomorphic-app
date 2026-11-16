@@ -273,9 +273,10 @@ Each step is useful without the ones after it.
 3. **Consolidation across brains.** Candidate pairs from cross-brain search, keys that
    include the brain, evidence filtered by what the reader can open, and the owner deciding
    which side stands. Built in a first form: `review_brain` with `check: "contradictions"`
-   and `against` compares one brain with another in the same organization
-   ([`consistency-checks.md`](consistency-checks.md), C8). Left: more than one other brain in
-   a pass, and the owner deciding which side stands, which needs step 2.
+   and `against` compares one brain with another in the same organization, or with every
+   other one ([`consistency-checks.md`](consistency-checks.md), C8). Left: one pass over a
+   whole organization, which needs findings held by the organization and not by one brain,
+   and the owner deciding which side stands, which needs step 2.
 4. **The org view.** Review and open questions across an org's brains. The first visible
    form of the self.
 5. **More kinds of open item:** question, obligation, prediction due.

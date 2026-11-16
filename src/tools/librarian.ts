@@ -121,7 +121,11 @@ import type { BaselineStepWire, SearchWire } from '../lib/tool-payloads.ts';
 import { advanceBaseline, baselineStepText } from '../lib/policy-baseline.ts';
 import {
 	REVIEW_CHECKS,
+	AGAINST_ALL,
 	againstRefusal,
+	brainsToCompare,
+	type ComparedBrain,
+	type Comparison,
 	type ConsolidationStep,
 	contradictionCoverage,
 	readContradictionPass,
@@ -1583,7 +1587,7 @@ export function registerLibrarianTools(
 		{
 			...toolAnnotations('Run a deep review pass over a brain', 'destructive'),
 			description:
-				'review_brain runs one of a brain\'s deep review passes over everything already in it, one budgeted step per call: repeat the call until the reply says finished, and progress is saved between calls. check "sensitive-data" scans every text file in the repository for credentials, card numbers and health identifiers, with no model; it records kinds and locations, never values, and replaces the previous scan. check "contradictions" has a model compare related pages and records where they disagree about the same fact, each with quotes from both pages and a proposed fix or a note that a person must decide; it is an enterprise feature that spends model credits within the organization\'s monthly cap, and a later pass checks only pairs where a page changed since it was last checked, and a page whose status is deprecated is left out. With `against`, "contradictions" compares this brain with another brain in the same organization instead: only pairs with one page in each are checked, so it finds a fact stated in one brain and restated differently in the other, and the findings land in this brain\'s report, shown only to people who can open both brains. Neither changes anything in the repository: results are review findings, listed with keys by the brain\'s report. Needs admin on the brain.',
+				'review_brain runs one of a brain\'s deep review passes over everything already in it, one budgeted step per call: repeat the call until the reply says finished, and progress is saved between calls. check "sensitive-data" scans every text file in the repository for credentials, card numbers and health identifiers, with no model; it records kinds and locations, never values, and replaces the previous scan. check "contradictions" has a model compare related pages and records where they disagree about the same fact, each with quotes from both pages and a proposed fix or a note that a person must decide; it is an enterprise feature that spends model credits within the organization\'s monthly cap, and a later pass checks only pairs where a page changed since it was last checked, and a page whose status is deprecated is left out. With `against`, "contradictions" compares this brain with another brain in the same organization instead, or with every other one when `against` is "all": only pairs with one page in this brain and one in another are checked, so it finds a fact stated in one brain and restated differently in another, and the findings land in this brain\'s report, each shown only to people who can also open the other brain. Neither changes anything in the repository: results are review findings, listed with keys by the brain\'s report. Needs admin on the brain.',
 			inputSchema: z.object({
 				brain: brainArg,
 				fresh: z
@@ -1596,7 +1600,7 @@ export function registerLibrarianTools(
 					.string()
 					.optional()
 					.describe(
-						'For "contradictions": another brain to compare this one against, by its handle or name. It must be in the same organization and you must be able to open it. Pass it again on every call that continues the pass.'
+						'For "contradictions": what to compare this brain against. A brain\'s handle or name compares it with that one brain, which must be in the same organization and one you can open. "all" compares it with every other brain in its organization that you can open, in one pass. Pass the same value again on every call that continues the pass.'
 					),
 				check: z
 					.enum(REVIEW_CHECKS)
@@ -1606,30 +1610,62 @@ export function registerLibrarianTools(
 			})
 		},
 		async ({ brain, check, fresh, against }) => {
-			// The other brain resolves first, so the call is counted against the brain it runs on.
-			const other = against ? await getContext({ brain: against }) : undefined;
-			const ctx = await getContext({ requires: 'admin', brain });
-			const refusal =
-				(other && againstRefusal(check, ctx, other)) ??
-				reviewCheckRefusal(check, {
-					policyMode: ctx.config.policyMode,
-					contradictionsAvailable: !!ctx.consolidate
-				});
-			if (refusal) return fail(refusal);
-			if (check === 'contradictions' && ctx.consolidate) {
-				const step = await ctx.consolidate({
-					fresh,
-					against: other && {
+			let comparison: Comparison | undefined;
+			// Brains an "all" pass could not open. They are named in the reply, never dropped
+			// silently, and never stop the pass: one unreachable brain would block it for good.
+			const unopened: string[] = [];
+			if (against) {
+				const home = await getContext({ requires: 'admin', brain });
+				const all = against.trim().toLowerCase() === AGAINST_ALL;
+				const wanted = all
+					? brainsToCompare(check, home, await deps?.listBrains?.().catch(() => undefined))
+					: { brains: [{ brainId: '', handle: against }] };
+				if ('refusal' in wanted) return fail(wanted.refusal);
+				const brains: ComparedBrain[] = [];
+				for (const want of wanted.brains) {
+					let other: BrainContext;
+					try {
+						other = await getContext({ brain: want.handle });
+					} catch (err) {
+						if (!all) throw err;
+						unopened.push(want.handle);
+						continue;
+					}
+					const refusal = againstRefusal(check, home, other);
+					if (refusal && !all) return fail(refusal);
+					if (refusal) continue;
+					brains.push({
 						brainId: other.brainId,
 						handle: other.activeBrain.id,
 						index: other.index,
 						store: other.store,
 						repo: other.locator,
 						config: other.config
-					}
-				});
+					});
+				}
+				if (!brains.length) {
+					return fail(
+						`None of the other brains could be opened (${unopened.map((h) => `"${h}"`).join(', ')}), so nothing was compared.`
+					);
+				}
+				comparison = all
+					? { scope: AGAINST_ALL, label: AGAINST_ALL, brains }
+					: { scope: brains[0].brainId, label: brains[0].handle, brains };
+			}
+			// Resolved last, so the call is counted against the brain it runs on.
+			const ctx = await getContext({ requires: 'admin', brain });
+			const refusal = reviewCheckRefusal(check, {
+				policyMode: ctx.config.policyMode,
+				contradictionsAvailable: !!ctx.consolidate
+			});
+			if (refusal) return fail(refusal);
+			if (check === 'contradictions' && ctx.consolidate) {
+				const step = await ctx.consolidate({ fresh, against: comparison });
+				const note = unopened.length
+					? ` Left out, could not be opened: ${unopened.map((h) => `"${h}"`).join(', ')}.`
+					: '';
 				return {
-					content: [{ type: 'text' as const, text: step.text }],
+					content: [{ type: 'text' as const, text: step.text + note }],
 					structuredContent: step.wire
 				};
 			}

@@ -2020,6 +2020,12 @@ try {
 			reviewed.isError && /against itself/.test(reviewed.text) && ran === 2,
 			reviewed.text
 		);
+		reviewed = await call('review_brain', { check: 'contradictions', against: 'all' });
+		check(
+			'review_brain against all refuses where there is no other brain, and runs nothing',
+			reviewed.isError && /no other brain/.test(reviewed.text) && ran === 2,
+			reviewed.text
+		);
 		reviewed = await call('review_brain', { check: 'sensitive-data', against: 'this-brain' });
 		check(
 			'review_brain refuses `against` on any other check',

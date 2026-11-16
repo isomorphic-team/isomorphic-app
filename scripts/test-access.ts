@@ -1696,6 +1696,11 @@ console.log('\nforgetting a brain: what disconnect deletes, and what it keeps');
 			`INSERT INTO brain_pass_items (brain_id, kind, item, fingerprint, checked_at)
 			 VALUES ('b-third', ?, 'a|b', 'fp', 1)`
 		).run(`consolidation:${about}`);
+		// A pair remembered by a check against every other brain.
+		f.prepare(
+			`INSERT INTO brain_pass_items (brain_id, kind, item, fingerprint, checked_at)
+			 VALUES ('b-third', 'consolidation:all', ?, 'fp', 1)`
+		).run(`a.md|//${about}//p.md`);
 	}
 	const about = (table: string, column: string, value: string) =>
 		(
@@ -1711,13 +1716,15 @@ console.log('\nforgetting a brain: what disconnect deletes, and what it keeps');
 		'forgetBrain deletes what other brains hold about it: findings quoting it and checks against it',
 		about('review_findings', 'other_brain_id', 'b-gone') === 0 &&
 			about('brain_passes', 'kind', 'consolidation:b-gone') === 0 &&
-			about('brain_pass_items', 'kind', 'consolidation:b-gone') === 0
+			about('brain_pass_items', 'kind', 'consolidation:b-gone') === 0 &&
+			about('brain_pass_items', 'item', 'a.md|//b-gone//p.md') === 0
 	);
 	check(
 		'...and leaves what they hold about a brain that stays',
 		about('review_findings', 'other_brain_id', 'b-live') === 1 &&
 			about('brain_passes', 'kind', 'consolidation:b-live') === 1 &&
-			about('brain_pass_items', 'kind', 'consolidation:b-live') === 1
+			about('brain_pass_items', 'kind', 'consolidation:b-live') === 1 &&
+			about('brain_pass_items', 'item', 'a.md|//b-live//p.md') === 1
 	);
 	const left = BRAIN_PURGED_TABLES.filter((t) => count(t, 'b-gone') > 0);
 	check(

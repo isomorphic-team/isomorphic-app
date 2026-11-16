@@ -57,6 +57,7 @@ import {
 	isDeprecated,
 	isOtherPage,
 	otherPageId,
+	pageBrain,
 	pagePath,
 	passesScreen,
 	planStep,
@@ -71,6 +72,7 @@ import {
 	type Proposal
 } from '../ee/review/consolidation.ts';
 import { conflictKey, readFindings, upsertFindings } from '../src/lib/review-queue.ts';
+import { AGAINST_ALL } from '../src/lib/review-checks.ts';
 import { resetIndex } from '../src/lib/brain-index.ts';
 import { continuePass, readPass, savePass, savePassStatement } from '../src/lib/brain-pass.ts';
 import { SNAPSHOT_BEGIN, SNAPSHOT_END } from '../src/lib/view-directives.ts';
@@ -1427,8 +1429,8 @@ console.log('\nconsolidation: one brain against another (12)');
 	const both = [
 		page('rates.md', 'Acme rates', 'Acme rates are listed here.'),
 		page('terms.md', 'Acme terms', 'Acme rates and terms.'),
-		page(otherPageId('rates.md'), 'Acme rates', 'Acme rates for partners.'),
-		page(otherPageId('garden.md'), 'Garden', 'Tomatoes and basil.')
+		page(otherPageId('brain-b', 'rates.md'), 'Acme rates', 'Acme rates for partners.'),
+		page(otherPageId('brain-b', 'garden.md'), 'Garden', 'Tomatoes and basil.')
 	];
 	const across = planStep(both, new Map(), null, 48, () => true, true);
 	check(
@@ -1440,7 +1442,7 @@ console.log('\nconsolidation: one brain against another (12)');
 	check(
 		'two pages at the same path in the two brains are a pair, not one page',
 		across.pairs.some(
-			({ pair }) => pair.includes('rates.md') && pair.includes(otherPageId('rates.md'))
+			({ pair }) => pair.includes('rates.md') && pair.includes(otherPageId('brain-b', 'rates.md'))
 		)
 	);
 	check(
@@ -1453,8 +1455,12 @@ console.log('\nconsolidation: one brain against another (12)');
 	const hub = [
 		page('dinner.md', 'Harbor dinner format', 'The Harbor dinner is a curated format.'),
 		page('acme.md', 'Acme agreement', 'The Acme agreement was signed.'),
-		page(otherPageId('template.md'), 'Agreement template', 'This agreement has a format.'),
-		page(otherPageId('acme.md'), 'Acme', 'The Acme agreement sets the rate.')
+		page(
+			otherPageId('brain-b', 'template.md'),
+			'Agreement template',
+			'This agreement has a format.'
+		),
+		page(otherPageId('brain-b', 'acme.md'), 'Acme', 'The Acme agreement sets the rate.')
 	];
 	const hubPairs = planStep(hub, new Map(), null, 48, () => true, true).pairs.map(({ pair }) =>
 		[...pair].sort().join('|')
@@ -1462,7 +1468,7 @@ console.log('\nconsolidation: one brain against another (12)');
 	check(
 		'between brains a page is a candidate only when it holds every word of the title',
 		JSON.stringify(hubPairs.sort()) ===
-			JSON.stringify([[otherPageId('acme.md'), 'acme.md'].sort().join('|')]),
+			JSON.stringify([[otherPageId('brain-b', 'acme.md'), 'acme.md'].sort().join('|')]),
 		JSON.stringify(hubPairs)
 	);
 	check(
@@ -1470,8 +1476,12 @@ console.log('\nconsolidation: one brain against another (12)');
 		relatedPages(hub[0], [hub[1], { ...hub[2], path: 't.md' }]).includes('t.md')
 	);
 	check(
-		'a page id gives back its path on either side',
-		pagePath(otherPageId('a/b.md')) === 'a/b.md' && pagePath('a/b.md') === 'a/b.md'
+		'a page id gives back its path on either side, and its brain when it is another one',
+		pagePath(otherPageId('brain-b', 'a/b.md')) === 'a/b.md' &&
+			pagePath('a/b.md') === 'a/b.md' &&
+			pageBrain(otherPageId('local/b', 'a/b.md')) === 'local/b' &&
+			pagePath(otherPageId('local/b', 'a/b.md')) === 'a/b.md' &&
+			pageBrain('a/b.md') === null
 	);
 
 	const LOW = 'The day rate for Acme engagement is $1,200 per day.';
@@ -1540,7 +1550,7 @@ console.log('\nconsolidation: one brain against another (12)');
 			store: home.store,
 			repo: home.locator,
 			gateway,
-			against
+			against: { scope: other.brainId, label: against.handle, brains: [against] }
 		};
 
 		const first = await advanceConsolidation({ ...base, newRunId: () => 'x1' }, NOW);
@@ -1663,6 +1673,82 @@ console.log('\nconsolidation: one brain against another (12)');
 				refreshed.runId === 'x3',
 			JSON.stringify({ edited, refreshed })
 		);
+
+		// A third brain, and one pass against both others.
+		const thirdSrc = await mkdtemp(join(tmpdir(), 'ee-third-'));
+		await seed(thirdSrc, 'rates/acme.md', `# Acme engagement\n\nTHIRD-RATES ${LOW}\n`);
+		const third = await openFolderAsBrain(thirdSrc, 'wiki');
+		try {
+			const everyone = {
+				scope: AGAINST_ALL,
+				label: AGAINST_ALL,
+				brains: [
+					against,
+					{
+						brainId: third.brainId,
+						handle: 'ops-9f8e7d',
+						index: d1Index(third.db as unknown as D1Database)(third.brainId),
+						store: third.store,
+						repo: third.locator,
+						config: third.config
+					}
+				]
+			};
+			prompts.length = 0;
+			const all = await advanceConsolidation(
+				{ ...base, against: everyone, newRunId: () => 'all1' },
+				NOW
+			);
+			const marks = (prompt: string) => ({
+				home: (prompt.match(/HOME-[A-Z]+/g) ?? []).length,
+				away: (prompt.match(/(OTHER|THIRD)-[A-Z]+/g) ?? []).length
+			});
+			check(
+				'against every other brain, a pair is one page of this brain and one of another, never two others',
+				all.status === 'done' &&
+					prompts.every((p) => marks(p).home === 1 && marks(p).away === 1) &&
+					prompts.some((p) => p.includes('THIRD-RATES')) &&
+					prompts.some((p) => p.includes('OTHER-RATES')),
+				JSON.stringify(prompts.map(marks))
+			);
+			const found = (await readFindings(db, home.brainId)).filter((f) => f.runId === 'all1');
+			check(
+				'each finding names the brain its other page is in',
+				found.length === 2 &&
+					found.some((f) => f.other?.brainId === other.brainId) &&
+					found.some(
+						(f) => f.other?.brainId === third.brainId && f.other.path === 'wiki/rates/acme.md'
+					) &&
+					found[0].key !== found[1].key,
+				JSON.stringify(found.map((f) => f.other))
+			);
+			check(
+				'that pass has its own run state, apart from a pass against one brain',
+				(await readRun(db, home.brainId, AGAINST_ALL))?.runId === 'all1' &&
+					(await readRun(db, home.brainId, other.brainId))?.runId === 'x3'
+			);
+			check(
+				'its reply says how to continue it',
+				consolidationStepText({ ...all, status: 'running' }, AGAINST_ALL).includes(
+					'and against "all" again'
+				) &&
+					consolidationStepText(all, AGAINST_ALL).startsWith('The check against every other brain')
+			);
+			prompts.length = 0;
+			const allAgain = await advanceConsolidation(
+				{ ...base, against: everyone, newRunId: () => 'all2' },
+				NOW
+			);
+			check(
+				'and its own memory of the pairs it checked',
+				allAgain.pairsChecked === 0 &&
+					allAgain.pairsUnchanged === all.pairsChecked &&
+					!prompts.length
+			);
+		} finally {
+			await third.cleanup();
+			await rm(thirdSrc, { recursive: true, force: true });
+		}
 
 		const own = await advanceConsolidation(
 			{ ...base, against: undefined, newRunId: () => 'own' },

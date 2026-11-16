@@ -68,6 +68,16 @@ export function forgetBrainsStatements(
 		// What other brains hold about these: findings quoting their pages, and the run state
 		// of checks made against them (kind `consolidation:<brain id>`, 14 characters in).
 		db.prepare(`DELETE FROM review_findings WHERE other_brain_id IN (${brainIds})`).bind(...binds),
+		// A check against every other brain remembers each pair under one kind, with the
+		// other brain's id inside the item (`//<brain id>//<path>`).
+		db
+			.prepare(
+				`WITH gone(id) AS (${brainIds})
+				 DELETE FROM brain_pass_items
+				 WHERE kind = 'consolidation:all'
+				   AND EXISTS (SELECT 1 FROM gone WHERE instr(item, '//' || gone.id || '//') > 0)`
+			)
+			.bind(...binds),
 		...['brain_passes', 'brain_pass_items'].map((t) =>
 			db
 				.prepare(

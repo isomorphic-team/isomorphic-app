@@ -46,13 +46,55 @@ export interface ComparedBrain {
 	config: BrainConfig;
 }
 
+// What `against` takes to mean every other brain of the organization the caller can open.
+export const AGAINST_ALL = 'all';
+
+// Brains one pass compares against at most. Each is opened on every call.
+export const MAX_COMPARED_BRAINS = 20;
+
+// What a contradictions pass compares a brain against. `scope` names the pass's run
+// state (one other brain's id, or AGAINST_ALL) and `label` is what the caller passed.
+export interface Comparison {
+	scope: string;
+	label: string;
+	brains: ComparedBrain[];
+}
+
 /** One step of the consolidation pass, as the Worker wires it into a brain's context. */
 export type ConsolidationStep = (opts?: {
 	// Start a new pass that checks every pair, ignoring what earlier passes checked.
 	fresh?: boolean;
-	// Compare this brain against another one instead of against itself.
-	against?: ComparedBrain;
+	// Compare this brain against others instead of against itself.
+	against?: Comparison;
 }) => Promise<{ text: string; wire: ConsolidationStepWire }>;
+
+// Which brains `against: "all"` covers for a brain: the others in its organization among
+// the brains the caller can open, in a stable order. Or why there is nothing to run.
+export function brainsToCompare(
+	check: ReviewCheck,
+	home: { brainId: string; orgId?: string },
+	reachable: readonly { brain_id: string; org_id: string; id: string }[] | undefined
+): { brains: { brainId: string; handle: string }[] } | { refusal: string } {
+	if (check !== 'contradictions') {
+		return { refusal: '`against` only applies to check "contradictions".' };
+	}
+	const brains = (reachable ?? [])
+		.filter((b) => !!home.orgId && b.org_id === home.orgId && b.brain_id !== home.brainId)
+		.map((b) => ({ brainId: b.brain_id, handle: b.id }))
+		.sort((a, b) => (a.brainId < b.brainId ? -1 : a.brainId > b.brainId ? 1 : 0));
+	if (!brains.length) {
+		return {
+			refusal:
+				'There is no other brain in this organization that you can open, so there is nothing to compare against.'
+		};
+	}
+	if (brains.length > MAX_COMPARED_BRAINS) {
+		return {
+			refusal: `You can open ${brains.length} other brains in this organization, and one pass compares against at most ${MAX_COMPARED_BRAINS}. Name one brain in \`against\` instead.`
+		};
+	}
+	return { brains };
+}
 
 // Why this brain cannot be checked against `other`, or null when it can. The caller has
 // already opened both, so reading the other brain is settled before this is asked. The

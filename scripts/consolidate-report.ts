@@ -17,8 +17,8 @@
 // --runs repeats the pass over the same database, so later runs show what the memory of
 // checked pairs saves: with nothing edited between runs, they check nothing.
 //
-// --against <folder> [--against-root <name>] compares the folder with a second brain, as
-// review_brain's `against` does. Without --models it lists the page pairs the pass would
+// --against <folder> compares the folder with a second brain, as review_brain's `against`
+// does. Repeat it to compare with several, as `against: "all"` does. Without --models it lists the page pairs the pass would
 // check, which costs nothing.
 //
 //   pnpm consolidate:report <folder> --against <other folder> [--models]
@@ -28,7 +28,9 @@ import { entitlementSql } from '../ee/entitlements.ts';
 import { FEATURES } from '../src/lib/entitlements.ts';
 import {
 	isDeprecated,
+	isOtherPage,
 	otherPageId,
+	pageBrain,
 	pagePath,
 	planStep,
 	runConsolidationStep,
@@ -36,8 +38,8 @@ import {
 	type Proposal
 } from '../ee/review/consolidation.ts';
 import { isContentPath, isToolMaintained } from '../src/lib/brain-policy.ts';
-import type { ComparedBrain } from '../src/lib/review-checks.ts';
-import { basename } from 'node:path';
+import { AGAINST_ALL, type ComparedBrain, type Comparison } from '../src/lib/review-checks.ts';
+import { basename, dirname } from 'node:path';
 import { readFindings } from '../src/lib/review-queue.ts';
 import { loadDevVarsIntoEnv } from '../src/persist.ts';
 import { loadAllFields, loadResolvedGraph, loadPageContents } from '../src/lib/brain-index.ts';
@@ -53,14 +55,13 @@ const capFlag = args.indexOf('--cap');
 const runsFlag = args.indexOf('--runs');
 const runs = runsFlag === -1 ? 1 : Number(args[runsFlag + 1]);
 const cap = capFlag === -1 ? 1 : Number(args[capFlag + 1]);
-const againstFlag = args.indexOf('--against');
-const againstSource = againstFlag === -1 ? null : args[againstFlag + 1];
-const againstRootFlag = args.indexOf('--against-root');
+// Every --against names one more brain to compare with.
+const againstAt = args.flatMap((a, i) => (a === '--against' ? [i + 1] : []));
+const againstSources = againstAt.map((i) => args[i]).filter(Boolean);
 const positional = args.filter(
 	(a, i) =>
 		!a.startsWith('--') &&
-		!(againstFlag !== -1 && i === againstFlag + 1) &&
-		!(againstRootFlag !== -1 && i === againstRootFlag + 1) &&
+		!againstAt.includes(i) &&
 		!(rootFlag !== -1 && i === rootFlag + 1) &&
 		!(capFlag !== -1 && i === capFlag + 1) &&
 		!(runsFlag !== -1 && i === runsFlag + 1)
@@ -76,20 +77,25 @@ if (!source) {
 }
 
 const brain = await openFolderAsBrain(source, rootArg ?? undefined);
-const otherBrain = againstSource
-	? await openFolderAsBrain(
-			againstSource,
-			againstRootFlag === -1 ? undefined : args[againstRootFlag + 1]
-		)
-	: null;
-const against: ComparedBrain | undefined = otherBrain
+// A folder named `wiki` is called by its parent, so two brains' `wiki` folders stay apart.
+const nameOf = (folder: string) =>
+	basename(folder) === 'wiki' ? basename(dirname(folder)) : basename(folder);
+const otherBrains = [];
+for (const folder of againstSources) {
+	otherBrains.push({ name: nameOf(folder), brain: await openFolderAsBrain(folder) });
+}
+const against: Comparison | undefined = otherBrains.length
 	? {
-			brainId: otherBrain.brainId,
-			handle: basename(againstSource!),
-			index: d1Index(otherBrain.db as unknown as D1Database)(otherBrain.brainId),
-			store: otherBrain.store,
-			repo: otherBrain.locator,
-			config: otherBrain.config
+			scope: otherBrains.length > 1 ? AGAINST_ALL : `local/${otherBrains[0].name}`,
+			label: otherBrains.length > 1 ? AGAINST_ALL : otherBrains[0].name,
+			brains: otherBrains.map(({ name, brain: b }) => ({
+				brainId: `local/${name}`,
+				handle: name,
+				index: d1Index(b.db as unknown as D1Database)(b.brainId),
+				store: b.store,
+				repo: b.locator,
+				config: b.config
+			}))
 		}
 	: undefined;
 try {
@@ -122,11 +128,11 @@ try {
 	if (withModels) await modelPass();
 } finally {
 	await brain.cleanup();
-	await otherBrain?.cleanup();
+	for (const o of otherBrains) await o.brain.cleanup();
 }
 
-// The page pairs a pass against the other brain would check, for no spend.
-async function pairPlan(other: ComparedBrain) {
+// The page pairs a pass against the other brains would check, for no spend.
+async function pairPlan(others: Comparison) {
 	const pagesOf = async (
 		b: Pick<ComparedBrain, 'index' | 'config'>,
 		id: (path: string) => string
@@ -149,15 +155,21 @@ async function pairPlan(other: ComparedBrain) {
 		{ index: d1Index(brain.db as unknown as D1Database)(brain.brainId), config: brain.config },
 		(p) => p
 	);
-	const there = await pagesOf(other, otherPageId);
+	const there: PageText[] = [];
+	for (const b of others.brains) {
+		there.push(...(await pagesOf(b, (path) => otherPageId(b.brainId, path))));
+	}
 	const plan = planStep([...here, ...there], new Map(), null, Infinity, () => true, true);
 	const title = new Map([...here, ...there].map((p) => [p.path, p.title]));
+	const names = others.brains.map((b) => `"${b.handle}"`).join(', ');
 	console.log(
-		`\nAgainst "${other.handle}": ${here.length} page(s) here, ${there.length} there, ${plan.pairs.length} pair(s) to check of ${here.length * there.length} possible.\n`
+		`\nAgainst ${names}: ${here.length} page(s) here, ${there.length} there, ${plan.pairs.length} pair(s) to check of ${here.length * there.length} possible.\n`
 	);
 	for (const { pair } of plan.pairs) {
-		const [a, b] = pair[0].startsWith('//') ? [pair[1], pair[0]] : pair;
-		console.log(`  ${a} ("${title.get(a)}")  <->  ${pagePath(b)} ("${title.get(b)}")`);
+		const [a, b] = isOtherPage(pair[0]) ? [pair[1], pair[0]] : pair;
+		console.log(
+			`  ${a} ("${title.get(a)}")  <->  ${pageBrain(b)}: ${pagePath(b)} ("${title.get(b)}")`
+		);
 	}
 }
 
