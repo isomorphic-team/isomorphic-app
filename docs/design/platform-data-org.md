@@ -1,6 +1,9 @@
 # Design: a dedicated data org for platform-stored brains
 
-Status: **proposed** (2026-10-02). Nothing here is built.
+Status: **proposed** (2026-10-02). Nothing here is built. Brains the platform holds in a
+Durable Object each ([`storage-backends.md`](./storage-backends.md) section 5.6) answer the
+same exposure a different way, for brains that are not repositories at all. The two are not
+yet reconciled: this document still applies to platform-stored brains that are repositories.
 
 ## The problem
 
@@ -62,7 +65,7 @@ token.
 
 An existing deployment has brains in the old organization, bound to the storage connection
 `github-app:<old installation id>`. Moving them is a case of "Relocate storage" in
-[`storage-and-tenancy.md`](./storage-and-tenancy.md#relocate-storage-step-5-not-built), and a
+[`storage-and-tenancy.md`](./storage-and-tenancy.md#relocate-storage-step-5-partly-built), and a
 simpler one: GitHub's repository transfer keeps history, issues and settings, and redirects the
 old URL, so no git push is needed.
 
@@ -97,9 +100,9 @@ Brains of `customer` orgs are untouched: they are bound to their own installatio
 
 ## Open questions
 
-- **Does the content index key on the repository owner?** If it does, a transferred brain
-  re-indexes on its next read, which is budgeted and resumable but not free for a large brain.
-  Check before writing the script.
+- **Does the content index key on the repository owner?** No. It is keyed by
+  `brains.brain_id` (migration 0011), which step 4 leaves alone, so a transferred brain keeps
+  its index.
 - **What does the data org's audit log cover on its plan?** Repository access by the owner is
   what the record is for. If the free plan's log does not show it, the plan choice is part of
   this design.

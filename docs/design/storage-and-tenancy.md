@@ -5,7 +5,9 @@
   `connect_brain`, `src/lib/brain-move.ts`; one tenancy model,
   `src/lib/static-tenant.ts`; derived state keyed by `brain_id`, migration 0011) and step 4
   (slug URLs, `src/lib/brain-slug.ts` and migration 0012) and step 6 (contract,
-  migrations 0013 and 0014). Step 5 not started.
+  migrations 0013 and 0014). Step 5 partly built: relocation as a copy of a brain's current
+  files (`src/lib/brain-relocate.ts`) and a second locator (`brains.storage_root`, migration
+  0027). An Azure Repos store and a history-preserving relocation are not built.
 - Author: Jon Hansing (via Claude)
 - Date: 2026-09-22
 - Related: `docs/design/brain-seams.md` (§6, identity is a key, never a path),
@@ -74,8 +76,8 @@ A credential to one provider account. Replaces `orgs.installation_id`.
 | Column          | Meaning                                                                                    |
 | --------------- | ------------------------------------------------------------------------------------------ |
 | `connection_id` | Opaque. Deterministic for GitHub App installations: `github-app:<installation id>`.        |
-| `provider`      | `github` today; `azure-devops`, `gitlab` later.                                            |
-| `kind`          | `github-app-installation` today; `github-token`, `azure-service-principal` later.          |
+| `provider`      | `github`, `platform` or `google`; `azure-devops`, `gitlab` later.                          |
+| `kind`          | `github-app-installation`, `github-token`, `platform-files`, `google-drive`.               |
 | `external_id`   | The provider's id for the credential (the installation id).                                |
 | `account`       | The provider account it reaches (a GitHub org login).                                      |
 | `owner_org_id`  | The org that administers it, or NULL for a **platform-owned** connection (hosted storage). |
@@ -91,8 +93,9 @@ the platform created.
 
 Where one brain's bytes live: a connection plus a locator. In step 1 the binding is one
 column, `brains.storage_connection_id`, and the locator is the existing `repo_owner` +
-`repo_name`, which is what a GitHub locator is. Step 5 generalizes the locator when a
-backend needs a different shape (Azure's organization, project and repository).
+`repo_name`, which is what a GitHub locator is. A brain in a Google Drive folder also has
+`brains.storage_root`, the folder's id (migration 0027). Step 5 generalizes the locator
+further when a backend needs a different shape (Azure's organization, project and repository).
 
 Every brain is bound (step 1's backfill, and every writer since). The fallback to the
 org's installation for an unbound brain was removed in step 6: an unbound brain is not
@@ -160,17 +163,18 @@ account, and the preview says so. Custody changing hands is relocation, a separa
 already set: both are the brain's own settings, gated at brain admin. A call with only
 `name` never touches the repository. There was previously no way to rename a brain.
 
-### Relocate storage (step 5, not built)
+### Relocate storage (step 5, partly built)
 
-Re-bind a brain to another connection or backend. Both ends are git, so relocation is a
-history-preserving push from one remote to another. It runs as a job, not in the Worker,
-which cannot run git. The brain's identity is unchanged, so grants, links and URLs
-survive.
+Re-bind a brain to another connection or backend. The brain's identity is unchanged, so
+grants, links and URLs survive.
 
-One relocation is built, and it is not between two git remotes: `configure_brain` copies a
-brain's current files out of its repository into storage the platform holds
-([`storage-backends.md`](storage-backends.md) section 5.6), in the Worker, leaving history
-behind.
+Built: `configure_brain` with `storage` copies a brain's current files between any two of
+a GitHub repository, storage the platform holds and a Google Drive folder (`relocateBrain`
+in `src/lib/brain-relocate.ts`, [`storage-backends.md`](storage-backends.md) section 9), in
+the Worker, a resumable step per call, leaving history behind.
+
+Not built: a history-preserving move between two git remotes. That is a push from one
+remote to another, and it runs as a job, not in the Worker, which cannot run git.
 
 ### Create and adopt
 
@@ -203,8 +207,9 @@ removals silently. Merges follow shared gate, annotation class and meaning, as
 `create_org` replaced `connect_github_org` in step 2, so creating an org and choosing
 where its storage lives are one verb: hosted by default, `github: true` for the
 customer's own GitHub organization. A later backend is another option on the same tool,
-not a new tool. `create_brain` / `connect_brain` later gain an
-optional connection argument defaulting to the org's.
+not a new tool. `create_brain` takes `storage`, which picks among a GitHub repository,
+storage the platform holds and a Google Drive folder, defaulting by the org's connection
+(`chooseBrainStorage`). `connect_brain` takes no connection argument.
 
 ## 7. Migration path
 
@@ -241,11 +246,12 @@ its deploy window, because a rollback reverts code and never schema.
    (`canonicalWebPath`); tools accept `owner/repo` and stale slugs through `matchBrain`. No
    alias table: the handle never changes, and the repo columns answer old links until a
    relocation (step 5) changes them, which is when step 5 needs one.
-5. **A second backend.** An Azure Repos `BrainStore`, a service-principal connection
-   kind, a generalized locator, and relocation. Built when a customer needs it, with an
-   e2e battery against a scratch repository (the twin of the `--github` mode). Backends
-   that are not git (OneDrive, SharePoint, Google Drive) need more than a new
-   implementation: [`storage-backends.md`](storage-backends.md).
+5. **A second backend (partly built).** An Azure Repos `BrainStore`, a service-principal
+   connection kind and a generalized locator are not built, and wait for a customer who
+   needs them, with an e2e battery against a scratch repository (the twin of the `--github`
+   mode). Relocation is built as a copy of the current files (section 5). Backends that
+   are not git are in [`storage-backends.md`](storage-backends.md): storage the platform
+   holds and Google Drive are built, OneDrive and SharePoint are not.
 6. **Contract (built).** Checked against production first (18 brains, all bound; every
    org's installation a recorded connection; one dead `tenants` row; no `github_links`).
    Removed: the binding fallback, the `tenants` table, the GitHub half of Connected

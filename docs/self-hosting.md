@@ -469,7 +469,8 @@ to require the directory for a domain.
 
 **Model consolidation (enterprise, optional).** `review_brain` with `check: "contradictions"`
 has a model compare related pages and queue the contradictions it finds as findings `validate`
-lists. It is an `ee/` feature: it runs only for an organization with the `enterprise`
+lists. With `against`, it compares one brain with another in the same organization, or with every
+other one (`against: "all"`). It is an `ee/` feature: it runs only for an organization with the `enterprise`
 entitlement (`pnpm entitle --org <org_id> --feature enterprise --cap 5`), within that
 entitlement's monthly spend cap, and only on a deployment holding a model key:
 

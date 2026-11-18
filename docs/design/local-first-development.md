@@ -3,6 +3,10 @@
 Status: **built** (2026-08-04). A plan to make a first contribution cheap, and to move the
 write-path end-to-end batteries into CI as a side effect. Both happened.
 
+This is the record of that plan, and its body is not kept current. The `BrainStore` contract
+as it stands (neutral names, capabilities, four implementations) is in
+[`storage-backends.md`](./storage-backends.md) and `src/lib/brain-repo.ts`.
+
 **Where the plan was wrong:**
 
 - The seam is **ten operations, not seven**. `branchCommitSha`, `repoWritePolicy`, and

@@ -43,7 +43,8 @@ Worker**, served at `https://pr-<number>-<preview worker>.<subdomain>.workers.de
    request is previewed on every push. A fork is not (below).
 2. **`build`** checks out the pull request, installs, regenerates, and bundles with
    `wrangler versions upload --dry-run --outdir`. It references no secret, has a read-only
-   token, and keeps no git credential. Its artifact is `worker.js` and `migrations/*.sql`.
+   token, and keeps no git credential. Its artifact is `worker.js` and the SQL
+   files of `migrations/` and `migrations-index/`.
 3. **`deploy`** holds the Cloudflare token and runs only its own checkout's code. It ensures
    the pull request's D1 database, generates the preview's config (below), applies the
    branch's migrations to that database, runs `wrangler preview <worker.js>`, smoke checks
@@ -152,7 +153,8 @@ this repository, never to a fork's code, which only runs in `build`.
 Cloudflare provisions no D1 for a Preview, and two Previews sharing a `database_id` share
 rows. A shared preview database would also carry every open branch's migrations at once, and
 one branch's schema change would break the others. D1 allows 10 databases on Workers Free and
-50,000 on Paid, so a preview account on Free supports nine open previews alongside its base.
+50,000 on Paid. Each pull request takes two (its platform database and its index database),
+so a preview account on Free supports four open previews alongside its base.
 
 KV is shared. OAuth grants in it are bound to each Preview's own origin, so a token from one
 Preview is refused by another.
@@ -161,8 +163,9 @@ Preview is refused by another.
 
 An invite-only preview means every reviewer is invited by hand first. Auto-provisioning lets a
 reviewer open `/b`, sign in, and reach the create-your-first-brain state, which is the path a
-new customer takes. Brain repositories accumulate in the throwaway organization; deleting the
-pull request's database does not delete them.
+new customer takes. Without a preview objects Worker, brain repositories accumulate in the
+throwaway organization; with one, files objects accumulate under each pull request's scope.
+Deleting the pull request's database deletes neither.
 
 ## What the smoke check covers
 

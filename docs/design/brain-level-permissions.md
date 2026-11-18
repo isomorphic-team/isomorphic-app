@@ -126,7 +126,7 @@ resolution started from `memberships` and a grant to anyone else was unreachable
 [`guest-access.md`](./guest-access.md).)
 
 UI: `app/views/BrainAccessView.tsx`. Sharing is a **view of the brain**, a peer of Files, Graph
-and Recent changes: it is in `brainDestinations()` so every brain crumb's picker offers it, and
+and Recent changes: it is in `destinationsIn` (`app/core/nav.ts`) so every brain crumb's picker offers it, and
 in the ⋯ menu's "This brain" group. It passes the trail's own scope test (switching brains shows
 a different answer), and it is ungated in both places because `brain_access` is read-only and
 open to anyone who can reach the brain at all; only the controls inside it are admin-gated.

@@ -36,7 +36,8 @@ import { McpServer, type RegisteredTool } from '@modelcontextprotocol/server';
 import { indexFor, indexRefs, type BrainIndex, type OpenIndex } from './lib/brain-index.ts';
 import { registeredTools, wrapToolHandler } from './lib/registered-tools.ts';
 import { serveMcp, serverOptions } from './lib/mcp-serve.ts';
-import type { ConsolidationStep, IdentityWire, OrgMembershipWire } from './lib/tool-payloads.ts';
+import type { IdentityWire, OrgMembershipWire } from './lib/tool-payloads.ts';
+import type { ConsolidationStep } from './lib/review-checks.ts';
 import { consolidationWire, runConsolidationStep } from '../ee/review/consolidation.ts';
 import { z } from 'zod';
 import type { OAuthHelpers } from '@cloudflare/workers-oauth-provider';
@@ -311,7 +312,8 @@ function consolidationFor(
 			...scope,
 			anthropicKey,
 			openRouterKey,
-			fresh: opts?.fresh
+			fresh: opts?.fresh,
+			against: opts?.against
 		});
 		return { text, wire: { consolidation: state && consolidationWire(state) } };
 	};

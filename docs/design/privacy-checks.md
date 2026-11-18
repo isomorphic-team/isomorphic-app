@@ -1,6 +1,6 @@
 # Design: privacy checks
 
-Status: **proposed** (2026-10-13). P0 and P1 are built; the rest is not. What it builds on, the data-policy guard, is built too.
+Status: **partly built** (2026-10-13). P0, P1 and P5 are built; the rest is not. What it builds on, the data-policy guard, is built too.
 
 This is the companion to [`consistency-checks.md`](./consistency-checks.md), and the privacy half of the roadmap's "brain review". The guard answers one question: did a write put sensitive data into a brain? This doc covers what the guard leaves open:
 
@@ -112,7 +112,7 @@ None of the following is built yet, which is why deciding it now is cheap.
 - **Publications** ([`brain-seams.md`](./brain-seams.md)): a declared-sensitive page does not cross into another brain.
 - **Consolidation:**
   - **Pre-scan.** A page with a high-severity detection never reaches the gateway. A declared-sensitive page reaches it only if the brain's policy allows model review of declared pages.
-  - **Every provider path is zero-retention.** OpenRouter requests carry `ZDR_PROVIDER`. The Anthropic path, which serves Haiku first, is used only when the operator declares a zero-data-retention arrangement for their Anthropic organization ([`consistency-checks.md`](./consistency-checks.md), Part 2).
+  - **Retention by provider.** OpenRouter requests carry `ZDR_PROVIDER`, which routes only to zero-data-retention endpoints. Anthropic requests, which serve Haiku first, run under the operator's own Anthropic organization's retention, which is standard unless the operator has arranged otherwise. ([`consistency-checks.md`](./consistency-checks.md), Part 2).
   - **Evidence.** Quotes are scrubbed through the detectors before they are stored in the findings queue or shown on the Review screen ([`consistency-checks.md`](./consistency-checks.md), Parts 2 and 3).
 
 ### Part 5: what stays outside Isomorphic
@@ -129,7 +129,7 @@ Isomorphic's docs point to it for anyone running `pnpm try` or keeping a checkou
 
 - **Unchanged from the guard:**
   - Detections and findings carry offsets and counts, never the matched text. The one derived form stored is a keyed fingerprint of a value someone dismissed.
-  - Policy findings are visible to admins only.
+  - Policy findings are visible to brain admins and the content's author only. Only an admin can dismiss one.
   - Nothing advisory blocks a write.
 - **New:**
   - A privacy report states its coverage, and never reports clean on partial coverage.
@@ -151,7 +151,7 @@ Isomorphic's docs point to it for anyone running `pnpm try` or keeping a checkou
 | P2   | Declarations: frontmatter fields, sensitive globs, brain-wide default           | core                         | `.isomorphic.json` policy block, tests                    |
 | P3   | Recognize git-crypt files through the store; local runtime reads git attributes | core                         | `BrainStore`, content index, `src/local/`                 |
 | P4   | Reach summary; sensitive counts in `share_brain` replies                        | core                         | `validate`, Review screen, `share_brain`                  |
-| P5   | Consolidation pre-scan and evidence scrubbing                                   | `ee/` and the findings queue | [`consistency-checks.md`](./consistency-checks.md) C3, C4 |
+| P5   | Built: consolidation pre-scan and evidence scrubbing                            | `ee/` and the findings queue | [`consistency-checks.md`](./consistency-checks.md) C3, C4 |
 | P6   | Enforcement on share links and publications, built with those features          | core                         | link sharing, brain seams                                 |
 
 P0 and P1 ship first. Together they would have surfaced brain A's two files, connection strings included. P2 and P4 together are the join. P5 is a precondition for model consolidation, not a follow-up to it.

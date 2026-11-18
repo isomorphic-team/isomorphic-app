@@ -304,12 +304,6 @@ export interface ConsolidationStepWire {
 	} | null;
 }
 
-/** One step of the consolidation pass, as the Worker wires it into a brain's context. */
-export type ConsolidationStep = (opts?: {
-	// Start a new pass that checks every pair, ignoring what earlier passes checked.
-	fresh?: boolean;
-}) => Promise<{ text: string; wire: ConsolidationStepWire }>;
-
 export interface GraphViewWire extends InBrain {
 	view: 'graph';
 	webUrl?: string;

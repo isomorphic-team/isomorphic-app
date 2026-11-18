@@ -11,10 +11,10 @@ the store of step 6 (Google Drive), which is being built before step 4 (Microsof
 
 ## 1. Summary
 
-A brain is a folder of Open Knowledge Format markdown. Today that folder is always a git
-repository, on GitHub or on disk. This document proposes letting the same folder live in
-Microsoft OneDrive or SharePoint document libraries (one API, Microsoft Graph) and in Google
-Drive, with every tool working unchanged. It also moves the brains the platform holds itself,
+A brain is a folder of Open Knowledge Format markdown. That folder is a git repository, on
+GitHub or on disk, or one of the stores this document adds. This document proposes letting
+the same folder live in Microsoft OneDrive or SharePoint document libraries (one API,
+Microsoft Graph) and in Google Drive, with every tool working unchanged. It also moves the brains the platform holds itself,
 those with no storage of the customer's behind them, out of the platform's GitHub
 organization and into a Durable Object each (section 5.6), which is built first.
 
@@ -43,8 +43,8 @@ desktop) with a local editor is possible and is the main source of concurrent wr
 ## 3. What is already in place
 
 - **One seam.** `BrainStore` (`src/lib/brain-repo.ts`) is the only interface between tools and
-  storage. Outside `brain-repo.ts`, `github.ts` and `bootstrap.ts`, only `scaffold-core.ts` calls
-  octokit directly.
+  storage. The GitHub adapter is `githubStore` in `src/lib/brain-store-github.ts`; outside it,
+  `github.ts` and `bootstrap.ts`, only `scaffold-core.ts` calls octokit directly.
 - **A second implementation.** `fsBrainStore` (`src/local/brain-store-fs.ts`) already reports a
   working-tree digest where GitHub reports a commit SHA, and refuses pull-request mode with an
   explanation. So two of the needed ideas exist: the revision is opaque, and a backend may lack a
@@ -163,11 +163,12 @@ Webhooks are not built and are not needed: polling on read matches the current m
 
 ### 5.6 Brains the platform holds
 
-A brain created without storage of the customer's own is a repository in the platform's
-GitHub organization today. Its content is then readable by every member of that organization
-and by every token and App scoped to it, in the ordinary course of using GitHub. Such a brain
-moves into a SQLite-backed Durable Object of its own, in the objects Worker, and that becomes
-the default for a hosted brain.
+On a deployment that binds no files objects, a brain created without storage of the
+customer's own is a repository in the platform's GitHub organization. Its content is then
+readable by every member of that organization and by every token and App scoped to it, in the
+ordinary course of using GitHub. Where files objects are bound, such a brain is a
+SQLite-backed Durable Object of its own, in the objects Worker, and that is the default for
+an org on platform-owned storage (`chooseBrainStorage`).
 
 - **The files are rows** (`src/lib/brain-store-sql.ts`). A write is one transaction that adds
   a commit and a new version of each file it touches, so the store has `atomicWrite` and
@@ -181,8 +182,8 @@ the default for a hosted brain.
   object's storage deliberately. What it removes is content appearing in a place people and
   tools browse.
 - **Export keeps the promise that a brain is the customer's.** A brain here is not a git
-  repository anyone can clone, so the default does not change until a brain can be copied out
-  to a GitHub repository.
+  repository anyone can clone, so `configure_brain` with `storage: "github"` moves it out to a
+  GitHub repository (section 9, step 3.6).
 
 ## 6. The backends
 
@@ -282,7 +283,7 @@ Each step is its own pull request.
       repository and binds it there. A copy out that leaves the brain where it is: a
       backup of each changed brain to an R2 bucket, sealed to a public key
       (`docs/ops/backups.md`). An archive for a member to download is not built.
-   7. The default for a hosted brain, and moving the existing ones.
+   7. Moving the existing hosted brains. The default for a new one is built (step 3.4).
 4. **The Graph store**, tested against an in-memory fake that reproduces delta tokens, `410`
    resync, eTags and name uniqueness, plus an e2e battery against a scratch folder (the twin of
    the GitHub `--github` mode). A new connection kind and `create_brain` / `connect_brain`
@@ -320,9 +321,8 @@ the current files. History stays behind in the source repository.
 - **Media.** `read_media` and attachments read binary files through the store. Confirm Graph and
   Drive downloads fit the Worker's memory and response limits for the media sizes already allowed.
 - **Coordinated writes in a Worker Preview.** A Preview binds the coordinator only when a
-  preview objects Worker is set up (`preview-environments.md`). Its object names are not
-  scoped per pull request yet: when a store first uses the coordinator, name its objects
-  through `OBJECTS_SCOPE` as the files objects are.
+  preview objects Worker is set up (`preview-environments.md`). A Drive brain's coordinator
+  object is named through `OBJECTS_SCOPE` as the files objects are (`filesObjectName`).
 - **Round trips per file, and content crossing twice.** Each file costs the object a call
   back to the MCP Worker on top of the backend's own request, steps run one at a time, and a
   written file's content crosses RPC twice (in the bundle, then back out through `put`), so a

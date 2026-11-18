@@ -34,7 +34,7 @@ The load-bearing claim is that the second one is far smaller than "build a web a
 app couples to its MCP host through exactly five calls in one file (`app/core/host.ts`:
 `callTool`, `openLink`, `getHostContext`, `requestDisplayMode`, and the theme appliers). Swap
 that file and the same bundle runs anywhere. The tool layer needs no port either: identity
-reaches `McpSession` as `props` (`user_id`, `email`, `gh_user_id`, `gh_login`, `org_id`), and a
+reaches `McpSession` as `props` (`user_id`, `email`, `org_id`, `role`), and a
 browser session already produces the first two. The web app is another MCP client, holding a
 cookie instead of a Bearer token.
 
@@ -98,7 +98,7 @@ The reader does not serve the app bundle. It renders HTML in the Worker and send
 
 ### 4.2 A share is a row, and the token is a credential
 
-New table `page_shares` (migration `0007`), additive per the expand-then-contract rule:
+New table `page_shares` (a new migration, the next free number), additive per the expand-then-contract rule:
 
 | column                                                 | meaning                                                                        |
 | ------------------------------------------------------ | ------------------------------------------------------------------------------ |
@@ -266,7 +266,7 @@ first commit.
 
 ## 8. Tool and app surface
 
-One new tool, which is a real cost against a surface deliberately consolidated from 42 to 30:
+One new tool, which is a real cost against a surface that is deliberately kept consolidated (38 tools today):
 
 **`share_page`** (brain admin+), following `share_brain`'s "every mutation in one verb" shape:
 create a link, list the links on a path, change expiry or audience, revoke (`audience: 'none'`).
@@ -319,7 +319,7 @@ Three things came out of building it that this document had wrong or did not kno
   a link to plain text. Phase 1 supplies the scope predicate; the renderer needs no further
   change for it, and `pnpm test:render` already pins flatten-keeps-text.
 
-**Phase 1: single-page share links.** Migration `0007`, `share_page`, the reader route and the
+**Phase 1: single-page share links.** A new migration, `share_page`, the reader route and the
 asset route in `fetch` ahead of `oauthProvider.fetch`, the link horizon, the app's share sheet.
 This is the ask, end to end, and it is shippable on its own.
 
@@ -349,9 +349,9 @@ What building it changed about this document:
   browser sends no `Origin` at all, so the content type must also be JSON: an HTML form can only
   POST three types, none of them JSON, which is what puts this endpoint out of a form's reach even
   with the cookie attached.
-- **Still open:** no browser-level coverage of the app in web mode (a harness route driving the
-  real bundle against a stubbed `/mcp`), and `script-src` still carries `'unsafe-inline'` because
-  the bundle inlines its own JS. Hashes belong in `pnpm gen:app`.
+- **Still open:** `script-src` still carries `'unsafe-inline'` because the bundle inlines its
+  own JS. (Browser coverage of the app in web mode exists: the `web` Playwright project runs
+  `tests/ui/web-nav.spec.ts` and `tests/ui/web-move.spec.ts`.) Hashes belong in `pnpm gen:app`.
 
 The **session bootstrap link** considered alongside this (a short-lived URL minted by an MCP tool
 that plants a session in whatever browser opens it) was **deliberately not built**. It only buys
