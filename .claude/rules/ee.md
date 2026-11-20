@@ -42,7 +42,10 @@ Licensed under `ee/LICENSE`, not the AGPL. Placement rule and history:
   checked pair is remembered in `brain_pass_items` with a fingerprint of both pages' blob shas
   and the check's own version (prompts, gates, models), so a later pass skips a pair whose
   fingerprint is unchanged and keeps its findings as they were; `fresh` starts a pass that
-  ignores the memory. A page with a
+  ignores the memory. A pair that is checked again keeps only that check's findings: the
+  queue's other rows for the pair, in both brains for a pair between two, are deleted
+  (`replacePairFindings`, by `conflictPairPrefix` through `pairQueues`). A finding's
+  explanation names the pages as its quotes do, never "page A" (`namePages`). A page with a
   high-severity detection never reaches the gateway. A page whose `status` field is
   `deprecated` (`isDeprecated`) is left out and counted in the reply: an old copy is expected
   to disagree with what replaced it. With an OpenRouter key, Jev screens each
@@ -80,7 +83,9 @@ Licensed under `ee/LICENSE`, not the AGPL. Placement rule and history:
   A pair one brain's pass checked is not checked again from the other. `review_brain` with
   `against: "organization"` runs one step of it for one organization when its admin asks
   (`runOrgChecksNow`, a finished pass standing for `ORG_PASS_NOW_STANDS_MS`);
-  `orgPassNowText` replies with counts and no brain's name. A step the gateway refuses (no
+  `orgPassNowText` replies with no brain's name and with counts over every brain's current
+  pass (`orgPassTotals`: the brains stepped, those under way, those whose finished pass
+  still stands), since one call steps one brain. A step the gateway refuses (no
   entitlement, the cap) is a stopped step with that reason, whatever the brain's row says. The run logs counts and brain
   ids, never content.
 - **No outside contributions**, and no customer names here either: the public-repo hygiene rules

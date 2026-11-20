@@ -24,6 +24,7 @@ import {
 	type OrgChecksStatus,
 	orgPassDue,
 	orgPassOrder,
+	orgPassTotals,
 	orgPassStart
 } from '../src/lib/org-pass.ts';
 import {
@@ -681,6 +682,35 @@ const of = (ts: Tension[], kind: string) => ts.filter((t) => t.kind === kind);
 			orgPassOrder([{ brain: 'a', run: done(T - 1000) }], T, 1000).length === 1 &&
 			orgPassOrder([{ brain: 'a', run: done(T - 1000) }], T).length === 0
 	);
+	{
+		const counted = (finishedAt: number | null, n: number) => ({
+			status: finishedAt === null ? ('running' as const) : ('done' as const),
+			startedAt: 0,
+			finishedAt,
+			pairsChecked: n,
+			findings: n / 10,
+			costUsd: n / 1000
+		});
+		const totals = orgPassTotals(
+			[
+				{ run: counted(T - 10, 200), stepped: false },
+				{ run: counted(null, 60), stepped: true },
+				{ run: counted(null, 30), stepped: false },
+				{ run: counted(T - 5000, 1000), stepped: false },
+				{ run: counted(T - 5000, 7), stepped: true },
+				{ run: null, stepped: false }
+			],
+			T,
+			1000
+		);
+		check(
+			'org pass: the totals cover every brain in this round, not only the one just stepped',
+			totals.pairsChecked === 297 &&
+				Math.abs(totals.findings - 29.7) < 1e-9 &&
+				Math.abs(totals.costUsd - 0.297) < 1e-9,
+			JSON.stringify(totals)
+		);
+	}
 	const order = orgPassOrder(
 		[
 			{ brain: 'old', run: done(T - 3 * ORG_PASS_EVERY_MS) },
@@ -919,6 +949,12 @@ const of = (ts: Tension[], kind: string) => ts.filter((t) => t.kind === kind);
 		seen.open.length === 1 &&
 			seen.open[0].headline.includes('The other brain is "Handbook" (brain: "handbook-1a2b3c").'),
 		JSON.stringify(seen)
+	);
+	check(
+		"a finding between two brains is listed ahead of a brain's own, so both copies are inside the cap",
+		seen.open[0].weight > queueReport([row()], shas, { role: 'editor' }).open[0].weight &&
+			seen.open[0].weight < 4.5,
+		String(seen.open[0]?.weight)
 	);
 	const hidden = queueReport([cross], home, { role: 'admin' });
 	check(
@@ -1403,6 +1439,29 @@ console.log('\nreview_brain: what may run, and what validate says about the cont
 			contradictionCoverage('admin', true, { ...done, status: 'stopped', pairsChecked: 40 })
 		)
 	);
+	{
+		const across = { ...done, finishedAt: Date.UTC(2026, 10, 3, 9), pairsChecked: 60, findings: 5 };
+		const line = contradictionCoverage('admin', true, null, across);
+		check(
+			"a brain checked only by the organization's checks says so, not that it was never checked",
+			/not run on this brain's own pages yet\./.test(line) &&
+				line.endsWith(
+					" Against the organization's other brains: last finished 2026-11-03 over 60 page pair(s), 5 finding(s) raised."
+				) &&
+				!/not run on this brain yet/.test(line),
+			line
+		);
+		check(
+			'a brain with both passes reports both, and one under way against the others says how far',
+			/last finished 2026-11-02 over 157 .* Against the organization's other brains: last finished 2026-11-03 over 60/.test(
+				contradictionCoverage('admin', true, done, across)
+			) &&
+				/Against the organization's other brains: in progress, 60 page pair\(s\) checked so far\.$/.test(
+					contradictionCoverage('admin', true, done, { ...across, status: 'running' })
+				) &&
+				contradictionCoverage('editor', true, null, across) === ''
+		);
+	}
 	check(
 		'a finished pass says when, over how much, and that running it again checks only later edits',
 		contradictionCoverage('owner', true, done) ===

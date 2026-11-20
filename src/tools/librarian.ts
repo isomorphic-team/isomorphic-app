@@ -131,6 +131,7 @@ import {
 	type ConsolidationStep,
 	contradictionCoverage,
 	readContradictionPass,
+	readContradictionPassAcross,
 	reviewCheckRefusal
 } from '../lib/review-checks.ts';
 import { toolAnnotations } from '../lib/tool-annotations.ts';
@@ -1563,7 +1564,8 @@ export function registerLibrarianTools(
 				policyText += contradictionCoverage(
 					role,
 					!!consolidate,
-					consolidate ? await readContradictionPass(db, brainId) : null
+					consolidate ? await readContradictionPass(db, brainId) : null,
+					consolidate ? await readContradictionPassAcross(db, brainId) : null
 				);
 			} catch {
 				// Advisory only; link validation stands alone.

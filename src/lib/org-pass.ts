@@ -135,6 +135,30 @@ export function orgPassOrder<B>(
 		.map((b) => b.brain);
 }
 
+// What an organization's checks have counted, every brain's current pass together: the
+// passes this run stepped, those under way, and those that finished and still stand. A
+// brain whose finished pass is due again counts nothing until it is stepped.
+export interface OrgPassTotals {
+	pairsChecked: number;
+	findings: number;
+	costUsd: number;
+}
+export function orgPassTotals(
+	brains: readonly { run: (OrgPassRun & OrgPassTotals) | null; stepped: boolean }[],
+	now: number,
+	stands = ORG_PASS_EVERY_MS
+): OrgPassTotals {
+	const totals = { pairsChecked: 0, findings: 0, costUsd: 0 };
+	for (const { run, stepped } of brains) {
+		if (!run) continue;
+		if (!stepped && run.status === 'done' && orgPassDue(run, now, stands)) continue;
+		totals.pairsChecked += run.pairsChecked;
+		totals.findings += run.findings;
+		totals.costUsd += run.costUsd;
+	}
+	return totals;
+}
+
 // Where a run starts among the organizations, so the step budget does not always go to
 // the same ones: it moves on by one each hour.
 export function orgPassStart(orgCount: number, now: number): number {

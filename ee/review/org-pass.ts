@@ -24,6 +24,8 @@ import {
 	ORG_PASS_STEPS_PER_RUN,
 	orgPassBrains,
 	orgPassOrder,
+	orgPassTotals,
+	type OrgPassTotals,
 	orgPassStart
 } from '../../src/lib/org-pass.ts';
 import {
@@ -75,6 +77,8 @@ export interface OrgPassOrgReport {
 	steps: OrgPassStep[];
 	// Brains that still have a step to take after this run.
 	pending: number;
+	// Every brain's current pass together (`orgPassTotals`).
+	totals: OrgPassTotals;
 }
 
 export interface OrgPassReport {
@@ -113,17 +117,22 @@ export async function runOrgPass<R extends { brain_id: string }>(
 			unopened: unopened.sort(),
 			leftOut: leftOut.map((b) => b.brainId),
 			steps: [],
-			pending: 0
+			pending: 0,
+			totals: { pairsChecked: 0, findings: 0, costUsd: 0 }
 		};
 		report.orgs.push(org);
 		if (brains.length === 0) continue;
 
 		const runs = await Promise.all(brains.map((b) => readRun(deps.db, b.brainId, AGAINST_ALL)));
+		const stands = deps.stands ?? ORG_PASS_EVERY_MS;
 		const queue = orgPassOrder(
 			brains.map((brain, i) => ({ brain, run: runs[i] })),
 			now,
-			deps.stands ?? ORG_PASS_EVERY_MS
+			stands
 		);
+		// Each brain's pass as it stands, and the brains this run stepped.
+		const latest = new Map(brains.map((b, i) => [b.brainId, runs[i]]));
+		const stepped = new Set<string>();
 		while (queue.length > 0 && report.steps < max) {
 			const home = queue.shift()!;
 			report.steps++;
@@ -150,12 +159,21 @@ export async function runOrgPass<R extends { brain_id: string }>(
 							costUsd: state.costUsd
 						};
 			org.steps.push(step);
+			if (!('refused' in state)) {
+				latest.set(home.brainId, state);
+				stepped.add(home.brainId);
+			}
 			if (step.status !== 'done') queue.push(home);
 			// What stops a pass (the spend cap, the entitlement, the provider) stops the
 			// organization's other brains too, so the rest wait for the next run.
 			if (step.status === 'stopped') break;
 		}
 		org.pending = queue.length;
+		org.totals = orgPassTotals(
+			[...latest].map(([brainId, run]) => ({ run, stepped: stepped.has(brainId) })),
+			now,
+			stands
+		);
 	}
 	return report;
 }
@@ -177,7 +195,12 @@ export async function runOrgChecksNow<R extends { brain_id: string }>(
 	return {
 		text: orgPassNowText(org),
 		wire: {
-			organization: { brains: org.brains, pending: org.pending, steps: org.steps.length }
+			organization: {
+				brains: org.brains,
+				pending: org.pending,
+				steps: org.steps.length,
+				...org.totals
+			}
 		}
 	};
 }
@@ -197,17 +220,17 @@ export function orgPassNowText(org: OrgPassOrgReport): string {
 	if (org.steps.length === 0) {
 		return `${who} Each one's check finished in the last ${ORG_PASS_NOW_STANDS_MS / 60_000} minutes, so nothing was run. validate on each brain lists its findings.`;
 	}
-	const sum = (pick: (s: OrgPassStep) => number | undefined) =>
-		org.steps.reduce((n, s) => n + (pick(s) ?? 0), 0);
-	const counts = `In the brains this call stepped: ${sum((s) => s.pairsChecked)} page pair(s) checked, ${sum((s) => s.findings)} conflict finding(s), $${sum((s) => s.costUsd).toFixed(4)} spent so far.`;
+	const t = org.totals;
+	const counts = (soFar: string) =>
+		`Across the organization's brains${soFar}: ${t.pairsChecked} page pair(s) checked, ${t.findings} conflict finding(s), $${t.costUsd.toFixed(4)} spent.`;
 	const stopped = org.steps.find((s) => s.status === 'stopped');
 	if (stopped) {
-		return `${who} The organization's checks stopped: ${stopText(stopped.stoppedReason)}. ${counts} ${again} to resume once that changes.`;
+		return `${who} The organization's checks stopped: ${stopText(stopped.stoppedReason)}. ${counts(' so far')} ${again} to resume once that changes.`;
 	}
 	const failed = org.steps.filter((s) => s.status === 'failed').length;
 	const failures = failed ? ` ${failed} brain(s) failed this time and will be tried again.` : '';
 	if (org.pending > 0) {
-		return `${who} The organization's checks are in progress, ${org.pending} brain(s) still to finish. ${counts}${failures} ${again} again to continue.`;
+		return `${who} The organization's checks are in progress, ${org.pending} brain(s) still to finish. ${counts(' so far')}${failures} ${again} again to continue.`;
 	}
-	return `${who} The organization's checks finished. ${counts}${failures} A pair of pages is checked once for both brains, and its finding is in both brains' reports: validate on each lists them.`;
+	return `${who} The organization's checks finished. ${counts('')}${failures} A pair of pages is checked once for both brains, and its finding is in both brains' reports: validate on each lists them.`;
 }
