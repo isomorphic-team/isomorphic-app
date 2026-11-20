@@ -670,6 +670,12 @@ console.log('\nthe cron schedule is set from the config, after the deploy is kno
 			refuses({ name: 'w', triggers: { crons: 'hourly' } }, 'a')
 	);
 	check(
+		'nor with a name or a schedule that is not one',
+		refuses({ name: 'w/../other', triggers: { crons: ['* * * * *'] } }, 'a') &&
+			refuses({ name: 'w', triggers: { crons: ['* * * * *"}, {"x": "y'] } }, 'a') &&
+			refuses({ name: 'w', triggers: { crons: [''] } }, 'a')
+	);
+	check(
 		'an empty list is a request that clears the schedules',
 		schedulesRequest({ name: 'w', triggers: { crons: [] } }, 'a').body.length === 0
 	);

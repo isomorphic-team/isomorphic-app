@@ -16,14 +16,23 @@ export interface SchedulesRequest {
 	body: { cron: string }[];
 }
 
+// What may reach the request from the config file: a Worker name and cron expressions,
+// each by its own alphabet, so nothing else in the file can shape the URL or the body.
+const WORKER_NAME = /^[A-Za-z0-9][A-Za-z0-9_-]{0,62}$/;
+const CRON = /^[A-Za-z0-9*/,?#\- ]{1,100}$/;
+
 /** The request that gives a Worker the schedules its config declares, or why it cannot be made. */
 export function schedulesRequest(config: unknown, accountId: string | undefined): SchedulesRequest {
 	const { name, triggers } = (config ?? {}) as { name?: unknown; triggers?: { crons?: unknown } };
-	if (typeof name !== 'string' || !name) throw new Error('The config names no Worker.');
+	if (typeof name !== 'string' || !WORKER_NAME.test(name))
+		throw new Error('The config names no Worker, or a name that is not a Worker name.');
 	if (!accountId) throw new Error('CLOUDFLARE_ACCOUNT_ID is not set.');
 	const crons = triggers?.crons;
-	if (!Array.isArray(crons) || !crons.every((c): c is string => typeof c === 'string' && !!c))
-		throw new Error('The config declares no `triggers.crons` list of strings.');
+	if (
+		!Array.isArray(crons) ||
+		!crons.every((c): c is string => typeof c === 'string' && CRON.test(c))
+	)
+		throw new Error('The config declares no `triggers.crons` list of cron expressions.');
 	return {
 		url: `https://api.cloudflare.com/client/v4/accounts/${encodeURIComponent(accountId)}/workers/scripts/${encodeURIComponent(name)}/schedules`,
 		body: crons.map((cron) => ({ cron }))
