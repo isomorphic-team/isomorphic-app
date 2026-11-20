@@ -60,9 +60,10 @@ Licensed under `ee/LICENSE`, not the AGPL. Placement rule and history:
   `consolidation:<brain id>` or `consolidation:all`). Pair memory is per pair, shared by
   every scope and both brains (`acrossMemory`, kind `ACROSS_KIND`, held under the brain
   whose id sorts first with the second in `other_brain_id`, read from either side by
-  `readPassItemsAbout`), so one check of a pair stands for both. A finding carries no patch
+  `readPassItems`), so one check of a pair stands for both. A finding carries no patch
   and is written to both queues (`triageFindings` returns the copy with the finding, each row holding the other's key in
-  `linked_key`); `resolve` closes or reopens the copy (`answerLinkedFindings`), and
+  `linked_key`); `resolve` closes or reopens the copy (`answerLinkedFindings`) once its
+  ledger write has landed, not while it waits in a pull request (`linkedAnswers`), and
   `readFindings` leaves out a row closed from the other side. All brains together stay
   under `MAX_DUP_PAGES`. The other brain's pages go to the model under the first brain's
   organization's entitlement and cap, which is why both must be in that organization.
@@ -78,8 +79,9 @@ Licensed under `ee/LICENSE`, not the AGPL. Placement rule and history:
   pass stands for `ORG_PASS_EVERY_MS`, and a stopped pass ends its organization's run.
   A pair one brain's pass checked is not checked again from the other. `review_brain` with
   `against: "organization"` runs one step of it for one organization when its admin asks
-  (`orgChecksNow` in the Worker, a finished pass standing for `ORG_PASS_NOW_STANDS_MS`);
-  `orgPassNowText` replies with counts and no brain's name. The run logs counts and brain
+  (`runOrgChecksNow`, a finished pass standing for `ORG_PASS_NOW_STANDS_MS`);
+  `orgPassNowText` replies with counts and no brain's name. A step the gateway refuses (no
+  entitlement, the cap) is a stopped step with that reason, whatever the brain's row says. The run logs counts and brain
   ids, never content.
 - **No outside contributions**, and no customer names here either: the public-repo hygiene rules
   apply to `ee/` exactly as to the core.

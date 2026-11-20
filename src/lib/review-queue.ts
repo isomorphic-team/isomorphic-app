@@ -643,6 +643,16 @@ export async function readFindings(db: D1Database, brainId: string): Promise<Que
 	return results.map(parseRow).filter((f): f is QueueFinding => f !== null);
 }
 
+// The answers to carry to other brains' queues after a ledger write. None while the write
+// waits in a pull request: the ledger does not hold the decision yet, and may never.
+export function linkedAnswers(
+	decisions: readonly { finding: string; action: string }[],
+	outcome: { prUrl?: string; merged?: boolean }
+): { key: string; dismissed: boolean }[] {
+	if (outcome.prUrl && !outcome.merged) return [];
+	return decisions.map((d) => ({ key: d.finding, dismissed: d.action === 'dismiss' }));
+}
+
 // Carries an answer to the copies of findings in other brains' queues. Dismissing a
 // finding here closes its copy there; restoring one opens its copy, and opens this one if
 // it was closed from the other side. A key with no copy changes nothing.

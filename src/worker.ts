@@ -39,7 +39,12 @@ import { serveMcp, serverOptions } from './lib/mcp-serve.ts';
 import type { IdentityWire, OrgMembershipWire } from './lib/tool-payloads.ts';
 import type { ConsolidationStep } from './lib/review-checks.ts';
 import { consolidationWire, runConsolidationStep } from '../ee/review/consolidation.ts';
-import { orgPassNowText, runOrgPass, type OrgPassReport } from '../ee/review/org-pass.ts';
+import {
+	runOrgChecksNow,
+	runOrgPass,
+	type OrgPassDeps,
+	type OrgPassReport
+} from '../ee/review/org-pass.ts';
 import { z } from 'zod';
 import type { OAuthHelpers } from '@cloudflare/workers-oauth-provider';
 import { installationOctokit, tokenOctokit, staticAuth, type AppCreds } from './lib/github.ts';
@@ -76,6 +81,7 @@ import {
 	assertRole,
 	listAccessibleBrains,
 	listStoredBrainsInOrg,
+	type StoredBrain,
 	linkedUserIds,
 	listAccessibleOrgs,
 	listOrgMemberships,
@@ -125,7 +131,7 @@ import { loadCustomToolDefs, registerCustomTools, type CustomToolLoad } from './
 import { resolveInstallationOrg, connectCustomerOrg } from './lib/org-connect.ts';
 import { loadBrainConfig, type BrainConfig } from './lib/brain-config.ts';
 import { FEATURES, hasFeature, listEntitledOrgs } from './lib/entitlements.ts';
-import { ORG_PASS_NOW_STANDS_MS, countOrgChecks } from './lib/org-pass.ts';
+import { countOrgChecks } from './lib/org-pass.ts';
 import {
 	ASSET_ROUTE_PREFIX,
 	assetLinkKey,
@@ -345,23 +351,15 @@ async function orgChecksStatus(env: Env, orgId: string, self: { brainId: string;
 	return { ...counts, entitled, modelKey: hasModelKey(env) };
 }
 
-// The scheduled run over every entitled organization, or with `only`, the steps a person
-// asked for in one organization.
-async function orgPass(
-	env: Env,
-	now = Date.now(),
-	only?: { orgId: string; maxSteps: number; stands: number }
-): Promise<OrgPassReport | undefined> {
+// How the organization pass reaches this deployment's brains and its model gateway, or
+// nothing without a model key.
+function orgPassDeps(env: Env): Omit<OrgPassDeps<StoredBrain>, 'orgs'> | undefined {
 	const anthropicKey = env.ANTHROPIC_API_KEY?.trim() || undefined;
 	const openRouterKey = env.OPENROUTER_API_KEY?.trim() || undefined;
 	if (!hasModelKey(env)) return undefined;
 	const db = env.PLATFORM_DB;
-	return runOrgPass({
+	return {
 		db,
-		now,
-		orgs: only ? [only.orgId] : await listEntitledOrgs(db, FEATURES.enterprise, now),
-		maxSteps: only?.maxSteps,
-		stands: only?.stands,
 		listBrains: (orgId) => listStoredBrainsInOrg(db, orgId),
 		open: async (row) => {
 			const { store } = await openStorage(env, row);
@@ -375,22 +373,36 @@ async function orgPass(
 				config: await loadBrainConfig(store, repo)
 			};
 		},
-		advance: async (orgId, home, against) =>
-			(
-				await runConsolidationStep({
-					db,
-					index: home.index,
-					brainId: home.brainId,
-					orgId,
-					config: home.config,
-					store: home.store,
-					repo: home.repo,
-					anthropicKey,
-					openRouterKey,
-					against
-				})
-			).state
-	});
+		advance: async (orgId, home, against) => {
+			const step = await runConsolidationStep({
+				db,
+				index: home.index,
+				brainId: home.brainId,
+				orgId,
+				config: home.config,
+				store: home.store,
+				repo: home.repo,
+				anthropicKey,
+				openRouterKey,
+				against
+			});
+			// A step that ran always has a state; one the gateway refused says why.
+			return step.refused || !step.state ? { refused: step.refused ?? 'no-key' } : step.state;
+		}
+	};
+}
+
+// The scheduled run over every organization with the entitlement.
+async function orgPass(env: Env, now = Date.now()): Promise<OrgPassReport | undefined> {
+	const deps = orgPassDeps(env);
+	return (
+		deps &&
+		runOrgPass({
+			...deps,
+			now,
+			orgs: await listEntitledOrgs(deps.db, FEATURES.enterprise, now)
+		})
+	);
 }
 
 function assetKeyFor(env: Env): Promise<CryptoKey> | undefined {
@@ -1230,28 +1242,10 @@ class McpSession {
 		// reach (scope: "all"). It is the SAME dep the brain tools take below, deliberately:
 		// the accessible set is one question with one answer, and a second way of computing
 		// it would eventually disagree with the switcher about which brains exist.
+		const orgChecks = orgPassDeps(this.env);
 		registerLibrarianTools(server, (opts) => this.tenantContext(opts), {
 			listBrains: () => this.listAccessibleBrainsForCaller(),
-			orgChecksNow: hasModelKey(this.env)
-				? async (orgId) => {
-						const report = await orgPass(this.env, Date.now(), {
-							orgId,
-							maxSteps: 1,
-							stands: ORG_PASS_NOW_STANDS_MS
-						});
-						const org = report?.orgs[0];
-						return {
-							text: orgPassNowText(org),
-							wire: {
-								organization: {
-									brains: org?.brains ?? 0,
-									pending: org?.pending ?? 0,
-									steps: org?.steps.length ?? 0
-								}
-							}
-						};
-					}
-				: undefined
+			orgChecksNow: orgChecks && ((orgId) => runOrgChecksNow(orgChecks, orgId))
 		});
 
 		// ---------- bulk import (derived-views PRD Phase 3) ----------

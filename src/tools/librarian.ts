@@ -122,7 +122,9 @@ import { advanceBaseline, baselineStepText } from '../lib/policy-baseline.ts';
 import {
 	REVIEW_CHECKS,
 	resolveComparison,
-	isAgainstOrganization,
+	againstIs,
+	orgChecksRefusal,
+	AGAINST_ORGANIZATION,
 	type OrgChecksNow,
 	unopenedNote,
 	type Comparison,
@@ -1610,23 +1612,15 @@ export function registerLibrarianTools(
 			})
 		},
 		async ({ brain, check, fresh, against }) => {
-			if (isAgainstOrganization(against)) {
-				if (check !== 'contradictions') {
-					return fail('`against` only applies to check "contradictions".');
-				}
-				if (fresh) {
-					return fail("`fresh` does not apply to the organization's checks. Nothing was run.");
-				}
+			if (againstIs(against, AGAINST_ORGANIZATION)) {
+				const run = deps?.orgChecksNow;
+				const refusal = orgChecksRefusal(check, fresh, !!run);
+				if (refusal || !run) return fail(refusal ?? 'Nothing was run.');
+				// The organization's own checks read brains the caller may not open, so the
+				// gate is the organization role and the brain only names the organization.
 				const org = await getContext({ requiresOrg: 'admin', brain });
-				if (!deps?.orgChecksNow || !org.orgId) {
-					return fail(
-						reviewCheckRefusal(check, {
-							policyMode: org.config.policyMode,
-							contradictionsAvailable: false
-						}) ?? 'This deployment cannot run organization checks.'
-					);
-				}
-				const step = await deps.orgChecksNow(org.orgId);
+				if (!org.orgId) return fail('This brain belongs to no organization. Nothing was run.');
+				const step = await run(org.orgId);
 				return {
 					content: [{ type: 'text' as const, text: step.text }],
 					structuredContent: step.wire

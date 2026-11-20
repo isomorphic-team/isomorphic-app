@@ -106,7 +106,7 @@ are in the list, with keys.
   (`brainsToCompare`), and names in its reply any it could not open (`resolveComparison`).
   The same pass runs on a schedule between the brains of an organization that take part
   (`BrainConfig.orgChecks`, set by `configure_brain` with `org_checks`), and at once with
-  `against: "organization"` (`isAgainstOrganization`), which gates on the ORG role
+  `against: "organization"` (`orgChecksRefusal`), which gates on the ORG role
   (`requiresOrg: 'admin'`, `pnpm test:scope`): see `ee.md`. A finding between two brains is
   in both queues, and `resolve` carries a dismissal to the copy (`answerLinkedFindings`).
   `configure_brain` still accepts the old `baseline_scan` / `consolidate` arguments only to

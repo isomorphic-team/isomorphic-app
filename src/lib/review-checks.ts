@@ -16,7 +16,7 @@ import { readPass, type PassStatus } from './brain-pass.ts';
 import type { BrainConfig, PolicyMode } from './brain-policy.ts';
 import type { BrainLocator, BrainStore } from './brain-repo.ts';
 import { roleAtLeast, type Role } from './orgs.ts';
-import type { ConsolidationStepWire } from './tool-payloads.ts';
+import type { ConsolidationStepWire, OrgChecksWire } from './tool-payloads.ts';
 
 export const REVIEW_CHECKS = ['sensitive-data', 'contradictions'] as const;
 export type ReviewCheck = (typeof REVIEW_CHECKS)[number];
@@ -62,14 +62,26 @@ export interface Comparison {
 // What `against` is for the organization's own checks: every brain that takes part
 // (`BrainConfig.orgChecks`), each against the others, run as the organization.
 export const AGAINST_ORGANIZATION = 'organization';
-export const isAgainstOrganization = (against: string | undefined) =>
-	against?.trim().toLowerCase() === AGAINST_ORGANIZATION;
+
+// Whether `against` is one of the words that name no brain, however it is cased.
+export const againstIs = (against: string | undefined, word: string) =>
+	against?.trim().toLowerCase() === word;
+
+const AGAINST_OTHER_CHECK = '`against` only applies to check "contradictions".';
+
+// Why the organization's checks cannot be run now by this call, or null when they can.
+export function orgChecksRefusal(
+	check: ReviewCheck,
+	fresh: boolean | undefined,
+	available: boolean
+): string | null {
+	if (check !== 'contradictions') return AGAINST_OTHER_CHECK;
+	if (fresh) return "`fresh` does not apply to the organization's checks. Nothing was run.";
+	return reviewCheckRefusal(check, { policyMode: 'off', contradictionsAvailable: available });
+}
 
 /** One step of an organization's checks, asked for by a person, as the Worker wires it. */
 export type OrgChecksNow = (orgId: string) => Promise<{ text: string; wire: OrgChecksWire }>;
-export interface OrgChecksWire {
-	organization: { brains: number; pending: number; steps: number };
-}
 
 /** One step of the consolidation pass, as the Worker wires it into a brain's context. */
 export type ConsolidationStep = (opts?: {
@@ -135,10 +147,8 @@ export async function resolveComparison(
 		open: (handle: string) => Promise<ComparedBrain & { orgId?: string }>;
 	}
 ): Promise<{ comparison: Comparison; unopened: string[] } | { refusal: string }> {
-	if (check !== 'contradictions') {
-		return { refusal: '`against` only applies to check "contradictions".' };
-	}
-	if (against.trim().toLowerCase() !== AGAINST_ALL) {
+	if (check !== 'contradictions') return { refusal: AGAINST_OTHER_CHECK };
+	if (!againstIs(against, AGAINST_ALL)) {
 		const other = await deps.open(against);
 		const refusal = againstRefusal(home, other);
 		return refusal ? { refusal } : { comparison: { all: false, brains: [other] }, unopened: [] };

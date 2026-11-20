@@ -291,6 +291,11 @@ export interface BaselineStepWire {
 	};
 }
 
+/** One step of an organization's checks (review_brain, against "organization"). */
+export interface OrgChecksWire {
+	organization: { brains: number; pending: number; steps: number };
+}
+
 /** One step of the model consolidation pass (review_brain, check "contradictions"). */
 export interface ConsolidationStepWire {
 	consolidation: {
