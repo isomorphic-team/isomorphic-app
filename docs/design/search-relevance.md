@@ -1,10 +1,8 @@
 # Design: search relevance
 
-Status: **built** (S1 and S2 together). Engine: `src/lib/search.ts` (pure) wired into
-`searchIndex` in `src/lib/brain-index.ts`. Tests: `pnpm test:search`. No schema change.
-`searchIndex` serves every search. Where a deployment binds `INDEX_DB`, an FTS5 engine
-(`src/lib/search-fts.ts`) runs in shadow beside it; see
-[`brain-index-storage.md`](./brain-index-storage.md).
+Status: **superseded** by [`brain-index-storage.md`](./brain-index-storage.md): search is
+answered by FTS5 (`src/lib/search-fts-index.ts`), and the `LIKE` engine this describes is
+removed. Its scoring functions remain in `src/lib/search.ts` for the consolidation pass.
 
 `search_pages` is the highest-frequency read on the tool surface and the one an agent
 reaches for when it does not already know a path. It could not answer a question,

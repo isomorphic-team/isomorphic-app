@@ -720,18 +720,16 @@ expose a real one.
 
 # TODO: index storage and full-text search
 
-[`design/brain-index-storage.md`](design/brain-index-storage.md). The content index is reached
-through `BrainIndex` and can live in its own D1 database (`INDEX_DB`, optional per deployment),
-where FTS5 search runs in shadow next to today's engine and logs where the two disagree. On 130
-probe questions over four real brains a prototype put the right page first 103 times against 86
-today, and searched a 5,380-page brain about three times faster.
+[`design/brain-index-storage.md`](design/brain-index-storage.md). The content index lives in
+its own D1 database (`INDEX_DB`) and `search_pages` is answered by SQLite FTS5 there. On 270
+long questions over five real brains it put the right page first 119 times against the
+previous engine's 88.
 
-Left, in order, each its own pull request: switch `search_pages` to FTS5, after reading the
-shadow lines from a real deployment; drop the index tables from the platform database once
-every deployment binds `INDEX_DB`; and one SQLite-backed Durable Object per brain in the objects
-Worker (`src/objects/worker.ts`), only when a limit calls for it (a brain near D1's size cap,
-write contention between brains, data residency). Open before that last step: how
-`scope: "all"` performs as one call per brain.
+Left, each its own pull request: drop the unused index tables from the platform database; and
+one SQLite-backed Durable Object per brain in the objects Worker (`src/objects/worker.ts`),
+only when a limit calls for it (a brain near D1's size cap, write contention between brains,
+data residency). Open before that last step: how `scope: "all"` performs as one call per
+brain.
 
 # TODO: related pages in search results
 

@@ -54,7 +54,7 @@ import { ensureGitRepo, fsBrainStore } from './local/brain-store-fs.ts';
 import type { BrainLocator } from './lib/brain-repo.ts';
 import { guardStore } from './lib/policy-guard.ts';
 import { recordDetections } from './lib/policy-store.ts';
-import { localD1 } from './local/d1-sqlite.ts';
+import { INDEX_MIGRATIONS_DIR, localD1 } from './local/d1-sqlite.ts';
 import { WEB_ROUTE_PREFIX, checkWebMcpRequest, webPathFor } from './lib/web-app.ts';
 import { WEB_APP_HEADERS, webShell } from './lib/web-shell.ts';
 import { ASSET_ROUTE_PREFIX, assetLinkKey, serveAssetLink } from './lib/asset-link.ts';
@@ -97,6 +97,8 @@ interface LocalBrain {
 	brainId: string;
 	label: string;
 	db: ReturnType<typeof localD1>['db'];
+	// The content index, in its own file as a deployment has it in its own database.
+	indexDb: ReturnType<typeof localD1>['db'];
 }
 
 const brains = new Map<string, LocalBrain>();
@@ -113,7 +115,8 @@ for (const d of dirs) {
 		locator: { owner: 'local', repo: label },
 		brainId: `local/${label}`,
 		label,
-		db: localD1(resolve(stateDir, 'index.sqlite')).db
+		db: localD1(resolve(stateDir, 'index.sqlite')).db,
+		indexDb: localD1(resolve(stateDir, 'content-index.sqlite'), INDEX_MIGRATIONS_DIR).db
 	});
 }
 const defaultBrainId = [...brains.keys()][0];
@@ -156,7 +159,7 @@ async function getContext(opts?: { brain?: string }): Promise<BrainContext> {
 		config,
 		author,
 		db: b.db,
-		...indexRefs(d1Index(b.db), b.brainId),
+		...indexRefs(d1Index(b.indexDb), b.brainId),
 		// Fixed, so a dismissal survives a restart. The key protects nothing here: the
 		// values sit in plain text in the folder beside this database.
 		policySecret: 'isomorphic-local',

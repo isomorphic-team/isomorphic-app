@@ -21,7 +21,6 @@ import {
 	ensureFresh,
 	INDEX_SCHEMA_VERSION,
 	listIndexedPages,
-	indexDatabase,
 	resetIndex,
 	writeThroughIndex as writeThroughWithTags,
 	REBUILD_PAGE_BUDGET,
@@ -971,17 +970,6 @@ console.log('\nContent index — bounded, resumable ensureFresh\n');
 		tables.join() === [...BRAIN_INDEX_TABLES].sort().join(),
 		tables.join()
 	);
-
-	const platformDb = {} as Parameters<typeof indexDatabase>[0]['PLATFORM_DB'];
-	const indexDb = {} as typeof platformDb;
-	check(
-		'the index uses INDEX_DB when it is bound',
-		indexDatabase({ PLATFORM_DB: platformDb, INDEX_DB: indexDb }) === indexDb
-	);
-	check(
-		'and the platform database when it is not',
-		indexDatabase({ PLATFORM_DB: platformDb }) === platformDb
-	);
 }
 
 // ---------- migrations against a database that OUTLIVES the process ----------
@@ -1107,7 +1095,7 @@ console.log('\nDerived state keyed by brain_id: the 0011 re-key');
 		writeFileSync(join(folder, `page-${i}.md`), `# Page ${i}\n\nBody ${i}.\n`);
 	const brain = await openFolderAsBrain(folder);
 	try {
-		const n = (await brain.db
+		const n = (await brain.indexDb
 			.prepare('SELECT COUNT(*) AS n FROM brain_pages WHERE brain_id = ?1')
 			.bind(brain.brainId)
 			.first<{ n: number }>())!.n;

@@ -242,12 +242,9 @@ check(
 	'a missing browser or missing linux baselines would skip green in CI'
 );
 
-// ---------- the wrangler template's optional index database ----------
+// ---------- the wrangler template's databases ----------
 
-// setup-config keeps or drops the INDEX_DB block. Either way the result has to be a
-// config wrangler accepts: valid once comments are stripped, with the right databases.
 {
-	const { optionalBlock } = await import('./optional-block.ts');
 	const template = readFileSync(new URL('wrangler.template.jsonc', root), 'utf8');
 	const bindings = (text: string): string[] => {
 		const json = text.replace(/^\s*\/\/.*$/gm, '').replace(/"__[A-Z0-9_]+__"/g, '"x"');
@@ -255,18 +252,10 @@ check(
 			(d) => d.binding
 		);
 	};
-	console.log(`\nthe wrangler template's index database is optional`);
+	console.log(`\nthe wrangler template binds both databases`);
 	check(
-		'kept, the config binds both databases',
-		bindings(optionalBlock(template, 'index-db', true)).join() === 'PLATFORM_DB,INDEX_DB'
-	);
-	check(
-		'dropped, it binds the platform database alone',
-		bindings(optionalBlock(template, 'index-db', false)).join() === 'PLATFORM_DB'
-	);
-	check(
-		'dropped, nothing of the block is left behind',
-		!/INDEX|index-db/.test(optionalBlock(template, 'index-db', false))
+		'the platform database and the index database',
+		bindings(template).join() === 'PLATFORM_DB,INDEX_DB'
 	);
 }
 
@@ -304,8 +293,7 @@ const D1_INDEX_FUNCTIONS = [
 	'loadResolvedGraph',
 	'loadAllFields',
 	'loadFieldsFor',
-	'indexSignals',
-	'searchIndex'
+	'searchIndexFts'
 ];
 const directIndexCall = new RegExp(`(?<![.\\w])(${D1_INDEX_FUNCTIONS.join('|')})\\(`);
 const sourceFiles = ['src/', 'ee/'].flatMap((dir) =>
@@ -314,7 +302,7 @@ const sourceFiles = ['src/', 'ee/'].flatMap((dir) =>
 		.map((f) => dir + f)
 );
 const offenders = sourceFiles
-	.filter((f) => f !== 'src/lib/brain-index.ts')
+	.filter((f) => f !== 'src/lib/brain-index.ts' && f !== 'src/lib/search-fts-index.ts')
 	.flatMap((f) =>
 		readFileSync(new URL(f, root), 'utf8')
 			.split('\n')

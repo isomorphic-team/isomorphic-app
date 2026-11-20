@@ -87,7 +87,7 @@ const against: Comparison | undefined = otherBrains.length
 			brains: otherBrains.map(({ name, brain: b }) => ({
 				brainId: `local/${name}`,
 				handle: name,
-				index: d1Index(b.db as unknown as D1Database)(b.brainId),
+				index: d1Index(b.indexDb as unknown as D1Database)(b.brainId),
 				store: b.store,
 				repo: b.locator,
 				config: b.config
@@ -95,11 +95,11 @@ const against: Comparison | undefined = otherBrains.length
 		}
 	: undefined;
 try {
-	const graph = await loadResolvedGraph(brain.db, brain.brainId, brain.config);
+	const graph = await loadResolvedGraph(brain.indexDb, brain.brainId, brain.config);
 	const contents =
 		graph.pages.length <= MAX_DUP_PAGES
 			? await loadPageContents(
-					brain.db,
+					brain.indexDb,
 					brain.brainId,
 					graph.pages.map((p) => p.path)
 				)
@@ -109,7 +109,7 @@ try {
 		pages: graph.pages,
 		edges: graph.edges,
 		contents,
-		fields: await loadAllFields(brain.db, brain.brainId),
+		fields: await loadAllFields(brain.indexDb, brain.brainId),
 		identityFields: brain.config.identityFields
 	});
 
@@ -130,7 +130,7 @@ try {
 // The page pairs a pass against the other brains would check, for no spend.
 async function pairPlan(others: Comparison) {
 	const home = {
-		index: d1Index(brain.db as unknown as D1Database)(brain.brainId),
+		index: d1Index(brain.indexDb as unknown as D1Database)(brain.brainId),
 		store: brain.store,
 		repo: brain.locator,
 		config: brain.config
@@ -204,7 +204,7 @@ async function modelPass() {
 		for (let step = 0; step < 500; step++) {
 			const { text, state } = await runConsolidationStep({
 				db,
-				index: d1Index(db)(brain.brainId),
+				index: d1Index(brain.indexDb as unknown as D1Database)(brain.brainId),
 				brainId: brain.brainId,
 				orgId,
 				config: brain.config,

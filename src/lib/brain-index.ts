@@ -27,7 +27,7 @@ import {
 import { classifyMdLink } from './links.ts';
 import { BRAIN_INDEX_TABLES } from './brain-forget.ts';
 import { searchIndexFts } from './search-fts-index.ts';
-import { ftsFirstSearch } from './search-engine.ts';
+import { timedSearch } from './search-engine.ts';
 import { type BrainConfig, CONFIG_PATH, isContentPath, loadIndexConfig } from './brain-config.ts';
 import {
 	parseFrontmatter,
@@ -42,13 +42,9 @@ import {
 } from './wiki.ts';
 import {
 	DEFAULT_SEARCH_OPTIONS,
-	rankPages,
-	searchCorpus,
 	tokenizeQuery,
 	mergeBrainResults,
 	type BrainSearchHit,
-	type PageSignal,
-	type QueryTerms,
 	type SearchResult
 } from './search.ts';
 
@@ -892,104 +888,7 @@ export async function loadPageContents(
 	return byPath;
 }
 
-// Pages whose content is fetched so their matching lines can be extracted. This is a
-// memory bound, not a relevance one: the previous engine selected `content` for every
-// matching row, so a common term on a large brain pulled the whole brain into the
-// isolate and then discarded all but the first 50 lines of it. Ranking happens on the
-// cheap signal rows first, so what survives this cut is the best of the brain rather
-// than the alphabetically earliest of it.
-const MAX_SEARCH_CANDIDATES = 25;
-
-// Phase 1 of searchIndex: one signal per page holding any query term, from SQL alone.
-// Exported so pnpm test:search can compare it with signalsFromContent, which phase 2
-// and searchCorpus derive from the content itself; the two must agree.
-export async function indexSignals(
-	db: D1Database,
-	brainId: string,
-	q: QueryTerms,
-	prefix: string | undefined
-): Promise<PageSignal[]> {
-	// One bound parameter per term, reused between the SELECT list and the WHERE, so a
-	// term is escaped exactly once.
-	const binds: unknown[] = [brainId];
-	const selects: string[] = [];
-	const conds: string[] = [];
-	for (const term of q.terms) {
-		const has = containsSql('content', term, binds);
-		selects.push(`(${has}) AS t${selects.length}`);
-		conds.push(has);
-	}
-	selects.push(`(${containsSql('content', q.phrase, binds)}) AS ph`);
-
-	// OR, not AND: a page holding some of the terms is a worse match, not a non-match,
-	// and the scorer is what decides how much worse. ANDing here would reintroduce the
-	// defect this replaces — an empty result for a query the brain can nearly answer.
-	let where = `brain_id = ?1 AND (${conds.join(' OR ')})`;
-	if (prefix) where += ` AND ${startsWithSql('path', prefix, binds)}`;
-
-	const rows = await db
-		.prepare(`SELECT path, title, ${selects.join(', ')} FROM brain_pages WHERE ${where}`)
-		.bind(...binds)
-		.all<Record<string, string | number | null>>();
-
-	return rows.results.map((r) => ({
-		path: String(r.path),
-		title: r.title == null ? null : String(r.title),
-		has: q.terms.map((_, i) => Number(r[`t${i}`]) === 1),
-		phrase: Number(r.ph) === 1
-	}));
-}
-
-// Full-text search over indexed page content, in two phases.
-//
-// Phase 1 asks SQL only what is cheap to ask: for each page, does it contain each
-// query term, and does it contain the whole query verbatim. Those rows are path,
-// title and a handful of booleans, so the answer stays small however large the brain.
-// Phase 2 fetches content for the top-ranked candidates and extracts their lines.
-//
-// SQL narrows; it never orders. Every decision about what ranks above what, and what
-// gets dropped, lives in the pure src/lib/search.ts so it can be tested without a
-// database — see docs/design/search-relevance.md.
-export async function searchIndex(
-	db: D1Database,
-	brainId: string,
-	query: string,
-	prefix: string | undefined,
-	max: number,
-	perPage: number = DEFAULT_SEARCH_OPTIONS.perPage
-): Promise<SearchResult> {
-	const q = tokenizeQuery(query);
-	const empty: SearchResult = {
-		hits: [],
-		terms: q.terms,
-		pagesMatched: 0,
-		pagesShown: 0,
-		linesElided: 0,
-		budgetHit: false
-	};
-	if (q.terms.length === 0) return empty;
-
-	const signals = await indexSignals(db, brainId, q, prefix);
-	if (signals.length === 0) return empty;
-
-	const chosen = rankPages(signals, q.terms).slice(0, MAX_SEARCH_CANDIDATES);
-	const contents = await loadPageContents(
-		db,
-		brainId,
-		chosen.map((s) => s.path)
-	);
-	const pages = chosen.map((s) => ({
-		path: s.path,
-		title: s.title,
-		content: contents.get(s.path) ?? ''
-	}));
-	// Ranking runs again over the fetched pages, where term FREQUENCY is finally
-	// known. It only refines the phase-1 order (frequency is one saturating term of a
-	// score coverage dominates), so a page cannot leapfrog a strictly better match.
-	return searchCorpus(pages, query, { max, perPage }, signals.length - chosen.length);
-}
-
-// The same search over a SET of brains. Each brain runs through searchIndex on its own,
+// The same search over a SET of brains. Each brain runs through its own index's search,
 // with its own budget, and the global ceiling is spent by mergeBrainResults, which is
 // where the round-robin lives so pnpm test:search can pin it without a database.
 //
@@ -1029,48 +928,6 @@ export async function searchBrains(
 		terms: results[0]?.result.terms ?? tokenizeQuery(query).terms,
 		perBrain: new Map(results.map((r) => [r.brainId, r.result]))
 	};
-}
-
-// D1 rejects a LIKE pattern longer than this many bytes ("LIKE or GLOB pattern too
-// complex"), whatever the query. The local shim sets the same limit.
-export const D1_LIKE_PATTERN_LIMIT = 50;
-
-const fitsLike = (pattern: string) =>
-	new TextEncoder().encode(pattern).length <= D1_LIKE_PATTERN_LIMIT;
-
-// SQL that is true when `column` contains `needle`, binding the needle onto `binds`.
-// LIKE where the pattern fits D1's limit; otherwise instr over lower(), which has no
-// limit and folds case the same way LIKE does (ASCII only).
-function containsSql(column: string, needle: string, binds: unknown[]): string {
-	const pattern = `%${escapeLike(needle)}%`;
-	if (fitsLike(pattern)) {
-		binds.push(pattern);
-		return `${column} LIKE ?${binds.length} ESCAPE '\\'`;
-	}
-	binds.push(needle);
-	return `instr(lower(${column}), lower(?${binds.length})) > 0`;
-}
-
-// SQL that is true when `column` starts with `prefix`, under the same limit.
-function startsWithSql(column: string, prefix: string, binds: unknown[]): string {
-	const pattern = `${escapeLike(prefix)}%`;
-	if (fitsLike(pattern)) {
-		binds.push(pattern);
-		return `${column} LIKE ?${binds.length} ESCAPE '\\'`;
-	}
-	binds.push(prefix);
-	return `instr(lower(${column}), lower(?${binds.length})) = 1`;
-}
-
-// Escape LIKE wildcards so a query containing % or _ is matched literally.
-// Exported so pnpm test:search can pin it. It has to be tested directly, because it is
-// invisible from the outside: searchCorpus re-verifies every candidate against the page
-// content it fetched, so an unescaped `%` that made phase 1 match the whole brain would
-// still produce the right hits — just after scanning and fetching far more than it had
-// any reason to. The escaping bounds the WORK; the re-verification is what guarantees
-// the answer.
-export function escapeLike(s: string): string {
-	return s.replace(/[\\%_]/g, (c) => `\\${c}`);
 }
 
 // ------------------------------------------------------------------ the seam ----
@@ -1114,19 +971,11 @@ export interface BrainIndex {
 export type OpenIndex = (brainId: string) => BrainIndex;
 
 /**
- * The database the content index lives in: its own (`INDEX_DB`) when the deployment binds
- * one, otherwise the platform database, which carries the same four tables.
+ * Opens indexes for a deployment: the content index lives in its own database, the only
+ * one holding the full-text table (a virtual table blocks `d1 export`, which the platform
+ * database needs).
  */
-export const indexDatabase = (env: { PLATFORM_DB: D1Database; INDEX_DB?: D1Database }) =>
-	env.INDEX_DB ?? env.PLATFORM_DB;
-
-/**
- * Opens indexes for a deployment. With its own index database, search is answered by
- * FTS5: that database is the only one holding the full-text table. Without it, by
- * searchIndex.
- */
-export const indexFor = (env: { PLATFORM_DB: D1Database; INDEX_DB?: D1Database }): OpenIndex =>
-	d1Index(indexDatabase(env), { fullText: env.INDEX_DB !== undefined });
+export const indexFor = (env: { INDEX_DB: D1Database }): OpenIndex => d1Index(env.INDEX_DB);
 
 /** The two index fields of a tool context: the brain's own index and the opener. */
 export const indexRefs = (openIndex: OpenIndex, brainId: string) => ({
@@ -1136,7 +985,7 @@ export const indexRefs = (openIndex: OpenIndex, brainId: string) => ({
 
 /** The index in a D1 database, shared by every brain and keyed by `brain_id`. */
 export const d1Index =
-	(db: D1Database, opts: { fullText?: boolean } = {}): OpenIndex =>
+	(db: D1Database): OpenIndex =>
 	(brainId) => ({
 		brainId,
 		ensureFresh: (store, repo, config) => ensureFresh(db, store, repo, brainId, config),
@@ -1151,14 +1000,8 @@ export const d1Index =
 		allFields: () => loadAllFields(db, brainId),
 		fieldsFor: (paths) => loadFieldsFor(db, brainId, paths),
 		search: (query, prefix, max, perPage) =>
-			opts.fullText
-				? ftsFirstSearch(
-						query,
-						{
-							fts: () => searchIndexFts(db, brainId, query, prefix, max, perPage),
-							like: () => searchIndex(db, brainId, query, prefix, max, perPage)
-						},
-						(line) => console.log(JSON.stringify(line))
-					)
-				: searchIndex(db, brainId, query, prefix, max, perPage)
+			timedSearch(
+				() => searchIndexFts(db, brainId, query, prefix, max, perPage),
+				(line) => console.log(JSON.stringify(line))
+			)
 	});

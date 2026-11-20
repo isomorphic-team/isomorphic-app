@@ -11,7 +11,6 @@
 import { DatabaseSync } from 'node:sqlite';
 import { readFileSync, readdirSync } from 'node:fs';
 import type { D1Database } from '@cloudflare/workers-types';
-import { D1_LIKE_PATTERN_LIMIT } from '../lib/brain-index.ts';
 
 const MIGRATIONS_DIR = new URL('../../migrations/', import.meta.url);
 // The index database's own migrations (the INDEX_DB binding).
@@ -89,8 +88,6 @@ export interface LocalDb {
 // across restarts, which is what the local runtime does.
 export function localD1(path = ':memory:', migrations: URL = MIGRATIONS_DIR): LocalDb {
 	const sqlite = new DatabaseSync(path);
-	// D1's cap, so a query that D1 rejects fails here too.
-	sqlite.limits.likePatternLength = D1_LIKE_PATTERN_LIMIT;
 	applyMigrations(sqlite, migrations);
 
 	function statement(sql: string, params: unknown[] = []) {
@@ -112,19 +109,27 @@ export function localD1(path = ':memory:', migrations: URL = MIGRATIONS_DIR): Lo
 		};
 	}
 
+	let queue: Promise<unknown> = Promise.resolve();
 	const db = {
 		prepare: (sql: string) => statement(sql),
-		batch: async (stmts: { run: () => Promise<unknown> }[]) => {
-			const results: unknown[] = [];
-			sqlite.exec('BEGIN');
-			try {
-				for (const s of stmts) results.push(await s.run());
-				sqlite.exec('COMMIT');
-				return results;
-			} catch (err) {
-				sqlite.exec('ROLLBACK');
-				throw err;
-			}
+		// One at a time: a batch is a transaction on the one connection, and two callers
+		// awaiting batches together (a search across brains) would otherwise nest them.
+		batch: (stmts: { run: () => Promise<unknown> }[]) => {
+			const run = async () => {
+				const results: unknown[] = [];
+				sqlite.exec('BEGIN');
+				try {
+					for (const s of stmts) results.push(await s.run());
+					sqlite.exec('COMMIT');
+					return results;
+				} catch (err) {
+					sqlite.exec('ROLLBACK');
+					throw err;
+				}
+			};
+			const next = queue.then(run, run);
+			queue = next.catch(() => undefined);
+			return next;
 		}
 	} as unknown as D1Database;
 

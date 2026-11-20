@@ -15,7 +15,6 @@
 //      production variable or environment used by a preview.
 
 import { readFileSync } from 'node:fs';
-import { optionalBlock } from './optional-block.ts';
 
 import { checker } from './check.ts';
 import {
@@ -112,9 +111,10 @@ console.log('\nJSONC is read without touching strings');
 console.log('\nthe previews block carries every binding the template declares');
 {
 	// As setup:config renders it for a preview, which has its own index database.
-	const template = parseJsonc(
-		optionalBlock(readFileSync('wrangler.template.jsonc', 'utf8'), 'index-db', true)
-	) as Record<string, unknown>;
+	const template = parseJsonc(readFileSync('wrangler.template.jsonc', 'utf8')) as Record<
+		string,
+		unknown
+	>;
 	const config = previewConfig(template);
 	const previews = config.previews as Record<string, unknown>;
 	// Every top-level key wrangler treats as a binding or a var. A Preview inherits none of

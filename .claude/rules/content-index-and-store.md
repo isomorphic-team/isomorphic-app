@@ -80,15 +80,15 @@ a derived index in D1 (`src/lib/brain-index.ts`, schema in `migrations/`).
   `brain-index.ts`. Those functions are the D1 implementation behind `d1Index(db)`; the context
   builders in `worker.ts` and `local.ts` choose the database. `pnpm test:wiring` fails on a
   direct call from `src/` or `ee/`. An operation the index lacks goes on the interface.
-- **The index lives in `INDEX_DB` when a deployment binds it, else in the platform database**
-  (`indexDatabase`). Both carry the same four tables (`pnpm test:index` compares them); a
-  change to one schema goes in `migrations/` and `migrations-index/` together. No query may
-  join an index table to a platform table: `pnpm test:index` runs on the index schema alone
-  and the e2e batteries keep the two in separate databases. `brain_pages.id` exists only in
-  the index database. `disconnect_brain` resets the index before `forgetBrain`, and
-  `create_brain` / `connect_brain` reset it before the brain row is written, because the
-  index may sit outside the platform batch. A brain dropped by `ensureStaticTenant` after a
-  config change keeps its rows in `INDEX_DB`.
+- **The index lives in its own database, `INDEX_DB`** (`indexFor`; the local runtime keeps
+  it in its own file, `content-index.sqlite`). Schema: `migrations-index/`. No query may join
+  an index table to a platform table: `pnpm test:index` runs on the index schema alone and
+  the other batteries keep the two in separate databases. `disconnect_brain` resets the
+  index before `forgetBrain`, and `create_brain` / `connect_brain` reset it before the brain
+  row is written, because the index sits outside the platform batch. A brain dropped by
+  `ensureStaticTenant` after a config change keeps its rows in `INDEX_DB`. The platform
+  database still carries the four index tables from before the split: nothing reads them,
+  `forgetBrain` still deletes a brain's rows from them, and a later migration drops them.
 - **The index is a derived cache, NEVER the source of truth.** Every read calls
   `index.ensureFresh(store, repo, config)`, which compares the branch head to
   `brain_index_meta.indexed_commit_sha` and reindexes changed pages (diffing blob shas) before

@@ -25,8 +25,7 @@
 //   - OAUTH_KV stores OAuth provider state (registered clients, grants,
 //     access/refresh tokens) and pending-auth nonces for the sign-in round trip.
 //   - PLATFORM_DB (D1) holds the org model and usage counters. Schema is `migrations/`.
-//   - INDEX_DB (D1, optional) holds the content index. Schema is `migrations-index/`.
-//     Without it the index is in PLATFORM_DB.
+//   - INDEX_DB (D1) holds the content index. Schema is `migrations-index/`.
 //   - WRITE_COORDINATOR and BRAIN_FILES are a Durable Object per brain each, implemented
 //     in the objects Worker (src/objects/worker.ts) and bound by script_name. This Worker
 //     implements none. BRAIN_FILES serves a brain bound to the platform-files
@@ -225,8 +224,8 @@ interface Env {
 	// invitations, storage connections), the content index, and usage counters.
 	// Schema is `migrations/`.
 	PLATFORM_DB: D1Database;
-	// The content index's own database. Optional: without it the index uses PLATFORM_DB.
-	INDEX_DB?: D1Database;
+	// The content index's own database, holding the full-text table.
+	INDEX_DB: D1Database;
 	// The write coordinator, one object per brain (src/lib/write-coordinator.ts), in the
 	// objects Worker. Unset in a Worker Preview, whose config carries no Durable Object.
 	WRITE_COORDINATOR?: DurableObjectNamespace<WriteCoordinatorObject>;

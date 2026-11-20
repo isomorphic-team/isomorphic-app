@@ -814,7 +814,7 @@ console.log('\nconsolidation: a pass over an indexed brain (7)');
 		};
 		const target = {
 			db,
-			index: d1Index(db)(brain.brainId),
+			index: d1Index(brain.indexDb as unknown as D1Database)(brain.brainId),
 			brainId: brain.brainId,
 			orgId: 'o1',
 			actorUserId: 'u1',
@@ -916,7 +916,7 @@ console.log('\nconsolidation: a pass over an indexed brain (7)');
 		await db.prepare('DELETE FROM org_entitlements').run();
 		const unentitled = await runConsolidationStep({
 			db,
-			index: d1Index(db)(brain.brainId),
+			index: d1Index(brain.indexDb as unknown as D1Database)(brain.brainId),
 			brainId: brain.brainId,
 			orgId: 'o1',
 			config: brain.config,
@@ -1023,7 +1023,7 @@ console.log('\nconsolidation: the Jev screen (8)');
 		};
 		const target = {
 			db,
-			index: d1Index(db)(brain.brainId),
+			index: d1Index(brain.indexDb as unknown as D1Database)(brain.brainId),
 			brainId: brain.brainId,
 			orgId: 'o1',
 			config: brain.config,
@@ -1225,7 +1225,7 @@ console.log('\nconsolidation: each step is bounded by time (10)');
 		};
 		const base = {
 			db,
-			index: d1Index(db)(brain.brainId),
+			index: d1Index(brain.indexDb as unknown as D1Database)(brain.brainId),
 			brainId: brain.brainId,
 			orgId: 'o1',
 			config: brain.config,
@@ -1310,7 +1310,7 @@ console.log('\nconsolidation: a pass remembers what it checked (11)');
 		};
 		const base = {
 			db,
-			index: d1Index(db)(brain.brainId),
+			index: d1Index(brain.indexDb as unknown as D1Database)(brain.brainId),
 			brainId: brain.brainId,
 			orgId: 'o1',
 			config: brain.config,
@@ -1534,14 +1534,14 @@ console.log('\nconsolidation: one brain against another (12)');
 		const against = {
 			brainId: other.brainId,
 			handle: 'handbook-1a2b3c',
-			index: d1Index(otherDb)(other.brainId),
+			index: d1Index(other.indexDb as unknown as D1Database)(other.brainId),
 			store: other.store,
 			repo: other.locator,
 			config: other.config
 		};
 		const base = {
 			db,
-			index: d1Index(db)(home.brainId),
+			index: d1Index(home.indexDb as unknown as D1Database)(home.brainId),
 			brainId: home.brainId,
 			orgId: 'o1',
 			config: home.config,
@@ -1684,7 +1684,7 @@ console.log('\nconsolidation: one brain against another (12)');
 					{
 						brainId: third.brainId,
 						handle: 'ops-9f8e7d',
-						index: d1Index(third.db as unknown as D1Database)(third.brainId),
+						index: d1Index(third.indexDb as unknown as D1Database)(third.brainId),
 						store: third.store,
 						repo: third.locator,
 						config: third.config

@@ -12,7 +12,7 @@ import type { D1Database, D1PreparedStatement } from '@cloudflare/workers-types'
 
 /**
  * The content index. `resetIndex` empties these to force a full rebuild. They may sit in
- * their own database (`indexDatabase`), where the batches below do not reach: the tools
+ * their own database (`INDEX_DB`), where the batches below do not reach: the tools
  * that remove or create a brain reset its index themselves.
  */
 export const BRAIN_INDEX_TABLES = [

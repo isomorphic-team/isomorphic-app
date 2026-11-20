@@ -58,7 +58,6 @@
 		"test:probe": "tsx scripts/test-probe.ts",
 		"consolidate:report": "tsx scripts/consolidate-report.ts",
 		"probe:report": "tsx scripts/probe-report.ts",
-		"search:compare": "tsx scripts/search-compare.ts",
 		"test:media": "tsx scripts/test-media.ts",
 		"test:index": "tsx scripts/test-index.ts",
 		"test:store": "tsx scripts/test-store.ts",

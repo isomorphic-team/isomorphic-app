@@ -397,42 +397,6 @@ export interface SearchHit {
 	text: string;
 }
 
-interface ScoredLine {
-	line: number;
-	text: string;
-	matched: number;
-	proximity: number;
-}
-
-/**
- * The matching lines of one page, best first, before the per-page cap is applied.
- * A line matching more of the query beats one matching less; proximity breaks the tie;
- * earliest wins after that, so the choice never depends on scan order.
- *
- * Proximity here is the same two-lane signal the page scorer uses, and for the same
- * reason: keying the tie-break on the whole query meant that on a question-shaped query
- * it never fired, so the line literally reading "the day rate is 1200" was picked no
- * more often than any other line holding both words apart.
- */
-export function scoreLines(content: string, q: QueryTerms): ScoredLine[] {
-	const lines = content.split('\n');
-	const out: ScoredLine[] = [];
-	for (let i = 0; i < lines.length; i++) {
-		const lc = lines[i].toLowerCase();
-		const matched = q.terms.filter((t) => lc.includes(t)).length;
-		if (matched === 0) continue;
-		const whole = q.phrase.length > 0 && lc.includes(q.phrase);
-		const bigramHits = q.bigrams.filter((b) => lc.includes(b)).length;
-		out.push({
-			line: i + 1,
-			text: lines[i].trim().slice(0, 200),
-			matched,
-			proximity: whole ? 1 : q.bigrams.length > 0 ? bigramHits / q.bigrams.length : 0
-		});
-	}
-	return out.sort((a, b) => b.matched - a.matched || b.proximity - a.proximity || a.line - b.line);
-}
-
 export interface SearchOptions {
 	/** Total hits returned across all pages. */
 	max: number;
@@ -454,59 +418,6 @@ export interface SearchResult {
 	linesElided: number;
 	/** True when the total budget stopped the result set short of the matches. */
 	budgetHit: boolean;
-}
-
-/**
- * Rank a corpus and collect its hits. This is the whole engine: `searchIndex` calls
- * it with the pages SQL selected, and the golden test calls it with a corpus written
- * by hand. Both exercise the same ordering.
- *
- * Lines come back in page order within a page. The per-page cap picks the BEST lines
- * and then restores reading order, so the three shown are the three that matched most
- * of the query rather than the first three encountered.
- */
-export function searchCorpus(
-	pages: { path: string; title?: string | null; content: string }[],
-	query: string,
-	opts: SearchOptions = DEFAULT_SEARCH_OPTIONS,
-	/** Pages that matched but whose content was never fetched (SQL narrowed them out). */
-	unfetchedMatches = 0
-): SearchResult {
-	const q = tokenizeQuery(query);
-	const signals = pages.map((p) => signalsFromContent(p, q)).filter((s) => s.has.some(Boolean));
-	const byPath = new Map(pages.map((p) => [p.path, p]));
-
-	const hits: SearchHit[] = [];
-	let linesElided = 0;
-	let pagesShown = 0;
-	let budgetHit = false;
-
-	for (const sig of rankPages(signals, q.terms, q.bigrams)) {
-		if (hits.length >= opts.max) {
-			budgetHit = true;
-			break;
-		}
-		const page = byPath.get(sig.path);
-		if (!page) continue;
-		const scored = scoreLines(page.content, q);
-		if (scored.length === 0) continue;
-		// Room left in the global budget can be smaller than the per-page cap, in
-		// which case the best lines are still the ones that fit.
-		const room = Math.min(opts.perPage, opts.max - hits.length);
-		const taken = scored.slice(0, room).sort((a, b) => a.line - b.line);
-		linesElided += scored.length - taken.length;
-		for (const t of taken) hits.push({ path: sig.path, line: t.line, text: t.text });
-		pagesShown++;
-	}
-
-	return {
-		hits,
-		terms: q.terms,
-		pagesMatched: signals.length + unfetchedMatches,
-		pagesShown,
-		linesElided,
-		budgetHit
-	};
 }
 
 /**

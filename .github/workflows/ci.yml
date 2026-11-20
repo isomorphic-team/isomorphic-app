@@ -195,7 +195,9 @@ jobs:
       # (offline — no Cloudflare token, never touches prod). Catches malformed
       # migration SQL on the PR, before it can reach the deploy's --remote apply.
       - name: D1 migrations apply cleanly (local)
-        run: pnpm exec wrangler d1 migrations apply platform-db --local
+        run: |
+          pnpm exec wrangler d1 migrations apply platform-db --local
+          pnpm exec wrangler d1 migrations apply index-db --local
 
       # Known advisories against the dependencies the Worker actually serves.
       # `--prod` is doing real work: it drops the wrangler/miniflare subtree, which

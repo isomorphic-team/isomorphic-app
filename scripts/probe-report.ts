@@ -6,10 +6,10 @@
 // question, and the questions themselves. Writing those is the model's job and the
 // point of the cost split — measuring where they land is one SQL statement each.
 //
-// Searching runs through the REAL searchIndex, so the numbers describe the retrieval
+// Searching runs through the real searchIndexFts, so the numbers describe the retrieval
 // path an agent actually gets, lexical limits included.
 import { readFile } from 'node:fs/promises';
-import { searchIndex } from '../src/lib/brain-index.ts';
+import { searchIndexFts } from '../src/lib/search-fts-index.ts';
 import {
 	scoreProbe,
 	summarizeProbes,
@@ -53,11 +53,7 @@ try {
 	const results: ProbeResult[] = [];
 	for (const { expect, questions } of spec) {
 		for (const q of questions) {
-			// searchIndex returns the hits plus what it left out (see
-			// docs/design/search-relevance.md). scoreProbe wants the hits; the rest of
-			// that result is a better truncation signal than inferring one from the hit
-			// count, which is the thread PR #68 is already pulling on.
-			const r = await searchIndex(brain.db, brain.brainId, q, undefined, HIT_BUDGET);
+			const r = await searchIndexFts(brain.indexDb, brain.brainId, q, undefined, HIT_BUDGET);
 			results.push(scoreProbe(q, expect, r.hits, HIT_BUDGET));
 		}
 	}

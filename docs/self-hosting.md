@@ -230,8 +230,8 @@ PUBLIC_BASE_URL=https://my-brain.<your-subdomain>.workers.dev \
   pnpm setup:config --provision --force
 ```
 
-`--provision` creates the KV namespace and the D1 database if they do not exist, finds them
-if they do, and writes their real ids into `wrangler.jsonc`. The objects Worker is named
+`--provision` creates the KV namespace and the two D1 databases (the platform one and the
+content index's) if they do not exist, finds them if they do, and writes their real ids into `wrangler.jsonc`. The objects Worker is named
 `isomorphic-objects` unless you also set `OBJECTS_WORKER_NAME`; two deployments in one
 Cloudflare account need different names. Then upload the secrets, which
 are deliberately not in `wrangler.jsonc` and never committed:
@@ -260,11 +260,12 @@ pnpm exec wrangler secret put PLATFORM_ORG
 pnpm exec wrangler secret put PLATFORM_INSTALLATION_ID
 ```
 
-Apply the schema to the remote database **before** deploying code that depends on it, then
+Apply the schema to both remote databases **before** deploying code that depends on it, then
 deploy:
 
 ```sh
 pnpm exec wrangler d1 migrations apply platform-db --remote
+pnpm exec wrangler d1 migrations apply index-db --remote
 pnpm worker:deploy
 ```
 

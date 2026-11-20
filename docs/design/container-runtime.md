@@ -53,7 +53,7 @@ dependence is the contents of `env`, `ctx.waitUntil`, and one module import:
 | Dependency                    | Used for                                                 | Files in `src/` that name it |
 | ----------------------------- | -------------------------------------------------------- | ---------------------------- |
 | `PLATFORM_DB` (D1)            | orgs, users, brains, roles, Auth.js tables               | 6                            |
-| `INDEX_DB` (D1, optional)     | the content index                                        | 3                            |
+| `INDEX_DB` (D1)               | the content index                                        | 3                            |
 | `OAUTH_KV` (KV)               | OAuth grants and tokens, active brain, pending connects  | 5                            |
 | `WRITE_COORDINATOR` (DO)      | the per-brain write lane and journal                     | 1 (plus the objects Worker)  |
 | `BRAIN_FILES` (DO)            | the files of a brain the platform holds                  | 1 (plus the objects Worker)  |

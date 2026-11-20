@@ -1,5 +1,5 @@
-// FTS5 search: the IO half. Runs in shadow beside searchIndex; search_pages does not
-// answer from it (docs/design/brain-index-storage.md).
+// FTS5 search: the IO half. Every search is answered here
+// (docs/design/brain-index-storage.md).
 //
 // The table, its source view and the triggers that keep it current are the index
 // database's schema (migrations-index/0002_pages_fts.sql). They exist only there, so
@@ -25,7 +25,7 @@ import {
 
 export const FTS_TABLE = 'brain_pages_fts';
 
-// Pages whose lines are extracted, as in searchIndex.
+// Pages whose lines are extracted.
 const MAX_FTS_CANDIDATES = 25;
 // Column weights for bm25(), in table order: path_text, title, content.
 const BM25_WEIGHTS = '2.0, 4.0, 1.0';
@@ -49,7 +49,7 @@ export async function checkFtsIndex(db: D1Database): Promise<void> {
 
 const PAGES = `${FTS_TABLE} JOIN brain_pages p ON p.id = ${FTS_TABLE}.rowid`;
 
-/** The same contract as searchIndex, answered by FTS5. */
+/** Search one brain's pages with FTS5. */
 export async function searchIndexFts(
 	db: D1Database,
 	brainId: string,

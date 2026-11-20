@@ -4,7 +4,7 @@
 // The folder is COPIED into a temp git repo (only .md files) and indexed there, so
 // the source is never written to and need not be a git repo itself. The content index
 // runs on node:sqlite via the same shim the e2e batteries use, so ensureFresh /
-// loadResolvedGraph / searchIndex behave exactly as they do in production.
+// loadResolvedGraph / searchIndexFts behave exactly as they do in production.
 import { cp, mkdtemp, mkdir, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, join, relative } from 'node:path';
@@ -15,7 +15,9 @@ import { ensureFresh } from '../src/lib/brain-index.ts';
 import type { BrainLocator, BrainStore } from '../src/lib/brain-repo.ts';
 
 export interface LocalBrain {
+	// The platform database, and the content index's own (migrations-index/).
 	db: ReturnType<typeof localD1>['db'];
+	indexDb: ReturnType<typeof localD1>['db'];
 	store: BrainStore;
 	locator: BrainLocator;
 	brainId: string;
@@ -32,13 +34,7 @@ async function markdownUnder(dir: string): Promise<string[]> {
 	return out.sort();
 }
 
-// `indexOnly` gives the brain the index database's schema (full-text table included)
-// instead of the platform database's, for reports that read nothing but the index.
-export async function openFolderAsBrain(
-	source: string,
-	rootName?: string,
-	opts: { indexOnly?: boolean } = {}
-): Promise<LocalBrain> {
+export async function openFolderAsBrain(source: string, rootName?: string): Promise<LocalBrain> {
 	const root = rootName ?? basename(source);
 	const dir = await mkdtemp(join(tmpdir(), 'brain-'));
 	const cleanup = () => rm(dir, { recursive: true, force: true });
@@ -61,21 +57,22 @@ export async function openFolderAsBrain(
 		const store = fsBrainStore({ dir, author: { name: 'Report', email: 'report@localhost' } });
 		const locator = { owner: 'local', repo: basename(source) };
 		const brainId = `${locator.owner}/${locator.repo}`;
-		const { db } = opts.indexOnly ? localD1(':memory:', INDEX_MIGRATIONS_DIR) : localD1();
+		const { db } = localD1();
+		const { db: indexDb } = localD1(':memory:', INDEX_MIGRATIONS_DIR);
 		const config = await loadBrainConfig(store, locator);
 		// One read indexes at most REINDEX_PAGE_BUDGET pages and leaves the rest for the
 		// next read. A report is a single pass, so read until a pass adds nothing.
 		const count = async () =>
-			(await db
+			(await indexDb
 				.prepare('SELECT COUNT(*) AS n FROM brain_pages WHERE brain_id = ?1')
 				.bind(brainId)
 				.first<{ n: number }>())!.n;
 		for (let before = -1, now = 0; now !== before;) {
 			before = now;
-			await ensureFresh(db, store, locator, brainId, config);
+			await ensureFresh(indexDb, store, locator, brainId, config);
 			now = await count();
 		}
-		return { db, store, locator, brainId, config, cleanup };
+		return { db, indexDb, store, locator, brainId, config, cleanup };
 	} catch (err) {
 		await cleanup();
 		throw err;
