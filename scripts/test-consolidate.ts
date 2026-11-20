@@ -56,6 +56,7 @@ import {
 	otherPageRef,
 	readFactLabels,
 	valuesOnPages,
+	linkedAnswers,
 	type QueueFinding
 } from '../src/lib/review-queue.ts';
 import { localD1 } from '../src/local/d1-sqlite.ts';
@@ -69,7 +70,9 @@ import {
 	unopenedNote,
 	type ComparedBrain,
 	contradictionCoverage,
-	reviewCheckRefusal
+	reviewCheckRefusal,
+	orgChecksRefusal,
+	againstIs
 } from '../src/lib/review-checks.ts';
 import { checker } from './check.ts';
 
@@ -640,6 +643,37 @@ const of = (ts: Tension[], kind: string) => ts.filter((t) => t.kind === kind);
 		'org pass: a finished pass stands for a day',
 		!orgPassDue(done(T - ORG_PASS_EVERY_MS + 1), T) && orgPassDue(done(T - ORG_PASS_EVERY_MS), T)
 	);
+	check(
+		'org checks now: only for contradictions, never fresh, and only with a model key',
+		/only applies to check "contradictions"/.test(
+			orgChecksRefusal('sensitive-data', false, true) ?? ''
+		) &&
+			/`fresh` does not apply/.test(orgChecksRefusal('contradictions', true, true) ?? '') &&
+			/needs a model key/.test(orgChecksRefusal('contradictions', undefined, false) ?? '') &&
+			orgChecksRefusal('contradictions', undefined, true) === null &&
+			againstIs(' Organization ', 'organization') &&
+			!againstIs('organization-wiki', 'organization') &&
+			!againstIs(undefined, 'organization')
+	);
+	{
+		const decided = [
+			{ finding: 'conflict:a', action: 'dismiss' },
+			{ finding: 'conflict:b', action: 'undismiss' }
+		];
+		check(
+			'linked findings: a ledger write that landed carries each answer to the other brain',
+			JSON.stringify(linkedAnswers(decided, {})) ===
+				JSON.stringify([
+					{ key: 'conflict:a', dismissed: true },
+					{ key: 'conflict:b', dismissed: false }
+				]) && linkedAnswers(decided, { prUrl: 'u', merged: true }).length === 2
+		);
+		check(
+			'linked findings: one still waiting in a pull request carries nothing',
+			linkedAnswers(decided, { prUrl: 'u' }).length === 0 &&
+				linkedAnswers(decided, { prUrl: 'u', merged: false }).length === 0
+		);
+	}
 	check(
 		'org pass: asked for now, a finished pass stands only as long as it is told to',
 		orgPassDue(done(T - 1000), T, 1000) &&

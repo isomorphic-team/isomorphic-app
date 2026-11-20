@@ -136,6 +136,6 @@ a derived index in D1 (`src/lib/brain-index.ts`, schema in `migrations/`).
   `continuePass`, `savePass`), one row per brain per kind (`consolidation`, `policy-baseline`);
   don't add a table per pass. (A files object's backup keeps its place in the object's own
   SQLite, `src/lib/brain-backup.ts`: the objects Worker has no D1.) What a pass last checked, item by item, goes in
-  `brain_pass_items` (`readPassItems`, `savePassItems`), so a later pass can skip unchanged items.
+  `brain_pass_items` (`readPassItems`, `savePassItems`, each row a `PassItem`), so a later pass can skip unchanged items.
 - The local runtime's `getRevision` reports a digest of the working tree; `listCommits` reports
   git shas.

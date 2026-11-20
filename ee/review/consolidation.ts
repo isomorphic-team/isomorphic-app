@@ -43,8 +43,8 @@ import {
 	continuePass,
 	readPass,
 	readPassItems,
-	readPassItemsAbout,
 	passItemKey,
+	type PassItem,
 	savePass,
 	savePassItems,
 	type PassScope,
@@ -553,15 +553,18 @@ export function acrossMemory(
 	one: { brainId: string; path: string; sha: string },
 	two: { brainId: string; path: string; sha: string },
 	version: string
-): { brainId: string; otherBrainId: string; item: string; fingerprint: string } {
+): PassItem & { otherBrainId: string } {
 	const [first, second] = one.brainId < two.brainId ? [one, two] : [two, one];
 	return {
 		brainId: first.brainId,
 		otherBrainId: second.brainId,
 		item: `${first.path}|${otherPageId(second.brainId, second.path)}`,
-		fingerprint: `${version}:${first.sha}:${second.sha}`
+		fingerprint: pairFingerprint(version, first.sha, second.sha)
 	};
 }
+// What decides whether a pair is checked again: the check's version and both pages'.
+const pairFingerprint = (version: string, shaA: string, shaB: string) =>
+	`${version}:${shaA}:${shaB}`;
 
 // ---------- what earlier passes checked ----------
 
@@ -815,31 +818,45 @@ export async function advanceConsolidation(
 	const itemsKind = t.against ? ACROSS_KIND : kind;
 	const lastChecked = state.fresh
 		? new Map<string, string>()
-		: t.against
-			? await readPassItemsAbout(t.db, t.brainId, ACROSS_KIND)
-			: await readPassItems(t.db, t.brainId, kind);
-	// What a pair is remembered by, or null when a page has no version to remember.
-	const memory = ([a, b]: Pair) => {
+		: await readPassItems(
+				t.db,
+				t.brainId,
+				itemsKind,
+				// A pass against one brain needs only what is remembered between the two.
+				t.against && !t.against.all ? t.against.brains[0].brainId : undefined
+			);
+	// What a pair is remembered by, or null when a page has no version to remember. Planning
+	// asks about a pair many times, so each is worked out once.
+	const memories = new Map<string, PassItem | null>();
+	const memory = (pair: Pair): PassItem | null => {
+		const id = pair.join('|');
+		if (!memories.has(id)) memories.set(id, remembered(pair));
+		return memories.get(id) ?? null;
+	};
+	const remembered = ([a, b]: Pair): PassItem | null => {
 		if (!shas[a] || !shas[b]) return null;
 		if (!t.against) {
-			const item = `${a}|${b}`;
-			return { key: item, item, fingerprint: `${version}:${shas[a]}:${shas[b]}` };
+			return {
+				brainId: t.brainId,
+				item: `${a}|${b}`,
+				fingerprint: pairFingerprint(version, shas[a], shas[b])
+			};
 		}
 		const [here, there] = byPath.get(a)?.other ? [b, a] : [a, b];
 		const other = byPath.get(there)?.other;
-		if (!other) return null;
-		const m = acrossMemory(
-			{ brainId: t.brainId, path: here, sha: shas[here] },
-			{ ...other, sha: shas[there] },
-			version
-		);
-		return { ...m, key: passItemKey(m.brainId, m.item) };
+		return other
+			? acrossMemory(
+					{ brainId: t.brainId, path: here, sha: shas[here] },
+					{ ...other, sha: shas[there] },
+					version
+				)
+			: null;
 	};
 	const unchanged = (pair: Pair) => {
 		const m = memory(pair);
-		return m !== null && lastChecked.get(m.key) === m.fingerprint;
+		return m !== null && lastChecked.get(passItemKey(m.brainId, m.item)) === m.fingerprint;
 	};
-	const checked: NonNullable<ReturnType<typeof memory>>[] = [];
+	const checked: PassItem[] = [];
 	const remember = (pair: Pair) => {
 		const m = memory(pair);
 		if (m) checked.push(m);
@@ -854,7 +871,8 @@ export async function advanceConsolidation(
 	);
 	const knownFacts = await readFactLabels(t.db, t.brainId);
 	const found: QueueFinding[] = [];
-	const copies: FindingCopy[] = [];
+	// The copies of findings between two brains, by the brain whose queue each goes into.
+	const copies = new Map<string, QueueFinding[]>();
 	// The first pair a refused gateway stopped. Pairs after it may have run in the same
 	// batch; the cursor stays before it, so the next step checks them again.
 	let firstStopped = Infinity;
@@ -946,7 +964,9 @@ export async function advanceConsolidation(
 					)
 			});
 			found.push(...triaged.findings);
-			copies.push(...triaged.copies);
+			for (const c of triaged.copies) {
+				copies.set(c.brainId, [...(copies.get(c.brainId) ?? []), c.finding]);
+			}
 			state.pairsChecked++;
 			remember(pair);
 		} catch (err) {
@@ -975,16 +995,10 @@ export async function advanceConsolidation(
 	}
 
 	await upsertFindings(t.db, t.brainId, found, now);
-	// Each finding between two brains goes into the other brain's queue as well.
-	for (const brainId of new Set(copies.map((c) => c.brainId))) {
-		await upsertFindings(
-			t.db,
-			brainId,
-			copies.filter((c) => c.brainId === brainId).map((c) => c.finding),
-			now
-		);
-	}
-	await savePassItems(t.db, t.brainId, itemsKind, checked, now);
+	// Each finding between two brains goes into the other brain's queue as well. One batch
+	// at a time: the local database runs a batch as a transaction and cannot nest them.
+	for (const [brainId, list] of copies) await upsertFindings(t.db, brainId, list, now);
+	await savePassItems(t.db, itemsKind, checked, now);
 	state.findings += found.length;
 
 	const firstOpen = Math.min(firstStopped, firstUnstarted);
@@ -1003,7 +1017,7 @@ export async function advanceConsolidation(
 	return state;
 }
 
-export const STOP_TEXT: Record<string, string> = {
+const STOP_TEXT: Record<string, string> = {
 	'over-cap': "this month's model spend cap for the organization is used up",
 	'not-entitled': 'the organization has no enterprise entitlement',
 	'no-key': 'this deployment has no model key',
@@ -1014,6 +1028,13 @@ export const STOP_TEXT: Record<string, string> = {
 	'too-many-pages-together': `the brains together have more than ${MAX_DUP_PAGES} pages`
 };
 
+// Why a pass stopped, in words.
+export const stopText = (reason: string | null | undefined) =>
+	STOP_TEXT[reason ?? ''] ?? reason ?? 'unknown';
+// The call that starts or continues a pass, as a reply names it.
+export const reviewCall = (against?: string) =>
+	`Call review_brain with check "contradictions"${against ? ` and against "${against}"` : ''}`;
+
 // What the tool says about a step, for the model and for an admin reading the reply.
 // `against` is what the caller passed to compare against: a brain's handle, or AGAINST_ALL.
 export function consolidationStepText(s: ConsolidationState, against?: string): string {
@@ -1022,9 +1043,7 @@ export function consolidationStepText(s: ConsolidationState, against?: string): 
 		: against === AGAINST_ALL
 			? 'The check against every other brain'
 			: `The check against "${against}"`;
-	const call = against
-		? `Call review_brain with check "contradictions" and against "${against}"`
-		: 'Call review_brain with check "contradictions"';
+	const call = reviewCall(against);
 	const cost = `$${s.costUsd.toFixed(4)}`;
 	const screened = s.pairsScreened ? ` (${s.pairsScreened} cleared by the screen)` : '';
 	const unchanged = s.pairsUnchanged
@@ -1036,8 +1055,7 @@ export function consolidationStepText(s: ConsolidationState, against?: string): 
 	const counts = `${s.pairsChecked} page pair(s) checked${screened}, ${s.pairsSkipped} skipped, ${s.findings} conflict finding(s), ${cost} spent.${unchanged}${deprecated}`;
 	if (s.status === 'done') return `${name} finished: ${counts} validate lists the findings.`;
 	if (s.status === 'stopped') {
-		const why = STOP_TEXT[s.stoppedReason ?? ''] ?? s.stoppedReason ?? 'unknown';
-		return `${name} stopped: ${why}. ${counts} ${call} to resume once that changes.`;
+		return `${name} stopped: ${stopText(s.stoppedReason)}. ${counts} ${call} to resume once that changes.`;
 	}
 	return `${name} in progress: ${counts} ${call} again to continue.`;
 }
@@ -1060,6 +1078,9 @@ export function consolidationWire(s: ConsolidationState): ConsolidationStepWire[
 export interface ConsolidationStepReply {
 	text: string;
 	state: ConsolidationState | null;
+	// Set when the step did not run: why the gateway would not open. `state` is then the
+	// pass as it stood.
+	refused?: string;
 }
 
 // Open the gateway for the brain's org and advance its pass one step. The one entry point
@@ -1088,8 +1109,9 @@ export async function runConsolidationStep(opts: {
 	});
 	if (!opened.ok) {
 		return {
-			text: `Consolidation did not run: ${STOP_TEXT[opened.reason]}.`,
-			state: await readRun(opts.db, opts.brainId, scopeOf(opts.against))
+			text: `Consolidation did not run: ${stopText(opened.reason)}.`,
+			state: await readRun(opts.db, opts.brainId, scopeOf(opts.against)),
+			refused: opened.reason
 		};
 	}
 	const state = await advanceConsolidation({ ...opts, gateway: opened.gateway });

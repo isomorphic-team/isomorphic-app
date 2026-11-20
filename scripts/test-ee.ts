@@ -83,7 +83,7 @@ import {
 } from '../src/lib/review-queue.ts';
 import { AGAINST_ALL, type ComparedBrain } from '../src/lib/review-checks.ts';
 import { ORG_PASS_EVERY_MS, ORG_PASS_NOW_STANDS_MS } from '../src/lib/org-pass.ts';
-import { orgPassNowText, runOrgPass } from '../ee/review/org-pass.ts';
+import { orgPassNowText, runOrgChecksNow, runOrgPass } from '../ee/review/org-pass.ts';
 import { resetIndex } from '../src/lib/brain-index.ts';
 import { continuePass, readPass, savePass, savePassStatement } from '../src/lib/brain-pass.ts';
 import { SNAPSHOT_BEGIN, SNAPSHOT_END } from '../src/lib/view-directives.ts';
@@ -2083,7 +2083,7 @@ console.log('\nthe scheduled organization pass: one run across organizations');
 	const state = (status: ConsolidationState['status'], stoppedReason: string | null = null) =>
 		({ status, stoppedReason, pairsChecked: 0, findings: 0, costUsd: 0 }) as ConsolidationState;
 	const run = (
-		advance: (home: string, n: number) => ConsolidationState | null,
+		advance: (home: string, n: number) => ConsolidationState | { refused: string },
 		opts: { now?: number; maxSteps?: number } = {}
 	) => {
 		const calls: string[] = [];
@@ -2119,11 +2119,15 @@ console.log('\nthe scheduled organization pass: one run across organizations');
 		stopped.calls.join() === 'a1,b1,b2' && stopped.report.orgs[0].steps[0].stoppedReason === 'cap',
 		stopped.calls.join()
 	);
-	const unrun = await run((home) => (home.startsWith('a') ? null : state('done')));
+	const unrun = await run((home) =>
+		home.startsWith('a') ? { refused: 'not-entitled' } : state('done')
+	);
 	check(
-		'so does a pass that could not run at all',
-		unrun.calls.join() === 'a1,b1,b2' && unrun.report.orgs[0].steps[0].status === 'not-run',
-		unrun.calls.join()
+		'so does a step the gateway refused, which is reported as stopped with the reason',
+		unrun.calls.join() === 'a1,b1,b2' &&
+			unrun.report.orgs[0].steps[0].status === 'stopped' &&
+			unrun.report.orgs[0].steps[0].stoppedReason === 'not-entitled',
+		JSON.stringify(unrun.report.orgs[0].steps)
 	);
 	const broken = await run((home) => {
 		if (home === 'a2') throw new Error('index unreachable');
@@ -2148,15 +2152,49 @@ console.log('\nthe scheduled organization pass: one run across organizations');
 				steps: [{ brainId: 'a1', status: 'stopped', stoppedReason: 'over-cap' }]
 			})
 		) &&
-			/did not run: the organization needs the contradictions check/.test(
+			/checks stopped: the organization has no enterprise entitlement\./.test(
 				orgPassNowText(unrun.report.orgs[0])
 			),
 		orgPassNowText(unrun.report.orgs[0])
 	);
+	{
+		// One organization, asked for by a person. Its brains' passes finished long ago, so
+		// a refused step must not read as finished from what their rows say.
+		const asked: string[] = [];
+		const now = (refuse: boolean) =>
+			runOrgChecksNow(
+				{
+					db,
+					listBrains: async (orgId) => orgBrains[orgId].map((brain_id) => ({ brain_id })),
+					open: async (row) => fake(row.brain_id),
+					advance: async (orgId, home) => {
+						asked.push(`${orgId}:${home.brainId}`);
+						return refuse ? { refused: 'not-entitled' } : state('done');
+					}
+				},
+				'o2'
+			);
+		const refused = await now(true);
+		check(
+			'now: an organization without the feature is told so, never that its checks finished',
+			/stopped: the organization has no enterprise entitlement/.test(refused.text) &&
+				!/finished/.test(refused.text) &&
+				refused.wire.organization.pending === 2,
+			refused.text
+		);
+		const stepped = await now(false);
+		check(
+			'now: one call takes one step, in the organization asked for, and reports what is left',
+			asked.join() === 'o2:b1,o2:b1' &&
+				JSON.stringify(stepped.wire) ===
+					JSON.stringify({ organization: { brains: 2, pending: 1, steps: 1 } }) &&
+				/against "organization" again to continue\.$/.test(stepped.text),
+			`${asked.join()} ${JSON.stringify(stepped)}`
+		);
+	}
 	check(
 		'now: with fewer than two brains taking part it says so, and names no brain',
-		/Fewer than two brains/.test(orgPassNowText(undefined)) &&
-			/Fewer than two brains/.test(orgPassNowText({ ...all.report.orgs[0], brains: 0 })) &&
+		/Fewer than two brains/.test(orgPassNowText({ ...all.report.orgs[0], brains: 0 })) &&
 			!/a1|a2|a3/.test(orgPassNowText(broken.report.orgs[0])) &&
 			/1 brain\(s\) failed this time/.test(orgPassNowText(broken.report.orgs[0])),
 		orgPassNowText(broken.report.orgs[0])

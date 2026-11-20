@@ -11,7 +11,7 @@
 // Worker-safe: no node:* imports.
 
 import type { PassStatus } from './brain-pass.ts';
-import { MAX_COMPARED_BRAINS } from './review-checks.ts';
+import { AGAINST_ORGANIZATION, MAX_COMPARED_BRAINS } from './review-checks.ts';
 
 // How long a brain's finished pass stands before the next one starts. A pass over brains
 // that have not changed checks no pair again, so this bounds reading, not model spend.
@@ -90,7 +90,7 @@ export function orgChecksStatusText(s: OrgChecksStatus): string {
 	];
 	const runs =
 		missing.length === 0
-			? ' The scheduled checks run across them, each brain about once a day. An organization admin can run them now: review_brain with check "contradictions" and against "organization".'
+			? ` The scheduled checks run across them, each brain about once a day. An organization admin can run them now: review_brain with check "contradictions" and against "${AGAINST_ORGANIZATION}".`
 			: ` The scheduled checks do not run until ${missing.join(', and ')}.`;
 	return count + unread + runs;
 }

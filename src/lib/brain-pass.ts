@@ -145,34 +145,34 @@ export async function savePass<C>(
 
 // ---------- what a pass last checked ----------
 
-// Each item a kind of pass has checked in a brain, with the fingerprint of everything that
-// check depended on. A pass skips an item whose fingerprint has not changed.
+// One item a kind of pass has checked, with the fingerprint of everything that check
+// depended on. A pass skips an item whose fingerprint has not changed. `brainId` is the
+// brain that holds the row; `otherBrainId` is set when the item involves a second brain,
+// so the row goes when either brain does.
+export interface PassItem {
+	brainId: string;
+	item: string;
+	fingerprint: string;
+	otherBrainId?: string;
+}
+
+// The fingerprints of a kind's items that involve a brain from either side: the ones it
+// holds and the ones another brain holds about it. With `withBrainId`, only those between
+// the two. Keyed by `passItemKey`, since two brains can hold the same item text.
 export async function readPassItems(
 	db: D1Database,
 	brainId: string,
-	kind: string
+	kind: string,
+	withBrainId?: string
 ): Promise<Map<string, string>> {
-	const { results } = await db
-		.prepare('SELECT item, fingerprint FROM brain_pass_items WHERE brain_id = ?1 AND kind = ?2')
-		.bind(brainId, kind)
-		.all<{ item: string; fingerprint: string }>();
-	return new Map(results.map((r) => [r.item, r.fingerprint]));
-}
-
-// The items of a kind that involve a brain from either side: the ones it holds and the
-// ones another brain holds about it (`other_brain_id`). Keyed by `passItemKey`, since two
-// brains can hold the same item text.
-export async function readPassItemsAbout(
-	db: D1Database,
-	brainId: string,
-	kind: string
-): Promise<Map<string, string>> {
+	const between = withBrainId
+		? `(brain_id = ?1 AND other_brain_id = ?3) OR (brain_id = ?3 AND other_brain_id = ?1)`
+		: `brain_id = ?1 OR other_brain_id = ?1`;
 	const { results } = await db
 		.prepare(
-			`SELECT brain_id, item, fingerprint FROM brain_pass_items
-			  WHERE kind = ?2 AND (brain_id = ?1 OR other_brain_id = ?1)`
+			`SELECT brain_id, item, fingerprint FROM brain_pass_items WHERE kind = ?2 AND (${between})`
 		)
-		.bind(brainId, kind)
+		.bind(...[brainId, kind, ...(withBrainId ? [withBrainId] : [])])
 		.all<{ brain_id: string; item: string; fingerprint: string }>();
 	return new Map(results.map((r) => [passItemKey(r.brain_id, r.item), r.fingerprint]));
 }
@@ -183,11 +183,8 @@ const ITEM_BATCH = 40;
 
 export async function savePassItems(
 	db: D1Database,
-	brainId: string,
 	kind: string,
-	// `otherBrainId` is set when the item involves another brain, so it goes when that brain
-	// does. `brainId` is the brain that holds the item, when it is not the one given.
-	items: readonly { item: string; fingerprint: string; otherBrainId?: string; brainId?: string }[],
+	items: readonly PassItem[],
 	now: number
 ): Promise<void> {
 	const stmt = db.prepare(
@@ -200,9 +197,7 @@ export async function savePassItems(
 		await db.batch(
 			items
 				.slice(i, i + ITEM_BATCH)
-				.map((x) =>
-					stmt.bind(x.brainId ?? brainId, kind, x.item, x.fingerprint, now, x.otherBrainId ?? null)
-				)
+				.map((x) => stmt.bind(x.brainId, kind, x.item, x.fingerprint, now, x.otherBrainId ?? null))
 		);
 	}
 }

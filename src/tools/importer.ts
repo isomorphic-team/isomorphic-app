@@ -19,6 +19,7 @@ import {
 	isPolicyKey,
 	expandClusterDecisions,
 	answerLinkedFindings,
+	linkedAnswers,
 	readFindings
 } from '../lib/review-queue.ts';
 import { z } from 'zod';
@@ -440,7 +441,7 @@ export function registerImportTools(
 				]
 					.filter(Boolean)
 					.join(', ');
-				await store.commitOrPR(locator, {
+				const outcome = await store.commitOrPR(locator, {
 					...commitOpts(config, author),
 					message: `Record validate decisions: ${summary}`,
 					writes: [{ path: REVIEW_LEDGER_PATH, content: serializeReviewLedger(ledger) }],
@@ -450,13 +451,13 @@ export function registerImportTools(
 					prBody: `${summary}. No page content changed — this records that a human decided, so validate stops re-reporting it.`
 				});
 				// A finding between two brains has a copy in the other brain's queue.
-				await answerLinkedFindings(
-					db,
-					brainId,
-					reviewDecisions.map((d) => ({ key: d.finding, dismissed: d.action === 'dismiss' }))
-				);
+				await answerLinkedFindings(db, brainId, linkedAnswers(reviewDecisions, outcome));
+				const pending =
+					outcome.prUrl && !outcome.merged
+						? ` The decision is proposed as a pull request and takes effect when it merges: ${outcome.prUrl}. A finding shared with another brain stays open there until it is answered in that brain.`
+						: '';
 				return ok(
-					`Recorded: ${summary}. validate will not raise ${dismissed === 1 ? 'it' : 'them'} again unless undismissed.`
+					`Recorded: ${summary}. validate will not raise ${dismissed === 1 ? 'it' : 'them'} again unless undismissed.${pending}`
 				);
 			}
 

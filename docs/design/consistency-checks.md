@@ -320,7 +320,8 @@ Roadmap step 2 extends the `validate` / `resolve` pattern into one findings queu
   brains, since it quotes both. A change to either page makes it stale. Its key names the
   other page by a digest, because the key is written to a brain's dismissal ledger.
   Dismissing it through `resolve` writes that brain's ledger and closes the copy in the
-  other brain (`answerLinkedFindings`, `closed_by_other`); `undismiss` opens the copy again,
+  other brain (`answerLinkedFindings`, `closed_by_other`), unless the ledger write is still a
+  pull request, when the copy stays open (`linkedAnswers`); `undismiss` opens the copy again,
   and from a brain whose copy was closed from the other side opens its own. Whoever can
   dismiss it in one brain therefore decides for both. It carries no patch and no "which
   side stands": between brains a person decides. It is never clustered. The pass has its
@@ -361,7 +362,7 @@ Roadmap step 2 extends the `validate` / `resolve` pattern into one findings queu
   and this one the brains that take part. A stopped pass (the spend cap, the provider)
   ends that organization's run.
 - **The same, asked for.** `review_brain` with `against: "organization"` runs one step of
-  that pass for the brain's organization (`orgPassNowText` is the reply), for an admin of
+  that pass for the brain's organization (`runOrgChecksNow`), for an admin of
   the organization, since it reads brains the caller may not be able to open; the reply
   gives counts and names no brain. Repeated calls end because a pass that finished within
   `ORG_PASS_NOW_STANDS_MS` is not started again.
