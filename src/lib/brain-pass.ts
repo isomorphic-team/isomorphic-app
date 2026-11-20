@@ -159,6 +159,25 @@ export async function readPassItems(
 	return new Map(results.map((r) => [r.item, r.fingerprint]));
 }
 
+// The items of a kind that involve a brain from either side: the ones it holds and the
+// ones another brain holds about it (`other_brain_id`). Keyed by `passItemKey`, since two
+// brains can hold the same item text.
+export async function readPassItemsAbout(
+	db: D1Database,
+	brainId: string,
+	kind: string
+): Promise<Map<string, string>> {
+	const { results } = await db
+		.prepare(
+			`SELECT brain_id, item, fingerprint FROM brain_pass_items
+			  WHERE kind = ?2 AND (brain_id = ?1 OR other_brain_id = ?1)`
+		)
+		.bind(brainId, kind)
+		.all<{ brain_id: string; item: string; fingerprint: string }>();
+	return new Map(results.map((r) => [passItemKey(r.brain_id, r.item), r.fingerprint]));
+}
+export const passItemKey = (brainId: string, item: string) => `${brainId}\0${item}`;
+
 // Rows per D1 batch when a step records what it checked.
 const ITEM_BATCH = 40;
 
@@ -166,8 +185,9 @@ export async function savePassItems(
 	db: D1Database,
 	brainId: string,
 	kind: string,
-	// `otherBrainId` is set when the item involves another brain, so it goes when that brain does.
-	items: readonly { item: string; fingerprint: string; otherBrainId?: string }[],
+	// `otherBrainId` is set when the item involves another brain, so it goes when that brain
+	// does. `brainId` is the brain that holds the item, when it is not the one given.
+	items: readonly { item: string; fingerprint: string; otherBrainId?: string; brainId?: string }[],
 	now: number
 ): Promise<void> {
 	const stmt = db.prepare(
@@ -180,7 +200,9 @@ export async function savePassItems(
 		await db.batch(
 			items
 				.slice(i, i + ITEM_BATCH)
-				.map((x) => stmt.bind(brainId, kind, x.item, x.fingerprint, now, x.otherBrainId ?? null))
+				.map((x) =>
+					stmt.bind(x.brainId ?? brainId, kind, x.item, x.fingerprint, now, x.otherBrainId ?? null)
+				)
 		);
 	}
 }

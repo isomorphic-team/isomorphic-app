@@ -3,8 +3,9 @@
 // scrubbing are pure; the two D1 functions at the end are the only storage.
 //
 // The queue is derived state. A decision about a finding is a dismissal in the brain's
-// ledger (findings.ts), answered through `resolve` like any other, so nothing here
-// records one.
+// ledger (findings.ts), answered through `resolve` like any other. The one decision kept
+// here is for a finding between two brains: it has a copy in each queue, and a dismissal
+// in one brain's ledger closes the copy in the other (`answerLinkedFindings`).
 //
 // Worker-safe: no node:* imports.
 
@@ -34,6 +35,8 @@ export interface QueueFinding {
 	// The page on the other side, when the finding is between this brain and another one.
 	// `paths` and `pageShas` then hold this brain's page only.
 	other?: OtherPage | null;
+	// The key the same finding has in the other brain's queue, when it has a copy there.
+	linkedKey?: string | null;
 }
 
 // A page in another brain: the brain's id, the page's path there, and its version tag
@@ -546,13 +549,13 @@ export async function upsertFindings(
 		`INSERT INTO review_findings
 		   (brain_id, key, kind, paths, headline, evidence, proposal, scores, page_shas,
 		    run_id, cluster_id, author_user_id, created_at, updated_at,
-		    other_brain_id, other_path, other_sha)
-		 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?13, ?14, ?15, ?16)
+		    other_brain_id, other_path, other_sha, linked_key)
+		 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?13, ?14, ?15, ?16, ?17)
 		 ON CONFLICT (brain_id, key) DO UPDATE SET
 		   kind = ?3, paths = ?4, headline = ?5, evidence = ?6, proposal = ?7, scores = ?8,
 		   page_shas = ?9, run_id = ?10, cluster_id = ?11,
 		   author_user_id = COALESCE(?12, author_user_id), updated_at = ?13,
-		   other_brain_id = ?14, other_path = ?15, other_sha = ?16`
+		   other_brain_id = ?14, other_path = ?15, other_sha = ?16, linked_key = ?17`
 	);
 	for (let i = 0; i < findings.length; i += WRITE_BATCH) {
 		await db.batch(
@@ -575,7 +578,8 @@ export async function upsertFindings(
 						now,
 						f.other?.brainId ?? null,
 						f.other?.path ?? null,
-						f.other?.sha ?? null
+						f.other?.sha ?? null,
+						f.linkedKey ?? null
 					)
 				)
 		);
@@ -597,6 +601,7 @@ interface FindingRow {
 	other_brain_id: string | null;
 	other_path: string | null;
 	other_sha: string | null;
+	linked_key: string | null;
 }
 
 // One row that cannot be parsed is dropped, so it never costs the rest of the report.
@@ -617,23 +622,53 @@ function parseRow(r: FindingRow): QueueFinding | null {
 			other:
 				r.other_brain_id && r.other_path
 					? { brainId: r.other_brain_id, path: r.other_path, sha: r.other_sha ?? '' }
-					: null
+					: null,
+			linkedKey: r.linked_key
 		};
 	} catch {
 		return null;
 	}
 }
 
+// A brain's queue. A finding dismissed through its copy in another brain is not in it.
 export async function readFindings(db: D1Database, brainId: string): Promise<QueueFinding[]> {
 	const { results } = await db
 		.prepare(
 			`SELECT key, kind, paths, headline, evidence, proposal, scores, page_shas, run_id,
-			        cluster_id, author_user_id, other_brain_id, other_path, other_sha
-			 FROM review_findings WHERE brain_id = ?1`
+			        cluster_id, author_user_id, other_brain_id, other_path, other_sha, linked_key
+			 FROM review_findings WHERE brain_id = ?1 AND closed_by_other IS NULL`
 		)
 		.bind(brainId)
 		.all<FindingRow>();
 	return results.map(parseRow).filter((f): f is QueueFinding => f !== null);
+}
+
+// Carries an answer to the copies of findings in other brains' queues. Dismissing a
+// finding here closes its copy there; restoring one opens its copy, and opens this one if
+// it was closed from the other side. A key with no copy changes nothing.
+export async function answerLinkedFindings(
+	db: D1Database,
+	brainId: string,
+	decisions: readonly { key: string; dismissed: boolean }[],
+	now = Date.now()
+): Promise<void> {
+	const copy = db.prepare(
+		`UPDATE review_findings SET closed_by_other = ?3
+		  WHERE (brain_id, key) IN (
+		    SELECT other_brain_id, linked_key FROM review_findings
+		     WHERE brain_id = ?1 AND key = ?2 AND linked_key IS NOT NULL)`
+	);
+	const own = db.prepare(
+		'UPDATE review_findings SET closed_by_other = NULL WHERE brain_id = ?1 AND key = ?2'
+	);
+	const stmts = decisions.flatMap((d) =>
+		d.dismissed
+			? [copy.bind(brainId, d.key, now)]
+			: [copy.bind(brainId, d.key, null), own.bind(brainId, d.key)]
+	);
+	for (let i = 0; i < stmts.length; i += WRITE_BATCH) {
+		await db.batch(stmts.slice(i, i + WRITE_BATCH));
+	}
 }
 
 export async function deleteFindings(

@@ -59,6 +59,8 @@ import {
 	isOtherPage,
 	otherPage,
 	otherPageId,
+	acrossMemory,
+	ACROSS_KIND,
 	pagePath,
 	passesScreen,
 	planStep,
@@ -73,10 +75,15 @@ import {
 	type Proposal,
 	type ConsolidationState
 } from '../ee/review/consolidation.ts';
-import { conflictKey, readFindings, upsertFindings } from '../src/lib/review-queue.ts';
+import {
+	answerLinkedFindings,
+	conflictKey,
+	readFindings,
+	upsertFindings
+} from '../src/lib/review-queue.ts';
 import { AGAINST_ALL, type ComparedBrain } from '../src/lib/review-checks.ts';
-import { ORG_PASS_EVERY_MS } from '../src/lib/org-pass.ts';
-import { runOrgPass } from '../ee/review/org-pass.ts';
+import { ORG_PASS_EVERY_MS, ORG_PASS_NOW_STANDS_MS } from '../src/lib/org-pass.ts';
+import { orgPassNowText, runOrgPass } from '../ee/review/org-pass.ts';
 import { resetIndex } from '../src/lib/brain-index.ts';
 import { continuePass, readPass, savePass, savePassStatement } from '../src/lib/brain-pass.ts';
 import { SNAPSHOT_BEGIN, SNAPSHOT_END } from '../src/lib/view-directives.ts';
@@ -1588,15 +1595,71 @@ console.log('\nconsolidation: one brain against another (12)');
 
 		const rows = await readFindings(db, home.brainId);
 		const row = rows[0];
+		const copies = await readFindings(db, other.brainId);
+		const copy = copies[0];
 		check(
-			'the disagreement between the brains is queued once, in the brain the pass ran from',
-			rows.length === 1 &&
-				row.kind === 'conflict' &&
-				(await readFindings(db, other.brainId)).length === 0 &&
-				(await readFindings(otherDb, other.brainId)).length === 0,
-			JSON.stringify(rows)
+			"one check queues the disagreement in both brains' queues",
+			rows.length === 1 && row.kind === 'conflict' && copies.length === 1,
+			JSON.stringify({ rows, copies })
 		);
 		const otherShas = await against.index.pageShas();
+		const homeShas = await base.index.pageShas();
+		check(
+			"the other brain's copy reads from its side: its page as the path, this brain's beside it",
+			JSON.stringify(copy?.paths) === JSON.stringify(['wiki/agreements/acme.md']) &&
+				copy?.other?.brainId === home.brainId &&
+				copy?.other?.sha === homeShas.get('wiki/agreements/acme.md') &&
+				copy?.pageShas['wiki/agreements/acme.md'] === otherShas.get('wiki/agreements/acme.md') &&
+				copy?.evidence[0] === `wiki/agreements/acme.md: "${LOW}"` &&
+				copy?.evidence[1] === `In the other brain, wiki/agreements/acme.md: "${HIGH}"`,
+			JSON.stringify(copy)
+		);
+		check(
+			'each copy carries the key of the other, and they differ',
+			!!row?.linkedKey &&
+				row.linkedKey === copy?.key &&
+				copy.linkedKey === row.key &&
+				row.key !== copy.key &&
+				!copy.key.includes(home.brainId),
+			JSON.stringify([row?.key, row?.linkedKey, copy?.key, copy?.linkedKey])
+		);
+		{
+			const open = async () => [
+				(await readFindings(db, home.brainId)).length,
+				(await readFindings(db, other.brainId)).length
+			];
+			await answerLinkedFindings(db, home.brainId, [{ key: row.key, dismissed: true }], NOW);
+			check(
+				'dismissing it in one brain closes the copy in the other, and leaves its own row to the ledger',
+				(await open()).join() === '1,0',
+				(await open()).join()
+			);
+			await answerLinkedFindings(db, home.brainId, [{ key: row.key, dismissed: false }], NOW);
+			check('restoring it there opens the copy again', (await open()).join() === '1,1');
+			await answerLinkedFindings(db, other.brainId, [{ key: copy.key, dismissed: true }], NOW);
+			check('it works from the other side too', (await open()).join() === '0,1');
+			await answerLinkedFindings(db, home.brainId, [{ key: row.key, dismissed: false }], NOW);
+			check(
+				'a brain whose copy was closed from the other side can restore its own',
+				(await open()).join() === '1,1'
+			);
+			await answerLinkedFindings(db, home.brainId, [{ key: 'conflict:none', dismissed: true }]);
+			check('a key with no copy changes nothing', (await open()).join() === '1,1');
+		}
+		{
+			const one = { brainId: 'b-legal', path: 'wiki/a.md', sha: 's1' };
+			const two = { brainId: 'b-admin', path: 'wiki/b.md', sha: 's2' };
+			const m = acrossMemory(one, two, 'v');
+			check(
+				'a pair of pages in two brains is remembered the same way from either brain',
+				JSON.stringify(m) === JSON.stringify(acrossMemory(two, one, 'v')) &&
+					m.brainId === 'b-admin' &&
+					m.otherBrainId === 'b-legal' &&
+					m.fingerprint === 'v:s2:s1' &&
+					acrossMemory({ ...one, sha: 's9' }, two, 'v').fingerprint !== m.fingerprint,
+				JSON.stringify(m)
+			);
+		}
 		check(
 			"it carries this brain's page as its path and the other brain's page beside it",
 			JSON.stringify(row?.paths) === JSON.stringify(['wiki/agreements/acme.md']) &&
@@ -1663,8 +1726,19 @@ console.log('\nconsolidation: one brain against another (12)');
 			]
 		});
 		prompts.length = 0;
+		// Closed from the home side before the edit: a refreshed finding stays closed.
+		await answerLinkedFindings(db, home.brainId, [{ key: row.key, dismissed: true }], NOW);
 		const edited = await advanceConsolidation({ ...base, newRunId: () => 'x3' }, NOW);
 		const refreshed = (await readFindings(db, home.brainId))[0];
+		check(
+			'checking the pair again does not reopen a copy that was dismissed from the other brain',
+			(await readFindings(db, other.brainId)).length === 0
+		);
+		await answerLinkedFindings(db, home.brainId, [{ key: row.key, dismissed: false }], NOW);
+		check(
+			'and the copy is refreshed with the pair',
+			(await readFindings(db, other.brainId))[0]?.runId === 'x3'
+		);
 		check(
 			'an edit in the other brain sends its pairs back to the model and refreshes the finding',
 			edited.pairsChecked > 0 &&
@@ -1708,11 +1782,15 @@ console.log('\nconsolidation: one brain against another (12)');
 				'against every other brain, a pair is one page of this brain and one of another, never two others',
 				all.status === 'done' &&
 					prompts.every((p) => marks(p).home === 1 && marks(p).away === 1) &&
-					prompts.some((p) => p.includes('THIRD-RATES')) &&
-					prompts.some((p) => p.includes('OTHER-RATES')),
+					prompts.some((p) => p.includes('THIRD-RATES')),
 				JSON.stringify(prompts.map(marks))
 			);
-			const found = (await readFindings(db, home.brainId)).filter((f) => f.runId === 'all1');
+			check(
+				'and a pair already checked against one brain is not sent to the model again',
+				prompts.every((p) => !p.includes('OTHER-')) && all.pairsUnchanged > 0,
+				JSON.stringify(prompts.map(marks))
+			);
+			const found = await readFindings(db, home.brainId);
 			check(
 				'each finding names the brain its other page is in',
 				found.length === 2 &&
@@ -1736,10 +1814,12 @@ console.log('\nconsolidation: one brain against another (12)');
 						.all<{ other_brain_id: string | null }>()
 				).results.map((r) => r.other_brain_id);
 			const itemBrains = await named(
-				"SELECT DISTINCT other_brain_id FROM brain_pass_items WHERE brain_id = ?1 AND kind = 'consolidation:all'"
+				`SELECT DISTINCT CASE WHEN brain_id = ?1 THEN other_brain_id ELSE brain_id END AS other_brain_id
+				   FROM brain_pass_items
+				  WHERE kind = '${ACROSS_KIND}' AND (brain_id = ?1 OR other_brain_id = ?1)`
 			);
 			check(
-				'each pair it remembers records the other brain it is about, so it goes when that brain does',
+				'each pair it remembers names both brains, so it goes when either does',
 				itemBrains.length === 2 &&
 					itemBrains.includes(other.brainId) &&
 					itemBrains.includes(third.brainId),
@@ -1772,9 +1852,9 @@ console.log('\nconsolidation: one brain against another (12)');
 				NOW
 			);
 			check(
-				'and its own memory of the pairs it checked',
+				'and asking again checks nothing',
 				allAgain.pairsChecked === 0 &&
-					allAgain.pairsUnchanged === all.pairsChecked &&
+					allAgain.pairsUnchanged === all.pairsChecked + all.pairsUnchanged &&
 					!prompts.length
 			);
 
@@ -1794,11 +1874,12 @@ console.log('\nconsolidation: one brain against another (12)');
 			});
 			const members: ComparedBrain[] = [legal, part(against), part(everyone.brains[1])];
 			const stepped: { home: string; against: string[]; all: boolean }[] = [];
-			const orgPass = (brains: ComparedBrain[], now: number, maxSteps?: number) =>
+			const orgPass = (brains: ComparedBrain[], now: number, maxSteps?: number, stands?: number) =>
 				runOrgPass({
 					db,
 					now,
 					maxSteps,
+					stands,
 					orgs: ['o1'],
 					listBrains: async () => [
 						...brains.map((b) => ({ brain_id: b.brainId })),
@@ -1861,9 +1942,14 @@ console.log('\nconsolidation: one brain against another (12)');
 				JSON.stringify(two.orgs[0].unopened) === JSON.stringify(['gone']) &&
 					two.orgs[0].brains === 2
 			);
+			check(
+				'scheduled: a pair the first brain checked is not sent to the model from the second',
+				!prompts.length && two.orgs[0].steps[0].pairsChecked === 0 && two.orgs[0].pending === 0,
+				JSON.stringify(two)
+			);
 			const theirs = await readFindings(db, other.brainId);
 			check(
-				"scheduled: each brain's findings land in its own queue, naming the other brain's page",
+				"scheduled: the second brain's queue has the finding all the same, naming the first brain's page",
 				theirs.length === 1 &&
 					theirs[0].other?.brainId === home.brainId &&
 					JSON.stringify(theirs[0].paths) === JSON.stringify(['wiki/agreements/acme.md']),
@@ -1878,7 +1964,16 @@ console.log('\nconsolidation: one brain against another (12)');
 			check('scheduled: the pass records no person as its actor', starter?.started_by === null);
 
 			stepped.length = 0;
+			prompts.length = 0;
 			const three = await orgPass(members, NOW);
+			check(
+				'scheduled: a brain that joins sends only the pair nobody has checked, and already holds the finding another brain made about it',
+				prompts.length === 1 &&
+					prompts[0].includes('THIRD-RATES') &&
+					prompts[0].includes('OTHER-RATES') &&
+					(await readFindings(db, third.brainId)).length === 1,
+				JSON.stringify(prompts.map(marks))
+			);
 			check(
 				'scheduled: a brain that joins is checked against every other one taking part',
 				three.steps === 1 &&
@@ -1893,22 +1988,45 @@ console.log('\nconsolidation: one brain against another (12)');
 			prompts.length = 0;
 			const nextDay = await orgPass(members, NOW + ORG_PASS_EVERY_MS);
 			check(
-				'scheduled: a day later every brain is checked again, and only a pair new to a brain goes to the model',
+				'scheduled: a day later every brain is stepped again, and no unchanged pair goes to the model',
 				nextDay.steps === 3 &&
 					new Set(stepped.map((s) => s.home)).size === 3 &&
-					nextDay.orgs[0].steps.every(
-						(s) =>
-							s.status === 'done' &&
-							// The one brain that had not been compared with the third yet.
-							s.pairsChecked === (s.brainId === other.brainId ? 1 : 0)
-					) &&
-					prompts.length === 1 &&
-					prompts[0].includes('THIRD-RATES') &&
-					prompts[0].includes('OTHER-RATES'),
+					nextDay.orgs[0].steps.every((s) => s.status === 'done' && s.pairsChecked === 0) &&
+					prompts.length === 0,
 				JSON.stringify(nextDay)
 			);
+			// Asked for by a person: a finished pass stands for minutes, not a day.
+			const soon = NOW + ORG_PASS_EVERY_MS + ORG_PASS_NOW_STANDS_MS;
+			const tooSoon = await orgPass(members, soon - 1, 1, ORG_PASS_NOW_STANDS_MS);
+			check(
+				'now: asked again within minutes of every pass finishing, nothing runs',
+				tooSoon.steps === 0 &&
+					tooSoon.orgs[0].pending === 0 &&
+					/3 brains take part \(1 could not be opened\)\. Each one's check finished in the last 10 minutes, so nothing was run/.test(
+						orgPassNowText(tooSoon.orgs[0])
+					),
+				orgPassNowText(tooSoon.orgs[0])
+			);
+			const nowRun = await orgPass(members, soon, 1, ORG_PASS_NOW_STANDS_MS);
+			check(
+				'now: after that it takes the one step it was given and says how many brains are left',
+				nowRun.steps === 1 &&
+					nowRun.orgs[0].pending === 2 &&
+					/in progress, 2 brain\(s\) still to finish\..*against "organization" again to continue\.$/.test(
+						orgPassNowText(nowRun.orgs[0])
+					),
+				orgPassNowText(nowRun.orgs[0])
+			);
+			await orgPass(members, soon, 1, ORG_PASS_NOW_STANDS_MS);
+			const lastStep = await orgPass(members, soon, 1, ORG_PASS_NOW_STANDS_MS);
+			check(
+				'now: the call that steps the last brain says the checks finished',
+				lastStep.orgs[0].pending === 0 &&
+					/The organization's checks finished\./.test(orgPassNowText(lastStep.orgs[0])),
+				orgPassNowText(lastStep.orgs[0])
+			);
 			stepped.length = 0;
-			const capped = await orgPass(members, NOW + 2 * ORG_PASS_EVERY_MS, 2);
+			const capped = await orgPass(members, NOW + 3 * ORG_PASS_EVERY_MS, 2);
 			check(
 				'scheduled: one run takes no more steps than its budget',
 				capped.steps === 2 && stepped.length === 2
@@ -2016,6 +2134,32 @@ console.log('\nthe scheduled organization pass: one run across organizations');
 		broken.calls.join() === 'a1,a2,a3,b1,b2' &&
 			broken.report.orgs[0].steps[1].status === 'failed' &&
 			broken.report.orgs[0].steps[1].error === 'index unreachable'
+	);
+	check(
+		'a stopped pass and one that could not run are still to finish',
+		stopped.report.orgs[0].pending === 3 && unrun.report.orgs[0].pending === 3,
+		JSON.stringify([stopped.report.orgs[0].pending, unrun.report.orgs[0].pending])
+	);
+	check(
+		'now: a stopped pass is reported with its reason, and one that could not run with what is missing',
+		/3 brains take part\. The organization's checks stopped: this month's model spend cap/.test(
+			orgPassNowText({
+				...stopped.report.orgs[0],
+				steps: [{ brainId: 'a1', status: 'stopped', stoppedReason: 'over-cap' }]
+			})
+		) &&
+			/did not run: the organization needs the contradictions check/.test(
+				orgPassNowText(unrun.report.orgs[0])
+			),
+		orgPassNowText(unrun.report.orgs[0])
+	);
+	check(
+		'now: with fewer than two brains taking part it says so, and names no brain',
+		/Fewer than two brains/.test(orgPassNowText(undefined)) &&
+			/Fewer than two brains/.test(orgPassNowText({ ...all.report.orgs[0], brains: 0 })) &&
+			!/a1|a2|a3/.test(orgPassNowText(broken.report.orgs[0])) &&
+			/1 brain\(s\) failed this time/.test(orgPassNowText(broken.report.orgs[0])),
+		orgPassNowText(broken.report.orgs[0])
 	);
 	const later = await run(() => state('done'), { now: 60 * 60 * 1000, maxSteps: 2 });
 	check(

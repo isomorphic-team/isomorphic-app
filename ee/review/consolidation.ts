@@ -3,7 +3,8 @@
 // Design: docs/design/consistency-checks.md, Part 2 (C4).
 //
 // A pass is budgeted and resumable. Each call plans up to PAIRS_PER_STEP page pairs from
-// its cursor (D1 `brain_passes`, kind 'consolidation', through src/lib/brain-pass.ts),
+// its cursor (D1 `brain_passes`, kind 'consolidation' or, against other brains, one kind
+// per scope, through src/lib/brain-pass.ts),
 // through the gateway, and writes what survives the filters to review_findings. Nothing is written to the brain: every finding waits for a person
 // (the auto tier is off).
 //
@@ -42,6 +43,8 @@ import {
 	continuePass,
 	readPass,
 	readPassItems,
+	readPassItemsAbout,
+	passItemKey,
 	savePass,
 	savePassItems,
 	type PassScope,
@@ -408,7 +411,10 @@ export async function triageFindings(input: {
 	pageShas: Readonly<Record<string, string>>;
 	runId: string;
 	misleading?: (claim: Claim) => Promise<number | undefined>;
-}): Promise<{ findings: QueueFinding[]; dropped: number }> {
+	// The brain the pass runs from. With it, a finding between two brains comes with its
+	// copy for the other brain's queue.
+	homeBrainId?: string;
+}): Promise<{ findings: QueueFinding[]; copies: FindingCopy[]; dropped: number }> {
 	const { a, b } = input;
 	// This brain's page first, when one of the two is another brain's. The finding then
 	// carries this brain's page in `paths`, the other in `other`, and no patch: a finding
@@ -441,6 +447,7 @@ export async function triageFindings(input: {
 	});
 	const scores = await Promise.all(passed.map((c) => input.misleading?.(c)));
 	const out = new Map<string, QueueFinding>();
+	const copies = new Map<string, FindingCopy>();
 	let dropped = input.claims.length - passed.length;
 	for (const [i, c] of passed.entries()) {
 		const misleading = scores[i];
@@ -471,15 +478,21 @@ export async function triageFindings(input: {
 			[c.value_a, c.value_b]
 		);
 		const standing = c.stands === 'a' ? a : c.stands === 'b' ? b : null;
-		out.set(key, {
+		const quote = (p: PageText) => (p === a ? c.quote_a : c.quote_b);
+		// The key the other brain's own pass would give the same disagreement.
+		const linkedKey =
+			there.other && input.homeBrainId
+				? await conflictKey(
+						[there.other.path, await otherPageRef(input.homeBrainId, here.path)],
+						[c.value_a, c.value_b]
+					)
+				: null;
+		const finding: QueueFinding = {
 			key,
 			kind: 'conflict',
 			paths: cited.map((p) => p.path).sort(),
 			headline: `${c.subject}: "${a.title}" says ${c.value_a}, "${b.title}" says ${c.value_b}.`,
-			evidence: [
-				...[here, there].map((p) => `${cite(p)}: "${p === a ? c.quote_a : c.quote_b}"`),
-				c.why
-			],
+			evidence: [...[here, there].map((p) => `${cite(p)}: "${quote(p)}"`), c.why],
 			proposal: {
 				tier: patch ? 'review' : 'person',
 				action: across ? 'person' : c.action,
@@ -494,10 +507,60 @@ export async function triageFindings(input: {
 			runId: input.runId,
 			clusterId: normalizeFactLabel(c.fact ?? '') || null,
 			authorUserId: null,
-			other: there.other ? { ...there.other, sha: input.pageShas[there.path] ?? '' } : null
-		});
+			other: there.other ? { ...there.other, sha: input.pageShas[there.path] ?? '' } : null,
+			linkedKey
+		};
+		out.set(key, finding);
+		if (there.other && input.homeBrainId && linkedKey) {
+			// The same finding as the other brain reads it: its page is the one here, and
+			// this brain's page is the one elsewhere.
+			copies.set(key, {
+				brainId: there.other.brainId,
+				finding: {
+					...finding,
+					key: linkedKey,
+					linkedKey: key,
+					paths: [there.other.path],
+					evidence: [
+						`${there.other.path}: "${quote(there)}"`,
+						`In the other brain, ${here.path}: "${quote(here)}"`,
+						c.why
+					],
+					pageShas: { [there.other.path]: input.pageShas[there.path] ?? '' },
+					other: {
+						brainId: input.homeBrainId,
+						path: here.path,
+						sha: input.pageShas[here.path] ?? ''
+					}
+				}
+			});
+		}
 	}
-	return { findings: [...out.values()], dropped };
+	return { findings: [...out.values()], copies: [...copies.values()], dropped };
+}
+
+// A finding as it goes into another brain's queue.
+export interface FindingCopy {
+	brainId: string;
+	finding: QueueFinding;
+}
+
+// How a pair of pages in two brains is remembered, whichever of the two the pass runs
+// from: under the brain whose id sorts first, naming the second. One check of the pair
+// then stands for both brains, and for a pass against one brain as for one against all.
+export const ACROSS_KIND = 'consolidation:pairs';
+export function acrossMemory(
+	one: { brainId: string; path: string; sha: string },
+	two: { brainId: string; path: string; sha: string },
+	version: string
+): { brainId: string; otherBrainId: string; item: string; fingerprint: string } {
+	const [first, second] = one.brainId < two.brainId ? [one, two] : [two, one];
+	return {
+		brainId: first.brainId,
+		otherBrainId: second.brainId,
+		item: `${first.path}|${otherPageId(second.brainId, second.path)}`,
+		fingerprint: `${version}:${first.sha}:${second.sha}`
+	};
 }
 
 // ---------- what earlier passes checked ----------
@@ -538,8 +601,8 @@ function checkVersion(): Promise<string> {
 
 const KIND = 'consolidation';
 
-// A pass against other brains keeps its own cursor and pair memory, per scope: one other
-// brain's id, or AGAINST_ALL.
+// A pass against other brains keeps its own cursor per scope: one other brain's id, or
+// AGAINST_ALL. What it has checked is remembered once for all of them (ACROSS_KIND).
 const passKind = (scope?: string) => (scope ? `${KIND}:${scope}` : KIND);
 const scopeOf = (c?: Comparison) => c && (c.all ? AGAINST_ALL : c.brains[0].brainId);
 // What the caller passed as `against`, for a reply that says how to continue.
@@ -665,7 +728,7 @@ export interface ConsolidationTarget {
 	// Start a new pass that checks every pair, ignoring what earlier passes checked.
 	fresh?: boolean;
 	// The brains to compare this one against. Only pairs with one page in this brain
-	// are checked, and the findings land in this brain's queue.
+	// are checked, and each finding lands in this brain's queue and the other's.
 	against?: Comparison;
 	// The step's clock, for STEP_TIME_MS. Date.now unless a test drives it.
 	clock?: () => number;
@@ -749,20 +812,37 @@ export async function advanceConsolidation(
 	});
 	// What earlier passes checked: a pair whose fingerprint still matches costs nothing.
 	const version = await checkVersion();
+	const itemsKind = t.against ? ACROSS_KIND : kind;
 	const lastChecked = state.fresh
 		? new Map<string, string>()
-		: await readPassItems(t.db, t.brainId, kind);
-	const fingerprint = ([a, b]: Pair) =>
-		shas[a] && shas[b] ? `${version}:${shas[a]}:${shas[b]}` : null;
-	const unchanged = (pair: Pair) => {
-		const fp = fingerprint(pair);
-		return fp !== null && lastChecked.get(pair.join('|')) === fp;
+		: t.against
+			? await readPassItemsAbout(t.db, t.brainId, ACROSS_KIND)
+			: await readPassItems(t.db, t.brainId, kind);
+	// What a pair is remembered by, or null when a page has no version to remember.
+	const memory = ([a, b]: Pair) => {
+		if (!shas[a] || !shas[b]) return null;
+		if (!t.against) {
+			const item = `${a}|${b}`;
+			return { key: item, item, fingerprint: `${version}:${shas[a]}:${shas[b]}` };
+		}
+		const [here, there] = byPath.get(a)?.other ? [b, a] : [a, b];
+		const other = byPath.get(there)?.other;
+		if (!other) return null;
+		const m = acrossMemory(
+			{ brainId: t.brainId, path: here, sha: shas[here] },
+			{ ...other, sha: shas[there] },
+			version
+		);
+		return { ...m, key: passItemKey(m.brainId, m.item) };
 	};
-	const checked: { item: string; fingerprint: string; otherBrainId?: string }[] = [];
+	const unchanged = (pair: Pair) => {
+		const m = memory(pair);
+		return m !== null && lastChecked.get(m.key) === m.fingerprint;
+	};
+	const checked: NonNullable<ReturnType<typeof memory>>[] = [];
 	const remember = (pair: Pair) => {
-		const fp = fingerprint(pair);
-		const otherBrainId = pair.map((id) => byPath.get(id)?.other?.brainId).find(Boolean);
-		if (fp) checked.push({ item: pair.join('|'), fingerprint: fp, otherBrainId });
+		const m = memory(pair);
+		if (m) checked.push(m);
 	};
 	const plan = planStep(
 		pages,
@@ -774,6 +854,7 @@ export async function advanceConsolidation(
 	);
 	const knownFacts = await readFactLabels(t.db, t.brainId);
 	const found: QueueFinding[] = [];
+	const copies: FindingCopy[] = [];
 	// The first pair a refused gateway stopped. Pairs after it may have run in the same
 	// batch; the cursor stays before it, so the next step checks them again.
 	let firstStopped = Infinity;
@@ -845,7 +926,8 @@ export async function advanceConsolidation(
 				TRIAGE_SCHEMA as unknown as Record<string, unknown>
 			);
 			count(served.model, served.costUsd);
-			const { findings } = await triageFindings({
+			const triaged = await triageFindings({
+				homeBrainId: t.brainId,
 				a,
 				b,
 				claims: served.value.claims ?? [],
@@ -863,7 +945,8 @@ export async function advanceConsolidation(
 						count
 					)
 			});
-			found.push(...findings);
+			found.push(...triaged.findings);
+			copies.push(...triaged.copies);
 			state.pairsChecked++;
 			remember(pair);
 		} catch (err) {
@@ -892,7 +975,16 @@ export async function advanceConsolidation(
 	}
 
 	await upsertFindings(t.db, t.brainId, found, now);
-	await savePassItems(t.db, t.brainId, kind, checked, now);
+	// Each finding between two brains goes into the other brain's queue as well.
+	for (const brainId of new Set(copies.map((c) => c.brainId))) {
+		await upsertFindings(
+			t.db,
+			brainId,
+			copies.filter((c) => c.brainId === brainId).map((c) => c.finding),
+			now
+		);
+	}
+	await savePassItems(t.db, t.brainId, itemsKind, checked, now);
 	state.findings += found.length;
 
 	const firstOpen = Math.min(firstStopped, firstUnstarted);
@@ -911,7 +1003,7 @@ export async function advanceConsolidation(
 	return state;
 }
 
-const STOP_TEXT: Record<string, string> = {
+export const STOP_TEXT: Record<string, string> = {
 	'over-cap': "this month's model spend cap for the organization is used up",
 	'not-entitled': 'the organization has no enterprise entitlement',
 	'no-key': 'this deployment has no model key',

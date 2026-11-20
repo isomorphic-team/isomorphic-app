@@ -69,6 +69,8 @@ import {
 	conflictKey,
 	policyKey,
 	upsertFindings,
+	readFindings,
+	deleteFindings,
 	type QueueFinding
 } from '../src/lib/review-queue.ts';
 import { webUrlFor } from '../src/lib/web-app.ts';
@@ -2128,6 +2130,34 @@ try {
 			decisions: [{ finding: rateKey, action: 'dismiss', why: 'different contracts' }]
 		});
 		check('resolve dismisses a queue finding by key', !dismissal.isError, dismissal.text);
+		{
+			// A finding between this brain and another one, with its copy in that brain's queue.
+			const elsewhere = 'b-e2e-elsewhere';
+			const linked = (key: string, linkedKey: string, other: string) => ({
+				...finding(key, ['May', 'June'], 'r1'),
+				paths: [left],
+				other: { brainId: other, path: 'wiki/far.md', sha: 's' },
+				linkedKey
+			});
+			await upsertFindings(db as never, brainId, [
+				linked('conflict:near', 'conflict:far', elsewhere)
+			]);
+			await upsertFindings(db as never, elsewhere, [
+				linked('conflict:far', 'conflict:near', brainId)
+			]);
+			const copyOpen = async () => (await readFindings(db as never, elsewhere)).length === 1;
+			const answer = (action: string) =>
+				call('resolve', { decisions: [{ finding: 'conflict:near', action, why: 'settled' }] });
+			const closed = await answer('dismiss');
+			check(
+				'resolve dismissing a finding between two brains closes its copy in the other brain',
+				!closed.isError && !(await copyOpen()),
+				closed.text
+			);
+			const reopened = await answer('undismiss');
+			check('...and restoring it opens the copy again', !reopened.isError && (await copyOpen()));
+			await deleteFindings(db as never, brainId, ['conflict:near']);
+		}
 		report = await call('validate', {});
 		check(
 			'the dismissal silences that fact and not the other on the same pages',
