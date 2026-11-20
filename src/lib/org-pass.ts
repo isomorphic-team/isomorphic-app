@@ -37,6 +37,60 @@ export function orgPassBrains<B extends { brainId: string; config: { orgChecks: 
 	};
 }
 
+// What stands between an organization's brains and its scheduled checks, as the person
+// who just changed one brain's part in them is told it.
+export interface OrgChecksStatus {
+	orgLabel: string;
+	// Brains of the organization that take part, the caller's included when it does.
+	takingPart: number;
+	// Brains whose config could not be read, so are in neither count.
+	unread: number;
+	// The organization holds the feature the pass is part of.
+	entitled: boolean;
+	// The deployment has a model key to run it with.
+	modelKey: boolean;
+}
+
+// How many of an organization's brains take part. `self` is the brain whose setting was
+// just written: its answer is the one given, not one read back through a cache.
+export async function countOrgChecks<R extends { brain_id: string }>(
+	rows: readonly R[],
+	self: { brainId: string; on: boolean },
+	read: (row: R) => Promise<boolean>
+): Promise<{ takingPart: number; unread: number }> {
+	const answers = await Promise.all(
+		rows.filter((r) => r.brain_id !== self.brainId).map((r) => read(r).catch(() => null))
+	);
+	return {
+		takingPart: answers.filter((a) => a === true).length + (self.on ? 1 : 0),
+		unread: answers.filter((a) => a === null).length
+	};
+}
+
+// The sentences that say whether the scheduled checks run for this organization, and
+// what is missing when they do not.
+export function orgChecksStatusText(s: OrgChecksStatus): string {
+	const n = s.takingPart;
+	const count =
+		n === 0
+			? `In ${s.orgLabel}, no brain takes part.`
+			: `In ${s.orgLabel}, ${n === 1 ? '1 brain takes' : `${n} brains take`} part.`;
+	const unread =
+		s.unread > 0
+			? ` ${s.unread === 1 ? '1 brain' : `${s.unread} brains`} could not be read and ${s.unread === 1 ? 'is' : 'are'} not counted.`
+			: '';
+	const missing = [
+		...(n < 2 ? ['a second brain takes part'] : []),
+		...(s.entitled ? [] : [`${s.orgLabel} has the contradictions check`]),
+		...(s.modelKey ? [] : ['this deployment has a model key'])
+	];
+	const runs =
+		missing.length === 0
+			? ' The scheduled checks run across them, each brain about once a day.'
+			: ` The scheduled checks do not run until ${missing.join(', and ')}.`;
+	return count + unread + runs;
+}
+
 export interface OrgPassRun {
 	status: PassStatus;
 	startedAt: number;

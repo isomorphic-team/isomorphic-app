@@ -517,8 +517,20 @@ check(
 	);
 }
 const brainsPayload = (await toolsFor(orgBoss).get('brains')!({})) as {
-	structuredContent?: { orgs?: { orgId: string }[] };
+	content?: { text: string }[];
+	structuredContent?: { orgs?: { orgId: string }[]; brains?: { id: string; orgLabel: string }[] };
 };
+{
+	// Read as text by a model with no other way to learn which organization a brain is in.
+	const text = brainsPayload.content?.[0]?.text ?? '';
+	const listed = brainsPayload.structuredContent?.brains ?? [];
+	check(
+		'brains names the handle and the organization of every brain it lists',
+		listed.length > 0 &&
+			listed.every((b) => !!b.orgLabel && text.includes(`(brain: "${b.id}"; ${b.orgLabel}) — `)),
+		text
+	);
+}
 const viewerPayload = (await toolsFor(lurker).get('brains')!({})) as {
 	structuredContent?: { orgs?: unknown[] };
 };

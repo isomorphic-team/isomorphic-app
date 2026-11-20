@@ -82,6 +82,7 @@ import {
 import { GITHUB_CAPABILITIES, githubStore } from '../lib/brain-store-github.ts';
 import { detectNeedsConfig, type OpenIndex } from '../lib/brain-index.ts';
 import { CONFIG_PATH, DEFAULT_BRAIN_CONFIG, withOrgChecks } from '../lib/brain-config.ts';
+import { orgChecksStatusText, type OrgChecksStatus } from '../lib/org-pass.ts';
 import { fail } from './shared.ts';
 import type { BrainsWire } from '../lib/tool-payloads.ts';
 import { toolAnnotations } from '../lib/tool-annotations.ts';
@@ -141,10 +142,15 @@ function brainRows(brains: AccessibleBrain[], activeId: string | undefined): Bra
 	}));
 }
 
-function rowsText(rows: BrainRow[]): string {
+// The list as the model reads it: each brain's name, the handle to pass as `brain`, the
+// organization it belongs to, and the caller's role.
+export function rowsText(rows: BrainRow[]): string {
 	if (rows.length === 0) return 'No brains available.';
 	return `Your brains (${rows.length}):\n${rows
-		.map((r) => `- ${r.label} — ${r.role}${r.active ? ' (active)' : ''}`)
+		.map(
+			(r) =>
+				`- ${r.label} (brain: "${r.id}"${r.orgLabel ? `; ${r.orgLabel}` : ''}) — ${r.role}${r.active ? ' (active)' : ''}`
+		)
 		.join('\n')}`;
 }
 
@@ -250,6 +256,12 @@ export function registerBrainTools(
 		githubFor?: (conn: StorageConnection) => Promise<Octokit>;
 		// Reaching a Google Drive. Absent when the deployment has no Google OAuth client.
 		drive?: DriveTools;
+		// Whether an organization's scheduled checks run, counting `self` as given. Absent
+		// where there is no organization to run them for.
+		orgChecksStatus?: (
+			orgId: string,
+			self: { brainId: string; on: boolean }
+		) => Promise<Omit<OrgChecksStatus, 'orgLabel'>>;
 	}
 ) {
 	const {
@@ -267,7 +279,8 @@ export function registerBrainTools(
 		webBaseUrl,
 		platformFiles,
 		githubFor,
-		drive
+		drive,
+		orgChecksStatus
 	} = deps;
 	// `people`: whether this deployment has anyone to share with, invite, or count.
 	// The nav offers Sharing, Members, Analytics and brain management only when it
@@ -358,7 +371,7 @@ export function registerBrainTools(
 		{
 			...toolAnnotations('Your brains', 'read'),
 			description:
-				"The knowledge bases (brains) this user can access (personal, team, and client), with the user's role in each and the active one marked. Returns the list as text; opens nothing in the chat. Call brains to answer 'what brains do I have?' or when YOU need the list before targeting one.",
+				"The knowledge bases (brains) this user can access (personal, team, and client), each with the handle to pass as `brain`, the organization it belongs to and the user's role, and the active one marked. Returns the list as text; opens nothing in the chat. Call brains to answer 'what brains do I have?' or when YOU need the list before targeting one.",
 			inputSchema: z.object({})
 		},
 		async () => {
@@ -1202,10 +1215,31 @@ export function registerBrainTools(
 				const state = org_checks
 					? 'takes part in its organization’s scheduled checks'
 					: 'is left out of its organization’s scheduled checks';
+				// Whether the checks run for this brain's organization, or nothing when that
+				// cannot be said: the setting was still written.
+				const status = async (): Promise<{ text: string; org?: OrgChecksStatus }> => {
+					if (!org_checks || !orgChecksStatus || !ctx.orgId) return { text: '' };
+					try {
+						const org = await getOrgById(ctx.db, ctx.orgId);
+						if (!org) return { text: '' };
+						const s: OrgChecksStatus = {
+							orgLabel: orgLabel(org),
+							...(await orgChecksStatus(ctx.orgId, { brainId: ctx.brainId, on: true }))
+						};
+						return { text: ` ${orgChecksStatusText(s)}`, org: s };
+					} catch {
+						return { text: '' };
+					}
+				};
 				if ('unchanged' in next) {
+					const s = await status();
 					return {
-						content: [{ type: 'text' as const, text: `This brain already ${state}.` }],
-						structuredContent: { orgChecks: org_checks, changed: false }
+						content: [{ type: 'text' as const, text: `This brain already ${state}.${s.text}` }],
+						structuredContent: {
+							orgChecks: org_checks,
+							changed: false,
+							...(s.org ? { organization: s.org } : {})
+						}
 					};
 				}
 				const open = await ctx.store.findOpenConfigPr(ctx.locator);
@@ -1239,12 +1273,17 @@ export function registerBrainTools(
 					};
 				}
 				invalidateConfig(ctx.locator.owner, ctx.locator.repo);
+				const s = await status();
 				const more = org_checks
-					? ' Its pages are compared with those of the organization’s other brains that take part, and validate lists a conflict only for people who can open both pages. Nothing runs until a second brain takes part and the organization has the contradictions check.'
+					? ` Its pages are compared with those of the organization’s other brains that take part, and validate lists a conflict only for people who can open both pages.${s.text || ' Nothing runs until a second brain takes part and the organization has the contradictions check.'}`
 					: '';
 				return {
 					content: [{ type: 'text' as const, text: `This brain now ${state}.${more}` }],
-					structuredContent: { orgChecks: org_checks, changed: true }
+					structuredContent: {
+						orgChecks: org_checks,
+						changed: true,
+						...(s.org ? { organization: s.org } : {})
+					}
 				};
 			}
 

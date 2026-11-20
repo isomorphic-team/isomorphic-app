@@ -124,7 +124,8 @@ import { dayKey, countedCall } from './lib/usage.ts';
 import { loadCustomToolDefs, registerCustomTools, type CustomToolLoad } from './tools/custom.ts';
 import { resolveInstallationOrg, connectCustomerOrg } from './lib/org-connect.ts';
 import { loadBrainConfig, type BrainConfig } from './lib/brain-config.ts';
-import { FEATURES, listEntitledOrgs } from './lib/entitlements.ts';
+import { FEATURES, hasFeature, listEntitledOrgs } from './lib/entitlements.ts';
+import { countOrgChecks } from './lib/org-pass.ts';
 import {
 	ASSET_ROUTE_PREFIX,
 	assetLinkKey,
@@ -325,10 +326,29 @@ function consolidationFor(
 // One run of the scheduled organization pass (ee/review/org-pass.ts), or undefined when
 // the deployment holds no model key. It covers the organizations with the enterprise
 // entitlement, opening each brain by its storage binding, with no person behind it.
+const hasModelKey = (env: Env) =>
+	!!(env.ANTHROPIC_API_KEY?.trim() || env.OPENROUTER_API_KEY?.trim());
+
+// Whether an organization's scheduled checks run: how many of its brains take part and
+// whether the organization and the deployment have what the pass needs. Every brain's
+// config is read, including brains the asker cannot open, and only the count leaves.
+async function orgChecksStatus(env: Env, orgId: string, self: { brainId: string; on: boolean }) {
+	const db = env.PLATFORM_DB;
+	const [counts, entitled] = await Promise.all([
+		countOrgChecks(await listStoredBrainsInOrg(db, orgId), self, async (row) => {
+			const { store } = await openStorage(env, row);
+			return (await loadBrainConfig(store, { owner: row.repo_owner, repo: row.repo_name }))
+				.orgChecks;
+		}),
+		hasFeature(db, orgId, FEATURES.enterprise)
+	]);
+	return { ...counts, entitled, modelKey: hasModelKey(env) };
+}
+
 async function orgPass(env: Env, now = Date.now()): Promise<OrgPassReport | undefined> {
 	const anthropicKey = env.ANTHROPIC_API_KEY?.trim() || undefined;
 	const openRouterKey = env.OPENROUTER_API_KEY?.trim() || undefined;
-	if (!anthropicKey && !openRouterKey) return undefined;
+	if (!hasModelKey(env)) return undefined;
 	const db = env.PLATFORM_DB;
 	return runOrgPass({
 		db,
@@ -1345,7 +1365,8 @@ class McpSession {
 				}
 				return githubClientFor(this.env, credential);
 			},
-			drive: driveAccess(this.env)
+			drive: driveAccess(this.env),
+			orgChecksStatus: (orgId, self) => orgChecksStatus(this.env, orgId, self)
 		});
 
 		// ---------- user-defined tools (brain-tools) ----------
