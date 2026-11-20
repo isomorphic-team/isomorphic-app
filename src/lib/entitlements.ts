@@ -58,6 +58,23 @@ export async function getEntitlement(
 	};
 }
 
+// The organizations holding a feature now, in a stable order.
+export async function listEntitledOrgs(
+	db: D1Database,
+	feature: Feature,
+	now = Date.now()
+): Promise<string[]> {
+	const { results } = await db
+		.prepare(
+			`SELECT org_id FROM org_entitlements
+			  WHERE feature = ?1 AND (expires_at IS NULL OR expires_at > ?2)
+			  ORDER BY org_id`
+		)
+		.bind(feature, now)
+		.all<{ org_id: string }>();
+	return (results ?? []).map((r) => r.org_id);
+}
+
 export async function hasFeature(
 	db: D1Database,
 	orgId: string,

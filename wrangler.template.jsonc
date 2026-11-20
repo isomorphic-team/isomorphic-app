@@ -36,6 +36,11 @@
 	// entry point.
 	"workers_dev": true,
 	"preview_urls": true,
+	// The scheduled organization pass (`scheduled` in src/worker.ts), hourly. It does
+	// nothing without a model key and an organization entitled to it. `wrangler deploy`
+	// applies this; a deployment that uploads and promotes versions instead has to set
+	// the schedule itself (docs/ops/deploy-and-rollback.md).
+	"triggers": { "crons": ["17 * * * *"] },
 	// The MCP transport is stateless (per-request server + web-standard transport
 	// in src/worker.ts), and this Worker implements no Durable Object: that would
 	// cost it its preview URLs. The legacy IsomorphicMindMcp DO class is deleted by

@@ -81,7 +81,7 @@ import {
 } from '../lib/brain-move.ts';
 import { GITHUB_CAPABILITIES, githubStore } from '../lib/brain-store-github.ts';
 import { detectNeedsConfig, type OpenIndex } from '../lib/brain-index.ts';
-import { CONFIG_PATH, DEFAULT_BRAIN_CONFIG } from '../lib/brain-config.ts';
+import { CONFIG_PATH, DEFAULT_BRAIN_CONFIG, withOrgChecks } from '../lib/brain-config.ts';
 import { fail } from './shared.ts';
 import type { BrainsWire } from '../lib/tool-payloads.ts';
 import { toolAnnotations } from '../lib/tool-annotations.ts';
@@ -929,7 +929,7 @@ export function registerBrainTools(
 				'destructive'
 			),
 			description:
-				"A brain's own settings. RENAME: pass `name` alone to change what the brain is called; nothing in its repository changes. STORAGE: pass `storage: \"isomorphic\"` to move a brain out of its GitHub repository into storage Isomorphic holds itself, or `storage: \"github\"` to move such a brain back into a GitHub repository; the reply is a preview until `confirm: true`, a large brain takes several calls with the same arguments, and it also needs admin in the brain's organization. CONTENT LAYOUT: set up an adopted repo so its pages appear, by writing a .isomorphic.json describing where its content lives; use when a connected brain shows no pages because its markdown isn't under the default 'wiki/' layout. Defaults to indexing the whole repo. If the repo already has a .isomorphic.json, this refuses and shows the current one; pass `overwrite: true` to replace it deliberately. Needs admin on the brain. configure_brain never moves a brain between organizations.",
+				"A brain's own settings. RENAME: pass `name` alone to change what the brain is called; nothing in its repository changes. STORAGE: pass `storage: \"isomorphic\"` to move a brain out of its GitHub repository into storage Isomorphic holds itself, or `storage: \"github\"` to move such a brain back into a GitHub repository; the reply is a preview until `confirm: true`, a large brain takes several calls with the same arguments, and it also needs admin in the brain's organization. CONTENT LAYOUT: set up an adopted repo so its pages appear, by writing a .isomorphic.json describing where its content lives; use when a connected brain shows no pages because its markdown isn't under the default 'wiki/' layout. Defaults to indexing the whole repo. If the repo already has a .isomorphic.json, this refuses and shows the current one; pass `overwrite: true` to replace it deliberately. ORGANIZATION CHECKS: pass `org_checks: true` alone to have the brain take part in the checks its organization runs across its brains on a schedule, or `false` to leave them; only that setting in .isomorphic.json changes. Needs admin on the brain. configure_brain never moves a brain between organizations.",
 			inputSchema: z.object({
 				brain: z
 					.string()
@@ -959,6 +959,12 @@ export function registerBrainTools(
 					.boolean()
 					.optional()
 					.describe('With `storage`: carry out the move. Without it the reply only describes it.'),
+				org_checks: z
+					.boolean()
+					.optional()
+					.describe(
+						'Whether this brain takes part in its organization’s scheduled checks. When it does, its pages are compared by a model with the pages of the organization’s other brains that take part, and a conflict is shown only to people who can open both pages. Off unless set. Pass it in a call of its own.'
+					),
 				// Retired: the review passes have their own tool. Still accepted so a call from an
 				// older conversation gets a pointer, instead of being stripped by the schema and
 				// read as a layout write with no arguments.
@@ -973,6 +979,7 @@ export function registerBrainTools(
 			overwrite,
 			storage,
 			confirm,
+			org_checks,
 			baseline_scan,
 			consolidate
 		}) => {
@@ -984,7 +991,12 @@ export function registerBrainTools(
 			});
 
 			if (storage !== undefined) {
-				if (name !== undefined || content_roots !== undefined || overwrite !== undefined) {
+				if (
+					name !== undefined ||
+					content_roots !== undefined ||
+					overwrite !== undefined ||
+					org_checks !== undefined
+				) {
 					return fail('Move a brain’s storage in a call of its own. Nothing was changed.');
 				}
 				const target = (await listBrains()).find((b) => b.brain_id === ctx.brainId);
@@ -1178,6 +1190,62 @@ export function registerBrainTools(
 				return fail(
 					`Review passes moved out of configure_brain: call review_brain with check "${baseline_scan ? 'sensitive-data' : 'contradictions'}". Nothing was changed.`
 				);
+			}
+
+			if (org_checks !== undefined) {
+				if (name !== undefined || content_roots !== undefined || overwrite !== undefined) {
+					return fail('Set org_checks in a call of its own. Nothing was changed.');
+				}
+				const file = await ctx.store.readFile(ctx.locator, CONFIG_PATH);
+				const next = withOrgChecks(file?.content ?? null, org_checks);
+				if ('problem' in next) return fail(`This brain’s ${next.problem}`);
+				const state = org_checks
+					? 'takes part in its organization’s scheduled checks'
+					: 'is left out of its organization’s scheduled checks';
+				if ('unchanged' in next) {
+					return {
+						content: [{ type: 'text' as const, text: `This brain already ${state}.` }],
+						structuredContent: { orgChecks: org_checks, changed: false }
+					};
+				}
+				const open = await ctx.store.findOpenConfigPr(ctx.locator);
+				if (open) {
+					return fail(
+						`A change to this brain’s ${CONFIG_PATH} is already proposed, so nothing was written. Review and merge it first: ${open}`
+					);
+				}
+				const outcome = await ctx.store.commitOrPR(ctx.locator, {
+					writeMode: ctx.config.writeMode,
+					defaultBranch: ctx.config.defaultBranch,
+					author: ctx.author,
+					autoMerge: ctx.config.autoMerge,
+					mergeMethod: ctx.config.mergeMethod,
+					message: `${org_checks ? 'Take part in' : 'Leave'} organization checks (${CONFIG_PATH})`,
+					writes: [{ path: CONFIG_PATH, content: next.content }],
+					base: await ctx.store.getRevision(ctx.locator, ctx.config.defaultBranch),
+					branchPrefix: 'isomorphic/configure',
+					prTitle: `${org_checks ? 'Take part in' : 'Leave'} organization checks`,
+					prBody: `Sets charter.orgChecks to ${org_checks} in ${CONFIG_PATH}.`
+				});
+				if (outcome.prUrl && !outcome.merged) {
+					return {
+						content: [
+							{
+								type: 'text' as const,
+								text: `This brain’s default branch is protected, so the change is proposed as a PR and takes effect when it merges: ${outcome.prUrl}`
+							}
+						],
+						structuredContent: { prUrl: outcome.prUrl }
+					};
+				}
+				invalidateConfig(ctx.locator.owner, ctx.locator.repo);
+				const more = org_checks
+					? ' Its pages are compared with those of the organization’s other brains that take part, and validate lists a conflict only for people who can open both pages. Nothing runs until a second brain takes part and the organization has the contradictions check.'
+					: '';
+				return {
+					content: [{ type: 'text' as const, text: `This brain now ${state}.${more}` }],
+					structuredContent: { orgChecks: org_checks, changed: true }
+				};
 			}
 
 			let renamed = '';

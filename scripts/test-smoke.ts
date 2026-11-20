@@ -28,6 +28,8 @@ import { smokeOrigin, waitForOrigin, allPassed, type Check } from './smoke.ts';
 const ORIGIN = 'https://example.workers.dev';
 
 import { checker } from './check.ts';
+import { parseJsonc } from './preview.ts';
+import { schedulesRequest } from './schedules.ts';
 
 const { check, done } = checker('smoke checks');
 
@@ -635,6 +637,73 @@ check('the workflow parsed into steps', steps.length > 5, `got ${steps.length}`)
 		(s) => /steps\.smoke\.outcome\s*==\s*'failure'/.test(s.if ?? '') && /exit 1/.test(s.body)
 	);
 	check('a failed smoke check turns the run red', failing.length > 0);
+}
+
+console.log('\nthe cron schedule is set from the config, after the deploy is known good');
+{
+	const template = parseJsonc(
+		readFileSync(new URL('../wrangler.template.jsonc', import.meta.url), 'utf8')
+	) as { triggers?: { crons?: string[] } };
+	const req = schedulesRequest({ ...template, name: 'acme-mcp' }, 'acct-1');
+	check(
+		'the request names the Worker and carries the schedules the template declares',
+		req.url ===
+			'https://api.cloudflare.com/client/v4/accounts/acct-1/workers/scripts/acme-mcp/schedules' &&
+			req.body.length > 0 &&
+			JSON.stringify(req.body) ===
+				JSON.stringify(template.triggers?.crons?.map((cron) => ({ cron }))),
+		JSON.stringify(req)
+	);
+	const refuses = (config: unknown, account: string | undefined) => {
+		try {
+			schedulesRequest(config, account);
+			return false;
+		} catch {
+			return true;
+		}
+	};
+	check(
+		'nothing is sent without a Worker name, an account, or a list of schedules',
+		refuses({ triggers: { crons: ['* * * * *'] } }, 'a') &&
+			refuses({ name: 'w', triggers: { crons: ['* * * * *'] } }, undefined) &&
+			refuses({ name: 'w' }, 'a') &&
+			refuses({ name: 'w', triggers: { crons: 'hourly' } }, 'a')
+	);
+	check(
+		'nor with a name or a schedule that is not one',
+		refuses({ name: 'w/../other', triggers: { crons: ['* * * * *'] } }, 'a') &&
+			refuses({ name: 'w', triggers: { crons: ['* * * * *"}, {"x": "y'] } }, 'a') &&
+			refuses({ name: 'w', triggers: { crons: [''] } }, 'a')
+	);
+	check(
+		'an empty list is a request that clears the schedules',
+		schedulesRequest({ name: 'w', triggers: { crons: [] } }, 'a').body.length === 0
+	);
+
+	const schedules = byId('schedules');
+	const smoke = byId('smoke');
+	const promote = byId('promote');
+	check(
+		'the workflow sets the schedule only after production passed its smoke check',
+		schedules !== undefined &&
+			/scripts\/schedules\.ts/.test(schedules.body) &&
+			/steps\.smoke\.outcome\s*==\s*'success'/.test(schedules.if ?? '') &&
+			steps.indexOf(schedules) > steps.indexOf(smoke!) &&
+			steps.indexOf(schedules) > steps.indexOf(promote!),
+		schedules?.if
+	);
+	check(
+		'and a schedule that could not be set leaves the deploy standing',
+		schedules?.continueOnError === true
+	);
+	const commands = deployYml
+		.split('\n')
+		.filter((line) => !/^\s*#/.test(line))
+		.join('\n');
+	check(
+		'it never runs `wrangler triggers deploy`, which also sets workers.dev and preview URLs',
+		!/wrangler triggers deploy/.test(commands)
+	);
 }
 
 {

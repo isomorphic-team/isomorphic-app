@@ -58,6 +58,11 @@ deployment's identity).
   the OAuth provider's host-based routing.
 - The DO `migrations` array (`v1` new / `v2` deleted `IsomorphicMindMcp`) is **append-only** by
   Cloudflare's rules. Neither entry may be removed.
+- **`triggers.crons` is the Worker's schedule** (the scheduled organization pass, `ee.md`).
+  `wrangler deploy` applies it. `deploy.yml` does not run that for this Worker, so after the
+  production smoke check it runs `scripts/schedules.ts`, which sets the schedules and
+  nothing else; never `wrangler triggers deploy`, which also sets workers.dev and preview
+  URLs from the config (`pnpm test:smoke` pins both). `previewConfig` drops `triggers`.
 
 ## The objects Worker
 

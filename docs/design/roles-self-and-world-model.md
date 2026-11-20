@@ -274,14 +274,17 @@ Each step is useful without the ones after it.
    include the brain, evidence filtered by what the reader can open, and the owner deciding
    which side stands. Built in a first form: `review_brain` with `check: "contradictions"`
    and `against` compares one brain with another in the same organization, or with every
-   other one ([`consistency-checks.md`](consistency-checks.md), C8). Left: one pass over a
-   whole organization, which needs findings held by the organization and not by one brain,
-   and the owner deciding which side stands, which needs step 2.
+   other one ([`consistency-checks.md`](consistency-checks.md), C8). Left: findings held
+   by the organization and not by one brain, so a pair is checked once, and the owner
+   deciding which side stands, which needs step 2.
 4. **The org view.** Review and open questions across an org's brains. The first visible
    form of the self.
 5. **More kinds of open item:** question, obligation, prediction due.
 6. **Prevention.** Cross-brain wikilinks, then publishing.
-7. **A scheduled org pass.**
+7. **A scheduled org pass.** Built in a first form: an hourly run checks each brain that
+   takes part against the others, as the organization and not as a person. Taking part is
+   the first charter declaration, `"charter": {"orgChecks": true}` in `.isomorphic.json`,
+   ahead of the owns and watches declarations of step 2.
 8. **Expectation and outcome fields,** then records tables, then scorecards on theory pages.
 9. **A grant that reads many brains and writes one.**
 10. **A coordinator with judgment,** only if the queue shows it is needed.

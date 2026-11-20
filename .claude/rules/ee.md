@@ -61,5 +61,17 @@ Licensed under `ee/LICENSE`, not the AGPL. Placement rule and history:
   the other brain it is about in `other_brain_id`, all brains together stay under
   `MAX_DUP_PAGES`, and a finding carries no patch. The other brain's pages go to the model under the first brain's
   organization's entitlement and cap, which is why both must be in that organization.
+- **The scheduled organization pass** (`runOrgPass`, `ee/review/org-pass.ts`; what it covers
+  and in what order is pure, `src/lib/org-pass.ts`) is the Worker's `scheduled` handler, on
+  the cron in `wrangler.template.jsonc`. For each entitled organization (`listEntitledOrgs`)
+  it opens every brain by its storage binding (`listStoredBrainsInOrg`), keeps those whose
+  config has `orgChecks` (`"charter": {"orgChecks": true}`, parsed by `parseOrgChecks`, off
+  unless exactly `true`), and advances each one's `AGAINST_ALL` pass against the others. It
+  runs as the organization: no person's access decides what it reads, no actor is recorded,
+  and a brain that does not take part has only its config read. Visibility plays no part;
+  the opt-in is the brain admin's. One run takes `ORG_PASS_STEPS_PER_RUN` steps, a finished
+  pass stands for `ORG_PASS_EVERY_MS`, and a stopped pass ends its organization's run.
+  Findings land in each brain's own queue, so a pair is checked from both sides. The run
+  logs counts and brain ids, never content.
 - **No outside contributions**, and no customer names here either: the public-repo hygiene rules
   apply to `ee/` exactly as to the core.

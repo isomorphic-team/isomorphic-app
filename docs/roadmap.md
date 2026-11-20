@@ -96,7 +96,9 @@ Order:
    checked pair, so a later pass checks only pairs whose pages changed. Built: the pass
    between a brain and one other, or every other, brain of its organization (C8, `against` on
    `review_brain`), whose findings
-   are shown only to people who can open both. Left: the Review screen section (C7).
+   are shown only to people who can open both. Built: the same pass on a schedule across an
+   organization's brains that opt in (`"charter": {"orgChecks": true}`), run as the
+   organization. Left: the Review screen section (C7).
 6. **When a deployment needs it:** an entitlement writer driven by billing (outside this
    repository), and signed offline license keys for self-hosters.
 

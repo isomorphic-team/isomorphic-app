@@ -24,6 +24,13 @@ Splitting them is what makes an automated rollback possible, so the job does thi
 | 7    | `smoke.ts <production url>`            | triggers step 8                                        |
 | 8    | `rollback <recorded id>`, both Workers | re-checked, and the run goes red either way            |
 
+When step 7 passes, the job sets the Worker's cron schedule from `triggers.crons` in the
+generated config (`scripts/schedules.ts`, one `PUT` to the Worker's `schedules` endpoint).
+`versions upload` and `versions deploy` leave triggers alone, and `wrangler triggers deploy`
+is not used because it also sets workers.dev and preview URLs from the config. A failure
+there warns and leaves the deploy standing, on whatever schedule the Worker had. A rollback
+does not touch the schedule.
+
 "Objects Worker rolled back" has one exception: Cloudflare refuses a rollback across a Durable
 Object class change, so a deploy that added a class (a new `migrations` entry in
 `wrangler.objects.template.jsonc`) leaves the new objects Worker live. The step reports that

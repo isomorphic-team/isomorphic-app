@@ -15,7 +15,14 @@ import {
 	type Tension,
 	type TensionInput
 } from '../src/lib/consolidate.ts';
-import { parseIdentityFields } from '../src/lib/brain-config.ts';
+import { parseIdentityFields, parseOrgChecks, withOrgChecks } from '../src/lib/brain-config.ts';
+import {
+	ORG_PASS_EVERY_MS,
+	orgPassBrains,
+	orgPassDue,
+	orgPassOrder,
+	orgPassStart
+} from '../src/lib/org-pass.ts';
 import {
 	parseReviewLedger,
 	serializeReviewLedger,
@@ -493,6 +500,109 @@ const of = (ts: Tension[], kind: string) => ts.filter((t) => t.kind === kind);
 	check(
 		'config: no declaration is email alone',
 		JSON.stringify(parseIdentityFields({})) === JSON.stringify(['email'])
+	);
+
+	check(
+		'config: a brain takes part in organization checks only when its charter says true',
+		parseOrgChecks({ charter: { orgChecks: true } }) &&
+			!parseOrgChecks({}) &&
+			!parseOrgChecks({ charter: {} }) &&
+			!parseOrgChecks({ charter: { orgChecks: 'true' } }) &&
+			!parseOrgChecks({ charter: { orgChecks: 1 } })
+	);
+	const existing = JSON.stringify({ paths: { 'docs/': 'content' }, charter: { owns: ['rates'] } });
+	const on = withOrgChecks(existing, true);
+	check(
+		'config: opting in sets the one field and keeps the rest of the file',
+		'content' in on &&
+			JSON.stringify(JSON.parse(on.content)) ===
+				JSON.stringify({
+					paths: { 'docs/': 'content' },
+					charter: { owns: ['rates'], orgChecks: true }
+				}) &&
+			on.content.endsWith('\n')
+	);
+	const fromNothing = withOrgChecks(null, true);
+	check(
+		'config: a brain with no config file gets one holding only the charter',
+		'content' in fromNothing &&
+			JSON.stringify(JSON.parse(fromNothing.content)) ===
+				JSON.stringify({ charter: { orgChecks: true } })
+	);
+	check(
+		'config: asking for what the file already says changes nothing',
+		'unchanged' in withOrgChecks(null, false) &&
+			'unchanged' in withOrgChecks('content' in on ? on.content : '', true)
+	);
+	const off = withOrgChecks('content' in on ? on.content : '', false);
+	check(
+		'config: opting out writes false',
+		'content' in off && JSON.parse(off.content).charter.orgChecks === false
+	);
+	check(
+		'config: a file that is not a JSON object is left alone',
+		'problem' in withOrgChecks('{ not json', true) && 'problem' in withOrgChecks('[]', true)
+	);
+}
+
+// ---------- the scheduled organization pass: which brains, and which next ----------
+{
+	const brain = (brainId: string, orgChecks = true) => ({ brainId, config: { orgChecks } });
+	const picked = orgPassBrains([brain('c'), brain('a'), brain('b', false)]);
+	check(
+		'org pass: covers the brains that take part, in a stable order',
+		picked.brains.map((b) => b.brainId).join() === 'a,c' && picked.leftOut.length === 0
+	);
+	check(
+		'org pass: one brain taking part is nothing to compare',
+		orgPassBrains([brain('a'), brain('b', false)]).brains.length === 0 &&
+			orgPassBrains([]).brains.length === 0
+	);
+	const crowd = orgPassBrains(
+		Array.from({ length: MAX_COMPARED_BRAINS + 3 }, (_, i) =>
+			brain(`b${String(i).padStart(2, '0')}`)
+		)
+	);
+	check(
+		'org pass: more brains than one pass compares are cut, and the rest named',
+		crowd.brains.length === MAX_COMPARED_BRAINS + 1 &&
+			crowd.leftOut.map((b) => b.brainId).join() === 'b21,b22'
+	);
+
+	const T = 1_000_000_000_000;
+	const done = (finishedAt: number) => ({ status: 'done' as const, startedAt: 0, finishedAt });
+	check(
+		'org pass: a brain never checked, or with a pass under way or stopped, has a step to take',
+		orgPassDue(null, T) &&
+			orgPassDue({ status: 'running', startedAt: T, finishedAt: null }, T) &&
+			orgPassDue({ status: 'stopped', startedAt: T, finishedAt: null }, T)
+	);
+	check(
+		'org pass: a finished pass stands for a day',
+		!orgPassDue(done(T - ORG_PASS_EVERY_MS + 1), T) && orgPassDue(done(T - ORG_PASS_EVERY_MS), T)
+	);
+	const order = orgPassOrder(
+		[
+			{ brain: 'old', run: done(T - 3 * ORG_PASS_EVERY_MS) },
+			{ brain: 'recent', run: done(T - 10) },
+			{ brain: 'new', run: null },
+			{ brain: 'older', run: done(T - 5 * ORG_PASS_EVERY_MS) },
+			{ brain: 'midway', run: { status: 'running' as const, startedAt: T - 5, finishedAt: null } }
+		],
+		T
+	);
+	check(
+		'org pass: passes under way go first, then brains never checked, then the longest finished',
+		order.join() === 'midway,new,older,old',
+		order.join()
+	);
+	const hour = 60 * 60 * 1000;
+	check(
+		'org pass: where a run starts among the organizations moves on each hour',
+		orgPassStart(3, 0) === 0 &&
+			orgPassStart(3, hour) === 1 &&
+			orgPassStart(3, 3 * hour) === 0 &&
+			orgPassStart(0, hour) === 0
 	);
 }
 

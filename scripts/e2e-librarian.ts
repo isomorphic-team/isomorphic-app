@@ -2286,6 +2286,39 @@ try {
 			((await fileText('.isomorphic.json')) ?? '').includes('"docs/": "content"'),
 			(await fileText('.isomorphic.json')) ?? ''
 		);
+
+		// Organization checks: one field of the config, set without replacing the file.
+		const layout = JSON.parse((await fileText('.isomorphic.json')) ?? '{}');
+		before = await commitCount();
+		br = await callBrain('configure_brain', { org_checks: true });
+		check('configure_brain opts the brain into organization checks', !br.isError, br.text);
+		await assertOneCommit('configure_brain org_checks', before);
+		const optedIn = JSON.parse((await fileText('.isomorphic.json')) ?? '{}');
+		check(
+			'...setting the one field and keeping the layout the file already had',
+			optedIn.charter?.orgChecks === true &&
+				JSON.stringify({ ...optedIn, charter: undefined }) === JSON.stringify(layout),
+			JSON.stringify(optedIn)
+		);
+		before = await commitCount();
+		br = await callBrain('configure_brain', { org_checks: true });
+		check(
+			'...and asking again writes nothing',
+			!br.isError && /already takes part/.test(br.text) && (await commitCount()) === before,
+			br.text
+		);
+		br = await callBrain('configure_brain', { org_checks: false, name: 'Renamed' });
+		check(
+			'...and it is refused alongside another setting, changing nothing',
+			br.isError && /call of its own/.test(br.text) && (await commitCount()) === before,
+			br.text
+		);
+		br = await callBrain('configure_brain', { org_checks: false });
+		check('configure_brain opts it out again', !br.isError && /left out/.test(br.text), br.text);
+		check(
+			'...by writing false, the layout still as it was',
+			JSON.parse((await fileText('.isomorphic.json')) ?? '{}').charter?.orgChecks === false
+		);
 	}
 
 	// ---- --github: writes on a protected branch join one pull request ----------

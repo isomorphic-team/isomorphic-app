@@ -88,6 +88,7 @@ interface ConfigFile extends LegacyConfigFile {
 	writes?: { mode?: unknown; autoMerge?: unknown };
 	index?: { fields?: unknown };
 	review?: { policy?: { mode?: unknown }; identityFields?: unknown };
+	charter?: { orgChecks?: unknown };
 }
 
 // Parse the path→role map from either file shape. New shape: a `paths` record
@@ -171,7 +172,43 @@ export async function loadBrainConfig(store: BrainStore, repo: BrainLocator): Pr
 		indexedFields: Array.isArray(rawFields) ? stringList(rawFields, []) : null,
 		sourceOfTruth: raw.sourceOfTruth === 'source' ? 'source' : 'app',
 		policyMode: parsePolicyMode(raw),
-		identityFields: parseIdentityFields(raw)
+		identityFields: parseIdentityFields(raw),
+		orgChecks: parseOrgChecks(raw)
+	};
+}
+
+// Only an explicit `true` opts a brain in: its pages go to a model alongside other
+// brains', so a typo must not do it.
+export function parseOrgChecks(raw: ConfigFile): boolean {
+	return raw.charter?.orgChecks === true;
+}
+
+// The config file with `charter.orgChecks` set and everything else as it was, for a brain
+// that has no file yet too. `unchanged` when it already says so; a file that is not a JSON
+// object is left alone.
+export function withOrgChecks(
+	current: string | null,
+	on: boolean
+): { content: string } | { unchanged: true } | { problem: string } {
+	let raw: unknown = {};
+	if (current !== null) {
+		try {
+			raw = JSON.parse(current);
+		} catch {
+			raw = null;
+		}
+	}
+	if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+		return { problem: `${CONFIG_PATH} is not a JSON object, so nothing was written.` };
+	}
+	const file = raw as ConfigFile;
+	if (parseOrgChecks(file) === on) return { unchanged: true };
+	const charter =
+		file.charter && typeof file.charter === 'object' && !Array.isArray(file.charter)
+			? file.charter
+			: {};
+	return {
+		content: JSON.stringify({ ...file, charter: { ...charter, orgChecks: on } }, null, 2) + '\n'
 	};
 }
 

@@ -375,6 +375,23 @@ jobs:
         continue-on-error: true
         run: pnpm exec tsx scripts/smoke.ts "${{ vars.PUBLIC_BASE_URL }}"
 
+      # The cron schedule is a trigger, and `versions upload` and `versions deploy` leave
+      # triggers alone. Set after the smoke check, so a version that is about to be rolled
+      # back is never given a schedule. A failure here leaves the deploy standing: the
+      # schedule is whatever it was, and the run says so.
+      - name: Set the cron schedule
+        id: schedules
+        if: steps.guard.outputs.ready == 'true' && steps.smoke.outcome == 'success'
+        continue-on-error: true
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          if ! pnpm exec tsx scripts/schedules.ts; then
+            echo "::warning::The cron schedule was not set, so scheduled work runs on the previous schedule, or not at all. The deploy itself succeeded."
+            exit 1
+          fi
+
       - name: Roll back
         id: rollback
         if: steps.smoke.outcome == 'failure' && steps.live.outputs.previous != ''

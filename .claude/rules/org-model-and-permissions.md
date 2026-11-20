@@ -229,7 +229,12 @@ index pays for freshness and a tree scan. Any per-brain work added to `brains` n
 shape: index first, GitHub only when the index cannot say. `pnpm test:scope` pins it.
 
 **`needsConfig` lists the whole tree** (`detectNeedsConfig`, so it sees `.isomorphic.json`),
-and `configure_brain` refuses to replace an existing config without `overwrite: true`.
+and `configure_brain` refuses to replace an existing config without `overwrite: true`. Its
+`org_checks` argument changes one field of that file and keeps the rest (`withOrgChecks`).
+
+**`listStoredBrainsInOrg` is not an access query.** It lists every brain an org holds with
+its storage binding, for the scheduled organization pass alone (`ee.md`), which runs as the
+organization and reads only brains that opted in. Nothing a person asks for may use it.
 
 ## Storage connections and moving brains
 
