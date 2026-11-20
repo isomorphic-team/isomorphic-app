@@ -43,11 +43,14 @@ import { d1Index, indexRefs, readPageShas } from '../src/lib/brain-index.ts';
 import { registerImportTools } from '../src/tools/importer.ts';
 import { registerLibrarianTools } from '../src/tools/librarian.ts';
 import { registerBrainTools } from '../src/tools/brains.ts';
+import { countOrgChecks } from '../src/lib/org-pass.ts';
+import { FEATURES, hasFeature } from '../src/lib/entitlements.ts';
 import type { ConsolidationStep } from '../src/lib/review-checks.ts';
 import { savePass } from '../src/lib/brain-pass.ts';
 import {
 	listAccessibleBrains,
 	listAccessibleOrgs,
+	listStoredBrainsInOrg,
 	resolveOrgForPerson,
 	assertRole,
 	type Role
@@ -1583,7 +1586,13 @@ try {
 	const brainServer = new McpServer({ name: 'librarian-e2e-brains', version: '0.0.0' });
 	registerBrainTools(brainServer, {
 		multiUser: true,
-		getContext,
+		getContext: async () => ({ ...(await getContext()), orgId: ORG_MAIN }),
+		// The Worker's wiring over the same database, with no other brain taking part.
+		orgChecksStatus: async (orgId, self) => ({
+			...(await countOrgChecks(await listStoredBrainsInOrg(db, orgId), self, async () => false)),
+			entitled: await hasFeature(db, orgId, FEATURES.enterprise),
+			modelKey: true
+		}),
 		orgContext,
 		listOrgs: () => listAccessibleOrgs(db, [USER]),
 		listBrains: () => listAccessibleBrains(db, [USER]),
@@ -2292,6 +2301,15 @@ try {
 		before = await commitCount();
 		br = await callBrain('configure_brain', { org_checks: true });
 		check('configure_brain opts the brain into organization checks', !br.isError, br.text);
+		check(
+			'...and says where that leaves the organization: one brain and no feature, so nothing runs',
+			/In [^.]+, 1 brain takes part\. The scheduled checks do not run until a second brain takes part, and [^.]+ has the contradictions check\.$/.test(
+				br.text
+			) &&
+				(br.sc.organization as { takingPart?: number; entitled?: boolean } | undefined)
+					?.takingPart === 1,
+			br.text
+		);
 		await assertOneCommit('configure_brain org_checks', before);
 		const optedIn = JSON.parse((await fileText('.isomorphic.json')) ?? '{}');
 		check(
@@ -2304,7 +2322,9 @@ try {
 		br = await callBrain('configure_brain', { org_checks: true });
 		check(
 			'...and asking again writes nothing',
-			!br.isError && /already takes part/.test(br.text) && (await commitCount()) === before,
+			!br.isError &&
+				/already takes part.*1 brain takes part/.test(br.text) &&
+				(await commitCount()) === before,
 			br.text
 		);
 		br = await callBrain('configure_brain', { org_checks: false, name: 'Renamed' });

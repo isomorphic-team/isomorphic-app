@@ -19,6 +19,9 @@ import { parseIdentityFields, parseOrgChecks, withOrgChecks } from '../src/lib/b
 import {
 	ORG_PASS_EVERY_MS,
 	orgPassBrains,
+	countOrgChecks,
+	orgChecksStatusText,
+	type OrgChecksStatus,
 	orgPassDue,
 	orgPassOrder,
 	orgPassStart
@@ -567,6 +570,62 @@ const of = (ts: Tension[], kind: string) => ts.filter((t) => t.kind === kind);
 		'org pass: more brains than one pass compares are cut, and the rest named',
 		crowd.brains.length === MAX_COMPARED_BRAINS + 1 &&
 			crowd.leftOut.map((b) => b.brainId).join() === 'b21,b22'
+	);
+
+	// What the person who opts a brain in is told about its organization.
+	const rows = ['a', 'b', 'c', 'd'].map((brain_id) => ({ brain_id }));
+	const counted = await countOrgChecks(rows, { brainId: 'a', on: true }, async (r) => {
+		if (r.brain_id === 'a') throw new Error('the brain just written is not read back');
+		if (r.brain_id === 'd') throw new Error('unreachable');
+		return r.brain_id === 'b';
+	});
+	check(
+		'org checks: the count is the brains that take part, the one just set as given',
+		counted.takingPart === 2 && counted.unread === 1,
+		JSON.stringify(counted)
+	);
+	check(
+		'org checks: a brain just opted out is not counted',
+		(await countOrgChecks(rows.slice(0, 2), { brainId: 'a', on: false }, async () => true))
+			.takingPart === 1
+	);
+	const told = (s: Partial<OrgChecksStatus>) =>
+		orgChecksStatusText({
+			orgLabel: 'Acme',
+			takingPart: 3,
+			unread: 0,
+			entitled: true,
+			modelKey: true,
+			...s
+		});
+	check(
+		'org checks: with two brains, the feature and a key, the reply says they run',
+		/^In Acme, 3 brains take part\. The scheduled checks run across them/.test(told({})) &&
+			!/do not run/.test(told({ takingPart: 2 })),
+		told({})
+	);
+	check(
+		'org checks: one brain alone waits for a second',
+		/1 brain takes part\. The scheduled checks do not run until a second brain takes part\.$/.test(
+			told({ takingPart: 1 })
+		),
+		told({ takingPart: 1 })
+	);
+	check(
+		'org checks: an organization without the feature is told so',
+		/do not run until Acme has the contradictions check\.$/.test(told({ entitled: false })),
+		told({ entitled: false })
+	);
+	check(
+		'org checks: everything missing is named at once',
+		/until a second brain takes part, and Acme has the contradictions check, and this deployment has a model key\.$/.test(
+			told({ takingPart: 1, entitled: false, modelKey: false })
+		)
+	);
+	check(
+		'org checks: brains that could not be read are said to be uncounted',
+		/2 brains could not be read and are not counted\./.test(told({ unread: 2 })) &&
+			/1 brain could not be read and is not counted\./.test(told({ unread: 1 }))
 	);
 
 	const T = 1_000_000_000_000;

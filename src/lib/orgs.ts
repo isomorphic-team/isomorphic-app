@@ -488,10 +488,11 @@ export type StoredBrain = Pick<
 >;
 
 // Every brain an org holds that has storage to open, ignoring who can reach it, and
-// none when the org is suspended. NOT an access query: the one caller is the scheduled
+// none when the org is suspended. NOT an access query. Its callers are the scheduled
 // organization pass (src/lib/org-pass.ts), which runs as the organization and decides
-// for itself which of these it reads. Anything that decides what a PERSON may open goes
-// through listAccessibleBrains and effectiveBrainRole.
+// for itself which of these it reads, and the count of brains taking part that
+// `configure_brain` reports, from which only the number leaves. Anything that decides
+// what a PERSON may open goes through listAccessibleBrains and effectiveBrainRole.
 export async function listStoredBrainsInOrg(db: D1Database, orgId: string): Promise<StoredBrain[]> {
 	const { results } = await db
 		.prepare(
