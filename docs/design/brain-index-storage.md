@@ -1,6 +1,6 @@
 # Design: where the derived index lives, and full-text search
 
-Status: **in implementation** (2026-11-09). Steps 1 to 3 of the order of work are built: full-text search runs in shadow.
+Status: **in implementation** (2026-11-09). Steps 1 to 4 of the order of work are built: full-text search answers where the index has its own database.
 
 Related: [`search-relevance.md`](search-relevance.md) (today's ranking),
 [`storage-and-tenancy.md`](storage-and-tenancy.md) (derived state keyed by `brain_id`),
@@ -64,6 +64,19 @@ two of the question's four terms and answers in other words ("renamed" for "call
 it ties on coverage with every page holding the two filler words and BM25 prefers those. The
 questions were written by a model that had read the target pages.
 
+A second set, shaped like what a deployment's searches turned out to be (most hit the
+six-term cap): 270 questions of 5 to 20 words over five brains, the largest of 3,900 pages.
+
+|               | top 1 | top 3 | found |   MRR |
+| :------------ | ----: | ----: | ----: | ----: |
+| `searchIndex` |    88 |   144 |   211 | 0.457 |
+| FTS5          |   119 |   167 |   228 | 0.550 |
+
+The expected page moved up on 94 questions and down on 44. The gain grows with the brain: on
+the largest, top 1 went from 14 of 70 to 35; on the smallest two the engines are level.
+Retrying every missing term as a prefix moved no page up and three down, so the retry runs
+only when a search matches nothing as whole words.
+
 Tried and dropped: weighting coverage by each term's rarity. It lowered top 1 from 103 to 97
 and did not fix that case.
 
@@ -79,7 +92,9 @@ On D1 a statement sent alone is a round trip, and round trips, not query time, s
 of a search. Measured in shadow on a deployment, 137 searches, each engine timed alone: sending
 its nine statements one by one, FTS5 took a median 510 ms against `searchIndex`'s 189 ms (two
 or three statements), and passed one second on 31% of searches. `searchIndexFts` now sends
-eight of them as one batch, so a search is two round trips.
+eight of them as one batch, so a search is two round trips; measured again over 80 searches,
+the two engines were level at a median 290 ms, with FTS5 about 200 ms slower on five- and
+six-term queries.
 
 ### Durable Objects and preview URLs
 
@@ -139,10 +154,11 @@ because the index is rebuildable, moving it into objects later is a backfill.
 2. **The index in its own D1 database,** `INDEX_DB`, optional per deployment. Built:
    `migrations-index/`, `indexDatabase`. A deployment that binds it starts with an empty index,
    which each brain refills on its next read; estimate the rows written before binding it.
-3. **FTS5 in shadow** in `INDEX_DB`: built alongside, disagreements with `searchIndex` logged,
-   latency measured on the real deployment. Built: `migrations-index/0002_pages_fts.sql`,
-   `shadowSearch`. Read the `search-shadow` lines in Workers Logs before step 4.
-4. **Switch `search_pages`,** keeping `expect` able to explain a rank.
+3. **FTS5 in shadow** in `INDEX_DB`, to measure latency and agreement on the real deployment
+   before the switch. Done, and removed by step 4.
+4. **Switch `search_pages`:** FTS5 answers where `INDEX_DB` is bound, `searchIndex` elsewhere
+   and as the fallback. Built: `ftsFirstSearch`. `expect` reads a page's position in the hits,
+   so it works with either engine.
 5. **Drop the index tables from the platform database,** once every deployment binds `INDEX_DB`.
 6. **The per-brain index object, in the objects Worker,** when a limit calls for it: a brain near D1's size
    cap, write budget contention between brains, or data residency. Measure `scope: "all"` over a
@@ -154,10 +170,6 @@ Related pages ships independently of all of this.
 
 - **Cross-brain search becomes one call per brain.** Measure `scope: "all"` over a few dozen
   objects before step 6.
-- **`%` and `_`.** The FTS5 tokenizer drops them, so `50%` searches for `50`; `searchIndex`
-  matches them literally.
-- **Explaining a rank.** `expect` can say why a page outranked another under `searchIndex`; a
-  BM25 score is harder to explain.
 - **Questions across brains** (admin views, "which brains mention X") need their own index or a
   fan-out.
 - **The per-object storage limit,** against the largest brain a customer is likely to connect.

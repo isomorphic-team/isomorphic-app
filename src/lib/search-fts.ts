@@ -1,4 +1,4 @@
-// FTS5 search: the pure half. Runs in shadow beside searchIndex.
+// FTS5 search: the pure half.
 //
 // Ordering keeps the coverage-first rule of search.ts (a page holding more of the query's
 // terms ranks above one holding fewer) and replaces the hand-weighted tie-breaks inside a
