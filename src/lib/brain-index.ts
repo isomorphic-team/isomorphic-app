@@ -27,7 +27,7 @@ import {
 import { classifyMdLink } from './links.ts';
 import { BRAIN_INDEX_TABLES } from './brain-forget.ts';
 import { searchIndexFts } from './search-fts-index.ts';
-import { shadowSearch } from './search-shadow.ts';
+import { ftsFirstSearch } from './search-engine.ts';
 import { type BrainConfig, CONFIG_PATH, isContentPath, loadIndexConfig } from './brain-config.ts';
 import {
 	parseFrontmatter,
@@ -1121,11 +1121,12 @@ export const indexDatabase = (env: { PLATFORM_DB: D1Database; INDEX_DB?: D1Datab
 	env.INDEX_DB ?? env.PLATFORM_DB;
 
 /**
- * Opens indexes for a deployment. With its own index database the full-text engine runs
- * in shadow on every search: that database is the only one holding the full-text table.
+ * Opens indexes for a deployment. With its own index database, search is answered by
+ * FTS5: that database is the only one holding the full-text table. Without it, by
+ * searchIndex.
  */
 export const indexFor = (env: { PLATFORM_DB: D1Database; INDEX_DB?: D1Database }): OpenIndex =>
-	d1Index(indexDatabase(env), { ftsShadow: env.INDEX_DB !== undefined });
+	d1Index(indexDatabase(env), { fullText: env.INDEX_DB !== undefined });
 
 /** The two index fields of a tool context: the brain's own index and the opener. */
 export const indexRefs = (openIndex: OpenIndex, brainId: string) => ({
@@ -1135,7 +1136,7 @@ export const indexRefs = (openIndex: OpenIndex, brainId: string) => ({
 
 /** The index in a D1 database, shared by every brain and keyed by `brain_id`. */
 export const d1Index =
-	(db: D1Database, opts: { ftsShadow?: boolean } = {}): OpenIndex =>
+	(db: D1Database, opts: { fullText?: boolean } = {}): OpenIndex =>
 	(brainId) => ({
 		brainId,
 		ensureFresh: (store, repo, config) => ensureFresh(db, store, repo, brainId, config),
@@ -1150,11 +1151,12 @@ export const d1Index =
 		allFields: () => loadAllFields(db, brainId),
 		fieldsFor: (paths) => loadFieldsFor(db, brainId, paths),
 		search: (query, prefix, max, perPage) =>
-			opts.ftsShadow
-				? shadowSearch(
+			opts.fullText
+				? ftsFirstSearch(
+						query,
 						{
-							current: () => searchIndex(db, brainId, query, prefix, max, perPage),
-							fts: () => searchIndexFts(db, brainId, query, prefix, max, perPage)
+							fts: () => searchIndexFts(db, brainId, query, prefix, max, perPage),
+							like: () => searchIndex(db, brainId, query, prefix, max, perPage)
 						},
 						(line) => console.log(JSON.stringify(line))
 					)

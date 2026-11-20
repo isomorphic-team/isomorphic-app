@@ -901,6 +901,20 @@ console.log('\nContent index — bounded, resumable ensureFresh\n');
 		long.hits.length > 0 && roundTrips === 2 && stmtCount === 9,
 		`roundTrips=${roundTrips} statements=${stmtCount}`
 	);
+	resetCounters();
+	await searchIndexFts(db, brainId, 'quokka zzznothing', undefined, 50);
+	check(
+		'fts: a missing term beside one that matches adds no round trip',
+		roundTrips === 2,
+		`roundTrips=${roundTrips}`
+	);
+	resetCounters();
+	const rescued = await searchIndexFts(db, brainId, 'quokk', undefined, 50);
+	check(
+		'fts: a search no page matches as words is retried as prefixes, one more round trip',
+		rescued.hits.length > 0 && roundTrips === 3,
+		`roundTrips=${roundTrips} hits=${rescued.hits.length}`
+	);
 
 	const incremental = await paths('quokka wombat page');
 	await rebuildFtsIndex(db);

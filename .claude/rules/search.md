@@ -1,6 +1,6 @@
 ---
 paths:
-  - "src/lib/{search,search-fts,search-fts-index,search-shadow,probe,brain-index}.ts"
+  - "src/lib/{search,search-fts,search-fts-index,search-engine,probe,brain-index}.ts"
   - "scripts/{test-search,test-probe,probe-report}.ts"
   - "app/views/SearchView.tsx"
   - "tests/ui/search.spec.ts"
@@ -35,18 +35,21 @@ ORDERS or DROPS a result is in the pure `src/lib/search.ts` (`pnpm test:search`)
   the index database only (`migrations-index/0002_pages_fts.sql`): an external-content table
   over `brain_pages`, kept current by triggers, so no write path names it. `pnpm test:index`
   drives the real write paths and checks it with FTS5's integrity check.
-- **The FTS5 engine runs in shadow, and `search_pages` still answers from `searchIndex`.**
-  `indexFor` turns the shadow on only where `INDEX_DB` is bound. `shadowSearch`
-  (`src/lib/search-shadow.ts`) runs the two engines one after the other, in an order that
-  alternates (they share a database that runs one query at a time, so overlapping them
-  corrupts both timings), abandons `searchIndexFts` after `SHADOW_BUDGET_MS`, and logs one
-  `search-shadow` JSON line of counts, ranks and timings:
-  never a query, a path or a brain. Its ordering is pure (`rankFtsPages` in
+- **Which engine answers is `ftsFirstSearch` (`src/lib/search-engine.ts`).** `indexFor` gives
+  a deployment with `INDEX_DB` the FTS5 engine (`searchIndexFts`); without it, the local
+  runtime included, `searchIndex` answers. `searchIndex` also answers a query with no letter
+  or digit in any term, and any search on which FTS5 throws. Each search on the FTS5 path
+  logs one `search` JSON line (engine, counts, milliseconds): never a query, a path or a brain.
+- **What FTS5 matches differs from LIKE.** Porter stemming (`fees` finds "fee"). Whole words,
+  except that a search no page matches as words is retried with every term as a prefix
+  (`config` alone finds "configuration"), at the cost of one more round trip; a match in the middle of a word is gone. Punctuation inside a term is
+  dropped (`50%` searches `50`). Its ordering is pure (`rankFtsPages` in
   `src/lib/search-fts.ts`: coverage, phrase, `bm25()`, path). Compare the engines on a folder
   with `pnpm search:compare <folder> <probes.json>`.
 - **A search's cost on D1 is its round trips, not its queries.** `searchIndexFts` sends its
   ranking statements (any term with `bm25()`, each term, the phrase) as one `db.batch` and
-  the lines as a second statement: two round trips, pinned by `pnpm test:index`. Sent one by
+  the lines as a second statement: two round trips (three on the prefix retry), pinned by
+  `pnpm test:index`. Sent one by
   one it measured about three times slower than `searchIndex` on a deployment. A new
   statement in a search goes in a batch.
 - **Probe against a real brain before believing a ranking change.** `pnpm probe:report <folder>
