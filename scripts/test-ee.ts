@@ -57,8 +57,10 @@ import {
 	consolidationStepText,
 	isDeprecated,
 	isOtherPage,
+	namePages,
 	otherPage,
 	otherPageId,
+	pairQueues,
 	acrossMemory,
 	ACROSS_KIND,
 	pagePath,
@@ -78,6 +80,7 @@ import {
 import {
 	answerLinkedFindings,
 	conflictKey,
+	deleteFindings,
 	readFindings,
 	upsertFindings
 } from '../src/lib/review-queue.ts';
@@ -638,6 +641,15 @@ console.log('\nconsolidation: candidates, pre-scan, claim filter, verify (6)');
 			f.scores?.misleading === 0.8
 	);
 	check('the finding carries its fact label as its cluster', f.clusterId === 'day rate');
+	check(
+		'an explanation that says "page A" names the page by its path, as the quotes do',
+		(await triage([claim({ why: 'Page A is dated earlier than page_b, so Page B stands.' })]))
+			.findings[0]?.evidence[2] ===
+			`${a.path} is dated earlier than ${b.path}, so ${b.path} stands.` &&
+			namePages('Page A says. page b too; a page about pages.', 'this one', 'that one', true) ===
+				'This one says. That one too; a page about pages.',
+		JSON.stringify(f.evidence)
+	);
 	check(
 		'the prompt lists the labels the brain already uses, and nothing when there are none',
 		triagePrompt(a, b, ['pod size', 'day rate']).endsWith(
@@ -1535,7 +1547,7 @@ console.log('\nconsolidation: one brain against another (12)');
 									// A patch that would pass every check inside one brain.
 									action: 'patch',
 									patch: { page: 'a', find: 'per day', replace: 'a day' },
-									why: 'The pages disagree.'
+									why: 'Page A and page B state different rates.'
 								}
 							]
 						: [];
@@ -1613,6 +1625,12 @@ console.log('\nconsolidation: one brain against another (12)');
 				copy?.evidence[0] === `wiki/agreements/acme.md: "${LOW}"` &&
 				copy?.evidence[1] === `In the other brain, wiki/agreements/acme.md: "${HIGH}"`,
 			JSON.stringify(copy)
+		);
+		check(
+			'the explanation names each page as the quotes beside it do, from either brain',
+			row?.evidence[2] === "The other brain's page and this brain's page state different rates." &&
+				copy?.evidence[2] === "This brain's page and the other brain's page state different rates.",
+			JSON.stringify([row?.evidence[2], copy?.evidence[2]])
 		);
 		check(
 			'each copy carries the key of the other, and they differ',
@@ -1715,6 +1733,50 @@ console.log('\nconsolidation: one brain against another (12)');
 				again.pairsUnchanged === first.pairsChecked &&
 				prompts.length === 0
 		);
+
+		{
+			// What an earlier check said about the same pair, under other values, in each
+			// queue, and a finding about another pair.
+			const [mine, theirs] = await pairQueues(
+				otherPage(other.brainId, {
+					path: 'wiki/agreements/acme.md',
+					title: 'Acme engagement',
+					content: ''
+				}),
+				{ path: 'wiki/agreements/acme.md', title: 'Acme engagement terms', content: '' },
+				home.brainId
+			);
+			const old = '0123456789abcdef';
+			const elsewhere = `conflict:wiki/misc/garden.md|x:${old}:${old}`;
+			await upsertFindings(
+				db,
+				home.brainId,
+				[
+					{ ...row, key: mine.prefix + old, linkedKey: null },
+					{ ...row, key: elsewhere, linkedKey: null }
+				],
+				NOW
+			);
+			await upsertFindings(db, other.brainId, [{ ...copy, key: theirs.prefix + old }], NOW);
+			const keys = async (brainId: string) =>
+				(await readFindings(db, brainId)).map((f) => f.key).sort();
+			check(
+				'the queues name the pair by the prefix its keys carry',
+				row.key.startsWith(mine.prefix) &&
+					copy.key.startsWith(theirs.prefix) &&
+					theirs.brainId === other.brainId &&
+					(await keys(home.brainId)).length === 3 &&
+					(await keys(other.brainId)).length === 2
+			);
+			await advanceConsolidation({ ...base, fresh: true, newRunId: () => 'x2f' }, NOW);
+			check(
+				"a pair checked again keeps only what this check found, in both brains' queues",
+				JSON.stringify(await keys(home.brainId)) === JSON.stringify([row.key, elsewhere].sort()) &&
+					JSON.stringify(await keys(other.brainId)) === JSON.stringify([copy.key]),
+				JSON.stringify([await keys(home.brainId), await keys(other.brainId)])
+			);
+			await deleteFindings(db, home.brainId, [elsewhere]);
+		}
 
 		await other.store.write(other.locator, {
 			message: 'Edit the other brain',
@@ -2187,10 +2249,59 @@ console.log('\nthe scheduled organization pass: one run across organizations');
 			'now: one call takes one step, in the organization asked for, and reports what is left',
 			asked.join() === 'o2:b1,o2:b1' &&
 				JSON.stringify(stepped.wire) ===
-					JSON.stringify({ organization: { brains: 2, pending: 1, steps: 1 } }) &&
+					JSON.stringify({
+						organization: {
+							brains: 2,
+							pending: 1,
+							steps: 1,
+							pairsChecked: 0,
+							findings: 0,
+							costUsd: 0
+						}
+					}) &&
 				/against "organization" again to continue\.$/.test(stepped.text),
 			`${asked.join()} ${JSON.stringify(stepped)}`
 		);
+		// The other brain finished a moment ago, with counts of its own.
+		await savePass(
+			db,
+			{ brainId: 'b2', kind: `consolidation:${AGAINST_ALL}`, orgId: 'o2' },
+			{
+				runId: 'r-b2',
+				status: 'done',
+				cursor: null,
+				counters: { pairsChecked: 205, findings: 10, costUsd: 0.2034 },
+				stoppedReason: null,
+				startedAt: Date.now(),
+				finishedAt: null
+			},
+			Date.now()
+		);
+		const last = await runOrgChecksNow(
+			{
+				db,
+				listBrains: async (orgId) => orgBrains[orgId].map((brain_id) => ({ brain_id })),
+				open: async (row) => fake(row.brain_id),
+				advance: async () => ({
+					...state('done'),
+					pairsChecked: 60,
+					findings: 5,
+					costUsd: 0.032
+				})
+			},
+			'o2'
+		);
+		check(
+			"now: the reply counts every brain's pass in the round, not only the brain this call stepped",
+			/checks finished\. Across the organization's brains: 265 page pair\(s\) checked, 15 conflict finding\(s\), \$0\.2354 spent\./.test(
+				last.text
+			) &&
+				last.wire.organization.pairsChecked === 265 &&
+				last.wire.organization.findings === 15 &&
+				last.wire.organization.pending === 0,
+			JSON.stringify(last)
+		);
+		await db.prepare("DELETE FROM brain_passes WHERE brain_id = 'b2'").run();
 	}
 	check(
 		'now: with fewer than two brains taking part it says so, and names no brain',

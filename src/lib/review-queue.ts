@@ -51,6 +51,9 @@ export interface OtherPage {
 const WRITE_BATCH = 40;
 
 const FINDING_WEIGHT = 4;
+// A finding between two brains is in both reports. Listed ahead of a brain's own, the two
+// copies are both inside the cap, so one can be checked against the other.
+const ACROSS_WEIGHT = 4.25;
 // Above everything advisory: a credential in a brain outranks a stale overview.
 const POLICY_WEIGHT = 5;
 
@@ -85,8 +88,12 @@ export function normalizeDisputedValue(value: string): string {
 // and dismissing one must not silence the other. One path is a page against itself.
 export async function conflictKey(paths: string[], values: string[]): Promise<string> {
 	const normalized = [...new Set(values.map(normalizeDisputedValue))].sort();
-	return `${findingKey('conflict', [...new Set(paths)])}:${await digest16(normalized.join('\0'))}`;
+	return `${conflictPairPrefix(paths)}${await digest16(normalized.join('\0'))}`;
 }
+
+// What every conflict key of one pair of pages starts with.
+export const conflictPairPrefix = (paths: string[]) =>
+	`${findingKey('conflict', [...new Set(paths)])}:`;
 
 // How a conflict key names a page in another brain: a digest, because the key is written
 // to this brain's dismissal ledger, where the other brain's id and path would be readable
@@ -372,7 +379,7 @@ function toFinding(f: QueueFinding, other?: ReachableBrain): Finding {
 		f.other && other ? [`The other brain is "${other.label}" (brain: "${other.handle}").`] : [];
 	return {
 		key: f.key,
-		weight: f.kind === 'policy' ? POLICY_WEIGHT : FINDING_WEIGHT,
+		weight: f.kind === 'policy' ? POLICY_WEIGHT : f.other ? ACROSS_WEIGHT : FINDING_WEIGHT,
 		headline: [
 			`- ${f.headline}`,
 			...[...count, ...f.evidence, ...where].map((e) => `    ${e}`)
@@ -678,6 +685,29 @@ export async function answerLinkedFindings(
 	);
 	for (let i = 0; i < stmts.length; i += WRITE_BATCH) {
 		await db.batch(stmts.slice(i, i + WRITE_BATCH));
+	}
+}
+
+// A pair of pages was checked again: its conflict findings are now the ones in `keep`, and
+// any other the queue holds for the pair is what an earlier check said. Each prefix is a
+// `conflictPairPrefix`.
+export async function replacePairFindings(
+	db: D1Database,
+	brainId: string,
+	pairs: readonly { prefix: string; keep: readonly string[] }[]
+): Promise<void> {
+	const stmt = db.prepare(
+		`DELETE FROM review_findings
+		  WHERE brain_id = ?1 AND kind = 'conflict'
+		    AND substr(key, 1, length(?2)) = ?2 AND length(key) = length(?2) + 16
+		    AND key NOT IN (SELECT value FROM json_each(?3))`
+	);
+	for (let i = 0; i < pairs.length; i += WRITE_BATCH) {
+		await db.batch(
+			pairs
+				.slice(i, i + WRITE_BATCH)
+				.map((p) => stmt.bind(brainId, p.prefix, JSON.stringify(p.keep)))
+		);
 	}
 }
 

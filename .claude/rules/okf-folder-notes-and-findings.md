@@ -95,11 +95,15 @@ are in the list, with keys.
   in `paths` and the other brain's in `other`. It quotes both, so `queueReport` shows it only
   to a viewer who can open the other brain (`reachableBrains` in `librarian.ts`), a change to
   either page makes it stale, its key names the other page by a digest (`otherPageRef`), and
-  it is never clustered.
+  it is never clustered. It is listed ahead of a brain's own conflict findings
+  (`ACROSS_WEIGHT`), so both copies fall inside `validate`'s cap and can be compared.
 - **`review_brain` runs the deep passes; `validate` only reports.** Separate tools because
   hosts approve per tool and `validate` is a free read they run unasked, while a pass takes
   minutes and, for `contradictions`, model credits. What may run and `validate`'s line about
-  the contradictions pass (admins only, where it can run) are `src/lib/review-checks.ts`.
+  the contradictions pass (admins only, where it can run) are `src/lib/review-checks.ts`: the
+  line covers the brain's own pass and, when there is one, its pass against the
+  organization's other brains (`readContradictionPassAcross`), which the organization's
+  checks also advance.
   `against` on `review_brain` compares the brain with another in the same organization
   (`againstRefusal`); the caller needs admin on the first and any access to the second.
   `against: "all"` compares it with every other brain of its organization the caller can open

@@ -185,14 +185,18 @@ export interface ContradictionPass {
 	findings: number;
 }
 
-// The pass kind the consolidation pass saves under (ee/review/consolidation.ts).
+// The pass kinds the consolidation pass saves under (ee/review/consolidation.ts): the
+// brain's own pages, and the brain against every other brain of its organization, which
+// is also the organization's checks.
 const CONTRADICTIONS_KIND = 'consolidation';
+const CONTRADICTIONS_ALL_KIND = `${CONTRADICTIONS_KIND}:${AGAINST_ALL}`;
 
-export async function readContradictionPass(
+async function readContradictionKind(
 	db: D1Database,
-	brainId: string
+	brainId: string,
+	kind: string
 ): Promise<ContradictionPass | null> {
-	const pass = await readPass(db, brainId, CONTRADICTIONS_KIND, { pairsChecked: 0, findings: 0 });
+	const pass = await readPass(db, brainId, kind, { pairsChecked: 0, findings: 0 });
 	return (
 		pass && {
 			status: pass.status,
@@ -203,21 +207,37 @@ export async function readContradictionPass(
 	);
 }
 
+export const readContradictionPass = (db: D1Database, brainId: string) =>
+	readContradictionKind(db, brainId, CONTRADICTIONS_KIND);
+
+export const readContradictionPassAcross = (db: D1Database, brainId: string) =>
+	readContradictionKind(db, brainId, CONTRADICTIONS_ALL_KIND);
+
 // The line `validate` adds about the contradictions pass: only for brain admins, and only
 // where the check can run, since anyone else could not act on it.
+// `across` is the pass against the organization's other brains, run by `against: "all"`
+// and by the organization's checks.
 export function contradictionCoverage(
 	viewer: Role,
 	contradictionsAvailable: boolean,
-	pass: ContradictionPass | null
+	pass: ContradictionPass | null,
+	across: ContradictionPass | null = null
 ): string {
 	if (!contradictionsAvailable || !roleAtLeast(viewer, 'admin')) return '';
 	const run = 'review_brain with check "contradictions"';
+	const day = (p: ContradictionPass) =>
+		p.finishedAt ? new Date(p.finishedAt).toISOString().slice(0, 10) : 'earlier';
+	const other = !across
+		? ''
+		: across.status !== 'done'
+			? ` Against the organization's other brains: in progress, ${across.pairsChecked} page pair(s) checked so far.`
+			: ` Against the organization's other brains: last finished ${day(across)} over ${across.pairsChecked} page pair(s), ${across.findings} finding(s) raised.`;
 	if (!pass) {
-		return `\n\nContradiction check: not run on this brain yet. ${run} has a model compare related pages (an enterprise feature that spends model credits).`;
+		const own = across ? "not run on this brain's own pages yet" : 'not run on this brain yet';
+		return `\n\nContradiction check: ${own}. ${run} has a model compare related pages (an enterprise feature that spends model credits).${other}`;
 	}
 	if (pass.status !== 'done') {
-		return `\n\nContradiction check: in progress, ${pass.pairsChecked} page pair(s) checked so far. ${run} continues it.`;
+		return `\n\nContradiction check: in progress, ${pass.pairsChecked} page pair(s) checked so far. ${run} continues it.${other}`;
 	}
-	const when = pass.finishedAt ? new Date(pass.finishedAt).toISOString().slice(0, 10) : 'earlier';
-	return `\n\nContradiction check: last finished ${when} over ${pass.pairsChecked} page pair(s), ${pass.findings} finding(s) raised. ${run} checks pages edited since, and only those.`;
+	return `\n\nContradiction check: last finished ${day(pass)} over ${pass.pairsChecked} page pair(s), ${pass.findings} finding(s) raised. ${run} checks pages edited since, and only those.${other}`;
 }

@@ -56,10 +56,12 @@ import { applyPageEdits } from '../../src/lib/page-patch.ts';
 import { detectSensitive } from '../../src/lib/policy-detectors.ts';
 import {
 	conflictKey,
+	conflictPairPrefix,
 	normalizeDisputedValue,
 	normalizeFactLabel,
 	otherPageRef,
 	readFactLabels,
+	replacePairFindings,
 	upsertFindings,
 	valuesOnPages,
 	type QueueFinding
@@ -388,6 +390,40 @@ export function blockShape(markdown: string): string {
 	return out.join('');
 }
 
+// The model's sentence about a claim calls the pages "page A" and "page B", an order the
+// quotes beside it do not keep. Each is renamed to what the quotes call that page. A name
+// that is a phrase, not a path, takes a capital where it starts a sentence.
+export function namePages(why: string, a: string, b: string, phrase = false): string {
+	return why.replace(/\bpage[ _]([ab])\b/gi, (_, letter: string, at: number) => {
+		const name = letter.toLowerCase() === 'a' ? a : b;
+		const opens = phrase && /(^|[.!?]\s+)$/.test(why.slice(0, at));
+		return opens ? name.charAt(0).toUpperCase() + name.slice(1) : name;
+	});
+}
+
+// The queues that hold a pair's findings, with what every key of the pair starts with in
+// each: this brain's (null), and for a pair between two brains the other brain's.
+export async function pairQueues(
+	a: PageText,
+	b: PageText,
+	homeBrainId?: string
+): Promise<{ brainId: string | null; prefix: string }[]> {
+	const [here, there] = a.other ? [b, a] : [a, b];
+	if (!there.other) return [{ brainId: null, prefix: conflictPairPrefix([a.path, b.path]) }];
+	const { brainId, path } = there.other;
+	return [
+		{ brainId: null, prefix: conflictPairPrefix([here.path, await otherPageRef(brainId, path)]) },
+		...(homeBrainId
+			? [
+					{
+						brainId,
+						prefix: conflictPairPrefix([path, await otherPageRef(homeBrainId, here.path)])
+					}
+				]
+			: [])
+	];
+}
+
 export interface Proposal {
 	// `review` for a patch that passed the checks, `person` for everything else.
 	tier: 'review' | 'person';
@@ -425,6 +461,11 @@ export async function triageFindings(input: {
 	const cited = across ? [here] : [a, b];
 	// Two brains can hold a page at the same path, so the other brain's line says so.
 	const cite = (p: PageText) => (p.other ? `In the other brain, ${p.other.path}` : p.path);
+	// What the explanation calls a page, as the brain holding `mine` reads it.
+	const called = (p: PageText, mine: PageText) =>
+		!across ? p.path : p === mine ? "this brain's page" : "the other brain's page";
+	const why = (c: Claim, mine: PageText) =>
+		namePages(c.why, called(a, mine), called(b, mine), across);
 	const contents = new Map([
 		[a.path, a.content],
 		[b.path, b.content]
@@ -492,7 +533,7 @@ export async function triageFindings(input: {
 			kind: 'conflict',
 			paths: cited.map((p) => p.path).sort(),
 			headline: `${c.subject}: "${a.title}" says ${c.value_a}, "${b.title}" says ${c.value_b}.`,
-			evidence: [...[here, there].map((p) => `${cite(p)}: "${quote(p)}"`), c.why],
+			evidence: [...[here, there].map((p) => `${cite(p)}: "${quote(p)}"`), why(c, here)],
 			proposal: {
 				tier: patch ? 'review' : 'person',
 				action: across ? 'person' : c.action,
@@ -524,7 +565,7 @@ export async function triageFindings(input: {
 					evidence: [
 						`${there.other.path}: "${quote(there)}"`,
 						`In the other brain, ${here.path}: "${quote(here)}"`,
-						c.why
+						why(c, there)
 					],
 					pageShas: { [there.other.path]: input.pageShas[there.path] ?? '' },
 					other: {
@@ -873,6 +914,18 @@ export async function advanceConsolidation(
 	const found: QueueFinding[] = [];
 	// The copies of findings between two brains, by the brain whose queue each goes into.
 	const copies = new Map<string, QueueFinding[]>();
+	// The pairs this step checked, by the brain whose queue holds their findings (null is
+	// this one), each with the keys the check gave. They replace what the queue held for
+	// the pair.
+	const rechecked = new Map<string | null, { prefix: string; keep: string[] }[]>();
+	const settle = async (a: PageText, b: PageText, keys: ReadonlyMap<string | null, string[]>) => {
+		for (const q of await pairQueues(a, b, t.brainId)) {
+			rechecked.set(q.brainId, [
+				...(rechecked.get(q.brainId) ?? []),
+				{ prefix: q.prefix, keep: keys.get(q.brainId) ?? [] }
+			]);
+		}
+	};
 	// The first pair a refused gateway stopped. Pairs after it may have run in the same
 	// batch; the cursor stays before it, so the next step checks them again.
 	let firstStopped = Infinity;
@@ -935,6 +988,7 @@ export async function advanceConsolidation(
 			if (!passesScreen(conflict)) {
 				state.pairsChecked++;
 				state.pairsScreened++;
+				await settle(a, b, new Map());
 				remember(pair);
 				return;
 			}
@@ -964,9 +1018,12 @@ export async function advanceConsolidation(
 					)
 			});
 			found.push(...triaged.findings);
+			const keys = new Map<string | null, string[]>([[null, triaged.findings.map((f) => f.key)]]);
 			for (const c of triaged.copies) {
 				copies.set(c.brainId, [...(copies.get(c.brainId) ?? []), c.finding]);
+				keys.set(c.brainId, [...(keys.get(c.brainId) ?? []), c.finding.key]);
 			}
+			await settle(a, b, keys);
 			state.pairsChecked++;
 			remember(pair);
 		} catch (err) {
@@ -994,6 +1051,9 @@ export async function advanceConsolidation(
 		await Promise.all(batch);
 	}
 
+	for (const [brainId, pairs] of rechecked) {
+		await replacePairFindings(t.db, brainId ?? t.brainId, pairs);
+	}
 	await upsertFindings(t.db, t.brainId, found, now);
 	// Each finding between two brains goes into the other brain's queue as well. One batch
 	// at a time: the local database runs a batch as a transaction and cannot nest them.

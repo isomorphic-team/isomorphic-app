@@ -313,7 +313,19 @@ function toolsFor(
 	registerLibrarianTools(server, getContext, {
 		orgChecksNow: async (orgId) => {
 			orgChecksAsked.push(orgId);
-			return { text: 'ran', wire: { organization: { brains: 0, pending: 0, steps: 0 } } };
+			return {
+				text: 'ran',
+				wire: {
+					organization: {
+						brains: 0,
+						pending: 0,
+						steps: 0,
+						pairsChecked: 0,
+						findings: 0,
+						costUsd: 0
+					}
+				}
+			};
 		}
 	});
 	const orgContext = async (opts?: { requires?: Role; org?: string }) => {
