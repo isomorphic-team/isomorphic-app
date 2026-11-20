@@ -640,6 +640,13 @@ const of = (ts: Tension[], kind: string) => ts.filter((t) => t.kind === kind);
 		'org pass: a finished pass stands for a day',
 		!orgPassDue(done(T - ORG_PASS_EVERY_MS + 1), T) && orgPassDue(done(T - ORG_PASS_EVERY_MS), T)
 	);
+	check(
+		'org pass: asked for now, a finished pass stands only as long as it is told to',
+		orgPassDue(done(T - 1000), T, 1000) &&
+			!orgPassDue(done(T - 999), T, 1000) &&
+			orgPassOrder([{ brain: 'a', run: done(T - 1000) }], T, 1000).length === 1 &&
+			orgPassOrder([{ brain: 'a', run: done(T - 1000) }], T).length === 0
+	);
 	const order = orgPassOrder(
 		[
 			{ brain: 'old', run: done(T - 3 * ORG_PASS_EVERY_MS) },

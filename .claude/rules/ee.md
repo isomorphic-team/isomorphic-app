@@ -56,10 +56,15 @@ Licensed under `ee/LICENSE`, not the AGPL. Placement rule and history:
   passed into the brains to compare. Every brain's pages go in one list (`comparablePages`,
   `pageTexts`), another brain's as an `otherPage` carrying its brain and its path there, and `planStep` pairs a page of the first
   brain only with pages of the others that hold every word of its title, and the reverse.
-  Two other brains are never paired. Run state and pair memory are per scope (kind
-  `consolidation:<brain id>` or `consolidation:all`), each pass row and remembered pair names
-  the other brain it is about in `other_brain_id`, all brains together stay under
-  `MAX_DUP_PAGES`, and a finding carries no patch. The other brain's pages go to the model under the first brain's
+  Two other brains are never paired. Run state is per scope (kind
+  `consolidation:<brain id>` or `consolidation:all`). Pair memory is per pair, shared by
+  every scope and both brains (`acrossMemory`, kind `ACROSS_KIND`, held under the brain
+  whose id sorts first with the second in `other_brain_id`, read from either side by
+  `readPassItemsAbout`), so one check of a pair stands for both. A finding carries no patch
+  and is written to both queues (`triageFindings` returns the copy with the finding, each row holding the other's key in
+  `linked_key`); `resolve` closes or reopens the copy (`answerLinkedFindings`), and
+  `readFindings` leaves out a row closed from the other side. All brains together stay
+  under `MAX_DUP_PAGES`. The other brain's pages go to the model under the first brain's
   organization's entitlement and cap, which is why both must be in that organization.
 - **The scheduled organization pass** (`runOrgPass`, `ee/review/org-pass.ts`; what it covers
   and in what order is pure, `src/lib/org-pass.ts`) is the Worker's `scheduled` handler, on
@@ -71,7 +76,10 @@ Licensed under `ee/LICENSE`, not the AGPL. Placement rule and history:
   and a brain that does not take part has only its config read. Visibility plays no part;
   the opt-in is the brain admin's. One run takes `ORG_PASS_STEPS_PER_RUN` steps, a finished
   pass stands for `ORG_PASS_EVERY_MS`, and a stopped pass ends its organization's run.
-  Findings land in each brain's own queue, so a pair is checked from both sides. The run
-  logs counts and brain ids, never content.
+  A pair one brain's pass checked is not checked again from the other. `review_brain` with
+  `against: "organization"` runs one step of it for one organization when its admin asks
+  (`orgChecksNow` in the Worker, a finished pass standing for `ORG_PASS_NOW_STANDS_MS`);
+  `orgPassNowText` replies with counts and no brain's name. The run logs counts and brain
+  ids, never content.
 - **No outside contributions**, and no customer names here either: the public-repo hygiene rules
   apply to `ee/` exactly as to the core.

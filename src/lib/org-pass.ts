@@ -17,6 +17,10 @@ import { MAX_COMPARED_BRAINS } from './review-checks.ts';
 // that have not changed checks no pair again, so this bounds reading, not model spend.
 export const ORG_PASS_EVERY_MS = 24 * 60 * 60 * 1000;
 
+// How long a finished pass stands when a person asks for the checks now. Asking again
+// within it starts nothing, which is how repeated calls come to an end.
+export const ORG_PASS_NOW_STANDS_MS = 10 * 60 * 1000;
+
 // Steps one scheduled run takes across every organization. Each step is one call's worth
 // of the contradictions pass, so this bounds a run's time and its outbound requests.
 export const ORG_PASS_STEPS_PER_RUN = 4;
@@ -86,7 +90,7 @@ export function orgChecksStatusText(s: OrgChecksStatus): string {
 	];
 	const runs =
 		missing.length === 0
-			? ' The scheduled checks run across them, each brain about once a day.'
+			? ' The scheduled checks run across them, each brain about once a day. An organization admin can run them now: review_brain with check "contradictions" and against "organization".'
 			: ` The scheduled checks do not run until ${missing.join(', and ')}.`;
 	return count + unread + runs;
 }
@@ -98,10 +102,14 @@ export interface OrgPassRun {
 }
 
 // Whether a brain's pass has a step to take now: one that is under way or stopped, one
-// that never ran, or one that finished long enough ago.
-export function orgPassDue(run: OrgPassRun | null, now: number): boolean {
+// that never ran, or one that finished at least `stands` ago.
+export function orgPassDue(
+	run: OrgPassRun | null,
+	now: number,
+	stands = ORG_PASS_EVERY_MS
+): boolean {
 	if (!run || run.status !== 'done') return true;
-	return now - (run.finishedAt ?? run.startedAt) >= ORG_PASS_EVERY_MS;
+	return now - (run.finishedAt ?? run.startedAt) >= stands;
 }
 
 // The brains with a step to take, in the order to take them: passes under way first, so
@@ -109,12 +117,13 @@ export function orgPassDue(run: OrgPassRun | null, now: number): boolean {
 // longest since they finished.
 export function orgPassOrder<B>(
 	brains: readonly { brain: B; run: OrgPassRun | null }[],
-	now: number
+	now: number,
+	stands = ORG_PASS_EVERY_MS
 ): B[] {
 	const rank = (run: OrgPassRun | null) =>
 		run && run.status !== 'done' ? 0 : run === null ? 1 : 2;
 	return brains
-		.filter((b) => orgPassDue(b.run, now))
+		.filter((b) => orgPassDue(b.run, now, stands))
 		.map((b, i) => ({ ...b, i }))
 		.sort(
 			(a, b) =>

@@ -228,6 +228,8 @@ type Handler = (
 // if the tool actually forwards it. A tool that accepts it and drops it silently
 // writes into the wrong organization, which no role assertion would catch.
 const orgAsks: ({ requires?: Role; org?: string } | undefined)[] = [];
+// The organizations whose checks a person asked to run now.
+const orgChecksAsked: string[] = [];
 
 // Every write to the active-brain pointer the brain tools made. Only an explicit act
 // may move it (see the last section), so most calls must leave this empty.
@@ -308,7 +310,12 @@ function toolsFor(
 	registerBrainAccessTools(server, getContext, { webBaseUrl: deployment.webBaseUrl });
 	registerMediaTools(server, getContext);
 	registerAnalyticsTools(server, getContext);
-	registerLibrarianTools(server, getContext);
+	registerLibrarianTools(server, getContext, {
+		orgChecksNow: async (orgId) => {
+			orgChecksAsked.push(orgId);
+			return { text: 'ran', wire: { organization: { brains: 0, pending: 0, steps: 0 } } };
+		}
+	});
 	const orgContext = async (opts?: { requires?: Role; org?: string }) => {
 		orgAsks.push(opts);
 		const orgRole = (opts?.org && p.orgRoleIn?.[opts.org]) || p.orgRole;
@@ -591,6 +598,31 @@ console.log('\nbrains answers a configured brain from the index alone');
 }
 
 // ===========================================================================
+// Running an organization's checks reads every brain that takes part, whoever can open
+// it, so it is the organization admin's to ask for. Admin of one brain is not enough.
+{
+	const now = { check: 'contradictions', against: 'Organization' };
+	check(
+		'review_brain against "organization" refuses a brain admin who is only an org viewer',
+		(await denies(sharedAdmin, 'review_brain', now)) && orgChecksAsked.length === 0
+	);
+	const ran = await attempt(orgBoss, 'review_brain', now);
+	check(
+		"...and runs the checks of the brain's organization for an org admin",
+		ran.outcome === 'allowed' && ran.text === 'ran' && orgChecksAsked.join() === 'org1',
+		`${ran.outcome}: ${ran.text} ${ran.detail}`
+	);
+	const wrong = await attempt(orgBoss, 'review_brain', { ...now, check: 'sensitive-data' });
+	const fresh = await attempt(orgBoss, 'review_brain', { ...now, fresh: true });
+	check(
+		'...and only for contradictions, never as a fresh pass',
+		/only applies to check "contradictions"/.test(wrong.text + wrong.detail) &&
+			/does not apply/.test(fresh.text + fresh.detail) &&
+			orgChecksAsked.length === 1,
+		`${wrong.text}${wrong.detail} | ${fresh.text}${fresh.detail}`
+	);
+}
+
 console.log('\nBRAIN-scope tools gate on the BRAIN role, never the org role');
 // ===========================================================================
 // The mirror invariant. Sharing is a property of the brain, so the person who was

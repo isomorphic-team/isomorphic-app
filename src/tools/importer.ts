@@ -18,6 +18,7 @@ import {
 	dismissPolicyFinding,
 	isPolicyKey,
 	expandClusterDecisions,
+	answerLinkedFindings,
 	readFindings
 } from '../lib/review-queue.ts';
 import { z } from 'zod';
@@ -448,6 +449,12 @@ export function registerImportTools(
 					prTitle: 'Record validate decisions',
 					prBody: `${summary}. No page content changed — this records that a human decided, so validate stops re-reporting it.`
 				});
+				// A finding between two brains has a copy in the other brain's queue.
+				await answerLinkedFindings(
+					db,
+					brainId,
+					reviewDecisions.map((d) => ({ key: d.finding, dismissed: d.action === 'dismiss' }))
+				);
 				return ok(
 					`Recorded: ${summary}. validate will not raise ${dismissed === 1 ? 'it' : 'them'} again unless undismissed.`
 				);

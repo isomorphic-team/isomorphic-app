@@ -472,7 +472,9 @@ has a model compare related pages and queue the contradictions it finds as findi
 lists. With `against`, it compares one brain with another in the same organization, or with every
 other one (`against: "all"`). Brains whose `.isomorphic.json` holds
 `"charter": {"orgChecks": true}` (`configure_brain` with `org_checks: true`) are also checked
-against each other about once a day, by the Worker's hourly cron trigger. `pnpm worker:deploy`
+against each other about once a day, by the Worker's hourly cron trigger, and at once when an
+organization admin passes `against: "organization"`. A pair of pages in two brains is sent to
+the model once, whichever way it is reached, and its finding shows in both brains. `pnpm worker:deploy`
 sets that schedule from `triggers.crons` in the wrangler template; a pipeline that uploads and
 promotes versions sets it with `pnpm exec tsx scripts/schedules.ts`. It is an `ee/` feature: it runs only for an organization with the `enterprise`
 entitlement (`pnpm entitle --org <org_id> --feature enterprise --cap 5`), within that

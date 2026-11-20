@@ -59,6 +59,18 @@ export interface Comparison {
 	brains: ComparedBrain[];
 }
 
+// What `against` is for the organization's own checks: every brain that takes part
+// (`BrainConfig.orgChecks`), each against the others, run as the organization.
+export const AGAINST_ORGANIZATION = 'organization';
+export const isAgainstOrganization = (against: string | undefined) =>
+	against?.trim().toLowerCase() === AGAINST_ORGANIZATION;
+
+/** One step of an organization's checks, asked for by a person, as the Worker wires it. */
+export type OrgChecksNow = (orgId: string) => Promise<{ text: string; wire: OrgChecksWire }>;
+export interface OrgChecksWire {
+	organization: { brains: number; pending: number; steps: number };
+}
+
 /** One step of the consolidation pass, as the Worker wires it into a brain's context. */
 export type ConsolidationStep = (opts?: {
 	// Start a new pass that checks every pair, ignoring what earlier passes checked.

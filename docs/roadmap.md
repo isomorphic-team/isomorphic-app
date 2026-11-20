@@ -98,7 +98,9 @@ Order:
    `review_brain`), whose findings
    are shown only to people who can open both. Built: the same pass on a schedule across an
    organization's brains that opt in (`"charter": {"orgChecks": true}`), run as the
-   organization. Left: the Review screen section (C7).
+   organization, or at once when its admin asks (`against: "organization"`). A pair of pages
+   in two brains is checked once, and its finding is in both brains' queues, answered in
+   either. Left: the Review screen section (C7).
 6. **When a deployment needs it:** an entitlement writer driven by billing (outside this
    repository), and signed offline license keys for self-hosters.
 

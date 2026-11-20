@@ -122,6 +122,8 @@ import { advanceBaseline, baselineStepText } from '../lib/policy-baseline.ts';
 import {
 	REVIEW_CHECKS,
 	resolveComparison,
+	isAgainstOrganization,
+	type OrgChecksNow,
 	unopenedNote,
 	type Comparison,
 	type ConsolidationStep,
@@ -884,6 +886,8 @@ async function deleteFolderWrite(
 // same search as the default.
 export interface LibrarianDeps {
 	listBrains?: () => Promise<AccessibleBrain[]>;
+	// Runs a step of an organization's checks now. Absent without a model key.
+	orgChecksNow?: OrgChecksNow;
 }
 
 // Which brains a search runs over. The active brain always leads, so it wins the
@@ -1583,7 +1587,7 @@ export function registerLibrarianTools(
 		{
 			...toolAnnotations('Run a deep review pass over a brain', 'destructive'),
 			description:
-				'review_brain runs one of a brain\'s deep review passes over everything already in it, one budgeted step per call: repeat the call until the reply says finished, and progress is saved between calls. check "sensitive-data" scans every text file in the repository for credentials, card numbers and health identifiers, with no model; it records kinds and locations, never values, and replaces the previous scan. check "contradictions" has a model compare related pages and records where they disagree about the same fact, each with quotes from both pages and a proposed fix or a note that a person must decide; it is an enterprise feature that spends model credits within the organization\'s monthly cap, and a later pass checks only pairs where a page changed since it was last checked, and a page whose status is deprecated is left out. With `against`, "contradictions" compares this brain with another brain in the same organization instead, or with every other one when `against` is "all": only pairs with one page in this brain and one in another are checked, so it finds a fact stated in one brain and restated differently in another, and the findings land in this brain\'s report, each shown only to people who can also open the other brain. Neither changes anything in the repository: results are review findings, listed with keys by the brain\'s report. Needs admin on the brain.',
+				'review_brain runs one of a brain\'s deep review passes over everything already in it, one budgeted step per call: repeat the call until the reply says finished, and progress is saved between calls. check "sensitive-data" scans every text file in the repository for credentials, card numbers and health identifiers, with no model; it records kinds and locations, never values, and replaces the previous scan. check "contradictions" has a model compare related pages and records where they disagree about the same fact, each with quotes from both pages and a proposed fix or a note that a person must decide; it is an enterprise feature that spends model credits within the organization\'s monthly cap, and a later pass checks only pairs where a page changed since it was last checked, and a page whose status is deprecated is left out. With `against`, "contradictions" compares this brain with another brain in the same organization instead, or with every other one when `against` is "all": only pairs with one page in this brain and one in another are checked, so it finds a fact stated in one brain and restated differently in another, and each finding lands in both brains\' reports, shown only to people who can open both brains; dismissing it in one dismisses it in the other. A pair of pages in two brains is checked once however it is reached: from either brain, against one brain or "all", or by the organization\'s scheduled checks. With `against` "organization", it runs those scheduled checks now instead of waiting for them: every brain that takes part (configure_brain with org_checks), each against the others, whoever can open them; that needs admin of the organization. Neither changes anything in the repository: results are review findings, listed with keys by the brain\'s report. Needs admin on the brain.',
 			inputSchema: z.object({
 				brain: brainArg,
 				fresh: z
@@ -1596,7 +1600,7 @@ export function registerLibrarianTools(
 					.string()
 					.optional()
 					.describe(
-						'For "contradictions": what to compare this brain against. A brain\'s handle or name compares it with that one brain, which must be in the same organization and one you can open. "all" compares it with every other brain in its organization that you can open, in one pass. Pass the same value again on every call that continues the pass.'
+						'For "contradictions": what to compare this brain against. A brain\'s handle or name compares it with that one brain, which must be in the same organization and one you can open. "all" compares it with every other brain in its organization that you can open, in one pass. "organization" runs the organization\'s scheduled checks now, over every brain that takes part in them. Pass the same value again on every call that continues the pass.'
 					),
 				check: z
 					.enum(REVIEW_CHECKS)
@@ -1606,6 +1610,28 @@ export function registerLibrarianTools(
 			})
 		},
 		async ({ brain, check, fresh, against }) => {
+			if (isAgainstOrganization(against)) {
+				if (check !== 'contradictions') {
+					return fail('`against` only applies to check "contradictions".');
+				}
+				if (fresh) {
+					return fail("`fresh` does not apply to the organization's checks. Nothing was run.");
+				}
+				const org = await getContext({ requiresOrg: 'admin', brain });
+				if (!deps?.orgChecksNow || !org.orgId) {
+					return fail(
+						reviewCheckRefusal(check, {
+							policyMode: org.config.policyMode,
+							contradictionsAvailable: false
+						}) ?? 'This deployment cannot run organization checks.'
+					);
+				}
+				const step = await deps.orgChecksNow(org.orgId);
+				return {
+					content: [{ type: 'text' as const, text: step.text }],
+					structuredContent: step.wire
+				};
+			}
 			let compared: { comparison: Comparison; unopened: string[] } | undefined;
 			if (against) {
 				const resolved = await resolveComparison(

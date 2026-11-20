@@ -313,22 +313,33 @@ Roadmap step 2 extends the `validate` / `resolve` pattern into one findings queu
   a single shared word is enough; between two it pairs a long page with everything.
   `pnpm consolidate:report <folder> --against <other folder>` lists the pairs for no spend,
   and with `--models` runs the pass. The caller is an admin of the brain the pass runs from and can open the
-  other. Findings land in the first brain's queue with the other brain's page beside them
-  (`other_brain_id`, `other_path`, `other_sha`, migration 0028), and `validate` reports one
-  only to a viewer who can open both brains, since it quotes both. A change to either page
-  makes it stale. Its key names the other page by a digest, because the key is written to
-  the first brain's dismissal ledger. It carries no patch and no "which side stands": between
-  brains a person decides. It is never clustered. The pass has its own cursor and pair memory
-  per other brain (`brain_passes` kind `consolidation:<brain id>`), and the two brains
-  together stay under `MAX_DUP_PAGES`. Removing a brain deletes what other brains hold about
-  it.
+  other. A finding lands in both brains' queues: in the first with the other brain's page
+  beside it (`other_brain_id`, `other_path`, `other_sha`, migration 0028), and in the other
+  as a copy read from its side (`FindingCopy`), each row holding the other's key
+  (`linked_key`, migration 0030). `validate` reports one only to a viewer who can open both
+  brains, since it quotes both. A change to either page makes it stale. Its key names the
+  other page by a digest, because the key is written to a brain's dismissal ledger.
+  Dismissing it through `resolve` writes that brain's ledger and closes the copy in the
+  other brain (`answerLinkedFindings`, `closed_by_other`); `undismiss` opens the copy again,
+  and from a brain whose copy was closed from the other side opens its own. Whoever can
+  dismiss it in one brain therefore decides for both. It carries no patch and no "which
+  side stands": between brains a person decides. It is never clustered. The pass has its
+  own cursor per other brain (`brain_passes` kind `consolidation:<brain id>`), and the two
+  brains together stay under `MAX_DUP_PAGES`. Removing a brain deletes what other brains
+  hold about it.
+- **A pair of pages in two brains is checked once.** What a pass between brains has checked
+  is remembered per pair, not per pass (`acrossMemory`, `brain_pass_items` kind
+  `consolidation:pairs`): under the brain whose id sorts first, naming the second. So a pair
+  one brain's pass checked is not sent to the model again from the other brain, nor by a
+  pass against one brain after a pass against all, nor by the scheduled pass after a manual
+  one, until a page or the check itself changes. `fresh` ignores the memory.
 - **Against every other brain.** `against: "all"` runs one pass between a brain and every
   other brain of its organization the caller can open (`brainsToCompare`, at most
   `MAX_COMPARED_BRAINS`). A page of the first brain takes its three best hits across all the
   others pooled, so its cost does not grow with the number of brains; a page of another
   brain takes its hits in the first brain only, and two other brains are never compared with
   each other. Each finding names the brain its other page is in. A brain that cannot be
-  opened is left out and named in the reply. The pass keeps one cursor and pair memory
+  opened is left out and named in the reply. The pass keeps one cursor
   (`consolidation:all`), all brains together stay under `MAX_DUP_PAGES`, and every brain's
   pages are still loaded whole on each call. Each pass row and remembered pair names the
   other brain it is about (`other_brain_id`, migration 0029), which is how removing a brain
@@ -344,11 +355,16 @@ Roadmap step 2 extends the `validate` / `resolve` pattern into one findings queu
   brain that does not take part has its config read and nothing else. Each covered brain
   is checked against all the others by the pass above, a step at a time: one run takes
   `ORG_PASS_STEPS_PER_RUN` steps across all organizations, passes under way first, and a
-  finished pass stands for `ORG_PASS_EVERY_MS` before the next. Findings land in each
-  brain's own queue under the same visibility rule, so a pair is checked once from each
-  side and a conflict appears in both queues. It shares its run state and pair memory with
-  `against: "all"`. A stopped pass (the spend cap, the provider) ends that organization's
-  run. Not built: a pass that checks a pair once and holds the finding for the organization.
+  finished pass stands for `ORG_PASS_EVERY_MS` before the next. A pair is sent to the
+  model once and its finding is in both brains' queues, as above. Each brain's cursor is
+  the one `against: "all"` uses, though that pass compares the brains its caller can open
+  and this one the brains that take part. A stopped pass (the spend cap, the provider)
+  ends that organization's run.
+- **The same, asked for.** `review_brain` with `against: "organization"` runs one step of
+  that pass for the brain's organization (`orgPassNowText` is the reply), for an admin of
+  the organization, since it reads brains the caller may not be able to open; the reply
+  gives counts and names no brain. Repeated calls end because a pass that finished within
+  `ORG_PASS_NOW_STANDS_MS` is not started again.
 - **Not yet:** the push trigger and background passes for one brain (C6), and the Review
   screen section (C7).
 
