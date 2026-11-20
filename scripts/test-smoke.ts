@@ -29,7 +29,7 @@ const ORIGIN = 'https://example.workers.dev';
 
 import { checker } from './check.ts';
 import { parseJsonc } from './preview.ts';
-import { schedulesRequest } from './schedules.ts';
+import { onlyAccount, schedulesRequest } from './schedules.ts';
 
 const { check, done } = checker('smoke checks');
 
@@ -644,11 +644,12 @@ console.log('\nthe cron schedule is set from the config, after the deploy is kno
 	const template = parseJsonc(
 		readFileSync(new URL('../wrangler.template.jsonc', import.meta.url), 'utf8')
 	) as { triggers?: { crons?: string[] } };
-	const req = schedulesRequest({ ...template, name: 'acme-mcp' }, 'acct-1');
+	const ACCOUNT = '0123456789abcdef0123456789abcdef';
+	const req = schedulesRequest({ ...template, name: 'acme-mcp' }, ACCOUNT);
 	check(
 		'the request names the Worker and carries the schedules the template declares',
 		req.url ===
-			'https://api.cloudflare.com/client/v4/accounts/acct-1/workers/scripts/acme-mcp/schedules' &&
+			`https://api.cloudflare.com/client/v4/accounts/${ACCOUNT}/workers/scripts/acme-mcp/schedules` &&
 			req.body.length > 0 &&
 			JSON.stringify(req.body) ===
 				JSON.stringify(template.triggers?.crons?.map((cron) => ({ cron }))),
@@ -664,20 +665,43 @@ console.log('\nthe cron schedule is set from the config, after the deploy is kno
 	};
 	check(
 		'nothing is sent without a Worker name, an account, or a list of schedules',
-		refuses({ triggers: { crons: ['* * * * *'] } }, 'a') &&
+		refuses({ triggers: { crons: ['* * * * *'] } }, ACCOUNT) &&
 			refuses({ name: 'w', triggers: { crons: ['* * * * *'] } }, undefined) &&
-			refuses({ name: 'w' }, 'a') &&
-			refuses({ name: 'w', triggers: { crons: 'hourly' } }, 'a')
+			refuses({ name: 'w' }, ACCOUNT) &&
+			refuses({ name: 'w', triggers: { crons: 'hourly' } }, ACCOUNT)
 	);
 	check(
 		'nor with a name or a schedule that is not one',
-		refuses({ name: 'w/../other', triggers: { crons: ['* * * * *'] } }, 'a') &&
-			refuses({ name: 'w', triggers: { crons: ['* * * * *"}, {"x": "y'] } }, 'a') &&
-			refuses({ name: 'w', triggers: { crons: [''] } }, 'a')
+		refuses({ name: 'w/../other', triggers: { crons: ['* * * * *'] } }, ACCOUNT) &&
+			refuses({ name: 'w', triggers: { crons: ['* * * * *"}, {"x": "y'] } }, ACCOUNT) &&
+			refuses({ name: 'w', triggers: { crons: [''] } }, ACCOUNT)
 	);
 	check(
 		'an empty list is a request that clears the schedules',
-		schedulesRequest({ name: 'w', triggers: { crons: [] } }, 'a').body.length === 0
+		schedulesRequest({ name: 'w', triggers: { crons: [] } }, ACCOUNT).body.length === 0
+	);
+	const throwsOn = (listing: unknown) => {
+		try {
+			onlyAccount(listing);
+			return false;
+		} catch {
+			return true;
+		}
+	};
+	check(
+		'with no account named, the one account the token reaches is used',
+		onlyAccount({ result: [{ id: ACCOUNT, name: 'Acme' }] }) === ACCOUNT
+	);
+	check(
+		'and with none, several, or no listing, nothing is guessed',
+		throwsOn({ result: [] }) &&
+			throwsOn({ result: [{ id: ACCOUNT }, { id: 'f'.repeat(32) }] }) &&
+			throwsOn({}) &&
+			throwsOn(null)
+	);
+	check(
+		'an account id that is not one never reaches the request',
+		refuses({ name: 'w', triggers: { crons: ['* * * * *'] } }, 'acct/../x')
 	);
 
 	const schedules = byId('schedules');
