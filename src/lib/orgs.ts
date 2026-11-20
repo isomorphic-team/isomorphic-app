@@ -473,6 +473,46 @@ export async function listBrainsInOrg(db: D1Database, orgId: string): Promise<Br
 	return results ?? [];
 }
 
+// A brain with what opening its storage takes, and no person's role on it.
+export type StoredBrain = Pick<
+	AccessibleBrain,
+	| 'brain_id'
+	| 'handle'
+	| 'org_id'
+	| 'repo_owner'
+	| 'repo_name'
+	| 'installation_id'
+	| 'storage_connection_id'
+	| 'storage_kind'
+	| 'storage_root'
+>;
+
+// Every brain an org holds that has storage to open, ignoring who can reach it, and
+// none when the org is suspended. NOT an access query: the one caller is the scheduled
+// organization pass (src/lib/org-pass.ts), which runs as the organization and decides
+// for itself which of these it reads. Anything that decides what a PERSON may open goes
+// through listAccessibleBrains and effectiveBrainRole.
+export async function listStoredBrainsInOrg(db: D1Database, orgId: string): Promise<StoredBrain[]> {
+	const { results } = await db
+		.prepare(
+			`SELECT b.brain_id AS brain_id, b.handle AS handle, b.org_id AS org_id,
+			        b.repo_owner AS repo_owner, b.repo_name AS repo_name,
+			        CAST(c.external_id AS INTEGER) AS installation_id,
+			        b.storage_connection_id AS storage_connection_id,
+			        c.kind AS storage_kind, b.storage_root AS storage_root
+			   FROM brains b
+			   JOIN orgs o ON o.org_id = b.org_id
+			   JOIN storage_connections c ON c.connection_id = b.storage_connection_id
+			  WHERE b.org_id = ?1
+			    AND o.suspended_at IS NULL
+			    AND b.archived_at IS NULL
+			  ORDER BY b.created_at ASC, b.brain_id ASC`
+		)
+		.bind(orgId)
+		.all<StoredBrain>();
+	return results ?? [];
+}
+
 // The oldest brain in an org that THIS user can actually reach: the brain a
 // freshly provisioned or freshly invited member lands on. Access runs through the
 // same pure rule as listAccessibleBrains, so a private brain nobody shared can

@@ -39,6 +39,7 @@ import { serveMcp, serverOptions } from './lib/mcp-serve.ts';
 import type { IdentityWire, OrgMembershipWire } from './lib/tool-payloads.ts';
 import type { ConsolidationStep } from './lib/review-checks.ts';
 import { consolidationWire, runConsolidationStep } from '../ee/review/consolidation.ts';
+import { runOrgPass, type OrgPassReport } from '../ee/review/org-pass.ts';
 import { z } from 'zod';
 import type { OAuthHelpers } from '@cloudflare/workers-oauth-provider';
 import { installationOctokit, tokenOctokit, staticAuth, type AppCreds } from './lib/github.ts';
@@ -74,6 +75,7 @@ import {
 	getAppUser,
 	assertRole,
 	listAccessibleBrains,
+	listStoredBrainsInOrg,
 	linkedUserIds,
 	listAccessibleOrgs,
 	listOrgMemberships,
@@ -122,6 +124,7 @@ import { dayKey, countedCall } from './lib/usage.ts';
 import { loadCustomToolDefs, registerCustomTools, type CustomToolLoad } from './tools/custom.ts';
 import { resolveInstallationOrg, connectCustomerOrg } from './lib/org-connect.ts';
 import { loadBrainConfig, type BrainConfig } from './lib/brain-config.ts';
+import { FEATURES, listEntitledOrgs } from './lib/entitlements.ts';
 import {
 	ASSET_ROUTE_PREFIX,
 	assetLinkKey,
@@ -317,6 +320,49 @@ function consolidationFor(
 		});
 		return { text, wire: { consolidation: state && consolidationWire(state) } };
 	};
+}
+
+// One run of the scheduled organization pass (ee/review/org-pass.ts), or undefined when
+// the deployment holds no model key. It covers the organizations with the enterprise
+// entitlement, opening each brain by its storage binding, with no person behind it.
+async function orgPass(env: Env, now = Date.now()): Promise<OrgPassReport | undefined> {
+	const anthropicKey = env.ANTHROPIC_API_KEY?.trim() || undefined;
+	const openRouterKey = env.OPENROUTER_API_KEY?.trim() || undefined;
+	if (!anthropicKey && !openRouterKey) return undefined;
+	const db = env.PLATFORM_DB;
+	return runOrgPass({
+		db,
+		now,
+		orgs: await listEntitledOrgs(db, FEATURES.enterprise, now),
+		listBrains: (orgId) => listStoredBrainsInOrg(db, orgId),
+		open: async (row) => {
+			const { store } = await openStorage(env, row);
+			const repo = { owner: row.repo_owner, repo: row.repo_name };
+			return {
+				brainId: row.brain_id,
+				handle: row.handle || row.brain_id,
+				index: indexFor(env)(row.brain_id),
+				store,
+				repo,
+				config: await loadBrainConfig(store, repo)
+			};
+		},
+		advance: async (orgId, home, against) =>
+			(
+				await runConsolidationStep({
+					db,
+					index: home.index,
+					brainId: home.brainId,
+					orgId,
+					config: home.config,
+					store: home.store,
+					repo: home.repo,
+					anthropicKey,
+					openRouterKey,
+					against
+				})
+			).state
+	});
 }
 
 function assetKeyFor(env: Env): Promise<CryptoKey> | undefined {
@@ -1821,5 +1867,12 @@ export default {
 			return new Response('Unauthorized', { status: 401 });
 		}
 		return mcpApiHandler.fetch(request, env, ctx);
+	},
+
+	// The cron trigger (`triggers.crons` in the wrangler template): one run of the
+	// scheduled organization pass. The log line carries counts and brain ids, no content.
+	async scheduled(_controller: ScheduledController, env: Env): Promise<void> {
+		const report = await orgPass(env);
+		if (report?.steps) console.log(JSON.stringify({ orgPass: report }));
 	}
 } satisfies ExportedHandler<Env>;

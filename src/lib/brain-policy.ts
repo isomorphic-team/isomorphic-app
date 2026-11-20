@@ -80,6 +80,9 @@ export interface BrainConfig extends PathPolicy {
 	// `same-identifier` consolidation check). `email`, plus whatever
 	// `"review": {"identityFields": [...]}` adds.
 	identityFields: string[];
+	// Whether this brain takes part in the checks its organization runs across its brains
+	// on a schedule, from `"charter": {"orgChecks": true}`. Off unless the brain says so.
+	orgChecks: boolean;
 }
 
 // The per-repo config file, read from the repo root.
@@ -96,7 +99,8 @@ export const DEFAULT_BRAIN_CONFIG: BrainConfig = {
 	indexedFields: null,
 	sourceOfTruth: 'app',
 	policyMode: 'shadow',
-	identityFields: ['email']
+	identityFields: ['email'],
+	orgChecks: false
 };
 
 // Normalize a root/prefix so prefix checks are unambiguous:

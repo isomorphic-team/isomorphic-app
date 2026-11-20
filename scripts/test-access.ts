@@ -279,7 +279,7 @@ import {
 	BRAIN_UNLINKED_TABLES,
 	forgetBrain
 } from '../src/lib/brain-forget.ts';
-import { brainIdFor, brainNameTaken, createBrain } from '../src/lib/orgs.ts';
+import { brainIdFor, brainNameTaken, createBrain, listStoredBrainsInOrg } from '../src/lib/orgs.ts';
 import { bindFixtureStorage } from './fixture-storage.ts';
 import { brainSlug } from '../src/lib/brain-slug.ts';
 import { DatabaseSync } from 'node:sqlite';
@@ -497,6 +497,37 @@ check(
 	!(await ids('alice')).includes('northwind/gone'),
 	JSON.stringify(await ids('alice'))
 );
+{
+	const stored = await listStoredBrainsInOrg(db, 'org1');
+	const everyone = (
+		await db
+			.prepare("SELECT brain_id FROM brains WHERE org_id = 'org1' AND archived_at IS NULL")
+			.all<{
+				brain_id: string;
+			}>()
+	).results.map((r) => r.brain_id);
+	check(
+		'the organization pass lists every brain the org holds, private ones included, but no archived one',
+		stored.length === everyone.length &&
+			stored.some((b) => b.brain_id === 'b-frozen') &&
+			!stored.some((b) => b.brain_id === 'b-gone') &&
+			everyone.every((id) => stored.some((b) => b.brain_id === id)),
+		JSON.stringify(stored.map((b) => b.brain_id))
+	);
+	check(
+		'each with what opening its storage takes',
+		stored.every(
+			(b) => !!b.storage_connection_id && !!b.storage_kind && !!b.repo_owner && !!b.repo_name
+		),
+		JSON.stringify(stored[0])
+	);
+	sqlite.exec("UPDATE orgs SET suspended_at = '2026-06-01' WHERE org_id = 'org1'");
+	check(
+		'and none for a suspended organization',
+		(await listStoredBrainsInOrg(db, 'org1')).length === 0
+	);
+	sqlite.exec("UPDATE orgs SET suspended_at = NULL WHERE org_id = 'org1'");
+}
 check(
 	'a read-only brain is still listed',
 	(await ids('carol')).includes('northwind/frozen'),

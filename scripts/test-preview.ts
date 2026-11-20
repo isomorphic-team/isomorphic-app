@@ -152,6 +152,13 @@ console.log('\nthe previews block carries every binding the template declares');
 			!('OBJECTS_SCOPE' in (previews.vars as object))
 	);
 
+	check(
+		'the template declares a cron schedule, and a Preview gets none',
+		Array.isArray((template.triggers as { crons?: unknown } | undefined)?.crons) &&
+			!('triggers' in config) &&
+			!('triggers' in previews)
+	);
+
 	// With a preview objects Worker: as setup:config renders the bindings for it.
 	const named = (worker: string) => ({
 		...template,

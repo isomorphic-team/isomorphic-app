@@ -26,6 +26,7 @@ import {
 	getEntitlement,
 	hasFeature,
 	isActive,
+	listEntitledOrgs,
 	type Entitlement
 } from '../src/lib/entitlements.ts';
 import {
@@ -69,10 +70,13 @@ import {
 	triagePrompt,
 	type Claim,
 	type PageText,
-	type Proposal
+	type Proposal,
+	type ConsolidationState
 } from '../ee/review/consolidation.ts';
 import { conflictKey, readFindings, upsertFindings } from '../src/lib/review-queue.ts';
-import { AGAINST_ALL } from '../src/lib/review-checks.ts';
+import { AGAINST_ALL, type ComparedBrain } from '../src/lib/review-checks.ts';
+import { ORG_PASS_EVERY_MS } from '../src/lib/org-pass.ts';
+import { runOrgPass } from '../ee/review/org-pass.ts';
 import { resetIndex } from '../src/lib/brain-index.ts';
 import { continuePass, readPass, savePass, savePassStatement } from '../src/lib/brain-pass.ts';
 import { SNAPSHOT_BEGIN, SNAPSHOT_END } from '../src/lib/view-directives.ts';
@@ -1773,6 +1777,142 @@ console.log('\nconsolidation: one brain against another (12)');
 					allAgain.pairsUnchanged === all.pairsChecked &&
 					!prompts.length
 			);
+
+			// The scheduled organization pass over the same three brains, and two it cannot
+			// use: one whose storage does not open, one that does not take part.
+			const part = (b: ComparedBrain, on = true): ComparedBrain => ({
+				...b,
+				config: { ...b.config, orgChecks: on }
+			});
+			const legal = part({
+				brainId: home.brainId,
+				handle: 'legal-0a1b2c',
+				index: base.index,
+				store: home.store,
+				repo: home.locator,
+				config: home.config
+			});
+			const members: ComparedBrain[] = [legal, part(against), part(everyone.brains[1])];
+			const stepped: { home: string; against: string[]; all: boolean }[] = [];
+			const orgPass = (brains: ComparedBrain[], now: number, maxSteps?: number) =>
+				runOrgPass({
+					db,
+					now,
+					maxSteps,
+					orgs: ['o1'],
+					listBrains: async () => [
+						...brains.map((b) => ({ brain_id: b.brainId })),
+						{ brain_id: 'gone' }
+					],
+					open: async (row) => {
+						const found = brains.find((b) => b.brainId === row.brain_id);
+						if (!found) throw new Error('storage unreachable');
+						return found;
+					},
+					advance: (orgId, h, vs) => {
+						stepped.push({
+							home: h.brainId,
+							against: vs.brains.map((b) => b.brainId),
+							all: vs.all
+						});
+						return advanceConsolidation(
+							{
+								db,
+								index: h.index,
+								brainId: h.brainId,
+								orgId,
+								config: h.config,
+								store: h.store,
+								repo: h.repo,
+								gateway,
+								against: vs
+							},
+							now
+						);
+					}
+				});
+
+			prompts.length = 0;
+			const lone = await orgPass(
+				[legal, part(against, false), part(everyone.brains[1], false)],
+				NOW
+			);
+			check(
+				'scheduled: with one brain taking part nothing runs',
+				lone.steps === 0 && lone.orgs[0].brains === 0 && !stepped.length && !prompts.length,
+				JSON.stringify(lone)
+			);
+
+			const two = await orgPass([legal, part(against), part(everyone.brains[1], false)], NOW);
+			check(
+				'scheduled: a brain that does not take part is neither checked nor compared against',
+				stepped.length === 1 &&
+					stepped[0].home === other.brainId &&
+					JSON.stringify(stepped[0].against) === JSON.stringify([home.brainId]) &&
+					prompts.every((p) => !p.includes('THIRD-')),
+				JSON.stringify(stepped)
+			);
+			check(
+				'scheduled: a brain whose pass finished within the day is not started again',
+				two.steps === 1 && two.orgs[0].steps.every((s) => s.brainId !== home.brainId)
+			);
+			check(
+				'scheduled: a brain that does not open is reported and the rest run',
+				JSON.stringify(two.orgs[0].unopened) === JSON.stringify(['gone']) &&
+					two.orgs[0].brains === 2
+			);
+			const theirs = await readFindings(db, other.brainId);
+			check(
+				"scheduled: each brain's findings land in its own queue, naming the other brain's page",
+				theirs.length === 1 &&
+					theirs[0].other?.brainId === home.brainId &&
+					JSON.stringify(theirs[0].paths) === JSON.stringify(['wiki/agreements/acme.md']),
+				JSON.stringify(theirs)
+			);
+			const starter = await db
+				.prepare(
+					"SELECT started_by FROM brain_passes WHERE brain_id = ?1 AND kind = 'consolidation:all'"
+				)
+				.bind(other.brainId)
+				.first<{ started_by: string | null }>();
+			check('scheduled: the pass records no person as its actor', starter?.started_by === null);
+
+			stepped.length = 0;
+			const three = await orgPass(members, NOW);
+			check(
+				'scheduled: a brain that joins is checked against every other one taking part',
+				three.steps === 1 &&
+					stepped[0].home === third.brainId &&
+					stepped[0].all &&
+					JSON.stringify([...stepped[0].against].sort()) ===
+						JSON.stringify([home.brainId, other.brainId].sort()),
+				JSON.stringify(stepped)
+			);
+
+			stepped.length = 0;
+			prompts.length = 0;
+			const nextDay = await orgPass(members, NOW + ORG_PASS_EVERY_MS);
+			check(
+				'scheduled: a day later every brain is checked again, and only a pair new to a brain goes to the model',
+				nextDay.steps === 3 &&
+					new Set(stepped.map((s) => s.home)).size === 3 &&
+					nextDay.orgs[0].steps.every(
+						(s) =>
+							s.status === 'done' &&
+							// The one brain that had not been compared with the third yet.
+							s.pairsChecked === (s.brainId === other.brainId ? 1 : 0)
+					) &&
+					prompts.length === 1 &&
+					prompts[0].includes('THIRD-RATES') &&
+					prompts[0].includes('OTHER-RATES'),
+				JSON.stringify(nextDay)
+			);
+			stepped.length = 0;
+			const capped = await orgPass(members, NOW + 2 * ORG_PASS_EVERY_MS, 2);
+			check(
+				'scheduled: one run takes no more steps than its budget',
+				capped.steps === 2 && stepped.length === 2
+			);
 		} finally {
 			await third.cleanup();
 			await rm(thirdSrc, { recursive: true, force: true });
@@ -1793,6 +1933,96 @@ console.log('\nconsolidation: one brain against another (12)');
 		await rm(homeSrc, { recursive: true, force: true });
 		await rm(otherSrc, { recursive: true, force: true });
 	}
+}
+
+console.log('\nthe scheduled organization pass: one run across organizations');
+{
+	const db = localD1(':memory:').db as unknown as D1Database;
+	await entitled(db, 'o1');
+	await entitled(db, 'o2');
+	await db
+		.prepare(
+			entitlementSql({
+				kind: 'grant',
+				orgId: 'o-lapsed',
+				feature: FEATURES.enterprise,
+				source: 'trial',
+				now: NOW - 10,
+				expiresAt: NOW - 1
+			})
+		)
+		.run();
+	check(
+		'it covers the organizations entitled now, and not one whose entitlement ran out',
+		JSON.stringify(await listEntitledOrgs(db, FEATURES.enterprise, NOW)) ===
+			JSON.stringify(['o1', 'o2']),
+		JSON.stringify(await listEntitledOrgs(db, FEATURES.enterprise, NOW))
+	);
+
+	const fake = (brainId: string) =>
+		({ brainId, handle: brainId, config: { orgChecks: true } }) as unknown as ComparedBrain;
+	const orgBrains: Record<string, string[]> = { o1: ['a1', 'a2', 'a3'], o2: ['b1', 'b2'] };
+	const state = (status: ConsolidationState['status'], stoppedReason: string | null = null) =>
+		({ status, stoppedReason, pairsChecked: 0, findings: 0, costUsd: 0 }) as ConsolidationState;
+	const run = (
+		advance: (home: string, n: number) => ConsolidationState | null,
+		opts: { now?: number; maxSteps?: number } = {}
+	) => {
+		const calls: string[] = [];
+		return runOrgPass({
+			db,
+			orgs: ['o1', 'o2'],
+			now: opts.now ?? 0,
+			maxSteps: opts.maxSteps ?? 10,
+			listBrains: async (orgId) => orgBrains[orgId].map((brain_id) => ({ brain_id })),
+			open: async (row) => fake(row.brain_id),
+			advance: async (_org, home) => {
+				calls.push(home.brainId);
+				return advance(home.brainId, calls.filter((c) => c === home.brainId).length);
+			}
+		}).then((report) => ({ report, calls }));
+	};
+
+	const all = await run(() => state('done'));
+	check(
+		'every brain taking part in every organization takes a step',
+		all.calls.join() === 'a1,a2,a3,b1,b2' && all.report.steps === 5,
+		all.calls.join()
+	);
+	const midway = await run((_home, n) => state(n < 3 ? 'running' : 'done'));
+	check(
+		'a pass still under way takes another step in the same run, after the other brains',
+		midway.calls.join() === 'a1,a2,a3,a1,a2,a3,a1,a2,a3,b1',
+		midway.calls.join()
+	);
+	const stopped = await run((home) => (home === 'a1' ? state('stopped', 'cap') : state('done')));
+	check(
+		"a stopped pass ends its organization's run and leaves the next organization alone",
+		stopped.calls.join() === 'a1,b1,b2' && stopped.report.orgs[0].steps[0].stoppedReason === 'cap',
+		stopped.calls.join()
+	);
+	const unrun = await run((home) => (home.startsWith('a') ? null : state('done')));
+	check(
+		'so does a pass that could not run at all',
+		unrun.calls.join() === 'a1,b1,b2' && unrun.report.orgs[0].steps[0].status === 'not-run',
+		unrun.calls.join()
+	);
+	const broken = await run((home) => {
+		if (home === 'a2') throw new Error('index unreachable');
+		return state('done');
+	});
+	check(
+		'a brain whose step throws is reported, and the others still run',
+		broken.calls.join() === 'a1,a2,a3,b1,b2' &&
+			broken.report.orgs[0].steps[1].status === 'failed' &&
+			broken.report.orgs[0].steps[1].error === 'index unreachable'
+	);
+	const later = await run(() => state('done'), { now: 60 * 60 * 1000, maxSteps: 2 });
+	check(
+		'an hour on, a run starts with the next organization, so a small budget is shared',
+		later.calls.join() === 'b1,b2',
+		later.calls.join()
+	);
 }
 
 console.log('\nbrain passes: the shared run state (9)');

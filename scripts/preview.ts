@@ -120,9 +120,11 @@ export interface PreviewObjects {
  * objects Worker, and the Preview's object names are scoped to it.
  *
  * It is the one writer of `PREVIEW_SIGN_IN`, so only a Preview can open sign-in.
+ *
+ * `triggers` are dropped: a Preview runs nothing on a schedule.
  */
 export function previewConfig(
-	{ durable_objects, ...config }: WranglerConfig,
+	{ durable_objects, triggers: _triggers, ...config }: WranglerConfig,
 	objects?: PreviewObjects,
 	openSignIn = false
 ): WranglerConfig {

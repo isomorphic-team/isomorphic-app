@@ -104,6 +104,8 @@ are in the list, with keys.
   (`againstRefusal`); the caller needs admin on the first and any access to the second.
   `against: "all"` compares it with every other brain of its organization the caller can open
   (`brainsToCompare`), and names in its reply any it could not open (`resolveComparison`).
+  The same pass runs on a schedule between the brains of an organization that take part
+  (`BrainConfig.orgChecks`, set by `configure_brain` with `org_checks`): see `ee.md`.
   `configure_brain` still accepts the old `baseline_scan` / `consolidate` arguments only to
   answer with a pointer: dropped from the schema, they would make the call a layout write.
 - `resolve` actions: `dismiss` / `undismiss` for structure, consolidation and policy findings

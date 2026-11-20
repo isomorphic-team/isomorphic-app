@@ -335,7 +335,22 @@ Roadmap step 2 extends the `validate` / `resolve` pattern into one findings queu
   finds them. Repeating `--against` on
   `pnpm consolidate:report` runs it over local folders. Design context: [`roles-self-and-world-model.md`](./roles-self-and-world-model.md),
   section 11, step 3.
-- **Not yet:** the push trigger and background passes (C6), and the Review screen section (C7).
+- **On a schedule, across an organization.** The Worker's cron trigger (`scheduled` in
+  `src/worker.ts`, hourly) runs the organization pass (`runOrgPass`,
+  `ee/review/org-pass.ts`) for every organization with the entitlement. It runs as the
+  organization: no person's access is consulted and none is recorded as the actor. A brain
+  is covered only when its own config says so, `"charter": {"orgChecks": true}` in
+  `.isomorphic.json` (`configure_brain` with `org_checks`), whatever its visibility, and a
+  brain that does not take part has its config read and nothing else. Each covered brain
+  is checked against all the others by the pass above, a step at a time: one run takes
+  `ORG_PASS_STEPS_PER_RUN` steps across all organizations, passes under way first, and a
+  finished pass stands for `ORG_PASS_EVERY_MS` before the next. Findings land in each
+  brain's own queue under the same visibility rule, so a pair is checked once from each
+  side and a conflict appears in both queues. It shares its run state and pair memory with
+  `against: "all"`. A stopped pass (the spend cap, the provider) ends that organization's
+  run. Not built: a pass that checks a pair once and holds the finding for the organization.
+- **Not yet:** the push trigger and background passes for one brain (C6), and the Review
+  screen section (C7).
 
 C1 and C2 stand alone and ship first. C3 is shared with the guard's own findings and belongs to roadmap step 2. C4 and C5 are the model work. C7 is where the value lands for people, because the review tier carries most of the work.
 
