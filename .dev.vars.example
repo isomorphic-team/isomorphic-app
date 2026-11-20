@@ -64,12 +64,24 @@ MCP_BEARER_TOKEN=
 AUTH_SECRET=
 AUTH_RESEND_KEY=
 
+# Optional: directory sign-in for orgs with the enterprise entitlement. One multi-tenant
+# Microsoft Entra application for the whole deployment, redirect URI
+# <origin>/auth/callback/microsoft-entra-id. Set an org up with `pnpm sso`.
+AUTH_ENTRA_CLIENT_ID=
+AUTH_ENTRA_CLIENT_SECRET=
+
+# Optional: brains kept in a member's Google Drive (create_brain storage: "google-drive").
+# One Google Cloud OAuth client (type "Web application") for the whole deployment, with the
+# drive.file scope and the redirect URI <PUBLIC_BASE_URL>/google/callback. oauth mode only.
+GOOGLE_CLIENT_ID=
+GOOGLE_CLIENT_SECRET=
+
 # ======================================================================
 # Deployment identity — consumed by `pnpm setup:config` to generate wrangler.jsonc
 # ======================================================================
-# wrangler.jsonc is generated and gitignored, because it holds ONE deployment's
-# identity rather than something shared by everyone who deploys this repo. These are
-# the values it is generated from. Every one has a working local default, so you can
+# wrangler.jsonc and wrangler.objects.jsonc are generated and gitignored, because they
+# hold ONE deployment's identity rather than something shared by everyone who deploys
+# this repo. These are the values they are generated from. Every one has a working local default, so you can
 # leave this whole block empty until you deploy.
 #
 # `pnpm setup:config --help` documents each one. `--provision` creates the Cloudflare
@@ -78,6 +90,10 @@ AUTH_RESEND_KEY=
 
 # Cloudflare Worker name. Must be unique within your account.
 WORKER_NAME=
+
+# Name of the objects Worker, which implements the Durable Objects the MCP Worker binds.
+# Unique within your account. Default: isomorphic-objects.
+OBJECTS_WORKER_NAME=
 
 # "static" (one bearer token) or "oauth" (multi-tenant orgs, roles, members).
 AUTH_MODE=
@@ -96,6 +112,12 @@ AUTH_EMAIL_REPLY_TO=
 
 # "true" creates a brain on a user's first request; "false" is invite-only.
 AUTO_PROVISION=
+
+# Backups of the brains this deployment holds, sealed to a public key and written to an
+# R2 bucket (docs/ops/backups.md). All empty: nothing is backed up.
+BACKUP_BUCKET=
+BACKUP_PUBLIC_KEY=
+BACKUP_INTERVAL_HOURS=
 
 # Cloudflare resource ids. Leave empty for local development: the generated config
 # gets placeholder ids, and Miniflare simulates KV and D1 on disk without ever

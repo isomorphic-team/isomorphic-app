@@ -109,6 +109,18 @@ its org. The content index (`ensureFresh`) self-builds on the first read — no 
   Don't delete the `brains` row by hand: that fails while grants or brain invites exist, and
   otherwise leaves the brain's other rows behind.
 - **Rename:** `configure_brain` with `name` (brain admin).
+- **Move off GitHub:** `configure_brain` with `storage: "isomorphic"` (brain admin and org
+  admin) copies the brain's current files into a Durable Object the deployment holds and
+  serves it from there. A preview until `confirm: true`; a large brain takes several calls.
+  The repository is left as it is and no longer read. Such a brain cannot be disconnected.
+- **Move back to GitHub:** `configure_brain` with `storage: "github"`, same gates and shape.
+  It copies the brain's current files into the repository the brain is named for, through the
+  connection that reaches that account, creating the repository (private) if it is gone and
+  removing files there that the brain does not have.
+- **Move into or out of Google Drive:** `configure_brain` with `storage: "google-drive"` puts
+  the brain in a new folder in the caller's own connected Drive (the reply is a link to
+  connect one when there is none); `storage: "isomorphic"` or `"github"` brings a Drive brain
+  out. Same gates and shape. The folder left behind is not removed.
 - **Move to another org:** `connect_brain` with the brain's name or id as `repo` and the
   destination `org`, then again with `confirm: true` (org admin in both orgs). The first call previews whose access changes. The brain
   keeps its storage binding, so it stays in the same GitHub account and is read
@@ -121,6 +133,11 @@ installation (a personal org, or a `hosted` one made by `create_org`).
 Adopting through it would let any org claim a repository another org's brain left
 behind in the platform account. Those orgs create brains with `create_brain`, or
 receive them by a move (`connect_brain` naming an existing brain).
+
+`create_brain` makes a repository, or with `storage: "isomorphic"` a brain the deployment
+holds itself with no repository, or with `storage: "google-drive"` a folder in the caller's
+own Google Drive (any org, once the deployment has a Google OAuth client). When the caller does not say, these orgs get a brain the
+deployment holds ([self-hosting](../self-hosting.md)).
 
 A `brains` row written by hand (step 3 above) needs no `storage_connection_id`: a NULL
 binding resolves through the org's installation, exactly as before migration 0010.

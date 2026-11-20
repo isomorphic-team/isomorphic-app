@@ -26,14 +26,16 @@ A preview gives each pull request a real origin with a real sign-in, where a rev
 Each pull request gets a Worker Preview named `pr-<number>` on a dedicated **preview
 Worker**, served at `https://pr-<number>-<preview worker>.<subdomain>.workers.dev`.
 
-| Resource   | Production              | Preview                                          |
-| ---------- | ----------------------- | ------------------------------------------------ |
-| Worker     | (the deployment's name) | `PREVIEW_WORKER_NAME`, hosting every Preview     |
-| D1         | `platform-db`           | `<PREVIEW_D1_DATABASE_NAME>-pr-<number>`, per PR |
-| KV         | `OAUTH_KV`              | one shared preview namespace                     |
-| Secrets    | the production Worker's | the preview Worker's Previews base config        |
-| GitHub App | the platform App        | a separate App on a throwaway organization       |
-| Feedback   | `FEEDBACK_TOKEN` set    | unset, so `submit_feedback` is not registered    |
+| Resource   | Production              | Preview                                                |
+| ---------- | ----------------------- | ------------------------------------------------------ |
+| Worker     | (the deployment's name) | `PREVIEW_WORKER_NAME`, hosting every Preview           |
+| D1         | `platform-db`           | `<PREVIEW_D1_DATABASE_NAME>-pr-<number>`, per PR       |
+| D1 (index) | `index-db`              | `<PREVIEW_D1_DATABASE_NAME>-pr-<number>-index`, per PR |
+| KV         | `OAUTH_KV`              | one shared preview namespace                           |
+| Objects    | the objects Worker      | `PREVIEW_OBJECTS_WORKER_NAME`, shared, scoped by name  |
+| Secrets    | the production Worker's | the preview Worker's Previews base config              |
+| GitHub App | the platform App        | a separate App on a throwaway organization             |
+| Feedback   | `FEEDBACK_TOKEN` set    | unset, so `submit_feedback` is not registered          |
 
 `preview.yml` runs three jobs, and the split is the security model:
 
@@ -41,7 +43,8 @@ Worker**, served at `https://pr-<number>-<preview worker>.<subdomain>.workers.de
    request is previewed on every push. A fork is not (below).
 2. **`build`** checks out the pull request, installs, regenerates, and bundles with
    `wrangler versions upload --dry-run --outdir`. It references no secret, has a read-only
-   token, and keeps no git credential. Its artifact is `worker.js` and `migrations/*.sql`.
+   token, and keeps no git credential. Its artifact is `worker.js` and the SQL
+   files of `migrations/` and `migrations-index/`.
 3. **`deploy`** holds the Cloudflare token and runs only its own checkout's code. It ensures
    the pull request's D1 database, generates the preview's config (below), applies the
    branch's migrations to that database, runs `wrangler preview <worker.js>`, smoke checks
@@ -52,6 +55,26 @@ A fourth job, **`cleanup`**, runs on `pull_request_target: closed`, checks out t
 only, and deletes the Preview and its database.
 
 ### The config
+
+A Durable Object binding names a Worker by `script_name` and reaches that Worker's one
+namespace (`docs/references.md`), so a Preview never binds the production objects Worker.
+With `PREVIEW_OBJECTS_WORKER_NAME` set, every Preview binds a **preview objects Worker**
+instead:
+
+- `scripts/preview.ts config` carries the `durable_objects` block into `previews`, and
+  refuses a binding that names any other Worker.
+- It sets `OBJECTS_SCOPE` to the Preview's name (`pr-<number>`), which the Worker prefixes
+  to each files object's name (`filesObjectName`), so two pull requests never address the same
+  object.
+- `deploy` deploys the preview objects Worker from a second checkout of the **base branch**,
+  with `wrangler deploy`. Every Preview shares it, so it runs the base branch's objects code:
+  a pull request that changes `src/objects/` previews against the base branch's classes until
+  it merges.
+- New brains go there, as on any deployment that binds files objects, so they stop
+  accumulating as repositories in the throwaway organization.
+
+Without the variable, the block is dropped: a Preview has no objects, its `/health` skips the
+ping, and a new brain is a repository.
 
 A Preview inherits no vars and no bindings: `wrangler preview` reads only the config's
 `previews` block, which is one per Worker. `deploy` generates `wrangler.jsonc` from the
@@ -67,7 +90,7 @@ reports and, if it differs, redeploys once with `--var PUBLIC_BASE_URL:<actual>`
 ### Sign-in
 
 A Preview signs anyone in as any email address they type, with no email sent
-(`AUTH_SIGN_IN=open`). It is still Auth.js's own flow: the sign-in POST is answered with a
+(`PREVIEW_SIGN_IN=open`). It is still Auth.js's own flow: the sign-in POST is answered with a
 redirect to the link Auth.js minted instead of an email carrying it, so the verification
 token, the session cookie and the return through `callbackUrl` are the ones production uses.
 The `preview-email` label on a pull request (or `-f email=true` on a dispatch) switches that
@@ -76,9 +99,8 @@ the pull request says which mode is on.
 
 Open sign-in means anyone with the URL can sign in as anyone. That reaches only the pull
 request's own database and the throwaway organization's GitHub App; the worst a stranger can
-do is create repositories there. `AUTH_SIGN_IN` defaults to `email`, `deploy.yml` never sets it
-(`pnpm test:preview` pins both), `pnpm setup:config` warns when it is `open`, and the Worker
-logs a warning when it serves with it.
+do is create repositories there. `previewConfig` is the only writer of `PREVIEW_SIGN_IN`: no
+setting, template entry or `deploy.yml` line sets it (`pnpm test:preview` pins it). The Worker logs a warning when it serves with it.
 
 ### Forks
 
@@ -131,7 +153,8 @@ this repository, never to a fork's code, which only runs in `build`.
 Cloudflare provisions no D1 for a Preview, and two Previews sharing a `database_id` share
 rows. A shared preview database would also carry every open branch's migrations at once, and
 one branch's schema change would break the others. D1 allows 10 databases on Workers Free and
-50,000 on Paid, so a preview account on Free supports nine open previews alongside its base.
+50,000 on Paid. Each pull request takes two (its platform database and its index database),
+so a preview account on Free supports four open previews alongside its base.
 
 KV is shared. OAuth grants in it are bound to each Preview's own origin, so a token from one
 Preview is refused by another.
@@ -140,8 +163,9 @@ Preview is refused by another.
 
 An invite-only preview means every reviewer is invited by hand first. Auto-provisioning lets a
 reviewer open `/b`, sign in, and reach the create-your-first-brain state, which is the path a
-new customer takes. Brain repositories accumulate in the throwaway organization; deleting the
-pull request's database does not delete them.
+new customer takes. Without a preview objects Worker, brain repositories accumulate in the
+throwaway organization; with one, files objects accumulate under each pull request's scope.
+Deleting the pull request's database deletes neither.
 
 ## What the smoke check covers
 
@@ -203,6 +227,13 @@ None of this can be created from a workflow. Use a separate Cloudflare account i
    ```
    The sending domain may be production's; a distinct From address shows a reviewer which
    deployment mailed them.
+8. **Optional: a preview objects Worker**, for Previews that hold brains themselves. Deploy
+   it once, add it to the token's Workers beside the preview Worker (step 5), and name it:
+   ```sh
+   OBJECTS_WORKER_NAME=<preview objects worker> pnpm setup:config --force
+   pnpm exec wrangler deploy -c wrangler.objects.jsonc
+   gh variable set PREVIEW_OBJECTS_WORKER_NAME --body <preview objects worker>
+   ```
 
 ## Verified on the first live run
 
@@ -220,6 +251,9 @@ Cloudflare's docs left these open; the first deployed Preview (2026-10-01) settl
 
 Each has a visible failure, not a silent one:
 
+- **The preview objects Worker path.** `pnpm test:preview` pins the config and the workflow's
+  shape; no Preview has run with `PREVIEW_OBJECTS_WORKER_NAME` set. A token that cannot
+  deploy that Worker fails the step, red.
 - **Whether the Editor role can delete a Preview.** If not, `cleanup` logs a notice and still
   deletes the database; the Preview is evicted at the per-Worker limit.
 - **Pricing.** Unstated; presumably ordinary Workers usage.
@@ -237,6 +271,8 @@ Each has a visible failure, not a silent one:
   and re-run the workflow.
 - **A migration edited after it was applied** is not re-run on that pull request's database
   (D1 tracks applied migrations by name). Close and reopen the pull request to start clean.
+- **A closed pull request's objects are not deleted.** `cleanup` removes the Preview and its
+  databases; the files objects under its scope stay in the preview objects Worker.
 - **Fork previews are built from the fork's code but configured by the base branch's**
   template, so a fork that adds a binding previews without it.
 

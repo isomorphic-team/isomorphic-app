@@ -399,7 +399,7 @@ const refuses = (r: { ok: boolean; error?: string }, text: string) =>
 console.log('\nwrite_page: create, update, or refuse (planPageWrite)');
 // ---------------------------------------------------------------------------
 {
-	const PAGE_NOW = { content: `---\ntitle: A\n---\n\n${BODY}`, sha: 'sha-now' };
+	const PAGE_NOW = { content: `---\ntitle: A\n---\n\n${BODY}`, version: 'sha-now' };
 	const plan = (
 		args: Omit<PageWriteArgs, 'path'>,
 		existing: typeof PAGE_NOW | null,

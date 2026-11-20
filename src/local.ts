@@ -51,6 +51,7 @@ import { loadCustomToolDefs, registerCustomTools } from './tools/custom.ts';
 import { loadBrainConfig } from './lib/brain-config.ts';
 import { SERVER_INSTRUCTIONS } from './lib/server-instructions.ts';
 import { ensureGitRepo, fsBrainStore } from './local/brain-store-fs.ts';
+import type { BrainLocator } from './lib/brain-repo.ts';
 import { guardStore } from './lib/policy-guard.ts';
 import { recordDetections } from './lib/policy-store.ts';
 import { localD1 } from './local/d1-sqlite.ts';
@@ -92,7 +93,7 @@ const author = gitIdentity();
 interface LocalBrain {
 	dir: string;
 	store: ReturnType<typeof fsBrainStore>;
-	repoArgs: { owner: string; repo: string };
+	locator: BrainLocator;
 	brainId: string;
 	label: string;
 	db: ReturnType<typeof localD1>['db'];
@@ -109,7 +110,7 @@ for (const d of dirs) {
 	brains.set(label, {
 		dir: d,
 		store: fsBrainStore({ dir: d, author }),
-		repoArgs: { owner: 'local', repo: label },
+		locator: { owner: 'local', repo: label },
 		brainId: `local/${label}`,
 		label,
 		db: localD1(resolve(stateDir, 'index.sqlite')).db
@@ -142,14 +143,14 @@ function resolveBrain(handle?: string): LocalBrain {
 // does. `opts.brain` is honoured, as it is in the Worker.
 async function getContext(opts?: { brain?: string }): Promise<BrainContext> {
 	const b = resolveBrain(opts?.brain);
-	const config = await loadBrainConfig(b.store, b.repoArgs);
+	const config = await loadBrainConfig(b.store, b.locator);
 	return {
 		store: guardStore(b.store, {
 			mode: config.policyMode,
 			record: (detections) =>
 				recordDetections(b.db, { brainId: b.brainId, mode: config.policyMode }, detections)
 		}),
-		repoArgs: b.repoArgs,
+		locator: b.locator,
 		role: 'owner',
 		orgRole: 'owner',
 		config,
@@ -233,8 +234,8 @@ app.get(`${ASSET_ROUTE_PREFIX}*`, async (c) =>
 			if (!b) return null;
 			return {
 				read: b.store.readBinary,
-				repoArgs: b.repoArgs,
-				config: await loadBrainConfig(b.store, b.repoArgs)
+				locator: b.locator,
+				config: await loadBrainConfig(b.store, b.locator)
 			};
 		}
 	)

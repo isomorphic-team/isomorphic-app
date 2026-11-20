@@ -24,6 +24,7 @@ import { readFileSync } from 'node:fs';
 import { posix } from 'node:path';
 
 import { checker } from './check.ts';
+import { GENERATED_CONFIGS } from './wrangler-configs.ts';
 import {
 	codeSpans,
 	constantClaims,
@@ -182,7 +183,7 @@ const dirSet = new Set(
 );
 const baseSet = new Set(files.map((p) => posix.basename(p)));
 // Generated locally and gitignored, and still correct to name.
-const GENERATED = new Set(['wrangler.jsonc', '.dev.vars']);
+const GENERATED = new Set([...GENERATED_CONFIGS, '.dev.vars']);
 
 const codeFiles = files.filter(
 	(p) =>

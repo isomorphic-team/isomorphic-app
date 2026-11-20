@@ -2,6 +2,7 @@
 paths:
   - "ee/**"
   - "scripts/{test-ee,entitle,consolidate-report}.ts"
+  - "src/lib/entitlements.ts"
   - "migrations/0016_org_entitlements.sql"
 ---
 
@@ -14,13 +15,15 @@ Licensed under `ee/LICENSE`, not the AGPL. Placement rule and history:
   other way round, except where the Worker wires an `ee/` feature in. An org with no
   entitlement must run the core unchanged.
 - **Every feature checks the one `enterprise` entitlement** (`FEATURES.enterprise`,
-  `hasFeature` / `getEntitlement` in `ee/entitlements.ts`). Rows are written only by
+  `hasFeature` / `getEntitlement` in `src/lib/entitlements.ts`). Rows are written only by
   `pnpm entitle` (or billing outside the repo), never by the Worker. No row or an expired one
   means off.
 - **An enterprise feature does not have to live in `ee/`** (2026-11-05,
-  `docs/design/open-source-boundary.md`). Enterprise identity will check the entitlement from
-  the core, after the entitlement READ moves to `src/lib/`, so the core still never calls into
-  `ee/`. Nothing has moved: `hasFeature` is in `ee/`, and core code must not call it.
+  `docs/design/open-source-boundary.md`). The entitlement read is in the core, under the AGPL,
+  so core code can check it without calling into `ee/`. The grant tooling (`entitlementSql`)
+  stays in `ee/entitlements.ts`. Enterprise identity is the one core feature that checks it
+  (`resolveSignInRoute` in `src/lib/sso.ts`, and the directory callback in
+  `src/auth/config.ts`).
 - **Every model request goes through `ee/review/gateway.ts`.** Text goes to Claude Haiku first
   (`ANTHROPIC_API_KEY`, the official SDK) and falls back to Luna (`OPENROUTER_API_KEY`) on a
   refusal, 429, 402 or 529. Every OpenRouter request carries `ZDR_PROVIDER` (`zdr: true`,
@@ -40,10 +43,23 @@ Licensed under `ee/LICENSE`, not the AGPL. Placement rule and history:
   and the check's own version (prompts, gates, models), so a later pass skips a pair whose
   fingerprint is unchanged and keeps its findings as they were; `fresh` starts a pass that
   ignores the memory. A page with a
-  high-severity detection never reaches the gateway. With an OpenRouter key, Jev screens each
+  high-severity detection never reaches the gateway. A page whose `status` field is
+  `deprecated` (`isDeprecated`) is left out and counted in the reply: an old copy is expected
+  to disagree with what replaced it. With an OpenRouter key, Jev screens each
   pair first at a 0.3 conflict score (`passesScreen`); a screen error lets the pair through. Claims are kept only when their quotes and
   values are on the pages word for word and, with Jev, that it scores 0.4 or more on whether a
   reader would be misled; a patch must also keep the page's block structure (`blockShape`).
   Nothing is written to the brain.
+- **With `against`, the same pass runs between a brain and others** of its organization: one
+  named brain (`againstRefusal` in `src/lib/review-checks.ts`), or every other one the caller
+  can open for `AGAINST_ALL` (`brainsToCompare`); `resolveComparison` turns what the caller
+  passed into the brains to compare. Every brain's pages go in one list (`comparablePages`,
+  `pageTexts`), another brain's as an `otherPage` carrying its brain and its path there, and `planStep` pairs a page of the first
+  brain only with pages of the others that hold every word of its title, and the reverse.
+  Two other brains are never paired. Run state and pair memory are per scope (kind
+  `consolidation:<brain id>` or `consolidation:all`), each pass row and remembered pair names
+  the other brain it is about in `other_brain_id`, all brains together stay under
+  `MAX_DUP_PAGES`, and a finding carries no patch. The other brain's pages go to the model under the first brain's
+  organization's entitlement and cap, which is why both must be in that organization.
 - **No outside contributions**, and no customer names here either: the public-repo hygiene rules
   apply to `ee/` exactly as to the core.

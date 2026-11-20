@@ -270,6 +270,24 @@ check(
 	);
 }
 
+// The objects template's backup bucket, the same way.
+{
+	const { optionalBlock } = await import('./optional-block.ts');
+	const { parseJsonc } = await import('./preview.ts');
+	const template = readFileSync(new URL('wrangler.objects.template.jsonc', root), 'utf8');
+	const config = (keep: boolean) =>
+		parseJsonc(optionalBlock(template, 'backups', keep)) as {
+			r2_buckets?: { binding: string }[];
+			vars: Record<string, string>;
+		};
+	console.log(`\nthe objects template's backup bucket is optional`);
+	check('kept, the config binds BACKUPS', config(true).r2_buckets?.[0].binding === 'BACKUPS');
+	check(
+		'dropped, it binds no bucket and is still a config',
+		config(false).r2_buckets === undefined && 'BACKUP_PUBLIC_KEY' in config(false).vars
+	);
+}
+
 // ---------- tools reach the content index only through BrainIndex ----------
 
 // The functions in src/lib/brain-index.ts that take a database are the D1 implementation
@@ -309,6 +327,32 @@ check(
 	'nothing outside brain-index.ts calls its database functions',
 	offenders.length === 0,
 	offenders.join('\n')
+);
+
+// ---------- the MCP Worker implements no Durable Object ----------
+//
+// A Worker that implements a Durable Object class gets no preview URLs, and deploy.yml's
+// check of each version before it takes traffic needs one. The classes live in the
+// objects Worker (src/objects/), which the MCP Worker reaches by binding. Nothing else in
+// src/ or ee/ may define a class or load that folder's code: a type import is erased,
+// any other import would bundle the class into the MCP Worker.
+const objectOffenders = sourceFiles
+	.filter((f) => !f.startsWith('src/objects/'))
+	.flatMap((f) =>
+		readFileSync(new URL(f, root), 'utf8')
+			.split('\n')
+			.filter(
+				(line) =>
+					/\bextends\s+DurableObject\b/.test(line) ||
+					(/\bfrom\s+['"][^'"]*\/objects\//.test(line) && !/^\s*import\s+type\b/.test(line))
+			)
+			.map((line) => `${f}: ${line.trim()}`)
+	);
+console.log('\nthe MCP Worker implements no Durable Object');
+check(
+	'only src/objects/ defines a Durable Object, and nothing loads it',
+	objectOffenders.length === 0,
+	objectOffenders.join('\n')
 );
 
 done();

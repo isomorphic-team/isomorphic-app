@@ -274,11 +274,12 @@ import { localD1, replayMigrations } from '../src/local/d1-sqlite.ts';
 import { readFileSync } from 'node:fs';
 import {
 	BRAIN_PURGED_TABLES,
+	BRAIN_REFERENCING_TABLES,
 	BRAIN_KEPT_TABLES,
 	BRAIN_UNLINKED_TABLES,
 	forgetBrain
 } from '../src/lib/brain-forget.ts';
-import { createBrain } from '../src/lib/orgs.ts';
+import { brainIdFor, brainNameTaken, createBrain } from '../src/lib/orgs.ts';
 import { bindFixtureStorage } from './fixture-storage.ts';
 import { brainSlug } from '../src/lib/brain-slug.ts';
 import { DatabaseSync } from 'node:sqlite';
@@ -286,6 +287,7 @@ import { planBrainMove, loadMovePeople, describeMove, moveBrain } from '../src/l
 import { connectCustomerOrg } from '../src/lib/org-connect.ts';
 import { ensureStaticTenant, STATIC_USER_ID } from '../src/lib/static-tenant.ts';
 import {
+	chooseBrainStorage,
 	credentialFor,
 	credentialForConnection,
 	orgStorage,
@@ -773,6 +775,22 @@ check('by GitHub owner', matchOrg(daveOrgs, 'contoso-io').org?.org.org_id === 'o
 check('by substring', matchOrg(daveOrgs, 'ontoso').org?.org.org_id === 'org2');
 check('a miss returns neither an org nor candidates', !matchOrg(daveOrgs, 'acme').org);
 check('an empty handle never silently picks one', !matchOrg(daveOrgs, '   ').org);
+{
+	// A personal organization is shown as "Personal" while its stored name is an address.
+	const personal = {
+		...daveOrgs[0],
+		org: {
+			...daveOrgs[0].org,
+			org_id: 'p-own',
+			name: 'dave@example.com',
+			model: 'platform' as const
+		}
+	};
+	check(
+		'by the label a personal organization is shown under',
+		matchOrg([...daveOrgs, personal], 'Personal').org?.org.org_id === 'p-own'
+	);
+}
 
 console.log('\nactiveAfterDisconnect: the brain a disconnect leaves you in');
 // disconnect_brain moved the pointer to a survivor and then reported the brain it
@@ -1523,6 +1541,36 @@ console.log('\nA single-user (static) deployment runs the org model (ensureStati
 	);
 }
 
+console.log('\nchooseBrainStorage: where a new brain goes');
+{
+	const base = { platformOwned: true, canHold: true };
+	const where = (o: Parameters<typeof chooseBrainStorage>[0]) => {
+		const c = chooseBrainStorage(o);
+		return 'storage' in c ? c.storage : `problem: ${c.problem}`;
+	};
+	check(
+		'an org on platform-owned storage gets a brain the deployment holds',
+		where(base) === 'isomorphic'
+	);
+	check(
+		'an org that connected its own GitHub account gets a repository there',
+		where({ ...base, platformOwned: false }) === 'github'
+	);
+	check(
+		'what the caller asks for wins, in either kind of org',
+		where({ ...base, requested: 'github' }) === 'github' &&
+			where({ ...base, platformOwned: false, requested: 'isomorphic' }) === 'isomorphic'
+	);
+	check(
+		'a deployment with no files objects falls back to GitHub by default',
+		where({ ...base, canHold: false }) === 'github'
+	);
+	check(
+		'...and refuses a caller who asked for storage it does not have',
+		where({ ...base, canHold: false, requested: 'isomorphic' }).startsWith('problem:')
+	);
+}
+
 console.log('\ncredentialFor: which credential reads a brain');
 check(
 	'a row with no storage kind: the installation id it carries',
@@ -1633,9 +1681,49 @@ console.log('\nforgetting a brain: what disconnect deletes, and what it keeps');
 		seed(t, 'b-live');
 	}
 
+	// What another brain holds about the one going away, and about one that stays.
+	for (const about of ['b-gone', 'b-live']) {
+		f.prepare(
+			`INSERT INTO review_findings
+			   (brain_id, key, kind, paths, headline, evidence, page_shas, run_id, created_at,
+			    updated_at, other_brain_id, other_path, other_sha)
+			 VALUES ('b-third', ?, 'conflict', '[]', 'h', '[]', '{}', 'r', 1, 1, ?, 'p.md', 's')`
+		).run(`conflict:${about}`, about);
+		f.prepare(
+			`INSERT INTO brain_passes
+			   (brain_id, kind, run_id, status, counters, started_at, updated_at, other_brain_id)
+			 VALUES ('b-third', ?, 'r', 'done', '{}', 1, 1, ?)`
+		).run(`consolidation:${about}`, about);
+		f.prepare(
+			`INSERT INTO brain_pass_items (brain_id, kind, item, fingerprint, checked_at, other_brain_id)
+			 VALUES ('b-third', 'consolidation:all', ?, 'fp', 1, ?)`
+		).run(`pair with ${about}`, about);
+	}
+	const referencing = tables.filter((t) => columns(t).some((c) => c.name === 'other_brain_id'));
+	check(
+		'every table that names a second brain is listed as referencing',
+		referencing.length === BRAIN_REFERENCING_TABLES.length &&
+			referencing.every((t) => (BRAIN_REFERENCING_TABLES as readonly string[]).includes(t)),
+		`with the column: ${referencing.join(', ')} (list it in src/lib/brain-forget.ts)`
+	);
+	const about = (table: string, column: string, value: string) =>
+		(
+			f.prepare(`SELECT COUNT(*) AS n FROM ${table} WHERE ${column} = ?`).get(value) as {
+				n: number;
+			}
+		).n;
+
 	// invitations and brain_memberships carry a foreign key to brains, so this batch
 	// fails outright unless they are purged before the brains row.
 	await forgetBrain(fdb, 'b-gone');
+	check(
+		'forgetBrain deletes what other brains hold about it: findings quoting it and checks against it',
+		BRAIN_REFERENCING_TABLES.every((t) => about(t, 'other_brain_id', 'b-gone') === 0)
+	);
+	check(
+		'...and leaves what they hold about a brain that stays',
+		BRAIN_REFERENCING_TABLES.every((t) => about(t, 'other_brain_id', 'b-live') === 1)
+	);
 	const left = BRAIN_PURGED_TABLES.filter((t) => count(t, 'b-gone') > 0);
 	check(
 		'forgetBrain deletes its rows in every purged table, pending brain invites included',
@@ -1670,6 +1758,46 @@ console.log('\nforgetting a brain: what disconnect deletes, and what it keeps');
 		repo_name: 'live'
 	});
 	check('...and clears nothing under an id a live brain holds', liveIntact());
+
+	// A name a brain holds stays taken whether or not a repository still exists for it.
+	check(
+		'brainNameTaken: a repository a brain holds, in any letter case',
+		(await brainNameTaken(fdb, 'acme', 'old')) && (await brainNameTaken(fdb, 'ACME', 'Old'))
+	);
+	check(
+		'brainNameTaken: a different repository whose name derives the same brain id',
+		brainIdFor('acme-old', 'x') === brainIdFor('acme', 'old-x') &&
+			(await createBrain(fdb, {
+				brain_id: brainIdFor('acme', 'old-x'),
+				org_id: 'fo',
+				repo_owner: 'acme',
+				repo_name: 'old-x'
+			})) &&
+			(await brainNameTaken(fdb, 'acme-old', 'x'))
+	);
+	check(
+		'brainNameTaken: a repository held under an id not derived from it, in any letter case',
+		await brainNameTaken(fdb, 'ACME', 'Live')
+	);
+	check('brainNameTaken: a free name is free', !(await brainNameTaken(fdb, 'acme', 'unused')));
+	check(
+		'createBrain says when it wrote nothing: the repository is held',
+		!(await createBrain(fdb, {
+			brain_id: 'brain-other-id',
+			org_id: 'fo',
+			repo_owner: 'acme',
+			repo_name: 'old'
+		}))
+	);
+	check(
+		'createBrain says when it wrote nothing: the id is held by another repository',
+		!(await createBrain(fdb, {
+			brain_id: brainIdFor('acme-old', 'x'),
+			org_id: 'fo',
+			repo_owner: 'acme-old',
+			repo_name: 'x'
+		}))
+	);
 
 	// The migration that deletes what earlier disconnects left behind.
 	seedResidue('b-older');

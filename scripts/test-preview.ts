@@ -61,6 +61,11 @@ console.log('\nthe plan is derived from the pull request number');
 		plan.databaseName
 	);
 	check(
+		'the index database is <base>-pr-<number>-index',
+		plan.indexDatabaseName === 'platform-db-preview-pr-128-index',
+		plan.indexDatabaseName
+	);
+	check(
 		'a non-number is refused',
 		throws(() => planPreview({ ...BASE, pr: NaN }), 'pull request')
 	);
@@ -106,9 +111,9 @@ console.log('\nJSONC is read without touching strings');
 
 console.log('\nthe previews block carries every binding the template declares');
 {
-	// As setup:config renders it for a preview: no CF_INDEX_D1_DATABASE_ID, so no INDEX_DB.
+	// As setup:config renders it for a preview, which has its own index database.
 	const template = parseJsonc(
-		optionalBlock(readFileSync('wrangler.template.jsonc', 'utf8'), 'index-db', false)
+		optionalBlock(readFileSync('wrangler.template.jsonc', 'utf8'), 'index-db', true)
 	) as Record<string, unknown>;
 	const config = previewConfig(template);
 	const previews = config.previews as Record<string, unknown>;
@@ -132,29 +137,79 @@ console.log('\nthe previews block carries every binding the template declares');
 		'secrets_store_secrets',
 		'ratelimits'
 	];
-	const used = BINDING_KEYS.filter((key) => key in template);
+	// Not carried, deliberately: a Durable Object binding names the objects Worker, which a
+	// Preview does not have (previewConfig).
+	const DROPPED = ['durable_objects'];
+	const used = BINDING_KEYS.filter((key) => key in template && !DROPPED.includes(key));
 	const missing = used.filter((key) => !(key in previews));
 	check('the template parses and declares bindings', used.length > 0, JSON.stringify(used));
 	check('every one is carried into previews', missing.length === 0, JSON.stringify(missing));
 	check(
-		'vars match the top level',
-		JSON.stringify(previews.vars) === JSON.stringify(template.vars)
+		'the template binds a Durable Object, and the preview config drops it everywhere',
+		'durable_objects' in template &&
+			!('durable_objects' in config) &&
+			!('durable_objects' in previews) &&
+			!('OBJECTS_SCOPE' in (previews.vars as object))
 	);
+
+	// With a preview objects Worker: as setup:config renders the bindings for it.
+	const named = (worker: string) => ({
+		...template,
+		durable_objects: {
+			bindings: (
+				(template.durable_objects as { bindings: Record<string, unknown>[] }).bindings ?? []
+			).map((b) => ({ ...b, script_name: worker }))
+		}
+	});
+	const objects = { worker: 'preview-objects', scope: 'pr-12' };
+	const withObjects = previewConfig(named('preview-objects'), objects);
+	const block = withObjects.previews as {
+		vars: Record<string, string>;
+		durable_objects?: { bindings: { name: string; script_name: string }[] };
+	};
+	check(
+		'with a preview objects Worker, every Durable Object binding is carried into previews',
+		block.durable_objects?.bindings.map((b) => b.name).join() === 'WRITE_COORDINATOR,BRAIN_FILES' &&
+			block.durable_objects.bindings.every((b) => b.script_name === 'preview-objects'),
+		JSON.stringify(block.durable_objects)
+	);
+	check(
+		'...and the Preview is given its own scope for object names',
+		block.vars.OBJECTS_SCOPE === 'pr-12' &&
+			(withObjects.vars as Record<string, string>).OBJECTS_SCOPE === 'pr-12'
+	);
+	check(
+		'a binding that names any other Worker is refused: it would reach that Worker’s objects',
+		throws(() => previewConfig(named('isomorphic-objects'), objects), 'preview-objects') &&
+			throws(() => previewConfig(template, objects), 'preview-objects')
+	);
+	check('vars match the top level', JSON.stringify(previews.vars) === JSON.stringify(config.vars));
 	const d1 = (previews.d1_databases as Record<string, unknown>[])[0];
+	check(
+		'both databases are carried, the index one included',
+		JSON.stringify(previews.d1_databases) === JSON.stringify(template.d1_databases) &&
+			(previews.d1_databases as { binding: string }[]).map((d) => d.binding).join() ===
+				'PLATFORM_DB,INDEX_DB',
+		JSON.stringify(previews.d1_databases)
+	);
 	check(
 		'the D1 binding is the top-level one',
 		JSON.stringify(d1) === JSON.stringify((template.d1_databases as unknown[])[0])
 	);
 	check('the block is a copy, not shared objects', d1 !== (template.d1_databases as unknown[])[0]);
 	check(
-		'two D1 bindings are refused rather than guessed between',
+		'D1 bindings other than the platform and index databases are refused',
 		throws(
 			() =>
 				previewConfig({
-					d1_databases: [{ binding: 'A' }, { binding: 'B' }]
+					d1_databases: [{ binding: 'PLATFORM_DB' }, { binding: 'B' }]
 				}),
-			'one D1 binding'
+			'PLATFORM_DB, INDEX_DB'
 		)
+	);
+	check(
+		'a config without the index database is refused',
+		throws(() => previewConfig({ d1_databases: [{ binding: 'PLATFORM_DB' }] }), 'INDEX_DB')
 	);
 }
 
@@ -245,12 +300,34 @@ console.log('\nthe workflow keeps secrets away from pull request code');
 		/persist-credentials: false/.test(job('build'))
 	);
 	check('build cannot write', /permissions:\n\s+contents: read\n\s+steps:/.test(job('build')));
-	check('deploy checks out the default ref', !/^\s+ref:/m.test(job('deploy')));
+	// The pull request's head never reaches the job that holds the token. The one named
+	// ref is the base branch, for the objects Worker every Preview shares.
+	const refs = [...job('deploy').matchAll(/^\s+ref:\s*(.+)$/gm)].map((m) => m[1]!.trim());
+	check(
+		'deploy checks out the default ref, and otherwise only the base branch',
+		refs.every((r) => r === '${{ github.event.pull_request.base.sha || github.sha }}') &&
+			refs.length <= 1,
+		refs.join(' | ')
+	);
+	const objectsStep = job('deploy').match(
+		/- name: Deploy the preview objects Worker\n([\s\S]*?)(?=\n {6}- name:|$)/
+	)?.[1];
+	check(
+		'the preview objects Worker is deployed from the base checkout, only when one is named',
+		!!objectsStep &&
+			/working-directory: base\n/.test(objectsStep) &&
+			/vars\.PREVIEW_OBJECTS_WORKER_NAME != ''/.test(objectsStep) &&
+			/deploy -c wrangler\.objects\.jsonc/.test(objectsStep) &&
+			!/artifact/.test(objectsStep),
+		objectsStep
+	);
 	const artifactUses = [...job('deploy').matchAll(/artifact\/(\S+?)["\s]/g)].map((m) => m[1]!);
 	check(
 		'deploy reads only the bundle and the SQL from the artifact',
 		artifactUses.length > 0 &&
-			artifactUses.every((u) => u === 'bundle/worker.js' || u === 'migrations/*.sql'),
+			artifactUses.every((u) =>
+				['bundle/worker.js', 'migrations/*.sql', 'migrations-index/*.sql'].includes(u)
+			),
 		JSON.stringify(artifactUses)
 	);
 	check('cleanup checks out the default ref', !/^\s+ref:/m.test(job('cleanup')));
@@ -294,21 +371,32 @@ console.log('\nopen sign-in is a preview setting and nothing else');
 	);
 	check(
 		'the config step takes the decided mode',
-		/AUTH_SIGN_IN: \$\{\{ needs\.resolve\.outputs\.signin \}\}/.test(yaml)
+		/PREVIEW_SIGN_IN: \$\{\{ needs\.resolve\.outputs\.signin \}\}/.test(yaml)
 	);
+	const vars = (open: boolean) =>
+		(
+			previewConfig(
+				{ d1_databases: [{ binding: 'PLATFORM_DB' }, { binding: 'INDEX_DB' }] },
+				undefined,
+				open
+			).previews as { vars: Record<string, string> }
+		).vars;
+	const open = vars(true);
 	check(
-		'deploy.yml never sets AUTH_SIGN_IN',
-		!readFileSync('.github/workflows/deploy.yml', 'utf8').includes('AUTH_SIGN_IN')
+		'previewConfig writes PREVIEW_SIGN_IN=open only when told to',
+		open.PREVIEW_SIGN_IN === 'open' && !('PREVIEW_SIGN_IN' in vars(false)),
+		JSON.stringify(open)
 	);
+	const nowhere = [
+		'.github/workflows/deploy.yml',
+		'scripts/setup-config.ts',
+		'wrangler.template.jsonc',
+		'.dev.vars.example'
+	].filter((f) => /SIGN_IN/.test(readFileSync(f, 'utf8')));
 	check(
-		'setup-config defaults it to email',
-		/key: 'AUTH_SIGN_IN',[\s\S]*?default: 'email'/.test(
-			readFileSync('scripts/setup-config.ts', 'utf8')
-		)
-	);
-	check(
-		'the template fills it from setup-config',
-		readFileSync('wrangler.template.jsonc', 'utf8').includes('"AUTH_SIGN_IN": "__AUTH_SIGN_IN__"')
+		'no deployment config or setting sets a sign-in mode',
+		nowhere.length === 0,
+		nowhere.join(', ')
 	);
 }
 

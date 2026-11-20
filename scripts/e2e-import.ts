@@ -25,15 +25,15 @@ import { connect, replicationLag, scratchBrain } from './e2e-harness.ts';
 
 const { db } = localD1();
 const brain = await scratchBrain('brain-import-e2e', 'Importer E2E test, safe to delete');
-const { store, repoArgs, brainId, name, headSha } = brain;
+const { store, locator, brainId, name, headSha } = brain;
 
 const server = new McpServer({ name: 'import-e2e', version: '0.0.0' });
 const getContext = async () => ({
 	store,
-	repoArgs,
+	locator,
 	role: 'owner' as const,
 	orgRole: 'owner' as const,
-	config: await loadBrainConfig(store, repoArgs),
+	config: await loadBrainConfig(store, locator),
 	author: undefined,
 	db,
 	brainId,
@@ -49,15 +49,15 @@ const { check, done } = checker('import E2E checks');
 // A human curator editing the brain OUTSIDE our tools. Expressed through the store
 // so it works against either backend, and so these edits look exactly like the ones
 // the importer's no-resurrection rule has to respect.
-async function readPage(path: string): Promise<{ content: string; sha: string } | null> {
-	return store.readFile(repoArgs, path);
+async function readPage(path: string): Promise<{ content: string; version: string } | null> {
+	return store.readFile(locator, path);
 }
 async function humanWrite(path: string, content: string, message: string) {
-	await store.commitFiles(repoArgs, { message, writes: [{ path, content }] });
+	await store.write(locator, { message, writes: [{ path, content }] });
 }
 async function humanDelete(path: string, message: string) {
 	if (!(await readPage(path))) throw new Error(`cannot delete missing ${path}`);
-	await store.commitFiles(repoArgs, { message, deletes: [path] });
+	await store.write(locator, { message, deletes: [path] });
 }
 
 const SOURCE = 'e2e-feed';

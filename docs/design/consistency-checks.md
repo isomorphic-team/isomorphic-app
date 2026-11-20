@@ -1,6 +1,6 @@
 # Design: consistency checks
 
-Status: **proposed** (2026-10-13). C1, C2 and C3 are built. C4 and C4a are built as a prototype: a Jev screen, then Haiku triage (2026-11-02); the rest is not.
+Status: **partly built** (2026-10-13). C1, C2, C3 and C5 are built. C4 and C4a are built as a prototype: a Jev screen, then Haiku triage (2026-11-02). C6 and C7 are not. C8, the pass between two brains, is built (2026-11-16).
 
 This is the consolidation half of the roadmap's "brain review" (steps 2 and 5).
 
@@ -137,7 +137,7 @@ These are pure and stay in the AGPL core. They keep invariant 1 of the consolida
 
 Contradictions need a model. Since 2026-09-30, model use has a home: `ee/`, behind the `enterprise` entitlement, with every request through `ee/review/gateway.ts`.
 
-- **Zero retention:** `ZDR_PROVIDER` routes only to zero-data-retention endpoints.
+- **Retention by provider:** OpenRouter requests carry `ZDR_PROVIDER`, which routes only to zero-data-retention endpoints. Anthropic requests, which serve Haiku first, run under the operator's own Anthropic organization's retention, which is standard unless the operator has arranged otherwise.
 - **Entitled orgs only:** a brain whose org has no entitlement runs the core unchanged.
 - **Spend cap:** a monthly cap per org, counted from the cost each response reports.
 
@@ -158,13 +158,12 @@ No frontier model is called.
 **How the gateway falls back.** The gateway gains an Anthropic adapter beside the OpenRouter one, and tries Haiku first for every text-writing request. It moves a request to Luna when:
 
 - the deployment has no Anthropic key
-- the Anthropic org is not configured for zero data retention
 - Haiku returns `stop_reason: "refusal"` (it has no server-side fallback)
-- the Anthropic side reports a rate limit or exhausted credits
+- the Anthropic side reports a rate limit, exhausted credits or an overload
 
 The run summary records which model served each request.
 
-**Zero retention still holds on both paths.** OpenRouter requests keep `ZDR_PROVIDER`. An Anthropic request is allowed only when the operator declares that their Anthropic organization has a zero-data-retention arrangement. There is no per-request flag to send, so the declaration is configuration, and without it the gateway skips Haiku.
+**Retention differs by path.** OpenRouter requests keep `ZDR_PROVIDER`. Anthropic requests, which serve Haiku first, run under the operator's own Anthropic organization's retention, which is standard unless the operator has arranged otherwise. There is no per-request flag to send on the Anthropic API.
 
 **The measurements are Luna's.** Haiku's triage recall, proposal quality and verify behavior are unmeasured. Under the rule that changing the proposal format or model means re-grading the verify gate, the auto tier stays off for Haiku-written proposals until a graded sample exists.
 
@@ -175,7 +174,7 @@ The run summary records which model served each request.
    A full pass is admin-requested and budgeted.
 
 2. **Pre-scan.** Every candidate page is checked against the guard's detectors before anything reaches the gateway. A page with a high-severity detection (a private key, an API token, a card number) is never sent. Skipped pairs are counted in the run summary, so a gap never reads as clean ([`privacy-checks.md`](./privacy-checks.md)).
-3. **Detect.** Both models judge each pair. A pair continues if either says so: the decision model's conflict probability is at least 0.2, or the LLM flags a conflict. This is tuned for recall, and precision is triage's job.
+3. **Detect.** The decision model screens each pair when the gateway has an OpenRouter key. A pair continues when its conflict probability is at least 0.3 (`JEV_GATE`). A pair with a page over 40,000 characters skips the screen rather than being cut, and without the key every pair goes to triage. This is tuned for recall, and precision is triage's job.
 4. **Triage, claim by claim.**
    - The LLM lists every point where the pages, or one page against itself, disagree about the same thing. It quotes both sides and says whether dates, scope or an existing note explain the difference.
    - For each claim it names the version that stands, using generic authority rules derived from `type:` and date fields:
@@ -211,7 +210,7 @@ The run summary records which model served each request.
 - **Incrementally:** on the push webhook (roadmap step 4), for pages changed since the last run.
 - **In full:** on an admin's request.
 
-The Worker has no Durable Object and no cron trigger, so a pass is a cursor in D1 that each invocation advances within its budget, under the whole-brain pass rule.
+The Worker implements no Durable Object and has no cron trigger, so a pass is a cursor in D1 that each invocation advances within its budget, under the whole-brain pass rule.
 
 ### Part 3: consolidation findings in the unified queue
 
@@ -241,7 +240,7 @@ Roadmap step 2 extends the `validate` / `resolve` pattern into one findings queu
 - **Unchanged:** the consolidation loop's invariants 3, 4, 7 and 8.
 - **Invariant 1 is scoped to the core.**
   - Everything the core returns stays computed.
-  - Model output comes only from `ee/`, through the gateway, for an entitled org, to zero-data-retention endpoints. That is processing on the operator's behalf ([`open-source-boundary.md`](./open-source-boundary.md)).
+  - Model output comes only from `ee/`, through the gateway, for an entitled org. OpenRouter requests go to zero-data-retention endpoints; Anthropic requests run under the operator's own Anthropic organization's retention. That is processing on the operator's behalf ([`open-source-boundary.md`](./open-source-boundary.md)).
   - [`consolidation-loop.md`](./consolidation-loop.md) states the scope.
 - **New:**
   - An auto-tier change requires a passing verify on the proposal itself, not a confident detection or the proposing model's own confidence.
@@ -256,16 +255,17 @@ Roadmap step 2 extends the `validate` / `resolve` pattern into one findings queu
 
 ## Work items
 
-| Item | What                                                                                                       | Where                    | Surface                                                                       |
-| ---- | ---------------------------------------------------------------------------------------------------------- | ------------------------ | ----------------------------------------------------------------------------- |
-| C1   | Built: template-aware `near-duplicate`, scaling to `MAX_DUP_PAGES`                                         | core                     | `consolidate.ts`, tests                                                       |
-| C2   | Built: `same-identifier` tension                                                                           | core                     | `consolidate.ts`, config field, tests                                         |
-| C3   | Built: consolidation kinds in the unified findings queue, staleness, `validate` and `resolve`              | core (roadmap step 2)    | D1 migration, findings, tests                                                 |
-| C4   | Pipeline: candidates, pre-scan, detect, claim triage, verify, tier, through the gateway                    | `ee/` (roadmap step 5)   | `ee/review/`, tests with a stubbed gateway                                    |
-| C4a  | Anthropic adapter in the gateway: Haiku first, Luna fallback, zero-retention declaration, cost from tokens | `ee/`                    | `ee/review/gateway.ts`, tests pinning the fallback order and the refusal path |
-| C5   | Claim clustering across pairs                                                                              | `ee/`                    | pipeline, tests with a stubbed gateway                                        |
-| C6   | Runs: webhook-triggered incremental pass, admin full pass in the background, D1 cursor                     | core trigger, `ee/` work | webhook (roadmap step 4), background driver, tests                            |
-| C7   | Consolidation section of the Review screen, approve and dismiss                                            | core                     | `ReviewView.tsx`, browser tests                                               |
+| Item | What                                                                                          | Where                    | Surface                                                                       |
+| ---- | --------------------------------------------------------------------------------------------- | ------------------------ | ----------------------------------------------------------------------------- |
+| C1   | Built: template-aware `near-duplicate`, scaling to `MAX_DUP_PAGES`                            | core                     | `consolidate.ts`, tests                                                       |
+| C2   | Built: `same-identifier` tension                                                              | core                     | `consolidate.ts`, config field, tests                                         |
+| C3   | Built: consolidation kinds in the unified findings queue, staleness, `validate` and `resolve` | core (roadmap step 2)    | D1 migration, findings, tests                                                 |
+| C4   | Pipeline: candidates, pre-scan, detect, claim triage, verify, tier, through the gateway       | `ee/` (roadmap step 5)   | `ee/review/`, tests with a stubbed gateway                                    |
+| C4a  | Anthropic adapter in the gateway: Haiku first, Luna fallback, cost from tokens                | `ee/`                    | `ee/review/gateway.ts`, tests pinning the fallback order and the refusal path |
+| C5   | Built: claim clustering across pairs                                                          | `ee/`                    | pipeline, tests with a stubbed gateway                                        |
+| C6   | Runs: webhook-triggered incremental pass, admin full pass in the background, D1 cursor        | core trigger, `ee/` work | webhook (roadmap step 4), background driver, tests                            |
+| C7   | Consolidation section of the Review screen, approve and dismiss                               | core                     | `ReviewView.tsx`, browser tests                                               |
+| C8   | Built: the pass between two brains of one organization                                        | `ee/`, core queue        | `review_brain`'s `against`, D1 migration, tests with a stubbed gateway        |
 
 **How the C4 prototype differs from the plan above** (2026-11-02):
 
@@ -280,11 +280,13 @@ Roadmap step 2 extends the `validate` / `resolve` pattern into one findings queu
   a patch must match once and leave the page's tables, lists and fences intact. A patch that
   passes goes to review; everything else, proposed notes included, goes to a person. Nothing
   decides a write unattended.
-- **No zero-retention declaration.** Anthropic requests get the operator's Anthropic
+- **Retention.** Anthropic requests get the operator's Anthropic
   organization's own retention. The gateway falls back to Luna on a refusal, a rate limit,
   exhausted credits or an overload.
 - **Candidates** are each page's three best search hits on its title, plus the near-duplicate
   and same-identifier tensions. A pair over `MAX_PAIR_CHARS` is skipped and counted, never cut.
+  A page marked `status: deprecated` is left out and counted: on two real brains, 42 of 44
+  findings between them involved a deprecated copy of pages that had since moved on.
 - **The trigger** is `review_brain` with `check: "contradictions"`, admin only, a budgeted
   step per call. `validate` lists what it found and, for admins, when it last ran.
   `pnpm consolidate:report <folder> --models` runs the same pass over a local copy.
@@ -304,6 +306,35 @@ Roadmap step 2 extends the `validate` / `resolve` pattern into one findings queu
   coverage line shows progress, and a gateway refusal still stops the pass as `stopped`. The push
   webhook and `review_brain` start the same job. The driver is a Cloudflare Queue or a cron
   trigger, not a Durable Object.
+- **Between two brains (C8).** `review_brain` with `check: "contradictions"` and `against`
+  runs the same pass over the pages of two brains in one organization, pairing a page only
+  with pages of the other brain: each page's three best search hits on its title there, in
+  both directions, counting only a page that holds every word of the title. Inside one brain
+  a single shared word is enough; between two it pairs a long page with everything.
+  `pnpm consolidate:report <folder> --against <other folder>` lists the pairs for no spend,
+  and with `--models` runs the pass. The caller is an admin of the brain the pass runs from and can open the
+  other. Findings land in the first brain's queue with the other brain's page beside them
+  (`other_brain_id`, `other_path`, `other_sha`, migration 0028), and `validate` reports one
+  only to a viewer who can open both brains, since it quotes both. A change to either page
+  makes it stale. Its key names the other page by a digest, because the key is written to
+  the first brain's dismissal ledger. It carries no patch and no "which side stands": between
+  brains a person decides. It is never clustered. The pass has its own cursor and pair memory
+  per other brain (`brain_passes` kind `consolidation:<brain id>`), and the two brains
+  together stay under `MAX_DUP_PAGES`. Removing a brain deletes what other brains hold about
+  it.
+- **Against every other brain.** `against: "all"` runs one pass between a brain and every
+  other brain of its organization the caller can open (`brainsToCompare`, at most
+  `MAX_COMPARED_BRAINS`). A page of the first brain takes its three best hits across all the
+  others pooled, so its cost does not grow with the number of brains; a page of another
+  brain takes its hits in the first brain only, and two other brains are never compared with
+  each other. Each finding names the brain its other page is in. A brain that cannot be
+  opened is left out and named in the reply. The pass keeps one cursor and pair memory
+  (`consolidation:all`), all brains together stay under `MAX_DUP_PAGES`, and every brain's
+  pages are still loaded whole on each call. Each pass row and remembered pair names the
+  other brain it is about (`other_brain_id`, migration 0029), which is how removing a brain
+  finds them. Repeating `--against` on
+  `pnpm consolidate:report` runs it over local folders. Design context: [`roles-self-and-world-model.md`](./roles-self-and-world-model.md),
+  section 11, step 3.
 - **Not yet:** the push trigger and background passes (C6), and the Review screen section (C7).
 
 C1 and C2 stand alone and ship first. C3 is shared with the guard's own findings and belongs to roadmap step 2. C4 and C5 are the model work. C7 is where the value lands for people, because the review tier carries most of the work.
@@ -312,7 +343,7 @@ C1 and C2 stand alone and ship first. C3 is shared with the guard's own findings
 
 - **Is Haiku as good a triager as Luna?** The claim-by-claim prompt, the claim filter and the verify gate were all measured with Luna. One graded run of Haiku on the same flagged sets settles it; until then the auto tier stays off for its proposals.
 - **Should credits count toward the cap?** Counting them keeps the cap's meaning stable. Not counting them lets an operator spend credits freely and keeps the cap for real money.
-- **The gates** (0.2 to detect, 0.4 per claim, the auto gate) come from three brains graded by a model whose own first pass misses real issues. They need a person-labelled sample before any default is trusted.
+- **The gates** (0.3 to detect, 0.4 per claim, the auto gate) come from three brains graded by a model whose own first pass misses real issues. They need a person-labelled sample before any default is trusted.
 - **The auto gate for claim-by-claim patches is a hypothesis.** The three retargeted questions at 0.5 passed 22 of 52 graded edits, all good. The gate was chosen on those same edits, so it needs a held-out sample before auto-apply is offered for them.
 - **How should claims be clustered?** Options: by the decision model on claim pairs, by a normalized subject key the LLM emits, or both.
 - **Are conflict keys stable across runs?** The fingerprint is only as stable as the values triage names: `$95/hr` one run and `$95` the next is a different key. Run triage twice over the flagged sets and measure how many keys match, and how much a cluster's entries grow `.isomorphic/review.json`, before C4 fixes the format.

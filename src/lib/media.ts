@@ -391,6 +391,13 @@ export function filenameFromUrl(raw: string): string {
 	}
 }
 
+export function bytesFromBase64(b64: string): Uint8Array {
+	const binary = atob(b64);
+	const bytes = new Uint8Array(binary.length);
+	for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+	return bytes;
+}
+
 // Base64 without Buffer (Worker) and without blowing the argument limit: 32 KiB of
 // char codes per spread, which a 5 MiB file crosses 160 times.
 export function base64FromBytes(bytes: Uint8Array): string {

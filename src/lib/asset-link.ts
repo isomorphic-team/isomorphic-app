@@ -12,7 +12,7 @@
 
 import { isContentPath } from './brain-policy.ts';
 import type { PathPolicy } from './brain-policy.ts';
-import type { BinaryContent, RepoRef } from './brain-repo.ts';
+import type { BinaryContent, BrainLocator } from './brain-repo.ts';
 import { MAX_ATTACHMENT_BYTES, mediaTypeOf } from './media.ts';
 
 export const ASSET_LINK_TTL_SECONDS = 15 * 60;
@@ -170,8 +170,8 @@ export function assetResponseHeaders(
 }
 
 export interface OpenedBrain {
-	read: (repo: RepoRef, path: string) => Promise<BinaryContent | null>;
-	repoArgs: RepoRef;
+	read: (repo: BrainLocator, path: string) => Promise<BinaryContent | null>;
+	locator: BrainLocator;
 	config: PathPolicy;
 }
 
@@ -220,7 +220,7 @@ export async function serveAssetLink(
 	if (!mimeType) return notFound();
 	const brain = await open(verdict.claim);
 	if (!brain || !isContentPath(path, brain.config)) return notFound();
-	const file = await brain.read(brain.repoArgs, path);
+	const file = await brain.read(brain.locator, path);
 	if (!file) return notFound();
 	if (file.size > MAX_ATTACHMENT_BYTES)
 		return plain(413, 'This file is over the size this brain serves.');

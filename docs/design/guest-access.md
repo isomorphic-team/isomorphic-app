@@ -73,9 +73,9 @@ member who was never invited to join.
   person: with `AUTO_PROVISION` on they get their own org, otherwise they are turned away.
   That is not a guest concept, it is the existing one.
 - **No expiry on a guest grant.** Revocation is explicit (`share_brain` with `access: 'none'`,
-  or the brain being disconnected, which drops every grant). The reader link in
-  [`link-sharing-and-the-web-app.md`](./link-sharing-and-the-web-app.md) is the expiring,
-  identity-free shape, for a different audience.
+  or the brain being disconnected, which drops every grant). The reader link proposed in
+  [`link-sharing-and-the-web-app.md`](./link-sharing-and-the-web-app.md), which is not built,
+  is the expiring, identity-free shape, for a different audience.
 - **No audience grants** ("everyone who can reach brain X can reach brain Y"). Nothing has
   asked for it; a grant per person per brain is legible and the panel shows it.
 

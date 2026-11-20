@@ -41,8 +41,8 @@ Different things wearing one filename.
 
 ### What the code actually does (verified)
 
-- **`FOLDER_NOTE_NAMES = ['index.md', 'README.md']`** (`src/lib/view-directives.ts:20`), with
-  `isFolderNoteName` re-exported to the app (`app/core/util.ts:6`). Nine call sites across
+- **`FOLDER_NOTE_NAMES = ['index.md', 'README.md']`** (`src/lib/view-directives.ts`), with
+  `isFolderNoteName` re-exported to the app (`app/core/util.ts`). Nine call sites across
   `views.ts`, `wiki.ts`, `custom-tools.ts`, `librarian.ts`, `Breadcrumb.tsx`, `actions.ts`, and
   `Browse.tsx`, all funnelling through that one constant. The concept is centralized, which is
   what makes this tractable.
@@ -53,12 +53,12 @@ Different things wearing one filename.
 - **The platform is what introduces violations.** `composeUpdate`
   (`src/lib/page-write.ts`) sets `manageFm` only when the page already has frontmatter or
   the caller passes `title`/`type`/`description`/`status`/`fields`; otherwise it writes the body
-  as-is. That is correct. But `folderNoteSeed` (`app/views/Browse.tsx:150`) returns a `title`,
-  and both call sites (`:597`, `:646`) pass it into `write_page`. **Every folder note created
+  as-is. That is correct. But `folderNoteSeed` (`app/views/Browse.tsx`) returns a `title`,
+  and both call sites pass it into `write_page`. **Every folder note created
   through the app is therefore born with `title:` and `updated:` frontmatter in `index.md`**,
   and once a page has frontmatter, `updated:` is re-stamped on every subsequent write.
-- **That `title` is redundant.** `pageTitle` (`src/lib/wiki.ts:228`) already resolves declared
-  `title:` → first `# H1` → filename, with an explicit folder-note case (`:235`) returning the
+- **That `title` is redundant.** `pageTitle` (`src/lib/wiki.ts`) already resolves declared
+  `title:` → first `# H1` → filename, with an explicit folder-note case returning the
   _folder's_ name. Seeding an `# H1` instead of passing `title` produces an identical
   user-visible result from a conformant file.
 - **Reserved names are indexed as ordinary concepts.** `src/lib/brain-index.ts` has no exclusion
@@ -104,7 +104,7 @@ Extend `FOLDER_NOTE_NAMES` to `['overview.md', 'index.md', 'README.md']`, with `
 taking priority. Purely additive: no existing brain changes behavior, because a folder with only
 `index.md` still resolves exactly as it does now.
 
-`overview.md` is the recommended name because `folderNoteSuggestions` (`src/tools/librarian.ts`)
+`overview.md` is the recommended name because `folderNoteSuggestions` (`src/lib/advisories.ts`)
 already treats `overview|about|home|summary|start-here` as overview-shaped filenames when it
 suggests promoting a page to a folder note. The vocabulary exists in the codebase.
 

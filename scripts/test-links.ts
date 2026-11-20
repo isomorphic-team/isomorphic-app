@@ -19,7 +19,7 @@ import {
 	type BrokenLink,
 	type ResolvedGraph
 } from '../src/lib/brain-index.ts';
-import { githubStore } from '../src/lib/brain-repo.ts';
+import { githubStore } from '../src/lib/brain-store-github.ts';
 import { localD1 } from '../src/local/d1-sqlite.ts';
 import { DEFAULT_BRAIN_CONFIG, type BrainConfig } from '../src/lib/brain-policy.ts';
 import { extractLinks, rewriteWikiLinks, wikilinkKey } from '../src/lib/wiki.ts';

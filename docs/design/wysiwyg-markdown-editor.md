@@ -10,7 +10,7 @@
 
 Status: **built, including Phase D.** The editor is WYSIWYG over ProseMirror
 (`prosemirror-markdown`), guarded by `pnpm test:roundtrip`, and the MCP SDK is v2
-(`@modelcontextprotocol/server` 2.0), so the textarea, the SDK 1.29 pin and the `agents`
+(`@modelcontextprotocol/server` 2.4.0), so the textarea, the SDK 1.29 pin and the `agents`
 package described in the next two paragraphs are gone. The rest of this document is the
 design as written.
 

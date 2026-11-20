@@ -23,11 +23,12 @@ import {
 	listIndexedPages,
 	indexDatabase,
 	resetIndex,
-	writeThroughIndex,
+	writeThroughIndex as writeThroughWithTags,
 	REBUILD_PAGE_BUDGET,
 	REINDEX_PAGE_BUDGET
 } from '../src/lib/brain-index.ts';
-import { githubStore, MAX_SCAN_PAGES } from '../src/lib/brain-repo.ts';
+import { MAX_SCAN_PAGES } from '../src/lib/brain-repo.ts';
+import { githubStore, gitBlobSha } from '../src/lib/brain-store-github.ts';
 import { INDEX_MIGRATIONS_DIR, applyMigrations, replayMigrations } from '../src/local/d1-sqlite.ts';
 import { DEFAULT_BRAIN_CONFIG, type BrainConfig } from '../src/lib/brain-policy.ts';
 import { pageTitle } from '../src/lib/wiki.ts';
@@ -39,6 +40,23 @@ import { openFolderAsBrain } from './local-brain.ts';
 import { fakeGithub, type FakePage } from './fake-github.ts';
 
 const { check, done } = checker('content-index checks');
+
+// Write-through as commitBundle drives it: every written file carries the version tag
+// the GitHub store returns for it (its git blob id).
+type WriteThroughArgs = Parameters<typeof writeThroughWithTags>;
+async function writeThroughIndex(
+	d1: WriteThroughArgs[0],
+	id: string,
+	cfg: BrainConfig,
+	baseSha: string,
+	landedSha: string,
+	writes: WriteThroughArgs[5],
+	deletes: string[]
+): Promise<boolean> {
+	const tags: Record<string, string> = {};
+	for (const w of writes) tags[w.path] = await gitBlobSha(w.content);
+	return writeThroughWithTags(d1, id, cfg, baseSha, landedSha, writes, deletes, tags);
+}
 
 // ---- D1 shim over node:sqlite, instrumented to count the work each read does ----
 //
@@ -53,11 +71,15 @@ applyMigrations(sqlite, INDEX_MIGRATIONS_DIR);
 
 let stmtCount = 0; // statements executed since the last resetCounters()
 let batchCount = 0;
+// Trips to the database: a batch is one, however many statements it carries.
+let roundTrips = 0;
+let inBatch = false;
 let failBatchStatement: number | null = null;
 let beforeBatch: (() => void) | null = null;
 function resetCounters() {
 	stmtCount = 0;
 	batchCount = 0;
+	roundTrips = 0;
 }
 
 function shimStatement(sql: string, params: unknown[] = []): any {
@@ -65,16 +87,24 @@ function shimStatement(sql: string, params: unknown[] = []): any {
 		bind: (...p: unknown[]) => shimStatement(sql, p),
 		first: async () => {
 			stmtCount++;
+			roundTrips++;
 			return sqlite.prepare(sql).get(...(params as [])) ?? null;
 		},
 		all: async () => {
 			stmtCount++;
+			roundTrips++;
 			return { results: sqlite.prepare(sql).all(...(params as [])) };
 		},
 		run: async () => {
 			stmtCount++;
-			const result = sqlite.prepare(sql).run(...(params as []));
-			return { success: true, meta: { changes: Number(result.changes) } };
+			if (!inBatch) roundTrips++;
+			const prepared = sqlite.prepare(sql);
+			if (prepared.columns().length > 0) {
+				const results = prepared.all(...(params as []));
+				return { success: true, meta: { changes: 0 }, results };
+			}
+			const result = prepared.run(...(params as []));
+			return { success: true, meta: { changes: Number(result.changes) }, results: [] };
 		}
 	};
 }
@@ -82,10 +112,12 @@ const db = {
 	prepare: (sql: string) => shimStatement(sql),
 	batch: async (stmts: { run: () => Promise<unknown> }[]) => {
 		batchCount++;
+		roundTrips++;
 		beforeBatch?.();
 		beforeBatch = null;
 		const results: unknown[] = [];
 		sqlite.exec('BEGIN');
+		inBatch = true;
 		try {
 			for (let i = 0; i < stmts.length; i++) {
 				if (i === failBatchStatement) throw new Error('injected batch failure');
@@ -96,6 +128,8 @@ const db = {
 		} catch (err) {
 			sqlite.exec('ROLLBACK');
 			throw err;
+		} finally {
+			inBatch = false;
 		}
 	}
 } as never;
@@ -369,19 +403,19 @@ console.log('\nContent index — bounded, resumable ensureFresh\n');
 }
 
 // ---------------------------------------------------------------- scenario 6
-// getHead with a named branch: the write path's hottest call used to pay a
+// getRevision with a named branch: the write path's hottest call used to pay a
 // repos.get just to learn the default branch that config already holds.
 {
 	console.log('\ngetHead with a named branch');
 	const before = gh.calls.reposGet;
-	const h = await store.getHead(repo, 'main');
+	const h = await store.getRevision(repo, 'main');
 	check('named branch skips the repos.get discovery', gh.calls.reposGet === before);
 	check(
 		'named branch resolves head',
-		h.branch === 'main' && h.commitSha === gh.head && !!h.treeSha,
+		h.branch === 'main' && h.id === gh.head && !!h.snapshot,
 		JSON.stringify(h)
 	);
-	const h2 = await store.getHead(repo, 'missing');
+	const h2 = await store.getRevision(repo, 'missing');
 	check(
 		'a missing branch falls back to discovery',
 		gh.calls.reposGet === before + 1 && h2.branch === 'main',
@@ -472,25 +506,49 @@ console.log('\nContent index — bounded, resumable ensureFresh\n');
 			!(await listIndexedPages(db, brainId)).some((p) => p.path === 'wiki/new-page.md')
 	);
 
-	// The stored blob sha is the REAL git object id, so a later incremental
-	// reindex diffs it as unchanged instead of refetching it.
+	// The stored blob sha is the tag the store returned for the write, so a later
+	// incremental reindex diffs it as unchanged instead of refetching it.
 	gh.head = 'commit-wt-4';
-	await writeThroughIndex(
+	await writeThroughWithTags(
 		db,
 		brainId,
 		config,
 		'commit-wt-3',
 		'commit-wt-4',
 		[{ path: 'wiki/empty.md', content: '' }],
-		[]
+		[],
+		{ 'wiki/empty.md': 'tag-from-store' }
 	);
 	const row = sqlite
 		.prepare(`SELECT blob_sha FROM brain_pages WHERE brain_id = ? AND path = ?`)
 		.get(brainId, 'wiki/empty.md') as { blob_sha: string };
 	check(
-		'blob sha matches git (empty blob)',
-		row.blob_sha === 'e69de29bb2d1d6434b8b29ae775ad8c2e48c5391',
+		'the stored sha is the tag the store returned',
+		row.blob_sha === 'tag-from-store',
 		row.blob_sha
+	);
+
+	// A page with no tag cannot be stored with one the next diff matches, so the
+	// whole write-through is skipped and the next read reconciles.
+	gh.head = 'commit-wt-5';
+	const untagged = await writeThroughWithTags(
+		db,
+		brainId,
+		config,
+		'commit-wt-4',
+		'commit-wt-5',
+		[
+			{ path: 'wiki/tagged.md', content: '# Tagged\n' },
+			{ path: 'wiki/untagged.md', content: '# Untagged\n' }
+		],
+		[],
+		{ 'wiki/tagged.md': 'tag-1' }
+	);
+	check(
+		'a page write without a tag skips write-through',
+		untagged === false &&
+			meta()?.indexed_commit_sha === 'commit-wt-4' &&
+			!(await listIndexedPages(db, brainId)).some((p) => p.path === 'wiki/tagged.md')
 	);
 }
 
@@ -827,6 +885,36 @@ console.log('\nContent index — bounded, resumable ensureFresh\n');
 		(await paths('wombat')).join() === gh.pages[1].path
 	);
 	check('fts: the index matches brain_pages after every write path', await consistent());
+
+	// Each statement sent alone is a round trip to the database, and that, not the
+	// query, is what a search costs on D1. Six terms and a phrase are nine statements.
+	resetCounters();
+	const long = await searchIndexFts(
+		db,
+		brainId,
+		'quokka wombat page victim outside edit',
+		undefined,
+		50
+	);
+	check(
+		'fts: a six-term search is two round trips, one for ranking and one for lines',
+		long.hits.length > 0 && roundTrips === 2 && stmtCount === 9,
+		`roundTrips=${roundTrips} statements=${stmtCount}`
+	);
+	resetCounters();
+	await searchIndexFts(db, brainId, 'quokka zzznothing', undefined, 50);
+	check(
+		'fts: a missing term beside one that matches adds no round trip',
+		roundTrips === 2,
+		`roundTrips=${roundTrips}`
+	);
+	resetCounters();
+	const rescued = await searchIndexFts(db, brainId, 'quokk', undefined, 50);
+	check(
+		'fts: a search no page matches as words is retried as prefixes, one more round trip',
+		rescued.hits.length > 0 && roundTrips === 3,
+		`roundTrips=${roundTrips} hits=${rescued.hits.length}`
+	);
 
 	const incremental = await paths('quokka wombat page');
 	await rebuildFtsIndex(db);

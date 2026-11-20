@@ -1467,6 +1467,23 @@ bridge.oncalltool = async (params) => {
 		await new Promise((r) => setTimeout(r, SLOW_LIST_MS));
 	return handleTool(params.name, (params.arguments ?? {}) as Record<string, unknown>);
 };
+// The model's side of the view's app tools: what a host lists from the open view and
+// calls on the model's behalf. A host lists them only when the view declared the
+// `tools` capability in its handshake, so this refuses the same way.
+(
+	window as unknown as {
+		__viewTools: {
+			list: () => Promise<unknown>;
+			call: (name: string, args?: Record<string, unknown>) => Promise<unknown>;
+		};
+	}
+).__viewTools = {
+	list: async () => {
+		if (!bridge.getAppCapabilities()?.tools) throw new Error('the view declared no tools');
+		return bridge.listTools({});
+	},
+	call: (name, args = {}) => bridge.callTool({ name, arguments: args })
+};
 // No tab opens here; the request is recorded where a test can read it, since which
 // URL the app asked the host to open is the whole assertion for "Open in browser".
 const openedLinks: string[] = [];

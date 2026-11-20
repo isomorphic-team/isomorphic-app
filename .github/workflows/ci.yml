@@ -121,6 +121,14 @@ jobs:
       - run: pnpm test:consolidate
       - run: pnpm test:probe
       - run: pnpm test:index
+      # The BrainStore contract on every backend: capabilities, version tags, PR-mode refusal.
+      - run: pnpm test:store
+      # connecting a Google Drive: the consent, sealed tokens, who a connection is offered to
+      - run: pnpm test:drive
+      # the write coordinator: one bundle at a time per brain, rollback, journal recovery
+      - run: pnpm test:coordinator
+      # the coordinator Durable Object in workerd (wrangler dev, no account): binding, RPC, restart
+      - run: pnpm test:objects
       - run: pnpm test:links
       - run: pnpm test:search
       - run: pnpm test:policy
@@ -135,6 +143,8 @@ jobs:
       - run: pnpm test:guard
       # Enterprise foundation: ZDR routing on every model request, entitlements, the spend cap.
       - run: pnpm test:ee
+      # Enterprise identity: domain verification, sign-in routing, accepting a provider sign-in.
+      - run: pnpm test:sso
       - run: pnpm test:app-resource
       # Every tool carries annotations.title and its read/destructive hint (directory review).
       - run: pnpm test:annotations
@@ -222,7 +232,7 @@ jobs:
     # this tag against the version pnpm resolves and fails if they drift, so the bump
     # cannot be forgotten and the failure names itself rather than arriving as a
     # confusing missing-browser in CI.
-    container: mcr.microsoft.com/playwright:v1.64.1-noble
+    container: mcr.microsoft.com/playwright:v1.65.0-noble
     # Roughly four minutes when healthy, most of it the image pull and the app bundle
     # build. Same backstop reasoning as the job above.
     timeout-minutes: 20

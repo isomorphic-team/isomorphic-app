@@ -15,6 +15,8 @@ node_modules
 # which is per-deployment rather than per-repository — so it is generated rather
 # than committed. Edit wrangler.template.jsonc, or your own .dev.vars.
 wrangler.jsonc
+# The objects Worker's config, generated the same way from wrangler.objects.template.jsonc.
+wrangler.objects.jsonc
 
 # TypeScript incremental build info
 *.tsbuildinfo

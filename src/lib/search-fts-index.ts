@@ -1,5 +1,5 @@
-// FTS5 search: the IO half. Answers search_pages where the index has its own database
-// (src/lib/search-engine.ts, docs/design/brain-index-storage.md).
+// FTS5 search: the IO half. Runs in shadow beside searchIndex; search_pages does not
+// answer from it (docs/design/brain-index-storage.md).
 //
 // The table, its source view and the triggers that keep it current are the index
 // database's schema (migrations-index/0002_pages_fts.sql). They exist only there, so
@@ -49,14 +49,6 @@ export async function checkFtsIndex(db: D1Database): Promise<void> {
 
 const PAGES = `${FTS_TABLE} JOIN brain_pages p ON p.id = ${FTS_TABLE}.rowid`;
 
-async function matchingPaths(db: D1Database, brainId: string, match: string): Promise<Set<string>> {
-	const rows = await db
-		.prepare(`SELECT p.path FROM ${PAGES} WHERE ${FTS_TABLE} MATCH ?1 AND p.brain_id = ?2`)
-		.bind(match, brainId)
-		.all<{ path: string }>();
-	return new Set(rows.results.map((r) => r.path));
-}
-
 /** The same contract as searchIndex, answered by FTS5. */
 export async function searchIndexFts(
 	db: D1Database,
@@ -78,37 +70,55 @@ export async function searchIndexFts(
 	};
 	if (terms.length === 0) return empty;
 
-	// Coverage needs to know which terms each page holds: one MATCH per term (at most six).
-	// A term no page holds as a word is retried as the start of one, so `config` still
-	// finds "configuration", as it did under LIKE. Only then: matching every term as a
-	// prefix would let `fee` count for "feedback".
-	const perTerm = await Promise.all(
-		terms.map(async (t) => {
-			const whole = await matchingPaths(db, brainId, ftsQuote(t));
-			if (whole.size > 0) return { match: ftsQuote(t), paths: whole };
-			const match = `${ftsQuote(t)}*`;
-			return { match, paths: await matchingPaths(db, brainId, match) };
-		})
-	);
-	const any = perTerm.map((t) => t.match).join(' OR ');
-	const rows = await db
-		.prepare(
-			`SELECT p.path, p.title, bm25(${FTS_TABLE}, ${BM25_WEIGHTS}) AS score
-			 FROM ${PAGES} WHERE ${FTS_TABLE} MATCH ?1 AND p.brain_id = ?2`
-		)
-		.bind(any, brainId)
-		.all<{ path: string; title: string | null; score: number }>();
-	const inScope = rows.results.filter((r) => !prefix || r.path.startsWith(prefix));
-	if (inScope.length === 0) return empty;
-
 	const words = q.phrase.split(/[^\p{L}\p{N}]+/u).filter(Boolean);
-	const phrase =
-		words.length > 1 ? await matchingPaths(db, brainId, ftsQuote(words.join(' '))) : new Set();
+	type Scored = { path: string; title: string | null; score: number };
+	const scoredBy = (match: string) =>
+		db
+			.prepare(
+				`SELECT p.path, p.title, bm25(${FTS_TABLE}, ${BM25_WEIGHTS}) AS score
+				 FROM ${PAGES} WHERE ${FTS_TABLE} MATCH ?1 AND p.brain_id = ?2`
+			)
+			.bind(match, brainId);
+	const paths = (match: string) =>
+		db
+			.prepare(`SELECT p.path FROM ${PAGES} WHERE ${FTS_TABLE} MATCH ?1 AND p.brain_id = ?2`)
+			.bind(match, brainId);
+	const pathSet = (r: { results: { path: string }[] }) => new Set(r.results.map((row) => row.path));
+
+	// One batch, so one round trip to the database: the pages holding any term with
+	// their bm25, then, for coverage, the pages holding each term (at most six), then the
+	// pages holding the whole phrase. Sent one by one these were up to eight round trips.
+	const matches = terms.map(ftsQuote);
+	const [first, ...sets] = await db.batch<Scored>([
+		scoredBy(matches.join(' OR ')),
+		...matches.map(paths),
+		...(words.length > 1 ? [paths(ftsQuote(words.join(' ')))] : [])
+	]);
+	let scored = first.results;
+	const perTerm = sets.slice(0, terms.length).map(pathSet);
+	const phrase = sets[terms.length] ? pathSet(sets[terms.length]) : new Set<string>();
+
+	// When no page holds any term as a word, the terms are retried as the starts of words,
+	// so `config` alone still finds "configuration", as it did under LIKE. Only then: it is
+	// one more round trip, and on a search that already has results a prefix adds pages
+	// that hold `feedback` for `fee` without moving the right one up (measured on probes).
+	if (scored.length === 0) {
+		matches.forEach((m, i) => (matches[i] = `${m}*`));
+		const [rescored, ...prefixed] = await db.batch<Scored>([
+			scoredBy(matches.join(' OR ')),
+			...matches.map(paths)
+		]);
+		scored = rescored.results;
+		prefixed.forEach((r, i) => (perTerm[i] = pathSet(r)));
+	}
+	const any = matches.join(' OR ');
+	const inScope = scored.filter((r) => !prefix || r.path.startsWith(prefix));
+	if (inScope.length === 0) return empty;
 
 	const signals: FtsSignal[] = inScope.map((r) => ({
 		path: r.path,
 		title: r.title,
-		covered: perTerm.filter((t) => t.paths.has(r.path)).length,
+		covered: perTerm.filter((s) => s.has(r.path)).length,
 		phrase: phrase.has(r.path),
 		bm25: Number(r.score)
 	}));

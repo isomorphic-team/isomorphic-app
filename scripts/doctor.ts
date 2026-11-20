@@ -11,6 +11,7 @@
 
 import { existsSync, readFileSync } from 'node:fs';
 import { readDevVars } from '../src/persist.ts';
+import { GENERATED_CONFIGS } from './wrangler-configs.ts';
 
 const root = new URL('../', import.meta.url);
 const has = (rel: string) => existsSync(new URL(rel, root));
@@ -51,11 +52,14 @@ if (has('node_modules')) {
 	next.push('pnpm install');
 }
 
-if (has('wrangler.jsonc')) {
-	line(OK, 'wrangler.jsonc generated');
+const missingConfigs = GENERATED_CONFIGS.filter((c) => !has(c));
+if (missingConfigs.length === 0) {
+	line(OK, `${GENERATED_CONFIGS.join(' and ')} generated`);
 } else {
-	line(WARN, 'wrangler.jsonc missing (it is generated and gitignored)', 'pnpm setup:config');
-	next.push('pnpm setup:config');
+	// Some present and some not: generated before a config was added, so --force.
+	const fix = `pnpm setup:config${missingConfigs.length < GENERATED_CONFIGS.length ? ' --force' : ''}`;
+	line(WARN, `${missingConfigs.join(' and ')} missing (generated and gitignored)`, fix);
+	next.push(fix);
 }
 
 // The local D1 lives under .wrangler/state. Its absence just means migrations have

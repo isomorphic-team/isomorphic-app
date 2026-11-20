@@ -31,7 +31,7 @@ import {
 	searchBrains,
 	searchIndex
 } from '../src/lib/brain-index.ts';
-import { searchTargets, type BrainContext } from '../src/tools/librarian.ts';
+import { reachableBrains, searchTargets, type BrainContext } from '../src/tools/librarian.ts';
 import type { AccessibleBrain } from '../src/lib/orgs.ts';
 import { INDEX_MIGRATIONS_DIR, localD1 } from '../src/local/d1-sqlite.ts';
 import { searchIndexFts } from '../src/lib/search-fts-index.ts';
@@ -818,6 +818,54 @@ function result(paths: string[], budgetHit = false): SearchResult {
 	check('no brains means no hits', none.hits.length === 0);
 }
 
+// reachableBrains: whose pages a report of findings may quote.
+{
+	const opened: string[] = [];
+	const openIndex = ((brainId: string) => {
+		opened.push(brainId);
+		return { pageShas: async () => new Map([['a.md', `sha-${brainId}`]]) };
+	}) as unknown as BrainContext['openIndex'];
+	const row = (id: string, name: string) =>
+		({ id, brain_id: `brain-${id}`, repo_owner: 'o', repo_name: id, name }) as AccessibleBrain;
+	const deps = { listBrains: async () => [row('legal', 'Legal'), row('handbook', 'Handbook')] };
+
+	const got = await reachableBrains(['brain-handbook', 'brain-closed'], deps, openIndex);
+	check(
+		'findings may quote exactly the wanted brains the caller can open',
+		got.size === 1 &&
+			got.get('brain-handbook')?.handle === 'handbook' &&
+			got.get('brain-handbook')?.shas.get('a.md') === 'sha-brain-handbook',
+		JSON.stringify([...got])
+	);
+	check(
+		'only those brains have their index read',
+		JSON.stringify(opened) === JSON.stringify(['brain-handbook'])
+	);
+	check(
+		'with no brain list, no other brain is reachable',
+		(await reachableBrains(['brain-handbook'], undefined, openIndex)).size === 0
+	);
+	check(
+		'nor when the brain list cannot be read',
+		(
+			await reachableBrains(
+				['brain-handbook'],
+				{
+					listBrains: async () => {
+						throw new Error('down');
+					}
+				},
+				openIndex
+			)
+		).size === 0
+	);
+	opened.length = 0;
+	check(
+		'and nothing is looked up when no finding names another brain',
+		(await reachableBrains([], deps, openIndex)).size === 0 && opened.length === 0
+	);
+}
+
 // searchTargets: which brains a fan-out is allowed to reach.
 // The index key (`brain_id`) and the handle differ on purpose, so a target built from
 // the wrong one is visible.
@@ -966,10 +1014,11 @@ function brain(id: string, name: string): AccessibleBrain {
 		JSON.stringify(stem.hits)
 	);
 
-	// "north" is not the stem of "Northwind", so only the prefix retry can find it.
+	// "north" is not the stem of "Northwind" and no page holds it as a word, so only the
+	// prefix retry can find it.
 	const partial = await searchIndexFts(db, BRAIN, 'north', undefined, 50);
 	check(
-		'fts: a term no page holds as a word matches as the start of one',
+		'fts: a search no page matches as words matches as the starts of words',
 		partial.hits.some((h) => h.path === 'wiki/vendors/northwind.md'),
 		JSON.stringify(partial.hits)
 	);

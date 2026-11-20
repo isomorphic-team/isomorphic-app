@@ -21,7 +21,7 @@
 // repo on disk) and re-exports the policy for existing importers. Worker-safe (no
 // node:*).
 
-import type { RepoRef, BrainStore } from './brain-repo.ts';
+import type { BrainLocator, BrainStore } from './brain-repo.ts';
 import {
 	type BrainConfig,
 	type MergeMethod,
@@ -50,11 +50,11 @@ export * from './brain-policy.ts';
 // each need both lists and a second walk would double the cost of every file tree.
 export async function listNonPagePaths(
 	store: BrainStore,
-	repo: RepoRef,
+	repo: BrainLocator,
 	config: BrainConfig
 ): Promise<{ assets: string[]; hidden: string[] }> {
-	const head = await store.getHead(repo, config.defaultBranch);
-	const tree = await store.listTree(repo, head, { extension: '*' });
+	const rev = await store.getRevision(repo, config.defaultBranch);
+	const tree = await store.listTree(repo, rev, { extension: '*' });
 	const assets: string[] = [];
 	const hidden: string[] = [];
 	for (const { path } of tree) {
@@ -120,7 +120,7 @@ export function parsePaths(raw: ConfigFile): Record<string, PathRole> {
 // behavior — so detection can never make a brain worse than it was.
 async function resolveWritePolicy(
 	store: BrainStore,
-	repo: RepoRef,
+	repo: BrainLocator,
 	rawMode: unknown
 ): Promise<{ writeMode: WriteMode; defaultBranch: string; mergeMethod: MergeMethod }> {
 	const explicit: WriteMode | null =
@@ -146,7 +146,7 @@ async function resolveWritePolicy(
 // wiki/+raw/ defaults (never break a brain over a bad config commit). The write
 // policy is always resolved from the live repo (protection detection), regardless
 // of whether a config file exists.
-export async function loadBrainConfig(store: BrainStore, repo: RepoRef): Promise<BrainConfig> {
+export async function loadBrainConfig(store: BrainStore, repo: BrainLocator): Promise<BrainConfig> {
 	const file = await store.readFile(repo, CONFIG_PATH);
 	let raw: ConfigFile = {};
 	if (file) {
@@ -197,7 +197,7 @@ export function parsePolicyMode(raw: ConfigFile): PolicyMode {
 // defaults, while a failed read keeps the caller's known-good config.
 export async function loadIndexConfig(
 	store: BrainStore,
-	repo: RepoRef,
+	repo: BrainLocator,
 	ref: string,
 	fallback: BrainConfig
 ): Promise<BrainConfig> {

@@ -588,7 +588,7 @@ console.log('\nread_media: paths it refuses without reading the store');
 			return null;
 		}
 	};
-	registerMediaTools(server, async () => ({ store, repoArgs: {}, config }) as never);
+	registerMediaTools(server, async () => ({ store, locator: {}, config }) as never);
 	const readMedia = handlers.get('read_media')!;
 	const refusal = async (path: string) => {
 		reads.length = 0;
@@ -907,7 +907,7 @@ console.log('\nserving a signed link');
 		!brainForClaim(claim, access[claim.userId ?? ''] ?? [])
 			? null
 			: {
-					repoArgs: { owner: 'o', repo: 'r' },
+					locator: { owner: 'o', repo: 'r' },
 					config,
 					read: async (_r: unknown, path: string) =>
 						files[path]
@@ -1006,7 +1006,7 @@ console.log('\nread_media: documents and links');
 				: null
 	};
 	const ctx = async () =>
-		({ store, repoArgs: {}, config, brainId: 'b1', actorUserId: 'u1' }) as never;
+		({ store, locator: {}, config, brainId: 'b1', actorUserId: 'u1' }) as never;
 	registerMediaTools(server, ctx, {
 		assetLinks: async () => ({ base: 'https://brain.example.com', key: linkKey }),
 		now: () => 1000

@@ -10,6 +10,8 @@
 // it, leaving a real repository behind on the platform org. Setting the code
 // lets Node exit naturally once the event loop drains, which runs the teardown.
 
+import type { BrainStore } from '../src/lib/brain-repo.ts';
+
 export interface Checker {
 	/** Assert `cond`. `detail` is printed only on failure. */
 	check(label: string, cond: boolean, detail?: string): void;
@@ -78,3 +80,8 @@ export function errorOf(fn: () => unknown): string | null | Promise<string | nul
 		return messageOf(e);
 	}
 }
+
+// A test double for the BrainStore with only the methods a battery calls. Unlike a
+// cast through `unknown`, the methods it does define are checked against the
+// contract, so a renamed field fails to compile instead of passing a stale stub.
+export const partialStore = (p: Partial<BrainStore>): BrainStore => p as BrainStore;

@@ -15,6 +15,7 @@
 // the auto-init commit — no partial state.
 
 import type { Octokit } from 'octokit';
+import type { BrainLocator, BrainStore, CommitAuthor } from './brain-repo.ts';
 import {
 	AGENTS_MD,
 	README_MD,
@@ -52,6 +53,17 @@ export function buildScaffoldFiles(): FileEntry[] {
 		// GitHub); .gitkeep because git doesn't track empty dirs.
 		{ path: 'source/.gitkeep', content: '' }
 	];
+}
+
+const SCAFFOLD_MESSAGE = 'Scaffold brain: AGENTS.md, README, .isomorphic.json, wiki/ and source/';
+
+// The scaffold as one write through a store, for a brain with no repository.
+export async function scaffoldInto(
+	store: BrainStore,
+	locator: BrainLocator,
+	author?: CommitAuthor
+): Promise<void> {
+	await store.write(locator, { message: SCAFFOLD_MESSAGE, writes: buildScaffoldFiles(), author });
 }
 
 export interface CreatedBrain {
@@ -98,7 +110,7 @@ export async function scaffoldExistingRepo(
 	const { data: commit } = await octokit.rest.git.createCommit({
 		owner,
 		repo,
-		message: 'Scaffold brain: AGENTS.md, README, .isomorphic.json, wiki/ and source/',
+		message: SCAFFOLD_MESSAGE,
 		tree: newTree.sha,
 		parents: [parentSha]
 	});
@@ -143,4 +155,29 @@ export async function createAndScaffoldBrain(
 		htmlUrl: repo.html_url,
 		commitSha
 	};
+}
+
+// Make sure a private repository exists for a brain's files to be written into, and say
+// whether this call created it. A new one gets a default branch from `auto_init`.
+export async function ensureRepository(
+	octokit: Octokit,
+	opts: { owner: string; name: string; description?: string }
+): Promise<{ created: boolean }> {
+	try {
+		await octokit.rest.repos.get({ owner: opts.owner, repo: opts.name });
+		return { created: false };
+	} catch (err) {
+		if ((err as { status?: number })?.status !== 404) throw err;
+	}
+	await octokit.rest.repos.createInOrg({
+		org: opts.owner,
+		name: opts.name,
+		description: opts.description ?? 'Brain — LLM-maintained knowledge base',
+		private: true,
+		auto_init: true,
+		has_issues: true,
+		has_projects: false,
+		has_wiki: false
+	});
+	return { created: true };
 }

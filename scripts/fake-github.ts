@@ -6,6 +6,12 @@
 // is then a blob in the tree and readable through getContent, which records the ref
 // it was asked for in `configReadRefs`. `heads/missing` 404s, so a branch fallback has
 // a real miss to take.
+//
+// Writes (createTree, createCommit, updateRef) apply to `pages` and move `head`. A
+// written page's sha is git's own blob id, computed with node:crypto, so a battery can
+// check the adapter's version tags against git rather than against the adapter.
+
+import { createHash } from 'node:crypto';
 
 export interface FakePage {
 	path: string;
@@ -35,6 +41,14 @@ export interface FakeGithub {
 	callCount(): number;
 }
 
+// git's object id for a blob: SHA-1 over `blob <bytes>\0<content>`.
+export function realGitBlobSha(content: string): string {
+	const body = Buffer.from(content, 'utf8');
+	return createHash('sha1')
+		.update(Buffer.concat([Buffer.from(`blob ${body.length}\0`), body]))
+		.digest('hex');
+}
+
 const notFound = () => Object.assign(new Error('Not Found'), { status: 404 });
 
 export function fakeGithub(): FakeGithub {
@@ -56,6 +70,7 @@ export function fakeGithub(): FakeGithub {
 		callCount: () => Object.values(gh.calls).reduce((a, b) => a + b, 0)
 	};
 	const { calls } = gh;
+	let commits = 0;
 
 	gh.octokit = {
 		graphql: async (_query: string, variables: Record<string, string>) => {
@@ -117,6 +132,24 @@ export function fakeGithub(): FakeGithub {
 						tree.push({ type: 'blob', path: '.isomorphic.json', sha: `config-${gh.head}` });
 					}
 					return { data: { tree } };
+				},
+				createTree: async ({
+					tree
+				}: {
+					tree: { path: string; content?: string; sha?: string | null }[];
+				}) => {
+					for (const e of tree) {
+						gh.pages = gh.pages.filter((p) => p.path !== e.path);
+						if (e.sha === null) continue;
+						if (e.content === undefined) throw new Error('binary writes are not faked');
+						gh.pages.push({ path: e.path, sha: realGitBlobSha(e.content), content: e.content });
+					}
+					return { data: { sha: `tree-pending` } };
+				},
+				createCommit: async () => ({ data: { sha: `commit-w${++commits}` } }),
+				updateRef: async ({ sha }: { sha: string }) => {
+					gh.head = sha;
+					return { data: {} };
 				},
 				getBlob: async () => {
 					throw new Error('getBlob should not be needed (no oversized blobs in this fixture)');

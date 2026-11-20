@@ -2,7 +2,7 @@
 // which is typechecked against the Workers runtime and may not import `node:*`.
 // Reachable only from src/local.ts.
 //
-// A git repo rather than a bare folder: commitFiles has to land a multi-file bundle
+// A git repo rather than a bare folder: write() has to land a multi-file bundle
 // whole or not at all, which write_page's edit batches depend on, and plain
 // filesystem writes cannot do that. Committing also gives view_activity a history.
 //
@@ -17,16 +17,18 @@ import { existsSync } from 'node:fs';
 import { mkdir, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
 import { dirname, join, relative, resolve, sep } from 'node:path';
 import { promisify } from 'node:util';
-import type {
-	BrainStore,
-	CommitEntry,
-	CommitOpts,
-	CommitOrPROpts,
-	Head,
-	PageContent,
-	RepoWritePolicy,
-	TreeEntry,
-	WriteOutcome
+import {
+	defineStore,
+	type BrainStore,
+	type CommitEntry,
+	type WriteOpts,
+	type CommitOrPROpts,
+	type WriteResult,
+	type Revision,
+	type PageContent,
+	type RepoWritePolicy,
+	type FileEntry,
+	type WriteOutcome
 } from '../lib/brain-repo.ts';
 
 const exec = promisify(execFile);
@@ -78,10 +80,12 @@ async function walk(root: string): Promise<Entry[]> {
 	return out;
 }
 
-// The per-file "blob sha" the content index diffs against. Size plus mtime, not a
+// The per-file version tag the content index diffs against. Size plus mtime, not a
 // content hash: the index only compares for equality, and hashing every file on every
 // read would mean reading the whole brain to detect a change.
-const fileToken = (e: Entry) => `${e.size}-${e.mtimeMs}`;
+const fileToken = (e: Pick<Entry, 'size' | 'mtimeMs'>) => `${e.size}-${e.mtimeMs}`;
+const statToken = (s: { size: number; mtimeMs: number }) =>
+	fileToken({ size: s.size, mtimeMs: Math.floor(s.mtimeMs) });
 
 // The whole-tree revision, standing in for a commit sha. Any create, delete, or edit
 // moves it, including one made outside our tools.
@@ -142,7 +146,7 @@ export async function ensureGitRepo(
 	if (!fresh) return;
 
 	await git(dir, ['add', '--all']);
-	// --allow-empty so an empty folder still gets a HEAD for getHead to report.
+	// --allow-empty so an empty folder still gets a HEAD for getRevision to report.
 	const args = [
 		'commit',
 		'--allow-empty',
@@ -159,7 +163,7 @@ export async function ensureGitRepo(
 export function fsBrainStore(opts: FsStoreOptions): BrainStore {
 	const root = resolve(opts.dir);
 
-	const head = async (): Promise<Head> => {
+	const revision = async (): Promise<Revision> => {
 		const entries = await walk(root);
 		const token = treeToken(entries);
 		let branch = 'main';
@@ -168,15 +172,12 @@ export function fsBrainStore(opts: FsStoreOptions): BrainStore {
 		} catch {
 			// A repo with no commits yet still has a branch name we can serve.
 		}
-		// commitSha and treeSha are the same digest: for this backend "which revision"
-		// and "which tree" are the same question.
-		return { branch, commitSha: token, treeSha: token };
+		// id and snapshot are the same digest: for this backend "which revision" and
+		// "which tree" are the same question.
+		return { id: token, branch, snapshot: token };
 	};
 
-	const commit = async (
-		repoUnused: unknown,
-		o: CommitOpts
-	): Promise<{ sha: string; head: Head }> => {
+	const commit = async (repoUnused: unknown, o: WriteOpts): Promise<WriteResult> => {
 		void repoUnused;
 		// Capture what we are about to overwrite so a failure halfway can be undone.
 		// Buffers, not strings: rolling a half-written bundle back through a utf8 decode
@@ -216,34 +217,39 @@ export function fsBrainStore(opts: FsStoreOptions): BrainStore {
 		// -c, so a machine with no configured git identity can still commit.
 		const ident = author ?? { name: 'Isomorphic', email: 'local@localhost' };
 		await git(root, ['-c', `user.name=${ident.name}`, '-c', `user.email=${ident.email}`, ...args]);
-		const sha = (await git(root, ['rev-parse', 'HEAD'])).trim();
-		return { sha, head: await head() };
+		// The same tag listTree reports for each file, read back after the write.
+		const writes = o.writes ?? [];
+		const stats = await Promise.all(writes.map((w) => stat(safeJoin(root, w.path))));
+		const versions = Object.fromEntries(writes.map((w, i) => [w.path, statToken(stats[i])]));
+		return { revision: await revision(), versions };
 	};
 
-	return {
+	return defineStore({
+		// Writes are a git commit (atomic, with history); there are no pull requests.
+		capabilities: { atomicWrite: true, proposals: false, history: true },
 		// The branch name selects nothing here (every branch is the same working
 		// tree); the parameter exists so the GitHub adapter can skip a round trip.
-		getHead: () => head(),
+		getRevision: () => revision(),
 		// A local brain never opens pull requests (commitOrPR refuses PR mode), so a
 		// write is always based on the working tree.
-		writeHead: () => head(),
+		writeBase: () => revision(),
 
 		// Every branch is the same working tree here, so the branch name selects nothing.
 		// The tree digest moves whenever anything on disk moves, which is what the
 		// index's freshness guard needs.
-		branchCommitSha: async () => (await head()).commitSha,
+		branchRevision: async () => (await revision()).id,
 
 		repoWritePolicy: async (): Promise<RepoWritePolicy> => {
-			const h = await head();
+			const h = await revision();
 			// Nothing gates a write to a directory you own.
 			return { defaultBranch: h.branch, branchProtected: false, mergeMethod: 'MERGE' };
 		},
 
-		listTree: async (_repo, _head, o): Promise<TreeEntry[]> => {
+		listTree: async (_repo, _at, o): Promise<FileEntry[]> => {
 			const ext = o?.extension ?? '.md';
 			return (await walk(root))
 				.filter((e) => ext === '*' || e.path.endsWith(ext))
-				.map((e) => ({ path: e.path, sha: fileToken(e) }));
+				.map((e) => ({ path: e.path, version: fileToken(e) }));
 		},
 
 		fetchPages: async (_repo, entries): Promise<{ pages: PageContent[]; truncated: boolean }> => {
@@ -265,7 +271,7 @@ export function fsBrainStore(opts: FsStoreOptions): BrainStore {
 			if (!s.isFile()) return null;
 			return {
 				content: await readFile(full, 'utf8'),
-				sha: fileToken({ path, size: s.size, mtimeMs: Math.floor(s.mtimeMs) })
+				version: statToken(s)
 			};
 		},
 
@@ -277,7 +283,7 @@ export function fsBrainStore(opts: FsStoreOptions): BrainStore {
 			const bytes = await readFile(full);
 			return {
 				contentBase64: bytes.toString('base64'),
-				sha: fileToken({ path, size: s.size, mtimeMs: Math.floor(s.mtimeMs) }),
+				version: statToken(s),
 				size: s.size
 			};
 		},
@@ -307,17 +313,11 @@ export function fsBrainStore(opts: FsStoreOptions): BrainStore {
 				});
 		},
 
-		commitFiles: (repo, o) => commit(repo, o),
+		write: (repo, o) => commit(repo, o),
 
 		commitOrPR: async (repo, o: CommitOrPROpts): Promise<WriteOutcome> => {
-			if (o.writeMode === 'pull-request') {
-				// Only reachable when a brain's own .isomorphic.json asks for review, since
-				// repoWritePolicy never reports protection here. Committing anyway would
-				// land a change the brain said needs approval.
-				throw new LocalGitError(
-					'This brain is configured for pull-request writes, which a local brain cannot open. Set writes.mode to "direct" in .isomorphic.json, or serve this brain from GitHub.'
-				);
-			}
+			// Pull-request mode never reaches here: defineStore refuses it, since this store
+			// has no proposals.
 			await commit(repo, o);
 			// The local revision is a digest of the mutable working tree, not the git
 			// commit this call created. An external edit can enter that digest without
@@ -325,5 +325,5 @@ export function fsBrainStore(opts: FsStoreOptions): BrainStore {
 			// of claiming a safe write-through revision.
 			return {};
 		}
-	};
+	});
 }

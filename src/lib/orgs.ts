@@ -586,7 +586,28 @@ export function brainIdFor(owner: string, repo: string): string {
 		.replace(/^-|-$/g, '')}`;
 }
 
+// Whether a brain already holds this repository name, or the id derived from it. A
+// brain's row can outlive its repository (deleted on GitHub, or the brain moved onto
+// other storage), so a repository name being free on GitHub does not make it free here.
+export async function brainNameTaken(
+	db: D1Database,
+	repoOwner: string,
+	repoName: string
+): Promise<boolean> {
+	const row = await db
+		.prepare(
+			`SELECT 1 AS taken FROM brains
+			  WHERE brain_id = ?1
+			     OR (repo_owner = ?2 COLLATE NOCASE AND repo_name = ?3 COLLATE NOCASE)
+			  LIMIT 1`
+		)
+		.bind(brainIdFor(repoOwner, repoName), repoOwner, repoName)
+		.first();
+	return row !== null;
+}
+
 // Inserts the brain in the batch that clears rows an earlier brain left under its id.
+// False when a brain already holds the repository or the id, and nothing was written.
 export async function createBrain(
 	db: D1Database,
 	b: {
@@ -598,16 +619,17 @@ export async function createBrain(
 		created_by?: string | null;
 		visibility?: string;
 		storage_connection_id?: string | null;
+		storage_root?: string | null;
 	}
-): Promise<void> {
-	await db.batch([
+): Promise<boolean> {
+	const results = await db.batch([
 		...clearBrainResidueStatements(db, b.brain_id),
 		db
 			.prepare(
 				`INSERT INTO brains (brain_id, org_id, repo_owner, repo_name, name, created_by, visibility,
-			                     storage_connection_id)
-       VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
-       ON CONFLICT(repo_owner, repo_name) DO NOTHING`
+			                     storage_connection_id, storage_root)
+       VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+       ON CONFLICT DO NOTHING`
 			)
 			.bind(
 				b.brain_id,
@@ -617,9 +639,11 @@ export async function createBrain(
 				b.name ?? null,
 				b.created_by ?? null,
 				b.visibility ?? 'org',
-				b.storage_connection_id ?? null
+				b.storage_connection_id ?? null,
+				b.storage_root ?? null
 			)
 	]);
+	return (results[results.length - 1].meta.changes ?? 0) > 0;
 }
 
 // The brain for a given repo, or null. Used by connect_brain to detect a repo that's
@@ -1079,6 +1103,9 @@ export interface AccessibleBrain {
 	// The binding's connection kind (storage-connections.ts), which decides whether a
 	// token or an installation reads it: see credentialFor.
 	storage_kind?: string | null;
+	// Where its files start within that storage (a Drive folder id), when the store
+	// needs more than repo_owner and repo_name to find them.
+	storage_root?: string | null;
 	repo_owner: string;
 	repo_name: string;
 	name?: string | null; // user-given display name (brains.name); NULL = derive from repo
@@ -1210,6 +1237,7 @@ interface BrainAccessRow {
 	storage_account: string | null;
 	storage_connection_id: string;
 	storage_kind: string | null;
+	storage_root: string | null;
 	org_role: string | null;
 	grant_role: string | null;
 	read_only: number | null;
@@ -1226,7 +1254,7 @@ async function queryBrainRows(db: D1Database, userIds: string[]): Promise<BrainA
 			        o.name AS org_name, o.model AS org_model,
 			        CAST(c.external_id AS INTEGER) AS installation_id,
 			        c.account AS storage_account, b.storage_connection_id AS storage_connection_id,
-			        c.kind AS storage_kind,
+			        c.kind AS storage_kind, b.storage_root AS storage_root,
 			        m.role AS org_role,
 			        bm.role AS grant_role, b.created_at AS created_at,
 			        b.read_only AS read_only`;
@@ -1296,6 +1324,7 @@ async function queryAccessibleBrains(
 			storage_account: r.storage_account ?? r.repo_owner,
 			storage_connection_id: r.storage_connection_id,
 			storage_kind: r.storage_kind,
+			storage_root: r.storage_root,
 			repo_owner: r.repo_owner,
 			repo_name: r.repo_name,
 			name: r.name,
@@ -1355,6 +1384,7 @@ export async function listStewardedBrains(
 			storage_account: r.storage_account ?? r.repo_owner,
 			storage_connection_id: r.storage_connection_id,
 			storage_kind: r.storage_kind,
+			storage_root: r.storage_root,
 			repo_owner: r.repo_owner,
 			repo_name: r.repo_name,
 			name: r.name,
@@ -1462,7 +1492,9 @@ export function matchOrg(
 	const q = query.trim().toLowerCase();
 	if (!q) return {};
 	const handles = (o: AccessibleOrg) =>
-		[o.org.org_id, o.org.name, o.storage_account ?? ''].filter(Boolean).map((s) => s.toLowerCase());
+		[o.org.org_id, o.org.name, orgLabel(o.org), o.storage_account ?? '']
+			.filter(Boolean)
+			.map((s) => s.toLowerCase());
 	const exact = orgs.find((o) => handles(o).includes(q));
 	if (exact) return { org: exact };
 	const subs = orgs.filter((o) => handles(o).some((h) => h.includes(q)));

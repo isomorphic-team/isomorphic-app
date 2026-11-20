@@ -98,9 +98,16 @@ export function localD1(path = ':memory:', migrations: URL = MIGRATIONS_DIR): Lo
 			bind: (...p: unknown[]) => statement(sql, p),
 			first: async () => sqlite.prepare(sql).get(...(params as [])) ?? null,
 			all: async () => ({ results: sqlite.prepare(sql).all(...(params as [])) }),
+			// As D1 does, `run` returns a statement's rows too, which is how a batch of
+			// reads gets its results.
 			run: async () => {
-				const result = sqlite.prepare(sql).run(...(params as []));
-				return { success: true, meta: { changes: Number(result.changes) } };
+				const prepared = sqlite.prepare(sql);
+				if (prepared.columns().length > 0) {
+					const results = prepared.all(...(params as []));
+					return { success: true, meta: { changes: 0 }, results };
+				}
+				const result = prepared.run(...(params as []));
+				return { success: true, meta: { changes: Number(result.changes) }, results: [] };
 			}
 		};
 	}

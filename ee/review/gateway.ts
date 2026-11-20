@@ -20,7 +20,12 @@
 
 import Anthropic from '@anthropic-ai/sdk';
 import type { D1Database } from '@cloudflare/workers-types';
-import { FEATURES, getEntitlement, isActive, type Entitlement } from '../entitlements.ts';
+import {
+	FEATURES,
+	getEntitlement,
+	isActive,
+	type Entitlement
+} from '../../src/lib/entitlements.ts';
 
 export const OPENROUTER_BASE = 'https://openrouter.ai/api';
 export const JEV_MODEL = 'typesafe/jev-1.13';

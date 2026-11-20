@@ -31,6 +31,8 @@ export interface PassScope {
 	kind: string;
 	orgId?: string;
 	actorUserId?: string;
+	// Set when the pass is about one other brain, so it goes when that brain does.
+	otherBrainId?: string;
 }
 
 interface PassRow {
@@ -108,13 +110,13 @@ export function savePassStatement<C>(
 		.prepare(
 			`INSERT INTO brain_passes
 			   (brain_id, kind, org_id, run_id, status, cursor, counters, stopped_reason,
-			    started_by, started_at, updated_at, finished_at)
-			 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?10, ?11)
+			    started_by, started_at, updated_at, finished_at, other_brain_id)
+			 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?10, ?11, ?12)
 			 ON CONFLICT (brain_id, kind) DO UPDATE SET
 			   org_id = ?3, status = ?5, cursor = ?6, counters = ?7, stopped_reason = ?8,
 			   started_by = CASE WHEN run_id = ?4 THEN started_by ELSE ?9 END,
 			   started_at = CASE WHEN run_id = ?4 THEN started_at ELSE ?10 END,
-			   run_id = ?4, updated_at = ?10, finished_at = ?11`
+			   run_id = ?4, updated_at = ?10, finished_at = ?11, other_brain_id = ?12`
 		)
 		.bind(
 			scope.brainId,
@@ -127,7 +129,8 @@ export function savePassStatement<C>(
 			s.stoppedReason,
 			scope.actorUserId ?? null,
 			now,
-			s.status === 'done' ? now : null
+			s.status === 'done' ? now : null,
+			scope.otherBrainId ?? null
 		);
 }
 
@@ -163,19 +166,21 @@ export async function savePassItems(
 	db: D1Database,
 	brainId: string,
 	kind: string,
-	items: readonly { item: string; fingerprint: string }[],
+	// `otherBrainId` is set when the item involves another brain, so it goes when that brain does.
+	items: readonly { item: string; fingerprint: string; otherBrainId?: string }[],
 	now: number
 ): Promise<void> {
 	const stmt = db.prepare(
-		`INSERT INTO brain_pass_items (brain_id, kind, item, fingerprint, checked_at)
-		 VALUES (?1, ?2, ?3, ?4, ?5)
-		 ON CONFLICT (brain_id, kind, item) DO UPDATE SET fingerprint = ?4, checked_at = ?5`
+		`INSERT INTO brain_pass_items (brain_id, kind, item, fingerprint, checked_at, other_brain_id)
+		 VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+		 ON CONFLICT (brain_id, kind, item) DO UPDATE SET
+		   fingerprint = ?4, checked_at = ?5, other_brain_id = ?6`
 	);
 	for (let i = 0; i < items.length; i += ITEM_BATCH) {
 		await db.batch(
 			items
 				.slice(i, i + ITEM_BATCH)
-				.map((x) => stmt.bind(brainId, kind, x.item, x.fingerprint, now))
+				.map((x) => stmt.bind(brainId, kind, x.item, x.fingerprint, now, x.otherBrainId ?? null))
 		);
 	}
 }

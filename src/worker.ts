@@ -27,20 +27,48 @@
 //   - PLATFORM_DB (D1) holds the org model and usage counters. Schema is `migrations/`.
 //   - INDEX_DB (D1, optional) holds the content index. Schema is `migrations-index/`.
 //     Without it the index is in PLATFORM_DB.
+//   - WRITE_COORDINATOR and BRAIN_FILES are a Durable Object per brain each, implemented
+//     in the objects Worker (src/objects/worker.ts) and bound by script_name. This Worker
+//     implements none. BRAIN_FILES serves a brain bound to the platform-files
+//     connection (openStorage).
 
 import { McpServer, type RegisteredTool } from '@modelcontextprotocol/server';
 import { indexFor, indexRefs, type BrainIndex, type OpenIndex } from './lib/brain-index.ts';
 import { registeredTools, wrapToolHandler } from './lib/registered-tools.ts';
 import { serveMcp, serverOptions } from './lib/mcp-serve.ts';
-import type { ConsolidationStep, IdentityWire, OrgMembershipWire } from './lib/tool-payloads.ts';
+import type { IdentityWire, OrgMembershipWire } from './lib/tool-payloads.ts';
+import type { ConsolidationStep } from './lib/review-checks.ts';
 import { consolidationWire, runConsolidationStep } from '../ee/review/consolidation.ts';
 import { z } from 'zod';
 import type { OAuthHelpers } from '@cloudflare/workers-oauth-provider';
 import { installationOctokit, tokenOctokit, staticAuth, type AppCreds } from './lib/github.ts';
-import { githubStore, commitAuthorFor, type BrainStore } from './lib/brain-repo.ts';
+import { commitAuthorFor, type BrainLocator, type BrainStore } from './lib/brain-repo.ts';
+import type { BrainFilesObject, WriteCoordinatorObject } from './objects/worker.ts';
+import { githubStore } from './lib/brain-store-github.ts';
 import { platformInstall, provisionOrgForUser } from './lib/provision.ts';
 import { ensureStaticTenant, STATIC_USER_ID } from './lib/static-tenant.ts';
-import { credentialFor, credentialForConnection, orgStorage } from './lib/storage-connections.ts';
+import {
+	credentialFor,
+	credentialForConnection,
+	isGithubCredential,
+	orgStorage,
+	type GithubCredential
+} from './lib/storage-connections.ts';
+import { filesObjectName, sqlBrainStore } from './lib/brain-store-sql.ts';
+import { driveApi, driveBrainStore } from './lib/brain-store-drive.ts';
+import {
+	DRIVE_CALLBACK_PATH,
+	DRIVE_CONNECT_PATH,
+	completeDriveConnect,
+	credentialKey,
+	driveAuthUrl,
+	driveTokenSource,
+	googleClient,
+	pendingDriveConnect,
+	startDriveConnect,
+	type GoogleClient
+} from './lib/drive-connection.ts';
+import { objectWriteCoordinator } from './lib/write-coordinator.ts';
 import { claimPendingInvites } from './lib/invites.ts';
 import {
 	getAppUser,
@@ -85,7 +113,7 @@ import { registerMediaTools } from './tools/media.ts';
 import { registerMemberTools } from './tools/members.ts';
 import { registerBrainAccessTools, type AccessContext } from './tools/brain-access.ts';
 import { registerConnectedAccountTools } from './tools/connected-accounts.ts';
-import { registerBrainTools } from './tools/brains.ts';
+import { registerBrainTools, type DriveTools } from './tools/brains.ts';
 import { registerOrgOnboardingTools } from './tools/org-onboarding.ts';
 import { registerFeedbackTools } from './tools/feedback.ts';
 import { registerAnalyticsTools } from './tools/analytics.ts';
@@ -176,8 +204,12 @@ interface Env {
 	AUTH_EMAIL_FROM?: string;
 	// Reply-To on the magic-link email (e.g. a support address). Empty sends none.
 	AUTH_EMAIL_REPLY_TO?: string;
-	// "open" (previews only): sign in as any email typed, no email sent. See src/auth/config.ts.
-	AUTH_SIGN_IN?: string;
+	// "open" on a Preview only, written by previewConfig. See src/auth/config.ts.
+	PREVIEW_SIGN_IN?: string;
+	// The deployment's multi-tenant Microsoft Entra application, for orgs that sign in through
+	// their own directory. Unset, no address is routed to a directory.
+	AUTH_ENTRA_CLIENT_ID?: string;
+	AUTH_ENTRA_CLIENT_SECRET?: string;
 
 	// Public origin of the deployed Worker (e.g. https://brain.example.com). Used by
 	// the connected-accounts tools to build the /link/start verification URL — a tool
@@ -195,6 +227,20 @@ interface Env {
 	PLATFORM_DB: D1Database;
 	// The content index's own database. Optional: without it the index uses PLATFORM_DB.
 	INDEX_DB?: D1Database;
+	// The write coordinator, one object per brain (src/lib/write-coordinator.ts), in the
+	// objects Worker. Unset in a Worker Preview, whose config carries no Durable Object.
+	WRITE_COORDINATOR?: DurableObjectNamespace<WriteCoordinatorObject>;
+	// The files of a brain the platform holds, one object per brain named by its
+	// brain_id (src/lib/brain-store-sql.ts). Unset in a Worker Preview with no preview
+	// objects Worker.
+	BRAIN_FILES?: DurableObjectNamespace<BrainFilesObject>;
+	// Prefixed to every files object's name (filesObjectName). Set only where several
+	// deployments share one objects Worker: a Worker Preview, to its own name.
+	OBJECTS_SCOPE?: string;
+	// The OAuth client registered with Google, for brains kept in a Google Drive
+	// (src/lib/drive-connection.ts). Without both, no Drive can be connected or read.
+	GOOGLE_CLIENT_ID?: string;
+	GOOGLE_CLIENT_SECRET?: string;
 
 	// Product feedback (submit_feedback). FEEDBACK_REPO is the "owner/repo" of the
 	// tracker that receives reports; FEEDBACK_TOKEN is a separate narrowly scoped
@@ -266,7 +312,8 @@ function consolidationFor(
 			...scope,
 			anthropicKey,
 			openRouterKey,
-			fresh: opts?.fresh
+			fresh: opts?.fresh,
+			against: opts?.against
 		});
 		return { text, wire: { consolidation: state && consolidationWire(state) } };
 	};
@@ -285,6 +332,118 @@ async function assetLinkIssuer(env: Env): Promise<AssetLinkIssuer | undefined> {
 	return base && key ? { base, key: await key } : undefined;
 }
 
+type GithubClient = Awaited<ReturnType<typeof installationOctokit>>;
+
+async function githubClientFor(env: Env, credential: GithubCredential): Promise<GithubClient> {
+	return credential.kind === 'token'
+		? tokenOctokit(requireToken(env))
+		: installationOctokit(appCreds(env), credential.installationId);
+}
+
+// Opens the store of a brain the platform holds itself, by brain_id, or undefined when
+// this deployment binds no files objects.
+function platformFiles(env: Env): ((brainId: string) => BrainStore) | undefined {
+	const ns = env.BRAIN_FILES;
+	return (
+		ns &&
+		((brainId) =>
+			sqlBrainStore(ns.get(ns.idFromName(filesObjectName(brainId, env.OBJECTS_SCOPE?.trim())))))
+	);
+}
+
+// What reaching a Google Drive takes: the OAuth client, the key stored tokens are sealed
+// under, and the write coordinator a Drive store lands its bundles through. Undefined
+// when this deployment lacks any of them.
+interface DriveAccess extends DriveTools {
+	client: GoogleClient;
+	key(): Promise<CryptoKey>;
+	fetcher: typeof fetch;
+}
+
+let driveKeyMemo: { secret: string; key: Promise<CryptoKey> } | undefined;
+
+function driveAccess(env: Env): DriveAccess | undefined {
+	const base = webBaseUrl({ authMode: env.AUTH_MODE, publicBaseUrl: env.PUBLIC_BASE_URL });
+	const client = googleClient(env, base);
+	const secret = deploymentSecret(env);
+	const ns = env.WRITE_COORDINATOR;
+	if (!base || !client || !secret || !ns) return undefined;
+	// Derived when a Drive is first reached, then kept for the isolate.
+	const key = (): Promise<CryptoKey> => {
+		if (driveKeyMemo?.secret !== secret) driveKeyMemo = { secret, key: credentialKey(secret) };
+		return driveKeyMemo.key;
+	};
+	// Called as a bare function: a Worker's fetch refuses any other receiver.
+	const fetcher: typeof fetch = (input, init) => fetch(input, init);
+	const coordinator = objectWriteCoordinator((name) => ns.get(ns.idFromName(name)));
+	return {
+		client,
+		key,
+		fetcher,
+		api: (connectionId) => {
+			let source: Promise<() => Promise<string>> | undefined;
+			return driveApi(fetcher, async () => {
+				source ??= key().then((k) =>
+					driveTokenSource({
+						db: env.PLATFORM_DB,
+						cache: env.OAUTH_KV,
+						key: k,
+						client,
+						connectionId,
+						fetcher
+					})
+				);
+				return (await source)();
+			});
+		},
+		// The coordinator object is named as the brain's files object would be, scope included.
+		store: (brainId, api, folderId) =>
+			driveBrainStore(
+				api,
+				{ folderId },
+				coordinator,
+				filesObjectName(brainId, env.OBJECTS_SCOPE?.trim())
+			),
+		connectLink: (pending) => startDriveConnect(env.OAUTH_KV, base, pending)
+	};
+}
+
+// A brain's storage, chosen by its binding (credentialFor): a GitHub repository through
+// a client holding its credential, the brain's own files object, or a folder in a
+// connected Google Drive.
+async function openStorage(
+	env: Env,
+	target: Pick<
+		AccessibleBrain,
+		'brain_id' | 'storage_kind' | 'installation_id' | 'storage_connection_id' | 'storage_root'
+	>
+): Promise<{ store: BrainStore; octokit?: GithubClient }> {
+	const credential = credentialFor(target);
+	if (credential.kind === 'google-drive') {
+		const drive = driveAccess(env);
+		if (!drive) {
+			throw new Error(
+				'This brain is kept in Google Drive, which this deployment is not set up to reach (GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, WRITE_COORDINATOR).'
+			);
+		}
+		if (!credential.connectionId || !credential.folderId) {
+			throw new Error('This brain is kept in Google Drive, but its record names no folder there.');
+		}
+		return {
+			store: drive.store(target.brain_id, drive.api(credential.connectionId), credential.folderId)
+		};
+	}
+	if (credential.kind === 'platform-files') {
+		const store = platformFiles(env)?.(target.brain_id);
+		if (!store) {
+			throw new Error('This brain is held in storage this deployment does not bind (BRAIN_FILES).');
+		}
+		return { store };
+	}
+	const octokit = await githubClientFor(env, credential);
+	return { store: githubStore(octokit), octokit };
+}
+
 // The brain a signed link names, read with its own storage binding, but only while
 // the user it was issued to can still reach it: revoking access kills their links.
 async function openBrainForAssetLink(env: Env, claim: AssetClaim): Promise<OpenedBrain | null> {
@@ -294,14 +453,9 @@ async function openBrainForAssetLink(env: Env, claim: AssetClaim): Promise<Opene
 		await listAccessibleBrains(env.PLATFORM_DB, await linkedUserIds(env.PLATFORM_DB, claim.userId))
 	);
 	if (!target) return null;
-	const credential = credentialFor(target);
-	const octokit =
-		credential.kind === 'token'
-			? tokenOctokit(requireToken(env))
-			: await installationOctokit(appCreds(env), credential.installationId);
-	const store = githubStore(octokit);
-	const repoArgs = { owner: target.repo_owner, repo: target.repo_name };
-	return { read: store.readBinary, repoArgs, config: await loadBrainConfig(store, repoArgs) };
+	const { store } = await openStorage(env, target);
+	const locator = { owner: target.repo_owner, repo: target.repo_name };
+	return { read: store.readBinary, locator, config: await loadBrainConfig(store, locator) };
 }
 
 // Thrown by brain-scope resolution when the caller has an org but no brain yet
@@ -318,12 +472,14 @@ class NoBrainError extends Error {
 }
 
 interface TenantContext {
-	octokit: Awaited<ReturnType<typeof installationOctokit>>;
-	// The brain's storage, bound to that octokit. Every content read and write goes
-	// through this rather than the client above, which is what lets a non-GitHub
-	// backend serve the same tools. See src/lib/brain-repo.ts.
+	// The GitHub client holding the brain's credential; absent for a brain that is not
+	// in a GitHub repository.
+	octokit?: GithubClient;
+	// The brain's storage. Every content read and write goes through this rather than
+	// the client above, which is what lets a non-GitHub backend serve the same tools.
+	// See src/lib/brain-repo.ts.
 	store: BrainStore;
-	repoArgs: { owner: string; repo: string };
+	locator: BrainLocator;
 	// The caller's role ON THE RESOLVED BRAIN (effectiveBrainRole: an explicit
 	// grant or org visibility, whichever is higher). Read
 	// tools ignore it; write/configure/share tools gate on it. The single-tenant
@@ -594,14 +750,11 @@ class McpSession {
 	// one call (a tool plus custom-tool discovery) read .isomorphic.json once.
 	private configCache = new Map<string, BrainConfig>();
 
-	private async loadConfig(
-		store: BrainStore,
-		repoArgs: { owner: string; repo: string }
-	): Promise<BrainConfig> {
-		const key = `${repoArgs.owner}/${repoArgs.repo}`;
+	private async loadConfig(store: BrainStore, locator: BrainLocator): Promise<BrainConfig> {
+		const key = `${locator.owner}/${locator.repo}`;
 		const cached = this.configCache.get(key);
 		if (cached) return cached;
-		const cfg = await loadBrainConfig(store, repoArgs);
+		const cfg = await loadBrainConfig(store, locator);
 		this.configCache.set(key, cfg);
 		return cfg;
 	}
@@ -682,12 +835,8 @@ class McpSession {
 			}
 		}
 
-		const credential = credentialFor(target);
-		const octokit =
-			credential.kind === 'token'
-				? tokenOctokit(requireToken(env))
-				: await installationOctokit(appCreds(env), credential.installationId);
-		const repoArgs = { owner: target.repo_owner, repo: target.repo_name };
+		const { store, octokit } = await openStorage(env, target);
+		const locator = { owner: target.repo_owner, repo: target.repo_name };
 		// Attribute commits to the human. Prefer the app_users row (authoritative
 		// name + verified email); fall back to the token email. A member with no
 		// GitHub account still gets legible authorship — GitHub just won't link it
@@ -701,8 +850,7 @@ class McpSession {
 				? undefined
 				: commitAuthorFor(await getAppUser(env.PLATFORM_DB, userId), email);
 		this.noteScope(target.org_id, target.brain_id);
-		const store = githubStore(octokit);
-		const config = await this.loadConfig(store, repoArgs);
+		const config = await this.loadConfig(store, locator);
 		return {
 			octokit,
 			store: guardStore(store, {
@@ -719,7 +867,7 @@ class McpSession {
 						detections
 					)
 			}),
-			repoArgs,
+			locator,
 			role: target.role,
 			orgRole: target.org_role,
 			orgId: target.org_id,
@@ -731,7 +879,7 @@ class McpSession {
 				actorUserId: userId,
 				config,
 				store,
-				repo: repoArgs
+				repo: locator
 			}),
 			config,
 			author,
@@ -827,10 +975,10 @@ class McpSession {
 		assertRole(membership.role, opts?.requires);
 		const storage = await orgStorage(env.PLATFORM_DB, membership.org);
 		const credential = credentialForConnection(storage);
-		const octokit =
-			credential.kind === 'token'
-				? tokenOctokit(requireToken(env))
-				: await installationOctokit(appCreds(env), credential.installationId);
+		if (!isGithubCredential(credential)) {
+			throw new Error(`Org ${membership.org.org_id} has no GitHub connection to create brains on.`);
+		}
+		const octokit = await githubClientFor(env, credential);
 		const author = commitAuthorFor(await getAppUser(env.PLATFORM_DB, userId), email);
 		// Org scope resolves no brain, so usage rows for these calls carry ''.
 		this.noteScope(membership.org.org_id);
@@ -928,10 +1076,10 @@ class McpSession {
 					let roleNote = '';
 					const identity: IdentityWire = { email };
 					try {
-						const { role, repoArgs, activeBrain } = await this.tenantContext();
-						roleNote = ` — ${role} of ${repoArgs.owner}/${repoArgs.repo}`;
+						const { role, locator, activeBrain } = await this.tenantContext();
+						roleNote = ` — ${role} of ${locator.owner}/${locator.repo}`;
 						identity.role = role;
-						identity.org = repoArgs.owner;
+						identity.org = locator.owner;
 						identity.activeBrain = activeBrain;
 					} catch {
 						// Resolution/provisioning not complete; still report the identity.
@@ -1142,7 +1290,16 @@ class McpSession {
 			invalidateConfig: (owner, repo) => this.invalidateConfig(owner, repo),
 			analyticsEnabled: this.usageEnabled(),
 			openIndex: indexFor(this.env),
-			webBaseUrl: this.webBase()
+			webBaseUrl: this.webBase(),
+			platformFiles: platformFiles(this.env),
+			githubFor: async (conn) => {
+				const credential = credentialForConnection(conn);
+				if (!isGithubCredential(credential)) {
+					throw new Error(`${conn.connection_id} is not a GitHub connection.`);
+				}
+				return githubClientFor(this.env, credential);
+			},
+			drive: driveAccess(this.env)
 		});
 
 		// ---------- user-defined tools (brain-tools) ----------
@@ -1416,6 +1573,50 @@ function connectedOrgPage(result: {
 	);
 }
 
+// Both ends of connecting a Google Drive (src/lib/drive-connection.ts). Each needs a
+// browser signed in as the person the link was made for.
+async function handleDriveConnect(request: Request, url: URL, env: Env): Promise<Response> {
+	const drive = driveAccess(env);
+	if (!drive || request.method !== 'GET') return new Response('Not found', { status: 404 });
+	const problem = (text: string) =>
+		cardPage('!', 'Google Drive was not connected', `<p>${escapeHtml(text)}</p>`);
+	const session = await getAuthSession(request, env);
+	const state = url.searchParams.get('state');
+	const starting = url.pathname === DRIVE_CONNECT_PATH;
+	if (!session?.user?.id) {
+		// Signing in comes back to the link. The callback is not resumed: its code is
+		// Google's, single use, and does not belong in a sign-in round trip.
+		return starting
+			? Response.redirect(
+					new URL(signInRedirect(url.pathname, url.search), url.origin).toString(),
+					302
+				)
+			: problem('You were signed out along the way. Sign in and open the link again.');
+	}
+	const sessionUserIds = await linkedUserIds(env.PLATFORM_DB, session.user.id);
+	if (starting) {
+		const pending = await pendingDriveConnect(env.OAUTH_KV, state, sessionUserIds);
+		if ('problem' in pending) return problem(pending.problem);
+		return Response.redirect(driveAuthUrl(drive.client, state!), 302);
+	}
+	const done = await completeDriveConnect({
+		db: env.PLATFORM_DB,
+		kv: env.OAUTH_KV,
+		key: await drive.key(),
+		client: drive.client,
+		fetcher: drive.fetcher,
+		state,
+		code: url.searchParams.get('code'),
+		sessionUserIds
+	});
+	if ('problem' in done) return problem(done.problem);
+	return cardPage(
+		'✓',
+		'Google Drive connected',
+		`<p>Isomorphic can now keep brains in the Google Drive of <code>${escapeHtml(done.email)}</code>. It can reach only the files it creates there.</p><p>Back in your AI assistant, ask for the brain again.</p>`
+	);
+}
+
 // Resolve a self-serve install → customer org + owner membership. Unknown/expired
 // state falls back to the generic confirmation (no identity to attribute).
 async function handleOrgConnectCallback(
@@ -1454,19 +1655,42 @@ async function handleOrgConnectCallback(
 	}
 }
 
+// The object /health pings. Its name is not a brain id, and ping() reads no storage.
+async function coordinatorReachable(
+	ns: DurableObjectNamespace<WriteCoordinatorObject> | undefined
+): Promise<boolean> {
+	if (!ns) return true;
+	try {
+		return (await ns.get(ns.idFromName('health')).ping()) === 'ok';
+	} catch {
+		return false;
+	}
+}
+
 export default {
 	async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
 		const url = new URL(request.url);
 
-		// Health check, no auth — useful for poking the deploy.
+		// Health check, no auth. The deploy smoke reads it, so it also checks that the
+		// write coordinator's binding reaches a running objects Worker.
 		if (url.pathname === '/health') {
-			return new Response('ok', { status: 200, headers: { 'content-type': 'text/plain' } });
+			const ok = await coordinatorReachable(env.WRITE_COORDINATOR);
+			return new Response(ok ? 'ok' : 'write coordinator unreachable', {
+				status: ok ? 200 : 503,
+				headers: { 'content-type': 'text/plain' }
+			});
 		}
 
 		// GitHub App post-install redirect (the App's Setup URL). GitHub sends the
 		// installer here with ?installation_id=…&setup_action=…. (The manifest
 		// registers the local bootstrap server's route for first setup; a deployed
 		// App's Setup URL points here.)
+		// Connecting a Google Drive: the link create_brain hands out, and Google's
+		// redirect back. Ahead of the OAuth provider, like the install callback.
+		if (url.pathname === DRIVE_CONNECT_PATH || url.pathname === DRIVE_CALLBACK_PATH) {
+			return handleDriveConnect(request, url, env);
+		}
+
 		if (url.pathname === '/github/install-callback') {
 			// Self-serve create_org (github: true) carries a `state` we stashed in KV,
 			// and completes into a customer org + owner membership. Without one (a

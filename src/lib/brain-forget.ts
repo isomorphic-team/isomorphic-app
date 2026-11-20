@@ -49,6 +49,18 @@ export const BRAIN_PURGED_TABLES = [
 ] as const;
 
 /**
+ * Tables whose rows can also name a second brain (`other_brain_id`): what one brain holds
+ * about another, such as a finding quoting its page or a check run against it. Those rows
+ * go when either brain does. `pnpm test:access` fails on a table with the column that is
+ * not listed here.
+ */
+export const BRAIN_REFERENCING_TABLES = [
+	'review_findings',
+	'brain_passes',
+	'brain_pass_items'
+] as const;
+
+/**
  * Kept: `usage_daily` holds only counters and is the analytics history;
  * `feedback_reports` is a report about the product, not brain data.
  */
@@ -64,9 +76,14 @@ export function forgetBrainsStatements(
 	brainIds: string,
 	...binds: unknown[]
 ): D1PreparedStatement[] {
-	return [...BRAIN_PURGED_TABLES, 'brains'].map((t) =>
-		db.prepare(`DELETE FROM ${t} WHERE brain_id IN (${brainIds})`).bind(...binds)
-	);
+	return [
+		...BRAIN_REFERENCING_TABLES.map((t) =>
+			db.prepare(`DELETE FROM ${t} WHERE other_brain_id IN (${brainIds})`).bind(...binds)
+		),
+		...[...BRAIN_PURGED_TABLES, 'brains'].map((t) =>
+			db.prepare(`DELETE FROM ${t} WHERE brain_id IN (${brainIds})`).bind(...binds)
+		)
+	];
 }
 
 /**

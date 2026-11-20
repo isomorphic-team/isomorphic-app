@@ -59,7 +59,7 @@ import {
 	applyPolicy,
 	applyBrainContext,
 	setBrainClosed,
-	editDirty,
+	hasUnsavedEdits,
 	setEditDirty,
 	bump
 } from './store.ts';
@@ -74,7 +74,7 @@ import { toast, askConfirm } from './toast.tsx';
 // It clears the flag on a YES: the caller is about to navigate, and the session it was
 // protecting is over. A NO leaves the flag set and the caller does nothing.
 async function confirmLeaveEdit(): Promise<boolean> {
-	if (currentView.kind !== 'edit' || !editDirty) return true;
+	if (!hasUnsavedEdits()) return true;
 	const ok = await askConfirm({
 		title: 'Discard your changes?',
 		body: 'This page has edits that have not been saved.',
@@ -562,16 +562,25 @@ async function navigateTo(path: string, { push = true } = {}) {
 // where the answer goes, including when the answer is "nothing moved" — a refresh
 // that repaints identical bytes and says nothing is indistinguishable from one that
 // silently failed, which is the confusion this control exists to end.
-async function refreshPage() {
+//
+// reloadPage is the swap and its verdict, shared with the view's show_page tool;
+// refreshPage is the control's toast around it. Null when no page is on screen or
+// the reader left it during the fetch; a failed fetch throws.
+async function reloadPage(): Promise<ReturnType<typeof refreshOutcome> | null> {
 	const before = currentView;
-	if (before.kind !== 'page') return;
+	if (before.kind !== 'page') return null;
+	const fresh = await fetchPage(before.path);
+	// An await is long enough for the reader to navigate away; repainting the page
+	// they left would be worse than not refreshing at all.
+	if (currentView.kind !== 'page' || currentView.path !== before.path) return null;
+	show(pageView(before.path, fresh), { push: false });
+	return refreshOutcome(before.sha, fresh.sha);
+}
+
+async function refreshPage() {
 	try {
-		const fresh = await fetchPage(before.path);
-		// An await is long enough for the reader to navigate away; repainting the page
-		// they left would be worse than not refreshing at all.
-		if (currentView.kind !== 'page' || currentView.path !== before.path) return;
-		show(pageView(before.path, fresh), { push: false });
-		const outcome = refreshOutcome(before.sha, fresh.sha);
+		const outcome = await reloadPage();
+		if (!outcome) return;
 		toast(
 			outcome === 'updated'
 				? 'Updated to the latest version'
@@ -1059,6 +1068,7 @@ export {
 	finishShareBrain,
 	fetchPage,
 	pageView,
+	reloadPage,
 	refreshPage,
 	navigateTo,
 	openAsset,

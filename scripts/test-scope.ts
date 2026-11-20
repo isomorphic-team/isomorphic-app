@@ -30,9 +30,10 @@ import { readFileSync, readdirSync } from 'node:fs';
 import { d1Index, indexRefs } from '../src/lib/brain-index.ts';
 import { localD1 } from '../src/local/d1-sqlite.ts';
 import { bindFixtureStorage } from './fixture-storage.ts';
-import { orgStorage } from '../src/lib/storage-connections.ts';
+import { PLATFORM_FILES_KIND, orgStorage } from '../src/lib/storage-connections.ts';
 import {
 	assertRole,
+	brainIdFor,
 	listStewardedBrains,
 	type Role,
 	type TenantOpts,
@@ -43,11 +44,15 @@ import { registerBrainAccessTools } from '../src/tools/brain-access.ts';
 import { registerMediaTools } from '../src/tools/media.ts';
 import { DEFAULT_BRAIN_CONFIG } from '../src/lib/brain-policy.ts';
 import { registerBrainTools } from '../src/tools/brains.ts';
+import { moveProblem } from '../src/lib/brain-relocate.ts';
 import { registerAnalyticsTools } from '../src/tools/analytics.ts';
 import { registerOrgOnboardingTools, type OrgOnboardingEnv } from '../src/tools/org-onboarding.ts';
 import { registerLibrarianTools, type BrainContext } from '../src/tools/librarian.ts';
 
 import { checker } from './check.ts';
+import type { BrainStore } from '../src/lib/brain-repo.ts';
+import { sqlBrainStore, sqlFiles } from '../src/lib/brain-store-sql.ts';
+import { sqliteDatabase } from './sqlite-database.ts';
 
 const { check, done } = checker('scope checks');
 
@@ -172,6 +177,11 @@ const trap = (name: string) =>
 	) as never;
 const octokit = trap('octokit');
 const store = trap('store');
+// The platform's own storage: it says what it can do, and any use of it is the trap.
+const filesStore = new Proxy(
+	{ capabilities: { atomicWrite: true, proposals: false, history: true } },
+	{ get: (t, prop) => (prop in t ? t[prop as keyof typeof t] : (store as never)[prop]) }
+) as never;
 
 // Which brain each context resolution named. A resolution is not free (in the
 // Worker it mints an installation token and reads the brain's config), so a tool
@@ -189,7 +199,7 @@ function contextFor(p: Persona) {
 		return {
 			octokit,
 			store,
-			repoArgs: { owner: 'northwind', repo: 'main' },
+			locator: { owner: 'northwind', repo: 'main' },
 			role: p.role,
 			orgRole: p.orgRole,
 			orgId: 'org1',
@@ -271,7 +281,18 @@ const onboardingEnv: OrgOnboardingEnv = {
 
 function toolsFor(
 	p: Persona,
-	deployment: { webBaseUrl?: string; multiUser?: boolean } = {
+	deployment: {
+		webBaseUrl?: string;
+		multiUser?: boolean;
+		// No files objects bound, so no brain can move onto the platform's own storage.
+		noFilesObjects?: boolean;
+		// A brain_id to list as already held by the platform.
+		held?: string;
+		// The GitHub client org-scope tools get, in place of the trap.
+		github?: unknown;
+		// Real stores for platform-held brains, by brain_id, in place of the trap.
+		files?: (brainId: string) => BrainStore;
+	} = {
 		webBaseUrl: 'https://brain.example'
 	}
 ): Map<string, Handler> {
@@ -302,7 +323,7 @@ function toolsFor(
 			...(ORG_ROWS[opts?.org ?? ''] ?? ORG_ROWS.Northwind)
 		};
 		return {
-			octokit,
+			octokit: (deployment.github as never) ?? octokit,
 			org,
 			// The real row, which the fixture's bindFixtureStorage wrote.
 			storage: await orgStorage(db, org),
@@ -352,6 +373,7 @@ function toolsFor(
 				installation_id: 1,
 				storage_account: 'northwind',
 				storage_connection_id: 'github-app:1',
+				...(b.brain_id === deployment.held ? { storage_kind: PLATFORM_FILES_KIND } : {}),
 				visibility: b.brain_id === 'b-main' ? 'private' : 'org',
 				repo_owner: 'northwind',
 				role: p.role,
@@ -367,7 +389,9 @@ function toolsFor(
 		invalidateConfig: () => {},
 		analyticsEnabled: true,
 		openIndex: d1Index(db),
-		webBaseUrl: deployment.webBaseUrl
+		webBaseUrl: deployment.webBaseUrl,
+		platformFiles: deployment.noFilesObjects ? undefined : (deployment.files ?? (() => filesStore)),
+		githubFor: async () => (deployment.github as never) ?? octokit
 	});
 	return handlers;
 }
@@ -375,8 +399,13 @@ function toolsFor(
 // Invoke a tool as a persona. Returns 'allowed' | 'denied'. Denial is either a thrown
 // authorization error (assertRole) or an isError result (an in-handler guard); both
 // are refusals, and a test that accepted only one would miss a gate moving between them.
-async function attempt(p: Persona, tool: string, args: Record<string, unknown> = {}) {
-	const handler = toolsFor(p).get(tool);
+async function attempt(
+	p: Persona,
+	tool: string,
+	args: Record<string, unknown> = {},
+	deployment?: Parameters<typeof toolsFor>[1]
+) {
+	const handler = toolsFor(p, deployment).get(tool);
 	if (!handler) {
 		return { outcome: 'missing' as const, detail: `tool ${tool} not registered`, text: '', sc: {} };
 	}
@@ -1278,6 +1307,339 @@ console.log('\nA single-user deployment: only the tools that can answer');
 // besides the operator can sign in. Where nobody can, the tools that add, move,
 // remove or switch brains, and the people and sharing tools, can only refuse, so
 // they are not registered, and the app is told through `features.people`.
+{
+	console.log('\nconfigure_brain moves storage at BRAIN admin AND org admin');
+	const go = { storage: 'isomorphic', confirm: true };
+	const movable = {
+		destination: { atomicWrite: true, proposals: false, history: true },
+		from: 'github' as const,
+		to: 'isomorphic' as const,
+		writeMode: 'direct' as const,
+		label: 'Main'
+	};
+	const both: Persona = {
+		label: 'org admin holding brain admin',
+		userId: 'u-boss',
+		orgRole: 'admin',
+		role: 'admin'
+	};
+	const shared = await attempt(sharedAdmin, 'configure_brain', go);
+	check(
+		'a brain admin who is only an org viewer cannot move its storage',
+		shared.outcome === 'denied' && !shared.detail.includes(STORE_MARKER),
+		shared.detail
+	);
+	check(
+		'an org owner holding only brain viewer cannot either',
+		await denies(orgBoss, 'configure_brain', go)
+	);
+	const preview = await attempt(both, 'configure_brain', { storage: 'isomorphic' });
+	check(
+		'without confirm it only describes the move, and reads no storage',
+		preview.outcome === 'allowed' && preview.text.startsWith('Nothing has changed yet.'),
+		preview.detail + preview.text
+	);
+	const confirmed = await attempt(both, 'configure_brain', go);
+	check(
+		'with confirm, an admin of both gets as far as the copy',
+		confirmed.detail.includes(STORE_MARKER),
+		confirmed.detail
+	);
+	const unbound = await attempt(both, 'configure_brain', go, { noFilesObjects: true });
+	check(
+		'a deployment with no files objects refuses',
+		unbound.outcome === 'denied' && unbound.detail.includes('cannot hold a brain'),
+		unbound.detail
+	);
+	const solo = await attempt(both, 'configure_brain', go, { multiUser: false });
+	check(
+		'a single-user deployment refuses: its brain follows its config',
+		solo.outcome === 'denied' && solo.detail.includes('cannot hold a brain'),
+		solo.detail
+	);
+	const already = await attempt(both, 'configure_brain', go, { held: 'b-main' });
+	check(
+		'a brain already held there is left alone',
+		already.outcome === 'denied' && already.detail.includes('already held'),
+		already.detail
+	);
+	const mixed = await attempt(both, 'configure_brain', { ...go, name: 'Other name' });
+	check(
+		'a storage move rides with no other setting',
+		mixed.outcome === 'denied' && mixed.detail.includes('call of its own'),
+		mixed.detail
+	);
+	check(
+		'a brain that takes its changes as pull requests is refused',
+		/pull requests/.test(moveProblem({ ...movable, writeMode: 'pull-request' }) ?? '') &&
+			moveProblem(movable) === null &&
+			// A destination that can hold a change for review takes such a brain.
+			moveProblem({
+				...movable,
+				writeMode: 'pull-request',
+				destination: { ...movable.destination, proposals: true }
+			}) === null
+	);
+	check(
+		'the refusal is the same rule for every pair of storages',
+		/already kept in Google Drive/.test(
+			moveProblem({ ...movable, from: 'google-drive', to: 'google-drive' }) ?? ''
+		) &&
+			/not set up/.test(
+				moveProblem({ ...movable, to: 'google-drive', destination: undefined }) ?? ''
+			) &&
+			moveProblem({ ...movable, from: 'google-drive', to: 'github' }) === null &&
+			/pull requests/.test(
+				moveProblem({ ...movable, to: 'google-drive', writeMode: 'pull-request' }) ?? ''
+			)
+	);
+	const toDrive = await attempt(both, 'configure_brain', {
+		storage: 'google-drive',
+		confirm: true
+	});
+	check(
+		'a deployment with no Google client refuses a move into a Drive',
+		toDrive.outcome === 'denied' && toDrive.detail.includes('not set up'),
+		toDrive.detail
+	);
+	const back = { storage: 'github', confirm: true };
+	const notHeld = await attempt(both, 'configure_brain', back);
+	check(
+		'a brain in a GitHub repository has nowhere to move back to',
+		notHeld.outcome === 'denied' && notHeld.detail.includes('already in a GitHub repository'),
+		notHeld.detail
+	);
+	check(
+		'moving back is gated the same way: a brain admin who is only an org viewer cannot',
+		await denies(sharedAdmin, 'configure_brain', back)
+	);
+	const backPreview = await attempt(
+		both,
+		'configure_brain',
+		{ storage: 'github' },
+		{
+			held: 'b-main'
+		}
+	);
+	check(
+		'without confirm it only describes the move back',
+		backPreview.outcome === 'allowed' && backPreview.text.startsWith('Nothing has changed yet.'),
+		backPreview.detail + backPreview.text
+	);
+	const backGo = await attempt(both, 'configure_brain', back, { held: 'b-main' });
+	check(
+		'with confirm, an admin of both gets as far as the repository',
+		backGo.detail.includes('octokit.') && backGo.detail.includes(STORE_MARKER),
+		backGo.detail
+	);
+	const backSolo = await attempt(both, 'configure_brain', back, {
+		held: 'b-main',
+		multiUser: false
+	});
+	check(
+		'a single-user deployment refuses the move back too',
+		backSolo.outcome === 'denied' && backSolo.detail.includes('No GitHub connection'),
+		backSolo.detail
+	);
+	const stranded = await attempt(
+		both,
+		'disconnect_brain',
+		{ brain: 'northwind/other' },
+		{
+			held: 'b-other'
+		}
+	);
+	check(
+		'disconnect_brain refuses a brain with no repository behind it',
+		stranded.outcome === 'denied' && stranded.detail.includes('strand its files'),
+		stranded.detail
+	);
+}
+
+{
+	console.log('\ncreate_brain never takes a name a brain already holds');
+	// GitHub has no repository of that name here (the brain's was deleted, or the brain
+	// moved onto other storage), so only the platform database can say it is taken.
+	const asked: string[] = [];
+	const github = {
+		rest: {
+			repos: {
+				createInOrg: async (o: { name: string }) => {
+					asked.push(o.name);
+					throw new Error('stop here');
+				}
+			}
+		}
+	};
+	const grants = () =>
+		(
+			sqlite
+				.prepare(`SELECT COUNT(*) AS n FROM brain_memberships WHERE brain_id = 'b-main'`)
+				.get() as { n: number }
+		).n;
+	const before = grants();
+	const made = await attempt(writer, 'create_brain', { name: 'Main' }, { github });
+	check(
+		'it asks GitHub for the next free name, not the held one',
+		asked.join() === 'main-2',
+		`${asked.join()} ${made.detail}`
+	);
+	check('and grants nothing on the brain that holds the name', grants() === before);
+}
+
+{
+	console.log('\ncreate_brain on storage the platform holds');
+	// One store per brain id, as the files objects are. The GitHub client is the trap:
+	// creating such a brain must not touch GitHub at all.
+	const objects = new Map<string, BrainStore>();
+	const files = (id: string) => {
+		if (!objects.has(id)) objects.set(id, sqlBrainStore(sqlFiles(sqliteDatabase())));
+		return objects.get(id)!;
+	};
+	const row = (name: string) =>
+		sqlite
+			.prepare(
+				`SELECT b.brain_id, b.repo_owner, b.repo_name, b.visibility, c.kind
+				   FROM brains b JOIN storage_connections c ON c.connection_id = b.storage_connection_id
+				  WHERE b.name = ?`
+			)
+			.get(name) as
+			| {
+					brain_id: string;
+					repo_owner: string;
+					repo_name: string;
+					visibility: string;
+					kind: string;
+			  }
+			| undefined;
+	const loc = { owner: 'northwind', repo: 'x' };
+	const paths = async (id: string) =>
+		(await files(id).listTree(loc, await files(id).getRevision(loc), { extension: '*' })).map(
+			(e) => e.path
+		);
+
+	const made = await attempt(
+		writer,
+		'create_brain',
+		{ name: 'Held', storage: 'isomorphic' },
+		{
+			files
+		}
+	);
+	const held = row('Held');
+	check(
+		'an editor creates one without GitHub being touched',
+		made.outcome === 'allowed' && held?.kind === PLATFORM_FILES_KIND,
+		made.detail
+	);
+	check(
+		'it is private, with an admin grant for its creator, like any new brain',
+		held?.visibility === 'private' &&
+			(
+				sqlite
+					.prepare('SELECT role FROM brain_memberships WHERE brain_id = ? AND user_id = ?')
+					.get(held.brain_id, writer.userId) as { role?: string } | undefined
+			)?.role === 'admin'
+	);
+	const scaffold = held ? await paths(held.brain_id) : [];
+	check(
+		'its files object holds the scaffold',
+		['.isomorphic.json', 'AGENTS.md', 'wiki/log.md'].every((p) => scaffold.includes(p)),
+		scaffold.join()
+	);
+	const second = await attempt(
+		writer,
+		'create_brain',
+		{ name: 'Held', storage: 'isomorphic' },
+		{
+			files
+		}
+	);
+	const rows = sqlite
+		.prepare(`SELECT repo_name FROM brains WHERE name = 'Held' ORDER BY repo_name`)
+		.all() as { repo_name: string }[];
+	check(
+		'a second brain of the same name gets the next slug, not the first one’s files',
+		second.outcome === 'allowed' && rows.map((r) => r.repo_name).join() === 'held,held-2',
+		rows.map((r) => r.repo_name).join() + second.detail
+	);
+
+	// Files under an id no brain row holds: an earlier attempt that never got its row.
+	await files(brainIdFor('northwind', 'orphan')).write(loc, {
+		message: 'Left behind',
+		writes: [{ path: 'wiki/theirs.md', content: 'x' }]
+	});
+	const beside = await attempt(
+		writer,
+		'create_brain',
+		{ name: 'Orphan', storage: 'isomorphic' },
+		{ files }
+	);
+	check(
+		'files left under a name are not adopted: the new brain takes the next slug',
+		beside.outcome === 'allowed' &&
+			row('Orphan')?.repo_name === 'orphan-2' &&
+			(await paths(brainIdFor('northwind', 'orphan'))).join() === 'wiki/theirs.md',
+		`${row('Orphan')?.repo_name} ${beside.detail}`
+	);
+
+	const byDefault = await attempt(
+		writer,
+		'create_brain',
+		{ name: 'Defaulted', org: 'Hosted Co' },
+		{ files }
+	);
+	check(
+		'an org on platform-owned storage gets a brain the deployment holds, unasked',
+		byDefault.outcome === 'allowed' && row('Defaulted')?.kind === PLATFORM_FILES_KIND,
+		byDefault.detail
+	);
+	const customer = await attempt(writer, 'create_brain', { name: 'Customer' }, { files });
+	check(
+		'an org with its own GitHub account still goes to GitHub',
+		customer.detail.includes('octokit.') && row('Customer') === undefined,
+		customer.detail
+	);
+	const none = await attempt(
+		writer,
+		'create_brain',
+		{ name: 'Nowhere', storage: 'isomorphic' },
+		{
+			noFilesObjects: true
+		}
+	);
+	check(
+		'a deployment with no files objects refuses the request and creates nothing',
+		none.outcome === 'denied' && none.detail.includes('cannot hold a brain') && !row('Nowhere'),
+		none.detail
+	);
+
+	// A brain created there never had a repository, so one under its name is not its own.
+	const both: Persona = {
+		label: 'admin of both',
+		userId: 'u-boss',
+		orgRole: 'admin',
+		role: 'admin'
+	};
+	const exists = { rest: { repos: { get: async () => ({ data: {} }) } } };
+	const foreign = await attempt(
+		both,
+		'configure_brain',
+		{ storage: 'github', confirm: true },
+		{
+			held: 'b-main',
+			github: exists
+		}
+	);
+	check(
+		'moving to GitHub refuses a repository the brain did not come from',
+		foreign.outcome === 'denied' && foreign.detail.includes('did not come from it'),
+		foreign.detail
+	);
+	sqlite.exec(`DELETE FROM brain_memberships WHERE brain_id IN (SELECT brain_id FROM brains WHERE name IN ('Held', 'Defaulted', 'Orphan'));
+		DELETE FROM brains WHERE name IN ('Held', 'Defaulted', 'Orphan');`);
+}
+
 {
 	const solo = toolsFor(orgBoss, { multiUser: false });
 	for (const t of ['switch_brain', 'create_brain', 'connect_brain', 'disconnect_brain']) {

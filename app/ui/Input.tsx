@@ -22,14 +22,18 @@ const control = cva(
 
 type ControlVariants = VariantProps<typeof control>;
 
-export type InputProps = Omit<JSX.IntrinsicElements['input'], 'class' | 'size'> &
+// Preact types `input` and `select` attributes as unions (keyed on `role`, `type`,
+// `multiple`), so the Omit has to distribute to keep each branch spreadable.
+type DistributiveOmit<T, K extends PropertyKey> = T extends unknown ? Omit<T, K> : never;
+
+export type InputProps = DistributiveOmit<JSX.IntrinsicElements['input'], 'class' | 'size'> &
 	ControlVariants & { class?: string };
 
 export function Input({ size, class: cls, ...rest }: InputProps) {
 	return <input {...rest} class={cn(control({ size }), cls)} />;
 }
 
-export type SelectProps = Omit<JSX.IntrinsicElements['select'], 'class' | 'size'> &
+export type SelectProps = DistributiveOmit<JSX.IntrinsicElements['select'], 'class' | 'size'> &
 	ControlVariants & { class?: string };
 
 export function Select({ size, class: cls, ...rest }: SelectProps) {

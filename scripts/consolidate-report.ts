@@ -16,10 +16,27 @@
 //
 // --runs repeats the pass over the same database, so later runs show what the memory of
 // checked pairs saves: with nothing edited between runs, they check nothing.
+//
+// --against <folder> compares the folder with a second brain, as review_brain's `against`
+// does. Repeat it to compare with several, as `against: "all"` does. Without --models it lists the page pairs the pass would
+// check, which costs nothing.
+//
+//   pnpm consolidate:report <folder> --against <other folder> [--models]
 import type { D1Database } from '@cloudflare/workers-types';
 import { d1Index } from '../src/lib/brain-index.ts';
-import { FEATURES, entitlementSql } from '../ee/entitlements.ts';
-import { runConsolidationStep, type Proposal } from '../ee/review/consolidation.ts';
+import { entitlementSql } from '../ee/entitlements.ts';
+import { FEATURES } from '../src/lib/entitlements.ts';
+import {
+	comparablePages,
+	pagePath,
+	pageTexts,
+	planStep,
+	runConsolidationStep,
+	type PageText,
+	type Proposal
+} from '../ee/review/consolidation.ts';
+import type { Comparison } from '../src/lib/review-checks.ts';
+import { basename, dirname } from 'node:path';
 import { readFindings } from '../src/lib/review-queue.ts';
 import { loadDevVarsIntoEnv } from '../src/persist.ts';
 import { loadAllFields, loadResolvedGraph, loadPageContents } from '../src/lib/brain-index.ts';
@@ -35,9 +52,13 @@ const capFlag = args.indexOf('--cap');
 const runsFlag = args.indexOf('--runs');
 const runs = runsFlag === -1 ? 1 : Number(args[runsFlag + 1]);
 const cap = capFlag === -1 ? 1 : Number(args[capFlag + 1]);
+// Every --against names one more brain to compare with.
+const againstAt = args.flatMap((a, i) => (a === '--against' ? [i + 1] : []));
+const againstSources = againstAt.map((i) => args[i]).filter(Boolean);
 const positional = args.filter(
 	(a, i) =>
 		!a.startsWith('--') &&
+		!againstAt.includes(i) &&
 		!(rootFlag !== -1 && i === rootFlag + 1) &&
 		!(capFlag !== -1 && i === capFlag + 1) &&
 		!(runsFlag !== -1 && i === runsFlag + 1)
@@ -53,6 +74,26 @@ if (!source) {
 }
 
 const brain = await openFolderAsBrain(source, rootArg ?? undefined);
+// A folder named `wiki` is called by its parent, so two brains' `wiki` folders stay apart.
+const nameOf = (folder: string) =>
+	basename(folder) === 'wiki' ? basename(dirname(folder)) : basename(folder);
+const otherBrains = [];
+for (const folder of againstSources) {
+	otherBrains.push({ name: nameOf(folder), brain: await openFolderAsBrain(folder) });
+}
+const against: Comparison | undefined = otherBrains.length
+	? {
+			all: otherBrains.length > 1,
+			brains: otherBrains.map(({ name, brain: b }) => ({
+				brainId: `local/${name}`,
+				handle: name,
+				index: d1Index(b.db as unknown as D1Database)(b.brainId),
+				store: b.store,
+				repo: b.locator,
+				config: b.config
+			}))
+		}
+	: undefined;
 try {
 	const graph = await loadResolvedGraph(brain.db, brain.brainId, brain.config);
 	const contents =
@@ -79,9 +120,38 @@ try {
 	} else {
 		report(graph.pages.length, graph.edges.length, graph.broken.length, tensions);
 	}
+	if (against && !asJson) await pairPlan(against);
 	if (withModels) await modelPass();
 } finally {
 	await brain.cleanup();
+	for (const o of otherBrains) await o.brain.cleanup();
+}
+
+// The page pairs a pass against the other brains would check, for no spend.
+async function pairPlan(others: Comparison) {
+	const home = {
+		index: d1Index(brain.db as unknown as D1Database)(brain.brainId),
+		store: brain.store,
+		repo: brain.locator,
+		config: brain.config
+	};
+	const here = await pageTexts(home, (await comparablePages(home)).pages);
+	const there: PageText[] = [];
+	for (const b of others.brains) {
+		there.push(...(await pageTexts(b, (await comparablePages(b)).pages, b.brainId)));
+	}
+	const plan = planStep([...here, ...there], new Map(), null, Infinity, () => true, true);
+	const byId = new Map([...here, ...there].map((p) => [p.path, p]));
+	const names = others.brains.map((b) => `"${b.handle}"`).join(', ');
+	console.log(
+		`\nAgainst ${names}: ${here.length} page(s) here, ${there.length} there, ${plan.pairs.length} pair(s) to check of ${here.length * there.length} possible.\n`
+	);
+	for (const { pair } of plan.pairs) {
+		const [a, b] = pair.map((id) => byId.get(id)!).sort((x) => (x.other ? 1 : -1));
+		console.log(
+			`  ${a.path} ("${a.title}")  <->  ${b.other?.brainId}: ${pagePath(b)} ("${b.title}")`
+		);
+	}
 }
 
 function report(pages: number, edges: number, broken: number, tensions: Tension[]) {
@@ -139,9 +209,10 @@ async function modelPass() {
 				orgId,
 				config: brain.config,
 				store: brain.store,
-				repo: brain.repoArgs,
+				repo: brain.locator,
 				anthropicKey,
-				openRouterKey
+				openRouterKey,
+				against
 			});
 			console.log(`  ${text}`);
 			if (state?.status !== 'running') {
@@ -150,7 +221,9 @@ async function modelPass() {
 			}
 		}
 	}
-	const conflicts = (await readFindings(db, brain.brainId)).filter((f) => f.kind === 'conflict');
+	const conflicts = (await readFindings(db, brain.brainId)).filter(
+		(f) => f.kind === 'conflict' && !!f.other === !!against
+	);
 	if (asJson) {
 		console.log(JSON.stringify(conflicts, null, 2));
 		return;

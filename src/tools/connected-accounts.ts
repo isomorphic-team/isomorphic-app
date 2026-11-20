@@ -58,7 +58,7 @@ function settingsSc(ctx: BrainContext, accounts: ConnectedAccount[]): SettingsWi
 		view: 'settings' as const,
 		email: ctx.author?.email,
 		role: ctx.role,
-		org: ctx.repoArgs.owner,
+		org: ctx.locator.owner,
 		activeBrain: ctx.activeBrain,
 		accounts
 	};

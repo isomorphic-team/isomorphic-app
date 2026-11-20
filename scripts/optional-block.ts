@@ -1,7 +1,8 @@
-// Optional blocks in wrangler.template.jsonc, for `pnpm setup:config`.
+// Optional blocks in the wrangler templates (scripts/wrangler-configs.ts), for
+// `pnpm setup:config`.
 //
 // A block sits between `// <name>:start` and `// <name>:end` comment lines and follows
-// the previous array element's `},`. Dropping it removes the block, the comment lines
+// an element that ends in a comma. Dropping it removes the block, the comment lines
 // directly above it and that comma.
 
 /** The template with the named block kept (markers removed) or dropped. */

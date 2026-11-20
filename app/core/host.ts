@@ -15,7 +15,7 @@ import {
 	applyHostStyleVariables,
 	type McpUiHostContext
 } from '@modelcontextprotocol/ext-apps';
-import type { CallToolResult } from '@modelcontextprotocol/client';
+import type { CallToolResult, ListToolsResult } from '@modelcontextprotocol/client';
 import type { DisplayMode } from './types.ts';
 import { bump } from './store.ts';
 import { toast } from './toast.tsx';
@@ -24,7 +24,10 @@ import { isWebHost, webCallTool } from './host-web.ts';
 // seam because every view that toasts a tool's reply already imports it from here.
 import { firstText } from '../../src/lib/tool-payloads.ts';
 
-const app = new App({ name: 'Isomorphic Brain', version: '0.2.0' });
+// `tools` declares that the view serves app tools (see serveViewTools). It has to be
+// in the handshake: a host lists a view's tools only when `ui/initialize` said so,
+// and the SDK throws on the handlers without it. No `listChanged`: the list is fixed.
+const app = new App({ name: 'Isomorphic Brain', version: '0.2.0' }, { tools: {} });
 
 // Fixed for the life of the page: the Worker decides which host is serving.
 const web = isWebHost();
@@ -137,6 +140,18 @@ export function registerHostEvents(events: HostEvents) {
 	app.ontoolinput = events.onResultComing;
 	app.ontoolinputpartial = events.onResultComing;
 	app.ontoolcancelled = events.onResultCancelled;
+}
+
+// The view's app tools: what the host lists from this view and calls while it is
+// open. Registered before connect(), like the events above. The web host has no
+// model attached, so it serves none.
+export function serveViewTools(
+	list: () => ListToolsResult,
+	call: (name: string, args: unknown) => Promise<CallToolResult>
+) {
+	if (web) return;
+	app.onlisttools = async () => list();
+	app.oncalltool = async (params) => call(params.name, params.arguments);
 }
 
 // Finish whatever handshake this host needs before the app draws real content.

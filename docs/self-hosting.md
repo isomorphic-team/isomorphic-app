@@ -8,8 +8,8 @@ modified source. See [`docs/licensing.md`](licensing.md) for the detail, includi
 copyleft does not reach (your brain content, and any MCP client).
 
 **The one-line version:** for one person on one machine you need Node 24 and git, and nothing
-else (path 0). For anyone else to reach it you need a Cloudflare account (Workers, D1, KV; the
-free tier is enough for a small team), a GitHub repository for the brain, and a GitHub token or
+else (path 0). For anyone else to reach it you need a Cloudflare account (Workers, Durable
+Objects, D1, KV; the free tier is enough for a small team), a GitHub repository for the brain, and a GitHub token or
 GitHub App. There is no Docker image and no Postgres path.
 
 This guide has four paths. Pick the smallest one that does what you need.
@@ -33,7 +33,9 @@ Three programs from one `src/`:
 
 - **The MCP Worker** (`src/worker.ts`), a Cloudflare Worker. It serves MCP tools to Claude and
   serves the in-client app UI. Uses D1 for a derived content index and, in multi-tenant mode,
-  for orgs and members. Uses KV for OAuth state. This is paths 2 and 3.
+  for orgs and members. Uses KV for OAuth state. This is paths 2 and 3. It deploys with a
+  second Worker, the **objects Worker** (`src/objects/worker.ts`, named by
+  `OBJECTS_WORKER_NAME`), which holds its Durable Objects and has no public URL.
 - **The local runtime** (`src/local.ts`), a Node server that offers the same content tools over
   a git repository on disk, with no accounts and no cloud anything. This is path 0.
 - **The bootstrap server** (`src/bootstrap.ts`), a Node script you run once. It registers a
@@ -47,8 +49,8 @@ And one thing you own that is not code:
   readable and editable without any of this software. If you stop using Isomorphic, you still
   have a git repo full of markdown.
 
-Cloudflare is the only supported deploy target for a SHARED instance. Workers, D1, and KV are used
-directly rather than through an abstraction layer, so porting to another runtime is real
+Cloudflare is the only supported deploy target for a SHARED instance. Workers, Durable Objects,
+D1, and KV are used directly rather than through an abstraction layer, so porting to another runtime is real
 work rather than a config change. The free tier is enough for a small team.
 
 ---
@@ -115,12 +117,14 @@ option A of path 2's first step and takes a couple of minutes. You can then poin
 Desktop, Claude Code, or the MCP Inspector at it. Run `pnpm doctor` if you are unsure what
 your checkout is still missing.
 
-### Why `wrangler.jsonc` is generated
+### Why the Wrangler configs are generated
 
-`wrangler.jsonc` is gitignored. It holds one deployment's identity: the Worker name, the
-public URL, and the Cloudflare KV and D1 resource ids. Those are per-deployment, not
-per-repository, and Wrangler will not interpolate environment variables into resource
-bindings, so the file is generated from `wrangler.template.jsonc` by `pnpm setup:config`.
+`wrangler.jsonc` (the MCP Worker) and `wrangler.objects.jsonc` (the objects Worker) are
+gitignored. They hold one deployment's identity: the two Worker names, the public URL, and the
+Cloudflare KV and D1 resource ids. Those are per-deployment, not per-repository, and Wrangler
+will not interpolate environment variables into resource bindings, so `pnpm setup:config`
+generates each file from its template (`wrangler.template.jsonc`,
+`wrangler.objects.template.jsonc`).
 
 The default profile writes obviously-fake ids. That is correct for local work:
 `wrangler dev` and `wrangler d1 migrations apply --local` run against Miniflare, which
@@ -227,7 +231,9 @@ PUBLIC_BASE_URL=https://my-brain.<your-subdomain>.workers.dev \
 ```
 
 `--provision` creates the KV namespace and the D1 database if they do not exist, finds them
-if they do, and writes their real ids into `wrangler.jsonc`. Then upload the secrets, which
+if they do, and writes their real ids into `wrangler.jsonc`. The objects Worker is named
+`isomorphic-objects` unless you also set `OBJECTS_WORKER_NAME`; two deployments in one
+Cloudflare account need different names. Then upload the secrets, which
 are deliberately not in `wrangler.jsonc` and never committed:
 
 If you took **option A** (a token), that is two secrets:
@@ -262,6 +268,9 @@ pnpm exec wrangler d1 migrations apply platform-db --remote
 pnpm worker:deploy
 ```
 
+`pnpm worker:deploy` deploys the objects Worker first and then the MCP Worker, which binds it.
+`pnpm setup:config` generates both configs (`wrangler.jsonc` and `wrangler.objects.jsonc`).
+
 Your MCP endpoint is `https://<worker>/mcp`. Hand that URL to your users;
 [`getting-started.md`](getting-started.md) is the page to point them at. If you put it on a
 custom domain, bind the
@@ -273,12 +282,15 @@ The template says this too.
 ### 2d. Automate the deploy (optional)
 
 `.github/workflows/deploy.yml` deploys on push to `main`. It needs one secret and a set of
-variables, because `wrangler.jsonc` is not committed and has to be regenerated in CI:
+variables, because the Wrangler configs are not committed and have to be regenerated in CI:
 
 ```sh
 gh secret set CLOUDFLARE_API_TOKEN     # "Edit Cloudflare Workers" template, plus D1 edit
 pnpm setup:config --print-ci           # prints the gh variable set commands, then run them
 ```
+
+The token must be able to deploy both Workers. One scoped to the MCP Worker alone fails at
+the objects Worker's step.
 
 Without them the job skips with a warning rather than deploying something misconfigured.
 
@@ -336,6 +348,14 @@ bootstrap did not (it only does so when `PUBLIC_BASE_URL` was set at the time).
 `AUTO_PROVISION=true` gives an unrecognized signed-in user their own org on first request.
 Set it to `false` for an invite-only instance: an unknown user gets an error instead, and
 you add people with `invite_member`.
+
+In an organization that uses your platform GitHub installation (a personal organization, or
+one made by `create_org` without `github`), `create_brain` keeps a new brain's files in a
+Durable Object in the objects Worker, with no repository, so no content sits in the platform
+organization. A caller can ask for a repository instead with `create_brain`'s
+`storage: "github"`, and `configure_brain` moves an existing brain between the two. An
+organization that connected its own GitHub account gets a repository there unless the caller
+asks otherwise.
 
 ### 3c. Your own account
 
@@ -397,9 +417,60 @@ issue text and requires an explicit confirmation before posting, publishes nothi
 account, and records the reporter privately in D1 (`feedback_reports`) keyed by the opaque
 report id printed in the issue. A per-user cap of ten reports a day bounds abuse.
 
+**Brains in Google Drive (optional).** A member can keep a brain in their own Google Drive
+instead of a repository: `create_brain` with `storage: "google-drive"`. `configure_brain`
+with `storage` moves an existing brain into a Drive or out of one. It needs
+`AUTH_MODE=oauth`, `PUBLIC_BASE_URL`, the objects Worker, and one OAuth client for the
+deployment. In the Google Cloud console, create a project, enable the Google Drive API,
+configure the consent screen with the single scope
+`https://www.googleapis.com/auth/drive.file`, and create a client of type "Web application"
+whose redirect URI is `<your origin>/google/callback`. Then:
+
+```sh
+pnpm exec wrangler secret put GOOGLE_CLIENT_ID
+pnpm exec wrangler secret put GOOGLE_CLIENT_SECRET
+```
+
+While the consent screen's publishing status is "Testing", only the test users you list can
+connect, and Google expires each connection after seven days. With `drive.file` the
+deployment reaches only the files it created: a file someone adds to a brain's folder by
+hand is not part of the brain. A Drive keeps no history of a brain's changes, so
+`view_activity` has nothing to list for one, and a page opened and saved in Google's own
+editor comes back with its markdown rewritten (escaped characters, `&nbsp;` lines): change
+pages through Isomorphic. Each member's refresh token is stored encrypted under a key
+derived from `AUTH_SECRET`, so changing `AUTH_SECRET` disconnects every Drive, and each is
+connected again from the link `create_brain` gives.
+
+**Directory sign-in (enterprise, optional).** An organization's people can sign in with its
+Microsoft Entra directory instead of a magic link. It runs only for an organization with the
+`enterprise` entitlement, and needs one multi-tenant Entra application for the deployment, with
+the redirect URI `<your origin>/auth/callback/microsoft-entra-id` and the delegated permissions
+`openid`, `profile` and `email`:
+
+```sh
+pnpm exec wrangler secret put AUTH_ENTRA_CLIENT_ID
+pnpm exec wrangler secret put AUTH_ENTRA_CLIENT_SECRET
+```
+
+Then, for each organization, claim its email domain, add the TXT record the command prints,
+verify it, and connect the directory's tenant id. Each command prints its SQL and writes
+nothing without `--apply`:
+
+```sh
+pnpm sso --org <org_id> --claim example.com --apply remote
+pnpm sso --org <org_id> --verify example.com --apply remote
+pnpm sso --org <org_id> --connect <tenant id> --apply remote
+```
+
+From then on an address at that domain is sent to the directory from the sign-in page, and a
+member who already signed in by magic link keeps their account. Verification asks Cloudflare's
+public DNS resolver for the domain's TXT records. There is no screen for this yet, and no way
+to require the directory for a domain.
+
 **Model consolidation (enterprise, optional).** `review_brain` with `check: "contradictions"`
 has a model compare related pages and queue the contradictions it finds as findings `validate`
-lists. It is an `ee/` feature: it runs only for an organization with the `enterprise`
+lists. With `against`, it compares one brain with another in the same organization, or with every
+other one (`against: "all"`). It is an `ee/` feature: it runs only for an organization with the `enterprise`
 entitlement (`pnpm entitle --org <org_id> --feature enterprise --cap 5`), within that
 entitlement's monthly spend cap, and only on a deployment holding a model key:
 
@@ -414,8 +485,10 @@ zero-data-retention endpoints. A page holding a credential or card number is nev
 see what a pass would find before deploying anything, run it over a local copy:
 `pnpm consolidate:report <folder> --models --cap 1`.
 
-**Backups.** Your knowledge is in a git repository, so it is already backed up everywhere it
-is cloned. The D1 database holds only derived data plus org and membership rows. Losing the
+**Backups.** A brain on GitHub is a git repository, so it is already backed up everywhere it
+is cloned. A brain the deployment holds itself is not: set `BACKUP_BUCKET` and `BACKUP_PUBLIC_KEY` and each one is
+backed up to an R2 bucket, encrypted, after it changes
+([`docs/ops/backups.md`](ops/backups.md)). The D1 database holds only derived data plus org and membership rows. Losing the
 index costs a rebuild; losing the org tables costs re-inviting people. Neither loses content.
 
 **Upgrading.** Pull, `pnpm install`, `pnpm setup:config --force` (in case the template

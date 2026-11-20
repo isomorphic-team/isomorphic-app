@@ -10,6 +10,7 @@
 // Stages per pair:
 //   1. Candidates: each page's RELATED_PER_PAGE best search hits on its title, plus the
 //      near-duplicate and same-identifier tensions.
+//      A page marked `status: deprecated` is no candidate and has none.
 //   2. Pre-scan: a page with a high-severity detection never reaches the gateway.
 //   3. Screen, when the gateway has Jev: a pair Jev scores under JEV_GATE for contradiction
 //      goes no further. A pair with a page over JEV_MAX_PAGE_CHARS skips the screen rather
@@ -26,19 +27,24 @@
 //   7. Tier: `review` for a patch that passed, `person` for everything else. Proposed notes go
 //      to a person too: in the evals most were judged unnecessary or misplaced.
 //
+// With `against`, the same pass runs between this brain and one or more others: every
+// brain's pages in one list, a page of this brain paired only with pages of the others and
+// the reverse, and findings that carry no patch.
+//
 // Worker-safe: no node:* imports.
 
 import type { D1Database } from '@cloudflare/workers-types';
 import type { BrainConfig } from '../../src/lib/brain-policy.ts';
 import { isContentPath, isToolMaintained } from '../../src/lib/brain-policy.ts';
 import type { BrainIndex } from '../../src/lib/brain-index.ts';
-import type { BrainStore, RepoRef } from '../../src/lib/brain-repo.ts';
+import type { BrainStore, BrainLocator } from '../../src/lib/brain-repo.ts';
 import {
 	continuePass,
 	readPass,
 	readPassItems,
 	savePass,
 	savePassItems,
+	type PassScope,
 	type PassState,
 	type PassStatus
 } from '../../src/lib/brain-pass.ts';
@@ -49,11 +55,13 @@ import {
 	conflictKey,
 	normalizeDisputedValue,
 	normalizeFactLabel,
+	otherPageRef,
 	readFactLabels,
 	upsertFindings,
 	valuesOnPages,
 	type QueueFinding
 } from '../../src/lib/review-queue.ts';
+import { AGAINST_ALL, type ComparedBrain, type Comparison } from '../../src/lib/review-checks.ts';
 import { rankPages, signalsFromContent, tokenizeQuery } from '../../src/lib/search.ts';
 import type { ConsolidationStepWire } from '../../src/lib/tool-payloads.ts';
 import { nextFence } from '../../src/lib/wiki.ts';
@@ -121,23 +129,51 @@ export function passesScreen(conflict: number | undefined): boolean {
 }
 
 export interface PageText {
+	// What the pass knows the page by: its path, or for a page of another brain an id made
+	// from the brain and the path (otherPageId).
 	path: string;
 	title: string;
 	content: string;
+	// Set for a page of another brain: that brain, and the page's path there.
+	other?: { brainId: string; path: string };
 }
 
 export type Pair = readonly [string, string];
 
+// A pass against other brains runs over every brain's pages at once. A page of another
+// brain gets an id no content path can equal (none starts with a slash), so pages at the
+// same path in different brains stay apart. The id is a key: nothing reads it back apart.
+const OTHER = '//';
+export const otherPageId = (brainId: string, path: string) => `${OTHER}${brainId}${OTHER}${path}`;
+export const isOtherPage = (id: string) => id.startsWith(OTHER);
+export const otherPage = (
+	brainId: string,
+	page: { path: string; title: string; content: string }
+): PageText => ({
+	path: otherPageId(brainId, page.path),
+	title: page.title,
+	content: page.content,
+	other: { brainId, path: page.path }
+});
+// The path a page has in its own brain.
+export const pagePath = (page: PageText) => page.other?.path ?? page.path;
+
 // ---------- candidates ----------
 
-// The pages most like `page` by its title, best first, never itself.
-export function relatedPages(page: PageText, pages: readonly PageText[], k = RELATED_PER_PAGE) {
+// The pages most like `page` by its title, best first, never itself. With `everyTerm`, a
+// page counts only when it holds every word of the title, not just one of them.
+export function relatedPages(
+	page: PageText,
+	pages: readonly PageText[],
+	k = RELATED_PER_PAGE,
+	everyTerm = false
+) {
 	const q = tokenizeQuery(page.title);
 	if (!q.terms.length) return [];
 	const others = pages.filter((p) => p.path !== page.path);
 	const signals = others.map((p) => signalsFromContent(p, q));
 	return rankPages(signals, q.terms, q.bigrams)
-		.filter((s) => s.has.some(Boolean))
+		.filter((s) => (everyTerm ? s.has.every(Boolean) : s.has.some(Boolean)))
 		.slice(0, k)
 		.map((s) => s.path);
 }
@@ -160,18 +196,30 @@ export function planStep(
 	budget = PAIRS_PER_STEP,
 	// Whether a pair costs a check. One that does not (unchanged since its last check)
 	// rides along without using the budget, so a brain that has not changed is one call.
-	costs: (pair: Pair) => boolean = () => true
+	costs: (pair: Pair) => boolean = () => true,
+	// A pass against other brains: a page of this brain is paired only with their pages,
+	// and a page of theirs only with this brain's.
+	acrossOnly = false
 ): StepPlan {
 	const sorted = [...pages].sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
 	// Lowered once: ranking lowercases every body it scores, and a step ranks many times.
 	const lowered = sorted.map((p) => ({ ...p, content: p.content.toLowerCase() }));
 	const byPath = new Map(lowered.map((p) => [p.path, p]));
+	const sides = acrossOnly
+		? { home: lowered.filter((p) => !p.other), away: lowered.filter((p) => p.other) }
+		: null;
+	const candidates = (page: PageText) => (!sides ? lowered : page.other ? sides.home : sides.away);
 	const related = new Map<string, Set<string>>();
 	const partnersOf = (path: string) => {
 		let set = related.get(path);
 		if (!set) {
 			const page = byPath.get(path);
-			set = new Set([...(page ? relatedPages(page, lowered) : []), ...(partners.get(path) ?? [])]);
+			set = new Set([
+				// Between brains the other brain is not about the same things, so one shared word
+				// pairs a long page with everything: the title's every word is required there.
+				...(page ? relatedPages(page, candidates(page), RELATED_PER_PAGE, acrossOnly) : []),
+				...(partners.get(path) ?? [])
+			]);
 			related.set(path, set);
 		}
 		return set;
@@ -196,6 +244,11 @@ export function planStep(
 	}
 	return { pairs, last, done: true };
 }
+
+// Whether a page says it is no longer current (OKF `status: deprecated`). Such a page is
+// expected to disagree with what replaced it, so the pass leaves it out.
+export const isDeprecated = (fields: ReadonlyMap<string, readonly string[]> | undefined) =>
+	(fields?.get('status') ?? []).some((v) => v.trim().toLowerCase() === 'deprecated');
 
 // Whether a page may be sent: a high-severity detection keeps it in the deployment.
 export const sendable = (content: string) =>
@@ -295,7 +348,7 @@ Report only real disagreements about the same thing. Different facts about diffe
 // label whichever pair raises it.
 export function triagePrompt(a: PageText, b: PageText, knownFacts: readonly string[] = []): string {
 	const page = (label: string, p: PageText) =>
-		`<page_${label} path="${p.path}" title="${p.title.replace(/"/g, "'")}">\n${p.content}\n</page_${label}>`;
+		`<page_${label} path="${pagePath(p)}" title="${p.title.replace(/"/g, "'")}">\n${p.content}\n</page_${label}>`;
 	const facts = knownFacts.length
 		? `\n\n<known_facts>\n${knownFacts.join('\n')}\n</known_facts>`
 		: '';
@@ -357,6 +410,15 @@ export async function triageFindings(input: {
 	misleading?: (claim: Claim) => Promise<number | undefined>;
 }): Promise<{ findings: QueueFinding[]; dropped: number }> {
 	const { a, b } = input;
+	// This brain's page first, when one of the two is another brain's. The finding then
+	// carries this brain's page in `paths`, the other in `other`, and no patch: a finding
+	// between brains always waits for a person.
+	const [here, there] = a.other ? [b, a] : [a, b];
+	const across = !!there.other;
+	// The pages of this brain the finding cites.
+	const cited = across ? [here] : [a, b];
+	// Two brains can hold a page at the same path, so the other brain's line says so.
+	const cite = (p: PageText) => (p.other ? `In the other brain, ${p.other.path}` : p.path);
 	const contents = new Map([
 		[a.path, a.content],
 		[b.path, b.content]
@@ -389,7 +451,7 @@ export async function triageFindings(input: {
 
 		let patch: Proposal['patch'] = null;
 		let patchRejected: string | undefined;
-		if (c.action === 'patch') {
+		if (c.action === 'patch' && !across) {
 			const target = c.patch?.page === 'b' ? b : a;
 			// The write path's own rule for an edit: matches exactly once, outside any
 			// generated okf-view snapshot.
@@ -402,29 +464,37 @@ export async function triageFindings(input: {
 			else patch = { path: target.path, find: c.patch.find, replace: c.patch.replace };
 		}
 
-		const key = await conflictKey([a.path, b.path], [c.value_a, c.value_b]);
+		const key = await conflictKey(
+			there.other
+				? [here.path, await otherPageRef(there.other.brainId, there.other.path)]
+				: [a.path, b.path],
+			[c.value_a, c.value_b]
+		);
+		const standing = c.stands === 'a' ? a : c.stands === 'b' ? b : null;
 		out.set(key, {
 			key,
 			kind: 'conflict',
-			paths: [a.path, b.path].sort(),
+			paths: cited.map((p) => p.path).sort(),
 			headline: `${c.subject}: "${a.title}" says ${c.value_a}, "${b.title}" says ${c.value_b}.`,
-			evidence: [`${a.path}: "${c.quote_a}"`, `${b.path}: "${c.quote_b}"`, c.why],
+			evidence: [
+				...[here, there].map((p) => `${cite(p)}: "${p === a ? c.quote_a : c.quote_b}"`),
+				c.why
+			],
 			proposal: {
 				tier: patch ? 'review' : 'person',
-				action: c.action,
-				stands: c.stands === 'a' ? a.path : c.stands === 'b' ? b.path : null,
+				action: across ? 'person' : c.action,
+				// Between brains a path does not say which brain, so none is named.
+				stands: across ? null : (standing?.path ?? null),
 				patch,
 				...(patchRejected ? { patchRejected } : {}),
 				model: input.model
 			} satisfies Proposal,
 			scores: misleading === undefined ? null : { misleading },
-			pageShas: {
-				[a.path]: input.pageShas[a.path] ?? '',
-				[b.path]: input.pageShas[b.path] ?? ''
-			},
+			pageShas: Object.fromEntries(cited.map((p) => [p.path, input.pageShas[p.path] ?? ''])),
 			runId: input.runId,
 			clusterId: normalizeFactLabel(c.fact ?? '') || null,
-			authorUserId: null
+			authorUserId: null,
+			other: there.other ? { ...there.other, sha: input.pageShas[there.path] ?? '' } : null
 		});
 	}
 	return { findings: [...out.values()], dropped };
@@ -468,6 +538,40 @@ function checkVersion(): Promise<string> {
 
 const KIND = 'consolidation';
 
+// A pass against other brains keeps its own cursor and pair memory, per scope: one other
+// brain's id, or AGAINST_ALL.
+const passKind = (scope?: string) => (scope ? `${KIND}:${scope}` : KIND);
+const scopeOf = (c?: Comparison) => c && (c.all ? AGAINST_ALL : c.brains[0].brainId);
+// What the caller passed as `against`, for a reply that says how to continue.
+const labelOf = (c?: Comparison) => c && (c.all ? AGAINST_ALL : c.brains[0].handle);
+
+type Readable = Pick<ComparedBrain, 'index' | 'store' | 'repo' | 'config'>;
+
+// The pages of a brain the pass compares, with the index brought up to date first: content
+// pages that are not tool-maintained and not marked deprecated.
+export async function comparablePages(b: Readable) {
+	await b.index.ensureFresh(b.store, b.repo, b.config);
+	const fields = await b.index.allFields();
+	const content = (await b.index.listPages()).filter(
+		(p) => isContentPath(p.path, b.config) && !isToolMaintained(p.path, b.config)
+	);
+	const pages = content.filter((p) => !isDeprecated(fields.get(p.path)));
+	return { pages, fields, deprecated: content.length - pages.length };
+}
+
+// Those pages with their text, as pages of another brain when `brainId` is given.
+export async function pageTexts(
+	b: Readable,
+	listed: readonly { path: string; title: string }[],
+	brainId?: string
+): Promise<PageText[]> {
+	const contents = await b.index.pageContents(listed.map((p) => p.path));
+	return listed.map((p) => {
+		const page = { path: p.path, title: p.title, content: contents.get(p.path) ?? '' };
+		return brainId ? otherPage(brainId, page) : page;
+	});
+}
+
 export interface ConsolidationState {
 	runId: string;
 	startedAt: number;
@@ -481,6 +585,8 @@ export interface ConsolidationState {
 	// Pairs skipped because neither page, nor the check itself, changed since they were
 	// last checked. Their findings stand as they were.
 	pairsUnchanged: number;
+	// Pages left out of this step because they are marked deprecated, both brains counted.
+	pagesDeprecated: number;
 	// A pass that ignores what earlier passes checked, set when it starts.
 	fresh: boolean;
 	findings: number;
@@ -495,6 +601,7 @@ type Counters = Pick<
 	| 'pairsSkipped'
 	| 'pairsScreened'
 	| 'pairsUnchanged'
+	| 'pagesDeprecated'
 	| 'fresh'
 	| 'findings'
 	| 'costUsd'
@@ -506,6 +613,7 @@ const noCounts = (): Counters => ({
 	pairsSkipped: 0,
 	pairsScreened: 0,
 	pairsUnchanged: 0,
+	pagesDeprecated: 0,
 	fresh: false,
 	findings: 0,
 	costUsd: 0,
@@ -517,20 +625,24 @@ const flatten = ({ counters, ...p }: PassState<Counters>): ConsolidationState =>
 	...counters
 });
 
-export async function readRun(db: D1Database, brainId: string): Promise<ConsolidationState | null> {
-	const pass = await readPass(db, brainId, KIND, noCounts());
+export async function readRun(
+	db: D1Database,
+	brainId: string,
+	scope?: string
+): Promise<ConsolidationState | null> {
+	const pass = await readPass(db, brainId, passKind(scope), noCounts());
 	return pass && flatten(pass);
 }
 
 async function saveRun(
 	db: D1Database,
-	scope: { brainId: string; orgId: string; actorUserId?: string },
+	scope: PassScope & { orgId: string },
 	{ runId, status, cursor, stoppedReason, startedAt, finishedAt, ...counters }: ConsolidationState,
 	now: number
 ) {
 	await savePass(
 		db,
-		{ ...scope, kind: KIND },
+		scope,
 		{ runId, status, cursor, stoppedReason, startedAt, finishedAt, counters },
 		now
 	);
@@ -547,11 +659,14 @@ export interface ConsolidationTarget {
 	config: BrainConfig;
 	// The pass reads the content index, so it brings the index up to the branch head first.
 	store: BrainStore;
-	repo: RepoRef;
+	repo: BrainLocator;
 	gateway: Pick<Gateway, 'chatJson' | 'decide'>;
 	newRunId?: () => string;
 	// Start a new pass that checks every pair, ignoring what earlier passes checked.
 	fresh?: boolean;
+	// The brains to compare this one against. Only pairs with one page in this brain
+	// are checked, and the findings land in this brain's queue.
+	against?: Comparison;
 	// The step's clock, for STEP_TIME_MS. Date.now unless a test drives it.
 	clock?: () => number;
 }
@@ -569,38 +684,57 @@ export async function advanceConsolidation(
 	t: ConsolidationTarget,
 	now = Date.now()
 ): Promise<ConsolidationState> {
-	const scope = { brainId: t.brainId, orgId: t.orgId, actorUserId: t.actorUserId };
+	const kind = passKind(scopeOf(t.against));
+	const others = t.against?.brains ?? [];
+	const scope = {
+		brainId: t.brainId,
+		orgId: t.orgId,
+		actorUserId: t.actorUserId,
+		kind,
+		// A pass against one brain goes when that brain does (brain-forget.ts).
+		otherBrainId: t.against && !t.against.all ? t.against.brains[0].brainId : undefined
+	};
 	const state = flatten(
 		continuePass(
-			t.fresh ? null : await readPass(t.db, t.brainId, KIND, noCounts()),
+			t.fresh ? null : await readPass(t.db, t.brainId, kind, noCounts()),
 			{ ...noCounts(), fresh: !!t.fresh },
 			t.newRunId ?? (() => crypto.randomUUID()),
 			now
 		)
 	);
 
-	await t.index.ensureFresh(t.store, t.repo, t.config);
-	const listed = (await t.index.listPages()).filter(
-		(p) => isContentPath(p.path, t.config) && !isToolMaintained(p.path, t.config)
-	);
-	if (listed.length > MAX_DUP_PAGES) {
-		const stopped = { ...state, status: 'stopped' as const, stoppedReason: 'too-many-pages' };
+	const listings = await Promise.all([t, ...others].map(comparablePages));
+	state.pagesDeprecated = listings.reduce((n, l) => n + l.deprecated, 0);
+	if (listings.reduce((n, l) => n + l.pages.length, 0) > MAX_DUP_PAGES) {
+		const stopped = {
+			...state,
+			status: 'stopped' as const,
+			stoppedReason: t.against ? 'too-many-pages-together' : 'too-many-pages'
+		};
 		await saveRun(t.db, scope, stopped, now);
 		return stopped;
 	}
-	const contents = await t.index.pageContents(listed.map((p) => p.path));
-	const pages: PageText[] = listed.map((p) => ({ ...p, content: contents.get(p.path) ?? '' }));
+	const [home, ...theirs] = listings;
+	const [homePages, ...otherPages] = await Promise.all([
+		pageTexts(t, home.pages),
+		...others.map((b, i) => pageTexts(b, theirs[i].pages, b.brainId))
+	]);
+	const pages = [...homePages, ...otherPages.flat()];
 	const byPath = new Map(pages.map((p) => [p.path, p]));
 
+	// Near-duplicates and shared identifiers are found inside one brain only.
 	const partners = new Map<string, string[]>();
-	for (const tension of computeTensions({
-		pages: listed,
-		edges: [],
-		contents,
-		fields: await t.index.allFields(),
-		identityFields: t.config.identityFields,
-		isContent: (p) => isContentPath(p, t.config)
-	})) {
+	const tensions = t.against
+		? []
+		: computeTensions({
+				pages: home.pages,
+				edges: [],
+				contents: new Map(homePages.map((p) => [p.path, p.content])),
+				fields: home.fields,
+				identityFields: t.config.identityFields,
+				isContent: (p) => isContentPath(p, t.config)
+			});
+	for (const tension of tensions) {
 		if (tension.kind !== 'near-duplicate' && tension.kind !== 'same-identifier') continue;
 		const [first, ...rest] = [...tension.paths].sort();
 		for (const other of rest) {
@@ -608,24 +742,36 @@ export async function advanceConsolidation(
 		}
 	}
 
-	const shas = Object.fromEntries(await t.index.pageShas());
+	const [homeShas, ...otherShas] = await Promise.all([t, ...others].map((b) => b.index.pageShas()));
+	const shas: Record<string, string> = Object.fromEntries(homeShas);
+	others.forEach((brain, i) => {
+		for (const [path, sha] of otherShas[i]) shas[otherPageId(brain.brainId, path)] = sha;
+	});
 	// What earlier passes checked: a pair whose fingerprint still matches costs nothing.
 	const version = await checkVersion();
 	const lastChecked = state.fresh
 		? new Map<string, string>()
-		: await readPassItems(t.db, t.brainId, KIND);
+		: await readPassItems(t.db, t.brainId, kind);
 	const fingerprint = ([a, b]: Pair) =>
 		shas[a] && shas[b] ? `${version}:${shas[a]}:${shas[b]}` : null;
 	const unchanged = (pair: Pair) => {
 		const fp = fingerprint(pair);
 		return fp !== null && lastChecked.get(pair.join('|')) === fp;
 	};
-	const checked: { item: string; fingerprint: string }[] = [];
+	const checked: { item: string; fingerprint: string; otherBrainId?: string }[] = [];
 	const remember = (pair: Pair) => {
 		const fp = fingerprint(pair);
-		if (fp) checked.push({ item: pair.join('|'), fingerprint: fp });
+		const otherBrainId = pair.map((id) => byPath.get(id)?.other?.brainId).find(Boolean);
+		if (fp) checked.push({ item: pair.join('|'), fingerprint: fp, otherBrainId });
 	};
-	const plan = planStep(pages, partners, state.cursor, PAIRS_PER_STEP, (pair) => !unchanged(pair));
+	const plan = planStep(
+		pages,
+		partners,
+		state.cursor,
+		PAIRS_PER_STEP,
+		(pair) => !unchanged(pair),
+		!!t.against
+	);
 	const knownFacts = await readFactLabels(t.db, t.brainId);
 	const found: QueueFinding[] = [];
 	// The first pair a refused gateway stopped. Pairs after it may have run in the same
@@ -746,7 +892,7 @@ export async function advanceConsolidation(
 	}
 
 	await upsertFindings(t.db, t.brainId, found, now);
-	await savePassItems(t.db, t.brainId, KIND, checked, now);
+	await savePassItems(t.db, t.brainId, kind, checked, now);
 	state.findings += found.length;
 
 	const firstOpen = Math.min(firstStopped, firstUnstarted);
@@ -772,23 +918,36 @@ const STOP_TEXT: Record<string, string> = {
 	'rate-limit': 'the model provider is rate limiting requests',
 	credits: 'the model account is out of credits',
 	overloaded: 'the model provider is overloaded',
-	'too-many-pages': `the brain has more than ${MAX_DUP_PAGES} pages`
+	'too-many-pages': `the brain has more than ${MAX_DUP_PAGES} pages`,
+	'too-many-pages-together': `the brains together have more than ${MAX_DUP_PAGES} pages`
 };
 
 // What the tool says about a step, for the model and for an admin reading the reply.
-export function consolidationStepText(s: ConsolidationState): string {
+// `against` is what the caller passed to compare against: a brain's handle, or AGAINST_ALL.
+export function consolidationStepText(s: ConsolidationState, against?: string): string {
+	const name = !against
+		? 'Consolidation'
+		: against === AGAINST_ALL
+			? 'The check against every other brain'
+			: `The check against "${against}"`;
+	const call = against
+		? `Call review_brain with check "contradictions" and against "${against}"`
+		: 'Call review_brain with check "contradictions"';
 	const cost = `$${s.costUsd.toFixed(4)}`;
 	const screened = s.pairsScreened ? ` (${s.pairsScreened} cleared by the screen)` : '';
 	const unchanged = s.pairsUnchanged
 		? ` ${s.pairsUnchanged} unchanged since their last check, not checked again.`
 		: '';
-	const counts = `${s.pairsChecked} page pair(s) checked${screened}, ${s.pairsSkipped} skipped, ${s.findings} conflict finding(s), ${cost} spent.${unchanged}`;
-	if (s.status === 'done') return `Consolidation finished: ${counts} validate lists the findings.`;
+	const deprecated = s.pagesDeprecated
+		? ` ${s.pagesDeprecated} page(s) marked deprecated were left out.`
+		: '';
+	const counts = `${s.pairsChecked} page pair(s) checked${screened}, ${s.pairsSkipped} skipped, ${s.findings} conflict finding(s), ${cost} spent.${unchanged}${deprecated}`;
+	if (s.status === 'done') return `${name} finished: ${counts} validate lists the findings.`;
 	if (s.status === 'stopped') {
 		const why = STOP_TEXT[s.stoppedReason ?? ''] ?? s.stoppedReason ?? 'unknown';
-		return `Consolidation stopped: ${why}. ${counts} Call review_brain with check "contradictions" to resume once that changes.`;
+		return `${name} stopped: ${why}. ${counts} ${call} to resume once that changes.`;
 	}
-	return `Consolidation in progress: ${counts} Call review_brain with check "contradictions" again to continue.`;
+	return `${name} in progress: ${counts} ${call} again to continue.`;
 }
 
 // ---------- the step a tool runs ----------
@@ -821,11 +980,12 @@ export async function runConsolidationStep(opts: {
 	actorUserId?: string;
 	config: BrainConfig;
 	store: BrainStore;
-	repo: RepoRef;
+	repo: BrainLocator;
 	openRouterKey?: string;
 	anthropicKey?: string;
 	fetch?: typeof fetch;
 	fresh?: boolean;
+	against?: Comparison;
 }): Promise<ConsolidationStepReply> {
 	const opened = await openGateway({
 		apiKey: opts.openRouterKey,
@@ -837,9 +997,9 @@ export async function runConsolidationStep(opts: {
 	if (!opened.ok) {
 		return {
 			text: `Consolidation did not run: ${STOP_TEXT[opened.reason]}.`,
-			state: await readRun(opts.db, opts.brainId)
+			state: await readRun(opts.db, opts.brainId, scopeOf(opts.against))
 		};
 	}
 	const state = await advanceConsolidation({ ...opts, gateway: opened.gateway });
-	return { text: consolidationStepText(state), state };
+	return { text: consolidationStepText(state, labelOf(opts.against)), state };
 }

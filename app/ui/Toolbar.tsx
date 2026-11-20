@@ -11,7 +11,7 @@
 // would (delay grouping, dismissal, touch, positioning) — the buttons here still use
 // native `title`, and swapping that out is the point at which a headless library
 // starts paying for itself.
-import type { ComponentChildren, JSX } from 'preact';
+import type { ComponentChildren, JSX, TargetedKeyboardEvent } from 'preact';
 import { useEffect, useLayoutEffect, useRef } from 'preact/hooks';
 import { cva, type VariantProps } from 'class-variance-authority';
 import { cn } from './cn.ts';
@@ -71,7 +71,7 @@ export function Toolbar({
 		return () => el.removeEventListener('focusin', onFocusIn);
 	}, []);
 
-	const onKeyDown = (e: JSX.TargetedKeyboardEvent<HTMLDivElement>) => {
+	const onKeyDown = (e: TargetedKeyboardEvent<HTMLDivElement>) => {
 		const from = items().indexOf(document.activeElement as HTMLButtonElement);
 		if (from < 0) return; // focus is somewhere else in the row; leave it alone
 		const move = (to: number) => {

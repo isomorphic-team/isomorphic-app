@@ -1,9 +1,10 @@
 ---
 paths:
-  - "src/lib/{brain-index,brain-repo,brain-config,brain-policy,brain-pass,links,wiki}.ts"
+  - "src/lib/{brain-index,brain-repo,brain-store-github,brain-config,brain-policy,brain-pass,links,wiki,write-coordinator}.ts"
+  - "src/objects/**"
   - "src/local/**"
   - "src/db/index-schema.sql"
-  - "scripts/test-{index,links}.ts"
+  - "scripts/test-{index,links,store,coordinator,objects}.ts"
   - "scripts/e2e-librarian.ts"
 ---
 
@@ -12,18 +13,58 @@ paths:
 ## `BrainStore`: the storage seam
 
 `src/lib/brain-repo.ts` exports `BrainStore`, the only interface between tools and a brain's
-storage, plus `githubStore(octokit)`; `src/local/brain-store-fs.ts` is the git-on-disk twin.
+storage, and the neutral types it speaks. `githubStore(octokit)` is in
+`src/lib/brain-store-github.ts`; `src/local/brain-store-fs.ts` is the git-on-disk twin.
 
-- **Twelve operations:** `getHead`, `writeHead`, `branchCommitSha`, `repoWritePolicy`, `listTree`,
-  `fetchPages`, `readFile`, `readBinary`, `findOpenConfigPr`, `listCommits`, `commitFiles`,
-  `commitOrPR`. It is what the tools do, not a general storage abstraction.
+- **Twelve operations:** `getRevision`, `writeBase`, `branchRevision`, `repoWritePolicy`,
+  `listTree`, `fetchPages`, `readFile`, `readBinary`, `findOpenConfigPr`, `listCommits`, `write`,
+  `commitOrPR`. It is what the tools do, not a general storage abstraction. A store that
+  answers from an earlier read (the Drive store's one listing) also has `refresh`, which
+  `copyStep` calls before its last look at the source.
+- **Neutral vocabulary.** A brain is addressed by a `BrainLocator`; its state is a `Revision`
+  whose `id` is opaque (compare, never parse; a commit sha on GitHub, a working-tree digest on
+  fs) and whose `snapshot` is backend-private; a listed file is a `FileEntry` with an opaque
+  `version`, the same tag `readFile` and `readBinary` report for it. Keep git words (commit, tree, blob) inside the store implementations.
+- **Each store declares `capabilities`** (`StoreCapabilities`: `atomicWrite`, `proposals`,
+  `history`). Branch on those, never on which store you hold. Every store is built through
+  `defineStore`, which makes a store without `proposals` refuse pull-request mode.
+- **A write returns each file's version tag** (`WriteResult.versions`, which a direct
+  `commitOrPR` reports as `WriteOutcome.landed` with the new revision): the same value `listTree`
+  reports for that file afterwards. The GitHub store uses the blob id (`gitBlobSha`), the fs
+  store a size and mtime token, the SQL store (`sqlBrainStore`, `src/lib/brain-store-sql.ts`,
+  over `BrainFilesObject` in the objects Worker) the sequence number of the commit that last changed the file, the Drive store the md5 Drive reports; a tag is opaque everywhere else. `pnpm test:store` runs this contract against every backend.
 - **If you reach for `ctx.octokit` while touching a brain's CONTENT, it belongs on the store.**
   A raw octokit call in a content path compiles and fails at runtime on the fs backend.
   `octokit` stays on the context (optional) only for GitHub-as-platform calls in
   `src/tools/brains.ts` behind `githubClient(ctx)`: create a repo, list an installation's repos,
   check a repo exists.
-- **`commitFiles` atomicity is load-bearing.** "An edit batch is never half-applied" rests on
+- **`write` atomicity is load-bearing.** "An edit batch is never half-applied" rests on
   the ref not moving unless the whole bundle committed, which is why a local brain is a git repo.
+  A store without `atomicWrite` lands its bundles through the write coordinator
+  (`src/lib/write-coordinator.ts`, `pnpm test:coordinator`): one bundle at a time per brain,
+  journaled with each file's prior and intended content, rolled back on failure, and settled by
+  the next call after an interruption. A bundle holds at most `MAX_BUNDLE_BYTES` of content,
+  counting what it replaces, and a larger one is refused before anything is written. Deployed, it is a Durable Object per brain in the objects
+  Worker (`src/objects/worker.ts`, journal in its SQLite via `sqlJournal`, `pnpm test:objects`),
+  reached through `objectWriteCoordinator` over the `WRITE_COORDINATOR` binding; locally,
+  `inMemoryWriteCoordinator`.
+  The Drive store is the one store that uses it, through `driveAccess` in `worker.ts`.
+- **A `FileBackend` crosses Workers RPC.** Pass a plain object (its functions become stubs that
+  call back into the MCP Worker, so the object holds no credential) with a `storage` naming what
+  it reaches; a journal entry is settled only through the same storage. A thrown error crosses
+  as a plain `Error` keeping `name` and own properties; `backendFromRpc` (inside the object) and
+  `objectWriteCoordinator` (outside) rebuild a `WriteConflictError` from it, so the coordinator
+  between them tests with `instanceof`.
+- **The Drive store** (`driveBrainStore`, `src/lib/brain-store-drive.ts`) keeps a brain in a
+  Google Drive folder (`brains.storage_root`), opened by `openStorage` for a brain bound to
+  a `google-drive` connection.
+  Drive is addressed by id and lets a folder hold two files of one name, so the store lists
+  the folder tree once per store (`listDrive`, build a store per request) and resolves paths
+  through that; the oldest file holds a contested path and the rest are `duplicates`. Its
+  revision is a digest of the listing. Drive has no conditional write: a write checks each
+  file against the revision it was planned on, then again by a metadata read just before the
+  upload. `pnpm test:store` runs it over `scripts/fake-google-drive.ts`; nothing has run it
+  against real Drive.
 - `listTree` defaults to `.md` files; pass an extension filter deliberately.
 - `pnpm test:index` wraps its octokit stub in the REAL `githubStore` (so `fetchPages`'s GraphQL
   batching is covered). `pnpm test:e2e-librarian --github` is the only coverage of the GitHub
@@ -77,7 +118,8 @@ a derived index in D1 (`src/lib/brain-index.ts`, schema in `migrations/`).
   touched (`index.writeThrough`, called from `commitBundle`) and advances `indexed_commit_sha`,
   in ONE conditional D1 transaction that no-ops if the index moved. Bundles over the
   40-statement budget, PR writes, and the fs backend skip it and reconcile on the next read.
-  Failures are swallowed: the commit is the fact. Blob shas via Web Crypto (`gitBlobSha`).
+  Failures are swallowed: the commit is the fact. Each row's `blob_sha` is the version tag the
+  write returned; a page without one skips write-through.
 - **Queryable frontmatter** (`brain_page_fields`): every scalar or list-of-scalar key, capped
   per page (`MAX_FIELD_KEYS_PER_PAGE`); optional `indexedFields` in `.isomorphic.json`
   restricts. Nested frontmatter blocks are not indexed.
@@ -92,7 +134,8 @@ a derived index in D1 (`src/lib/brain-index.ts`, schema in `migrations/`).
   forever). **Any new whole-brain pass: budget, cursor, advance the marker only when done.**
   Its run state goes in `brain_passes` through `src/lib/brain-pass.ts` (`readPass`,
   `continuePass`, `savePass`), one row per brain per kind (`consolidation`, `policy-baseline`);
-  don't add a table per pass. What a pass last checked, item by item, goes in
+  don't add a table per pass. (A files object's backup keeps its place in the object's own
+  SQLite, `src/lib/brain-backup.ts`: the objects Worker has no D1.) What a pass last checked, item by item, goes in
   `brain_pass_items` (`readPassItems`, `savePassItems`), so a later pass can skip unchanged items.
-- The local runtime's `getHead` reports a digest of the working tree; `listCommits` reports
+- The local runtime's `getRevision` reports a digest of the working tree; `listCommits` reports
   git shas.

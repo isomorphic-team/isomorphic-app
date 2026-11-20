@@ -46,7 +46,10 @@ Settled so far:
   with a reason that is logged and shown to admins.
 - **Quarantined content lives in D1 with a TTL, never in git,** because anything committed
   stays in history.
-- **Content goes only to zero-data-retention model endpoints.**
+- **Retention depends on the provider** (`ee/review/gateway.ts`). OpenRouter requests carry the
+  zero-data-retention routing flag. Anthropic requests, which serve Haiku first, run under the
+  operator's own Anthropic organization's retention, which is standard unless the operator has
+  arranged otherwise.
 - **Writes made outside Isomorphic are scanned after the fact** (push webhook), not blocked.
   Branch lockdown is left to the brain owner.
 - **Model stages are forward-only.** Existing content gets only the deterministic detectors,
@@ -90,13 +93,16 @@ Order:
    with a Jev screen and Haiku triage, writing `conflict` findings with proposals and no auto
    tier. Each step stops starting new pairs after 15 seconds, so a call ends well inside a
    host's tool timeout. Built: claim clusters (C5), from a fact label per claim, and a memory of each
-   checked pair, so a later pass checks only pairs whose pages changed. Left: the Review
-   screen section (C7).
+   checked pair, so a later pass checks only pairs whose pages changed. Built: the pass
+   between a brain and one other, or every other, brain of its organization (C8, `against` on
+   `review_brain`), whose findings
+   are shown only to people who can open both. Left: the Review screen section (C7).
 6. **When a deployment needs it:** an entitlement writer driven by billing (outside this
    repository), and signed offline license keys for self-hosters.
 
-The deterministic detectors, the findings queue and `resolve` stay in the AGPL core; the
-model stages, consolidation and the gateway are in `ee/`.
+The deterministic detectors, the findings queue and `resolve` stay in the AGPL core;
+consolidation and the gateway are in `ee/`, where the guard's model stages go when they are
+built.
 
 # TODO: many agents, many brains
 
@@ -226,8 +232,6 @@ Open:
 - Claude Code MCP client OAuth bug: token is issued but not attached to the post-flow `/mcp`
   reconnection ([#46140](https://github.com/anthropics/claude-code/issues/46140)). Inspector
   works; track upstream.
-- Add `propose_change` (PR-style write for `wiki/`) once a lint agent exists. Without lint, a
-  PR just sits there.
 - Split read vs write MCP scopes so read-only clients cannot mutate. Today the OAuth grant is
   a single bucket.
 - **Installation-token cache.** Every request builds a fresh `App`/octokit and mints an
@@ -267,7 +271,7 @@ is described as a proposed change.
 # TODO: bulk page updates (batch field writes, and find/replace across pages)
 
 Every write tool targets one logical thing: one page, or one folder subtree. The
-underlying primitive does not have that limit, since `commitFiles` already lands N
+underlying primitive does not have that limit, since `write` already lands N
 files in one atomic commit. Three wants sit on the other side of that gap.
 
 **Batch field writes.** The case that produced issue #14: 44 archived todos, each
@@ -377,7 +381,7 @@ How template and schema changes reach every customer brain after they're scaffol
 **Recommended shape: versioned, idempotent migrations applied lazily on first touch.**
 
 - **Version markers.** Each brain records its `schema_version` (small `.brain-version` file at repo root: machine-readable, mostly invisible to users). Mirror it as a column in D1 so the Worker can check without a GitHub call. Platform ships `CURRENT_SCHEMA_VERSION` plus an ordered migration registry (`src/lib/migrations/NNN-name.ts`).
-- **Migration contract.** A migration is an idempotent async function `(store, repoArgs) => void` producing at most ONE atomic commit (commitFiles) plus a `wiki/log.md` entry, so the librarian visibly did maintenance, consistent with the no-git principle. Idempotent because a crashed run must be safely re-runnable; the version marker only advances after success.
+- **Migration contract.** A migration is an idempotent async function `(store, locator) => void` producing at most ONE atomic write (`write`) plus a `wiki/log.md` entry, so the librarian visibly did maintenance, consistent with the no-git principle. Idempotent because a crashed run must be safely re-runnable; the version marker only advances after success.
 - **Lazy application in `tenantContext()`.** After tenant resolution: if D1 `schema_version` < current, take a per-brain lock, run pending migrations in order, bump D1 and the in-repo marker. Dormant brains migrate on their next use; no fleet job needed. Budget-cap the work per request (Worker subrequest limits) so large data migrations chunk across successive touches ("migrate up to N pages per request until done").
 - **Eager batch runner (optional, later).** A cron Worker iterating D1 tenants for migrations that must land everywhere promptly (security fixes, breaking tool changes). Same migration functions, different driver.
 - **The clobber policy is the hard part.** Classify brain files:
@@ -464,7 +468,7 @@ Not built, in rough priority order:
 
 The dev harness (`dev/harness.ts`) loads the REAL app bytes and drives them over the
 REAL `AppBridge`, so the app side is production code. But it answers every tool call
-itself, from fixtures. That second half is roughly 1,400 lines reimplementing the
+itself, from fixtures. That second half reimplements the
 server, and it is the largest remaining source of "works in the preview, differs in
 prod".
 
@@ -615,11 +619,12 @@ Fleet-wide, it fits the **brain schema migrations** item above rather than a bes
 
 # TODO: test harness
 
-About thirty golden batteries run offline in `pnpm test`, plus two end-to-end batteries that
+The golden batteries run offline in `pnpm test`, plus two end-to-end batteries that
 drive the real tool handlers against a git repo in a temp directory, the browser suite
 (`pnpm test:ui`), and the deploy smoke checks (`scripts/smoke.ts`, pinned by
-`pnpm test:smoke`, which also covers the OAuth metadata documents). What is still missing is
-in-workerd coverage of the tool handlers.
+`pnpm test:smoke`, which also covers the OAuth metadata documents). `pnpm test:objects` runs
+the objects Worker in workerd. What is still missing is in-workerd coverage of the tool
+handlers.
 
 - **`@cloudflare/vitest-pool-workers` for tool handlers.** Runs tests inside workerd with
   KV and D1 bindings via Wrangler's local emulation. Cover each tool's happy path, write
@@ -651,6 +656,27 @@ Reconsider at the same time: Auth.js is on database sessions, which is why the `
 callback has to copy `user.id` and why the bridge re-reads the session per request. JWT
 sessions would drop both.
 
+# TODO: publisher verification for the Entra application
+
+A deployment's multi-tenant Entra application
+([`docs/design/enterprise-identity.md`](design/enterprise-identity.md), D4) shows as
+**unverified** on Microsoft's consent screen until its publisher is verified. Beyond the
+badge, a customer tenant's default consent policy does not let users consent to an
+unverified multi-tenant application, so each customer's admin has to grant consent first.
+
+Verifying takes, in the Entra application's registration:
+
+- **A Microsoft AI Cloud Partner Program ID** (formerly MPN) for the operator's business,
+  entered under Branding & properties → Publisher verification.
+- **A publisher domain** that is a verified custom domain in the tenant that registers the
+  application, matching the domain of the Partner Program account's email.
+- **Terms of service and privacy statement URLs** under Branding & properties, which the
+  consent screen links to.
+
+This is a per-deployment operator step, not code: a self-hoster registers and verifies their
+own application. The deployment docs should list it next to `AUTH_ENTRA_CLIENT_ID` and
+`AUTH_ENTRA_CLIENT_SECRET`.
+
 # TODO: branch-protected brains, what is left
 
 Built: a write to a brain whose default branch is protected opens a pull request instead of
@@ -667,16 +693,16 @@ Open, in rough order:
    `.isomorphic.json` (`protectedPaths: ["internal/**"]`); the faithful version reads
    CODEOWNERS plus branch/ruleset path filters. A bundle that spans both domains goes whole
    to PR.
-2. **Pending-review state in the app.** The editor reports the proposal, but nothing
-   remembers it: the page shows the branch as it is, so a second edit starts from the
-   unmerged base and opens a second pull request. Wants a "pending review" state with the pull request's status.
-3. **Batch a session's edits** into one pull request rather than one per save.
-4. **Approver routing** (notify or assign the org's admins on each proposal), and a per-brain
+2. **Pending-review state in the app.** A write while an Isomorphic pull request is open joins
+   that pull request, and the editor opens the page as it stands there. The page view still
+   shows the default branch and says nothing about the open pull request. Wants a "pending
+   review" state with the pull request's status.
+3. **Approver routing** (notify or assign the org's admins on each proposal), and a per-brain
    policy for who may auto-merge versus propose only.
 
 # TODO: commit attribution niceties
 
-Writes are attributed to the person who made them (`author` on `commitFiles` /
+Writes are attributed to the person who made them (`author` on `write` /
 `commitOrPR`, resolved per request). Two niceties remain: put "Edited by <name>" in pull
 request bodies, and offer a per-brain noreply address for members who would rather not
 expose a real one.
@@ -694,17 +720,17 @@ expose a real one.
 
 # TODO: index storage and full-text search
 
-[`design/brain-index-storage.md`](design/brain-index-storage.md). The content index and the
-state derived from it move out of the platform database into one SQLite-backed Durable Object
-per brain, implemented in a separate index Worker that this Worker binds to (which keeps
-version URLs and the pre-promotion smoke). Then `search_pages` moves to FTS5 inside that
-object: on 130 probe questions over four real brains a prototype put the right page first 103
-times against 86 today, and searched a 5,380-page brain about three times faster.
+[`design/brain-index-storage.md`](design/brain-index-storage.md). The content index is reached
+through `BrainIndex` and can live in its own D1 database (`INDEX_DB`, optional per deployment),
+where FTS5 search runs in shadow next to today's engine and logs where the two disagree. On 130
+probe questions over four real brains a prototype put the right page first 103 times against 86
+today, and searched a 5,380-page brain about three times faster.
 
-In order, each its own pull request: an index interface in `src/lib/` with today's tables
-behind it; the index Worker and per-brain object, with the local runtime and previews covered;
-a backfill from git; FTS5 in shadow, with disagreements logged; then the switch. Open before
-the second step: whether SQLite-backed Durable Objects are on the Workers free plan, and how
+Left, in order, each its own pull request: switch `search_pages` to FTS5, after reading the
+shadow lines from a real deployment; drop the index tables from the platform database once
+every deployment binds `INDEX_DB`; and one SQLite-backed Durable Object per brain in the objects
+Worker (`src/objects/worker.ts`), only when a limit calls for it (a brain near D1's size cap,
+write contention between brains, data residency). Open before that last step: how
 `scope: "all"` performs as one call per brain.
 
 # TODO: related pages in search results
@@ -717,6 +743,55 @@ attendees and changelogs, so only matches holding every term are followed, a bod
 needs two matches touching it, and hubs pass declared relations only. Needs nothing from the
 storage change. Before shipping: stop loading the whole page list per search to resolve
 wikilinks.
+
+# TODO: brains on storage that is not git, what is left
+
+[`design/storage-backends.md`](design/storage-backends.md). Left from its order of work: the
+Microsoft Graph store, with its connection kind and `create_brain` / `connect_brain` options;
+conflict copies and duplicate names in `validate`; for Google Drive, a battery against real
+Drive, adopting an existing folder, and removing a connection; an archive of a brain for a
+member to download; moving existing hosted brains; and proposals held by the write coordinator,
+when a customer on these backends needs review.
+
+# TODO: running the platform in a container, off Cloudflare
+
+[`design/container-runtime.md`](design/container-runtime.md). Proposed, nothing built: a Node
+host that imports the MCP Worker's `fetch` handler unchanged and supplies its bindings from
+local equivalents, shipped as one container image. In order: the host on static auth, the
+objects in process, OAuth and sign-in, the image, then Azure.
+
+# TODO: org-scope tools without a brain
+
+[`design/org-scope-resolution.md`](design/org-scope-resolution.md). Not built: `members`,
+`analytics` and the member mutations (`invite_member`, `set_member_role`, `remove_member`)
+take an `org` and resolve through `orgContext`, so authorization follows the named org and
+none of them needs a brain.
+
+# TODO: preview environments, what is unverified
+
+[`design/preview-environments.md`](design/preview-environments.md). The workflow is built and
+has deployed a Preview. Unverified: a Preview run with `PREVIEW_OBJECTS_WORKER_NAME` set, and
+whether the Editor role can delete a Preview.
+
+# TODO: a published retention statement
+
+[`design/brain-disconnect-retention.md`](design/brain-disconnect-retention.md), phase 4. A
+retention section stating what each surface keeps and for how long, so the answer is written
+down and not read out of the code.
+
+# TODO: code mode
+
+[`design/code-mode.md`](design/code-mode.md). One tool, `run_script`, runs a script the model
+writes against typed `brain` and `org` APIs inside a Dynamic Worker with no network, so a
+multi-step read costs one call and only its result reaches the model. Writes are staged by the
+script and committed by one destructive `apply_changes` call, atomically, after the person
+approves a summary the server wrote. Brain-authored tools become saved scripts, and the rarely
+called admin tools leave the model's tool list while staying callable by the app.
+
+In order, each its own pull request: `run_script`, read-only, behind `CODE_MODE`; a measurement
+on a real host, which decides the rest; saved scripts in place of brain-authored tools; staged
+writes; `org` methods and app-only tools. The last needs code mode on in every deployment,
+which makes Workers Paid a self-hosting requirement.
 
 # TODO: content index, optional work
 
@@ -734,8 +809,8 @@ reads correct and unbounded.
   write-through, so only outside edits would wait out the TTL.
 
 **FTS5 in the platform database** stays decided against: a virtual table disables
-`wrangler d1 export` for the whole database, which holds the org tables. FTS5 itself is
-proposed in its own storage, under "index storage and full-text search" above, with BM25 as one
+`wrangler d1 export` for the whole database, which holds the org tables. FTS5 runs in shadow
+in the index database, under "index storage and full-text search" above, with BM25 as one
 signal and the order still decided by a pure module. Today's ranking is `src/lib/search.ts`;
 its reasoning is in [`design/search-relevance.md`](design/search-relevance.md).
 
