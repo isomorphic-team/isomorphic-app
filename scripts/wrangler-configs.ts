@@ -14,7 +14,10 @@ export const WRANGLER_CONFIGS: WranglerConfig[] = [
 	{
 		template: 'wrangler.template.jsonc',
 		output: 'wrangler.jsonc',
-		blocks: [{ name: 'index-db', setting: 'CF_INDEX_D1_DATABASE_ID' }]
+		blocks: [
+			{ name: 'index-db', setting: 'CF_INDEX_D1_DATABASE_ID' },
+			{ name: 'code-mode', setting: 'CODE_MODE' }
+		]
 	},
 	{
 		template: 'wrangler.objects.template.jsonc',

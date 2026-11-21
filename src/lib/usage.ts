@@ -32,6 +32,7 @@ export const TOOL_KINDS: Record<string, UsageKind> = {
 	read_page: 'read',
 	view_page: 'read',
 	list_pages: 'read',
+	run_script: 'read',
 	browse_brain: 'read',
 	find_inbound_links: 'read',
 	view_graph: 'read',

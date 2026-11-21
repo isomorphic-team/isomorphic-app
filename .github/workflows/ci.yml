@@ -129,6 +129,8 @@ jobs:
       - run: pnpm test:coordinator
       # the coordinator Durable Object in workerd (wrangler dev, no account): binding, RPC, restart
       - run: pnpm test:objects
+      # run_script's sandbox in a real Dynamic Worker (wrangler dev, no account): no network, limits, output
+      - run: pnpm test:code-mode
       - run: pnpm test:links
       - run: pnpm test:search
       - run: pnpm test:policy

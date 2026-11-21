@@ -96,12 +96,22 @@ We use `@modelcontextprotocol/ext-apps`: `/server` (registerAppTool / registerAp
 - **Durable Objects limits:** https://developers.cloudflare.com/durable-objects/platform/limits/
 - **D1 supported SQLite extensions:** https://developers.cloudflare.com/d1/sql-api/sql-statements/
 - **D1 import/export limits:** https://developers.cloudflare.com/d1/best-practices/import-export-data/
+- **Dynamic Workers (Worker Loader), behind `run_script`:** https://developers.cloudflare.com/dynamic-workers/
+  (API reference, custom bindings, limits, pricing). Code Mode, the pattern: https://blog.cloudflare.com/code-mode
 
 ---
 
 ## Verified facts worth remembering
 
 Non-obvious things confirmed against the sources above (with the "why it bit us"):
+
+- **Dynamic Workers: open beta since 2026-03-24, Workers Paid only.** Checked 2026-11-13 against
+  the pricing and changelog pages. Billed per unique Dynamic Worker per day (an id plus its code;
+  1,000 a month included), with requests and CPU at Workers Standard rates. `globalOutbound: null`
+  makes `fetch()` and `connect()` throw. `limits: { cpuMs, subRequests }` is accepted, but local
+  workerd (wrangler 4.160) does not enforce `cpuMs`: a busy loop in the sandbox hangs the caller,
+  so only the deployed runtime can show the limit working. A never-settling promise is cancelled
+  by the runtime's hang detection locally.
 
 - **D1 DOES support FTS5 virtual tables — and creating one costs the whole database its
   export.** Verified against Cloudflare's docs on 2026-08-31, because
