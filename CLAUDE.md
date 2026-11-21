@@ -163,7 +163,7 @@ agent that opens this repo. When they drift, an agent acts on the drift with con
 | `app-widget.md`                        | the `ui://` bundle, `tool-payloads.ts`, `pickShownBrain`, `features`                           |
 | `mcp-request-path-and-tool-surface.md` | `serveMcp`, the preamble, registration and gating, tool-description rules                      |
 | `content-index-and-store.md`           | `BrainStore`, the D1 index, freshness, wikilinks, budgets                                      |
-| `search.md`                            | ranking, proximity, FTS5 decision, probes, cross-brain search                                  |
+| `search.md`                            | the FTS5 engine, ranking, round trips, probes, cross-brain search                              |
 | `write-path.md`                        | `page-write`, patches, `fields`, `write-target`, `change-record`, the retry ledger             |
 | `okf-folder-notes-and-findings.md`     | OKF, folder notes, `validate` / `resolve`, findings, consolidation                             |
 | `derived-views.md`                     | `okf-view` grammar and the three renderings                                                    |
@@ -192,7 +192,7 @@ Each is stated in full in its rules file; these hold even when that file has not
   never `listAccessibleBrains`. Only `switch_brain`, `create_brain` and `disconnect_brain` move
   the active-brain pointer.
 - **Any whole-brain index pass is budgeted and resumable.**
-- **Don't adopt FTS5** without reading its entry in `docs/references.md`. Any change to
+- **The FTS5 table lives only in `INDEX_DB`**, never the platform database. Any change to
   `src/lib/render.ts`'s policy constants is a security change. Changelog, commit and reply
   wording comes from `src/lib/change-record.ts`; path rules from `src/lib/write-target.ts`.
 - **OKF is a contract with every brain repo.** A format change must keep working for existing

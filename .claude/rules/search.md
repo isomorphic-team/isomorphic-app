@@ -8,60 +8,49 @@ paths:
 
 # Search (`search_pages`)
 
-Design record: `docs/design/search-relevance.md`.
+Design record: `docs/design/brain-index-storage.md`.
 
-`searchIndex` (`brain-index.ts`) runs in TWO PHASES: **SQL narrows, it never orders.** Phase 1
-asks D1 only, per page, whether it holds each query term and the whole query verbatim. Phase 2
-fetches content for the top `MAX_SEARCH_CANDIDATES` (25) and extracts lines. Everything that
-ORDERS or DROPS a result is in the pure `src/lib/search.ts` (`pnpm test:search`).
+`searchIndexFts` (`src/lib/search-fts-index.ts`) answers every search from SQLite FTS5 in the
+index database. SQL computes the signals; the order is decided in the pure `rankFtsPages`
+(`src/lib/search-fts.ts`): coverage, then the whole phrase, then `bm25()` with title and path
+weighted, then path. `pnpm test:search` pins it on real FTS5 in `node:sqlite`.
 
-- **Terms are ORed, not ANDed.** Partial matches are worse matches, not non-matches; ANDing in
-  SQL returns nothing for question-shaped queries.
-- **Coverage dominates the score.** Title and path matches only break ties within a coverage
-  band; frequency SATURATES. Ties break on path, so results are stable between reads.
-- **Proximity has two lanes that never stack:** `1` for the whole query verbatim, else the
-  fraction of the query's BIGRAMS present. Bigrams come from the RAW query (stopword removal
-  destroys adjacency), and neither word may be a function word (`NON_COLLOCATING`, which
-  deliberately excludes prepositions and light verbs). `scoreLines` uses the same signal.
-- **`%` and `_` stay inside the token** and never act as LIKE wildcards at either layer; a lone
-  one survives the minimum length (`isUsableTerm`). `-` splits, so "fine grained" answers
-  `fine-grained`.
-- **D1 rejects a LIKE pattern over 50 bytes** (`D1_LIKE_PATTERN_LIMIT`). Phase 1 builds every
-  pattern through `containsSql` / `startsWithSql`, which fall back to `instr(lower(...))` past
-  the limit; the local D1 shim enforces the same limit so `test:search` sees it.
-- **The response says what it left out** (`elisionNote`) and which terms it searched.
-- **FTS5 never goes in the platform database:** a virtual table disables `wrangler d1 export`
-  for the whole database, which holds org and user rows (`docs/references.md`). It lives in
-  the index database only (`migrations-index/0002_pages_fts.sql`): an external-content table
-  over `brain_pages`, kept current by triggers, so no write path names it. `pnpm test:index`
-  drives the real write paths and checks it with FTS5's integrity check.
-- **Which engine answers is `ftsFirstSearch` (`src/lib/search-engine.ts`).** `indexFor` gives
-  a deployment with `INDEX_DB` the FTS5 engine (`searchIndexFts`); without it, the local
-  runtime included, `searchIndex` answers. `searchIndex` also answers a query with no letter
-  or digit in any term, and any search on which FTS5 throws. Each search on the FTS5 path
-  logs one `search` JSON line (engine, counts, milliseconds): never a query, a path or a brain.
-- **What FTS5 matches differs from LIKE.** Porter stemming (`fees` finds "fee"). Whole words,
-  except that a search no page matches as words is retried with every term as a prefix
-  (`config` alone finds "configuration"), at the cost of one more round trip; a match in the middle of a word is gone. Punctuation inside a term is
-  dropped (`50%` searches `50`). Its ordering is pure (`rankFtsPages` in
-  `src/lib/search-fts.ts`: coverage, phrase, `bm25()`, path). Compare the engines on a folder
-  with `pnpm search:compare <folder> <probes.json>`.
-- **A search's cost on D1 is its round trips, not its queries.** `searchIndexFts` sends its
-  ranking statements (any term with `bm25()`, each term, the phrase) as one `db.batch` and
-  the lines as a second statement: two round trips (three on the prefix retry), pinned by
-  `pnpm test:index`. Sent one by
-  one it measured about three times slower than `searchIndex` on a deployment. A new
+- **Terms are ORed, not ANDed.** Partial matches are worse matches, not non-matches. Coverage
+  (how many of the query's terms a page holds) dominates; ties break on path, so results are
+  stable between reads.
+- **The query is tokenized by `tokenizeQuery` (`src/lib/search.ts`):** filler words dropped, at
+  most six terms. Each term is quoted (`ftsQuote`), so query text is never read as FTS5 syntax.
+- **What matches.** Porter stemming (`fees` finds "fee"). Whole words: a match in the middle of
+  a word does not count. A search no page matches as words is retried with every term as a
+  prefix (`config` alone finds "configuration"), at the cost of one more round trip.
+  Punctuation inside a term is dropped (`50%` searches `50`), and a query of symbols alone
+  finds nothing.
+- **The full-text table lives only in the index database** (`migrations-index/0002_pages_fts.sql`),
+  never the platform one: a virtual table disables `wrangler d1 export` for its database
+  (`docs/references.md`). It is an external-content table over `brain_pages`, kept current by
+  triggers, so no write path names it. `pnpm test:index` drives the real write paths and
+  checks it with FTS5's integrity check.
+- **A search's cost on D1 is its round trips, not its queries.** The ranking statements (any
+  term with `bm25()`, each term, the phrase) go as one `db.batch` and the lines as a second
+  statement: two round trips (three on the prefix retry), pinned by `pnpm test:index`. A new
   statement in a search goes in a batch.
+- **The response says what it left out** (`elisionNote`) and which terms it searched.
+- **Each search logs one `search` JSON line** (`timedSearch`, `src/lib/search-engine.ts`):
+  terms, pages matched, milliseconds. Never a query, a path or a brain.
+- **`scorePage`, `rankPages` and `signalsFromContent` in `search.ts` are not the search
+  engine.** They rank pages held in memory, and the consolidation pass uses them to find a
+  page's neighbours.
 - **Probe against a real brain before believing a ranking change.** `pnpm probe:report <folder>
-  <probes.json>` runs probes through the real `searchIndex` offline and reports how many
+  <probes.json>` runs probes through the real `searchIndexFts` offline and reports how many
   landed in the top band and the mean reciprocal rank (`summarizeProbes`), the numbers to
-  compare two runs by; a constructed corpus only confirms what its author intended. `search_pages` also takes `expect` (a path), which reports
-  where that page ranked and what beat it (`scoreProbe` in `src/lib/probe.ts`,
-  `pnpm test:probe`). A probe that hits the budget is inconclusive, not failed.
+  compare two runs by; a constructed corpus only confirms what its author intended.
+  `search_pages` also takes `expect` (a path), which reports where that page ranked and what
+  beat it (`scoreProbe` in `src/lib/probe.ts`, `pnpm test:probe`). A probe that hits the
+  budget is inconclusive, not failed.
 
 ## Across brains
 
-`scope: 'all'` on `search_pages` fans out: `searchBrains` runs `searchIndex` per brain and
+`scope: 'all'` on `search_pages` fans out: `searchBrains` runs each brain's `index.search` and
 `mergeBrainResults` (`search.ts`) folds them. `searchTargets` (`librarian.ts`) picks the brains.
 
 - **Ranking stays per brain**: a score is relative to its corpus.

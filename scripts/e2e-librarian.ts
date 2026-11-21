@@ -189,7 +189,7 @@ const getContext = async () => {
 		author: undefined,
 		db,
 		brainId,
-		...indexRefs(d1Index(indexDb, { fullText: true }), brainId),
+		...indexRefs(d1Index(indexDb), brainId),
 		policySecret: 'e2e-secret',
 		consolidate,
 		activeBrain: { id: name, label: name }
@@ -1598,7 +1598,7 @@ try {
 		orgContext,
 		listOrgs: () => listAccessibleOrgs(db, [USER]),
 		listBrains: () => listAccessibleBrains(db, [USER]),
-		openIndex: d1Index(indexDb, { fullText: true }),
+		openIndex: d1Index(indexDb),
 		activeBrainId: () => activeId,
 		setActiveBrain: async (id: string) => {
 			activeId = id;

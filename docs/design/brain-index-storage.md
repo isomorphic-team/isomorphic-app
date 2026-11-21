@@ -1,6 +1,6 @@
 # Design: where the derived index lives, and full-text search
 
-Status: **in implementation** (2026-11-09). Steps 1 to 4 of the order of work are built: full-text search answers where the index has its own database.
+Status: **in implementation** (2026-11-09). Steps 1 to 5 of the order of work are built: FTS5 is the only search engine.
 
 Related: [`search-relevance.md`](search-relevance.md) (today's ranking),
 [`storage-and-tenancy.md`](storage-and-tenancy.md) (derived state keyed by `brain_id`),
@@ -151,16 +151,17 @@ because the index is rebuildable, moving it into objects later is a backfill.
 
 1. **The index interface** in `src/lib/`, with today's D1 tables behind it. No behaviour change.
    Built: `BrainIndex` and `d1Index` in `src/lib/brain-index.ts`.
-2. **The index in its own D1 database,** `INDEX_DB`, optional per deployment. Built:
-   `migrations-index/`, `indexDatabase`. A deployment that binds it starts with an empty index,
-   which each brain refills on its next read; estimate the rows written before binding it.
+2. **The index in its own D1 database,** `INDEX_DB`. Built: `migrations-index/`. A new one
+   starts empty, and each brain refills it on its next read.
 3. **FTS5 in shadow** in `INDEX_DB`, to measure latency and agreement on the real deployment
    before the switch. Done, and removed by step 4.
-4. **Switch `search_pages`:** FTS5 answers where `INDEX_DB` is bound, `searchIndex` elsewhere
-   and as the fallback. Built: `ftsFirstSearch`. `expect` reads a page's position in the hits,
-   so it works with either engine.
-5. **Drop the index tables from the platform database,** once every deployment binds `INDEX_DB`.
-6. **The per-brain index object, in the objects Worker,** when a limit calls for it: a brain near D1's size
+4. **Switch `search_pages`** to FTS5. Built. `expect` reads a page's position in the hits, so
+   it needed no change.
+5. **Remove the `LIKE` engine and require `INDEX_DB`.** Built: `searchIndexFts` is the only
+   engine, in every runtime.
+6. **Drop the index tables from the platform database:** first stop `forgetBrain` naming them,
+   then the migration, in separate deploys.
+7. **The per-brain index object, in the objects Worker,** when a limit calls for it: a brain near D1's size
    cap, write budget contention between brains, or data residency. Measure `scope: "all"` over a
    few dozen objects first.
 
@@ -169,7 +170,7 @@ Related pages ships independently of all of this.
 ## 7. Open questions
 
 - **Cross-brain search becomes one call per brain.** Measure `scope: "all"` over a few dozen
-  objects before step 6.
+  objects before step 7.
 - **Questions across brains** (admin views, "which brains mention X") need their own index or a
   fan-out.
 - **The per-object storage limit,** against the largest brain a customer is likely to connect.

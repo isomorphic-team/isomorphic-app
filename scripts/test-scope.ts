@@ -28,7 +28,7 @@
 
 import { readFileSync, readdirSync } from 'node:fs';
 import { d1Index, indexRefs } from '../src/lib/brain-index.ts';
-import { localD1 } from '../src/local/d1-sqlite.ts';
+import { INDEX_MIGRATIONS_DIR, localD1 } from '../src/local/d1-sqlite.ts';
 import { bindFixtureStorage } from './fixture-storage.ts';
 import { PLATFORM_FILES_KIND, orgStorage } from '../src/lib/storage-connections.ts';
 import {
@@ -63,6 +63,8 @@ const { check, done } = checker('scope checks');
 // migrations, not from src/db/auth-schema.sql, which is reference only. This battery
 // pins the authorization model, so it asserts against the schema a deployment runs.
 const { db, sqlite } = localD1();
+// The content index's own database, as a deployment has it.
+const { db: indexDb, sqlite: indexSqlite } = localD1(':memory:', INDEX_MIGRATIONS_DIR);
 
 sqlite.exec(`
   INSERT INTO orgs (org_id, name, model, installation_id, brain_owner, created_by) VALUES
@@ -210,7 +212,7 @@ function contextFor(p: Persona) {
 			config: DEFAULT_BRAIN_CONFIG,
 			db,
 			brainId: 'b-main',
-			...indexRefs(d1Index(db), 'b-main'),
+			...indexRefs(d1Index(indexDb), 'b-main'),
 			activeBrain: { id: 'main-0a1b2c', label: 'Main' }
 		} as BrainContext;
 	};
@@ -407,7 +409,7 @@ function toolsFor(
 		},
 		invalidateConfig: () => {},
 		analyticsEnabled: true,
-		openIndex: d1Index(db),
+		openIndex: d1Index(indexDb),
 		webBaseUrl: deployment.webBaseUrl,
 		platformFiles: deployment.noFilesObjects ? undefined : (deployment.files ?? (() => filesStore)),
 		githubFor: async () => (deployment.github as never) ?? octokit
@@ -589,7 +591,7 @@ check(
 // handle tools address it with (`northwind/main`), so the fixture keys it the same way.
 console.log('\nbrains answers a configured brain from the index alone');
 {
-	sqlite
+	indexSqlite
 		.prepare(
 			`INSERT INTO brain_pages (brain_id, path, title, blob_sha, content) VALUES (?, ?, ?, ?, ?)`
 		)

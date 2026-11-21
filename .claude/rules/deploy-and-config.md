@@ -42,12 +42,11 @@ deployment's identity).
   `--print-ci` emits the `gh variable set` commands.
 - **CI:** `ci.yml` runs `pnpm setup:config` with no secrets (fork PRs stay green). `deploy.yml`
   regenerates from repository **variables** and **skips with a warning** if
-  `CF_OAUTH_KV_ID`/`CF_D1_DATABASE_ID` are unset rather than deploying template defaults.
-- **`INDEX_DB` is optional** (the content index's own D1 database, schema in
-  `migrations-index/`). The template's block for it sits between `// index-db:start` and
-  `// index-db:end`; `setup:config` keeps it only when `CF_INDEX_D1_DATABASE_ID` is set
-  (`optionalBlock`, `scripts/optional-block.ts`, pinned by `pnpm test:wiring`), and
-  `deploy.yml` applies its migrations only then. `pnpm db:migrate:index` applies them locally.
+  `CF_OAUTH_KV_ID`, `CF_D1_DATABASE_ID` or `CF_INDEX_D1_DATABASE_ID` is unset rather than deploying template defaults.
+- **`INDEX_DB` is required:** the content index's own D1 database (schema in
+  `migrations-index/`, `pnpm db:migrate:index` locally), the only one holding the full-text
+  table. `deploy.yml` skips with a warning when `CF_INDEX_D1_DATABASE_ID` is unset and applies
+  its migrations before the code. A new or emptied one fills itself on each brain's next read.
 - **Don't hardcode our deployment anywhere.** `src/manifest.ts` takes the OAuth callback origin
   as an argument (`PUBLIC_BASE_URL`); the install-callback page derives its host from the request.
 
@@ -86,7 +85,7 @@ in `worker.ts`). `pnpm test:wiring` fails on a class or a value import of `src/o
   `BrainFilesObject` backs its brain up to the `BACKUPS` R2 bucket on an alarm after it
   changes, sealed to the public key. The private key is never deployed, so the Worker still
   holds nothing that reads a brain. The `r2_buckets` block is optional (`backups`, kept when
-  `BACKUP_BUCKET` is set), like `index-db` above.
+  `BACKUP_BUCKET` is set: `optionalBlock`, `scripts/optional-block.ts`).
 - **So its RPC methods and stored tables only ever grow.** The MCP Worker version live during a
   deploy, and the one a rollback returns to, call the new objects Worker.
 - **Worker Previews never bind it**: a binding reaches the named Worker's one namespace.

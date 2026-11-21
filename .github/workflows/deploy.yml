@@ -160,6 +160,7 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CF_OAUTH_KV_ID: ${{ vars.CF_OAUTH_KV_ID }}
           CF_D1_DATABASE_ID: ${{ vars.CF_D1_DATABASE_ID }}
+          CF_INDEX_D1_DATABASE_ID: ${{ vars.CF_INDEX_D1_DATABASE_ID }}
         run: |
           ready=true
           if [ -z "$CLOUDFLARE_API_TOKEN" ]; then
@@ -168,6 +169,10 @@ jobs:
           fi
           if [ -z "$CF_OAUTH_KV_ID" ] || [ -z "$CF_D1_DATABASE_ID" ]; then
             echo "::warning::CF_OAUTH_KV_ID / CF_D1_DATABASE_ID are not set as repository variables — skipping deploy. Run 'pnpm setup:config --print-ci' locally for the exact commands, or see the setup notes at the top of this workflow."
+            ready=false
+          fi
+          if [ -z "$CF_INDEX_D1_DATABASE_ID" ]; then
+            echo "::warning::CF_INDEX_D1_DATABASE_ID is not set as a repository variable, skipping deploy. The content index needs its own D1 database: run 'pnpm setup:config --provision' and then '--print-ci' for the commands."
             ready=false
           fi
           echo "ready=$ready" >> "$GITHUB_OUTPUT"
@@ -224,7 +229,7 @@ jobs:
       # (CF_INDEX_D1_DATABASE_ID). Schema first, as above. Its rows are derived from
       # git, so a new database fills itself on each brain's next read.
       - name: Apply index database migrations (prod)
-        if: steps.guard.outputs.ready == 'true' && vars.CF_INDEX_D1_DATABASE_ID != ''
+        if: steps.guard.outputs.ready == 'true'
         run: pnpm exec wrangler d1 migrations apply "${INDEX_D1_DATABASE_NAME:-index-db}" --remote
         env:
           INDEX_D1_DATABASE_NAME: ${{ vars.INDEX_D1_DATABASE_NAME }}

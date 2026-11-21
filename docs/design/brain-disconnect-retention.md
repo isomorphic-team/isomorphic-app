@@ -74,9 +74,8 @@ was.
 
 - **`forgetBrain`** deletes the purged rows and the `brains` row in one `db.batch()`, grants and
   invites before the row they reference. `disconnect_brain` calls it. One batch, so a failure
-  part way cannot remove the `brains` row and leave rows that nothing points at. Where the
-  index sits in its own database (`indexDatabase`, `INDEX_DB`), that batch does not reach
-  it: `disconnect_brain` resets the brain's index first, while the brain still exists.
+  part way cannot remove the `brains` row and leave rows that nothing points at. The
+  index sits in its own database (`INDEX_DB`), which that batch does not reach: `disconnect_brain` resets the brain's index first, while the brain still exists.
 - **A brain the platform holds itself is not disconnected.** `disconnect_brain` refuses
   one (`platformHoldsFiles`), since its files are in no repository, until it is moved to
   GitHub with `configure_brain`.

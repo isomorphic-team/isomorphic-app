@@ -113,12 +113,11 @@ Non-obvious things confirmed against the sources above (with the "why it bit us"
   virtual tables."_ The blast radius is the DATABASE, not the table, and `platform-db` holds
   `orgs`, `memberships`, `app_users`, `invitations` and `feedback_reports` — so an FTS index
   over a derived cache would put a manual destructive step into the backup path for the
-  platform's system of record. That, plus BM25 being unreproducible outside SQLite (the design
-  requires a ranking a caller can recompute, and a pure golden test can pin), is why search
-  ranks in `src/lib/search.ts` instead. **If FTS5 is revisited**, the seam is deliberate:
-  SQL narrows candidates, the pure module orders them, so only the narrowing phase changes.
+  platform's system of record. So the full-text table lives in the index database
+  (`INDEX_DB`), which holds only derived rows and never needs exporting, and never in the
+  platform one.
   `node:sqlite` ships FTS5 too (porter tokenizer included), so a test can run the real thing;
-  a prototype, its measurements and where the index should live are in
+  the engine's measurements and where the index lives are in
   [`design/brain-index-storage.md`](design/brain-index-storage.md).
 
 - **`wrangler versions upload` inherits the Worker's secrets; `wrangler deploy` is what you

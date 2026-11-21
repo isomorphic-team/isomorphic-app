@@ -110,7 +110,7 @@ const fill = (template: string) =>
 const objects = parseJsonc(
 	optionalBlock(fill('wrangler.objects.template.jsonc'), 'backups', true)
 ) as Record<string, unknown>;
-const mcp = parseJsonc(optionalBlock(fill('wrangler.template.jsonc'), 'index-db', false)) as {
+const mcp = parseJsonc(fill('wrangler.template.jsonc')) as {
 	durable_objects: { bindings: { name: string; class_name: string; script_name: string }[] };
 };
 

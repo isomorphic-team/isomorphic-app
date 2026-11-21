@@ -144,13 +144,13 @@ const SETTINGS = [
 		key: 'INDEX_D1_DATABASE_NAME',
 		placeholder: '__INDEX_D1_DATABASE_NAME__',
 		default: 'index-db',
-		help: 'Name of the D1 database holding the content index, when CF_INDEX_D1_DATABASE_ID is set.'
+		help: 'Name of the D1 database holding the content index.'
 	},
 	{
 		key: 'CF_INDEX_D1_DATABASE_ID',
 		placeholder: '__INDEX_D1_DATABASE_ID__',
-		default: '',
-		help: 'D1 database id for the content index. Empty keeps the index in the platform database; --provision creates one.'
+		default: 'local-dev-index-d1-database-id',
+		help: 'D1 database id for the content index. Fake by default; --provision fills in the real one.'
 	},
 	{
 		key: 'CF_OAUTH_KV_ID',
@@ -395,7 +395,8 @@ async function main(): Promise<void> {
 
 	const usingFakeIds =
 		resolved.get('CF_OAUTH_KV_ID')!.source === 'default' ||
-		resolved.get('CF_D1_DATABASE_ID')!.source === 'default';
+		resolved.get('CF_D1_DATABASE_ID')!.source === 'default' ||
+		resolved.get('CF_INDEX_D1_DATABASE_ID')!.source === 'default';
 
 	if (printOnly) return;
 
