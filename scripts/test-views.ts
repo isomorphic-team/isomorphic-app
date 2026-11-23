@@ -34,7 +34,7 @@ import {
 } from '../src/lib/views.ts';
 import type { PageFields } from '../src/lib/brain-index.ts';
 
-import { RECORD_VIEW } from '../src/lib/change-record.ts';
+import { RECORD_VIEW } from '../src/lib/view-directives.ts';
 import { checker } from './check.ts';
 
 const { check, done } = checker('view checks');
@@ -745,7 +745,15 @@ async function main() {
 					['check_at', ['2026-11-20']]
 				])
 			],
-			['notes/standup.md', new Map([['type', ['Meeting']]])]
+			['notes/standup.md', new Map([['type', ['Meeting']]])],
+			[
+				'decisions/linked-from-claim.md',
+				new Map([
+					['type', ['Decision']],
+					['expected', ['Reached by the claim only']],
+					['check_at', ['2026-12-20']]
+				])
+			]
 		]);
 		const recCtx: ViewContext = {
 			resolved: {
@@ -754,14 +762,14 @@ async function main() {
 					{ path: 'decisions/raise.md', title: 'Raise the price' },
 					{ path: 'decisions/pending.md', title: 'Renewal push' },
 					{ path: 'bets/annual.md', title: 'Annual plans' },
-					{ path: 'notes/standup.md', title: 'Standup' }
+					{ path: 'notes/standup.md', title: 'Standup' },
+					{ path: 'decisions/linked-from-claim.md', title: 'Linked from claim' }
 				],
-				edges: [
-					'decisions/raise.md',
-					'decisions/pending.md',
-					'bets/annual.md',
-					'notes/standup.md'
-				].map((source) => ({ source, target: claim, kind: 'md' as const, cnt: 1 })),
+				edges: ['decisions/raise.md', 'decisions/pending.md', 'bets/annual.md', 'notes/standup.md']
+					.map((source) => ({ source, target: claim, kind: 'md' as const, cnt: 1 }))
+					.concat([
+						{ source: claim, target: 'decisions/linked-from-claim.md', kind: 'md' as const, cnt: 1 }
+					]),
 				fileEdges: [],
 				broken: []
 			},
@@ -787,6 +795,12 @@ async function main() {
 		);
 		check('a filled outcome shows', /Raise the price[^\n]*held/.test(out.display), out.display);
 		check('a page typed Bet stays in', out.display.includes('Annual plans'), out.display);
+		check(
+			'direction: a decision the claim page links to, which does not link back, shows nothing',
+			!out.display.includes('Linked from claim') &&
+				!out.display.includes('Reached by the claim only'),
+			out.display
+		);
 		check(
 			'a page that links with no check_at stays out',
 			!out.display.includes('Standup'),

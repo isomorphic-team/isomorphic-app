@@ -32,12 +32,8 @@ import {
 	type PageWriteArgs
 } from '../src/lib/page-write.ts';
 import { parsePaths } from '../src/lib/brain-config.ts';
-import {
-	describeChange,
-	expectationNote,
-	hasDeadlinePhrase,
-	RECORD_VIEW
-} from '../src/lib/change-record.ts';
+import { describeChange, expectationNote, hasDeadlinePhrase } from '../src/lib/change-record.ts';
+import { RECORD_VIEW } from '../src/lib/view-directives.ts';
 
 import { checker } from './check.ts';
 
@@ -795,6 +791,13 @@ console.log('\nwrite_page: the commitment prompt (expectationNote)');
 		'create: the note offers the record view with its guard, in done and proposed',
 		[dec.done, dec.proposed].every((t) => t.includes(GUARD) && t.includes(RECORD_VIEW)),
 		dec.proposed
+	);
+	check(
+		'create: the note says the offer applies when this page links to the claim page',
+		[dec.done, dec.proposed].every((t) =>
+			t.includes('If this page links to the page whose claim it tests')
+		),
+		dec.done
 	);
 	check(
 		'create: the record offer appears once per write',

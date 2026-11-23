@@ -2,7 +2,6 @@
 paths:
   - "src/lib/{views,view-directives}.ts"
   - "scripts/test-views.ts"
-  - "src/lib/change-record.ts"
 ---
 
 # Derived views (`okf-view`)
@@ -29,9 +28,9 @@ otherwise alphabetically, with "(none)" last. In `display` only, `YYYY-MM-DD` ce
 snapshot keeps the raw value so a saved file does not change from day to day.
 `FOLDER_NOTE_NAMES` lives here as the single source of truth.
 
-- **The record view.** `RECORD_VIEW` (`src/lib/change-record.ts`) is the fence a claim's page
+- **The record view.** `RECORD_VIEW` (`src/lib/view-directives.ts`) is the fence a claim's page
   carries to show the decisions that test it: backlinks filtered on `check_at` being a date,
-  not on `type`, so a Bet or ADR counts and a page that links without a date does not. The create reply of a Decision or Commitment page offers it.
+  not on `type`, so a Bet or ADR counts and a page that links without a date does not. It lists the pages that link to the claim's page, so a decision must link to it. The create reply of a Decision or Commitment page offers it.
 - **Three renderings from one source.** `display` (fence replaced by the live result; what
   `view_page` serves), `snapshotted` (fence + cached rendering between `okf-view:snapshot`
   markers; what is written to the file and what `read_page` serves), `stripSnapshots` (what

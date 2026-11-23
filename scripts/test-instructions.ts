@@ -77,8 +77,8 @@ console.log('\ncommitments');
 		line
 	);
 	check(
-		'it links a commitment from the page whose claim it tests',
-		/from the page whose claim it tests/.test(line),
+		'it links a commitment to the page whose claim it tests',
+		/linking to the page whose claim it tests/.test(line),
 		line
 	);
 	check(

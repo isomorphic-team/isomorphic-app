@@ -15,6 +15,7 @@ import { logPathOf } from './brain-policy.ts';
 import type { CommitAuthor, CommitOrPROpts, FileWrite } from './brain-repo.ts';
 import { MAX_SCAN_PAGES } from './brain-repo.ts';
 import { isToolPagePath } from './custom-tools.ts';
+import { RECORD_VIEW } from './view-directives.ts';
 import type { Frontmatter } from './wiki.ts';
 import { insertLogEntry, listOf } from './wiki.ts';
 
@@ -117,23 +118,7 @@ export function expectationNote(input: ExpectationInput): string {
 	return (input.added ?? []).some(hasDeadlinePhrase) ? DEADLINE_TEXT : '';
 }
 
-/**
- * The view that shows a page its record: the pages linking to it that carry a check
- * date, with what was expected and what happened. It filters on `check_at`, not on
- * `type`, so a page typed Bet or ADR counts and a page that links without a date does not.
- */
-export const RECORD_VIEW = [
-	'```okf-view',
-	'kind: backlinks',
-	'filter: { check_at: ">= 2000-01-01" }',
-	'as: table',
-	'columns: [title, expected, check_at, outcome]',
-	'sort: check_at',
-	'order: desc',
-	'```'
-].join('\n');
-
-const RECORD_TEXT = `If the page whose claim this tests does not already show its record (read it first), offer to append this there with write_page append:\n${RECORD_VIEW}\none yes completes it. Then tell the person that page now shows its record.`;
+const RECORD_TEXT = `If this page links to the page whose claim it tests and that page does not already show its record (read it first), offer to append this there with write_page append:\n${RECORD_VIEW}\none yes completes it. Then tell the person that page now shows its record.`;
 
 const EXPECTATION_TEXT =
 	'If the person gave a date, use it as check_at; otherwise ask. Tell the person the check date you set. One commitment per page: a second gets its own page. write_page fields {expected, check_at: YYYY-MM-DD}.';
