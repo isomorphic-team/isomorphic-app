@@ -92,6 +92,20 @@ export function findingKey(kind: string, identity: string | string[]): string {
 export const isCommitmentKey = (key: string): boolean =>
 	key.startsWith('prediction-due:') || key.startsWith('undated-commitment:');
 
+/**
+ * The line that opens the findings list. `shown` counts the findings listed, `silenced` the
+ * dismissed ones withheld; the dismissed count prints whenever it is above zero, including
+ * when nothing else is listed.
+ */
+export function findingsIntro(shown: number, silenced: number): string {
+	const note = silenced > 0 ? ` ${silenced} previously dismissed and not shown.` : '';
+	if (shown === 0) return silenced > 0 ? `\n\n${note.trim()}` : '';
+	return (
+		`\n\n${shown} finding(s) need a decision — advisory, nothing here is broken,` +
+		` and each can be answered or silenced with resolve.${note}\n`
+	);
+}
+
 /** Splits findings into commitment findings and the rest, each in its original order. */
 export function partitionCommitments(findings: readonly Finding[]): {
 	commitments: Finding[];

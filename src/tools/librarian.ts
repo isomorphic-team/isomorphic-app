@@ -66,6 +66,7 @@ import { isToolPagePath, planCustomTools } from '../lib/custom-tools.ts';
 import { isFolderNoteName } from '../lib/view-directives.ts';
 import {
 	filterDismissed,
+	findingsIntro,
 	partitionCommitments,
 	parseReviewLedger,
 	renderFindings,
@@ -1560,14 +1561,9 @@ export function registerLibrarianTools(
 				// Commitment findings render in the due area, capped apart from the rest, so a
 				// full report of housekeeping cannot hide them.
 				const { commitments, rest } = partitionCommitments(clusterFindings(kept));
-				if (rest.length) {
-					const { text } = renderFindings(rest, MAX_FINDINGS_SHOWN);
-					const silenced = all.length - kept.length;
-					const note = silenced ? ` ${silenced} previously dismissed and not shown.` : '';
-					findingsText =
-						`\n\n${rest.length} finding(s) need a decision — advisory, nothing here is broken,` +
-						` and each can be answered or silenced with resolve.${note}\n${text}`;
-				}
+				findingsText =
+					findingsIntro(rest.length, all.length - kept.length) +
+					(rest.length ? renderFindings(rest, MAX_FINDINGS_SHOWN).text : '');
 				findingsText += staleNote(keptStale.length);
 				const coming = comingDueLines(conceptPages, fieldsByPath, todayIso());
 				comingDueText =

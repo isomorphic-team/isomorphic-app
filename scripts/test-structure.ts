@@ -30,6 +30,7 @@ import {
 	findingKey,
 	filterDismissed,
 	importFindings,
+	findingsIntro,
 	partitionCommitments,
 	renderFindings,
 	type Finding,
@@ -987,6 +988,14 @@ console.log('\nfolder-note advisory: a note-less folder holding its own overview
 					dismissed: [{ key: commitments[0]!.key, why: 'deferred', at: '2026-11-23' }]
 				})
 			).commitments.length === 1
+		);
+		check(
+			'findings intro: the dismissed count prints with nothing else listed, and not at zero',
+			findingsIntro(0, 2) === '\n\n2 previously dismissed and not shown.' &&
+				findingsIntro(0, 0) === '' &&
+				findingsIntro(3, 2).includes('3 finding(s) need a decision') &&
+				findingsIntro(3, 2).includes(' 2 previously dismissed and not shown.') &&
+				!findingsIntro(3, 0).includes('previously dismissed')
 		);
 		check(
 			'partition: a kind is matched with its colon, so a longer kind name is not a commitment',
