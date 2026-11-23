@@ -5,7 +5,8 @@
 - Date: 2026-08-11
 - Audience: the engineering session picking this up in `isomorphic-app`
 - Related: `docs/design/derived-views-and-sync-prd.md` (the views engine and `sync_records`
-  this builds on), `CLAUDE.md` (Brain model, Content index, Derived views, OKF)
+  this builds on), `CLAUDE.md` (Brain model, Content index, Derived views, OKF),
+  `docs/design/self-and-executive.md` (adds expectation and outcome fields to records)
 
 ## 1. Summary
 

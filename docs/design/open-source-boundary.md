@@ -49,7 +49,8 @@ Until 2026-11-05 this document treated the two as one test, which put sign-in in
 
 In `ee/`: model-powered review (brain consolidation today; the data-policy guard's model stages
 are not built and belong here when they are), the model gateway it uses, and the operator's
-grant tooling (`entitlementSql`).
+grant tooling (`entitlementSql`). The self, its charter and its passes
+([`self-and-executive.md`](./self-and-executive.md)) are proposed for `ee/` too.
 
 Enterprise but in the core: enterprise identity (verified domains, a provider per org, SSO
 enforcement, just-in-time provisioning, SCIM), because every sign-in runs through it. It checks
