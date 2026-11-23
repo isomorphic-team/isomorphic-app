@@ -107,9 +107,9 @@ Open Knowledge Format (one concept per page, `type:` frontmatter, `index.md` fol
 
 ## State of the repo
 
-Not built: webhooks, Google sign-in, storage on Microsoft Graph, invitation emails.
-[`docs/roadmap.md`](docs/roadmap.md) is the public plan: when the user references a roadmap
-item, check the code before assuming it exists or does not.
+Not built: webhooks, Google sign-in, Microsoft Graph storage, invitation emails. Why the product
+exists and which job each feature serves: [`docs/product-spine.md`](docs/product-spine.md). Plan:
+[`docs/roadmap.md`](docs/roadmap.md); check the code before assuming a roadmap item exists.
 
 ## Public-repo hygiene
 

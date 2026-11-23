@@ -10,7 +10,8 @@ designed fit together, and the small number of new pieces that join them.
 
 - Author: Jon Hansing (via Claude)
 - Audience: anyone deciding what to build next, and the sessions that pick up the work items
-- Related: [`consistency-checks.md`](consistency-checks.md), [`privacy-checks.md`](privacy-checks.md),
+- Related: [`../product-spine.md`](../product-spine.md) (what the product is for, and where roles
+  and the org view sit in it), [`consistency-checks.md`](consistency-checks.md), [`privacy-checks.md`](privacy-checks.md),
   [`multi-agent-surface.md`](multi-agent-surface.md), [`brain-seams.md`](brain-seams.md),
   [`derived-views-and-sync-prd.md`](derived-views-and-sync-prd.md),
   [`records-tables-prd.md`](records-tables-prd.md),

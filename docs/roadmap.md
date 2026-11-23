@@ -12,6 +12,8 @@ How to read it:
 - A **Decided against** or **(dropped)** section is a direction we chose not to take. The
   reasoning is left in place so nobody re-proposes it without knowing why.
 - Nothing here is a commitment or a date. Priorities move.
+- What the product is for, and which job each item serves, is in
+  [`product-spine.md`](product-spine.md).
 
 If you want to work on something in here, say so in an issue first so two people do not
 build the same thing. Several of these are good first contributions, particularly the app
