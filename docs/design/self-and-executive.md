@@ -258,7 +258,8 @@ and why, and a person decides.
 When authors diverge: a conflict of values stops the action. A conflict of intent or set points
 becomes an `arbitration` item addressed to the authors.
 
-Items are the channel between the passes and the executive:
+Items, and the `prediction-due` finding `validate` computes, are the channel between the passes
+and the executive:
 
 1. `validate` lists `prediction-due` from the page's frontmatter; nothing is queued.
 2. The executive, next time it is in conversation, reads the item and looks in its sources.
