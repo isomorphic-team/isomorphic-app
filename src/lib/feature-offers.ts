@@ -6,7 +6,6 @@ import { checkDateOf, COMMITMENT_TYPE_RE } from './advisories.ts';
 import type { PageFields } from './brain-index.ts';
 import { findingKey, isCommitmentKey, type Finding } from './findings.ts';
 import { roleAtLeast, type Role } from './orgs.ts';
-import { DUE_KEY } from './view-directives.ts';
 
 /** What an entry reads. `pages` are concept pages only. */
 export interface OfferContext {
@@ -91,19 +90,21 @@ export const FEATURE_OFFERS: FeatureOffer[] = [
 		unused: (ctx) =>
 			commitmentPages(ctx).every((path) => {
 				const get = (k: string) => ctx.fields.get(path)?.get(k);
-				return !checkDateOf(get) && !nonEmpty(get('outcome'));
+				return (
+					!nonEmpty(get('check_at')) && !nonEmpty(get('expected')) && !nonEmpty(get('outcome'))
+				);
 			}),
 		text: (ctx) => {
-			const dated = ctx.pages.filter((p) =>
-				[...(ctx.fields.get(p.path) ?? [])].some(([k, v]) => DUE_KEY.test(k) && nonEmpty(v))
-			).length;
-			const own = dated
-				? ` ${dated} page(s) keep their own due-named dates, which validate lists but cannot ask about.`
-				: '';
+			const paths = commitmentPages(ctx);
+			const dated = paths.filter((path) => checkDateOf((k) => ctx.fields.get(path)?.get(k))).length;
+			const undated = paths.length - dated;
+			const split = dated
+				? `${dated} already have a date validate raises and ${undated} do not`
+				: `none has a date validate raises`;
 			return (
-				`Tell the person: this brain holds ${commitmentPages(ctx).length} decisions or commitments and none has a check date or an outcome, ` +
-				`so validate cannot raise them. With a check date, validate raises each one when its date comes and asks what happened.${own} ` +
-				'Only if yes: ask which decisions are still open, then call write_page with fields `expected` and `check_at` (YYYY-MM-DD) on each. ' +
+				`Tell the person: this brain holds ${paths.length} decisions or commitments, ${split}, and none records \`expected\`, ` +
+				'so validate cannot compare what happened with what was expected. ' +
+				'Only if yes: ask which of the 3 to 5 most recently updated undated decisions are still waiting on a result, then call write_page with fields `expected` and `check_at` (YYYY-MM-DD) on only those; none waiting counts as no. ' +
 				'If no: resolve with dismiss and their reason.'
 			);
 		}

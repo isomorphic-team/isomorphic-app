@@ -1531,10 +1531,36 @@ console.log('\nfeature offers: one line for a feature the brain does not use');
 		'commitments: the script tells, asks, then names the tool call and the dismissal',
 		/^- Tell the person: .* Only if yes: .*write_page.*check_at.* If no: resolve with dismiss/.test(
 			offer?.headline ?? ''
-		) && (offer?.headline ?? '').includes('6 page(s) keep their own due-named dates'),
+		) &&
+			(offer?.headline ?? '').includes('none has a date validate raises') &&
+			(offer?.headline ?? '').includes('none records `expected`') &&
+			!/check date|due-named|cannot ask what happened/.test(offer?.headline ?? ''),
 		offer?.headline
 	);
+	check(
+		'commitments: decisions dated only by `due` still get the offer',
+		(await pickOffer(ctxOf(six({ due: ['2026-12-01'] })), keepAll))?.key ===
+			'feature-offer:commitments'
+	);
+	const mixed = await pickOffer(
+		ctxOf([
+			...six({ due: ['2026-12-01'] }).slice(0, 4),
+			decision(7, { status: ['decided'], due: ['2026-12-01'] }),
+			decision(8)
+		]),
+		keepAll
+	);
+	check(
+		'commitments: dated counts what checkDateOf dates (a decided page with only due is undated)',
+		/4 already have a date validate raises and 2 do not/.test(mixed?.headline ?? ''),
+		mixed?.headline
+	);
 	const rows = six();
+	rows[0] = decision(1, { expected: ['it ships'] });
+	check(
+		'commitments: one expected makes it vanish',
+		(await pickOffer(ctxOf(rows), keepAll)) === null
+	);
 	rows[0] = decision(1, { check_at: ['2026-12-01'] });
 	check(
 		'commitments: one check_at makes it vanish',
