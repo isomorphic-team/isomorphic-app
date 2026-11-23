@@ -14,7 +14,7 @@ import { SOURCE_KEY_FIELD, SOURCE_KEYS_FIELD } from './brain-import.ts';
 import { type Finding, findingKey } from './findings.ts';
 import { OKF_PAGE_STATUSES } from './page-patch.ts';
 import type { ProbeResult } from './probe.ts';
-import { datePart, isFolderNoteName } from './view-directives.ts';
+import { datePart, DUE_KEY, isFolderNoteName } from './view-directives.ts';
 import { parseFrontmatter, slugOf, slugify, wikilinkKey, wikilinkTargetName } from './wiki.ts';
 
 // Folder-note advisory for validate. A folder's overview page has to be named index.md
@@ -411,8 +411,8 @@ export const COMMITMENT_TYPE_RE = /decision|commitment/i;
 // stamped on every save.
 const QUIET_DATE_KEYS = ['raised'];
 
-// A `status` or `state` value that means the page is finished, so a date left in `due` is
-// history. Applies on the follow-up path only: `check_at` closes on `outcome`.
+// A `status`, `state` or `stage` value that means the page is finished, so a date left in
+// `due` is history. Applies on the follow-up path only: `check_at` closes on `outcome`.
 const CLOSED_STATUSES = new Set([
 	'done',
 	'closed',
@@ -425,8 +425,16 @@ const CLOSED_STATUSES = new Set([
 	'dropped',
 	'superseded',
 	'archived',
-	'deprecated'
+	'deprecated',
+	'lost',
+	'won'
 ]);
+
+// Whether any of a page's `status`, `state` or `stage` values is a closed one.
+const hasClosedValue = (get: (key: string) => string[] | undefined): boolean =>
+	['status', 'state', 'stage'].some((k) =>
+		(get(k) ?? []).some((v) => CLOSED_STATUSES.has(v.trim().toLowerCase()))
+	);
 
 /**
  * The date a page is to be checked, and the key it came from. `check_at` when it holds a
@@ -452,8 +460,7 @@ export function checkDateOf(
 	if (get('check_at')?.some((v) => v.trim() !== '')) return undefined;
 	const has = (key: string) => (get(key) ?? []).some((v) => v.trim() !== '');
 	if (has(SOURCE_KEY_FIELD) || has(SOURCE_KEYS_FIELD)) return undefined;
-	for (const k of ['status', 'state'])
-		if ((get(k) ?? []).some((v) => CLOSED_STATUSES.has(v.trim().toLowerCase()))) return undefined;
+	if (hasClosedValue(get)) return undefined;
 	for (const key of FOLLOW_UP_DATE_KEYS) {
 		const date = first(key);
 		if (date !== undefined) return { date, key };
@@ -536,16 +543,93 @@ export function comingDueLines(
 		if (!(days <= COMING_DUE_DAYS)) continue;
 		rows.push({ path: p.path, date: c.date, days, shown: c.shown, key: c.key });
 	}
-	rows.sort((a, b) => a.date.localeCompare(b.date) || a.path.localeCompare(b.path));
-	const lines = rows.slice(0, MAX_COMING_DUE_LINES).map((r) => {
-		const inDays = `in ${r.days} day${r.days === 1 ? '' : 's'}`;
-		return r.key === 'check_at'
-			? `- ${r.path}: check due ${r.date} (${inDays})${r.shown ? `. Expected: ${r.shown}` : ''}. Record it with write_page fields {outcome: ...}.`
-			: `- ${r.path}: due ${r.date} (from \`${r.key}\`, ${inDays}).${expectedClause(r.shown)} ${aliasHint(r.key)}.`;
-	});
-	if (rows.length > MAX_COMING_DUE_LINES)
-		lines.push(`...and ${rows.length - MAX_COMING_DUE_LINES} more.`);
+	return capLines(
+		rows,
+		MAX_COMING_DUE_LINES,
+		(a, b) => a.date.localeCompare(b.date) || a.path.localeCompare(b.path),
+		(r) => {
+			const inDays = `in ${r.days} day${r.days === 1 ? '' : 's'}`;
+			return r.key === 'check_at'
+				? `- ${r.path}: check due ${r.date} (${inDays})${r.shown ? `. Expected: ${r.shown}` : ''}. Record it with write_page fields {outcome: ...}.`
+				: `- ${r.path}: due ${r.date} (from \`${r.key}\`, ${inDays}).${expectedClause(r.shown)} ${aliasHint(r.key)}.`;
+		},
+		(rest) => `...and ${rest.length} more.`
+	);
+}
+
+// Sorted rows as at most `cap` lines, then one line for the rest: the shared shape of
+// `comingDueLines` and `otherDueLines`. `tail` gets the rows that did not fit.
+function capLines<T>(
+	rows: T[],
+	cap: number,
+	order: (a: T, b: T) => number,
+	line: (row: T) => string,
+	tail: (rest: T[]) => string
+): string[] {
+	const sorted = [...rows].sort(order);
+	const lines = sorted.slice(0, cap).map(line);
+	if (sorted.length > cap) lines.push(tail(sorted.slice(cap)));
 	return lines;
+}
+
+/** The most lines `otherDueLines` returns. */
+export const MAX_OTHER_DUE_LINES = 8;
+
+// A page's dates in deadline-named fields (`next_step_due`, `follow_up_due_date`: keys matching DUE_KEY, ending in `_due`, `-due`, `_due_date` or `-due-date`)
+// other than the follow-up keys, `check_at` and `due`, which the due block reads. Listed for a
+// date that is today or past, or within COMING_DUE_DAYS, on a concept page that is not
+// imported, has no `outcome` and has no closed `status`, `state` or `stage`. Not a finding:
+// no key, nothing to dismiss, and these dates recur, so an outcome does not fit. The next
+// days first, then the most recently passed, so the stalest fall into the count. A page and
+// key are never in this list and the due block.
+export function otherDueLines(
+	pages: { path: string }[],
+	fieldsByPath: Map<string, PageFields>,
+	today: string
+): string[] {
+	const t = dayNumber(today);
+	const rows: { path: string; key: string; date: string; days: number }[] = [];
+	for (const p of pages) {
+		const fields = fieldsByPath.get(p.path);
+		if (!fields) continue;
+		const get = (k: string) => fields.get(k);
+		const has = (k: string) => (get(k) ?? []).some((v) => v.trim() !== '');
+		if (has('outcome') || has(SOURCE_KEY_FIELD) || has(SOURCE_KEYS_FIELD) || hasClosedValue(get))
+			continue;
+		for (const key of fields.keys()) {
+			if (!DUE_KEY.test(key) || FOLLOW_UP_DATE_KEYS.includes(key)) continue;
+			const date = (get(key) ?? []).map(datePart).find((d) => d !== undefined);
+			if (date === undefined) continue;
+			const days = Math.round(dayNumber(date) - t);
+			if (days > COMING_DUE_DAYS) continue;
+			rows.push({ path: p.path, key, date, days });
+		}
+	}
+	return capLines(
+		rows,
+		MAX_OTHER_DUE_LINES,
+		(a, b) =>
+			Number(a.days < 0) - Number(b.days < 0) ||
+			(a.days >= 0 ? a.days - b.days : b.days - a.days) ||
+			a.path.localeCompare(b.path) ||
+			a.key.localeCompare(b.key),
+		(r) => {
+			const when =
+				r.days === 0
+					? 'today'
+					: r.days > 0
+						? `in ${r.days} day${r.days === 1 ? '' : 's'}`
+						: `${-r.days} day${r.days === -1 ? '' : 's'} ago`;
+			return `- ${r.path}: ${r.key} ${r.date} (${when}). If the step moved, set a new date: write_page fields {${r.key}: ...}.`;
+		},
+		(rest) => `...and ${rest.length} more, further from today than these.`
+	);
+}
+
+/** The block after the due block: `otherDueLines` under a header, or nothing when empty. */
+export function otherDueBlock(lines: string[]): string {
+	if (lines.length === 0) return '';
+	return `\n\nDates in other deadline-named fields (keys ending in _due, -due, _due_date or -due-date), nearest first:\n${lines.join('\n')}`;
 }
 
 /**
@@ -556,10 +640,10 @@ export function comingDueLines(
  */
 export function dueBlock(coming: string[], overdue: number): string {
 	if (coming.length === 0 && overdue === 0)
-		return '\n\nNothing due or coming due from `check_at` or `due`; dates kept in other fields are not listed.';
+		return '\n\nNothing due or coming due from `check_at` or `due`; dates in other deadline-named fields are listed separately, dates under other field names are not read.';
 	const lines = [...coming];
 	if (overdue > 0) lines.push(`${overdue} overdue (prediction-due findings).`);
-	return `\n\nDue and coming due (read from \`check_at\` or \`due\`; dates kept in other fields are not listed):\n${lines.join('\n')}`;
+	return `\n\nDue and coming due (read from \`check_at\` or \`due\`; dates in other deadline-named fields are listed separately, dates under other field names are not read):\n${lines.join('\n')}`;
 }
 
 // A decision or commitment page that is still open by its own status field and has no date to
@@ -582,7 +666,7 @@ export function undatedCommitmentFindings(
 		const values = ['state', 'status'].flatMap((k) =>
 			(get(k) ?? []).map((v) => ({ key: k, value: v.trim() })).filter((s) => s.value !== '')
 		);
-		if (values.some((s) => CLOSED_STATUSES.has(s.value.toLowerCase()))) continue;
+		if (hasClosedValue(get)) continue;
 		// `draft` and `stable` are write_page's own page statuses: they describe the page, not
 		// the commitment, so they say nothing about whether it is open.
 		const open = values.find(

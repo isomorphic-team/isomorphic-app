@@ -1028,7 +1028,7 @@ try {
 	check(
 		'validate says nothing is due when nothing is',
 		r.text.includes(
-			'Nothing due or coming due from `check_at` or `due`; dates kept in other fields are not listed.'
+			'Nothing due or coming due from `check_at` or `due`; dates in other deadline-named fields are listed separately, dates under other field names are not read.'
 		),
 		r.text
 	);
@@ -1103,7 +1103,7 @@ try {
 	check(
 		'the due block carries the scope note in its header',
 		r.text.includes(
-			'Due and coming due (read from `check_at` or `due`; dates kept in other fields are not listed):'
+			'Due and coming due (read from `check_at` or `due`; dates in other deadline-named fields are listed separately, dates under other field names are not read):'
 		),
 		r.text
 	);
@@ -1190,6 +1190,35 @@ try {
 	check(
 		'closing it in its state field removes the finding',
 		findingCount(r.text) === undatedBefore
+	);
+
+	await call('write_page', {
+		path: 'wiki/deals/northwind.md',
+		title: 'Northwind renewal',
+		type: 'Deal',
+		content: 'Renewal.',
+		fields: { next_step_due: inDays(-4) }
+	});
+	await settledHead();
+	r = await call('validate', {});
+	const otherAt = r.text.indexOf('Dates in other deadline-named fields');
+	check(
+		'validate lists a next-step date after the due block and before the findings',
+		otherAt > r.text.indexOf('Due and coming due') &&
+			otherAt > r.text.indexOf('Nothing due or coming due') &&
+			(!r.text.includes('need a decision') || otherAt < r.text.indexOf('need a decision')) &&
+			r.text.includes(
+				'wiki/deals/northwind.md: next_step_due ' + inDays(-4) + ' (4 days ago). If the step moved'
+			),
+		r.text
+	);
+	await call('write_page', { path: 'wiki/deals/northwind.md', fields: { stage: 'lost' } });
+	await settledHead();
+	r = await call('validate', {});
+	check(
+		'a closed stage removes it from the block',
+		!r.text.includes('wiki/deals/northwind.md: next_step_due'),
+		r.text
 	);
 
 	// ══ findings: validate surfaces, resolve records, validate stops re-raising ═══

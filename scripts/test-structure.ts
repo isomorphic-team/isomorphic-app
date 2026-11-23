@@ -15,6 +15,9 @@ import {
 	comingDueLines,
 	checkDateOf,
 	undatedCommitmentFindings,
+	otherDueLines,
+	otherDueBlock,
+	MAX_OTHER_DUE_LINES,
 	dueBlock,
 	COMING_DUE_DAYS,
 	MAX_COMING_DUE_LINES,
@@ -900,14 +903,14 @@ console.log('\nfolder-note advisory: a note-less folder holding its own overview
 		check(
 			'due block: nothing due prints one line naming the keys read and the gap',
 			nothing ===
-				'\n\nNothing due or coming due from `check_at` or `due`; dates kept in other fields are not listed.',
+				'\n\nNothing due or coming due from `check_at` or `due`; dates in other deadline-named fields are listed separately, dates under other field names are not read.',
 			nothing
 		);
 		const coming1 = dueBlock(['- a.md: due 2026-11-25 (from `due`, in 2 days).'], 0);
 		check(
 			'due block: coming lines sit under the header',
 			coming1.startsWith(
-				'\n\nDue and coming due (read from `check_at` or `due`; dates kept in other fields are not listed):\n- a.md'
+				'\n\nDue and coming due (read from `check_at` or `due`; dates in other deadline-named fields are listed separately, dates under other field names are not read):\n- a.md'
 			),
 			coming1
 		);
@@ -918,6 +921,158 @@ console.log('\nfolder-note advisory: a note-less folder holding its own overview
 				overdueOnly.endsWith('\n2 overdue (prediction-due findings).') &&
 				!/below|listed/.test(overdueOnly.split('\n').at(-1)!),
 			overdueOnly
+		);
+	}
+
+	// other deadline-named fields: next-step dates and the like, listed unkeyed
+	{
+		const other = (rows: Record<string, string[]>, today = TODAY) =>
+			otherDueLines(
+				[{ path: 'deals/northwind.md' }],
+				new Map([['deals/northwind.md', fields(rows)]]),
+				today
+			);
+		const one = other({ next_step_due: ['2026-11-20'] });
+		check(
+			'other due: a past next_step_due is listed with its key to reset',
+			one.length === 1 &&
+				one[0] ===
+					'- deals/northwind.md: next_step_due 2026-11-20 (3 days ago). If the step moved, set a new date: write_page fields {next_step_due: ...}.',
+			one.join('\n')
+		);
+		check(
+			'other due: the key patterns of the platform deadline predicate match',
+			['next_move_due', 'next-step-due', 'renewal_due_date', 'go-live-due-date'].every(
+				(k) => other({ [k]: ['2026-11-20'] }).length === 1
+			)
+		);
+		check(
+			'other due: a *_due_date key is listed under its own name',
+			other({ renewal_due_date: ['2026-11-20'] })[0]?.startsWith(
+				'- deals/northwind.md: renewal_due_date 2026-11-20'
+			) === true
+		);
+		check(
+			"other due: due and check_at are the due block's, and other names are not read",
+			other({ due: ['2026-11-20'] }).length === 0 &&
+				other({ check_at: ['2026-11-20'] }).length === 0 &&
+				other({ next_step: ['2026-11-20'] }).length === 0 &&
+				other({ duet: ['2026-11-20'] }).length === 0 &&
+				other({ due_soon: ['2026-11-20'] }).length === 0
+		);
+		check(
+			'other due: a page and key are never in both blocks',
+			['next_step_due', 'due', 'check_at'].every((k) => {
+				const rows = { [k]: ['2026-11-25'] };
+				const inOther = other(rows).length;
+				const inDue = coming(rows) !== '' || due(rows).length > 0 ? 1 : 0;
+				return inOther + inDue <= 1;
+			})
+		);
+		check(
+			'other due: the window is the next seven days and everything past',
+			other({ next_step_due: ['2026-11-30'] })[0]?.includes('(in 7 days)') === true &&
+				other({ next_step_due: ['2026-11-24'] })[0]?.includes('(in 1 day)') === true &&
+				other({ next_step_due: ['2026-11-23'] })[0]?.includes('(today)') === true &&
+				other({ next_step_due: ['2026-11-22'] })[0]?.includes('(1 day ago)') === true &&
+				other({ next_step_due: ['2026-12-01'] }).length === 0 &&
+				other({ next_step_due: ['2025-01-01'] }).length === 1
+		);
+		check(
+			'other due: a non-date value is ignored, a later date in the list is used',
+			other({ next_step_due: ['call back'] }).length === 0 &&
+				other({ next_step_due: ['call back', '2026-11-20T09:00Z'] }).length === 1
+		);
+		for (const [k, v] of [
+			['status', 'done'],
+			['state', 'Closed'],
+			['stage', 'lost'],
+			['stage', 'won'],
+			['status', 'archived'],
+			['status', 'deprecated']
+		])
+			check(
+				`other due: ${k} "${v}" skips the page`,
+				other({ next_step_due: ['2026-11-20'], [k]: [v] }).length === 0
+			);
+		check(
+			'other due: an open stage, an outcome or an import skips nothing but the last two',
+			other({ next_step_due: ['2026-11-20'], stage: ['negotiation'] }).length === 1 &&
+				other({ next_step_due: ['2026-11-20'], outcome: ['signed'] }).length === 0 &&
+				other({ next_step_due: ['2026-11-20'], source_key: ['crm-1'] }).length === 0 &&
+				other({ next_step_due: ['2026-11-20'], source_keys: ['crm-1'] }).length === 0
+		);
+		check(
+			'other due: two keys on a page are two lines',
+			other({ next_step_due: ['2026-11-20'], renewal_due: ['2026-11-21'] }).length === 2
+		);
+		const ordered2 = otherDueLines(
+			['a', 'b', 'c', 'd', 'e'].map((n) => ({ path: `${n}.md` })),
+			new Map(
+				(
+					[
+						['a', '2026-11-01'],
+						['b', '2026-11-22'],
+						['c', '2026-11-25'],
+						['d', '2026-11-24'],
+						['e', '2026-11-10']
+					] as const
+				).map(([n, d]) => [`${n}.md`, fields({ next_step_due: [d] })])
+			),
+			TODAY
+		);
+		check(
+			'other due: next days first, then the most recently passed',
+			ordered2.map((l) => l.slice(2, 3)).join('') === 'dcbea',
+			ordered2.join('\n')
+		);
+		const many = Array.from({ length: MAX_OTHER_DUE_LINES + 3 }, (_, i) => `p${i}.md`);
+		const manyOther = otherDueLines(
+			many.map((path) => ({ path })),
+			new Map(
+				many.map((path, i) => [
+					path,
+					fields({ next_step_due: [`2026-10-${String(10 + i).padStart(2, '0')}`] })
+				])
+			),
+			TODAY
+		);
+		check(
+			'other due: the cap is 8, the nearest are kept, and the tail counts the rest without calling them stale',
+			MAX_OTHER_DUE_LINES === 8 &&
+				manyOther.filter((l) => l.startsWith('- ')).length === 8 &&
+				manyOther[0]!.includes('p10.md') &&
+				manyOther.at(-1) === '...and 3 more, further from today than these.',
+			manyOther.join('\n')
+		);
+		check(
+			'other due: the block is empty when nothing is listed, and headed otherwise',
+			otherDueBlock([]) === '' &&
+				otherDueBlock(one).startsWith(
+					'\n\nDates in other deadline-named fields (keys ending in _due, -due, _due_date or -due-date), nearest first:\n- deals'
+				)
+		);
+		// the shared helper still caps coming due at 20 and the rest are counted
+		const c25 = Array.from({ length: 25 }, (_, i) => `q${i}.md`);
+		const comingMany = comingDueLines(
+			c25.map((path) => ({ path })),
+			new Map(c25.map((path) => [path, fields({ check_at: ['2026-11-25'] })])),
+			TODAY
+		);
+		check(
+			'other due: coming due still caps at 20 through the shared helper',
+			comingMany.length === 21 && comingMany.at(-1) === '...and 5 more.'
+		);
+		// the closed list now reads stage, lost and won on the earlier paths too
+		check(
+			'closed values: stage, lost and won close item 1 and item 2 as well',
+			due({ due: ['2026-11-10'], stage: ['lost'] }).length === 0 &&
+				due({ due: ['2026-11-10'], status: ['won'] }).length === 0 &&
+				due({ due: ['2026-11-10'], stage: ['negotiation'] }).length === 1 &&
+				undatedCommitmentFindings(
+					[{ path: 'd.md' }],
+					new Map([['d.md', fields({ type: ['Decision'], state: ['open'], stage: ['won'] })]])
+				).length === 0
 		);
 	}
 
