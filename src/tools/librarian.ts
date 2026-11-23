@@ -66,10 +66,8 @@ import { isToolPagePath, planCustomTools } from '../lib/custom-tools.ts';
 import { isFolderNoteName } from '../lib/view-directives.ts';
 import {
 	filterDismissed,
-	findingsIntro,
-	partitionCommitments,
+	renderValidateFindings,
 	parseReviewLedger,
-	renderFindings,
 	REVIEW_LEDGER_PATH,
 	importFindings,
 	type Finding
@@ -1560,17 +1558,16 @@ export function registerLibrarianTools(
 
 				// Commitment findings render in the due area, capped apart from the rest, so a
 				// full report of housekeeping cannot hide them.
-				const { commitments, rest } = partitionCommitments(clusterFindings(kept));
-				findingsText =
-					findingsIntro(rest.length, all.length - kept.length) +
-					(rest.length ? renderFindings(rest, MAX_FINDINGS_SHOWN).text : '');
-				findingsText += staleNote(keptStale.length);
+				const rendered = renderValidateFindings(
+					clusterFindings(kept),
+					all.length - kept.length,
+					MAX_FINDINGS_SHOWN
+				);
+				findingsText = rendered.list + staleNote(keptStale.length);
 				const coming = comingDueLines(conceptPages, fieldsByPath, todayIso());
 				comingDueText =
-					dueBlock(
-						commitments.length ? renderFindings(commitments, MAX_FINDINGS_SHOWN).text : '',
-						coming
-					) + otherDueBlock(otherDueLines(conceptPages, fieldsByPath, todayIso()));
+					dueBlock(rendered.due, coming) +
+					otherDueBlock(otherDueLines(conceptPages, fieldsByPath, todayIso()));
 				openPolicy = kept.filter((f) => isPolicyKey(f.key)).length;
 			} catch {
 				// Advisory only; link validation stands alone.

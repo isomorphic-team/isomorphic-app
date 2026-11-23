@@ -117,6 +117,24 @@ export function partitionCommitments(findings: readonly Finding[]): {
 	return { commitments, rest };
 }
 
+/**
+ * The two texts `validate` builds from its kept findings: `due`, the commitment findings
+ * rendered for the due area (empty when there are none), and `list`, the intro and the other
+ * findings. Each is capped at `limit` on its own, and no finding is in both.
+ */
+export function renderValidateFindings(
+	findings: readonly Finding[],
+	silenced: number,
+	limit: number
+): { due: string; list: string } {
+	const { commitments, rest } = partitionCommitments(findings);
+	return {
+		due: commitments.length ? renderFindings(commitments, limit).text : '',
+		list:
+			findingsIntro(rest.length, silenced) + (rest.length ? renderFindings(rest, limit).text : '')
+	};
+}
+
 // ---------- the ledger ----------
 
 export function parseReviewLedger(raw: string | null): ReviewLedger {

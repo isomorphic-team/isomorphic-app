@@ -122,7 +122,7 @@ are in the list, with keys.
   flooded. Key `undated-commitment:<path>` (the path alone, so a dismissal survives edits),
   weight 2, below `prediction-due`. The headline names the key and value the page uses and,
   when present, its `raised` date as found; nothing is computed from it. `updated` is not shown:
-  it is stamped on every save. No per-kind cap: `renderFindings`' limit is the only one.
+  it is stamped on every save. Commitment findings and the rest are each capped separately by `renderFindings`.
 - **`src/lib/consolidate.ts`** (pure, `pnpm test:consolidate`) detects where a brain's cheap
   surface disagrees with its content: islands, orphans, note-less and hollow folder notes,
   mixed conventions, folder-echo pages, near-duplicates (bigram Jaccard with each folder's

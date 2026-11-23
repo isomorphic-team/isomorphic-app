@@ -31,6 +31,7 @@ import {
 	filterDismissed,
 	importFindings,
 	findingsIntro,
+	renderValidateFindings,
 	partitionCommitments,
 	renderFindings,
 	type Finding,
@@ -989,6 +990,39 @@ console.log('\nfolder-note advisory: a note-less folder holding its own overview
 				})
 			).commitments.length === 1
 		);
+		{
+			const mk = (key: string, weight: number): Finding => ({ key, weight, headline: `- ${key}` });
+			const few = renderValidateFindings(
+				[
+					mk('island:a.md', 1),
+					mk('prediction-due:b.md@2026-11-01', 3),
+					mk('undated-commitment:c.md', 2)
+				],
+				0,
+				12
+			);
+			const crowd = Array.from({ length: 14 }, (_, i) => mk(`island:p${i}.md`, 5));
+			const full = renderValidateFindings(
+				[...crowd, mk('prediction-due:b.md@2026-11-01', 3), mk('undated-commitment:c.md', 2)],
+				0,
+				12
+			);
+			check(
+				'validate findings: each commitment finding is in the due text only, once, however many others there are',
+				few.due.split('prediction-due:b.md').length === 3 &&
+					few.due.includes('- prediction-due:b.md@2026-11-01') &&
+					few.due.includes('- undated-commitment:c.md') &&
+					!few.list.includes('prediction-due') &&
+					!few.list.includes('undated-commitment') &&
+					few.list.includes('island:a.md') &&
+					full.due.includes('- prediction-due:b.md@2026-11-01') &&
+					full.due.includes('- undated-commitment:c.md') &&
+					!full.list.includes('commitment') &&
+					!full.list.includes('prediction-due') &&
+					full.list.includes('…and 2 more') &&
+					renderValidateFindings([], 0, 12).due === ''
+			);
+		}
 		check(
 			'findings intro: the dismissed count prints with nothing else listed, and not at zero',
 			findingsIntro(0, 2) === '\n\n2 previously dismissed and not shown.' &&

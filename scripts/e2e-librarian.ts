@@ -1157,7 +1157,8 @@ try {
 			`Ship the draft (wiki/decisions/ship.md): due ${inDays(-3)} (from \`due\`), nothing recorded.`
 		) &&
 			comingBlock(r.text).includes(`[prediction-due:wiki/decisions/ship.md@${inDays(-3)}]`) &&
-			r.text.indexOf('Ship the draft') < r.text.indexOf('need a decision'),
+			r.text.indexOf('Ship the draft') < r.text.indexOf('need a decision') &&
+			r.text.split('[prediction-due:wiki/decisions/ship.md@').length === 2,
 		r.text
 	);
 	await call('write_page', { path: 'wiki/decisions/ship.md', fields: { outcome: 'sent' } });
@@ -1177,7 +1178,9 @@ try {
 		'an open decision with no date is a finding in the due area, with title and owner',
 		comingBlock(r.text).includes(
 			'Review the vendor (wiki/decisions/vendor-review.md), owner Pat: open (state proposed), no check date.'
-		) && comingBlock(r.text).includes('[undated-commitment:wiki/decisions/vendor-review.md]'),
+		) &&
+			comingBlock(r.text).includes('[undated-commitment:wiki/decisions/vendor-review.md]') &&
+			r.text.split('[undated-commitment:wiki/decisions/vendor-review.md]').length === 2,
 		r.text
 	);
 	await call('write_page', {
@@ -1191,6 +1194,54 @@ try {
 		!r.text.includes('wiki/decisions/vendor-review.md), owner'),
 		r.text
 	);
+
+	// Commitment findings show once, in the due area, even when the other findings fill their cap.
+	const crowd = Array.from({ length: 14 }, (_, i) => `wiki/crowd/lonely-${i}.md`);
+	const addCrowd = async (from: number, to: number) => {
+		for (const path of crowd.slice(from, to))
+			await call('write_page', { path, title: `Lonely ${path}`, content: 'Nothing links here.' });
+	};
+	await addCrowd(0, 3);
+	await call('write_page', {
+		path: 'wiki/decisions/ship.md',
+		fields: { outcome: '', due: inDays(-3) }
+	});
+	await call('write_page', {
+		path: 'wiki/decisions/vendor-review.md',
+		fields: { state: 'proposed' }
+	});
+	await settledHead();
+	r = await call('validate', {});
+	check(
+		'with a few other findings listed, each commitment finding still shows once, in the due area',
+		r.text.includes('need a decision') &&
+			r.text.split('[prediction-due:wiki/decisions/ship.md@').length === 2 &&
+			r.text.split('[undated-commitment:wiki/decisions/vendor-review.md]').length === 2 &&
+			r.text.indexOf('[prediction-due:') < r.text.indexOf('need a decision'),
+		r.text
+	);
+	await addCrowd(3, 14);
+	await settledHead();
+	r = await call('validate', {});
+	const once = (needle: string) => r.text.split(needle).length - 1 === 1;
+	const listAt = r.text.indexOf('need a decision');
+	check(
+		'commitment findings show once each, in the due area, while other findings fill their cap',
+		listAt > 0 &&
+			once('[prediction-due:wiki/decisions/ship.md@') &&
+			once('[undated-commitment:wiki/decisions/vendor-review.md]') &&
+			r.text.indexOf('[prediction-due:') < listAt &&
+			r.text.indexOf('[undated-commitment:') < listAt &&
+			(r.text.slice(listAt).match(/^\s+\[[a-z-]+:/gm) ?? []).length >= 12,
+		r.text
+	);
+	await call('write_page', { path: 'wiki/decisions/ship.md', fields: { outcome: 'sent' } });
+	await call('write_page', {
+		path: 'wiki/decisions/vendor-review.md',
+		fields: { state: 'decided' }
+	});
+	for (const path of crowd) await call('delete_page', { path });
+	await settledHead();
 
 	await call('write_page', {
 		path: 'wiki/deals/northwind.md',
