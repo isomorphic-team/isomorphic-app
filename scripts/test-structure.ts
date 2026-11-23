@@ -45,7 +45,15 @@ import {
 } from '../src/lib/wiki.ts';
 import type { PageFields } from '../src/lib/brain-index.ts';
 
+import {
+	FEATURE_OFFERS,
+	offerContext,
+	pickOffer,
+	type OfferContext
+} from '../src/lib/feature-offers.ts';
+
 import { checker } from './check.ts';
+import { registeredToolNames, toolRegistrationSources } from './doc-refs.ts';
 
 const { check, done } = checker('structure checks');
 
@@ -1414,6 +1422,266 @@ console.log('\nfolder-note advisory: a note-less folder holding its own overview
 		'prediction: weight sits between structure advisories and import findings',
 		w === 3 && typed[0]!.weight < w && w < imp[0]!.weight
 	);
+}
+
+// ---------- feature offers ----------
+
+console.log('\nfeature offers: one line for a feature the brain does not use');
+{
+	// Tools that no offer is about, each with the reason. Brain-authored tools (tools/ pages) are
+	// not listed: they may be removed. `review_brain` is used by the consolidation offer; its
+	// sensitive-data pass has no positive signal. A new tool is either used by an offer
+	// (`uses` in FEATURE_OFFERS) or named here, so adding one forces the decision.
+	const NO_OFFER: Record<string, string[]> = {
+		'reading and viewing': [
+			'search_pages',
+			'read_page',
+			'view_page',
+			'list_pages',
+			'browse_brain',
+			'find_inbound_links',
+			'view_graph',
+			'view_activity',
+			'view_review',
+			'validate',
+			'read_media',
+			'whoami',
+			'analytics'
+		],
+		'organization, member, sharing and brain management': [
+			'brains',
+			'switch_brain',
+			'brain_access',
+			'members',
+			'connected_accounts',
+			'configure_brain',
+			'create_brain',
+			'connect_brain',
+			'disconnect_brain',
+			'share_brain',
+			'invite_member',
+			'set_member_role',
+			'remove_member',
+			'create_org',
+			'link_identity',
+			'unlink_identity',
+			'submit_feedback'
+		],
+		'write tools: using one is not a feature to adopt': [
+			'move_page',
+			'delete_page',
+			'edit_page',
+			'resolve'
+		],
+		'phase 2, no detector yet': ['sync_records', 'attach_media']
+	};
+	const exempt = new Set(Object.values(NO_OFFER).flat());
+	const used = new Set(FEATURE_OFFERS.flatMap((o) => o.uses));
+
+	const registered = new Set(
+		toolRegistrationSources().flatMap(({ src }) => registeredToolNames(src))
+	);
+	const undecided = [...registered].filter((n) => !used.has(n) && !exempt.has(n)).sort();
+	check(
+		'coverage: every registered tool is used by an offer or exempt with a reason',
+		registered.size > 15 && undecided.length === 0,
+		undecided.length
+			? `add to FEATURE_OFFERS uses or NO_OFFER in scripts/test-structure.ts: ${undecided.join(', ')}`
+			: `found ${registered.size}`
+	);
+	const unknown = [...used, ...exempt].filter((n) => !registered.has(n)).sort();
+	check(
+		'coverage: every name listed is a registered tool',
+		unknown.length === 0,
+		unknown.join(', ')
+	);
+	check(
+		'coverage: a name is not both used and exempt',
+		[...used].every((n) => !exempt.has(n))
+	);
+
+	const decision = (i: number, extra: Record<string, string[]> = {}): [string, PageFields] => [
+		`decisions/d${i}.md`,
+		fields({ type: ['Decision'], ...extra })
+	];
+	const ctxOf = (rows: [string, PageFields][], over: Partial<OfferContext> = {}): OfferContext => ({
+		pages: rows.map(([path]) => ({ path })),
+		fields: new Map(rows),
+		indexedFields: null,
+		canEdit: true,
+		commitmentFindings: false,
+		tension: false,
+		orgAdmin: false,
+		lacksEnterprise: async () => true,
+		...over
+	});
+	const six = (extra: Record<string, string[]> = {}) =>
+		[1, 2, 3, 4, 5, 6].map((i) => decision(i, extra));
+	const keepAll = (o: Finding[]) => o;
+
+	// the motivating shape: many decisions, no check date, hand-tracked due-named keys
+	const shape = ctxOf(six({ next_step_due: ['2026-12-01'] }));
+	const offer = await pickOffer(shape, keepAll);
+	check(
+		'commitments: fires on many decisions with no check_at, expected or outcome',
+		offer?.key === 'feature-offer:commitments' && offer.weight === 1,
+		offer?.key
+	);
+	check(
+		'commitments: the script tells, asks, then names the tool call and the dismissal',
+		/^- Tell the person: .* Only if yes: .*write_page.*check_at.* If no: resolve with dismiss/.test(
+			offer?.headline ?? ''
+		) && (offer?.headline ?? '').includes('6 page(s) keep their own due-named dates'),
+		offer?.headline
+	);
+	const rows = six();
+	rows[0] = decision(1, { check_at: ['2026-12-01'] });
+	check(
+		'commitments: one check_at makes it vanish',
+		(await pickOffer(ctxOf(rows), keepAll)) === null
+	);
+	rows[0] = decision(1, { outcome: ['shipped'] });
+	check(
+		'commitments: one outcome makes it vanish',
+		(await pickOffer(ctxOf(rows), keepAll)) === null
+	);
+	check(
+		'commitments: four decisions are too few',
+		(await pickOffer(ctxOf(six().slice(0, 4)), keepAll)) === null
+	);
+	check(
+		'commitments: other page types do not count',
+		(await pickOffer(
+			ctxOf(six().map(([p]) => [p, fields({ type: ['Note'] })] as [string, PageFields])),
+			keepAll
+		)) === null
+	);
+	check(
+		'commitments: silent when the brain does not index check_at',
+		(await pickOffer(ctxOf(six(), { indexedFields: ['type'] }), keepAll)) === null &&
+			(await pickOffer(ctxOf(six(), { indexedFields: ['type', 'check_at'] }), keepAll)) !== null
+	);
+	check(
+		'commitments: silent for a viewer',
+		(await pickOffer(ctxOf(six(), { canEdit: false }), keepAll)) === null
+	);
+	const commitments = FEATURE_OFFERS.find((o) => o.id === 'commitments')!;
+	check(
+		'commitments: applies false below the minimum, unused false once dated',
+		!commitments.applies(ctxOf(six().slice(0, 4))) &&
+			commitments.applies(ctxOf(six())) &&
+			!commitments.unused(ctxOf(six({ check_at: ['2026-12-01'] }))) &&
+			commitments.unused(ctxOf(six()))
+	);
+	check(
+		'commitments: no offer line when commitment findings already fire',
+		(await pickOffer(ctxOf(six(), { commitmentFindings: true }), keepAll)) === null
+	);
+	check(
+		'commitments: dueBlock says what a check date gets when it lists commitment findings, not otherwise',
+		dueBlock('- b.md: finding', []).includes(
+			'A check date puts a commitment in this list when it comes due.'
+		) &&
+			!dueBlock('', ['- a.md: coming']).includes('A check date puts') &&
+			!dueBlock('', []).includes('A check date puts')
+	);
+
+	// dismissal, the cap and the order
+	const dismissed: ReviewLedger = {
+		version: 1,
+		dismissed: [{ key: 'feature-offer:commitments', why: 'tracked elsewhere', at: '2026-11-23' }]
+	};
+	const keepLedger = (o: Finding[]) => filterDismissed(o, dismissed);
+	check(
+		'dismissal: a dismissed offer is not shown',
+		(await pickOffer(ctxOf(six()), keepLedger)) === null
+	);
+	const eeCtx = ctxOf(six(), { tension: true, orgAdmin: true });
+	check(
+		'order: core comes before ee',
+		(await pickOffer(eeCtx, keepAll))?.key === 'feature-offer:commitments'
+	);
+	const next = await pickOffer(eeCtx, keepLedger);
+	check(
+		'dismissal: the next eligible entry surfaces after one is dismissed',
+		next?.key === 'feature-offer:consolidation',
+		next?.key
+	);
+	let reads = 0;
+	const counted = { ...eeCtx, lacksEnterprise: async () => (reads++, true) };
+	await pickOffer(counted, keepAll);
+	check('ee: the entitlement is not read while a core offer shows', reads === 0);
+	const ee = ctxOf([], { tension: true, orgAdmin: true });
+	check(
+		'ee: fires on a tension for an org admin without the entitlement',
+		(await pickOffer(ee, keepAll))?.key === 'feature-offer:consolidation'
+	);
+	check(
+		'ee: silent without a tension',
+		(await pickOffer({ ...ee, tension: false }, keepAll)) === null
+	);
+	check(
+		'ee: silent for a non-admin or with no organization',
+		(await pickOffer({ ...ee, orgAdmin: false }, keepAll)) === null
+	);
+	check(
+		'ee: silent when the organization has the entitlement',
+		(await pickOffer({ ...ee, lacksEnterprise: async () => false }, keepAll)) === null
+	);
+	const many = await pickOffer(eeCtx, keepAll);
+	check('cap: one offer is returned', !Array.isArray(many) && many !== null);
+
+	// the gating, derived from roles and the kept finding keys
+	{
+		const base: Parameters<typeof offerContext>[0] = {
+			pages: [],
+			fields: new Map(),
+			indexedFields: null,
+			role: 'editor',
+			orgRole: 'admin',
+			orgId: 'org-1',
+			keptKeys: [],
+			lacksEnterprise: async () => true
+		};
+		const c = (over: Partial<typeof base>) => offerContext({ ...base, ...over });
+		check(
+			'context: an editor can act, a viewer cannot',
+			c({}).canEdit && !c({ role: 'viewer' }).canEdit
+		);
+		check(
+			'context: org admin and owner are admins, an editor, no org role or no org is not',
+			c({}).orgAdmin &&
+				c({ orgRole: 'owner' }).orgAdmin &&
+				!c({ orgRole: 'editor' }).orgAdmin &&
+				!c({ orgRole: null }).orgAdmin &&
+				!c({ orgId: undefined }).orgAdmin
+		);
+		check(
+			'context: prediction-due and undated-commitment keys are commitment findings, others are not',
+			c({ keptKeys: ['prediction-due:a.md@2026-11-01'] }).commitmentFindings &&
+				c({ keptKeys: ['undated-commitment:a.md'] }).commitmentFindings &&
+				!c({ keptKeys: ['island:a.md', 'near-duplicate:a.md|b.md'] }).commitmentFindings
+		);
+		check(
+			'context: near-duplicate and same-identifier keys are the tension evidence, others are not',
+			c({ keptKeys: ['near-duplicate:a.md|b.md'] }).tension &&
+				c({ keptKeys: ['same-identifier:a.md|b.md'] }).tension &&
+				!c({ keptKeys: ['island:a.md', 'orphan:a.md', 'conflict:x'] }).tension
+		);
+	}
+
+	// text hygiene
+	const texts = [
+		offer!.headline,
+		(await pickOffer(ee, keepAll))!.headline,
+		...FEATURE_OFFERS.map((o) => o.text(shape))
+	];
+	check(
+		'texts: no em-dash, at sign, hostname or URL',
+		texts.every((t) => !/[—–@]|https?:|www\.|\.(com|sh|io|ai)\b/.test(t)),
+		texts.find((t) => /[—–@]|https?:|www\.|\.(com|sh|io|ai)\b/.test(t))
+	);
+	check('texts: the offer key carries no count or date', !/\d/.test(offer!.key));
 }
 
 done();

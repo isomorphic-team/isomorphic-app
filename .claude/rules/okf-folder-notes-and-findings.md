@@ -124,6 +124,15 @@ are in the list, with keys.
   weight 2, below `prediction-due`. The headline names the key and value the page uses and,
   when present, its `raised` date as found; nothing is computed from it. `updated` is not shown:
   it is stamped on every save. Commitment findings and the rest are each capped separately by `renderFindings`.
+- **`FEATURE_OFFERS`** (`src/lib/feature-offers.ts`, pure) holds the features `validate` offers
+  when a brain does not use them: at most one line (`pickOffer`), directly after the due area,
+  keyed `feature-offer:<id>` with no count or date, dismissed through `resolve` like any finding.
+  It is rendered apart from the findings, so it never counts in the intro or the cap. Shown to
+  editors and above. Core entries go first; an `ee` entry is offered only to an organization admin
+  whose organization lacks the entitlement, and `hasFeature` is read only then. `commitments`
+  stays silent when commitment findings already fire (`dueBlock`'s header says what a check
+  date gets instead). Every registered tool is either in an entry's `uses` or in `NO_OFFER`
+  (`scripts/test-structure.ts`, with a reason), so a new tool forces the decision.
 - **`src/lib/consolidate.ts`** (pure, `pnpm test:consolidate`) detects where a brain's cheap
   surface disagrees with its content: islands, orphans, note-less and hollow folder notes,
   mixed conventions, folder-echo pages, near-duplicates (bigram Jaccard with each folder's

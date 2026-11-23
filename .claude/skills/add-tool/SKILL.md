@@ -59,6 +59,9 @@ call it) goes in a pure or db-only function in `src/lib/` (compare `planPageWrit
   an unclassified tool.
 - If it is a widget tool: a `WEB_TOOL_ROUTING` entry in `src/lib/web-app.ts`, either an
   address or `{ kind: 'none', why }`. `pnpm test:web` fails otherwise.
+- A `uses` entry in `FEATURE_OFFERS` (`src/lib/feature-offers.ts`) or a `NO_OFFER` reason in
+  `scripts/test-structure.ts`: whether `validate` should offer the tool to a brain that does not use it.
+  `pnpm test:structure` fails otherwise.
 
 ## 5. Tests, in the same change
 
