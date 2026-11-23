@@ -84,7 +84,7 @@ Links: \`[[Other Page]]\` wikilinks (matched against a page's path, filename, or
 
 **Record a commitment as its own page.** A decision or promise that expects a result gets a page of its own (\`type: Decision\` or \`Commitment\`), linked from the page it concerns, with \`expected\` (what you expect) and \`check_at\` (\`YYYY-MM-DD\`, when to look) in its frontmatter, and \`outcome\` once it is known. One commitment per page, so each has one date. \`validate\` lists the ones whose date has passed or comes within a week and have no outcome, so run it when asked what is due, coming up or overdue. A follow-up kept another way does not show in \`validate\`; a page with \`check_at\` does, so record the commitment this way even where the brain tracks follow-ups elsewhere.
 
-To show a page the record of the decisions that test its claim, link the commitment page from it and add this view to that page:
+To show a page the record of the decisions that test its claim, link to it from the commitment page and add this view to that page:
 
 \`\`\`okf-view
 kind: backlinks
