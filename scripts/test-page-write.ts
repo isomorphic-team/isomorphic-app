@@ -878,6 +878,86 @@ console.log('\nwrite_page: the commitment prompt (expectationNote)');
 	);
 }
 
+console.log('\nwrite_page: the compare note (outcome set on a page with expected)');
+{
+	const COMPARE = 'If it met what was expected, say so in one line and stop';
+	const note = (
+		frontmatter: Frontmatter,
+		patch?: Record<string, unknown>,
+		kind: 'create' | 'update' = 'update'
+	) => expectationNote({ kind, frontmatter, patch });
+	const dec: Frontmatter = {
+		type: 'Decision',
+		expected: 'Churn falls below 3%',
+		outcome: 'Churn was 5%'
+	};
+	check(
+		'compare: outcome in this call on a page with expected fires',
+		note(dec, { outcome: 'Churn was 5%' }).includes(COMPARE)
+	);
+	{
+		// The real create path: composeCreate, then describeChange with no patch.
+		const made = (fields: Record<string, unknown>) => {
+			const c = composeCreate(
+				'wiki/decisions/pricing.md',
+				{ content: 'Raised the price.', title: 'Pricing', type: 'Decision', fields } as Parameters<
+					typeof composeCreate
+				>[1],
+				TODAY
+			);
+			if (!c.ok) throw new Error('compose failed');
+			return describeChange({
+				kind: 'create',
+				path: 'wiki/decisions/pricing.md',
+				title: c.title,
+				expectation: { frontmatter: c.frontmatter }
+			});
+		};
+		const both = made({ expected: 'Churn falls below 3%', outcome: 'Churn was 5%' });
+		check(
+			'compare: a create with expected and outcome carries it in done and proposed',
+			both.done.includes(COMPARE) && both.proposed.includes(COMPARE)
+		);
+		check(
+			'compare: a create with expected only gets the commitment prompt, not the compare',
+			!made({ expected: 'x' }).done.includes(COMPARE)
+		);
+	}
+	check(
+		'compare: no expected, none',
+		note({ type: 'Decision', outcome: 'x' }, { outcome: 'x' }) === ''
+	);
+	check(
+		'compare: outcome not in this call, none',
+		!note(dec, { check_at: '2026-12-01' }).includes(COMPARE) && !note(dec).includes(COMPARE)
+	);
+	check(
+		'compare: an empty outcome in the patch, none',
+		!note({ ...dec, outcome: '' }, { outcome: '' }).includes(COMPARE)
+	);
+	const both = note(dec, { expected: 'Churn falls below 3%', outcome: 'Churn was 5%' });
+	check(
+		'compare: {expected, outcome} yields only the compare text',
+		both.includes(COMPARE) &&
+			!both.includes('check_at') &&
+			!both.includes('One commitment per page')
+	);
+	check(
+		'compare: names the revise branch, the no-linked-claim branch and the yes gate',
+		[
+			'ONE question offering to revise that page',
+			'do not edit it in this reply',
+			'no claim page is linked and ask which page'
+		].every((t) => dec.expected && note(dec, { outcome: 'z' }).includes(t))
+	);
+	check(
+		'compare: no quoted opening and no new-commitment line',
+		!note(dec, { outcome: 'z' }).includes('Happened:') &&
+			!note(dec, { outcome: 'z' }).includes('new commitment')
+	);
+	check('compare: never says surprise', !/surprise/i.test(note(dec, { outcome: 'z' })));
+}
+
 console.log('\nwrite_page: the deadline-phrase note');
 {
 	const DEADLINE = 'This reads like a commitment';

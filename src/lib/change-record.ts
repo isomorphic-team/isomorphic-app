@@ -99,7 +99,8 @@ export function hasDeadlinePhrase(text: string): boolean {
 const hasValue = (fm: Frontmatter, key: string) => listOf(fm[key]).some((v) => v.trim() !== '');
 
 /**
- * The prompt to record a commitment with its check date, at most one per write. A new
+ * The prompt to record a commitment with its check date, at most one per write. A call that
+ * sets `outcome` on a page with an `expected` gets the compare note instead (`compareNote`). A new
  * page typed Decision or Commitment with no check date (`check_at`, or a dated `due`, `checkDateOf`) and no `outcome` gets it; an
  * update gets it when the call set `expected` and the page still has no check date.
  * Failing those, a page of another type gets a second, narrower note when the text this
@@ -107,6 +108,8 @@ const hasValue = (fm: Frontmatter, key: string) => listOf(fm[key]).some((v) => v
  */
 export function expectationNote(input: ExpectationInput): string {
 	const fm = input.frontmatter;
+	const compare = compareNote(fm, input.kind === 'create' ? fm : input.patch);
+	if (compare) return compare;
 	if (hasValue(fm, 'check_at') || checkDateOf((k) => listOf(fm[k]))) return '';
 	const commitmentPage = COMMITMENT_TYPE_RE.test(listOf(fm.type)[0] ?? '');
 	if (input.kind === 'create') {
@@ -116,6 +119,22 @@ export function expectationNote(input: ExpectationInput): string {
 	}
 	if (commitmentPage || hasValue(fm, 'outcome')) return '';
 	return (input.added ?? []).some(hasDeadlinePhrase) ? DEADLINE_TEXT : '';
+}
+
+// The first non-empty value of a frontmatter key, trimmed.
+const firstValue = (v: unknown): string =>
+	listOf(v as Frontmatter[string])
+		.map((x) => x.trim())
+		.find((x) => x !== '') ?? '';
+
+// Asks the agent to compare a result it just recorded with what the page expected, and to
+// offer revising the page the decision tested, never to edit it in the same reply. Empty unless this call set a non-empty
+// `outcome` and the page has a non-empty `expected`.
+function compareNote(fm: Frontmatter, patch: Record<string, unknown> | null | undefined): string {
+	if (!patch || firstValue(patch.outcome) === '') return '';
+	const expected = firstValue(fm.expected);
+	if (expected === '') return '';
+	return 'If it met what was expected, say so in one line and stop. If it departed: when the page this one links to asserts something the result contradicts, ask the person ONE question offering to revise that page, and do not edit it in this reply. When no linked page asserts anything, say no claim page is linked and ask which page, if any, it tested.';
 }
 
 const RECORD_TEXT = `If this page links to the page whose claim it tests and that page does not already show its record (read it first), offer to append this there with write_page append:\n${RECORD_VIEW}\none yes completes it. Then tell the person that page now shows its record.`;
