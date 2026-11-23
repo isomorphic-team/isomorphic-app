@@ -25,6 +25,9 @@ on:
     types: [created]
   pull_request_target:
     types: [opened, closed, synchronize]
+  # `cla` is a required check, so it has to report in the merge queue too. The signature was
+  # already checked on the pull request, which cannot enter the queue without it.
+  merge_group:
 
 permissions:
   actions: write
@@ -33,7 +36,7 @@ permissions:
   statuses: write
 
 concurrency:
-  group: cla-${{ github.event.pull_request.number || github.event.issue.number }}
+  group: cla-${{ github.event.pull_request.number || github.event.issue.number || github.ref }}
   cancel-in-progress: false
 
 jobs:
@@ -43,13 +46,16 @@ jobs:
     if: >-
       (github.event.comment.body == 'I have read the CLA Document and I hereby sign the CLA')
       || github.event_name == 'pull_request_target'
+      || github.event_name == 'merge_group'
     steps:
       - name: Check for signature-store token
         id: guard
         env:
           TOKEN: ${{ secrets.CLA_SIGNATURES_TOKEN }}
         run: |
-          if [ -z "$TOKEN" ]; then
+          if [ "${{ github.event_name }}" = merge_group ]; then
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+          elif [ -z "$TOKEN" ]; then
             echo "::warning::CLA_SIGNATURES_TOKEN is not set — skipping the CLA check. See the setup notes at the top of .github/workflows/cla.yml."
             echo "ready=false" >> "$GITHUB_OUTPUT"
           else

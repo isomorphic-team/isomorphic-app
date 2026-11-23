@@ -242,6 +242,21 @@ check(
 	'a missing browser or missing linux baselines would skip green in CI'
 );
 
+// ---------- the required checks report in the merge queue ----------
+
+// main merges through a merge queue. A required check whose workflow has no `merge_group`
+// trigger never reports there, and every queued pull request waits forever.
+console.log('\nthe workflows behind the required checks run in the merge queue');
+for (const file of ['ci.yml', 'cla.yml']) {
+	const text = readFileSync(new URL(`.github/workflows/${file}`, root), 'utf8');
+	const on = /\non:\n([\s\S]*?)\n\S/.exec(text)?.[1] ?? '';
+	check(
+		`${file} runs on merge_group`,
+		/^ {2}merge_group:/m.test(on),
+		'add `merge_group:` under `on:`'
+	);
+}
+
 // ---------- the wrangler template's optional index database ----------
 
 // setup-config keeps or drops the INDEX_DB block. Either way the result has to be a
