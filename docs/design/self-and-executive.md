@@ -226,9 +226,12 @@ review queue (`src/lib/review-queue.ts`):
 Two signals need no outcome at all:
 
 - **Absence.** A commitment that no later record mentions. Nothing contradicts it, so no
-  consistency check sees it.
+  consistency check sees it. Built in part, as a finding `validate` computes
+  (`undatedCommitmentFindings`, `src/lib/advisories.ts`): a Decision or Commitment page that
+  is open by its own `status` or `state` and has no check date. It is not "no later record
+  mentions it", which would need a history pass.
 - **Re-dating.** A commitment given a new date. Each revision is recorded, and the count is
-  data about the owner.
+  data about the owner. Not built.
 
 ## 11. The passes
 

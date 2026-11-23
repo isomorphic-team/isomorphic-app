@@ -14,6 +14,7 @@ import {
 	predictionDueFindings,
 	comingDueLines,
 	checkDateOf,
+	undatedCommitmentFindings,
 	dueBlock,
 	COMING_DUE_DAYS,
 	MAX_COMING_DUE_LINES,
@@ -843,7 +844,8 @@ console.log('\nfolder-note advisory: a note-less folder holding its own overview
 			'canceled',
 			'dropped',
 			'superseded',
-			'archived'
+			'archived',
+			'deprecated'
 		])
 			check(
 				`follow-up: status "${closed}" skips the alias path`,
@@ -859,6 +861,12 @@ console.log('\nfolder-note advisory: a note-less folder holding its own overview
 				`follow-up: ${k} "${v.trim()}" skips the alias path`,
 				due({ due: ['2026-11-10'], [k]: [v] }).length === 0
 			);
+		check(
+			'follow-up: a deprecated page with a past due is not raised',
+			due({ due: ['2026-11-10'], status: ['deprecated'] }).length === 0 &&
+				due({ due: ['2026-11-10'], state: ['Deprecated'] }).length === 0 &&
+				due({ due: ['2026-11-10'], status: ['stable'] }).length === 1
+		);
 		check(
 			'follow-up: an open status does not skip',
 			due({ due: ['2026-11-10'], status: ['in progress'] }).length === 1
@@ -910,6 +918,133 @@ console.log('\nfolder-note advisory: a note-less folder holding its own overview
 				overdueOnly.endsWith('\n2 overdue (prediction-due findings).') &&
 				!/below|listed/.test(overdueOnly.split('\n').at(-1)!),
 			overdueOnly
+		);
+	}
+
+	// undated-commitment: an open decision with nothing to check it by
+	{
+		const undated = (rows: Record<string, string[]>, path = 'decisions/pricing.md') =>
+			undatedCommitmentFindings([{ path }], new Map([[path, fields(rows)]]));
+		const open = { type: ['Decision'], state: ['proposed'] };
+		const base = undated(open);
+		check(
+			'undated: an open decision with no date raises, keyed on the path alone',
+			base.length === 1 &&
+				base[0]!.key === findingKey('undated-commitment', 'decisions/pricing.md'),
+			JSON.stringify(base)
+		);
+		check(
+			'undated: the headline is pinned',
+			base[0]?.headline ===
+				'- decisions/pricing.md: open (state proposed), no check date. Give it a check date (write_page fields {check_at: YYYY-MM-DD}), record what was decided ({outcome: ...}), or close it in the field the page uses for its state; or dismiss with resolve and a reason.',
+			base[0]?.headline
+		);
+		check(
+			'undated: raised is shown as found; updated is not, and a non-date raised is omitted',
+			undated({ ...open, updated: ['2026-06-10'], raised: ['2026-03-01'] })[0]?.headline.includes(
+				'no check date; raised 2026-03-01. Give it'
+			) === true &&
+				!undated({ ...open, updated: ['2026-06-10'] })[0]!.headline.includes('updated') &&
+				!base[0]!.headline.includes('raised') &&
+				!undated({ ...open, raised: ['sometime'] })[0]!.headline.includes('raised')
+		);
+		check(
+			'undated: the headline names the key the page uses',
+			undated({ type: ['Commitment'], status: ['open'] })[0]?.headline.includes('(status open)') ===
+				true &&
+				undated({ type: ['Commitment'], state: ['open'] })[0]?.headline.includes('(state open)') ===
+					true
+		);
+		check(
+			'undated: type matching is the commitment pattern, first type only',
+			undated({ ...open, type: ['Adopted Decision Record'] }).length === 1 &&
+				undated({ ...open, type: ['Note'] }).length === 0 &&
+				undated({ ...open, type: ['Note', 'Decision'] }).length === 0
+		);
+		check(
+			'undated: no state or status raises nothing',
+			undated({ type: ['Decision'] }).length === 0 &&
+				undated({ type: ['Decision'], status: [' '] }).length === 0 &&
+				undated({ type: ['Decision'], state: [''] }).length === 0
+		);
+		check(
+			'undated: the page statuses draft and stable say nothing about the commitment',
+			undated({ type: ['Decision'], status: ['draft'] }).length === 0 &&
+				undated({ type: ['Decision'], status: ['stable'] }).length === 0 &&
+				undated({ type: ['Decision'], status: ['Stable'] }).length === 0
+		);
+		check(
+			'undated: a status that is not a page status raises, and so does any state',
+			undated({ type: ['Decision'], status: ['open'] }).length === 1 &&
+				undated({ type: ['Decision'], status: ['stable'], state: ['open'] }).length === 1 &&
+				undated({
+					type: ['Decision'],
+					status: ['draft'],
+					state: ['proposed']
+				})[0]?.headline.includes('(state proposed)') === true
+		);
+		check(
+			'undated: a state of draft or stable is still a state, so it raises',
+			undated({ type: ['Decision'], state: ['draft'] }).length === 1 &&
+				undated({ type: ['Decision'], state: ['stable'] }).length === 1
+		);
+		for (const closed of [
+			'done',
+			'Closed',
+			'complete',
+			'completed',
+			'resolved',
+			'decided',
+			'cancelled',
+			'canceled',
+			'dropped',
+			'superseded',
+			'archived',
+			'deprecated'
+		])
+			check(
+				`undated: status "${closed}" raises nothing`,
+				undated({ type: ['Decision'], status: [closed] }).length === 0 &&
+					undated({ type: ['Decision'], state: [closed] }).length === 0
+			);
+		check(
+			'undated: a closed state beats an open status',
+			undated({ type: ['Decision'], status: ['open'], state: ['decided'] }).length === 0
+		);
+		check(
+			'undated: check_at or due (even past) raises nothing',
+			undated({ ...open, check_at: ['2026-12-01'] }).length === 0 &&
+				undated({ ...open, due: ['2026-01-01'] }).length === 0
+		);
+		check(
+			'undated: a due that is not a date does not count as a date',
+			undated({ ...open, due: ['when the audit lands'] }).length === 1
+		);
+		check(
+			'undated: an outcome raises nothing',
+			undated({ ...open, outcome: ['held'] }).length === 0
+		);
+		check('undated: an empty outcome does not', undated({ ...open, outcome: [''] }).length === 1);
+		check(
+			'undated: a non-empty revisit raises nothing',
+			undated({ ...open, revisit: ['after launch'] }).length === 0
+		);
+		check(
+			'undated: source_key and source_keys raise nothing',
+			undated({ ...open, source_key: ['crm-1'] }).length === 0 &&
+				undated({ ...open, source_keys: ['crm-1'] }).length === 0
+		);
+		check(
+			'undated: editing the page keeps the key',
+			undated({ ...open, state: ['in progress'], updated: ['2026-07-01'] })[0]?.key === base[0]!.key
+		);
+		check(
+			'undated: it ranks below prediction-due',
+			base[0]!.weight < due({ check_at: ['2026-11-01'] })[0]!.weight
+		);
+		check(
+			'undated: only the pages passed in are considered',
+			undatedCommitmentFindings([], new Map([['a.md', fields(open)]])).length === 0
 		);
 	}
 

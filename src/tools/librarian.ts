@@ -77,6 +77,7 @@ import {
 	inlinedConceptSuggestions,
 	typeFieldSuggestions,
 	predictionDueFindings,
+	undatedCommitmentFindings,
 	comingDueLines,
 	dueBlock,
 	ambiguousTitleSuggestions,
@@ -1376,7 +1377,7 @@ export function registerLibrarianTools(
 		{
 			...toolAnnotations('Check the brain for problems', 'read'),
 			description:
-				'`validate` checks a brain and reports what needs attention. It is also the way to see which commitments are due or coming due. Two kinds of result, deliberately separate. DEFECTS: broken links — markdown links to missing pages and [[wikilinks]] that match no page. Those have one right answer and cannot be silenced. FINDINGS: everything advisory, each carrying a `[key]` — pending import decisions, Open Knowledge Format structure notes (concepts written as sections inside a folder note instead of getting their own page, pages missing a `type:`, names two pages both answer to), consolidation tensions (a page nothing links to, a folder note that lists none of its pages, two pages telling the same story), and commitments whose check date has passed with no `outcome` recorded. The check date is `check_at`, or a dated `due` when there is no `check_at`; a condition in a follow-up key is not a date and is not tracked; ask the person for a date and set `check_at` if they want it tracked. A date kept in another field (such as a next-step date) is not listed: say so when answering what is due. The result starts with a block of what is due or coming due within the next week, or a line saying nothing is. Nothing advisory blocks a save, and any finding can be answered or permanently silenced with `resolve` using its key, so a deliberate choice stops being re-reported. For brain admins it also lists sensitive data found in writes (pages and kinds, never the values). Run after big changes or restructures, when asked to tidy a brain up, or when asked what is due or overdue.',
+				'`validate` checks a brain and reports what needs attention. It is also the way to see which commitments are due or coming due. Two kinds of result, deliberately separate. DEFECTS: broken links — markdown links to missing pages and [[wikilinks]] that match no page. Those have one right answer and cannot be silenced. FINDINGS: everything advisory, each carrying a `[key]` — pending import decisions, Open Knowledge Format structure notes (concepts written as sections inside a folder note instead of getting their own page, pages missing a `type:`, names two pages both answer to), consolidation tensions (a page nothing links to, a folder note that lists none of its pages, two pages telling the same story), commitments whose check date has passed with no `outcome` recorded, and Decision or Commitment pages that are still open by their own `status` or `state` with no check date. To say how long a listed page has been quiet, call view_activity with its path. The check date is `check_at`, or a dated `due` when there is no `check_at`; a condition in a follow-up key is not a date and is not tracked; ask the person for a date and set `check_at` if they want it tracked. A date kept in another field (such as a next-step date) is not listed: say so when answering what is due. The result starts with a block of what is due or coming due within the next week, or a line saying nothing is. Nothing advisory blocks a save, and any finding can be answered or permanently silenced with `resolve` using its key, so a deliberate choice stops being re-reported. For brain admins it also lists sensitive data found in writes (pages and kinds, never the values). Run after big changes or restructures, when asked to tidy a brain up, or when asked what is due or overdue.',
 			inputSchema: z.object({ brain: brainArg })
 		},
 		async ({ brain }) => {
@@ -1522,6 +1523,7 @@ export function registerLibrarianTools(
 					),
 					...typeFieldSuggestions(conceptPages, fieldsByPath),
 					...predictionDueFindings(conceptPages, fieldsByPath, todayIso()),
+					...undatedCommitmentFindings(conceptPages, fieldsByPath),
 					...ambiguousTitleSuggestions(resolved.pages),
 					...wikilinkPortabilityNote(resolved.edges),
 					...folderNotes,

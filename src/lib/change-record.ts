@@ -10,7 +10,7 @@
 // changelog is a file in the brain's own repository that people read, so its
 // wording is a contract, and this is where it is kept.
 
-import { checkDateOf } from './advisories.ts';
+import { checkDateOf, COMMITMENT_TYPE_RE } from './advisories.ts';
 import type { BrainConfig } from './brain-policy.ts';
 import { logPathOf } from './brain-policy.ts';
 import type { CommitAuthor, CommitOrPROpts, FileWrite } from './brain-repo.ts';
@@ -83,7 +83,6 @@ export interface ExpectationInput {
 	added?: string[];
 }
 
-const COMMITMENT_TYPE_RE = /decision|commitment/i;
 const WEEKDAY = '(?:mon|tues?|wed(?:nes)?|thu(?:rs?)?|fri|sat(?:ur)?|sun)(?:day)?';
 const MONTH =
 	'(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|june?|july?|aug(?:ust)?|sept?(?:ember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)';
