@@ -82,6 +82,21 @@ Links: \`[[Other Page]]\` wikilinks (matched against a page's path, filename, or
 
 **Track whatever this brain needs, in whatever keys it uses.** Beyond \`type:\`, frontmatter is yours: \`done\`, \`owner\`, \`due\`, \`priority\`, \`stage\`, \`client\`. Every flat key is indexed, so anything written here is immediately filterable by \`okf-view\` \`filter:\` and \`group-by:\`. A filter value can compare as well as match: \`due: "< today"\`, \`last_touch: "<= -30d"\`, \`value: ">= 10000"\`, \`stage: "!= lost"\`. Write dates as \`YYYY-MM-DD\` so they compare (in a rendered table they read as "Oct 16 · in 12 days", or "overdue" under a key ending in \`due\`), and list the values of a \`group-by\` key in its filter to set the order of the groups (\`stage: [lead, qualified, proposal]\`); a page missing the key, or holding a value that is not a date or number, never matches a comparison. Set or remove one with \`write_page\`'s \`fields\` argument (\`{done: "2026-08-10"}\`, or \`null\` to remove a key), which **leaves the page body untouched** and so needs no prior read. Key names use letters, digits, dashes and underscores. \`title\` / \`type\` / \`description\` / \`status\` are set by their own arguments instead, because changing them does more than write a value.
 
+**Record a commitment as its own page.** A decision or promise that expects a result gets a page of its own (\`type: Decision\` or \`Commitment\`), linked from the page it concerns, with \`expected\` (what you expect) and \`check_at\` (\`YYYY-MM-DD\`, when to look) in its frontmatter, and \`outcome\` once it is known. One commitment per page, so each has one date. \`validate\` lists the ones whose date has passed or comes within a week and have no outcome, so run it when asked what is due, coming up or overdue. A page is dated by its \`check_at\`, or by a dated \`due\` when it has no \`check_at\`. Dates under other deadline-named keys (ending \`_due\`, \`-due\`, \`_due_date\`, \`-due-date\`) are listed apart and not tracked as commitments. An open Decision or Commitment page (by its \`state\` or \`status\`) with no date is raised, to be dated or closed.
+
+To show a page the record of the decisions that test its claim, link from each commitment page to that page and add this view to that page:
+
+\`\`\`okf-view
+kind: backlinks
+filter: { check_at: ">= 2000-01-01" }
+as: table
+columns: [title, expected, check_at, outcome]
+sort: check_at
+order: desc
+\`\`\`
+
+It lists every page that links here and carries a \`check_at\`, whatever its \`type\`, with what was expected and what happened.
+
 **Nested frontmatter is preserved, not interpreted.** The keys the tools understand are flat: a string, or a list of strings. OKF's richer provenance shapes (\`sources:\` as a list of \`resource:\`/\`title:\` mappings, \`generated: {by, at}\`, \`verified:\`) are kept **verbatim** — a page carrying them can be edited and saved through the tools without losing a byte. What you cannot do is query them: nested values aren't indexed, so \`okf-view\` \`filter:\` and \`group-by:\` can't see inside them. Write the keys you want to filter on flat, and let the nested provenance ride along.
 
 ## Lifecycle

@@ -34,6 +34,7 @@ import {
 } from '../src/lib/views.ts';
 import type { PageFields } from '../src/lib/brain-index.ts';
 
+import { readFileSync } from 'node:fs';
 import { RECORD_VIEW } from '../src/lib/view-directives.ts';
 import { checker } from './check.ts';
 
@@ -717,6 +718,12 @@ async function main() {
 			'RECORD_VIEW parses with no error',
 			!parseViewSpec(body).error,
 			parseViewSpec(body).error
+		);
+		check(
+			"the brain template's AGENTS.md carries RECORD_VIEW exactly",
+			readFileSync(new URL('../brain-template/AGENTS.md', import.meta.url), 'utf8').includes(
+				RECORD_VIEW
+			)
 		);
 		const claim = 'theory/pricing.md';
 		const recFields = new Map<string, PageFields>([
