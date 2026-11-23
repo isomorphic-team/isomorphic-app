@@ -57,6 +57,12 @@ check(
 	`${SERVER_INSTRUCTIONS.length} characters`
 );
 
+check(
+	'the static text leaves room for the per-caller brain list (at most 3,270 characters)',
+	SERVER_INSTRUCTIONS.length <= 3270,
+	`${SERVER_INSTRUCTIONS.length} characters`
+);
+
 console.log('\ncommitments');
 {
 	const line =
@@ -228,7 +234,7 @@ console.log("\ncomposeInstructions: the caller's brains");
 	);
 	const listed = (full.match(/\(brain: "/g) ?? []).length;
 	const more = Number(full.match(/and (\d+) more: call brains/)?.[1]);
-	check('...listing as many as fit', listed > 3, `${listed}`);
+	check('...listing as many as fit', listed > 5, `${listed}`);
 	check('...and counting the rest exactly', listed + more === 300, `${listed} + ${more}`);
 	check('...filling the space', full.length > SERVER_INSTRUCTIONS_LIMIT - 120, `${full.length}`);
 	const exact = Array.from({ length: listed }, (_, i) => brain(i + 1));
