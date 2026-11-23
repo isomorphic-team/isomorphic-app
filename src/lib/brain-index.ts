@@ -866,6 +866,70 @@ export async function loadFieldsFor(
 	return byPath;
 }
 
+/** A page carrying a check date key, with every indexed field it has. */
+export interface DatedPage {
+	path: string;
+	title: string;
+	fields: PageFields;
+}
+
+/** The most dated pages `loadDatedPages` reads. */
+export const MAX_DATED_PAGES = 400;
+
+/**
+ * Pages that carry `check_at` or `due`, with all their indexed fields, or null when the
+ * index does not reflect the branch tip right now (never built, mid-reindex, mid-rebuild, or
+ * behind a newer commit). It never reindexes: one branch-tip read, one meta read, one query
+ * for the dated paths and the chunked field reads for them. For callers that answer without the index when it is not ready.
+ */
+export async function loadDatedPages(
+	db: D1Database,
+	store: BrainStore,
+	repo: BrainLocator,
+	brainId: string,
+	config: BrainConfig
+): Promise<DatedPage[] | null> {
+	const liveSha = await store.branchRevision(repo, config.defaultBranch);
+	const meta = await db
+		.prepare(
+			`SELECT indexed_commit_sha, schema_version, rebuild_cursor
+			 FROM brain_index_meta WHERE brain_id = ?1`
+		)
+		.bind(brainId)
+		.first<{
+			indexed_commit_sha: string | null;
+			schema_version: number;
+			rebuild_cursor: string | null;
+		}>();
+	if (
+		!meta ||
+		meta.indexed_commit_sha !== liveSha ||
+		(meta.schema_version ?? 0) < INDEX_SCHEMA_VERSION ||
+		meta.rebuild_cursor
+	)
+		return null;
+	const rows = await db
+		.prepare(
+			`SELECT DISTINCT p.path AS path, p.title AS title
+			 FROM brain_page_fields f
+			 JOIN brain_pages p ON p.brain_id = f.brain_id AND p.path = f.path
+			 WHERE f.brain_id = ?1 AND f.key IN ('check_at', 'due')
+			 ORDER BY p.path LIMIT ${MAX_DATED_PAGES}`
+		)
+		.bind(brainId)
+		.all<{ path: string; title: string | null }>();
+	const fields = await loadFieldsFor(
+		db,
+		brainId,
+		rows.results.map((r) => r.path)
+	);
+	return rows.results.map((r) => ({
+		path: r.path,
+		title: r.title ?? deslug(r.path),
+		fields: fields.get(r.path) ?? new Map()
+	}));
+}
+
 // Indexed content for a BOUNDED set of paths, straight from the index (no GitHub
 // fetch). Chunked like loadFieldsFor so cost tracks the candidate count. Callers
 // must keep that set small — validate passes only the brain's folder notes (one
@@ -1102,6 +1166,12 @@ export interface BrainIndex {
 	graph(config: BrainConfig): Promise<ResolvedGraph>;
 	allFields(): Promise<Map<string, PageFields>>;
 	fieldsFor(paths: string[]): Promise<Map<string, PageFields>>;
+	/** Pages with a check date key and their fields, or null unless the index is current. See `loadDatedPages`. */
+	datedPages(
+		store: BrainStore,
+		repo: BrainLocator,
+		config: BrainConfig
+	): Promise<DatedPage[] | null>;
 	search(
 		query: string,
 		prefix: string | undefined,
@@ -1150,6 +1220,7 @@ export const d1Index =
 		graph: (config) => loadResolvedGraph(db, brainId, config),
 		allFields: () => loadAllFields(db, brainId),
 		fieldsFor: (paths) => loadFieldsFor(db, brainId, paths),
+		datedPages: (store, repo, config) => loadDatedPages(db, store, repo, brainId, config),
 		search: (query, prefix, max, perPage) =>
 			opts.fullText
 				? ftsFirstSearch(

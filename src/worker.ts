@@ -115,7 +115,9 @@ import { WEB_APP_HEADERS, signInRedirect, webShell } from './lib/web-shell.ts';
 import { registerLibrarianTools } from './tools/librarian.ts';
 import { registerImportTools } from './tools/importer.ts';
 import { registerBrainApp } from './tools/apps.ts';
-import { composeInstructions, SERVER_INSTRUCTIONS } from './lib/server-instructions.ts';
+import { pastDueLine } from './lib/open-findings.ts';
+import { todayIso } from './lib/wiki.ts';
+import { assembleHandshake, SERVER_INSTRUCTIONS } from './lib/server-instructions.ts';
 import { registerCoreTools } from './tools/core.ts';
 import { registerMediaTools } from './tools/media.ts';
 import { registerMemberTools } from './tools/members.ts';
@@ -607,6 +609,10 @@ interface TenantContext {
 // How long a handshake waits for the caller's brain list before answering with the
 // static instructions.
 const HANDSHAKE_LOOKUP_MS = 1_500;
+
+// How long the handshake waits for the past-due line. Shorter than the lookup above, so a
+// slow index drops only that line and the brain list still answers.
+const HANDSHAKE_DUE_MS = 900;
 
 // Per-request MCP session. The transport is stateless (a fresh server + transport
 // per POST, response on the same request). This carries the request env, the
@@ -1120,16 +1126,27 @@ class McpSession {
 	// request a user cannot retry past, so a slow or failed lookup answers with the
 	// static text rather than holding the connection open.
 	async handshakeInstructions(): Promise<string> {
-		const lookup = (async () => {
-			const [brains] = await Promise.all([
-				this.listAccessibleBrainsForCaller(),
-				this.loadActiveBrain()
-			]);
-			return composeInstructions(brains, this.activeBrainId);
-		})();
+		const lookup = assembleHandshake({
+			brains: () => this.listAccessibleBrainsForCaller(),
+			loadActive: async () => {
+				await this.loadActiveBrain();
+				return this.activeBrainId;
+			},
+			dueLine: () => this.activeBrainDueLine(),
+			dueMs: HANDSHAKE_DUE_MS,
+			onDueError: (err) =>
+				console.warn(`[instructions] due: ${err instanceof Error ? err.message : String(err)}`)
+		});
 		return withFallback(lookup, HANDSHAKE_LOOKUP_MS, SERVER_INSTRUCTIONS, (err) =>
 			console.warn(`[instructions] ${err instanceof Error ? err.message : String(err)}`)
 		);
+	}
+
+	// The handshake's past-due line for the active brain: empty unless the brain's index is
+	// current for its branch tip, so it never starts an index pass.
+	private async activeBrainDueLine(): Promise<string> {
+		const ctx = await this.tenantContext();
+		return pastDueLine({ ...ctx, today: todayIso() });
 	}
 
 	buildServer(instructions: string = SERVER_INSTRUCTIONS): McpServer {

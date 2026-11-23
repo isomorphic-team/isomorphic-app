@@ -50,6 +50,9 @@ import { registerBrainApp } from './tools/apps.ts';
 import { loadCustomToolDefs, registerCustomTools } from './tools/custom.ts';
 import { loadBrainConfig } from './lib/brain-config.ts';
 import { SERVER_INSTRUCTIONS } from './lib/server-instructions.ts';
+import { isHandshake, peekJsonRpc } from './lib/mcp-preamble.ts';
+import { pastDueLine } from './lib/open-findings.ts';
+import { todayIso } from './lib/wiki.ts';
 import { ensureGitRepo, fsBrainStore } from './local/brain-store-fs.ts';
 import type { BrainLocator } from './lib/brain-repo.ts';
 import { guardStore } from './lib/policy-guard.ts';
@@ -181,10 +184,10 @@ const assetKey = assetLinkKey(
 
 // One server per request, like the Worker. An McpServer binds to a single transport, so
 // a reused one answers the first call and 500s on every one after.
-function buildServer(): McpServer {
+function buildServer(instructions: string = SERVER_INSTRUCTIONS): McpServer {
 	const server = new McpServer(
 		{ name: 'isomorphic-local', title: `Isomorphic (${basename(dir)})`, version: '0.1.0' },
-		serverOptions(SERVER_INSTRUCTIONS)
+		serverOptions(instructions)
 	);
 
 	registerCoreTools(server, getContext);
@@ -197,6 +200,19 @@ function buildServer(): McpServer {
 	registerBrainApp(server, getContext, { webBaseUrl: origin });
 	registerCustomTools(server, getContext, custom.defs);
 	return server;
+}
+
+// The static instructions plus the default brain's past-due line. The index is brought
+// current first (local, bounded by the reindex budget), so the first session sees the line.
+async function localInstructions(): Promise<string> {
+	try {
+		const ctx = await getContext();
+		await ctx.index.ensureFresh(ctx.store, ctx.locator, ctx.config);
+		return SERVER_INSTRUCTIONS + (await pastDueLine({ ...ctx, today: todayIso() }));
+	} catch (err) {
+		console.warn(`[instructions] ${err instanceof Error ? err.message : String(err)}`);
+		return SERVER_INSTRUCTIONS;
+	}
 }
 
 const app = new Hono();
@@ -218,7 +234,9 @@ app.post('/mcp', async (c) => {
 		hasAuthorization: false
 	});
 	if (!verdict.ok) return c.text(verdict.message, verdict.status as 403);
-	return (await serveMcp(c.req.raw, buildServer())).response;
+	const raw = await c.req.raw.clone().text();
+	const instructions = isHandshake(peekJsonRpc(raw)) ? await localInstructions() : undefined;
+	return (await serveMcp(c.req.raw, buildServer(instructions))).response;
 });
 // Same 405 as the Worker: the stateless transport offers no server-to-client stream,
 // and answering GET makes compliant clients retry forever.

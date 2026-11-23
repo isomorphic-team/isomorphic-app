@@ -11,6 +11,7 @@ import { folderMoveCollisions } from '../src/tools/librarian.ts';
 import {
 	inlinedConceptSuggestions,
 	typeFieldSuggestions,
+	dueSummary,
 	predictionDueFindings,
 	comingDueLines,
 	checkDateOf,
@@ -52,6 +53,9 @@ import {
 	type OfferContext
 } from '../src/lib/feature-offers.ts';
 
+import { isConceptPage, pastDueLine } from '../src/lib/open-findings.ts';
+import { DEFAULT_BRAIN_CONFIG } from '../src/lib/brain-config.ts';
+import { REVIEW_LEDGER_PATH } from '../src/lib/findings.ts';
 import { checker } from './check.ts';
 import { registeredToolNames, toolRegistrationSources } from './doc-refs.ts';
 
@@ -628,7 +632,124 @@ console.log('\nfolder-note advisory: a note-less folder holding its own overview
 	);
 }
 
+// ---------- the handshake's past-due line ----------
+
+{
+	const cfg = { ...DEFAULT_BRAIN_CONFIG };
+	check('concept page: an ordinary page', isConceptPage('decisions/pricing.md', cfg));
+	check('concept page: not a folder note', !isConceptPage('decisions/index.md', cfg));
+	check('concept page: not a tool-maintained page', !isConceptPage('wiki/log.md', cfg));
+
+	const dated = (path: string, rows: Record<string, string[]>) => ({
+		path,
+		title: `Title of ${path}`,
+		fields: fields(rows)
+	});
+	const pages = [
+		dated('decisions/pricing.md', { check_at: ['2026-11-01'] }),
+		dated('decisions/dismissed.md', { check_at: ['2026-11-02'] }),
+		dated('decisions/index.md', { check_at: ['2026-11-01'] }),
+		dated('wiki/log.md', { check_at: ['2026-11-01'] }),
+		dated('decisions/later.md', { check_at: ['2999-01-01'] })
+	];
+	const line = async (
+		datedPages: typeof pages | null,
+		ledger: string | null | 'throw'
+	): Promise<string> =>
+		pastDueLine({
+			store: {
+				readFile: async (_l: unknown, path: string) => {
+					if (ledger === 'throw') throw new Error('unreadable');
+					return path === REVIEW_LEDGER_PATH && ledger ? { content: ledger } : null;
+				}
+			} as never,
+			locator: { owner: 'example-org', repo: 'brain' },
+			config: cfg,
+			index: { datedPages: async () => datedPages } as never,
+			today: '2026-11-23'
+		});
+	const dismissedKey = findingKey('prediction-due', 'decisions/dismissed.md@2026-11-02');
+	const ledgerJson = JSON.stringify({
+		dismissed: [{ key: dismissedKey, reason: 'r', at: '2026-11-03' }]
+	});
+	const both = await line(pages, null);
+	check(
+		'past-due line: counts concept pages only, no folder note, log or future date',
+		/2 commitments have/.test(both) && !/index\.md|log\.md|later/.test(both),
+		both
+	);
+	const filtered = await line(pages, ledgerJson);
+	check(
+		'past-due line: a dismissed prediction-due is not counted',
+		/1 commitment has/.test(filtered) &&
+			/pricing\.md/.test(filtered) &&
+			!/dismissed\.md/.test(filtered),
+		filtered
+	);
+	check(
+		'past-due line: an unreadable ledger filters nothing',
+		/2 commitments have/.test(await line(pages, 'throw'))
+	);
+	check(
+		'past-due line: a corrupt ledger filters nothing',
+		/2 commitments have/.test(await line(pages, '{not json'))
+	);
+	check('past-due line: a stale index gives no line', (await line(null, null)) === '');
+	check('past-due line: nothing due gives no line', (await line([pages[4]], null)) === '');
+}
+
 // ---------- prediction due ----------
+
+// dueSummary is the handshake's count; it must agree with predictionDueFindings.
+{
+	const TODAY = '2026-11-23';
+	const rows: Record<string, Record<string, string[]>> = {
+		'd/none.md': { type: ['Decision'] },
+		'd/future.md': { check_at: ['2026-12-01'] },
+		'd/closed.md': { check_at: ['2026-11-01'], outcome: ['shipped'] },
+		'd/late-b.md': { check_at: ['2026-11-10'] },
+		'd/late-a.md': { check_at: ['2026-11-10'] },
+		'd/today.md': { check_at: ['2026-11-23'] },
+		'd/older.md': { check_at: ['2026-10-01'] },
+		'd/due-only.md': { due: ['2026-11-02'] },
+		'd/due-closed.md': { due: ['2026-11-02'], status: ['done'] }
+	};
+	const pages = Object.keys(rows).map((path) => ({ path, title: `T ${path}` }));
+	const byPath = new Map(Object.entries(rows).map(([p, r]) => [p, fields(r)]));
+	const s = dueSummary(pages, byPath, TODAY);
+	check(
+		'dueSummary: counts past and today, not future, closed, undated',
+		s.count === 5,
+		`${s.count}`
+	);
+	check(
+		'dueSummary: the first three by date then path',
+		s.top.map((p) => p.path).join() === 'd/older.md,d/due-only.md,d/late-a.md',
+		s.top.map((p) => p.path).join()
+	);
+	check(
+		'dueSummary: the same pages predictionDueFindings raises',
+		s.count === predictionDueFindings(pages, byPath, TODAY).length
+	);
+	check(
+		'dueSummary: a dismissed finding is not counted',
+		dueSummary([{ path: 'd/older.md' }], byPath, TODAY, {
+			dismissed: [{ key: findingKey('prediction-due', 'd/older.md@2026-10-01') }]
+		} as never).count === 0
+	);
+	check(
+		'dueSummary: nothing overdue is empty',
+		dueSummary([{ path: 'd/future.md' }], byPath, TODAY).count === 0
+	);
+	check(
+		'dueSummary: a `due` date counts when there is no check_at',
+		dueSummary([{ path: 'd/due-only.md' }], byPath, TODAY).count === 1
+	);
+	check(
+		'dueSummary: a closed status drops the `due` fallback',
+		dueSummary([{ path: 'd/due-closed.md' }], byPath, TODAY).count === 0
+	);
+}
 
 {
 	const TODAY = '2026-11-23';
