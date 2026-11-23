@@ -920,6 +920,16 @@ console.log('\nwrite_page: the deadline-phrase note');
 			return n !== '' && !fired(n);
 		})()
 	);
+	check(
+		'deadline: the note states the consequence and the remedy',
+		[
+			'will not appear in validate',
+			'its own page',
+			'Create it now',
+			'keep your own follow-up field'
+		].every((t) => note(['by Friday']).includes(t)),
+		note(['by Friday'])
+	);
 	check('deadline: hasDeadlinePhrase matches the plain case', hasDeadlinePhrase('due Tuesday'));
 
 	// Added text only: the existing page body is never read.

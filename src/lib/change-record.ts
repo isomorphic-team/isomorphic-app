@@ -121,7 +121,7 @@ const EXPECTATION_TEXT =
 	'If the person gave a date, use it as check_at; otherwise ask. Tell the person the check date you set. One commitment per page: a second gets its own page. write_page fields {expected, check_at: YYYY-MM-DD}.';
 
 const DEADLINE_TEXT =
-	'This reads like a commitment. Record it as its own page, type Commitment, linked from here, with write_page fields {expected, check_at: YYYY-MM-DD}. Tell the person the check date you set.';
+	'This reads like a commitment. Left on this page it will not appear in validate or in a what-is-due answer. Create it now as its own page (write_page, type Commitment, fields {expected, check_at: YYYY-MM-DD}), linked from here, and keep your own follow-up field too. Tell the person the check date you set.';
 
 export const MAX_REFS_LISTED = 20;
 
