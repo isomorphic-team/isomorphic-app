@@ -84,6 +84,19 @@ Links: \`[[Other Page]]\` wikilinks (matched against a page's path, filename, or
 
 **Record a commitment as its own page.** A decision or promise that expects a result gets a page of its own (\`type: Decision\` or \`Commitment\`), linked from the page it concerns, with \`expected\` (what you expect) and \`check_at\` (\`YYYY-MM-DD\`, when to look) in its frontmatter, and \`outcome\` once it is known. One commitment per page, so each has one date. \`validate\` lists the ones whose date has passed or comes within a week and have no outcome, so run it when asked what is due, coming up or overdue. A follow-up kept another way does not show in \`validate\`; a page with \`check_at\` does, so record the commitment this way even where the brain tracks follow-ups elsewhere.
 
+To show a page the record of the decisions that test its claim, link the commitment page from it and add this view to that page:
+
+\`\`\`okf-view
+kind: backlinks
+filter: { check_at: ">= 2000-01-01" }
+as: table
+columns: [title, expected, check_at, outcome]
+sort: check_at
+order: desc
+\`\`\`
+
+It lists every page that links here and carries a \`check_at\`, whatever its \`type\`, with what was expected and what happened.
+
 **Nested frontmatter is preserved, not interpreted.** The keys the tools understand are flat: a string, or a list of strings. OKF's richer provenance shapes (\`sources:\` as a list of \`resource:\`/\`title:\` mappings, \`generated: {by, at}\`, \`verified:\`) are kept **verbatim** — a page carrying them can be edited and saved through the tools without losing a byte. What you cannot do is query them: nested values aren't indexed, so \`okf-view\` \`filter:\` and \`group-by:\` can't see inside them. Write the keys you want to filter on flat, and let the nested provenance ride along.
 
 ## Lifecycle
