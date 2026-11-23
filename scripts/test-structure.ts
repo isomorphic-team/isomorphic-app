@@ -1104,9 +1104,7 @@ console.log('\nfolder-note advisory: a note-less folder holding its own overview
 		const one = other({ next_step_due: ['2026-11-20'] });
 		check(
 			'other due: a past next_step_due is listed with its key to reset',
-			one.length === 1 &&
-				one[0] ===
-					'- deals/northwind.md: next_step_due 2026-11-20 (3 days ago). If the step moved, set a new date: write_page fields {next_step_due: ...}.',
+			one.length === 1 && one[0] === '- deals/northwind.md: next_step_due 2026-11-20 (3 days ago).',
 			one.join('\n')
 		);
 		check(
@@ -1195,30 +1193,62 @@ console.log('\nfolder-note advisory: a note-less folder holding its own overview
 			ordered2.map((l) => l.slice(2, 3)).join('') === 'dcbea',
 			ordered2.join('\n')
 		);
-		const many = Array.from({ length: MAX_OTHER_DUE_LINES + 3 }, (_, i) => `p${i}.md`);
-		const manyOther = otherDueLines(
-			many.map((path) => ({ path })),
-			new Map(
-				many.map((path, i) => [
-					path,
-					fields({ next_step_due: [`2026-10-${String(10 + i).padStart(2, '0')}`] })
-				])
-			),
-			TODAY
+		const manyAt = (n: number) => {
+			const names = Array.from({ length: n }, (_, i) => `p${i}.md`);
+			return otherDueLines(
+				names.map((path) => ({ path, title: 'Acme renewal' })),
+				new Map(
+					names.map((path, i) => [
+						path,
+						fields({
+							next_step_due: [`2026-10-${String(1 + (i % 28)).padStart(2, '0')}`],
+							owner: ['Pat']
+						})
+					])
+				),
+				TODAY
+			);
+		};
+		const l36 = manyAt(36);
+		const l45 = manyAt(45);
+		check(
+			'other due: 36 dates are 36 lines and no tail',
+			l36.length === 36 && l36.every((l) => l.startsWith('- Acme renewal (p')),
+			l36.join('\n')
 		);
 		check(
-			'other due: the cap is 8, the nearest are kept, and the tail counts the rest without calling them stale',
-			MAX_OTHER_DUE_LINES === 8 &&
-				manyOther.filter((l) => l.startsWith('- ')).length === 8 &&
-				manyOther[0]!.includes('p10.md') &&
-				manyOther.at(-1) === '...and 3 more, further from today than these.',
-			manyOther.join('\n')
+			'other due: 45 dates are 40 lines and a tail of 5',
+			MAX_OTHER_DUE_LINES === 40 &&
+				l45.length === 41 &&
+				l45.at(-1) === '...and 5 more, further from today than these.',
+			l45.at(-1)
+		);
+		check(
+			'other due: a line keeps title and owner and carries no per-line advice',
+			l45[0]!.includes('), owner Pat: next_step_due 2026-') &&
+				l45.every((l) => !l.includes('set a new date') && !l.includes('write_page')),
+			l45[0]
+		);
+		check(
+			'other due: the nearest are kept and the tail counts the rest without calling them stale',
+			l45.filter((l) => l.startsWith('- ')).length === MAX_OTHER_DUE_LINES &&
+				l45[0]!.includes('p27.md') &&
+				!l45.some((l) => l.includes('p0.md')),
+			l45.slice(0, 2).join('\n')
 		);
 		check(
 			'other due: the block is empty when nothing is listed, and headed otherwise',
 			otherDueBlock([]) === '' &&
 				otherDueBlock(one).startsWith(
-					'\n\nDates in other deadline-named fields (keys ending in _due, -due, _due_date or -due-date), nearest first:\n- deals'
+					'\n\nDates in other deadline-named fields (keys ending in _due, -due, _due_date or -due-date), nearest first.'
+				) &&
+				otherDueBlock(one).includes('ask the person') &&
+				otherDueBlock(one).includes('once per client or owner and not per page') &&
+				otherDueBlock(one).includes('never decide for them') &&
+				otherDueBlock(one).includes('write_page fields {key: YYYY-MM-DD}') &&
+				otherDueBlock(one).includes('write_page fields {key: null}') &&
+				otherDueBlock(one).endsWith(
+					'\n- deals/northwind.md: next_step_due 2026-11-20 (3 days ago).'
 				)
 		);
 		// the shared helper still caps coming due at 20 and the rest are counted
