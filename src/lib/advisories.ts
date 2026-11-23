@@ -654,7 +654,7 @@ export function otherDueLines(
 /** The block after the due block: `otherDueLines` under a header, or nothing when empty. */
 export function otherDueBlock(lines: string[]): string {
 	if (lines.length === 0) return '';
-	return `\n\nDates in other deadline-named fields (keys ending in _due, -due, _due_date or -due-date), nearest first. Some of these may be finished: ask the person which are still live before removing any date, once per client or owner and not per page, and never decide for them. Moved: write_page fields {key: YYYY-MM-DD}. No longer applies: write_page fields {key: null}.\n${lines.join('\n')}`;
+	return `\n\nDates in other deadline-named fields (keys ending in _due, -due, _due_date or -due-date), nearest first. Some of these may be finished: ask the person which are still live before removing any date, once per client or owner and not per page, and never decide for them. Moved: read the page first; if its next step describes something already past, ask the person what comes next and write that, then set the new date (write_page fields {key: YYYY-MM-DD}). No longer applies: write_page fields {key: null}.\n${lines.join('\n')}`;
 }
 
 /**
