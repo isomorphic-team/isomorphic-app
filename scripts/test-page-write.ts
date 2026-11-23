@@ -939,7 +939,7 @@ console.log('\nwrite_page: the compare note (outcome set on a page with expected
 	check(
 		'compare: {expected, outcome} yields only the compare text',
 		both.includes(COMPARE) &&
-			!both.includes('check_at') &&
+			!both.includes('If the person gave a date') &&
 			!both.includes('One commitment per page')
 	);
 	check(
@@ -955,6 +955,36 @@ console.log('\nwrite_page: the compare note (outcome set on a page with expected
 		!note(dec, { outcome: 'z' }).includes('Happened:') &&
 			!note(dec, { outcome: 'z' }).includes('new commitment')
 	);
+	{
+		const TABLE = "The claim's record table lists only pages with check_at";
+		const dueOnly: Frontmatter = { ...dec, due: '2026-12-01' };
+		const withDue = note(dueOnly, { outcome: 'Churn was 5%' });
+		check(
+			'learn: due-only plus outcome gets the check_at sentence naming the date',
+			withDue.includes(TABLE) &&
+				withDue.includes('set check_at to 2026-12-01 with write_page fields')
+		);
+		check(
+			'learn: with check_at present, no sentence',
+			!note({ ...dueOnly, check_at: '2026-12-01' }, { outcome: 'x' }).includes(TABLE) &&
+				!note(dec, { outcome: 'x' }).includes(TABLE)
+		);
+		check(
+			'learn: due-only without outcome in the call gets no note',
+			note({ type: 'Decision', expected: 'x', due: '2026-12-01' }, { expected: 'x' }) === ''
+		);
+		const named = note(dec, { outcome: 'z' });
+		check(
+			'learn: the no-claim branch says to link a named page after a yes',
+			named.includes('if the person names the page, after a yes link it from this page')
+		);
+		check(
+			'learn: the record offer is the RECORD_TEXT guard, once',
+			named.includes('does not already show its record (read it first)') &&
+				named.split('does not already show its record').length === 2 &&
+				named.includes(RECORD_VIEW)
+		);
+	}
 	check('compare: never says surprise', !/surprise/i.test(note(dec, { outcome: 'z' })));
 }
 
