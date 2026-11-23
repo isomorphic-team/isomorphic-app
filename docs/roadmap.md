@@ -592,19 +592,21 @@ large brain work).
 [`design/roles-self-and-world-model.md`](design/roles-self-and-world-model.md) gives each brain
 a role and computes an org view over facts. A computed view cannot hold goals, priorities or
 expectations, so this adds a **self**: a boundary declared over brains from any organization,
-with a charter people write and an **executive** that reads declared sources, records dated
-observations and expectations in the brains inside the boundary, compares expectation with
-outcome, and raises items or drafts actions for a person to send.
+with a charter people write. Its **executive** is an agent on the client side: it reads mail,
+transcripts and other brains through the client's own connectors, records dated observations
+and expectations in the brains inside the boundary, and drafts actions for a person to send.
+Scheduled passes on the platform read only what those brains hold, compare expectation with
+outcome, and raise items. The platform reads no outside source.
 
-It goes in `ee/`, on core primitives that stay AGPL: records, the review queue and `resolve`,
-live views and the deterministic detectors. With the self off, every brain still reads,
-validates and renders, and still states expectations and is asked what happened.
+The declaration, the charter and the passes go in `ee/`, on core primitives that stay AGPL:
+records, the review queue and `resolve`, live views and the deterministic detectors. With the
+self off, every brain still reads, validates and renders, and still states expectations and is
+asked what happened.
 
 In order, each useful alone: records with the expectation fields and an item raised on the
 check date, both core (the records tables item above); cross-brain wikilinks; the self
-declaration with staging and the reconciler, measured against a hand-labeled set; the compare
-pass and its item kinds; executive ranking and drafted proposals; calibration shown on theory
-pages.
+declaration and the charter; the compare pass and its item kinds; the ranking pass;
+calibration shown on theory pages.
 
 # TODO: folder notes and OKF conformance (split the listing from the overview)
 

@@ -124,9 +124,9 @@ several brains and write one. That makes "write only to the brain you serve" a p
 the grant, not a sentence in a prompt. The guard at `BrainStore.commitOrPR` stays the backstop
 for content.
 
-A self's executive is the one actor with a wider grant: it reads its inside brains and sensed
-sources, and writes records into every brain inside its blanket
-([`self-and-executive.md`](self-and-executive.md), section 11).
+A self's executive is the case this grant does not fit: it writes records into every brain
+inside its blanket. It acts within a person's access until a grant of its own is designed
+([`self-and-executive.md`](self-and-executive.md), sections 4 and 16).
 
 ## 5. A brain has a role
 
@@ -155,8 +155,8 @@ section 5).
 
 A role is not a self. A brain makes no promises in its own name and cannot change what it is
 for. Its stance is still worth having: a legal brain that leans cautious and a delivery brain
-that leans toward yes disagree usefully, and a person decides between them. A self's
-executive, where one exists, surfaces the disagreement.
+that leans toward yes disagree usefully, and a person decides between them. A self's passes,
+where one exists, surface the disagreement.
 
 ## 6. An org has a view
 
@@ -184,7 +184,7 @@ Three rules follow from what the view is:
   self is not a brain either; it is declared on the platform.
 - **It owns no subject facts and writes none.** It reads every brain and raises open items.
   The failure to design against is the story overwriting the record. A self's executive
-  writes records inside its own blanket and proposals everywhere else.
+  writes records inside its own blanket and drafts everywhere else.
 - **It answers by audience.** It is the one place where material at different disclosure
   levels meets, so every answer is filtered by what the asker can already read. A finding
   that spans two brains quotes only the side its reader can open, and points at the other.
@@ -240,9 +240,10 @@ The loop:
    person decides.
 
 The fields, the item raised on the check date and the view on the theory page need no model,
-so they are core and work for any brain. Reading sources to find expectations and outcomes,
-and judging what a surprise means, is a self's compare pass in `ee/`
-([`self-and-executive.md`](self-and-executive.md), section 10).
+so they are core and work for any brain. Finding expectations and outcomes in outside sources
+is the work of a self's executive, an agent on the client side. Judging what a surprise means
+is a self's compare pass in `ee/` ([`self-and-executive.md`](self-and-executive.md),
+sections 8 and 10).
 
 How to revise comes from experiments we ran on claim learning:
 
@@ -291,9 +292,10 @@ coordinator with cheap readers, not peers messaging each other. A hosted agent r
 run it. It should reach brains through the MCP server with a read-mostly grant, not through
 a copy of the content, since a copy is one more thing to drift.
 
-That coordinator is a self's executive ([`self-and-executive.md`](self-and-executive.md),
-section 11). It needs an identity after all, the self's, because it acts for one boundary of
-intent across brains in more than one organization.
+That coordinator is a self's executive, an agent on the client side
+([`self-and-executive.md`](self-and-executive.md), section 8). The platform's part is passes
+that run as the self, read only what its inside brains hold, and raise items (section 11 of
+that document).
 
 ## 11. Order of work
 
