@@ -72,11 +72,15 @@ console.log('\ncommitments');
 		/own page/.test(line) && /Decision or Commitment/.test(line)
 	);
 	check(
-		'it says a follow-up kept elsewhere never shows in validate',
-		/another way[^\n]*only a page with `check_at`/.test(line),
+		'it says a commitment is dated by check_at, or a dated due when it has none',
+		/dates it by `check_at`, or a dated `due` when it has none/.test(line),
 		line
 	);
-	check('it says a dated due counts too', /`check_at` \(or a dated `due`\)/.test(line), line);
+	check(
+		'it says dates under other deadline-named keys are listed apart, not tracked',
+		/other deadline-named keys are listed apart, not tracked/.test(line),
+		line
+	);
 	check(
 		'it links a commitment to the page whose claim it tests',
 		/linking to the page whose claim it tests/.test(line),
