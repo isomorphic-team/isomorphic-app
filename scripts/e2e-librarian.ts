@@ -168,6 +168,8 @@ let callerOrgRole: 'owner' | 'admin' | 'editor' = 'owner';
 let callerOrgId: string | undefined;
 // The Worker wires the enterprise consolidation pass in only when it holds a model key.
 let consolidate: ConsolidationStep | undefined;
+// Makes the advisory part of validate throw, to prove the parts that stand apart survive.
+let breakAdvisory = false;
 // Wrapped in the guard as the Worker and the local runtime wrap it, so writes here raise
 // the same policy findings.
 const getContext = async () => {
@@ -195,7 +197,15 @@ const getContext = async () => {
 		author: undefined,
 		db,
 		brainId,
-		...indexRefs(d1Index(indexDb, { fullText: true }), brainId),
+		...(() => {
+			const refs = indexRefs(d1Index(indexDb, { fullText: true }), brainId);
+			if (!breakAdvisory) return refs;
+			const index = Object.create(refs.index) as typeof refs.index;
+			index.allFields = async () => {
+				throw new Error('advisory read failed');
+			};
+			return { ...refs, index };
+		})(),
 		policySecret: 'e2e-secret',
 		consolidate,
 		activeBrain: { id: name, label: name }
@@ -2667,6 +2677,14 @@ try {
 				!(await call('view_review', {})).text.includes(flagged),
 			report.text
 		);
+		// The admin section counts open policy findings, never dismissed ones.
+		const openPolicyCount = (text: string): number | null =>
+			/no open findings\. /.test(text)
+				? 0
+				: /(\d+) open finding\(s\) among those above/.test(text)
+					? Number(/(\d+) open finding\(s\) among those above/.exec(text)![1])
+					: null;
+		const policyOpenWhileDismissed = openPolicyCount(report.text);
 
 		// A dismissal covers the values reviewed, and leaves the repository alone.
 		const ledgerText = (await fileText('.isomorphic/review.json')) ?? '';
@@ -2698,6 +2716,63 @@ try {
 		await call('resolve', { decisions: [{ finding: flaggedKey, action: 'undismiss' }] });
 		report = await call('validate', {});
 		check('undismiss brings it back', report.text.includes(`[${flaggedKey}]`), report.text);
+		check(
+			'the admin section counts open policy findings and leaves out dismissed ones',
+			policyOpenWhileDismissed !== null &&
+				openPolicyCount(report.text) === policyOpenWhileDismissed + 1,
+			report.text
+		);
+
+		// A dismissal held in the review ledger (hand-edited) hides a policy finding from the
+		// admin count as well as the list.
+		const ledgerBefore = await fileText('.isomorphic/review.json');
+		const openBefore = openPolicyCount(report.text);
+		const ledgerObj = JSON.parse(ledgerBefore ?? '{"version":1,"dismissed":[]}');
+		ledgerObj.dismissed.push({ key: flaggedKey, why: 'hand edit', at: '2026-11-23' });
+		await store.write(locator, {
+			message: 'hand-dismiss a policy finding',
+			writes: [{ path: '.isomorphic/review.json', content: JSON.stringify(ledgerObj) }]
+		});
+		await settledHead();
+		report = await call('validate', {});
+		check(
+			'a ledger dismissal leaves a policy finding out of the admin count',
+			openBefore !== null && openPolicyCount(report.text) === openBefore - 1,
+			report.text
+		);
+		await store.write(locator, {
+			message: 'restore the review ledger',
+			writes: [
+				{ path: '.isomorphic/review.json', content: ledgerBefore ?? '{"version":1,"dismissed":[]}' }
+			]
+		});
+		await settledHead();
+
+		// Pending-import lines stand apart from the advisory part: they print when it throws.
+		await store.write(locator, {
+			message: 'corrupt import ledger',
+			writes: [{ path: '.isomorphic/imports/e2e.json', content: 'not json' }]
+		});
+		await settledHead();
+		breakAdvisory = true;
+		report = await call('validate', {});
+		breakAdvisory = false;
+		check(
+			'pending-import lines survive a failure in the advisory part',
+			report.text.includes('Import ledger for "e2e" is corrupt') &&
+				!report.text.includes(`[${flaggedKey}]`),
+			report.text
+		);
+		await store.write(locator, {
+			message: 'remove the corrupt import ledger',
+			writes: [
+				{
+					path: '.isomorphic/imports/e2e.json',
+					content: '{"version":1,"imported":[],"suppressed":[],"pending":[]}'
+				}
+			]
+		});
+		await settledHead();
 
 		before = await commitCount();
 		br = await callBrain('configure_brain', {});

@@ -190,7 +190,7 @@ broken-link report is the thing that loses. The codebase already made this call 
 `folderNoteSuggestions` is deliberately silent on note-less folders, because "this
 folder has no note" is not a defect.
 
-**Shape.** In the `validate` handler (`src/tools/librarian.ts`), run `computeTensions`
+**Shape.** In `openFindings` (`src/lib/open-findings.ts`, called by the `validate` handler), run `computeTensions`
 **without** `contents`, which skips near-duplicate detection and keeps it index-only
 and cheap. Emit one line: `N consolidation tension(s) open (M dismissed) — run
 consolidate.` Wrap it in its own try/catch like every other advisory section there;
