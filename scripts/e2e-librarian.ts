@@ -1027,7 +1027,9 @@ try {
 	r = await call('validate', {});
 	check(
 		'validate says nothing is due when nothing is',
-		r.text.includes('Nothing due or coming due from `check_at` or `due`'),
+		r.text.includes(
+			'Nothing due or coming due from `check_at` or `due`; dates kept in other fields are not listed.'
+		),
 		r.text
 	);
 	r = await call('write_page', {
@@ -1096,6 +1098,13 @@ try {
 	check(
 		'the coming-due list carries no finding key',
 		!/\[[a-z-]+:[^\]]*\]/.test(comingBlock(r.text)),
+		r.text
+	);
+	check(
+		'the due block carries the scope note in its header',
+		r.text.includes(
+			'Due and coming due (read from `check_at` or `due`; dates kept in other fields are not listed):'
+		),
 		r.text
 	);
 	check(

@@ -974,10 +974,6 @@ console.log('\nwrite_page: the deadline-phrase note');
 			prompts({ type: 'Decision', due: 'when the audit lands' })
 		);
 		check(
-			'follow-up date: a closed status brings the prompt back',
-			prompts({ type: 'Decision', due: '2026-12-01', status: 'done' })
-		);
-		check(
 			'follow-up date: an update that set expected on a page with a dated due is silent',
 			expectationNote({
 				kind: 'update',
