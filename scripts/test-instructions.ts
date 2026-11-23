@@ -83,8 +83,8 @@ console.log('\ncommitments');
 		line
 	);
 	check(
-		'it says to compare a reported result with expected and offer to record it as outcome',
-		/compare it with `expected` and offer to record it as `outcome`/.test(line),
+		'it says to offer a reported result as outcome, then compare it with expected',
+		/offer it as `outcome` on the commitment's page and compare it with `expected`/.test(line),
 		line
 	);
 	check('it does not tell the agent to record without asking', !/no need to ask/.test(line), line);

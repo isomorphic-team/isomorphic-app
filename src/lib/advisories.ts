@@ -391,7 +391,7 @@ export function wikilinkPortabilityNote(edges: { kind: 'md' | 'wiki'; cnt: numbe
 	];
 }
 
-export const EXPECTED_MAX_CHARS = 120;
+const EXPECTED_MAX_CHARS = 120;
 
 /** How many days ahead of its `check_at` a commitment is listed as coming due. */
 export const COMING_DUE_DAYS = 7;

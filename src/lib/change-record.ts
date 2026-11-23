@@ -10,7 +10,7 @@
 // changelog is a file in the brain's own repository that people read, so its
 // wording is a contract, and this is where it is kept.
 
-import { checkDateOf, COMMITMENT_TYPE_RE, EXPECTED_MAX_CHARS } from './advisories.ts';
+import { checkDateOf, COMMITMENT_TYPE_RE } from './advisories.ts';
 import type { BrainConfig } from './brain-policy.ts';
 import { logPathOf } from './brain-policy.ts';
 import type { CommitAuthor, CommitOrPROpts, FileWrite } from './brain-repo.ts';
@@ -134,9 +134,7 @@ function compareNote(fm: Frontmatter, patch: Record<string, unknown> | null | un
 	if (!patch || firstValue(patch.outcome) === '') return '';
 	const expected = firstValue(fm.expected);
 	if (expected === '') return '';
-	const clip = (v: string) =>
-		v.length > EXPECTED_MAX_CHARS ? v.slice(0, EXPECTED_MAX_CHARS) + '...' : v;
-	return `Expected: ${clip(expected)}. Happened: ${clip(firstValue(patch.outcome))}. Did the result meet it or depart from it? If it met it, say so in one line and stop. If it departed: when the page this one links to asserts something the result contradicts, ask the person ONE question offering to revise that page, and do not edit it in this reply. When no linked page asserts anything, say no claim page is linked and ask which page, if any, it tested. If the result also sets a new date, open a new commitment for the new date; this one stays closed.`;
+	return 'Did the result meet what the page expected? If it met it, say so in one line and stop. If it departed: when the page this one links to asserts something the result contradicts, ask the person ONE question offering to revise that page, and do not edit it in this reply. When no linked page asserts anything, say no claim page is linked and ask which page, if any, it tested.';
 }
 
 const RECORD_TEXT = `If this page links to the page whose claim it tests and that page does not already show its record (read it first), offer to append this there with write_page append:\n${RECORD_VIEW}\none yes completes it. Then tell the person that page now shows its record.`;

@@ -880,7 +880,7 @@ console.log('\nwrite_page: the commitment prompt (expectationNote)');
 
 console.log('\nwrite_page: the compare note (outcome set on a page with expected)');
 {
-	const COMPARE = 'Did the result meet it or depart from it';
+	const COMPARE = 'Did the result meet what the page expected';
 	const note = (
 		frontmatter: Frontmatter,
 		patch?: Record<string, unknown>,
@@ -892,11 +892,8 @@ console.log('\nwrite_page: the compare note (outcome set on a page with expected
 		outcome: 'Churn was 5%'
 	};
 	check(
-		'compare: outcome in this call on a page with expected fires, quoting expected',
-		note(dec, { outcome: 'Churn was 5%' }).includes(COMPARE) &&
-			note(dec, { outcome: 'Churn was 5%' }).includes(
-				'Expected: Churn falls below 3%. Happened: Churn was 5%.'
-			)
+		'compare: outcome in this call on a page with expected fires',
+		note(dec, { outcome: 'Churn was 5%' }).includes(COMPARE)
 	);
 	{
 		// The real create path: composeCreate, then describeChange with no patch.
@@ -945,25 +942,13 @@ console.log('\nwrite_page: the compare note (outcome set on a page with expected
 			!both.includes('check_at') &&
 			!both.includes('One commitment per page')
 	);
-	const long = 'x'.repeat(300);
-	const capped = note({ ...dec, expected: long }, { outcome: 'y' });
-	check(
-		'compare: expected is capped',
-		capped.includes('x'.repeat(120) + '...') && !capped.includes('x'.repeat(121))
-	);
 	check(
 		'compare: names the revise branch, the no-linked-claim branch and the yes gate',
 		[
 			'ONE question offering to revise that page',
 			'do not edit it in this reply',
-			'no claim page is linked and ask which page',
-			'open a new commitment for the new date; this one stays closed'
+			'no claim page is linked and ask which page'
 		].every((t) => dec.expected && note(dec, { outcome: 'z' }).includes(t))
-	);
-	const longOut = note(dec, { outcome: 'y'.repeat(300) });
-	check(
-		'compare: outcome is capped',
-		longOut.includes('Happened: ' + 'y'.repeat(120) + '...') && !longOut.includes('y'.repeat(121))
 	);
 	check('compare: never says surprise', !/surprise/i.test(note(dec, { outcome: 'z' })));
 }
