@@ -45,7 +45,8 @@ enableJsonResponse: true })`. The split uses the SDK's own `isLegacyRequest`.
   `BrainIndex.datedPages` answers only when the index is current for the branch tip and never
   reindexes, and the line has its own `HANDSHAKE_DUE_MS` deadline, so a late lookup drops that
   line and keeps the brain list. `pastDueLine` (`src/lib/open-findings.ts`) builds it for the Worker and for the local runtime,
-  which serves the static text plus that line for its default brain, after `ensureFresh`.
+  which serves the static text plus that line for its default brain (`staticWithDueLine`):
+  `ensureFresh` and the line share a 1.5 s limit, after which the static text answers.
 - `loadActiveBrain` and `loadCustomTools` fail open.
 - **`describeRequest` logs** any `/mcp` answer at 4xx or over 5s: methods, message SHAPES (key
   names only, never values), protocol era, status, duration, transport error. A slow call

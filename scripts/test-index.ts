@@ -22,6 +22,7 @@ import {
 	INDEX_SCHEMA_VERSION,
 	listIndexedPages,
 	loadDatedPages,
+	MAX_DATED_PAGES,
 	d1Index,
 	indexDatabase,
 	resetIndex,
@@ -1168,6 +1169,44 @@ console.log('\nDerived state keyed by brain_id: the 0011 re-key');
 		)
 		.run(INDEX_SCHEMA_VERSION, 'wiki/p-0001.md', brainId);
 	check('mid-rebuild: dropped', (await loadDatedPages(db, store, repo, brainId, config)) === null);
+}
+
+// Closed pages (an `outcome`) do not count toward the dated-page cap.
+{
+	console.log('\ndated pages: closed pages cannot fill the cap');
+	resetDb();
+	const closed = Array.from({ length: MAX_DATED_PAGES + 5 }, (_, i) => ({
+		path: `wiki/a-${String(i).padStart(4, '0')}.md`,
+		sha: `sha-closed-${i}`,
+		content: `---\ntype: Decision\ncheck_at: 2026-10-01\noutcome: shipped\n---\n\n# Closed ${i}\n`
+	}));
+	const open = {
+		path: 'wiki/z-open.md',
+		sha: 'sha-open',
+		content: '---\ntype: Decision\ncheck_at: 2026-10-02\n---\n\n# Open\n'
+	};
+	gh.pages = [...closed, open];
+	gh.head = 'commit-closed';
+	await readUntilConverged(5);
+	const got = await loadDatedPages(db, store, repo, brainId, config);
+	check(
+		'only the open dated page is returned, past the cap of closed ones',
+		got?.length === 1 && got[0].path === 'wiki/z-open.md',
+		`${got?.length} pages`
+	);
+	// A blank outcome is not a recorded one (openCheck trims). The index drops blank values
+	// itself, so the row is written directly.
+	sqlite
+		.prepare(
+			`INSERT INTO brain_page_fields (brain_id, path, key, value, value_num) VALUES (?, 'wiki/z-open.md', 'outcome', '   ', NULL)`
+		)
+		.run(brainId);
+	const blank = await loadDatedPages(db, store, repo, brainId, config);
+	check(
+		'a whitespace-only outcome still counts as open',
+		blank?.length === 1 && blank[0].path === 'wiki/z-open.md',
+		`${blank?.length} pages`
+	);
 }
 
 // ---------- the offline report loader (scripts/local-brain.ts) ----------

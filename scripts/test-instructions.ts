@@ -34,6 +34,7 @@ import { localD1 } from '../src/local/d1-sqlite.ts';
 import { bindFixtureStorage } from './fixture-storage.ts';
 import {
 	assembleHandshake,
+	staticWithDueLine,
 	composeInstructions,
 	overdueLine,
 	instructionText,
@@ -176,6 +177,16 @@ console.log('\npast-due line');
 		onDueError: () => (warned = true)
 	});
 	check('a failed lookup drops only the line and is reported', failed === plain && warned);
+	const lateLocal = await staticWithDueLine(slow, 20);
+	check('local: a late lookup leaves the static text', lateLocal === SERVER_INSTRUCTIONS);
+	const failedLocal = await staticWithDueLine(async () => {
+		throw new Error('boom');
+	}, 20);
+	check('local: a failed lookup leaves the static text', failedLocal === SERVER_INSTRUCTIONS);
+	check(
+		'local: a timely lookup appends the line',
+		(await staticWithDueLine(async () => line, 200)) === SERVER_INSTRUCTIONS + line
+	);
 	const ok = await assembleHandshake({
 		brains: async () => brains,
 		loadActive: async () => 'b1-h1',

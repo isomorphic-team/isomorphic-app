@@ -877,7 +877,7 @@ export interface DatedPage {
 export const MAX_DATED_PAGES = 400;
 
 /**
- * Pages that carry `check_at` or `due`, with all their indexed fields, or null when the
+ * Pages that carry `check_at` or `due` and no recorded outcome, with all their indexed fields, or null when the
  * index does not reflect the branch tip right now (never built, mid-reindex, mid-rebuild, or
  * behind a newer commit). It never reindexes: one branch-tip read, one meta read, one query
  * for the dated paths and the chunked field reads for them. For callers that answer without the index when it is not ready.
@@ -914,6 +914,10 @@ export async function loadDatedPages(
 			 FROM brain_page_fields f
 			 JOIN brain_pages p ON p.brain_id = f.brain_id AND p.path = f.path
 			 WHERE f.brain_id = ?1 AND f.key IN ('check_at', 'due')
+			   AND NOT EXISTS (
+			     SELECT 1 FROM brain_page_fields o
+			     WHERE o.brain_id = f.brain_id AND o.path = f.path AND o.key = 'outcome' AND TRIM(o.value) <> ''
+			   )
 			 ORDER BY p.path LIMIT ${MAX_DATED_PAGES}`
 		)
 		.bind(brainId)
