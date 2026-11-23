@@ -1246,6 +1246,8 @@ console.log('\nfolder-note advisory: a note-less folder holding its own overview
 				otherDueBlock(one).includes('once per client or owner and not per page') &&
 				otherDueBlock(one).includes('never decide for them') &&
 				otherDueBlock(one).includes('write_page fields {key: YYYY-MM-DD}') &&
+				otherDueBlock(one).includes('read the page first') &&
+				otherDueBlock(one).includes('ask the person what comes next') &&
 				otherDueBlock(one).includes('write_page fields {key: null}') &&
 				otherDueBlock(one).endsWith(
 					'\n- deals/northwind.md: next_step_due 2026-11-20 (3 days ago).'

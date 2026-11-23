@@ -1260,6 +1260,8 @@ try {
 			(!r.text.includes('need a decision') || otherAt < r.text.indexOf('need a decision')) &&
 			r.text.includes('wiki/deals/northwind.md): next_step_due ' + inDays(-4) + ' (4 days ago).') &&
 			r.text.includes('{key: YYYY-MM-DD}') &&
+			r.text.includes('read the page first') &&
+			r.text.includes('ask the person what comes next') &&
 			r.text.includes('{key: null}') &&
 			!r.text.includes('If the step moved'),
 		r.text
