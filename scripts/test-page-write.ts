@@ -878,6 +878,62 @@ console.log('\nwrite_page: the commitment prompt (expectationNote)');
 	);
 }
 
+console.log('\nwrite_page: the compare note (outcome set on a page with expected)');
+{
+	const COMPARE = 'Compare it with the outcome';
+	const note = (
+		frontmatter: Frontmatter,
+		patch?: Record<string, unknown>,
+		kind: 'create' | 'update' = 'update'
+	) => expectationNote({ kind, frontmatter, patch });
+	const dec: Frontmatter = {
+		type: 'Decision',
+		expected: 'Churn falls below 3%',
+		outcome: 'Churn was 5%'
+	};
+	check(
+		'compare: outcome in this call on a page with expected fires, quoting expected',
+		note(dec, { outcome: 'Churn was 5%' }).includes(COMPARE) &&
+			note(dec, { outcome: 'Churn was 5%' }).includes('Expected: Churn falls below 3%.')
+	);
+	check(
+		'compare: fires on create too',
+		note(dec, { outcome: 'Churn was 5%' }, 'create').includes(COMPARE)
+	);
+	check(
+		'compare: no expected, none',
+		note({ type: 'Decision', outcome: 'x' }, { outcome: 'x' }) === ''
+	);
+	check(
+		'compare: outcome not in this call, none',
+		!note(dec, { check_at: '2026-12-01' }).includes(COMPARE) && !note(dec).includes(COMPARE)
+	);
+	check(
+		'compare: an empty outcome in the patch, none',
+		!note({ ...dec, outcome: '' }, { outcome: '' }).includes(COMPARE)
+	);
+	const both = note(dec, { expected: 'Churn falls below 3%', outcome: 'Churn was 5%' });
+	check(
+		'compare: {expected, outcome} yields only the compare text',
+		both.includes(COMPARE) &&
+			!both.includes('check_at') &&
+			!both.includes('One commitment per page')
+	);
+	const long = 'x'.repeat(300);
+	const capped = note({ ...dec, expected: long }, { outcome: 'y' });
+	check(
+		'compare: expected is capped',
+		capped.includes('x'.repeat(120) + '...') && !capped.includes('x'.repeat(121))
+	);
+	check(
+		'compare: names the revise branch, the no-linked-claim branch and the yes gate',
+		['offer to revise the page', 'else name the page', 'Never edit that page without a yes'].every(
+			(t) => dec.expected && note(dec, { outcome: 'z' }).includes(t)
+		)
+	);
+	check('compare: never says surprise', !/surprise/i.test(note(dec, { outcome: 'z' })));
+}
+
 console.log('\nwrite_page: the deadline-phrase note');
 {
 	const DEADLINE = 'This reads like a commitment';

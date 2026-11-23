@@ -250,6 +250,8 @@ A decision or commitment is made, with a result that can be checked later.
 | Record      | A Decision or Commitment page with `expected` and `check_at`, linked to the claim it tests | `write_page` (its reply asks for a date) |
 | Be reminded | The person asks what is due or on their plate                                              | `validate`, its due area                 |
 | Close       | The outcome is recorded on the page                                                        | `write_page`                             |
+| Compare     | The outcome is set on a page that has `expected`                                           | `write_page` reply                       |
+| Revise      | The result departed from what was expected                                                 | `write_page` reply                       |
 | Learn       | The claim's page shows the decisions that tested it                                        | `RECORD_VIEW` on the claim's page        |
 
 Where the vision takes it:
