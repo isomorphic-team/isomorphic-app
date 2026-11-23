@@ -177,12 +177,15 @@ Records come from [`records-tables-prd.md`](records-tables-prd.md). The self add
 
 An observation is dated and sourced ("as of a date, this brain showed this"). It never claims
 to be current. When a sensed brain moves away from what an inside brain observed, the
-difference is a prediction error, and the compare pass treats it as one.
+observation is stale and the compare pass records a new one. The change is a `surprise` only
+when an expectation covered it.
 
 ## 10. Compare, and the items it raises
 
-The compare pass is a pass type on `brain_passes` (`src/lib/brain-pass.ts`). It raises items
-in the review queue (`src/lib/review-queue.ts`) of these kinds:
+`prediction-due` needs only a check date. The core raises it for any brain, with or without a
+self ([`roles-self-and-world-model.md`](roles-self-and-world-model.md), section 8). The
+compare pass is a pass type on `brain_passes` (`src/lib/brain-pass.ts`) and raises the other
+four. All five are items in the review queue (`src/lib/review-queue.ts`):
 
 | Kind             | Raised when                                                           |
 | ---------------- | --------------------------------------------------------------------- |
@@ -225,8 +228,8 @@ else is a `proposal`. Outward actions are drafts until a person sends them.
 
 ## 12. Invariants
 
-1. The self never writes a subject fact into an owner brain. It writes records inside its
-   blanket and proposals everywhere else.
+1. The self never writes a subject fact, and never writes into a brain it only senses. It
+   writes records in its inside brains and proposals everywhere else.
 2. Inferred is never evidence.
 3. Observations are dated and sourced, never mirrors.
 4. Every outward action carries an expectation.
@@ -237,24 +240,25 @@ else is a `proposal`. Outward actions are drafts until a person sends them.
 ## 13. Licensing boundary
 
 The self is in `ee/`: the declaration, the charter, staging, the reconciler, the compare pass
-and the executive. It builds on core primitives that stay AGPL: records, the review queue and
-`resolve`, live views and the guard's deterministic detectors. See
+and the executive. It builds on core primitives that stay AGPL: records with the expectation
+fields, the `prediction-due` item, the review queue and `resolve`, live views (the record a
+theory page shows is one) and the guard's deterministic detectors. See
 [`open-source-boundary.md`](open-source-boundary.md).
 
 ## 14. Order of work
 
-Each step is useful without the ones after it.
+Each step is useful without the ones after it. Steps 1, 2 and 6 are core.
 
-1. **Records with the expectation fields,** from the records-tables PRD.
+1. **Records with the expectation fields, and the `prediction-due` item,** from the
+   records-tables PRD.
 2. **Cross-brain wikilinks.** One meeting produces records in several inside brains, linked to
    one shared source.
-3. **The self declaration,** with `validate` checks: a brain inside two selves, a sensed brain
-   with no grant, a charter with no values.
-4. **Staging and the reconciler,** starting with transcripts and mail, measured against the
-   gold set.
-5. **The compare pass and the new item kinds.**
-6. **Executive ranking and drafted proposals.**
-7. **Calibration:** each theory page shows its record, as a live view over the outcomes that
+3. **The self declaration, staging and the reconciler,** starting with transcripts and mail,
+   measured against the gold set. A declaration is refused when a brain is already inside
+   another self, a sensed brain has no grant, or the charter has no values.
+4. **The compare pass and its four item kinds.**
+5. **Executive ranking and drafted proposals.**
+6. **Calibration:** each theory page shows its record, as a live view over the outcomes that
    link to it.
 
 ## 15. Decided against
@@ -273,6 +277,17 @@ Each step is useful without the ones after it.
 
 ## 16. Open questions
 
+- Whose entitlement and spend cap does the executive run under? Both are per organization,
+  and a self is outside every organization.
+- Where do a self's items live, and who may see them? The review queue is keyed by brain and
+  shown by brain role. An item about mail or a sensed brain has no brain, and an author need
+  not be a member of any inside brain. A record drawn from mail is also open to every reader
+  of the brain it lands in.
+- Senses need connectors, and the platform has none. Does a grant to read a brain cover
+  sending its content to a model provider?
+- How does staging relate to the propose-and-admit ledger in
+  [`records-tables-prd.md`](records-tables-prd.md), which keeps a proposed row in git? And if
+  transcript extractions wait for confirmation, does a record ever carry `inferred`?
 - Should the charter also be readable as a page, given that a copy of it would drift?
 - Is a person a self? A personal brain and a person's mail make the same blanket at size one.
 - What happens to observations of a client when the engagement ends and an agreement limits

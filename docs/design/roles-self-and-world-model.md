@@ -132,12 +132,12 @@ sources, and writes records into every brain inside its blanket
 
 A role has four parts:
 
-| Part                                                      | Where it lives                                                     |
-| --------------------------------------------------------- | ------------------------------------------------------------------ |
-| Charter: what the brain owns, and which brains it watches | A new declaration in `.isomorphic.json`, summarized in `AGENTS.md` |
-| Standards: what correct means here                        | The policy rulebook page the guard already reads                   |
-| Stance: the bias the brain is meant to have               | Prose in `AGENTS.md`                                               |
-| Its own open items and history                            | The review queue and the activity log                              |
+| Part                                                               | Where it lives                                                     |
+| ------------------------------------------------------------------ | ------------------------------------------------------------------ |
+| Role declaration: what the brain owns, and which brains it watches | A new declaration in `.isomorphic.json`, summarized in `AGENTS.md` |
+| Standards: what correct means here                                 | The policy rulebook page the guard already reads                   |
+| Stance: the bias the brain is meant to have                        | Prose in `AGENTS.md`                                               |
+| Its own open items and history                                     | The review queue and the activity log                              |
 
 Ownership is declared at the grain a person would say it: "executed agreements and their
 terms", "billing procedure", "client pages". It is not a registry of sentences. Its uses are
@@ -149,13 +149,14 @@ concrete:
 
 Ownership here is by subject. A self adds a second axis, the observer: expectations,
 calibration and models of counterparties belong to the self that holds them, whatever they are
-about, and never land in the subject's brain
-([`self-and-executive.md`](self-and-executive.md), section 5).
+about. They are records in the self's inside brains, placed by subject, and are never written
+into a brain the self only senses ([`self-and-executive.md`](self-and-executive.md),
+section 5).
 
 A role is not a self. A brain makes no promises in its own name and cannot change what it is
 for. Its stance is still worth having: a legal brain that leans cautious and a delivery brain
-that leans toward yes disagree usefully, and the self's executive surfaces the disagreement
-for a person to decide.
+that leans toward yes disagree usefully, and a person decides between them. A self's
+executive, where one exists, surfaces the disagreement.
 
 ## 6. An org has a view
 
@@ -238,6 +239,11 @@ The loop:
 5. When the record turns against a belief, a pass proposes a revision as an open item. A
    person decides.
 
+The fields, the item raised on the check date and the view on the theory page need no model,
+so they are core and work for any brain. Reading sources to find expectations and outcomes,
+and judging what a surprise means, is a self's compare pass in `ee/`
+([`self-and-executive.md`](self-and-executive.md), section 10).
+
 How to revise comes from experiments we ran on claim learning:
 
 - Retiring a claim after a fixed number of contradictions lost to plain recency. Do not
@@ -293,8 +299,8 @@ intent across brains in more than one organization.
 
 Each step is useful without the ones after it.
 
-1. **Roles as a convention.** An owns and watches section in `AGENTS.md`, and a charter
-   page. No code. This tests the idea on a real org before the platform changes.
+1. **Roles as a convention.** An owns and watches section in `AGENTS.md`. No code. This
+   tests the idea on a real org before the platform changes.
 2. **Role declarations in `.isomorphic.json`,** with the `validate` checks in section 5.
 3. **Consolidation across brains.** Candidate pairs from cross-brain search, keys that
    include the brain, evidence filtered by what the reader can open, and the owner deciding
@@ -309,8 +315,9 @@ Each step is useful without the ones after it.
 6. **Prevention.** Cross-brain wikilinks, then publishing.
 7. **A scheduled org pass.** Built in a first form: an hourly run checks each brain that
    takes part against the others, as the organization and not as a person. Taking part is
-   the first charter declaration, `"charter": {"orgChecks": true}` in `.isomorphic.json`,
-   ahead of the owns and watches declarations of step 2.
+   the first role declaration, `"charter": {"orgChecks": true}` in `.isomorphic.json`,
+   ahead of the owns and watches declarations of step 2. The key is named `charter`; in
+   prose, charter means a self's.
 8. **Expectation and outcome fields,** then records tables, then scorecards on theory pages.
 9. **A grant that reads many brains and writes one.**
 10. **A coordinator with judgment,** only if the queue shows it is needed.

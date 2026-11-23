@@ -598,12 +598,13 @@ outcome, and raises items or drafts actions for a person to send.
 
 It goes in `ee/`, on core primitives that stay AGPL: records, the review queue and `resolve`,
 live views and the deterministic detectors. With the self off, every brain still reads,
-validates and renders.
+validates and renders, and still states expectations and is asked what happened.
 
-In order, each useful alone: records with the expectation fields (the records tables item
-above); cross-brain wikilinks; the self declaration and its `validate` checks; staging and the
-reconciler, measured against a hand-labeled set; the compare pass and its item kinds; executive
-ranking and drafted proposals; calibration shown on theory pages.
+In order, each useful alone: records with the expectation fields and an item raised on the
+check date, both core (the records tables item above); cross-brain wikilinks; the self
+declaration with staging and the reconciler, measured against a hand-labeled set; the compare
+pass and its item kinds; executive ranking and drafted proposals; calibration shown on theory
+pages.
 
 # TODO: folder notes and OKF conformance (split the listing from the overview)
 
