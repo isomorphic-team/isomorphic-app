@@ -11,18 +11,48 @@ for the maintainer, not a documentation fix.
 
 ## What the product is for
 
+Helping people and AI achieve together what neither could alone. Isomorphic is the interface for
+that collective intelligence: the shared place where people and their agents keep what the group
+knows, decides and expects, and do their work against it.
+
 A team runs its business on what it knows, what it has decided and what it expects to happen.
-Most of that lives in people's heads, in mail and in meetings, and writing it down is a separate
-job from doing the work, which is why it does not get done.
+Most of that lives in people's heads, in mail and in meetings. Writing it down is a separate job
+from doing the work, which is why it does not get done, and knowledge nobody wrote down cannot
+be shared with a colleague or handed to an agent. So the group never knows more than its members
+remember, and its agents start every conversation from nothing.
 
 Isomorphic makes that knowledge something the team's agents keep for them, and then something
 the organization can reason with: notice where it disagrees with itself, say what it expects,
 and learn when the world answers.
 
+## Who does what
+
+Working together means each side does what it is good at, through the same brains:
+
+| AI does                                                     | People do                                               |
+| ----------------------------------------------------------- | ------------------------------------------------------- |
+| Write it down, as a byproduct of the conversation           | Say what is worth keeping, and correct what was written |
+| Keep it true: find what is broken, stale or contradictory   | Decide what a finding means, and which side stands      |
+| Sense: read meetings and mail, and draft what they show     | Confirm what was inferred before it counts as evidence  |
+| Remember every commitment, and bring it back when it is due | Make the commitments, and record what happened          |
+| Compare expectation with outcome, and rank what is open     | Author the charter: values, intent and set points       |
+| Draft actions                                               | Send them                                               |
+
+The brain is the shared medium. A person can read and edit everything an agent wrote, in the
+viewer, in a browser or on github.com, and an agent can use everything a person wrote. Neither
+side holds anything the other cannot see.
+
+Collective intelligence fails in two directions, and the product guards against both. When the
+AI does too little, people go back to remembering and the brain goes stale. When it does too
+much, the group stops thinking: a model's draft becomes a fact, a belief is revised because a
+pass said so, and an action goes out nobody chose. That is why inferred is never evidence, a
+fix across brains waits for a person, and actions are drafts until a person sends them.
+
 ## Three levels
 
-Each level fixes a failure the one below it cannot see. Each is useful without the ones above
-it, and none replaces the one below.
+Each level widens the collective: a person and their agent, then a team of functions that
+agree, then an organization that learns. Each level fixes a failure the one below it cannot see.
+Each is useful without the ones above it, and none replaces the one below.
 
 | Level                          | The team gets                                                                                       | The failure it fixes                                                                                                                          | State                                                                                |
 | ------------------------------ | --------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------ |
@@ -53,6 +83,16 @@ messaging and autonomy to what is mostly bookkeeping, and has no rule for who is
 
 ### Why a self
 
+A self is what lets a system of people and agents cohere into something that can act and adapt
+in a competitive environment. Without one, every agent and every brain is locally right: each
+serves its own conversation or its own function, and nothing decides between them when they
+pull different ways. Roles say who owns which fact. They do not say what the firm is trying to
+do, so they cannot say which of two reasonable actions to take, or notice that the market has
+moved and the firm's beliefs have not. A self gives the system one intent to act toward and one
+loop to learn from: it ranks what is open by that intent, acts through drafts people send, and
+revises its beliefs when the world answers differently from what it expected. That is the
+difference between a well-kept archive and an organization that competes.
+
 The organization view can hold facts. It cannot hold intentions: goals, what deserves attention
 this week, what the firm expects to happen, and its models of the people it works with. No
 brain's content derives those; people choose them.
@@ -75,6 +115,10 @@ mail show, with a provenance, and drafts actions for a person to send.
 
 - **A design names the job, the step and the level it works at.** A change that serves no job
   here is out of scope until a job is added.
+- **A design says what people do and what AI does at its step.** It should take work off people
+  that an agent does as well, and leave with people the decisions that are theirs in the table
+  above. A change that moves one of those decisions to the AI is a product decision for the
+  maintainer.
 - **Work should move a job up a level, or close a seam on its current path.** Polishing a step
   that already works is the lowest-value change, and several in a row is how the product reaches
   a local optimum.
@@ -90,8 +134,9 @@ mail show, with a provenance, and drafts actions for a person to send.
 - **The open seams are the work list.** A design that touches one says whether it closes it or
   widens it.
 
-The agent is the main user: a person talks to their AI assistant, and the assistant uses the
-brains through their tools. Every path is written from that side.
+Most work reaches the brains through an agent: a person talks to their AI assistant, and the
+assistant uses the brains through their tools. So every path is written from the agent's side,
+and ends with what the person sees and decides.
 
 ## The lines that hold it together
 
