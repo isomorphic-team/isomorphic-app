@@ -33,7 +33,9 @@ paths:
 - **`src/lib/change-record.ts`** (`pnpm test:record`) is what a write SAYS about itself: the
   changelog bullet, commit message, PR text, both replies (landed vs PR), the "still linked"
   note, and `toolRosterNote`. The changelog is a file people read, so its wording is a
-  contract: compose it here, never inline in a tool. `commitOpts` is the shared commit
+  contract: compose it here, never inline in a tool. The deadline note
+  (`expectationNote`) reads only text added by `append`, `edits` and a create's body; a
+  `write_page` that replaces the whole `content` of an existing page gets none. `commitOpts` is the shared commit
   preamble (also used by the importer and media).
 - Only `wiki/log.md` is tool-maintained. Writes to a protected branch become a PR, which
   merges itself on green only when auto-merge could be armed (`writes.autoMerge`, default true,
