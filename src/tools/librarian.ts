@@ -64,7 +64,7 @@ import { isMediaPath, mediaTypeOf } from '../lib/media.ts';
 import { tryRenderViews, type ViewDeps } from '../lib/views.ts';
 import { isToolPagePath, planCustomTools } from '../lib/custom-tools.ts';
 import { importFindings, type Finding } from '../lib/findings.ts';
-import { openFindings } from '../lib/open-findings.ts';
+import { openFindings, renderOpenFindings } from '../lib/open-findings.ts';
 import { folderNoteSuggestions, brokenLinkReport, describeProbe } from '../lib/advisories.ts';
 import { scoreProbe } from '../lib/probe.ts';
 import { OKF_PAGE_STATUSES } from '../lib/page-patch.ts';
@@ -1464,8 +1464,7 @@ export function registerLibrarianTools(
 					folderNotes,
 					reachable: (ids) => reachableBrains(ids, deps, openIndex)
 				});
-				findingsText = open.findingsText;
-				comingDueText = open.comingDueText;
+				({ findingsText, comingDueText } = renderOpenFindings(open));
 				openPolicy = open.openPolicy;
 			} catch {
 				// Advisory only; link validation stands alone.

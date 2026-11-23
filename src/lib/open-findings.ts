@@ -1,6 +1,6 @@
 // What is open in a brain: the one assembly of the advisory findings, the stored queue, the due
-// area, the other-dates block and the feature offer. `validate` renders `findingsText` and
-// `comingDueText` from it; the structured fields are for any other surface that lists what is open.
+// area, the other-dates block and the feature offer. `validate` formats it with `renderOpenFindings`;
+// the structured fields are for any other surface that lists what is open.
 // Reads the index, the store and D1 through the arguments, never a tool context.
 import type { D1Database } from '@cloudflare/workers-types';
 import {
@@ -27,6 +27,7 @@ import {
 	parseReviewLedger,
 	renderFindings,
 	renderValidateFindings,
+	partitionCommitments,
 	REVIEW_LEDGER_PATH,
 	type Finding,
 	type ReviewLedger
@@ -65,20 +66,35 @@ export interface OpenFindingsInput {
 }
 
 export interface OpenFindings {
-	/** Every finding raised this run, before dismissals. */
-	all: Finding[];
-	/** Those not dismissed. */
-	kept: Finding[];
-	/** Stored findings whose pages changed since, only counted. */
-	staleCount: number;
-	/** The list under the due area, with the stale note. */
-	findingsText: string;
-	/** The due area, the feature offer and the other-dates block. */
-	comingDueText: string;
+	/** The due area: commitment findings (prediction-due, undated-commitment), then the unkeyed coming-due lines. */
+	due: { commitments: Finding[]; coming: string[] };
+	/** The kept findings validate lists, clustered, apart from the commitments above. */
+	findings: { list: Finding[]; silenced: number; staleCount: number };
+	/** Dates under other deadline-named keys, nearest first, at most `MAX_OTHER_DUE_LINES`. */
+	otherDates: string[];
 	/** The one feature offer, or null. */
 	offer: Finding | null;
 	/** Open policy findings, for the admin section. */
 	openPolicy: number;
+}
+
+/** The two texts `validate` prints for an `OpenFindings`; the one place it is formatted. */
+export function renderOpenFindings(open: OpenFindings): {
+	findingsText: string;
+	comingDueText: string;
+} {
+	const rendered = renderValidateFindings(
+		[...open.due.commitments, ...open.findings.list],
+		open.findings.silenced,
+		MAX_FINDINGS_SHOWN
+	);
+	return {
+		findingsText: rendered.list + staleNote(open.findings.staleCount),
+		comingDueText:
+			dueBlock(rendered.due, open.due.coming) +
+			(open.offer ? `\n\n${renderFindings([open.offer], 1).text}` : '') +
+			otherDueBlock(open.otherDates)
+	};
 }
 
 export async function openFindings(input: OpenFindingsInput): Promise<OpenFindings> {
@@ -160,13 +176,7 @@ export async function openFindings(input: OpenFindingsInput): Promise<OpenFindin
 		// An unparseable ledger filters nothing rather than failing the read.
 	}
 
-	// Commitment findings render in the due area, capped apart from the rest, so a full report
-	// of housekeeping cannot hide them.
-	const rendered = renderValidateFindings(
-		clusterFindings(kept),
-		all.length - kept.length,
-		MAX_FINDINGS_SHOWN
-	);
+	const { commitments, rest } = partitionCommitments(clusterFindings(kept));
 	const coming = comingDueLines(conceptPages, fieldsByPath, todayIso());
 	// One offer for a feature the brain does not use, right after the due area. It is not in
 	// `all`, so it never counts in the findings intro or the cap.
@@ -185,14 +195,9 @@ export async function openFindings(input: OpenFindingsInput): Promise<OpenFindin
 		(offers) => (ledger ? filterDismissed(offers, ledger) : offers)
 	);
 	return {
-		all,
-		kept,
-		staleCount: keptStale.length,
-		findingsText: rendered.list + staleNote(keptStale.length),
-		comingDueText:
-			dueBlock(rendered.due, coming) +
-			(offer ? `\n\n${renderFindings([offer], 1).text}` : '') +
-			otherDueBlock(otherDueLines(conceptPages, fieldsByPath, todayIso())),
+		due: { commitments, coming },
+		findings: { list: rest, silenced: all.length - kept.length, staleCount: keptStale.length },
+		otherDates: otherDueLines(conceptPages, fieldsByPath, todayIso()),
 		offer,
 		openPolicy: kept.filter((f) => isPolicyKey(f.key)).length
 	};

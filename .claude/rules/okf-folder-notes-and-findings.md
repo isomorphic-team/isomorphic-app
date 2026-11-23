@@ -96,7 +96,7 @@ are in the list, with keys.
   below one line, say what is not read); with nothing due it is one line saying the same.
   `openFindings` (`src/lib/open-findings.ts`) assembles everything open (the advisory and queued
   findings, dismissals, the due area, the feature offer, the other-dates block) and returns it
-  structured with the two rendered texts `validate` prints; `validate` only gathers imports and
+  structured (`due`, `findings`, `otherDates`, `offer`); `renderOpenFindings` makes the two texts `validate` prints; `validate` only gathers imports and
   link defects around it. It partitions: `partitionCommitments` (`findings.ts`, by the kind in the
   key) splits `prediction-due` and `undated-commitment` from the other findings after
   clustering, each group goes through `renderFindings` with its own cap, and the commitment
