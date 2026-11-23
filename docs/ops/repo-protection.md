@@ -17,46 +17,45 @@ cannot merge, cannot change settings, and cannot read a secret. The only thing t
 propose a diff.
 
 So the control you actually want is **path-scoped review**, not path-scoped write, and GitHub
-does have that: [`CODEOWNERS`](../../.github/CODEOWNERS) plus "Require review from Code Owners". A pull
-request touching `src/auth/`, `migrations/`, `pnpm-lock.yaml`, or `LICENSE` cannot merge
-without a maintainer's explicit approval on that file. A pull request that only touches
-`app/views/GraphView.tsx` still needs a review, but it does not need to wait on the person
-who owns the auth code.
+does have that: [`CODEOWNERS`](../../.github/CODEOWNERS) plus "Require review from Code Owners". With
+it on, a pull request touching `src/auth/`, `migrations/`, `pnpm-lock.yaml`, or `LICENSE`
+cannot merge without a code owner's explicit approval.
+
+It is off while the maintainer is the only account with write access: with one person able to
+merge, a required approval is that person approving their own merge. `CODEOWNERS` still
+requests the maintainer's review on every pull request. **Turn it on, with one required
+approval, before a second account gets write access.**
 
 ## Settings to apply
 
 ### 1. Branch ruleset on `main`
 
-Current state as of the open-sourcing change: `main` requires the `check` status and blocks
-force pushes and deletions, but does **not** require a pull request or a review. That was
-correct for a solo private repo. It is not correct for a public one, where the same
-configuration means anyone with write access, including a future maintainer on a bad day, can
-push straight to a branch that auto-deploys to production.
+`main` deploys to production on merge, so anyone who can push to it can ship. These are on:
 
-Turn on:
-
-| Setting                                 | Why                                                                                                                      |
-| --------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
-| Require a pull request before merging   | No direct pushes to `main`, including yours. Every change becomes reviewable and revertible as a unit.                   |
-| Require 1 approval                      | The floor. With one maintainer you approve your own PRs, which is theater; it stops being theater the day there are two. |
-| Require review from Code Owners         | This is the path-scoped control. Without it `CODEOWNERS` is documentation.                                               |
-| Dismiss stale approvals on new commits  | Otherwise a contributor can get approval on a clean diff and then push something else before you merge.                  |
-| Require status checks: `check`          | The CI job. Already on.                                                                                                  |
-| Require branches to be up to date       | Catches a change that passes alone and fails against current `main`.                                                     |
-| Require conversation resolution         | Cheap, and stops a review comment being merged past.                                                                     |
-| Block force pushes and deletions        | Already on.                                                                                                              |
-| Do not include administrators (for now) | See the note directly below. This stays off, and a separate ruleset covers what it was wanted for.                       |
+| Setting                                     | Why                                                                                                               |
+| ------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| Require a pull request before merging       | No direct pushes to `main`, including yours. Every change becomes reviewable and revertible as a unit.            |
+| Require 0 approvals, no Code Owner review   | One account has write access, so an approval would be its own. Both go back on before a second account can merge. |
+| Dismiss stale approvals on new commits      | Otherwise a contributor can get approval on a clean diff and then push something else before you merge.           |
+| Require status checks: `check`, `cla`, `ui` | The offline batteries, the CLA, and the app in a real browser.                                                    |
+| Require branches to be up to date           | Catches a change that passes alone and fails against current `main`.                                              |
+| Require conversation resolution             | Cheap, and stops a review comment being merged past.                                                              |
+| Block force pushes and deletions            | A rewritten `main` cannot be rolled back to.                                                                      |
+| Allow auto-merge (a repository setting)     | A pull request set to auto-merge merges itself once the required checks pass, with nobody waiting on CI.          |
+| Do not include administrators               | See the note directly below. This stays off, and a separate ruleset covers what it was wanted for.                |
 
 ```sh
+gh api -X PATCH repos/isomorphic-team/isomorphic-app -F allow_auto_merge=true
+
 gh api -X PUT repos/isomorphic-team/isomorphic-app/branches/main/protection \
   --input - <<'JSON'
 {
-  "required_status_checks": { "strict": true, "contexts": ["check"] },
+  "required_status_checks": { "strict": true, "contexts": ["check", "cla", "ui"] },
   "enforce_admins": false,
   "required_pull_request_reviews": {
-    "required_approving_review_count": 1,
+    "required_approving_review_count": 0,
     "dismiss_stale_reviews": true,
-    "require_code_owner_reviews": true
+    "require_code_owner_reviews": false
   },
   "restrictions": null,
   "required_conversation_resolution": true,
@@ -72,11 +71,11 @@ the maintainer too. On 2026-08-18 a pull request was merged 54 seconds after a p
 check was still running, and `main` went red. That is exactly what enforcing on admins would
 prevent.
 
-It also cannot be used. `enforce_admins` is all or nothing: it applies EVERY rule above to
-admins, including `required_approving_review_count: 1` with `require_code_owner_reviews: true`.
-`CODEOWNERS` names one person, GitHub does not allow approving your own pull request, and there
-is no second code owner. So turning it on does not tighten the checks; it makes the repository
-unmergeable by the only person who can merge.
+It is still the wrong tool. `enforce_admins` is all or nothing: it applies EVERY rule above to
+admins. Today that would bind the maintainer to `ui`, a browser job that can fail on browser
+infrastructure, with no override. With an approval and Code Owner review required it is worse:
+`CODEOWNERS` names one person and GitHub does not allow approving your own pull request, so
+the repository becomes unmergeable by the only person who can merge.
 
 Rulesets do not have that problem. They apply to admins **by default**, and exemptions are
 per-ruleset via `bypass_actors` rather than a single repo-wide switch. So one narrow ruleset
@@ -106,9 +105,9 @@ Confirm it binds you rather than politely suggesting: the response carries
 `"current_user_can_bypass": "never"`.
 
 Rulesets and classic branch protection stack, and the most restrictive wins. That layering is
-the entire point: classic protection keeps `enforce_admins: false` so the maintainer merges
-without a self-approval, while the ruleset makes the checks unskippable for everyone including
-the maintainer. Neither mechanism can express that on its own.
+the entire point: classic protection keeps `enforce_admins: false` so the maintainer can
+override a `ui` failure, while the ruleset makes `check` and `cla` unskippable for everyone
+including the maintainer. Neither mechanism can express that on its own.
 
 The one cost is `strict_required_status_checks_policy`, which now binds the maintainer too: a
 branch must be up to date with `main` before it merges, with no override. That is the tax for
@@ -177,22 +176,23 @@ Worth being precise about, because "we removed the deploy approval" sounds like 
 The deploy gate was never what kept outside contributions out; it sat one step later than the
 control that does.
 
-| Path to production       | Who can take it                                                                                                                                                                     |
-| ------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Merge a pull request     | Requires `check` + `cla` green, branch up to date, **and a code-owner review**. `CODEOWNERS` makes the maintainer the owner of `*`, so that means every pull request on every path. |
-| `workflow_dispatch`      | Repository collaborators with write access. Redeploys whatever is on `main`; it cannot ship unreviewed code.                                                                        |
-| Pull request from a fork | Nobody. `deploy.yml` has no `pull_request` trigger and fork pull requests receive no secrets.                                                                                       |
-| Direct push to `main`    | Nobody. A pull request is required.                                                                                                                                                 |
+| Path to production       | Who can take it                                                                                                                               |
+| ------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| Merge a pull request     | An account with write access, once `check`, `cla` and `ui` are green and the branch is up to date. The maintainer's is the only such account. |
+| `workflow_dispatch`      | Repository collaborators with write access. Redeploys whatever is on `main`; it cannot ship anything else.                                    |
+| Pull request from a fork | Nobody. `deploy.yml` has no `pull_request` trigger and fork pull requests receive no secrets.                                                 |
+| Direct push to `main`    | Nobody. A pull request is required.                                                                                                           |
 
 So the answer to "who can deploy" is "whoever can get a commit onto `main`", and that is the
-maintainer, via a review they were already performing.
+maintainer, or an agent session acting with the maintainer's credentials.
 
-**The residual risk is the maintainer's own merges, not contributors'.** With one code owner,
-a self-merge is reviewed by nobody and now ships instantly. The rollout's smoke check and
-rollback cover a version that fails to boot or loses its OAuth surface; they do not cover a
-change that boots fine and is wrong. That is the trade, and it is worth re-reading the day a
-second maintainer exists, at which point `prevent_self_review` and a real second review become
-available for free.
+**The residual risk is the maintainer's own merges, not contributors'.** A merge is reviewed
+only if the maintainer chooses to review it, and ships at once, including one that auto-merge
+lands when the checks pass. The rollout's smoke check and rollback cover a version that fails
+to boot or loses its OAuth surface; they do not cover a change that boots fine and is wrong,
+and a rollback never reverts a migration. That is the trade, and it is worth re-reading the
+day a second account gets write access: the approval and Code Owner review go back on first,
+and `prevent_self_review` and a real second review become available for free.
 
 ## What CI already defends against
 
