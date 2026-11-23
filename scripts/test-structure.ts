@@ -983,6 +983,11 @@ console.log('\nfolder-note advisory: a note-less folder holding its own overview
 					state: ['proposed']
 				})[0]?.headline.includes('(state proposed)') === true
 		);
+		check(
+			'undated: a state of draft or stable is still a state, so it raises',
+			undated({ type: ['Decision'], state: ['draft'] }).length === 1 &&
+				undated({ type: ['Decision'], state: ['stable'] }).length === 1
+		);
 		for (const closed of [
 			'done',
 			'Closed',
