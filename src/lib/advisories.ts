@@ -668,8 +668,11 @@ export function dueBlock(commitments: string, coming: string[]): string {
 	if (commitments === '' && coming.length === 0)
 		return `\n\nNothing due or coming due. Tell the person that ${NOT_READ}`;
 	const lines = [...(commitments === '' ? [] : [commitments]), ...coming];
-	return `\n\nDue and coming due. Answer from these lines first, give the findings further down one line, and tell the person that ${NOT_READ} For each open one with no date, ask the person which: set a check date, record what was decided, or dismiss it.\n${lines.join('\n')}`;
+	const gets = commitments === '' ? '' : ` ${CHECK_DATE_GETS}`;
+	return `\n\nDue and coming due. Answer from these lines first, give the findings further down one line, and tell the person that ${NOT_READ} For each open one with no date, ask the person which: set a check date, record what was decided, or dismiss it.${gets}\n${lines.join('\n')}`;
 }
+
+const CHECK_DATE_GETS = 'A check date puts a commitment in this list when it comes due.';
 
 const NOT_READ =
 	'dates kept under other field names (not `check_at`, `due`, or a key ending in `_due`, `-due`, `_due_date` or `-due-date`) are not read.';
