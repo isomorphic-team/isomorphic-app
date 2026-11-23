@@ -38,10 +38,10 @@ approval, before a second account gets write access.**
 | Require 0 approvals, no Code Owner review   | One account has write access, so an approval would be its own. Both go back on before a second account can merge. |
 | Dismiss stale approvals on new commits      | Otherwise a contributor can get approval on a clean diff and then push something else before you merge.           |
 | Require status checks: `check`, `cla`, `ui` | The offline batteries, the CLA, and the app in a real browser.                                                    |
-| Require branches to be up to date           | Catches a change that passes alone and fails against current `main`.                                              |
+| Require a merge queue (squash)              | Each pull request is tested merged onto current `main` before it lands, without a manual branch update.           |
 | Require conversation resolution             | Cheap, and stops a review comment being merged past.                                                              |
 | Block force pushes and deletions            | A rewritten `main` cannot be rolled back to.                                                                      |
-| Allow auto-merge (a repository setting)     | A pull request set to auto-merge merges itself once the required checks pass, with nobody waiting on CI.          |
+| Allow auto-merge (a repository setting)     | `gh pr merge --auto` adds a pull request to the merge queue once its checks pass, with nobody waiting on CI.      |
 | Do not include administrators               | See the note directly below. This stays off, and a separate ruleset covers what it was wanted for.                |
 
 ```sh
@@ -50,7 +50,7 @@ gh api -X PATCH repos/isomorphic-team/isomorphic-app -F allow_auto_merge=true
 gh api -X PUT repos/isomorphic-team/isomorphic-app/branches/main/protection \
   --input - <<'JSON'
 {
-  "required_status_checks": { "strict": true, "contexts": ["check", "cla", "ui"] },
+  "required_status_checks": { "strict": false, "contexts": ["check", "cla", "ui"] },
   "enforce_admins": false,
   "required_pull_request_reviews": {
     "required_approving_review_count": 0,
@@ -93,8 +93,18 @@ gh api -X POST repos/isomorphic-team/isomorphic-app/rulesets --input - <<'JSON'
   "rules": [
     { "type": "required_status_checks",
       "parameters": {
-        "strict_required_status_checks_policy": true,
+        "strict_required_status_checks_policy": false,
         "required_status_checks": [{ "context": "check" }, { "context": "cla" }]
+      } },
+    { "type": "merge_queue",
+      "parameters": {
+        "merge_method": "SQUASH",
+        "grouping_strategy": "ALLGREEN",
+        "min_entries_to_merge": 1,
+        "max_entries_to_merge": 5,
+        "max_entries_to_build": 5,
+        "min_entries_to_merge_wait_minutes": 0,
+        "check_response_timeout_minutes": 60
       } }
   ]
 }
@@ -109,10 +119,12 @@ the entire point: classic protection keeps `enforce_admins: false` so the mainta
 override a `ui` failure, while the ruleset makes `check` and `cla` unskippable for everyone
 including the maintainer. Neither mechanism can express that on its own.
 
-The one cost is `strict_required_status_checks_policy`, which now binds the maintainer too: a
-branch must be up to date with `main` before it merges, with no override. That is the tax for
-"CI ran on exactly the merged content" being true rather than nearly true. Drop that one field
-if it becomes tiresome; keep the rest.
+The merge queue makes "CI ran on exactly the merged content" true without requiring each branch
+to be up to date, so `strict` is off in both places. A pull request that falls behind `main` no
+longer waits for someone to update it: the queue builds it on top of `main` and on top of the
+entries ahead of it. Every workflow behind a required check needs a `merge_group` trigger, or
+the queue waits on a check that never reports (`pnpm test:wiring` pins `ci.yml` and `cla.yml`).
+`cla` only reports in the queue; the signature was checked on the pull request.
 
 ### 2. Actions: require approval for outside contributors
 
@@ -176,12 +188,12 @@ Worth being precise about, because "we removed the deploy approval" sounds like 
 The deploy gate was never what kept outside contributions out; it sat one step later than the
 control that does.
 
-| Path to production       | Who can take it                                                                                                                               |
-| ------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------- |
-| Merge a pull request     | An account with write access, once `check`, `cla` and `ui` are green and the branch is up to date. The maintainer's is the only such account. |
-| `workflow_dispatch`      | Repository collaborators with write access. Redeploys whatever is on `main`; it cannot ship anything else.                                    |
-| Pull request from a fork | Nobody. `deploy.yml` has no `pull_request` trigger and fork pull requests receive no secrets.                                                 |
-| Direct push to `main`    | Nobody. A pull request is required.                                                                                                           |
+| Path to production       | Who can take it                                                                                                                                     |
+| ------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Merge a pull request     | An account with write access, once `check`, `cla` and `ui` are green on it and again in the merge queue. The maintainer's is the only such account. |
+| `workflow_dispatch`      | Repository collaborators with write access. Redeploys whatever is on `main`; it cannot ship anything else.                                          |
+| Pull request from a fork | Nobody. `deploy.yml` has no `pull_request` trigger and fork pull requests receive no secrets.                                                       |
+| Direct push to `main`    | Nobody. A pull request is required.                                                                                                                 |
 
 So the answer to "who can deploy" is "whoever can get a commit onto `main`", and that is the
 maintainer, or an agent session acting with the maintainer's credentials.
