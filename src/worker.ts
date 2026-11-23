@@ -115,10 +115,9 @@ import { WEB_APP_HEADERS, signInRedirect, webShell } from './lib/web-shell.ts';
 import { registerLibrarianTools } from './tools/librarian.ts';
 import { registerImportTools } from './tools/importer.ts';
 import { registerBrainApp } from './tools/apps.ts';
-import { dueSummary } from './lib/advisories.ts';
-import { isConceptPage } from './lib/open-findings.ts';
+import { pastDueLine } from './lib/open-findings.ts';
 import { todayIso } from './lib/wiki.ts';
-import { assembleHandshake, overdueLine, SERVER_INSTRUCTIONS } from './lib/server-instructions.ts';
+import { assembleHandshake, SERVER_INSTRUCTIONS } from './lib/server-instructions.ts';
 import { registerCoreTools } from './tools/core.ts';
 import { registerMediaTools } from './tools/media.ts';
 import { registerMemberTools } from './tools/members.ts';
@@ -1147,12 +1146,7 @@ class McpSession {
 	// current for its branch tip, so it never starts an index pass.
 	private async activeBrainDueLine(): Promise<string> {
 		const ctx = await this.tenantContext();
-		const dated = await ctx.index.datedPages(ctx.store, ctx.locator, ctx.config);
-		if (!dated) return '';
-		const concept = dated.filter((p) => isConceptPage(p.path, ctx.config));
-		return overdueLine(
-			dueSummary(concept, new Map(concept.map((p) => [p.path, p.fields])), todayIso())
-		);
+		return pastDueLine({ ...ctx, today: todayIso() });
 	}
 
 	buildServer(instructions: string = SERVER_INSTRUCTIONS): McpServer {

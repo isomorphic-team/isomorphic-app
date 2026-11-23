@@ -11,7 +11,7 @@
 
 import type { BrokenLink, PageFields } from './brain-index.ts';
 import { SOURCE_KEY_FIELD, SOURCE_KEYS_FIELD } from './brain-import.ts';
-import { type Finding, findingKey } from './findings.ts';
+import { type Finding, findingKey, type ReviewLedger } from './findings.ts';
 import { OKF_PAGE_STATUSES } from './page-patch.ts';
 import type { ProbeResult } from './probe.ts';
 import { datePart, DUE_KEY, isFolderNoteName } from './view-directives.ts';
@@ -538,17 +538,22 @@ export const DUE_SUMMARY_LISTED = 3;
 /**
  * How many commitments have reached their check date (on or before `today`, the same test
  * as `predictionDueFindings`, so `validate` lists exactly these) with no `outcome`, and
- * the first few by date. `pages` is the caller's concept-page filter.
+ * the first few by date. `pages` is the caller's concept-page filter. A `prediction-due`
+ * finding the review ledger dismisses is not counted, as in `validate`.
  */
 export function dueSummary(
 	pages: { path: string; title?: string }[],
 	fieldsByPath: Map<string, PageFields>,
-	today: string
+	today: string,
+	ledger?: ReviewLedger
 ): { count: number; top: { path: string; title?: string }[] } {
 	const due: { path: string; title?: string; date: string }[] = [];
 	for (const p of pages) {
 		const c = openCheck(fieldsByPath.get(p.path));
-		if (c && c.date <= today) due.push({ path: p.path, title: p.title, date: c.date });
+		if (!c || c.date > today) continue;
+		const key = findingKey('prediction-due', `${p.path}@${c.date}`);
+		if (ledger?.dismissed.some((d) => d.key === key)) continue;
+		due.push({ path: p.path, title: p.title, date: c.date });
 	}
 	due.sort((a, b) => a.date.localeCompare(b.date) || a.path.localeCompare(b.path));
 	return {

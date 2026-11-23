@@ -53,6 +53,9 @@ import {
 	type OfferContext
 } from '../src/lib/feature-offers.ts';
 
+import { isConceptPage, pastDueLine } from '../src/lib/open-findings.ts';
+import { DEFAULT_BRAIN_CONFIG } from '../src/lib/brain-config.ts';
+import { REVIEW_LEDGER_PATH } from '../src/lib/findings.ts';
 import { checker } from './check.ts';
 import { registeredToolNames, toolRegistrationSources } from './doc-refs.ts';
 
@@ -629,6 +632,72 @@ console.log('\nfolder-note advisory: a note-less folder holding its own overview
 	);
 }
 
+// ---------- the handshake's past-due line ----------
+
+{
+	const cfg = { ...DEFAULT_BRAIN_CONFIG };
+	check('concept page: an ordinary page', isConceptPage('decisions/pricing.md', cfg));
+	check('concept page: not a folder note', !isConceptPage('decisions/index.md', cfg));
+	check('concept page: not a tool-maintained page', !isConceptPage('wiki/log.md', cfg));
+
+	const dated = (path: string, rows: Record<string, string[]>) => ({
+		path,
+		title: `Title of ${path}`,
+		fields: fields(rows)
+	});
+	const pages = [
+		dated('decisions/pricing.md', { check_at: ['2026-11-01'] }),
+		dated('decisions/dismissed.md', { check_at: ['2026-11-02'] }),
+		dated('decisions/index.md', { check_at: ['2026-11-01'] }),
+		dated('wiki/log.md', { check_at: ['2026-11-01'] }),
+		dated('decisions/later.md', { check_at: ['2999-01-01'] })
+	];
+	const line = async (
+		datedPages: typeof pages | null,
+		ledger: string | null | 'throw'
+	): Promise<string> =>
+		pastDueLine({
+			store: {
+				readFile: async (_l: unknown, path: string) => {
+					if (ledger === 'throw') throw new Error('unreadable');
+					return path === REVIEW_LEDGER_PATH && ledger ? { content: ledger } : null;
+				}
+			} as never,
+			locator: { owner: 'example-org', repo: 'brain' },
+			config: cfg,
+			index: { datedPages: async () => datedPages } as never,
+			today: '2026-11-23'
+		});
+	const dismissedKey = findingKey('prediction-due', 'decisions/dismissed.md@2026-11-02');
+	const ledgerJson = JSON.stringify({
+		dismissed: [{ key: dismissedKey, reason: 'r', at: '2026-11-03' }]
+	});
+	const both = await line(pages, null);
+	check(
+		'past-due line: counts concept pages only, no folder note, log or future date',
+		/2 commitments have/.test(both) && !/index\.md|log\.md|later/.test(both),
+		both
+	);
+	const filtered = await line(pages, ledgerJson);
+	check(
+		'past-due line: a dismissed prediction-due is not counted',
+		/1 commitment has/.test(filtered) &&
+			/pricing\.md/.test(filtered) &&
+			!/dismissed\.md/.test(filtered),
+		filtered
+	);
+	check(
+		'past-due line: an unreadable ledger filters nothing',
+		/2 commitments have/.test(await line(pages, 'throw'))
+	);
+	check(
+		'past-due line: a corrupt ledger filters nothing',
+		/2 commitments have/.test(await line(pages, '{not json'))
+	);
+	check('past-due line: a stale index gives no line', (await line(null, null)) === '');
+	check('past-due line: nothing due gives no line', (await line([pages[4]], null)) === '');
+}
+
 // ---------- prediction due ----------
 
 // dueSummary is the handshake's count; it must agree with predictionDueFindings.
@@ -661,6 +730,12 @@ console.log('\nfolder-note advisory: a note-less folder holding its own overview
 	check(
 		'dueSummary: the same pages predictionDueFindings raises',
 		s.count === predictionDueFindings(pages, byPath, TODAY).length
+	);
+	check(
+		'dueSummary: a dismissed finding is not counted',
+		dueSummary([{ path: 'd/older.md' }], byPath, TODAY, {
+			dismissed: [{ key: findingKey('prediction-due', 'd/older.md@2026-10-01') }]
+		} as never).count === 0
 	);
 	check(
 		'dueSummary: nothing overdue is empty',

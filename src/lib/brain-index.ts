@@ -879,8 +879,8 @@ export const MAX_DATED_PAGES = 400;
 /**
  * Pages that carry `check_at` or `due`, with all their indexed fields, or null when the
  * index does not reflect the branch tip right now (never built, mid-reindex, mid-rebuild, or
- * behind a newer commit). It never reindexes: one branch-tip read, one meta read, two
- * bounded queries. For callers that answer without the index when it is not ready.
+ * behind a newer commit). It never reindexes: one branch-tip read, one meta read, one query
+ * for the dated paths and the chunked field reads for them. For callers that answer without the index when it is not ready.
  */
 export async function loadDatedPages(
 	db: D1Database,

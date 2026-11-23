@@ -22,6 +22,7 @@ import {
 	INDEX_SCHEMA_VERSION,
 	listIndexedPages,
 	loadDatedPages,
+	d1Index,
 	indexDatabase,
 	resetIndex,
 	writeThroughIndex as writeThroughWithTags,
@@ -38,6 +39,7 @@ import { checker } from './check.ts';
 import { checkFtsIndex, rebuildFtsIndex, searchIndexFts } from '../src/lib/search-fts-index.ts';
 import { BRAIN_INDEX_TABLES } from '../src/lib/brain-forget.ts';
 import { openFolderAsBrain } from './local-brain.ts';
+import { pastDueLine } from '../src/lib/open-findings.ts';
 import { fakeGithub, type FakePage } from './fake-github.ts';
 
 const { check, done } = checker('content-index checks');
@@ -1121,6 +1123,27 @@ console.log('\nDerived state keyed by brain_id: the 0011 re-key');
 			got[0].fields.get('check_at')?.[0] === '2026-11-01',
 		JSON.stringify(got)
 	);
+	// The local runtime: ensureFresh, then the line, from the real index.
+	{
+		const line = await pastDueLine({
+			store,
+			locator: repo,
+			config,
+			index: d1Index(db)(brainId),
+			today: '2026-11-23'
+		});
+		check('past-due line over the real index', /1 commitment has reached/.test(line), line);
+		check(
+			'and none the day before the check date',
+			(await pastDueLine({
+				store,
+				locator: repo,
+				config,
+				index: d1Index(db)(brainId),
+				today: '2026-10-31'
+			})) === ''
+		);
+	}
 	gh.head = 'commit-dated-2';
 	const rows = () =>
 		(sqlite.prepare('SELECT COUNT(*) AS n FROM brain_pages').get() as { n: number }).n;

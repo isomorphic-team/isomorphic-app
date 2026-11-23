@@ -37,6 +37,12 @@ const exec = promisify(execFile);
 // directories that would swamp the index.
 const SKIP_DIRS = new Set(['.git', 'node_modules', '.next', 'dist', 'build', '.venv']);
 
+// The local content index (and its -wal, -shm and -journal files) is derived from the brain.
+// Counted in the revision, every index write would make the index stale against the very
+// revision it was just built for.
+const isIndexFile = (rel: string): boolean =>
+	rel.split(sep).join('/').startsWith('.isomorphic/index.sqlite');
+
 export class LocalGitError extends Error {}
 
 async function git(dir: string, args: string[]): Promise<string> {
@@ -67,6 +73,7 @@ async function walk(root: string): Promise<Entry[]> {
 				await visit(join(dir, item.name));
 			} else if (item.isFile()) {
 				const full = join(dir, item.name);
+				if (isIndexFile(relative(root, full))) continue;
 				const s = await stat(full);
 				out.push({
 					path: relative(root, full).split(sep).join('/'),

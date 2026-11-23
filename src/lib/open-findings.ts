@@ -6,6 +6,7 @@ import type { D1Database } from '@cloudflare/workers-types';
 import {
 	ambiguousTitleSuggestions,
 	comingDueLines,
+	dueSummary,
 	dueBlock,
 	folderNoteSuggestions,
 	inlinedConceptSuggestions,
@@ -46,6 +47,7 @@ import {
 	type ReachableBrain
 } from './review-queue.ts';
 import { isFolderNoteName } from './view-directives.ts';
+import { overdueLine } from './server-instructions.ts';
 import { todayIso } from './wiki.ts';
 
 /** Pending import findings and the lines `validate` prints about them. */
@@ -151,6 +153,35 @@ export async function readImportLedgers(
 export function isConceptPage(path: string, config: BrainConfig): boolean {
 	return (
 		!isFolderNoteName(path.slice(path.lastIndexOf('/') + 1)) && !isToolMaintained(path, config)
+	);
+}
+
+/**
+ * The handshake's past-due line for a brain: empty unless its index is current for the
+ * branch tip (never reindexes) and a concept page has reached its check date with no outcome
+ * and no dismissal. An unreadable review ledger filters nothing, as in `openFindings`.
+ */
+export async function pastDueLine(input: {
+	store: BrainStore;
+	locator: BrainLocator;
+	config: BrainConfig;
+	index: BrainIndex;
+	today: string;
+}): Promise<string> {
+	const { store, locator, config, index, today } = input;
+	const dated = await index.datedPages(store, locator, config);
+	if (!dated) return '';
+	const concept = dated.filter((p) => isConceptPage(p.path, config));
+	let ledger: ReviewLedger | undefined;
+	try {
+		ledger = parseReviewLedger(
+			(await store.readFile(locator, REVIEW_LEDGER_PATH))?.content ?? null
+		);
+	} catch {
+		ledger = undefined;
+	}
+	return overdueLine(
+		dueSummary(concept, new Map(concept.map((p) => [p.path, p.fields])), today, ledger)
 	);
 }
 
