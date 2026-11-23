@@ -1023,12 +1023,12 @@ try {
 	const inDays = (n: number) =>
 		new Date(Date.parse(todayIso()) + n * 86_400_000).toISOString().slice(0, 10);
 	const comingBlock = (text: string) =>
-		/Due and coming due[^\n]*\n(?:- [^\n]*\n?)+/.exec(text)?.[0] ?? '';
+		/Due and coming due[^\n]*\n(?:[^\n]+\n?)+/.exec(text)?.[0] ?? '';
 	r = await call('validate', {});
 	check(
 		'validate says nothing is due when nothing is',
 		r.text.includes(
-			'Nothing due or coming due from `check_at` or `due`; dates in other deadline-named fields are listed separately, dates under other field names are not read.'
+			'Nothing due or coming due. Tell the person that dates kept under other field names (not `check_at` or a name ending in due) are not read.'
 		),
 		r.text
 	);
@@ -1086,7 +1086,7 @@ try {
 	check(
 		'validate lists a commitment due in 3 days',
 		comingBlock(r.text).includes(
-			'wiki/decisions/pricing.md: check due ' + inDays(3) + ' (in 3 days)'
+			'wiki/decisions/pricing.md): check due ' + inDays(3) + ' (in 3 days)'
 		) && comingBlock(r.text).includes('Churn stays under 5%'),
 		r.text
 	);
@@ -1096,14 +1096,18 @@ try {
 		r.text
 	);
 	check(
-		'the coming-due list carries no finding key',
-		!/\[[a-z-]+:[^\]]*\]/.test(comingBlock(r.text)),
+		'a coming-due line carries no finding key',
+		!/\[[a-z-]+:[^\]]*\]/.test(
+			comingBlock(r.text)
+				.split('\n')
+				.find((l) => l.includes('wiki/decisions/pricing.md') && l.includes('in 3 days')) ?? '['
+		),
 		r.text
 	);
 	check(
-		'the due block carries the scope note in its header',
+		'the due block header is the instruction, with what is not read',
 		r.text.includes(
-			'Due and coming due (read from `check_at` or `due`; dates in other deadline-named fields are listed separately, dates under other field names are not read):'
+			'Due and coming due. Answer from these lines first, give the findings further down one line, and tell the person that dates kept under other field names (not `check_at` or a name ending in due) are not read.'
 		),
 		r.text
 	);
@@ -1125,7 +1129,7 @@ try {
 	r = await call('validate', {});
 	check(
 		'validate lists a commitment kept in due, naming the key',
-		comingBlock(r.text).includes('wiki/decisions/vendor.md: due ' + inDays(2)) &&
+		comingBlock(r.text).includes('wiki/decisions/vendor.md): due ' + inDays(2)) &&
 			comingBlock(r.text).includes('(from `due`'),
 		r.text
 	);
@@ -1148,38 +1152,33 @@ try {
 	await settledHead();
 	r = await call('validate', {});
 	check(
-		'an overdue due is counted in the block (the finding itself can sit under the findings cap)',
-		r.text.includes('1 overdue (prediction-due findings).'),
+		'an overdue due is a finding in the due area, with its title, ahead of the findings',
+		comingBlock(r.text).includes(
+			`Ship the draft (wiki/decisions/ship.md): due ${inDays(-3)} (from \`due\`), nothing recorded.`
+		) &&
+			comingBlock(r.text).includes(`[prediction-due:wiki/decisions/ship.md@${inDays(-3)}]`) &&
+			r.text.indexOf('Ship the draft') < r.text.indexOf('need a decision'),
 		r.text
 	);
 	await call('write_page', { path: 'wiki/decisions/ship.md', fields: { outcome: 'sent' } });
 	await settledHead();
 
-	// The findings cap (12, by weight) hides this finding in a brain with this many, so
-	// the wiring is pinned by the findings count rather than by its line.
-	const findingCount = (text: string) =>
-		Number(/(\d+) finding\(s\) need a decision/.exec(text)?.[1]);
-	// The page is created with no state first, so the count that follows differs from
-	// this one by the undated-commitment finding alone (the new page is also an island).
+	// A commitment finding renders in the due area, outside the cap on the rest.
 	await call('write_page', {
 		path: 'wiki/decisions/vendor-review.md',
 		title: 'Review the vendor',
 		type: 'Decision',
-		content: 'Review it.'
-	});
-	await settledHead();
-	r = await call('validate', {});
-	const undatedBefore = findingCount(r.text);
-	await call('write_page', {
-		path: 'wiki/decisions/vendor-review.md',
-		fields: { state: 'proposed' }
+		content: 'Review it.',
+		fields: { state: 'proposed', owner: 'Pat' }
 	});
 	await settledHead();
 	r = await call('validate', {});
 	check(
-		'an open decision with no date adds one finding to validate',
-		findingCount(r.text) === undatedBefore + 1,
-		`${undatedBefore} -> ${findingCount(r.text)}`
+		'an open decision with no date is a finding in the due area, with title and owner',
+		comingBlock(r.text).includes(
+			'Review the vendor (wiki/decisions/vendor-review.md), owner Pat: open (state proposed), no check date.'
+		) && comingBlock(r.text).includes('[undated-commitment:wiki/decisions/vendor-review.md]'),
+		r.text
 	);
 	await call('write_page', {
 		path: 'wiki/decisions/vendor-review.md',
@@ -1189,7 +1188,8 @@ try {
 	r = await call('validate', {});
 	check(
 		'closing it in its state field removes the finding',
-		findingCount(r.text) === undatedBefore
+		!r.text.includes('wiki/decisions/vendor-review.md), owner'),
+		r.text
 	);
 
 	await call('write_page', {
@@ -1208,7 +1208,7 @@ try {
 			otherAt > r.text.indexOf('Nothing due or coming due') &&
 			(!r.text.includes('need a decision') || otherAt < r.text.indexOf('need a decision')) &&
 			r.text.includes(
-				'wiki/deals/northwind.md: next_step_due ' + inDays(-4) + ' (4 days ago). If the step moved'
+				'wiki/deals/northwind.md): next_step_due ' + inDays(-4) + ' (4 days ago). If the step moved'
 			),
 		r.text
 	);
@@ -1217,7 +1217,7 @@ try {
 	r = await call('validate', {});
 	check(
 		'a closed stage removes it from the block',
-		!r.text.includes('wiki/deals/northwind.md: next_step_due'),
+		!r.text.includes('wiki/deals/northwind.md): next_step_due'),
 		r.text
 	);
 

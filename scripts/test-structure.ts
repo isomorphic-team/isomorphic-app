@@ -21,6 +21,7 @@ import {
 	dueBlock,
 	COMING_DUE_DAYS,
 	MAX_COMING_DUE_LINES,
+	MAX_FINDINGS_SHOWN,
 	ambiguousTitleSuggestions,
 	wikilinkPortabilityNote,
 	folderNoteSuggestions
@@ -29,6 +30,10 @@ import {
 	findingKey,
 	filterDismissed,
 	importFindings,
+	kindOfKey,
+	partitionCommitments,
+	renderFindings,
+	type Finding,
 	type ReviewLedger
 } from '../src/lib/findings.ts';
 import {
@@ -899,28 +904,151 @@ console.log('\nfolder-note advisory: a note-less folder holding its own overview
 
 	// the block validate opens with
 	{
-		const nothing = dueBlock([], 0);
+		const NOT_READ =
+			'dates kept under other field names (not `check_at` or a name ending in due) are not read.';
+		const nothing = dueBlock('', []);
 		check(
-			'due block: nothing due prints one line naming the keys read and the gap',
-			nothing ===
-				'\n\nNothing due or coming due from `check_at` or `due`; dates in other deadline-named fields are listed separately, dates under other field names are not read.',
+			'due block: nothing due is one imperative sentence naming what is not read',
+			nothing === `\n\nNothing due or coming due. Tell the person that ${NOT_READ}`,
 			nothing
 		);
-		const coming1 = dueBlock(['- a.md: due 2026-11-25 (from `due`, in 2 days).'], 0);
+		const coming1 = dueBlock('', ['- a.md: due 2026-11-25 (from `due`, in 2 days).']);
 		check(
-			'due block: coming lines sit under the header',
-			coming1.startsWith(
-				'\n\nDue and coming due (read from `check_at` or `due`; dates in other deadline-named fields are listed separately, dates under other field names are not read):\n- a.md'
-			),
+			'due block: the header is the imperative and the coming lines sit under it',
+			coming1 ===
+				`\n\nDue and coming due. Answer from these lines first, give the findings further down one line, and tell the person that ${NOT_READ}\n- a.md: due 2026-11-25 (from \`due\`, in 2 days).`,
 			coming1
 		);
-		const overdueOnly = dueBlock([], 2);
+		const withFindings = dueBlock('- b.md: finding\n  [prediction-due:b.md@2026-11-01]', [
+			'- a.md: coming'
+		]);
 		check(
-			'due block: overdue alone still prints the header and the count',
-			overdueOnly.includes('Due and coming due') &&
-				overdueOnly.endsWith('\n2 overdue (prediction-due findings).') &&
-				!/below|listed/.test(overdueOnly.split('\n').at(-1)!),
-			overdueOnly
+			'due block: commitment findings come before the coming-due lines, keys intact',
+			withFindings.indexOf('- b.md: finding') < withFindings.indexOf('- a.md: coming') &&
+				withFindings.includes('[prediction-due:b.md@2026-11-01]') &&
+				!withFindings.includes('overdue (prediction-due findings)'),
+			withFindings
+		);
+		check(
+			'due block: findings alone still print the header, not the nothing-due line',
+			dueBlock('- b.md: finding', []).includes('Due and coming due.') &&
+				!dueBlock('- b.md: finding', []).includes('Nothing due')
+		);
+	}
+
+	// the commitment group: partitioned from the rest, capped apart
+	{
+		const f = (key: string, weight: number): Finding => ({ key, weight, headline: `- ${key}` });
+		const noise = Array.from({ length: 14 }, (_, i) =>
+			f(`island:p${String(i).padStart(2, '0')}.md`, 4)
+		);
+		const all = [
+			...noise,
+			...predictionDueFindings(
+				[{ path: 'decisions/pricing.md' }],
+				new Map([['decisions/pricing.md', fields({ check_at: ['2026-11-01'] })]]),
+				TODAY
+			),
+			...undatedCommitmentFindings(
+				[{ path: 'decisions/vendor.md' }],
+				new Map([['decisions/vendor.md', fields({ type: ['Decision'], state: ['open'] })]])
+			)
+		];
+		const { commitments, rest } = partitionCommitments(all);
+		check(
+			'partition: prediction-due and undated-commitment split from the rest, by kind',
+			commitments.length === 2 &&
+				rest.length === 14 &&
+				commitments.every((c) => /^(prediction-due|undated-commitment):/.test(c.key)),
+			JSON.stringify(commitments.map((c) => c.key))
+		);
+		const crowded = renderFindings(all, MAX_FINDINGS_SHOWN);
+		check(
+			'partition: in one capped list 14 heavier findings hide both commitment findings',
+			!crowded.text.includes('decisions/pricing.md') &&
+				!crowded.text.includes('decisions/vendor.md')
+		);
+		const shownCommit = renderFindings(commitments, MAX_FINDINGS_SHOWN);
+		const shownRest = renderFindings(rest, MAX_FINDINGS_SHOWN);
+		check(
+			'partition: each group caps on its own, and the commitment group shows both',
+			shownCommit.shown === 2 &&
+				shownCommit.hidden === 0 &&
+				shownRest.shown === MAX_FINDINGS_SHOWN &&
+				shownRest.hidden === 2 &&
+				shownCommit.text.indexOf('decisions/pricing.md') <
+					shownCommit.text.indexOf('decisions/vendor.md'),
+			shownCommit.text
+		);
+		check(
+			'partition: a dismissed commitment finding is absent',
+			partitionCommitments(
+				filterDismissed(all, {
+					version: 1,
+					dismissed: [{ key: commitments[0]!.key, why: 'deferred', at: '2026-11-23' }]
+				})
+			).commitments.length === 1
+		);
+		check(
+			'partition: the kind is read from the key, not a literal prefix match on the finding',
+			kindOfKey('prediction-due:a.md@2026-11-01') === 'prediction-due' &&
+				partitionCommitments([f('prediction-duel:x', 1)]).commitments.length === 0
+		);
+	}
+
+	// title and owner on the lines
+	{
+		const page = { path: 'decisions/pricing.md', title: 'Raise the price' };
+		const flds = (rows: Record<string, string[]>) => new Map([[page.path, fields(rows)]]);
+		const pd = predictionDueFindings(
+			[page],
+			flds({ check_at: ['2026-11-01'], owner: ['Pat'] }),
+			TODAY
+		)[0]!;
+		check(
+			'labels: a prediction-due line reads title (path), owner',
+			pd.headline.startsWith(
+				'- Raise the price (decisions/pricing.md), owner Pat: check due 2026-11-01'
+			),
+			pd.headline
+		);
+		check(
+			'labels: no owner, no owner clause; a blank owner counts as none',
+			!predictionDueFindings(
+				[page],
+				flds({ check_at: ['2026-11-01'] }),
+				TODAY
+			)[0]!.headline.includes('owner') &&
+				!predictionDueFindings(
+					[page],
+					flds({ check_at: ['2026-11-01'], owner: ['  '] }),
+					TODAY
+				)[0]!.headline.includes('owner')
+		);
+		check(
+			'labels: no title gives the bare path',
+			predictionDueFindings(
+				[{ path: page.path }],
+				flds({ check_at: ['2026-11-01'] }),
+				TODAY
+			)[0]!.headline.startsWith('- decisions/pricing.md: check due')
+		);
+		check(
+			'labels: coming-due, undated and other-date lines carry them too',
+			comingDueLines(
+				[page],
+				flds({ check_at: ['2026-11-25'], owner: ['Pat'] }),
+				TODAY
+			)[0]!.startsWith('- Raise the price (decisions/pricing.md), owner Pat: check due') &&
+				undatedCommitmentFindings(
+					[page],
+					flds({ type: ['Decision'], state: ['open'], owner: ['Pat'] })
+				)[0]!.headline.startsWith('- Raise the price (decisions/pricing.md), owner Pat: open') &&
+				otherDueLines(
+					[page],
+					flds({ next_step_due: ['2026-11-20'], owner: ['Pat'] }),
+					TODAY
+				)[0]!.startsWith('- Raise the price (decisions/pricing.md), owner Pat: next_step_due')
 		);
 	}
 

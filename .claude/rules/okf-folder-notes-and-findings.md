@@ -89,9 +89,17 @@ are in the list, with keys.
   policy findings, so this appears in `validate` alone.
   **`comingDueLines`** is the same read for a check date after today and within
   `COMING_DUE_DAYS` (7): an unkeyed list opening the `validate` result (earliest first,
-  at most `MAX_COMING_DUE_LINES`; `dueBlock` prints one line when nothing is due, so a person is
-  never told nothing else is due while a date sits in a field it does not read), not a finding, so there is nothing to
-  dismiss, and a page is never in it and in `prediction-due`. The `write_page` reply carries
+  at most `MAX_COMING_DUE_LINES`), not a finding, so there is nothing to
+  dismiss, and a page is never in it and in `prediction-due`.
+  **`dueBlock`** is the one function that builds the due area `validate` opens with. Its header
+  is the instruction the reader acts on (answer from these lines first, give the findings
+  below one line, say what is not read); with nothing due it is one line saying the same.
+  `librarian.ts` only partitions: `partitionCommitments` (`findings.ts`, by the kind in the
+  key) splits `prediction-due` and `undated-commitment` from the other findings after
+  clustering, each group goes through `renderFindings` with its own cap, and the commitment
+  group renders in the due area ahead of the coming-due lines, keyed and dismissable. The
+  lines of both groups and the other-dates block name a page "title (path), owner x" (owner
+  only when the page has one; the bare path when there is no title). No weights changed. The `write_page` reply carries
   `expectationNote` (`change-record.ts`), at most one per write: for a new Decision or
   Commitment page with no check date or `outcome`, for an update that set `expected` on a page
   with no check date, or, on a page of another type with no check date or `outcome`, when the
