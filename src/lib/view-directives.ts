@@ -90,7 +90,7 @@ function isNumeric(s: string): boolean {
 }
 
 // A field value's date part: `2026-09-01` or the date of `2026-09-01T10:00Z`.
-function datePart(value: string): string | undefined {
+export function datePart(value: string): string | undefined {
 	const d = value.trim().slice(0, 10);
 	const rest = value.trim().slice(10);
 	if (rest !== '' && !rest.startsWith('T')) return undefined;

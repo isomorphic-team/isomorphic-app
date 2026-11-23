@@ -11,11 +11,17 @@ import { folderMoveCollisions } from '../src/tools/librarian.ts';
 import {
 	inlinedConceptSuggestions,
 	typeFieldSuggestions,
+	predictionDueFindings,
 	ambiguousTitleSuggestions,
 	wikilinkPortabilityNote,
 	folderNoteSuggestions
 } from '../src/lib/advisories.ts';
-import { findingKey } from '../src/lib/findings.ts';
+import {
+	findingKey,
+	filterDismissed,
+	importFindings,
+	type ReviewLedger
+} from '../src/lib/findings.ts';
 import {
 	parseFrontmatter,
 	withFrontmatter,
@@ -596,6 +602,127 @@ console.log('\nfolder-note advisory: a note-less folder holding its own overview
 		'findings are sorted by key, so validate is stable between reads',
 		two.map((f) => f.key).join('|') ===
 			`${findingKey('folder-note', 'wiki/a')}|${findingKey('folder-note', 'wiki/z')}`
+	);
+}
+
+// ---------- prediction due ----------
+
+{
+	const TODAY = '2026-11-23';
+	const due = (
+		rows: Record<string, string[]>,
+		path = 'decisions/pricing.md',
+		today = TODAY
+	): ReturnType<typeof predictionDueFindings> =>
+		predictionDueFindings([{ path }], new Map([[path, fields(rows)]]), today);
+
+	const equal = due({ check_at: ['2026-11-23'] });
+	check('prediction: due today raises', equal.length === 1, JSON.stringify(equal));
+	check(
+		'prediction: key carries the path and the date',
+		equal[0]?.key === findingKey('prediction-due', 'decisions/pricing.md@2026-11-23'),
+		equal[0]?.key
+	);
+	check('prediction: due yesterday raises', due({ check_at: ['2026-11-22'] }).length === 1);
+	check('prediction: due tomorrow does not', due({ check_at: ['2026-11-24'] }).length === 0);
+	check(
+		'prediction: closed by an outcome',
+		due({ check_at: ['2026-11-01'], outcome: ['done'] }).length === 0
+	);
+	check(
+		'prediction: an empty outcome does not close',
+		due({ check_at: ['2026-11-01'], outcome: [''] }).length === 1
+	);
+	check(
+		'prediction: a blank outcome does not close',
+		due({ check_at: ['2026-11-01'], outcome: ['   '] }).length === 1
+	);
+
+	const dt = due({ check_at: ['2026-09-01T10:00Z'] });
+	check(
+		'prediction: a datetime counts by its date part',
+		dt.length === 1 && dt[0]?.key.endsWith('@2026-09-01') === true,
+		JSON.stringify(dt)
+	);
+	for (const bad of ['next week', '2026-13-45', '2026-09-01x', '']) {
+		check(
+			`prediction: unparseable check_at "${bad}" is ignored`,
+			due({ check_at: [bad] }).length === 0
+		);
+	}
+	check('prediction: no check_at raises nothing', due({ type: ['Decision'] }).length === 0);
+	check(
+		'prediction: expected alone raises nothing',
+		due({ expected: ['Churn under 5%'] }).length === 0
+	);
+
+	const quoted = due({ check_at: ['2026-11-01'], expected: ['Churn stays under 5%'] })[0];
+	check(
+		'prediction: headline names the path, the date and the expectation',
+		quoted?.headline.includes('decisions/pricing.md') === true &&
+			quoted.headline.includes('2026-11-01') &&
+			quoted.headline.includes('Churn stays under 5%'),
+		quoted?.headline
+	);
+	check(
+		'prediction: no expected, no expectation clause',
+		due({ check_at: ['2026-11-01'] })[0]?.headline.includes('Expected') === false
+	);
+	const long = due({ check_at: ['2026-11-01'], expected: ['x'.repeat(300)] })[0];
+	check(
+		'prediction: a long expectation is truncated',
+		long?.headline.includes('x'.repeat(120) + '...') === true &&
+			!long.headline.includes('x'.repeat(121)),
+		long?.headline
+	);
+
+	const extra = predictionDueFindings(
+		[{ path: 'a.md' }],
+		new Map([
+			['a.md', fields({ check_at: ['2026-11-01'] })],
+			['wiki/index.md', fields({ check_at: ['2026-11-01'] })]
+		]),
+		TODAY
+	);
+	check(
+		'prediction: only the pages passed in are considered',
+		extra.length === 1 && extra[0]?.key.includes('a.md') === true
+	);
+
+	const redated = due({ check_at: ['2026-11-10'] });
+	const oldKey = due({ check_at: ['2026-11-01'] })[0]!.key;
+	const ledger: ReviewLedger = {
+		version: 1,
+		dismissed: [{ key: oldKey, why: 'deferred', at: '2026-11-02' }]
+	};
+	check(
+		'prediction: a dismissal hides that date',
+		filterDismissed(due({ check_at: ['2026-11-01'] }), ledger).length === 0
+	);
+	check(
+		'prediction: re-dating changes the key, so the dismissal no longer applies',
+		redated[0]!.key !== oldKey && filterDismissed(redated, ledger).length === 1
+	);
+
+	const pair = predictionDueFindings(
+		[{ path: 'b.md' }, { path: 'a.md' }],
+		new Map([
+			['a.md', fields({ check_at: ['2026-11-01'] })],
+			['b.md', fields({ check_at: ['2026-11-02'] })]
+		]),
+		TODAY
+	);
+	check('prediction: two pages, two findings', pair.length === 2);
+
+	const typed = typeFieldSuggestions(
+		[{ path: 'a.md' }, { path: 'b.md' }],
+		new Map([['a.md', fields({ type: ['X'] })]])
+	);
+	const imp = importFindings('src', [{ key: 'k', kind: 'needs-decision', reason: 'r' }]);
+	const w = equal[0]!.weight;
+	check(
+		'prediction: weight sits between structure advisories and import findings',
+		w === 3 && typed[0]!.weight < w && w < imp[0]!.weight
 	);
 }
 

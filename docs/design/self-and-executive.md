@@ -1,6 +1,8 @@
 # Design: the self and the executive
 
-Status: **proposed** (2026-11-21). Nothing in this document is built.
+Status: **proposed** (2026-11-21). The `prediction-due` item and the expectation fields
+(sections 9 and 10, step 1 of section 14) are built as a finding `validate` computes from
+frontmatter; nothing else in this document is.
 
 - Author: Jon Hansing (via Claude)
 - Audience: anyone deciding what to build after roles and the org view, and the sessions that
@@ -208,7 +210,10 @@ when an expectation covered it.
 `prediction-due` needs only a check date. The core raises it for any brain, with or without a
 self ([`roles-self-and-world-model.md`](roles-self-and-world-model.md), section 8). The
 compare pass is a pass type on `brain_passes` (`src/lib/brain-pass.ts`) and raises the other
-three. All four are items in the review queue (`src/lib/review-queue.ts`):
+three. `prediction-due` is a finding `validate` computes on each call from the page's own
+frontmatter (`predictionDueFindings`, `src/lib/advisories.ts`), keyed on the path and the
+check date, so the page is the state and nothing is stored. The other three are items in the
+review queue (`src/lib/review-queue.ts`):
 
 | Kind             | Raised when                                                           |
 | ---------------- | --------------------------------------------------------------------- |
