@@ -84,6 +84,15 @@ are in the list, with keys.
   fields, so a brain whose `indexedFields` omits `check_at`, or a page whose `check_at` sits
   past `MAX_FIELD_KEYS_PER_PAGE`, is never raised. The Review screen (`view_review`) shows only
   policy findings, so this appears in `validate` alone.
+  **`comingDueLines`** is the same read for a `check_at` after today and within
+  `COMING_DUE_DAYS` (7): an unkeyed list in the `validate` result (earliest first,
+  at most `MAX_COMING_DUE_LINES`, absent when empty), not a finding, so there is nothing to
+  dismiss, and a page is never in it and in `prediction-due`. The `write_page` reply carries
+  `expectationNote` (`change-record.ts`), at most one per write: for a new Decision or
+  Commitment page with no `check_at` or `outcome`, for an update that set `expected` on a page
+  with no `check_at`, or, on a page of another type with no `check_at` or `outcome`, when the
+  text the write added matches `hasDeadlinePhrase` (by, before, until or due, then a weekday,
+  month, ISO date or "next week").
 - **`src/lib/consolidate.ts`** (pure, `pnpm test:consolidate`) detects where a brain's cheap
   surface disagrees with its content: islands, orphans, note-less and hollow folder notes,
   mixed conventions, folder-echo pages, near-duplicates (bigram Jaccard with each folder's

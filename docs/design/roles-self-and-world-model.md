@@ -235,7 +235,8 @@ The loop:
 1. A decision is recorded with its expectation and a check date, linked to the theory page
    it applies.
 2. On the check date, `validate` lists the page as a `prediction-due` finding: what happened?
-   It is computed from the frontmatter on each call, with no pass and no table.
+   It is computed from the frontmatter on each call, with no pass and no table. `validate`
+   also lists the pages due in the next 7 days, outside the findings.
 3. The answer is recorded as the outcome.
 4. Each theory page shows its record, as a live view over the outcomes that link to it.
 5. When the record turns against a belief, a pass proposes a revision as an open item. A

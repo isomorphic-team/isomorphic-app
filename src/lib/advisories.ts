@@ -389,14 +389,40 @@ export function wikilinkPortabilityNote(edges: { kind: 'md' | 'wiki'; cnt: numbe
 	];
 }
 
+const EXPECTED_MAX_CHARS = 120;
+
+/** How many days ahead of its `check_at` a commitment is listed as coming due. */
+export const COMING_DUE_DAYS = 7;
+
+/** The most coming-due lines `comingDueLines` returns. */
+export const MAX_COMING_DUE_LINES = 20;
+
+// The expectation text and check date of a page with no recorded outcome, or null.
+function openCheck(
+	fields: PageFields | undefined
+): { date: string; shown: string | undefined } | null {
+	if (!fields) return null;
+	if (fields.get('outcome')?.some((v) => v.trim() !== '')) return null;
+	const raw = fields.get('check_at')?.[0];
+	const date = raw === undefined ? undefined : datePart(raw);
+	if (date === undefined) return null;
+	const expected = fields
+		.get('expected')
+		?.map((v) => v.trim())
+		.find((v) => v !== '');
+	const shown =
+		expected && expected.length > EXPECTED_MAX_CHARS
+			? expected.slice(0, EXPECTED_MAX_CHARS) + '...'
+			: expected;
+	return { date, shown };
+}
+
 // A commitment whose check date has come: a concept page whose first `check_at` value
 // (a date or datetime, read by its date part like `okf-view` filters; unparseable values
 // are ignored) is on or before `today` and that has no non-empty `outcome`. `pages` is the
 // caller's concept-page filter (no folder notes, no tool-maintained pages). The key carries
 // the date, so a dismissal covers that date only and re-dating raises the item again.
 // Nothing is stored: the page is the state.
-const EXPECTED_MAX_CHARS = 120;
-
 export function predictionDueFindings(
 	pages: { path: string }[],
 	fieldsByPath: Map<string, PageFields>,
@@ -404,25 +430,47 @@ export function predictionDueFindings(
 ): Finding[] {
 	const out: Finding[] = [];
 	for (const p of pages) {
-		const fields = fieldsByPath.get(p.path);
-		if (!fields) continue;
-		if (fields.get('outcome')?.some((v) => v.trim() !== '')) continue;
-		const raw = fields.get('check_at')?.[0];
-		const date = raw === undefined ? undefined : datePart(raw);
-		if (date === undefined || date > today) continue;
-		const expected = fields
-			.get('expected')
-			?.map((v) => v.trim())
-			.find((v) => v !== '');
-		const shown =
-			expected && expected.length > EXPECTED_MAX_CHARS
-				? expected.slice(0, EXPECTED_MAX_CHARS) + '...'
-				: expected;
+		const c = openCheck(fieldsByPath.get(p.path));
+		if (!c || c.date > today) continue;
 		out.push({
-			key: findingKey('prediction-due', `${p.path}@${date}`),
+			key: findingKey('prediction-due', `${p.path}@${c.date}`),
 			weight: 3,
-			headline: `- ${p.path}: check due ${date}${shown ? `. Expected: ${shown}` : ''}. No outcome is recorded. Record it with write_page fields {outcome: ...}, or dismiss with resolve and a reason.`
+			headline: `- ${p.path}: check due ${c.date}${c.shown ? `. Expected: ${c.shown}` : ''}. No outcome is recorded. Record it with write_page fields {outcome: ...}, or dismiss with resolve and a reason.`
 		});
 	}
 	return out;
+}
+
+const DAY_MS = 86_400_000;
+const dayNumber = (iso: string): number => Date.parse(`${iso}T00:00:00Z`) / DAY_MS;
+
+// The commitments whose check date is after `today` and within COMING_DUE_DAYS of it,
+// with no outcome, as lines for `validate`; empty when there are none. Not a finding: no
+// key, nothing to dismiss. A check date of `today` or earlier is `predictionDueFindings`',
+// so no page is in both. Earliest first; past MAX_COMING_DUE_LINES the last line counts
+// the rest.
+export function comingDueLines(
+	pages: { path: string }[],
+	fieldsByPath: Map<string, PageFields>,
+	today: string
+): string[] {
+	const t = dayNumber(today);
+	const rows: { path: string; date: string; days: number; shown?: string }[] = [];
+	for (const p of pages) {
+		const c = openCheck(fieldsByPath.get(p.path));
+		if (!c || c.date <= today) continue;
+		const days = Math.round(dayNumber(c.date) - t);
+		if (!(days <= COMING_DUE_DAYS)) continue;
+		rows.push({ path: p.path, date: c.date, days, shown: c.shown });
+	}
+	rows.sort((a, b) => a.date.localeCompare(b.date) || a.path.localeCompare(b.path));
+	const lines = rows
+		.slice(0, MAX_COMING_DUE_LINES)
+		.map(
+			(r) =>
+				`- ${r.path}: check due ${r.date} (in ${r.days} day${r.days === 1 ? '' : 's'})${r.shown ? `. Expected: ${r.shown}` : ''}. Record it with write_page fields {outcome: ...}.`
+		);
+	if (rows.length > MAX_COMING_DUE_LINES)
+		lines.push(`...and ${rows.length - MAX_COMING_DUE_LINES} more.`);
+	return lines;
 }

@@ -28,9 +28,11 @@ import {
 	composeCreate,
 	composeUpdate,
 	isPatching,
+	addedText,
 	type PageWriteArgs
 } from '../src/lib/page-write.ts';
 import { parsePaths } from '../src/lib/brain-config.ts';
+import { describeChange, expectationNote, hasDeadlinePhrase } from '../src/lib/change-record.ts';
 
 import { checker } from './check.ts';
 
@@ -762,6 +764,190 @@ const TODAY = '2026-09-23';
 		f.ok && !f.notes.some((n) => n.startsWith('heads up:'))
 	);
 	check('update: a bad field is refused', !up({ fields: { title: 'x' } }).ok);
+}
+
+console.log('\nwrite_page: the commitment prompt (expectationNote)');
+{
+	const NOTE = 'check_at: YYYY-MM-DD';
+	const create = (args: Parameters<typeof composeCreate>[1]) => {
+		const c = composeCreate('wiki/decisions/pricing.md', args, TODAY);
+		if (!c.ok) throw new Error('compose failed');
+		return describeChange({
+			kind: 'create',
+			path: 'wiki/decisions/pricing.md',
+			title: c.title,
+			expectation: { frontmatter: c.frontmatter }
+		});
+	};
+	const dec = create({ content: 'Raise the price.', title: 'Pricing', type: 'Decision' });
+	check(
+		'create: a Decision page without check_at carries the prompt in done',
+		dec.done.includes(NOTE)
+	);
+	check('create: ... and in proposed', dec.proposed.includes(NOTE));
+	check(
+		'create: a Commitment type matches too, any case',
+		create({ content: 'x', title: 'T', type: 'commitment' }).done.includes(NOTE)
+	);
+	check(
+		'create: another type gets none',
+		!create({ content: 'x', title: 'T', type: 'Meeting' }).done.includes(NOTE) &&
+			!create({ content: 'x', title: 'T', type: 'Meeting' }).proposed.includes(NOTE)
+	);
+	check('create: no type gets none', !create({ content: 'x', title: 'T' }).done.includes(NOTE));
+	check(
+		'create: a check_at already set silences it',
+		!create({
+			content: 'x',
+			title: 'T',
+			type: 'Decision',
+			fields: { check_at: '2026-12-01' }
+		}).done.includes(NOTE)
+	);
+	check(
+		'create: an outcome already set silences it',
+		!create({
+			content: 'x',
+			title: 'T',
+			type: 'Decision',
+			fields: { outcome: 'held' }
+		}).done.includes(NOTE)
+	);
+
+	const up = (
+		fields: Record<string, string | null>,
+		existing: Frontmatter = { type: 'Decision' }
+	) => {
+		const c = composeUpdate(
+			'wiki/decisions/pricing.md',
+			withFrontmatter(existing, 'Body.'),
+			{ fields },
+			TODAY,
+			24
+		);
+		if (!c.ok) throw new Error('compose failed');
+		return describeChange({
+			kind: 'update',
+			path: 'wiki/decisions/pricing.md',
+			label: c.label,
+			notes: c.notes,
+			expectation: { frontmatter: c.frontmatter, patch: fields }
+		});
+	};
+	check(
+		'update: setting expected without check_at carries the prompt',
+		up({ expected: 'Churn under 5%' }).done.includes(NOTE)
+	);
+	check(
+		'update: expected with check_at set in the same call gets none',
+		!up({ expected: 'Churn under 5%', check_at: '2026-12-01' }).done.includes(NOTE)
+	);
+	check(
+		'update: a page that already has check_at gets none',
+		!up({ expected: 'x' }, { type: 'Decision', check_at: '2026-12-01' }).done.includes(NOTE)
+	);
+	check(
+		'update: a write that does not touch expected gets none',
+		!up({ owner: 'pat' }).done.includes(NOTE)
+	);
+	check(
+		'update: removing expected gets none',
+		!up({ expected: null }, { type: 'Decision', expected: 'x' }).done.includes(NOTE)
+	);
+	check(
+		'update: expectationNote is empty with no patch',
+		expectationNote({ kind: 'update', frontmatter: { expected: 'x' } }) === ''
+	);
+}
+
+console.log('\nwrite_page: the deadline-phrase note');
+{
+	const DEADLINE = 'This reads like a commitment';
+	const MEETING: Frontmatter = { type: 'Meeting', title: 'Weekly' };
+	const note = (
+		added: string[],
+		frontmatter: Frontmatter = MEETING,
+		kind: 'create' | 'update' = 'update',
+		patch?: Record<string, unknown>
+	) => expectationNote({ kind, frontmatter, added, patch });
+	const fired = (n: string) => n.includes(DEADLINE);
+	check(
+		'deadline: "by Friday" in an append gets the note',
+		fired(note(['Ship the draft by Friday.']))
+	);
+	check('deadline: before a month', fired(note(['Sign before March'])));
+	check('deadline: until an ISO date', fired(note(['Hold until 2026-12-01'])));
+	check('deadline: due next week', fired(note(['Report due next week'])));
+	check('deadline: case-insensitive', fired(note(['BY MONDAY'])));
+	check(
+		'deadline: the text names the page type and the field call',
+		note(['by Friday']).includes('type Commitment') &&
+			note(['by Friday']).includes('{expected, check_at: YYYY-MM-DD}')
+	);
+	for (const text of [
+		'sent by the team',
+		'before the merger',
+		'a decision on 2026-12-01',
+		'Friday works',
+		'standby',
+		'by 5pm'
+	])
+		check(`deadline: "${text}" gets none`, !fired(note([text])));
+	check('deadline: nothing added gets none', note([]) === '' && note([], MEETING, 'create') === '');
+	check(
+		'deadline: a page with check_at gets none',
+		note(['by Friday'], { ...MEETING, check_at: '2026-12-01' }) === ''
+	);
+	check(
+		'deadline: a page with an outcome gets none',
+		note(['by Friday'], { ...MEETING, outcome: 'held' }) === ''
+	);
+	check(
+		'deadline: a new page of another type gets it from its body',
+		fired(note(['by Friday'], MEETING, 'create'))
+	);
+	const decision: Frontmatter = { type: 'Decision' };
+	check(
+		'deadline: a Decision page is the type trigger, not this one',
+		note(['by Friday'], decision, 'update') === '' &&
+			note(['by Friday'], decision, 'create') !== '' &&
+			!fired(note(['by Friday'], decision, 'create'))
+	);
+	check(
+		'deadline: expected set on another type gives the field note, once',
+		(() => {
+			const n = note(['by Friday'], { ...MEETING, expected: 'x' }, 'update', { expected: 'x' });
+			return n !== '' && !fired(n);
+		})()
+	);
+	check(
+		'deadline: the note states the consequence and the remedy',
+		[
+			'will not appear in validate',
+			'its own page',
+			'Create it now',
+			'keep your own follow-up field'
+		].every((t) => note(['by Friday']).includes(t)),
+		note(['by Friday'])
+	);
+	check('deadline: hasDeadlinePhrase matches the plain case', hasDeadlinePhrase('due Tuesday'));
+
+	// Added text only: the existing page body is never read.
+	check(
+		'added: an append and the new side of each edit count',
+		addedText({ append: 'a', edits: [{ find: 'x', replace: 'b' }] }).join('|') === 'a|b'
+	);
+	check(
+		'added: the text an edit replaces does not count',
+		!addedText({ edits: [{ find: 'by Friday', replace: 'soon' }] }).some(hasDeadlinePhrase)
+	);
+	check('added: nothing patched, nothing added', addedText({}).length === 0);
+	const withDeadline = withFrontmatter({ ...MEETING }, 'Old text: ship by Friday.');
+	const c = composeUpdate('wiki/m.md', withDeadline, { fields: { owner: 'pat' } }, TODAY, 24);
+	check(
+		'added: a metadata-only write to a page that already says "by Friday" gets none',
+		c.ok && note(addedText({}), c.frontmatter) === ''
+	);
 }
 
 done();

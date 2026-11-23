@@ -77,6 +77,8 @@ import {
 	inlinedConceptSuggestions,
 	typeFieldSuggestions,
 	predictionDueFindings,
+	comingDueLines,
+	COMING_DUE_DAYS,
 	ambiguousTitleSuggestions,
 	brokenLinkReport,
 	wikilinkPortabilityNote,
@@ -103,7 +105,13 @@ import {
 } from '../lib/review-queue.ts';
 import { brainLabel, type TenantOpts, type Role, type AccessibleBrain } from '../lib/orgs.ts';
 import { brainArg, fail, ok } from './shared.ts';
-import { checkPageWrite, planPageWrite, composeCreate, composeUpdate } from '../lib/page-write.ts';
+import {
+	addedText,
+	checkPageWrite,
+	planPageWrite,
+	composeCreate,
+	composeUpdate
+} from '../lib/page-write.ts';
 import {
 	commitOpts,
 	changelogWrite,
@@ -459,7 +467,8 @@ async function createPageWrite(
 		path: target,
 		title: composed.title,
 		status: composed.status,
-		description: args.description
+		description: args.description,
+		expectation: { frontmatter: composed.frontmatter, added: [composed.body] }
 	});
 	const writes = [{ path: target, content: newContent }];
 	const entry = changelogWrite(config, log, today, rec.bullet);
@@ -480,7 +489,7 @@ async function updatePageWrite(
 	ctx: BrainContext,
 	base: Revision,
 	existing: { content: string; version: string },
-	args: Parameters<typeof composeUpdate>[2] & { path: string; sha?: string }
+	args: Parameters<typeof composeUpdate>[2] & { path: string; sha?: string; added?: string[] }
 ) {
 	const { store, locator, config, author } = ctx;
 	const { path, sha } = args;
@@ -522,7 +531,8 @@ async function updatePageWrite(
 		label: composed.label,
 		statusChanged: composed.statusChanged,
 		retitledFrom: composed.retitledFrom,
-		notes
+		notes,
+		expectation: { frontmatter: composed.frontmatter, patch: args.fields, added: args.added }
 	});
 	const entry = changelogWrite(config, log, today, rec.bullet);
 	if (entry) writes.push(entry);
@@ -1071,7 +1081,8 @@ export function registerLibrarianTools(
 					description,
 					status,
 					fields,
-					sha
+					sha,
+					added: addedText(args)
 				});
 			});
 		}
@@ -1365,7 +1376,7 @@ export function registerLibrarianTools(
 		{
 			...toolAnnotations('Check the brain for problems', 'read'),
 			description:
-				'`validate` checks a brain and reports what needs attention. Two kinds of result, deliberately separate. DEFECTS: broken links — markdown links to missing pages and [[wikilinks]] that match no page. Those have one right answer and cannot be silenced. FINDINGS: everything advisory, each carrying a `[key]` — pending import decisions, Open Knowledge Format structure notes (concepts written as sections inside a folder note instead of getting their own page, pages missing a `type:`, names two pages both answer to), consolidation tensions (a page nothing links to, a folder note that lists none of its pages, two pages telling the same story), and commitments whose `check_at` date has passed with no `outcome` recorded. Nothing advisory blocks a save, and any finding can be answered or permanently silenced with `resolve` using its key, so a deliberate choice stops being re-reported. For brain admins it also lists sensitive data found in writes (pages and kinds, never the values). Run after big changes or restructures, or when asked to tidy a brain up.',
+				'`validate` checks a brain and reports what needs attention. It is also the way to see which commitments are due or coming due. Two kinds of result, deliberately separate. DEFECTS: broken links — markdown links to missing pages and [[wikilinks]] that match no page. Those have one right answer and cannot be silenced. FINDINGS: everything advisory, each carrying a `[key]` — pending import decisions, Open Knowledge Format structure notes (concepts written as sections inside a folder note instead of getting their own page, pages missing a `type:`, names two pages both answer to), consolidation tensions (a page nothing links to, a folder note that lists none of its pages, two pages telling the same story), and commitments whose `check_at` date has passed with no `outcome` recorded. A separate list shows those due within the next week. Nothing advisory blocks a save, and any finding can be answered or permanently silenced with `resolve` using its key, so a deliberate choice stops being re-reported. For brain admins it also lists sensitive data found in writes (pages and kinds, never the values). Run after big changes or restructures, when asked to tidy a brain up, or when asked what is due or overdue.',
 			inputSchema: z.object({ brain: brainArg })
 		},
 		async ({ brain }) => {
@@ -1461,6 +1472,7 @@ export function registerLibrarianTools(
 			// getting their own file, and pages missing the `type:` the format requires.
 			// Soft and best-effort — a failure here must never take link validation with it.
 			let findingsText = '';
+			let comingDueText = '';
 			let openPolicy: number | null = null;
 			try {
 				const notePaths = resolved.pages
@@ -1549,6 +1561,9 @@ export function registerLibrarianTools(
 						` and each can be answered or silenced with resolve.${note}\n${text}`;
 				}
 				findingsText += staleNote(keptStale.length);
+				const coming = comingDueLines(conceptPages, fieldsByPath, todayIso());
+				if (coming.length)
+					comingDueText = `\n\nCommitments coming due in the next ${COMING_DUE_DAYS} days:\n${coming.join('\n')}`;
 				openPolicy = kept.filter((f) => isPolicyKey(f.key)).length;
 			} catch {
 				// Advisory only; link validation stands alone.
@@ -1573,7 +1588,7 @@ export function registerLibrarianTools(
 				// Advisory only; link validation stands alone.
 			}
 
-			const extras = `${truncationNote(truncated)}${pendingText}${toolText}${findingsText}${policyText}`;
+			const extras = `${truncationNote(truncated)}${pendingText}${toolText}${findingsText}${comingDueText}${policyText}`;
 			if (problemCount === 0) {
 				return ok(`Checked ${pageCount} page(s) — no broken links.${extras}`);
 			}
