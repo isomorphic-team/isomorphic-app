@@ -1194,6 +1194,19 @@ console.log('\nDerived state keyed by brain_id: the 0011 re-key');
 		got?.length === 1 && got[0].path === 'wiki/z-open.md',
 		`${got?.length} pages`
 	);
+	// A blank outcome is not a recorded one (openCheck trims). The index drops blank values
+	// itself, so the row is written directly.
+	sqlite
+		.prepare(
+			`INSERT INTO brain_page_fields (brain_id, path, key, value, value_num) VALUES (?, 'wiki/z-open.md', 'outcome', '   ', NULL)`
+		)
+		.run(brainId);
+	const blank = await loadDatedPages(db, store, repo, brainId, config);
+	check(
+		'a whitespace-only outcome still counts as open',
+		blank?.length === 1 && blank[0].path === 'wiki/z-open.md',
+		`${blank?.length} pages`
+	);
 }
 
 // ---------- the offline report loader (scripts/local-brain.ts) ----------

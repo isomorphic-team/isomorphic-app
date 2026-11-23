@@ -877,7 +877,7 @@ export interface DatedPage {
 export const MAX_DATED_PAGES = 400;
 
 /**
- * Pages that carry `check_at` or `due`, with all their indexed fields, or null when the
+ * Pages that carry `check_at` or `due` and no recorded outcome, with all their indexed fields, or null when the
  * index does not reflect the branch tip right now (never built, mid-reindex, mid-rebuild, or
  * behind a newer commit). It never reindexes: one branch-tip read, one meta read, one query
  * for the dated paths and the chunked field reads for them. For callers that answer without the index when it is not ready.
