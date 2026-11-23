@@ -880,7 +880,7 @@ console.log('\nwrite_page: the commitment prompt (expectationNote)');
 
 console.log('\nwrite_page: the compare note (outcome set on a page with expected)');
 {
-	const COMPARE = 'Did the result meet what the page expected';
+	const COMPARE = 'If it met what was expected, say so in one line and stop';
 	const note = (
 		frontmatter: Frontmatter,
 		patch?: Record<string, unknown>,
@@ -949,6 +949,11 @@ console.log('\nwrite_page: the compare note (outcome set on a page with expected
 			'do not edit it in this reply',
 			'no claim page is linked and ask which page'
 		].every((t) => dec.expected && note(dec, { outcome: 'z' }).includes(t))
+	);
+	check(
+		'compare: no quoted opening and no new-commitment line',
+		!note(dec, { outcome: 'z' }).includes('Happened:') &&
+			!note(dec, { outcome: 'z' }).includes('new commitment')
 	);
 	check('compare: never says surprise', !/surprise/i.test(note(dec, { outcome: 'z' })));
 }

@@ -134,7 +134,7 @@ function compareNote(fm: Frontmatter, patch: Record<string, unknown> | null | un
 	if (!patch || firstValue(patch.outcome) === '') return '';
 	const expected = firstValue(fm.expected);
 	if (expected === '') return '';
-	return 'Did the result meet what the page expected? If it met it, say so in one line and stop. If it departed: when the page this one links to asserts something the result contradicts, ask the person ONE question offering to revise that page, and do not edit it in this reply. When no linked page asserts anything, say no claim page is linked and ask which page, if any, it tested.';
+	return 'If it met what was expected, say so in one line and stop. If it departed: when the page this one links to asserts something the result contradicts, ask the person ONE question offering to revise that page, and do not edit it in this reply. When no linked page asserts anything, say no claim page is linked and ask which page, if any, it tested.';
 }
 
 const RECORD_TEXT = `If this page links to the page whose claim it tests and that page does not already show its record (read it first), offer to append this there with write_page append:\n${RECORD_VIEW}\none yes completes it. Then tell the person that page now shows its record.`;
