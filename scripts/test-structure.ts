@@ -30,7 +30,6 @@ import {
 	findingKey,
 	filterDismissed,
 	importFindings,
-	kindOfKey,
 	partitionCommitments,
 	renderFindings,
 	type Finding,
@@ -916,7 +915,7 @@ console.log('\nfolder-note advisory: a note-less folder holding its own overview
 		check(
 			'due block: the header is the imperative and the coming lines sit under it',
 			coming1 ===
-				`\n\nDue and coming due. Answer from these lines first, give the findings further down one line, and tell the person that ${NOT_READ}\n- a.md: due 2026-11-25 (from \`due\`, in 2 days).`,
+				`\n\nDue and coming due. Answer from these lines first, give the findings further down one line, and tell the person that ${NOT_READ} For each open one with no date, ask the person which: set a check date, record what was decided, or dismiss it.\n- a.md: due 2026-11-25 (from \`due\`, in 2 days).`,
 			coming1
 		);
 		const withFindings = dueBlock('- b.md: finding\n  [prediction-due:b.md@2026-11-01]', [
@@ -990,9 +989,8 @@ console.log('\nfolder-note advisory: a note-less folder holding its own overview
 			).commitments.length === 1
 		);
 		check(
-			'partition: the kind is read from the key, not a literal prefix match on the finding',
-			kindOfKey('prediction-due:a.md@2026-11-01') === 'prediction-due' &&
-				partitionCommitments([f('prediction-duel:x', 1)]).commitments.length === 0
+			'partition: a kind is matched with its colon, so a longer kind name is not a commitment',
+			partitionCommitments([f('prediction-duel:x', 1)]).commitments.length === 0
 		);
 	}
 

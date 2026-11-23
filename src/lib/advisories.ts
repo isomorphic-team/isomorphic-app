@@ -11,7 +11,7 @@
 
 import type { BrokenLink, PageFields } from './brain-index.ts';
 import { SOURCE_KEY_FIELD, SOURCE_KEYS_FIELD } from './brain-import.ts';
-import { COMMITMENT_KINDS, type Finding, findingKey } from './findings.ts';
+import { type Finding, findingKey } from './findings.ts';
 import { OKF_PAGE_STATUSES } from './page-patch.ts';
 import type { ProbeResult } from './probe.ts';
 import { datePart, DUE_KEY, isFolderNoteName } from './view-directives.ts';
@@ -521,7 +521,7 @@ export function predictionDueFindings(
 		const c = openCheck(fieldsByPath.get(p.path));
 		if (!c || c.date > today) continue;
 		out.push({
-			key: findingKey(COMMITMENT_KINDS[0], `${p.path}@${c.date}`),
+			key: findingKey('prediction-due', `${p.path}@${c.date}`),
 			weight: 3,
 			headline:
 				c.key === 'check_at'
@@ -668,7 +668,7 @@ export function dueBlock(commitments: string, coming: string[]): string {
 	if (commitments === '' && coming.length === 0)
 		return `\n\nNothing due or coming due. Tell the person that ${NOT_READ}`;
 	const lines = [...(commitments === '' ? [] : [commitments]), ...coming];
-	return `\n\nDue and coming due. Answer from these lines first, give the findings further down one line, and tell the person that ${NOT_READ}\n${lines.join('\n')}`;
+	return `\n\nDue and coming due. Answer from these lines first, give the findings further down one line, and tell the person that ${NOT_READ} For each open one with no date, ask the person which: set a check date, record what was decided, or dismiss it.\n${lines.join('\n')}`;
 }
 
 const NOT_READ =
@@ -710,7 +710,7 @@ export function undatedCommitmentFindings(
 			return d ? [`${k} ${d}`] : [];
 		});
 		out.push({
-			key: findingKey(COMMITMENT_KINDS[1], p.path),
+			key: findingKey('undated-commitment', p.path),
 			weight: 2,
 			headline: `- ${pageLabel(p, fields)}: open (${open.key} ${open.value}), no check date${found.length ? `; ${found.join(', ')}` : ''}. Give it a check date (write_page fields {check_at: YYYY-MM-DD}), record what was decided ({outcome: ...}), or close it in the field the page uses for its state; or dismiss with resolve and a reason.`
 		});

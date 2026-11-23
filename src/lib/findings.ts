@@ -88,11 +88,9 @@ export function findingKey(kind: string, identity: string | string[]): string {
 	return `${kind}:${parts.join('|')}`;
 }
 
-/** The kind of a finding: the part of its key before the first colon. */
-export const kindOfKey = (key: string): string => key.slice(0, Math.max(key.indexOf(':'), 0));
-
-/** The kinds that are commitments: a check date has come, or a decision has none. */
-export const COMMITMENT_KINDS = ['prediction-due', 'undated-commitment'] as const;
+/** Whether a finding key is a commitment: a check date has come, or a decision has none. */
+export const isCommitmentKey = (key: string): boolean =>
+	key.startsWith('prediction-due:') || key.startsWith('undated-commitment:');
 
 /** Splits findings into commitment findings and the rest, each in its original order. */
 export function partitionCommitments(findings: readonly Finding[]): {
@@ -101,10 +99,7 @@ export function partitionCommitments(findings: readonly Finding[]): {
 } {
 	const commitments: Finding[] = [];
 	const rest: Finding[] = [];
-	for (const f of findings)
-		((COMMITMENT_KINDS as readonly string[]).includes(kindOfKey(f.key)) ? commitments : rest).push(
-			f
-		);
+	for (const f of findings) (isCommitmentKey(f.key) ? commitments : rest).push(f);
 	return { commitments, rest };
 }
 

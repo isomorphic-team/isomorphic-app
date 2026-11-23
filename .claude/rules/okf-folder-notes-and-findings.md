@@ -99,7 +99,7 @@ are in the list, with keys.
   clustering, each group goes through `renderFindings` with its own cap, and the commitment
   group renders in the due area ahead of the coming-due lines, keyed and dismissable. The
   lines of both groups and the other-dates block name a page "title (path), owner x" (owner
-  only when the page has one; the bare path when there is no title). No weights changed. The `write_page` reply carries
+  only when the page has one; the bare path when there is no title). The `write_page` reply carries
   `expectationNote` (`change-record.ts`), at most one per write: for a new Decision or
   Commitment page with no check date or `outcome`, for an update that set `expected` on a page
   with no check date, or, on a page of another type with no check date or `outcome`, when the

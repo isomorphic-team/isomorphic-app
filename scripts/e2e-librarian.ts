@@ -1107,7 +1107,7 @@ try {
 	check(
 		'the due block header is the instruction, with what is not read',
 		r.text.includes(
-			'Due and coming due. Answer from these lines first, give the findings further down one line, and tell the person that dates kept under other field names (not `check_at`, `due`, or a key ending in `_due`, `-due`, `_due_date` or `-due-date`) are not read.'
+			'Due and coming due. Answer from these lines first, give the findings further down one line, and tell the person that dates kept under other field names (not `check_at`, `due`, or a key ending in `_due`, `-due`, `_due_date` or `-due-date`) are not read. For each open one with no date, ask the person which: set a check date, record what was decided, or dismiss it.'
 		),
 		r.text
 	);
