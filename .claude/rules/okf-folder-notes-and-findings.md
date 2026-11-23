@@ -99,13 +99,15 @@ are in the list, with keys.
   month, ISO date or "next week").
 - **`undatedCommitmentFindings`** (`advisories.ts`, pure) is the absence half of a commitment:
   a concept page whose first `type` matches `COMMITMENT_TYPE_RE` (decision or commitment),
-  that has a `status` or `state` value and none is a closed one, with no `checkDateOf` date,
+  that says it is open (a `state` value, or a `status` value that is neither closed nor one of
+  `OKF_PAGE_STATUSES`, which describe the page, not the commitment) and has no closed value in
+  either key, with no `checkDateOf` date,
   no non-empty `outcome` or `revisit`, and no `source_key` or `source_keys`. A page with no
   status field raises nothing, because a brain whose decisions are records would otherwise be
   flooded. Key `undated-commitment:<path>` (the path alone, so a dismissal survives edits),
   weight 2, below `prediction-due`. The headline names the key and value the page uses and,
-  when present, its `raised` and `updated` dates as found; nothing is computed from them, and
-  `updated` is stamped on every save. No per-kind cap: `renderFindings`' limit is the only one.
+  when present, its `raised` date as found; nothing is computed from it. `updated` is not shown:
+  it is stamped on every save. No per-kind cap: `renderFindings`' limit is the only one.
 - **`src/lib/consolidate.ts`** (pure, `pnpm test:consolidate`) detects where a brain's cheap
   surface disagrees with its content: islands, orphans, note-less and hollow folder notes,
   mixed conventions, folder-echo pages, near-duplicates (bigram Jaccard with each folder's

@@ -12,6 +12,7 @@
 import type { BrokenLink, PageFields } from './brain-index.ts';
 import { SOURCE_KEY_FIELD, SOURCE_KEYS_FIELD } from './brain-import.ts';
 import { type Finding, findingKey } from './findings.ts';
+import { OKF_PAGE_STATUSES } from './page-patch.ts';
 import type { ProbeResult } from './probe.ts';
 import { datePart, isFolderNoteName } from './view-directives.ts';
 import { parseFrontmatter, slugOf, slugify, wikilinkKey, wikilinkTargetName } from './wiki.ts';
@@ -405,9 +406,10 @@ const FOLLOW_UP_DATE_KEYS = ['due'];
 /** A page type that names a commitment: Decision, Commitment, or a name containing either. */
 export const COMMITMENT_TYPE_RE = /decision|commitment/i;
 
-// Keys a page may carry its own dates in that say how long it has been open, shown on
-// `undated-commitment` as found. Nothing is computed from them.
-const QUIET_DATE_KEYS = ['raised', 'updated'];
+// Keys a page may carry a date in that says how long it has been open, shown on
+// `undated-commitment` as found. Nothing is computed from them. `updated` is not one: it is
+// stamped on every save.
+const QUIET_DATE_KEYS = ['raised'];
 
 // A `status` or `state` value that means the page is finished, so a date left in `due` is
 // history. Applies on the follow-up path only: `check_at` closes on `outcome`.
@@ -422,7 +424,8 @@ const CLOSED_STATUSES = new Set([
 	'canceled',
 	'dropped',
 	'superseded',
-	'archived'
+	'archived',
+	'deprecated'
 ]);
 
 /**
@@ -560,8 +563,8 @@ export function dueBlock(coming: string[], overdue: number): string {
 }
 
 // A decision or commitment page that is still open by its own status field and has no date to
-// check it by. Raised only when the page HAS a `status` or `state` value that is not a closed
-// one: a page with no status field is a record, not an open item, and raises nothing. Not
+// check it by. Raised only when the page says it is open: a `state` value, or a `status`
+// value that is neither closed nor one of write_page's own page statuses. A page with no such value is a record, not an open item, and raises nothing. Not
 // raised for imported pages, a page with an outcome, or one whose `revisit` says when.
 // The key is the path alone, so a dismissal survives edits. Weight 2, below prediction-due
 // (3), so a due date outranks a missing one. Nothing is stored: the page is the state.
@@ -576,11 +579,18 @@ export function undatedCommitmentFindings(
 		const get = (k: string) => fields.get(k);
 		const has = (k: string) => (get(k) ?? []).some((v) => v.trim() !== '');
 		if (!COMMITMENT_TYPE_RE.test(get('type')?.[0] ?? '')) continue;
-		const states = ['status', 'state'].flatMap((k) =>
+		const values = ['state', 'status'].flatMap((k) =>
 			(get(k) ?? []).map((v) => ({ key: k, value: v.trim() })).filter((s) => s.value !== '')
 		);
-		if (states.length === 0 || states.some((s) => CLOSED_STATUSES.has(s.value.toLowerCase())))
-			continue;
+		if (values.some((s) => CLOSED_STATUSES.has(s.value.toLowerCase()))) continue;
+		// `draft` and `stable` are write_page's own page statuses: they describe the page, not
+		// the commitment, so they say nothing about whether it is open.
+		const open = values.find(
+			(s) =>
+				s.key === 'state' ||
+				!(OKF_PAGE_STATUSES as readonly string[]).includes(s.value.toLowerCase())
+		);
+		if (!open) continue;
 		if (checkDateOf(get) || has('outcome') || has('revisit')) continue;
 		if (has(SOURCE_KEY_FIELD) || has(SOURCE_KEYS_FIELD)) continue;
 		const found = QUIET_DATE_KEYS.flatMap((k) => {
@@ -590,7 +600,7 @@ export function undatedCommitmentFindings(
 		out.push({
 			key: findingKey('undated-commitment', p.path),
 			weight: 2,
-			headline: `- ${p.path}: open (${states[0]!.key} ${states[0]!.value}), no check date${found.length ? `; ${found.join(', ')}` : ''}. Give it a check date (write_page fields {check_at: YYYY-MM-DD}), record what was decided ({outcome: ...}), or close it in its own status field; or dismiss with resolve and a reason.`
+			headline: `- ${p.path}: open (${open.key} ${open.value}), no check date${found.length ? `; ${found.join(', ')}` : ''}. Give it a check date (write_page fields {check_at: YYYY-MM-DD}), record what was decided ({outcome: ...}), or close it in the field the page uses for its state; or dismiss with resolve and a reason.`
 		});
 	}
 	return out;

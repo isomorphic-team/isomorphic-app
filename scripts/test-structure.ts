@@ -844,7 +844,8 @@ console.log('\nfolder-note advisory: a note-less folder holding its own overview
 			'canceled',
 			'dropped',
 			'superseded',
-			'archived'
+			'archived',
+			'deprecated'
 		])
 			check(
 				`follow-up: status "${closed}" skips the alias path`,
@@ -860,6 +861,12 @@ console.log('\nfolder-note advisory: a note-less folder holding its own overview
 				`follow-up: ${k} "${v.trim()}" skips the alias path`,
 				due({ due: ['2026-11-10'], [k]: [v] }).length === 0
 			);
+		check(
+			'follow-up: a deprecated page with a past due is not raised',
+			due({ due: ['2026-11-10'], status: ['deprecated'] }).length === 0 &&
+				due({ due: ['2026-11-10'], state: ['Deprecated'] }).length === 0 &&
+				due({ due: ['2026-11-10'], status: ['stable'] }).length === 1
+		);
 		check(
 			'follow-up: an open status does not skip',
 			due({ due: ['2026-11-10'], status: ['in progress'] }).length === 1
@@ -918,10 +925,10 @@ console.log('\nfolder-note advisory: a note-less folder holding its own overview
 	{
 		const undated = (rows: Record<string, string[]>, path = 'decisions/pricing.md') =>
 			undatedCommitmentFindings([{ path }], new Map([[path, fields(rows)]]));
-		const open = { type: ['Decision'], status: ['proposed'] };
+		const open = { type: ['Decision'], state: ['proposed'] };
 		const base = undated(open);
 		check(
-			'undated: an open-status decision with no date raises, keyed on the path alone',
+			'undated: an open decision with no date raises, keyed on the path alone',
 			base.length === 1 &&
 				base[0]!.key === findingKey('undated-commitment', 'decisions/pricing.md'),
 			JSON.stringify(base)
@@ -929,24 +936,24 @@ console.log('\nfolder-note advisory: a note-less folder holding its own overview
 		check(
 			'undated: the headline is pinned',
 			base[0]?.headline ===
-				'- decisions/pricing.md: open (status proposed), no check date. Give it a check date (write_page fields {check_at: YYYY-MM-DD}), record what was decided ({outcome: ...}), or close it in its own status field; or dismiss with resolve and a reason.',
+				'- decisions/pricing.md: open (state proposed), no check date. Give it a check date (write_page fields {check_at: YYYY-MM-DD}), record what was decided ({outcome: ...}), or close it in the field the page uses for its state; or dismiss with resolve and a reason.',
 			base[0]?.headline
 		);
 		check(
-			'undated: raised and updated are shown as found, in that order',
+			'undated: raised is shown as found; updated is not, and a non-date raised is omitted',
 			undated({ ...open, updated: ['2026-06-10'], raised: ['2026-03-01'] })[0]?.headline.includes(
-				'no check date; raised 2026-03-01, updated 2026-06-10. Give it'
+				'no check date; raised 2026-03-01. Give it'
 			) === true &&
-				undated({ ...open, updated: ['2026-06-10'] })[0]?.headline.includes(
-					'no check date; updated 2026-06-10. Give it'
-				) === true &&
+				!undated({ ...open, updated: ['2026-06-10'] })[0]!.headline.includes('updated') &&
 				!base[0]!.headline.includes('raised') &&
 				!undated({ ...open, raised: ['sometime'] })[0]!.headline.includes('raised')
 		);
 		check(
 			'undated: the headline names the key the page uses',
-			undated({ type: ['Commitment'], state: ['open'] })[0]?.headline.includes('(state open)') ===
-				true
+			undated({ type: ['Commitment'], status: ['open'] })[0]?.headline.includes('(status open)') ===
+				true &&
+				undated({ type: ['Commitment'], state: ['open'] })[0]?.headline.includes('(state open)') ===
+					true
 		);
 		check(
 			'undated: type matching is the commitment pattern, first type only',
@@ -955,9 +962,26 @@ console.log('\nfolder-note advisory: a note-less folder holding its own overview
 				undated({ ...open, type: ['Note', 'Decision'] }).length === 0
 		);
 		check(
-			'undated: no status field raises nothing',
+			'undated: no state or status raises nothing',
 			undated({ type: ['Decision'] }).length === 0 &&
-				undated({ type: ['Decision'], status: [' '] }).length === 0
+				undated({ type: ['Decision'], status: [' '] }).length === 0 &&
+				undated({ type: ['Decision'], state: [''] }).length === 0
+		);
+		check(
+			'undated: the page statuses draft and stable say nothing about the commitment',
+			undated({ type: ['Decision'], status: ['draft'] }).length === 0 &&
+				undated({ type: ['Decision'], status: ['stable'] }).length === 0 &&
+				undated({ type: ['Decision'], status: ['Stable'] }).length === 0
+		);
+		check(
+			'undated: a status that is not a page status raises, and so does any state',
+			undated({ type: ['Decision'], status: ['open'] }).length === 1 &&
+				undated({ type: ['Decision'], status: ['stable'], state: ['open'] }).length === 1 &&
+				undated({
+					type: ['Decision'],
+					status: ['draft'],
+					state: ['proposed']
+				})[0]?.headline.includes('(state proposed)') === true
 		);
 		for (const closed of [
 			'done',
@@ -970,7 +994,8 @@ console.log('\nfolder-note advisory: a note-less folder holding its own overview
 			'canceled',
 			'dropped',
 			'superseded',
-			'archived'
+			'archived',
+			'deprecated'
 		])
 			check(
 				`undated: status "${closed}" raises nothing`,
@@ -979,7 +1004,7 @@ console.log('\nfolder-note advisory: a note-less folder holding its own overview
 			);
 		check(
 			'undated: a closed state beats an open status',
-			undated({ type: ['Decision'], status: ['proposed'], state: ['decided'] }).length === 0
+			undated({ type: ['Decision'], status: ['open'], state: ['decided'] }).length === 0
 		);
 		check(
 			'undated: check_at or due (even past) raises nothing',
@@ -1006,8 +1031,7 @@ console.log('\nfolder-note advisory: a note-less folder holding its own overview
 		);
 		check(
 			'undated: editing the page keeps the key',
-			undated({ ...open, status: ['in progress'], updated: ['2026-07-01'] })[0]?.key ===
-				base[0]!.key
+			undated({ ...open, state: ['in progress'], updated: ['2026-07-01'] })[0]?.key === base[0]!.key
 		);
 		check(
 			'undated: it ranks below prediction-due',
