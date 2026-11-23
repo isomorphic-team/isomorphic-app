@@ -1051,14 +1051,14 @@ try {
 		fields: { expected: 'Churn stays under 5%', check_at: inDays(3) }
 	});
 	check('setting check_at silences the prompt', !/check_at: YYYY-MM-DD/.test(r.text), r.text);
-	r = await call('write_page', {
+	await call('write_page', {
 		path: 'wiki/decisions/hiring.md',
 		title: 'Hire a designer',
 		type: 'Decision',
 		content: 'Hire one.',
 		fields: { expected: 'Offer accepted', check_at: inDays(30) }
 	});
-	r = await call('write_page', {
+	await call('write_page', {
 		path: 'wiki/notes/standup.md',
 		title: 'Standup',
 		type: 'Meeting',
@@ -1098,7 +1098,7 @@ try {
 		!/\[[a-z-]+:[^\]]*\]/.test(comingBlock(r.text)),
 		r.text
 	);
-	r = await call('write_page', { path: 'wiki/decisions/pricing.md', fields: { outcome: 'held' } });
+	await call('write_page', { path: 'wiki/decisions/pricing.md', fields: { outcome: 'held' } });
 	await settledHead();
 	r = await call('validate', {});
 	check('an outcome removes it from the list', comingBlock(r.text) === '', r.text);
