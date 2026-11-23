@@ -1275,6 +1275,53 @@ try {
 		r.text
 	);
 
+	// ══ feature offers: one line after the due area, dismissed through resolve ═══
+	// The earlier sections leave dated decisions behind; clear them so the brain is the
+	// motivating shape: many decisions, none with a check date or outcome.
+	for (const name of ['hiring', 'pricing', 'ship', 'vendor-review', 'vendor'])
+		await call('delete_page', { path: `wiki/decisions/${name}.md` });
+	for (let i = 1; i <= 6; i++)
+		await call('write_page', {
+			path: `wiki/offers/d${i}.md`,
+			title: `Offer decision ${i}`,
+			type: 'Decision',
+			content: `Decision ${i}.`,
+			fields: { next_step_due: inDays(90) }
+		});
+	await settledHead();
+	const OFFER_KEY = '[feature-offer:commitments]';
+	r = await call('validate', {});
+	const offerAt = r.text.indexOf(OFFER_KEY);
+	check(
+		'validate offers the commitments feature right after the due area',
+		offerAt > r.text.indexOf('Nothing due or coming due') &&
+			r.text.slice(0, offerAt).includes('Tell the person:') &&
+			r.text.includes('Only if yes:') &&
+			r.text.split(OFFER_KEY).length === 2 &&
+			(!r.text.includes('need a decision') || offerAt < r.text.indexOf('need a decision')),
+		r.text
+	);
+	check(
+		'the offer is not counted in the findings intro',
+		!/\n\d+ finding\(s\) need a decision/.test(r.text) ||
+			!r.text.slice(r.text.indexOf('need a decision')).includes(OFFER_KEY),
+		r.text
+	);
+	r = await call('resolve', {
+		decisions: [
+			{ finding: 'feature-offer:commitments', action: 'dismiss', why: 'tracked elsewhere' }
+		]
+	});
+	check('resolve dismisses an offer by its key', !r.isError, r.text);
+	await settledHead();
+	r = await call('validate', {});
+	check('a dismissed offer is gone from validate', !r.text.includes(OFFER_KEY), r.text);
+	await call('write_page', {
+		path: 'wiki/offers/d1.md',
+		fields: { expected: 'Done', check_at: inDays(3) }
+	});
+	await settledHead();
+
 	// ══ findings: validate surfaces, resolve records, validate stops re-raising ═══
 	// The whole point of keying findings. Driven end to end because the ledger is a
 	// real file in the repo and the round trip is what a user actually performs: the
