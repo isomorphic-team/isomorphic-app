@@ -13,6 +13,8 @@ import {
 	typeFieldSuggestions,
 	predictionDueFindings,
 	comingDueLines,
+	checkDateOf,
+	dueBlock,
 	COMING_DUE_DAYS,
 	MAX_COMING_DUE_LINES,
 	ambiguousTitleSuggestions,
@@ -789,6 +791,127 @@ console.log('\nfolder-note advisory: a note-less folder holding its own overview
 		TODAY
 	);
 	check('coming due: earliest first', ordered[0]!.includes('b.md') && ordered[1]!.includes('a.md'));
+
+	// the follow-up date keys: due stands in when there is no check_at
+	{
+		const alias = (rows: Record<string, string[]>) => due(rows)[0];
+		const viaDue = alias({ due: ['2026-11-10'], expected: ['Draft sent'] });
+		check(
+			'follow-up: a dated due raises with the usual key',
+			viaDue?.key === findingKey('prediction-due', 'decisions/pricing.md@2026-11-10'),
+			viaDue?.key
+		);
+		check(
+			'follow-up: the headline and hint are pinned and do not say prediction',
+			viaDue?.headline ===
+				'- decisions/pricing.md: due 2026-11-10 (from `due`), nothing recorded. Expected: Draft sent. If done, record what happened with write_page fields {outcome: ...}; if it moved, set a new date with write_page fields {due: ...}; or dismiss with resolve and a reason.',
+			viaDue?.headline
+		);
+		check(
+			'follow-up: a check_at page keeps its wording',
+			!due({ check_at: ['2026-11-10'] })[0]!.headline.includes('date from') &&
+				due({ check_at: ['2026-11-10'] })[0]!.headline.includes('Record it with write_page')
+		);
+		check(
+			'follow-up: check_at wins over due',
+			due({ check_at: ['2026-12-25'], due: ['2026-11-10'] }).length === 0 &&
+				alias({ check_at: ['2026-11-10'], due: ['2026-11-01'] })?.key.endsWith('@2026-11-10') ===
+					true
+		);
+		check(
+			'follow-up: a condition is ignored, a later date in the list is not',
+			due({ due: ['when the audit lands'] }).length === 0 &&
+				due({ due: ['after launch', '2026-11-10'] }).length === 1
+		);
+		check(
+			'follow-up: an unparseable check_at is not replaced by due',
+			due({ check_at: ['next week'], due: ['2026-11-10'] }).length === 0
+		);
+		check('follow-up: a future due does not raise', due({ due: ['2026-12-25'] }).length === 0);
+		check(
+			'follow-up: an outcome closes it',
+			due({ due: ['2026-11-10'], outcome: ['sent'] }).length === 0
+		);
+		for (const closed of [
+			'done',
+			'closed',
+			'complete',
+			'completed',
+			'resolved',
+			'decided',
+			'cancelled',
+			'canceled',
+			'dropped',
+			'superseded',
+			'archived'
+		])
+			check(
+				`follow-up: status "${closed}" skips the alias path`,
+				due({ due: ['2026-11-10'], status: [closed] }).length === 0
+			);
+		for (const [k, v] of [
+			['status', 'Done'],
+			['status', ' superseded '],
+			['state', 'closed'],
+			['state', 'ARCHIVED']
+		] as const)
+			check(
+				`follow-up: ${k} "${v.trim()}" skips the alias path`,
+				due({ due: ['2026-11-10'], [k]: [v] }).length === 0
+			);
+		check(
+			'follow-up: an open status does not skip',
+			due({ due: ['2026-11-10'], status: ['in progress'] }).length === 1
+		);
+		check(
+			'follow-up: a closed status does not close a page with check_at',
+			due({ check_at: ['2026-11-10'], status: ['done'] }).length === 1
+		);
+		check(
+			'follow-up: source_key and source_keys skip the alias path',
+			due({ due: ['2026-11-10'], source_key: ['crm-1'] }).length === 0 &&
+				due({ due: ['2026-11-10'], source_keys: ['crm-1'] }).length === 0 &&
+				due({ check_at: ['2026-11-10'], source_key: ['crm-1'] }).length === 1
+		);
+		check(
+			'follow-up: coming due includes the alias, naming the key',
+			coming({ due: ['2026-11-25'], expected: ['Draft sent'] }) ===
+				'- decisions/pricing.md: due 2026-11-25 (from `due`, in 2 days). Expected: Draft sent. If done, record what happened with write_page fields {outcome: ...}; if it moved, set a new date with write_page fields {due: ...}.' &&
+				coming({ due: ['2026-11-25'], status: ['done'] }) === ''
+		);
+		check(
+			'follow-up: checkDateOf reports the key and handles a missing page',
+			checkDateOf((k) => ({ due: ['2026-11-10T09:00Z'] })[k])?.key === 'due' &&
+				checkDateOf(() => undefined) === undefined
+		);
+	}
+
+	// the block validate opens with
+	{
+		const nothing = dueBlock([], 0);
+		check(
+			'due block: nothing due prints one line naming the keys read and the gap',
+			nothing ===
+				'\n\nNothing due or coming due from `check_at` or `due`; dates kept in other fields are not listed.',
+			nothing
+		);
+		const coming1 = dueBlock(['- a.md: due 2026-11-25 (from `due`, in 2 days).'], 0);
+		check(
+			'due block: coming lines sit under the header',
+			coming1.startsWith(
+				'\n\nDue and coming due (read from `check_at` or `due`; dates kept in other fields are not listed):\n- a.md'
+			),
+			coming1
+		);
+		const overdueOnly = dueBlock([], 2);
+		check(
+			'due block: overdue alone still prints the header and the count',
+			overdueOnly.includes('Due and coming due') &&
+				overdueOnly.endsWith('\n2 overdue (prediction-due findings).') &&
+				!/below|listed/.test(overdueOnly.split('\n').at(-1)!),
+			overdueOnly
+		);
+	}
 
 	const typed = typeFieldSuggestions(
 		[{ path: 'a.md' }, { path: 'b.md' }],

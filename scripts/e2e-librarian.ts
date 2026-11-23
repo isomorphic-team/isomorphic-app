@@ -1023,11 +1023,13 @@ try {
 	const inDays = (n: number) =>
 		new Date(Date.parse(todayIso()) + n * 86_400_000).toISOString().slice(0, 10);
 	const comingBlock = (text: string) =>
-		/Commitments coming due[^\n]*\n(?:- [^\n]*\n?)+/.exec(text)?.[0] ?? '';
+		/Due and coming due[^\n]*\n(?:- [^\n]*\n?)+/.exec(text)?.[0] ?? '';
 	r = await call('validate', {});
 	check(
-		'validate omits the coming-due list when nothing is due',
-		!/coming due/i.test(r.text),
+		'validate says nothing is due when nothing is',
+		r.text.includes(
+			'Nothing due or coming due from `check_at` or `due`; dates kept in other fields are not listed.'
+		),
 		r.text
 	);
 	r = await call('write_page', {
@@ -1098,10 +1100,60 @@ try {
 		!/\[[a-z-]+:[^\]]*\]/.test(comingBlock(r.text)),
 		r.text
 	);
+	check(
+		'the due block carries the scope note in its header',
+		r.text.includes(
+			'Due and coming due (read from `check_at` or `due`; dates kept in other fields are not listed):'
+		),
+		r.text
+	);
+	check(
+		'the coming-due list comes before the findings',
+		!r.text.includes('need a decision') ||
+			r.text.indexOf('Due and coming due') < r.text.indexOf('need a decision'),
+		r.text
+	);
+	r = await call('write_page', {
+		path: 'wiki/decisions/vendor.md',
+		title: 'Pick a vendor',
+		type: 'Decision',
+		content: 'Pick one.',
+		fields: { expected: 'Shortlist agreed', due: inDays(2) }
+	});
+	check('a dated due gets no check_at prompt', !/check_at: YYYY-MM-DD/.test(r.text), r.text);
+	await settledHead();
+	r = await call('validate', {});
+	check(
+		'validate lists a commitment kept in due, naming the key',
+		comingBlock(r.text).includes('wiki/decisions/vendor.md: due ' + inDays(2)) &&
+			comingBlock(r.text).includes('(from `due`'),
+		r.text
+	);
 	await call('write_page', { path: 'wiki/decisions/pricing.md', fields: { outcome: 'held' } });
 	await settledHead();
 	r = await call('validate', {});
-	check('an outcome removes it from the list', comingBlock(r.text) === '', r.text);
+	check(
+		'an outcome removes it from the list',
+		!comingBlock(r.text).includes('wiki/decisions/pricing.md'),
+		r.text
+	);
+
+	await call('write_page', {
+		path: 'wiki/decisions/ship.md',
+		title: 'Ship the draft',
+		type: 'Decision',
+		content: 'Ship it.',
+		fields: { expected: 'Draft out', due: inDays(-3) }
+	});
+	await settledHead();
+	r = await call('validate', {});
+	check(
+		'an overdue due is counted in the block (the finding itself can sit under the findings cap)',
+		r.text.includes('1 overdue (prediction-due findings).'),
+		r.text
+	);
+	await call('write_page', { path: 'wiki/decisions/ship.md', fields: { outcome: 'sent' } });
+	await settledHead();
 
 	// ══ findings: validate surfaces, resolve records, validate stops re-raising ═══
 	// The whole point of keying findings. Driven end to end because the ledger is a

@@ -10,6 +10,7 @@
 // changelog is a file in the brain's own repository that people read, so its
 // wording is a contract, and this is where it is kept.
 
+import { checkDateOf } from './advisories.ts';
 import type { BrainConfig } from './brain-policy.ts';
 import { logPathOf } from './brain-policy.ts';
 import type { CommitAuthor, CommitOrPROpts, FileWrite } from './brain-repo.ts';
@@ -100,14 +101,14 @@ const hasValue = (fm: Frontmatter, key: string) => listOf(fm[key]).some((v) => v
 
 /**
  * The prompt to record a commitment with its check date, at most one per write. A new
- * page typed Decision or Commitment with no `check_at` and no `outcome` gets it; an
- * update gets it when the call set `expected` and the page still has no `check_at`.
+ * page typed Decision or Commitment with no check date (`check_at`, or a dated `due`, `checkDateOf`) and no `outcome` gets it; an
+ * update gets it when the call set `expected` and the page still has no check date.
  * Failing those, a page of another type gets a second, narrower note when the text this
  * write added carries a deadline phrase. Empty otherwise.
  */
 export function expectationNote(input: ExpectationInput): string {
 	const fm = input.frontmatter;
-	if (hasValue(fm, 'check_at')) return '';
+	if (hasValue(fm, 'check_at') || checkDateOf((k) => listOf(fm[k]))) return '';
 	const commitmentPage = COMMITMENT_TYPE_RE.test(listOf(fm.type)[0] ?? '');
 	if (input.kind === 'create') {
 		if (commitmentPage) return hasValue(fm, 'outcome') ? '' : `${EXPECTATION_TEXT} ${RECORD_TEXT}`;
