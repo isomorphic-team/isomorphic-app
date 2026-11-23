@@ -1155,6 +1155,43 @@ try {
 	await call('write_page', { path: 'wiki/decisions/ship.md', fields: { outcome: 'sent' } });
 	await settledHead();
 
+	// The findings cap (12, by weight) hides this finding in a brain with this many, so
+	// the wiring is pinned by the findings count rather than by its line.
+	const findingCount = (text: string) =>
+		Number(/(\d+) finding\(s\) need a decision/.exec(text)?.[1]);
+	// The page is created with no state first, so the count that follows differs from
+	// this one by the undated-commitment finding alone (the new page is also an island).
+	await call('write_page', {
+		path: 'wiki/decisions/vendor-review.md',
+		title: 'Review the vendor',
+		type: 'Decision',
+		content: 'Review it.'
+	});
+	await settledHead();
+	r = await call('validate', {});
+	const undatedBefore = findingCount(r.text);
+	await call('write_page', {
+		path: 'wiki/decisions/vendor-review.md',
+		fields: { state: 'proposed' }
+	});
+	await settledHead();
+	r = await call('validate', {});
+	check(
+		'an open decision with no date adds one finding to validate',
+		findingCount(r.text) === undatedBefore + 1,
+		`${undatedBefore} -> ${findingCount(r.text)}`
+	);
+	await call('write_page', {
+		path: 'wiki/decisions/vendor-review.md',
+		fields: { state: 'decided' }
+	});
+	await settledHead();
+	r = await call('validate', {});
+	check(
+		'closing it in its state field removes the finding',
+		findingCount(r.text) === undatedBefore
+	);
+
 	// ══ findings: validate surfaces, resolve records, validate stops re-raising ═══
 	// The whole point of keying findings. Driven end to end because the ledger is a
 	// real file in the repo and the round trip is what a user actually performs: the
