@@ -1,7 +1,8 @@
 # Concepts
 
-Every concept the product has, with its one meaning and where it lives. A design or a change
-names the rows it uses. A change that needs a new concept adds a row in the same pull request
+Every concept the product has, with its one meaning and where it lives. Which job each concept
+serves, and the path through the product it sits on, is in [`product-spine.md`](product-spine.md).
+A design or a change names the rows it uses. A change that needs a new concept adds a row in the same pull request
 and says why no existing row does the job. Changing what a row means is a product decision for
 the maintainer, not a refactor.
 
