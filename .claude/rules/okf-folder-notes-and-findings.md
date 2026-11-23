@@ -94,7 +94,10 @@ are in the list, with keys.
   **`dueBlock`** is the one function that builds the due area `validate` opens with. Its header
   is the instruction the reader acts on (answer from these lines first, give the findings
   below one line, say what is not read); with nothing due it is one line saying the same.
-  `librarian.ts` only partitions: `partitionCommitments` (`findings.ts`, by the kind in the
+  `openFindings` (`src/lib/open-findings.ts`) assembles everything open (the advisory and queued
+  findings, dismissals, the due area, the feature offer, the other-dates block) and returns it
+  structured with the two rendered texts `validate` prints; `validate` only gathers imports and
+  link defects around it. It partitions: `partitionCommitments` (`findings.ts`, by the kind in the
   key) splits `prediction-due` and `undated-commitment` from the other findings after
   clustering, each group goes through `renderFindings` with its own cap, and the commitment
   group renders in the due area ahead of the coming-due lines, keyed and dismissable. The

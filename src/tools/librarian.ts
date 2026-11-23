@@ -63,36 +63,9 @@ import {
 import { isMediaPath, mediaTypeOf } from '../lib/media.ts';
 import { tryRenderViews, type ViewDeps } from '../lib/views.ts';
 import { isToolPagePath, planCustomTools } from '../lib/custom-tools.ts';
-import { isFolderNoteName } from '../lib/view-directives.ts';
-import {
-	filterDismissed,
-	renderValidateFindings,
-	parseReviewLedger,
-	REVIEW_LEDGER_PATH,
-	importFindings,
-	renderFindings,
-	type Finding,
-	type ReviewLedger
-} from '../lib/findings.ts';
-import { offerContext, pickOffer } from '../lib/feature-offers.ts';
-import { FEATURES, hasFeature } from '../lib/entitlements.ts';
-import {
-	folderNoteSuggestions,
-	inlinedConceptSuggestions,
-	typeFieldSuggestions,
-	predictionDueFindings,
-	undatedCommitmentFindings,
-	comingDueLines,
-	otherDueBlock,
-	otherDueLines,
-	dueBlock,
-	ambiguousTitleSuggestions,
-	brokenLinkReport,
-	wikilinkPortabilityNote,
-	describeProbe,
-	MAX_FINDINGS_SHOWN
-} from '../lib/advisories.ts';
-import { computeTensions, tensionFindings, MAX_DUP_PAGES } from '../lib/consolidate.ts';
+import { importFindings, type Finding } from '../lib/findings.ts';
+import { openFindings } from '../lib/open-findings.ts';
+import { folderNoteSuggestions, brokenLinkReport, describeProbe } from '../lib/advisories.ts';
 import { scoreProbe } from '../lib/probe.ts';
 import { OKF_PAGE_STATUSES } from '../lib/page-patch.ts';
 import { elisionNote } from '../lib/search.ts';
@@ -101,15 +74,7 @@ import { dedupeWrite, writeFingerprint, secondsSince } from '../lib/write-dedupe
 import { d1WriteLedger } from '../lib/write-dedupe-store.ts';
 import { detectionSection } from '../lib/policy-guard.ts';
 import { readCoverage } from '../lib/policy-store.ts';
-import {
-	isPolicyKey,
-	otherBrainIds,
-	queueReport,
-	clusterFindings,
-	readReconciledFindings,
-	staleNote,
-	type ReachableBrain
-} from '../lib/review-queue.ts';
+import { type ReachableBrain } from '../lib/review-queue.ts';
 import { brainLabel, type TenantOpts, type Role, type AccessibleBrain } from '../lib/orgs.ts';
 import { brainArg, fail, ok } from './shared.ts';
 import {
@@ -1477,122 +1442,31 @@ export function registerLibrarianTools(
 			// page list (no extra fetch).
 			const folderNotes = folderNoteSuggestions(resolved.pages);
 
-			// OKF structure advisories: concepts inlined into a folder note instead of
-			// getting their own file, and pages missing the `type:` the format requires.
-			// Soft and best-effort — a failure here must never take link validation with it.
+			// Advisory only, and best-effort: a failure here never takes link validation with it.
 			let findingsText = '';
 			let comingDueText = '';
 			let openPolicy: number | null = null;
 			try {
-				const notePaths = resolved.pages
-					.filter((p) => isFolderNoteName(p.path.slice(p.path.lastIndexOf('/') + 1)))
-					.map((p) => p.path);
-				const noteContents = await index.pageContents(notePaths);
-				const fieldsByPath = await index.allFields();
-				const conceptPages = resolved.pages.filter(
-					(p) =>
-						!isFolderNoteName(p.path.slice(p.path.lastIndexOf('/') + 1)) &&
-						!isToolMaintained(p.path, config)
-				);
-
-				// Consolidation tensions need page BODIES only for near-duplicate
-				// detection, and loading a whole brain's content is the one expensive
-				// thing here — so above the cap that check is skipped rather than run.
-				const contents =
-					resolved.pages.length <= MAX_DUP_PAGES
-						? await index.pageContents(resolved.pages.map((p) => p.path))
-						: undefined;
-
-				// Stored findings. An unreadable queue costs this block, not the report.
-				let queued: { open: Finding[]; stale: Finding[] } = { open: [], stale: [] };
-				const rows = await readReconciledFindings({
-					db,
+				const open = await openFindings({
 					store,
-					repo: locator,
-					defaultBranch: config.defaultBranch,
+					locator,
+					config,
+					db,
 					brainId,
-					secret: policySecret
-				}).catch(() => []);
-				if (rows.length) {
-					queued = queueReport(
-						rows,
-						await index.pageShas(),
-						{ role, userId: actorUserId },
-						await reachableBrains(otherBrainIds(rows), deps, openIndex)
-					);
-				}
-
-				const all: Finding[] = [
-					...importFindingsList,
-					...queued.open,
-					...inlinedConceptSuggestions(
-						[...noteContents].map(([path, content]) => ({ path, content })),
-						resolved.pages
-					),
-					...typeFieldSuggestions(conceptPages, fieldsByPath),
-					...predictionDueFindings(conceptPages, fieldsByPath, todayIso()),
-					...undatedCommitmentFindings(conceptPages, fieldsByPath),
-					...ambiguousTitleSuggestions(resolved.pages),
-					...wikilinkPortabilityNote(resolved.edges),
-					...folderNotes,
-					...tensionFindings(
-						computeTensions({
-							pages: resolved.pages,
-							edges: resolved.edges,
-							contents,
-							toolMaintained: (p) => isToolMaintained(p, config),
-							fields: fieldsByPath,
-							identityFields: config.identityFields,
-							isContent: (p) => isContentPath(p, config)
-						})
-					)
-				];
-
-				// Everything already decided about is dropped here. A best-effort read:
-				// a corrupt or unreadable ledger must not cost the caller their report,
-				// it just means nothing is filtered this run.
-				let kept = all;
-				let keptStale = queued.stale;
-				let ledger: ReviewLedger | null = null;
-				try {
-					const raw = await store.readFile(locator, REVIEW_LEDGER_PATH);
-					ledger = parseReviewLedger(raw?.content ?? null);
-					kept = filterDismissed(all, ledger);
-					keptStale = filterDismissed(queued.stale, ledger);
-				} catch {
-					// An unparseable ledger filters nothing rather than failing the read.
-				}
-
-				// Commitment findings render in the due area, capped apart from the rest, so a
-				// full report of housekeeping cannot hide them.
-				const rendered = renderValidateFindings(
-					clusterFindings(kept),
-					all.length - kept.length,
-					MAX_FINDINGS_SHOWN
-				);
-				findingsText = rendered.list + staleNote(keptStale.length);
-				const coming = comingDueLines(conceptPages, fieldsByPath, todayIso());
-				// One offer for a feature the brain does not use, right after the due area. It
-				// is not in `all`, so it never counts in the findings intro or the cap.
-				const offer = await pickOffer(
-					offerContext({
-						pages: conceptPages,
-						fields: fieldsByPath,
-						indexedFields: config.indexedFields,
-						role,
-						orgRole,
-						orgId,
-						keptKeys: kept.map((f) => f.key),
-						lacksEnterprise: async () =>
-							!(orgId && (await hasFeature(db, orgId, FEATURES.enterprise)))
-					}),
-					(offers) => (ledger ? filterDismissed(offers, ledger) : offers)
-				);
-				comingDueText =
-					dueBlock(rendered.due, coming) +
-					(offer ? `\n\n${renderFindings([offer], 1).text}` : '') +
-					otherDueBlock(otherDueLines(conceptPages, fieldsByPath, todayIso()));
-				openPolicy = kept.filter((f) => isPolicyKey(f.key)).length;
+					index,
+					graph: resolved,
+					role,
+					actorUserId,
+					orgId,
+					orgRole,
+					policySecret,
+					importFindings: importFindingsList,
+					folderNotes,
+					reachable: (ids) => reachableBrains(ids, deps, openIndex)
+				});
+				findingsText = open.findingsText;
+				comingDueText = open.comingDueText;
+				openPolicy = open.openPolicy;
 			} catch {
 				// Advisory only; link validation stands alone.
 			}
