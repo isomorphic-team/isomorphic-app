@@ -106,7 +106,7 @@ The product has four partial versions of the same thing:
 
 Each is something unresolved, with a source and someone who should answer it. The queue is
 the one with keys, visibility rules and a `resolve` path, so it is the one to extend: more
-kinds (a question, an obligation, a prediction due), and a read across every brain in an org.
+kinds (a question, an obligation; a prediction due is computed in `validate` instead), and a read across every brain in an org.
 A page convention can stay as the human-readable face of the same items.
 
 Open items are also the only channel between brains. A pass or an agent that finds something
@@ -315,7 +315,7 @@ Each step is useful without the ones after it.
    deciding which side stands, which needs step 2.
 4. **The org view.** Review and open questions across an org's brains. The first visible
    form of the view.
-5. **More kinds of open item:** question, obligation, prediction due.
+5. **More kinds of open item:** question, obligation. Prediction due is built as a finding `validate` computes.
 6. **Prevention.** Cross-brain wikilinks, then publishing.
 7. **A scheduled org pass.** Built in a first form: an hourly run checks each brain that
    takes part against the others, as the organization and not as a person. Taking part is

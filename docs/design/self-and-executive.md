@@ -260,7 +260,7 @@ becomes an `arbitration` item addressed to the authors.
 
 Items are the channel between the passes and the executive:
 
-1. A pass raises `prediction-due`.
+1. `validate` lists `prediction-due` from the page's frontmatter; nothing is queued.
 2. The executive, next time it is in conversation, reads the item and looks in its sources.
 3. It records the outcome.
 4. The next compare pass raises a `surprise`, or nothing.
