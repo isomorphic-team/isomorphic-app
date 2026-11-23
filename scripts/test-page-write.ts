@@ -961,6 +961,35 @@ console.log('\nwrite_page: the deadline-phrase note');
 				patch: { expected: 'x' }
 			}).includes(RECORD_VIEW)
 	);
+	// A page that already carries a check date under its own key is not asked for check_at.
+	{
+		const prompts = (frontmatter: Frontmatter, kind: 'create' | 'update' = 'create') =>
+			expectationNote({ kind, frontmatter }) !== '';
+		check(
+			'follow-up date: a dated due on a Decision gets no check_at prompt',
+			!prompts({ type: 'Decision', due: '2026-12-01' })
+		);
+		check(
+			'follow-up date: a dated revisit on a Commitment gets no check_at prompt',
+			!prompts({ type: 'Commitment', revisit: '2026-12-01' })
+		);
+		check(
+			'follow-up date: a conditional revisit still gets the prompt',
+			prompts({ type: 'Decision', revisit: 'when the audit lands' })
+		);
+		check(
+			'follow-up date: a closed status brings the prompt back',
+			prompts({ type: 'Decision', due: '2026-12-01', status: 'done' })
+		);
+		check(
+			'follow-up date: an update that set expected on a page with a dated due is silent',
+			expectationNote({
+				kind: 'update',
+				frontmatter: { type: 'Decision', expected: 'x', due: '2026-12-01' },
+				patch: { expected: 'x' }
+			}) === ''
+		);
+	}
 	check('deadline: hasDeadlinePhrase matches the plain case', hasDeadlinePhrase('due Tuesday'));
 
 	// Added text only: the existing page body is never read.

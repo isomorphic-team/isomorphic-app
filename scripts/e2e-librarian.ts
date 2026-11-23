@@ -1098,10 +1098,36 @@ try {
 		!/\[[a-z-]+:[^\]]*\]/.test(comingBlock(r.text)),
 		r.text
 	);
+	check(
+		'the coming-due list comes before the findings',
+		!r.text.includes('need a decision') ||
+			r.text.indexOf('Commitments coming due') < r.text.indexOf('need a decision'),
+		r.text
+	);
+	r = await call('write_page', {
+		path: 'wiki/decisions/vendor.md',
+		title: 'Pick a vendor',
+		type: 'Decision',
+		content: 'Pick one.',
+		fields: { expected: 'Shortlist agreed', due: inDays(2) }
+	});
+	check('a dated due gets no check_at prompt', !/check_at: YYYY-MM-DD/.test(r.text), r.text);
+	await settledHead();
+	r = await call('validate', {});
+	check(
+		'validate lists a commitment kept in due, naming the key',
+		comingBlock(r.text).includes('wiki/decisions/vendor.md: check due ' + inDays(2)) &&
+			comingBlock(r.text).includes('(date from `due`)'),
+		r.text
+	);
 	await call('write_page', { path: 'wiki/decisions/pricing.md', fields: { outcome: 'held' } });
 	await settledHead();
 	r = await call('validate', {});
-	check('an outcome removes it from the list', comingBlock(r.text) === '', r.text);
+	check(
+		'an outcome removes it from the list',
+		!comingBlock(r.text).includes('wiki/decisions/pricing.md'),
+		r.text
+	);
 
 	// ══ findings: validate surfaces, resolve records, validate stops re-raising ═══
 	// The whole point of keying findings. Driven end to end because the ledger is a

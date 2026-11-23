@@ -77,6 +77,11 @@ console.log('\ncommitments');
 		line
 	);
 	check(
+		'it says a dated due or revisit counts too',
+		/`check_at` \(or a dated `due` or `revisit`\)/.test(line),
+		line
+	);
+	check(
 		'it links a commitment to the page whose claim it tests',
 		/linking to the page whose claim it tests/.test(line),
 		line

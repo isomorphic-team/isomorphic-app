@@ -76,21 +76,24 @@ are in the list, with keys.
   tuned against false positives), `typeFieldSuggestions` (inconsistency, not absence),
   `ambiguousTitleSuggestions`, `wikilinkPortabilityNote`, plus `brokenLinkReport`. Anything
   needing a `BrainContext` belongs back in the tool.
-- **`predictionDueFindings`** (`advisories.ts`, pure) lists a concept page whose first
-  `check_at` is on or before today (read with `datePart`; unparseable values are ignored) and
-  that has no non-empty `outcome`, quoting `expected`. Key `prediction-due:<path>@<date>`, so a
+- **`predictionDueFindings`** (`advisories.ts`, pure) lists a concept page whose check date
+  is on or before today and that has no non-empty `outcome`. `checkDateOf` reads the date: the
+  first `check_at` (via `datePart`; unparseable values are ignored), else the first dated `due`
+  or `revisit`, unless the page has `source_key` or `source_keys` or a closed `status` or
+  `state`. A page's `check_at` closes only on `outcome`. A follow-up date adds "(date from
+  `due`)" to the line and a neutral next step. `RECORD_VIEW` still lists `check_at` pages only, quoting `expected`. Key `prediction-due:<path>@<date>`, so a
   dismissal covers that date and re-dating raises it again. Computed on each `validate` call
   and never queued (the queue is for findings that take work to produce). It reads indexed
   fields, so a brain whose `indexedFields` omits `check_at`, or a page whose `check_at` sits
   past `MAX_FIELD_KEYS_PER_PAGE`, is never raised. The Review screen (`view_review`) shows only
   policy findings, so this appears in `validate` alone.
-  **`comingDueLines`** is the same read for a `check_at` after today and within
+  **`comingDueLines`** is the same read for a check date after today and within
   `COMING_DUE_DAYS` (7): an unkeyed list in the `validate` result (earliest first,
   at most `MAX_COMING_DUE_LINES`, absent when empty), not a finding, so there is nothing to
   dismiss, and a page is never in it and in `prediction-due`. The `write_page` reply carries
   `expectationNote` (`change-record.ts`), at most one per write: for a new Decision or
-  Commitment page with no `check_at` or `outcome`, for an update that set `expected` on a page
-  with no `check_at`, or, on a page of another type with no `check_at` or `outcome`, when the
+  Commitment page with no check date or `outcome`, for an update that set `expected` on a page
+  with no check date, or, on a page of another type with no check date or `outcome`, when the
   text the write added matches `hasDeadlinePhrase` (by, before, until or due, then a weekday,
   month, ISO date or "next week").
 - **`src/lib/consolidate.ts`** (pure, `pnpm test:consolidate`) detects where a brain's cheap

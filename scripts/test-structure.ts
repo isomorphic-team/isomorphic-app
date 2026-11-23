@@ -13,6 +13,7 @@ import {
 	typeFieldSuggestions,
 	predictionDueFindings,
 	comingDueLines,
+	checkDateOf,
 	COMING_DUE_DAYS,
 	MAX_COMING_DUE_LINES,
 	ambiguousTitleSuggestions,
@@ -789,6 +790,93 @@ console.log('\nfolder-note advisory: a note-less folder holding its own overview
 		TODAY
 	);
 	check('coming due: earliest first', ordered[0]!.includes('b.md') && ordered[1]!.includes('a.md'));
+
+	// the follow-up date keys: due and revisit stand in when there is no check_at
+	{
+		const alias = (rows: Record<string, string[]>) => due(rows)[0];
+		const viaDue = alias({ due: ['2026-11-10'], expected: ['Draft sent'] });
+		check(
+			'follow-up: a dated due raises with the usual key',
+			viaDue?.key === findingKey('prediction-due', 'decisions/pricing.md@2026-11-10'),
+			viaDue?.key
+		);
+		check(
+			'follow-up: the headline names the key and does not call it a prediction',
+			viaDue?.headline.includes('(date from `due`)') === true &&
+				!/predict/i.test(viaDue.headline) &&
+				viaDue.headline.includes('mark it closed in the page') &&
+				viaDue.headline.includes('Draft sent'),
+			viaDue?.headline
+		);
+		check(
+			'follow-up: a check_at page keeps its wording',
+			!due({ check_at: ['2026-11-10'] })[0]!.headline.includes('date from') &&
+				due({ check_at: ['2026-11-10'] })[0]!.headline.includes('Record it with write_page')
+		);
+		check(
+			'follow-up: a dated revisit raises',
+			alias({ revisit: ['2026-11-10'] })?.headline.includes('(date from `revisit`)') === true
+		);
+		check(
+			'follow-up: due is read before revisit',
+			alias({ due: ['2026-11-10'], revisit: ['2026-11-01'] })?.key.endsWith('@2026-11-10') === true
+		);
+		check(
+			'follow-up: check_at wins over due',
+			due({ check_at: ['2026-12-25'], due: ['2026-11-10'] }).length === 0 &&
+				alias({ check_at: ['2026-11-10'], due: ['2026-11-01'] })?.key.endsWith('@2026-11-10') ===
+					true
+		);
+		check(
+			'follow-up: a condition is ignored, a later date in the list is not',
+			due({ revisit: ['when the audit lands'] }).length === 0 &&
+				due({ revisit: ['after launch', '2026-11-10'] }).length === 1
+		);
+		check(
+			'follow-up: an unparseable check_at is not replaced by due',
+			due({ check_at: ['next week'], due: ['2026-11-10'] }).length === 0
+		);
+		check('follow-up: a future due does not raise', due({ due: ['2026-12-25'] }).length === 0);
+		check(
+			'follow-up: an outcome closes it',
+			due({ due: ['2026-11-10'], outcome: ['sent'] }).length === 0
+		);
+		for (const [k, v] of [
+			['status', 'Done'],
+			['status', ' superseded '],
+			['status', 'cancelled'],
+			['state', 'closed'],
+			['state', 'ARCHIVED']
+		] as const)
+			check(
+				`follow-up: ${k} "${v.trim()}" skips the alias path`,
+				due({ due: ['2026-11-10'], [k]: [v] }).length === 0
+			);
+		check(
+			'follow-up: an open status does not skip',
+			due({ due: ['2026-11-10'], status: ['in progress'] }).length === 1
+		);
+		check(
+			'follow-up: a closed status does not close a page with check_at',
+			due({ check_at: ['2026-11-10'], status: ['done'] }).length === 1
+		);
+		check(
+			'follow-up: source_key and source_keys skip the alias path',
+			due({ due: ['2026-11-10'], source_key: ['crm-1'] }).length === 0 &&
+				due({ due: ['2026-11-10'], source_keys: ['crm-1'] }).length === 0 &&
+				due({ check_at: ['2026-11-10'], source_key: ['crm-1'] }).length === 1
+		);
+		check(
+			'follow-up: coming due includes the alias, naming the key',
+			coming({ due: ['2026-11-25'] }).includes('(in 2 days) (date from `due`)') &&
+				coming({ due: ['2026-11-25'], status: ['done'] }) === ''
+		);
+		check(
+			'follow-up: checkDateOf reports the key and handles a missing page',
+			checkDateOf((k) => ({ revisit: ['2026-11-10T09:00Z'] })[k])?.key === 'revisit' &&
+				checkDateOf(() => undefined) === undefined
+		);
+	}
 
 	const typed = typeFieldSuggestions(
 		[{ path: 'a.md' }, { path: 'b.md' }],
