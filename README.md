@@ -86,6 +86,13 @@ So the substrate is one markdown file per concept, in a normal git repository, i
 You can read it on github.com, edit it in Obsidian, grep it, diff it, and review a change in a
 pull request. If you stop using Isomorphic tomorrow you still have everything.
 
+The larger aim is people and AI doing together what neither could alone. The brain is where
+they meet: the agent does the writing down and the upkeep nobody has time for, people decide
+what matters and what a finding means, and both read and write the same files. Past one brain,
+that means brains that agree with each other, and then an organization that states what it
+expects and learns from what happens.
+[`docs/product-spine.md`](docs/product-spine.md) says how each feature serves that.
+
 ## Features
 
 Every tool is listed, grouped by what it is for. The gate each one sits behind is in

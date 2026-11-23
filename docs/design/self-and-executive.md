@@ -7,7 +7,8 @@ frontmatter; nothing else in this document is.
 - Author: Jon Hansing (via Claude)
 - Audience: anyone deciding what to build after roles and the org view, and the sessions that
   pick up the work items
-- Related: [`roles-self-and-world-model.md`](roles-self-and-world-model.md),
+- Related: [`../product-spine.md`](../product-spine.md) (what the product is for, and where the
+  self sits in it), [`roles-self-and-world-model.md`](roles-self-and-world-model.md),
   [`records-tables-prd.md`](records-tables-prd.md), [`consistency-checks.md`](consistency-checks.md),
   [`privacy-checks.md`](privacy-checks.md), [`multi-agent-surface.md`](multi-agent-surface.md),
   [`open-source-boundary.md`](open-source-boundary.md)
