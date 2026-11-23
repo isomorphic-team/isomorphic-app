@@ -905,7 +905,7 @@ console.log('\nfolder-note advisory: a note-less folder holding its own overview
 	// the block validate opens with
 	{
 		const NOT_READ =
-			'dates kept under other field names (not `check_at` or a name ending in due) are not read.';
+			'dates kept under other field names (not `check_at`, `due`, or a key ending in `_due`, `-due`, `_due_date` or `-due-date`) are not read.';
 		const nothing = dueBlock('', []);
 		check(
 			'due block: nothing due is one imperative sentence naming what is not read',

@@ -672,7 +672,7 @@ export function dueBlock(commitments: string, coming: string[]): string {
 }
 
 const NOT_READ =
-	'dates kept under other field names (not `check_at` or a name ending in due) are not read.';
+	'dates kept under other field names (not `check_at`, `due`, or a key ending in `_due`, `-due`, `_due_date` or `-due-date`) are not read.';
 
 // A decision or commitment page that is still open by its own status field and has no date to
 // check it by. Raised only when the page says it is open: a `state` value, or a `status`

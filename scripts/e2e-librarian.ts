@@ -1028,7 +1028,7 @@ try {
 	check(
 		'validate says nothing is due when nothing is',
 		r.text.includes(
-			'Nothing due or coming due. Tell the person that dates kept under other field names (not `check_at` or a name ending in due) are not read.'
+			'Nothing due or coming due. Tell the person that dates kept under other field names (not `check_at`, `due`, or a key ending in `_due`, `-due`, `_due_date` or `-due-date`) are not read.'
 		),
 		r.text
 	);
@@ -1107,7 +1107,7 @@ try {
 	check(
 		'the due block header is the instruction, with what is not read',
 		r.text.includes(
-			'Due and coming due. Answer from these lines first, give the findings further down one line, and tell the person that dates kept under other field names (not `check_at` or a name ending in due) are not read.'
+			'Due and coming due. Answer from these lines first, give the findings further down one line, and tell the person that dates kept under other field names (not `check_at`, `due`, or a key ending in `_due`, `-due`, `_due_date` or `-due-date`) are not read.'
 		),
 		r.text
 	);
