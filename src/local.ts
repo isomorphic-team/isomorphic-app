@@ -49,7 +49,7 @@ import { registerImportTools } from './tools/importer.ts';
 import { registerBrainApp } from './tools/apps.ts';
 import { loadCustomToolDefs, registerCustomTools } from './tools/custom.ts';
 import { loadBrainConfig } from './lib/brain-config.ts';
-import { SERVER_INSTRUCTIONS } from './lib/server-instructions.ts';
+import { SERVER_INSTRUCTIONS, staticWithDueLine } from './lib/server-instructions.ts';
 import { isHandshake, peekJsonRpc } from './lib/mcp-preamble.ts';
 import { pastDueLine } from './lib/open-findings.ts';
 import { todayIso } from './lib/wiki.ts';
@@ -203,16 +203,19 @@ function buildServer(instructions: string = SERVER_INSTRUCTIONS): McpServer {
 }
 
 // The static instructions plus the default brain's past-due line. The index is brought
-// current first (local, bounded by the reindex budget), so the first session sees the line.
-async function localInstructions(): Promise<string> {
-	try {
-		const ctx = await getContext();
-		await ctx.index.ensureFresh(ctx.store, ctx.locator, ctx.config);
-		return SERVER_INSTRUCTIONS + (await pastDueLine({ ...ctx, today: todayIso() }));
-	} catch (err) {
-		console.warn(`[instructions] ${err instanceof Error ? err.message : String(err)}`);
-		return SERVER_INSTRUCTIONS;
-	}
+// current first, within LOCAL_DUE_MS: a first build of a large folder finishes in the
+// background and the line is absent until the next handshake.
+const LOCAL_DUE_MS = 1_500;
+function localInstructions(): Promise<string> {
+	return staticWithDueLine(
+		async () => {
+			const ctx = await getContext();
+			await ctx.index.ensureFresh(ctx.store, ctx.locator, ctx.config);
+			return pastDueLine({ ...ctx, today: todayIso() });
+		},
+		LOCAL_DUE_MS,
+		(err) => console.warn(`[instructions] ${err instanceof Error ? err.message : String(err)}`)
+	);
 }
 
 const app = new Hono();

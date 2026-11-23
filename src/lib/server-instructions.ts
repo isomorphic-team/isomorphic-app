@@ -128,6 +128,18 @@ function compose(
 }
 
 /**
+ * SERVER_INSTRUCTIONS plus a past-due line for callers with no brain list (the local
+ * runtime). `line` has `ms` to answer; a late or failed lookup leaves the static text.
+ */
+export async function staticWithDueLine(
+	line: () => Promise<string>,
+	ms: number,
+	onError?: (err: unknown) => void
+): Promise<string> {
+	return SERVER_INSTRUCTIONS + (await withFallback(line(), ms, '', onError));
+}
+
+/**
  * The handshake text from its three lookups. The due line has its own deadline: a late or
  * failed lookup drops that line and leaves the brain list. The brain list's failure is the
  * caller's to handle (the whole text falls back to SERVER_INSTRUCTIONS).

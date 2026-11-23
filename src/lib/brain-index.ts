@@ -914,6 +914,10 @@ export async function loadDatedPages(
 			 FROM brain_page_fields f
 			 JOIN brain_pages p ON p.brain_id = f.brain_id AND p.path = f.path
 			 WHERE f.brain_id = ?1 AND f.key IN ('check_at', 'due')
+			   AND NOT EXISTS (
+			     SELECT 1 FROM brain_page_fields o
+			     WHERE o.brain_id = f.brain_id AND o.path = f.path AND o.key = 'outcome' AND TRIM(o.value) <> ''
+			   )
 			 ORDER BY p.path LIMIT ${MAX_DATED_PAGES}`
 		)
 		.bind(brainId)
