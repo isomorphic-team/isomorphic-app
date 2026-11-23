@@ -97,7 +97,7 @@ are in the list, with keys.
   `openFindings` (`src/lib/open-findings.ts`) assembles everything open (pending imports, the advisory and queued
   findings, dismissals, the due area, the feature offer, the other-dates block) and returns it
   structured (`due`, `findings`, `otherDates`, `offer`); `renderOpenFindings` makes the two texts `validate` prints; `validate` adds only the
-  link defects and tool notes around it. It partitions: `partitionCommitments` (`findings.ts`, by the kind in the
+  link defects and tool notes around it. `openFindings` partitions: `partitionCommitments` (`findings.ts`, by the kind in the
   key) splits `prediction-due` and `undated-commitment` from the other findings after
   clustering, each group goes through `renderFindings` with its own cap, and the commitment
   group renders in the due area ahead of the coming-due lines, keyed and dismissable. The

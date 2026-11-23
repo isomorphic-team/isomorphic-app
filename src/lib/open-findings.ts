@@ -48,6 +48,12 @@ import {
 import { isFolderNoteName } from './view-directives.ts';
 import { todayIso } from './wiki.ts';
 
+/** Pending import findings and the lines `validate` prints about them. */
+export interface ImportLedgers {
+	findings: Finding[];
+	notes: string[];
+}
+
 export interface OpenFindingsInput {
 	store: BrainStore;
 	locator: BrainLocator;
@@ -62,6 +68,8 @@ export interface OpenFindingsInput {
 	orgRole: Role | null | undefined;
 	policySecret: string | undefined;
 	/** The other brains the stored queue quotes, as far as the caller can open them. */
+	/** The caller's own `readImportLedgers`, when it needs the notes even if this throws. */
+	imports?: ImportLedgers;
 	reachable: (brainIds: readonly string[]) => Promise<Map<string, ReachableBrain>>;
 }
 
@@ -104,11 +112,11 @@ export function renderOpenFindings(open: OpenFindings): {
  * (`.isomorphic/imports/<source>.json`) until someone answers them with `resolve`. Best-effort:
  * a failed read costs this part only.
  */
-async function readImportLedgers(
+export async function readImportLedgers(
 	store: BrainStore,
 	locator: BrainLocator,
 	config: BrainConfig
-): Promise<{ findings: Finding[]; notes: string[] }> {
+): Promise<ImportLedgers> {
 	const findings: Finding[] = [];
 	const notes: string[] = [];
 	try {
@@ -143,7 +151,7 @@ async function readImportLedgers(
 
 export async function openFindings(input: OpenFindingsInput): Promise<OpenFindings> {
 	const { store, locator, config, index, graph: resolved } = input;
-	const imports = await readImportLedgers(store, locator, config);
+	const imports = input.imports ?? (await readImportLedgers(store, locator, config));
 	const notePaths = resolved.pages
 		.filter((p) => isFolderNoteName(p.path.slice(p.path.lastIndexOf('/') + 1)))
 		.map((p) => p.path);

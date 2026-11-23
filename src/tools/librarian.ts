@@ -63,7 +63,7 @@ import {
 import { isMediaPath, mediaTypeOf } from '../lib/media.ts';
 import { tryRenderViews, type ViewDeps } from '../lib/views.ts';
 import { isToolPagePath, planCustomTools } from '../lib/custom-tools.ts';
-import { openFindings, renderOpenFindings } from '../lib/open-findings.ts';
+import { openFindings, readImportLedgers, renderOpenFindings } from '../lib/open-findings.ts';
 import { brokenLinkReport, describeProbe } from '../lib/advisories.ts';
 import { scoreProbe } from '../lib/probe.ts';
 import { OKF_PAGE_STATUSES } from '../lib/page-patch.ts';
@@ -1402,7 +1402,9 @@ export function registerLibrarianTools(
 			let findingsText = '';
 			let comingDueText = '';
 			let openPolicy: number | null = null;
-			let pendingText = '';
+			// Read first and apart: it catches its own errors, so a failure below cannot drop its lines.
+			const imports = await readImportLedgers(store, locator, config);
+			const pendingText = imports.notes.length ? `\n\n${imports.notes.join('\n\n')}` : '';
 			try {
 				const open = await openFindings({
 					store,
@@ -1417,11 +1419,11 @@ export function registerLibrarianTools(
 					orgId,
 					orgRole,
 					policySecret,
+					imports,
 					reachable: (ids) => reachableBrains(ids, deps, openIndex)
 				});
 				({ findingsText, comingDueText } = renderOpenFindings(open));
 				openPolicy = open.openPolicy;
-				pendingText = open.importNotes.length ? `\n\n${open.importNotes.join('\n\n')}` : '';
 			} catch {
 				// Advisory only; link validation stands alone.
 			}
