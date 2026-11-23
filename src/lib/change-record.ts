@@ -77,32 +77,51 @@ export interface ExpectationInput {
 	frontmatter: Frontmatter;
 	/** The `fields` patch the call sent, if any. */
 	patch?: Record<string, unknown> | null;
+	/** The text this write added: the new body, the appended text, the new side of each edit. */
+	added?: string[];
 }
 
 const COMMITMENT_TYPE_RE = /decision|commitment/i;
+const WEEKDAY = '(?:mon|tues?|wed(?:nes)?|thu(?:rs?)?|fri|sat(?:ur)?|sun)(?:day)?';
+const MONTH =
+	'(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|june?|july?|aug(?:ust)?|sept?(?:ember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)';
+const DEADLINE_RE = new RegExp(
+	`\\b(?:by|before|until|due)\\s+(?:${WEEKDAY}|${MONTH}|\\d{4}-\\d{2}-\\d{2}|next\\s+week)\\b`,
+	'i'
+);
+
+/** Does the text carry a deadline: by, before, until or due, then a weekday, month, ISO date or "next week"? */
+export function hasDeadlinePhrase(text: string): boolean {
+	return DEADLINE_RE.test(text);
+}
+
 const hasValue = (fm: Frontmatter, key: string) => listOf(fm[key]).some((v) => v.trim() !== '');
 
 /**
- * The prompt to record when a commitment is checked. A new page typed Decision or
- * Commitment with no `check_at` and no `outcome` gets it; an update gets it only when
- * the call set `expected` and the page still has no `check_at`. Empty otherwise.
+ * The prompt to record a commitment with its check date, at most one per write. A new
+ * page typed Decision or Commitment with no `check_at` and no `outcome` gets it; an
+ * update gets it when the call set `expected` and the page still has no `check_at`.
+ * Failing those, a page of another type gets a second, narrower note when the text this
+ * write added carries a deadline phrase. Empty otherwise.
  */
 export function expectationNote(input: ExpectationInput): string {
 	const fm = input.frontmatter;
-	const fires =
-		input.kind === 'create'
-			? COMMITMENT_TYPE_RE.test(listOf(fm.type)[0] ?? '') &&
-				!hasValue(fm, 'check_at') &&
-				!hasValue(fm, 'outcome')
-			: input.patch != null &&
-				input.patch.expected != null &&
-				hasValue(fm, 'expected') &&
-				!hasValue(fm, 'check_at');
-	return fires ? EXPECTATION_TEXT : '';
+	if (hasValue(fm, 'check_at')) return '';
+	const commitmentPage = COMMITMENT_TYPE_RE.test(listOf(fm.type)[0] ?? '');
+	if (input.kind === 'create') {
+		if (commitmentPage) return hasValue(fm, 'outcome') ? '' : EXPECTATION_TEXT;
+	} else if (input.patch != null && input.patch.expected != null && hasValue(fm, 'expected')) {
+		return EXPECTATION_TEXT;
+	}
+	if (commitmentPage || hasValue(fm, 'outcome')) return '';
+	return (input.added ?? []).some(hasDeadlinePhrase) ? DEADLINE_TEXT : '';
 }
 
 const EXPECTATION_TEXT =
 	'If the person gave a date, use it as check_at; otherwise ask. Tell the person the check date you set. One commitment per page: a second gets its own page. write_page fields {expected, check_at: YYYY-MM-DD}.';
+
+const DEADLINE_TEXT =
+	'This reads like a commitment. Record it as its own page, type Commitment, linked from here, with write_page fields {expected, check_at: YYYY-MM-DD}. Tell the person the check date you set.';
 
 export const MAX_REFS_LISTED = 20;
 

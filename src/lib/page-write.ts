@@ -170,6 +170,13 @@ export function splitProvidedContent(content: string): { fm: Frontmatter; body: 
 	return { fm: frontmatter ?? {}, body: frontmatter ? body : content };
 }
 
+/** The text a partial write adds: the appended text and the new side of each edit. */
+export function addedText(args: Pick<PageWriteArgs, 'append' | 'edits'>): string[] {
+	return [args.append, ...(args.edits ?? []).map((e) => e.replace)].filter(
+		(t): t is string => typeof t === 'string'
+	);
+}
+
 export interface ComposedCreate {
 	/** The new file, before view snapshots are refreshed. */
 	content: string;
@@ -177,6 +184,8 @@ export interface ComposedCreate {
 	status?: string;
 	/** The page's frontmatter as written. */
 	frontmatter: Frontmatter;
+	/** The body as written, without its frontmatter. */
+	body: string;
 }
 
 /** A brand-new page: fresh frontmatter, managed keys first. */
@@ -227,7 +236,8 @@ export function composeCreate(
 		content: withFrontmatter(fm, provided.body),
 		title,
 		status: typeof fm.status === 'string' ? fm.status : undefined,
-		frontmatter: fm
+		frontmatter: fm,
+		body: provided.body
 	};
 }
 

@@ -28,10 +28,11 @@ import {
 	composeCreate,
 	composeUpdate,
 	isPatching,
+	addedText,
 	type PageWriteArgs
 } from '../src/lib/page-write.ts';
 import { parsePaths } from '../src/lib/brain-config.ts';
-import { describeChange, expectationNote } from '../src/lib/change-record.ts';
+import { describeChange, expectationNote, hasDeadlinePhrase } from '../src/lib/change-record.ts';
 
 import { checker } from './check.ts';
 
@@ -856,6 +857,86 @@ console.log('\nwrite_page: the commitment prompt (expectationNote)');
 	check(
 		'update: expectationNote is empty with no patch',
 		expectationNote({ kind: 'update', frontmatter: { expected: 'x' } }) === ''
+	);
+}
+
+console.log('\nwrite_page: the deadline-phrase note');
+{
+	const DEADLINE = 'This reads like a commitment';
+	const MEETING: Frontmatter = { type: 'Meeting', title: 'Weekly' };
+	const note = (
+		added: string[],
+		frontmatter: Frontmatter = MEETING,
+		kind: 'create' | 'update' = 'update',
+		patch?: Record<string, unknown>
+	) => expectationNote({ kind, frontmatter, added, patch });
+	const fired = (n: string) => n.includes(DEADLINE);
+	check(
+		'deadline: "by Friday" in an append gets the note',
+		fired(note(['Ship the draft by Friday.']))
+	);
+	check('deadline: before a month', fired(note(['Sign before March'])));
+	check('deadline: until an ISO date', fired(note(['Hold until 2026-12-01'])));
+	check('deadline: due next week', fired(note(['Report due next week'])));
+	check('deadline: case-insensitive', fired(note(['BY MONDAY'])));
+	check(
+		'deadline: the text names the page type and the field call',
+		note(['by Friday']).includes('type Commitment') &&
+			note(['by Friday']).includes('{expected, check_at: YYYY-MM-DD}')
+	);
+	for (const text of [
+		'sent by the team',
+		'before the merger',
+		'a decision on 2026-12-01',
+		'Friday works',
+		'standby',
+		'by 5pm'
+	])
+		check(`deadline: "${text}" gets none`, !fired(note([text])));
+	check('deadline: nothing added gets none', note([]) === '' && note([], MEETING, 'create') === '');
+	check(
+		'deadline: a page with check_at gets none',
+		note(['by Friday'], { ...MEETING, check_at: '2026-12-01' }) === ''
+	);
+	check(
+		'deadline: a page with an outcome gets none',
+		note(['by Friday'], { ...MEETING, outcome: 'held' }) === ''
+	);
+	check(
+		'deadline: a new page of another type gets it from its body',
+		fired(note(['by Friday'], MEETING, 'create'))
+	);
+	const decision: Frontmatter = { type: 'Decision' };
+	check(
+		'deadline: a Decision page is the type trigger, not this one',
+		note(['by Friday'], decision, 'update') === '' &&
+			note(['by Friday'], decision, 'create') !== '' &&
+			!fired(note(['by Friday'], decision, 'create'))
+	);
+	check(
+		'deadline: expected set on another type gives the field note, once',
+		(() => {
+			const n = note(['by Friday'], { ...MEETING, expected: 'x' }, 'update', { expected: 'x' });
+			return n !== '' && !fired(n);
+		})()
+	);
+	check('deadline: hasDeadlinePhrase matches the plain case', hasDeadlinePhrase('due Tuesday'));
+
+	// Added text only: the existing page body is never read.
+	check(
+		'added: an append and the new side of each edit count',
+		addedText({ append: 'a', edits: [{ find: 'x', replace: 'b' }] }).join('|') === 'a|b'
+	);
+	check(
+		'added: the text an edit replaces does not count',
+		!addedText({ edits: [{ find: 'by Friday', replace: 'soon' }] }).some(hasDeadlinePhrase)
+	);
+	check('added: nothing patched, nothing added', addedText({}).length === 0);
+	const withDeadline = withFrontmatter({ ...MEETING }, 'Old text: ship by Friday.');
+	const c = composeUpdate('wiki/m.md', withDeadline, { fields: { owner: 'pat' } }, TODAY, 24);
+	check(
+		'added: a metadata-only write to a page that already says "by Friday" gets none',
+		c.ok && note(addedText({}), c.frontmatter) === ''
 	);
 }
 
