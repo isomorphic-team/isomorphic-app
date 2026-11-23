@@ -235,9 +235,12 @@ The loop:
 1. A decision is recorded with its expectation and a check date, linked to the theory page
    it applies.
 2. On the check date, `validate` lists the page as a `prediction-due` finding: what happened?
-   It is computed from the frontmatter on each call, with no pass and no table.
+   It is computed from the frontmatter on each call, with no pass and no table. `validate`
+   also lists the pages due in the next 7 days, outside the findings.
 3. The answer is recorded as the outcome.
 4. Each theory page shows its record, as a live view over the outcomes that link to it.
+   Built as a convention: `RECORD_VIEW` in `src/lib/view-directives.ts`, which the create
+   reply of a Decision or Commitment page offers to append, when the decision links to it, to the page whose claim it tests.
 5. When the record turns against a belief, a pass proposes a revision as an open item. A
    person decides.
 
@@ -323,7 +326,8 @@ Each step is useful without the ones after it.
    ahead of the owns and watches declarations of step 2. The key is named `charter`; in
    prose, charter means a self's.
 8. **Expectation and outcome fields,** then records tables, then scorecards on theory pages.
-   The fields and the `prediction-due` finding are built; records tables and scorecards are not.
+   The fields, the `prediction-due` finding and the record view on a claim's page are built;
+   records tables and scorecards are not.
 9. **A grant that reads many brains and writes one.**
 10. **A coordinator with judgment,** only if the queue shows it is needed.
 

@@ -12,6 +12,9 @@ import {
 	inlinedConceptSuggestions,
 	typeFieldSuggestions,
 	predictionDueFindings,
+	comingDueLines,
+	COMING_DUE_DAYS,
+	MAX_COMING_DUE_LINES,
 	ambiguousTitleSuggestions,
 	wikilinkPortabilityNote,
 	folderNoteSuggestions
@@ -713,6 +716,79 @@ console.log('\nfolder-note advisory: a note-less folder holding its own overview
 		TODAY
 	);
 	check('prediction: two pages, two findings', pair.length === 2);
+
+	// coming due: the week before the check date, an unkeyed section
+	const comingList = (rows: Record<string, string[]>, today = TODAY) =>
+		comingDueLines(
+			[{ path: 'decisions/pricing.md' }],
+			new Map([['decisions/pricing.md', fields(rows)]]),
+			today
+		);
+	const coming = (rows: Record<string, string[]>, today = TODAY) =>
+		comingList(rows, today).join('\n');
+	check(
+		'coming due: empty gives an empty list',
+		comingList({ check_at: ['2026-12-25'] }).length === 0 && comingList({}).length === 0
+	);
+	check('coming due: the window is seven days', COMING_DUE_DAYS === 7);
+	check(
+		'coming due: a check_at of today is prediction-due, not coming due',
+		coming({ check_at: ['2026-11-23'] }) === '' && due({ check_at: ['2026-11-23'] }).length === 1
+	);
+	check('coming due: tomorrow is in', coming({ check_at: ['2026-11-24'] }).includes('(in 1 day)'));
+	const edge = coming({ check_at: ['2026-11-30'] });
+	check(
+		'coming due: today + 7 is in',
+		edge.includes('check due 2026-11-30 (in 7 days)') && edge.includes('decisions/pricing.md'),
+		edge
+	);
+	check('coming due: today + 8 is out', coming({ check_at: ['2026-12-01'] }) === '');
+	check(
+		'coming due: the window crosses a month end',
+		coming({ check_at: ['2026-12-02'] }, '2026-11-28').includes('in 4 days')
+	);
+	check(
+		'coming due: an outcome silences it',
+		coming({ check_at: ['2026-11-25'], outcome: ['held'] }) === ''
+	);
+	check('coming due: unparseable check_at is ignored', coming({ check_at: ['next week'] }) === '');
+	check('coming due: nothing prints when nothing is due', coming({ type: ['Decision'] }) === '');
+	const quotedSoon = coming({ check_at: ['2026-11-25'], expected: ['Churn under 5%'] });
+	check(
+		'coming due: a line quotes the expectation and ends with the next step',
+		quotedSoon.includes('Expected: Churn under 5%') &&
+			quotedSoon.includes('Record it with write_page fields {outcome: ...}.'),
+		quotedSoon
+	);
+	check('coming due: no finding key is printed', !/prediction-/.test(quotedSoon));
+	for (const d of ['2026-11-20', '2026-11-23', '2026-11-24', '2026-11-30', '2026-12-05']) {
+		const rows = { check_at: [d] };
+		check(
+			`coming due: ${d} is never both coming due and prediction-due`,
+			(coming(rows) !== '' ? 1 : 0) + due(rows).length <= 1
+		);
+	}
+	const many = Array.from({ length: MAX_COMING_DUE_LINES + 5 }, (_, i) => `p${i}.md`);
+	const manyLines = comingDueLines(
+		many.map((path) => ({ path })),
+		new Map(many.map((path) => [path, fields({ check_at: ['2026-11-25'] })])),
+		TODAY
+	);
+	check(
+		'coming due: the line cap holds and the rest is counted',
+		manyLines.filter((l) => l.startsWith('- ')).length === MAX_COMING_DUE_LINES &&
+			manyLines.at(-1) === '...and 5 more.',
+		manyLines.join('\n')
+	);
+	const ordered = comingDueLines(
+		[{ path: 'b.md' }, { path: 'a.md' }],
+		new Map([
+			['a.md', fields({ check_at: ['2026-11-26'] })],
+			['b.md', fields({ check_at: ['2026-11-25'] })]
+		]),
+		TODAY
+	);
+	check('coming due: earliest first', ordered[0]!.includes('b.md') && ordered[1]!.includes('a.md'));
 
 	const typed = typeFieldSuggestions(
 		[{ path: 'a.md' }, { path: 'b.md' }],

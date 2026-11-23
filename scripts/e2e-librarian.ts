@@ -74,6 +74,7 @@ import {
 	type QueueFinding
 } from '../src/lib/review-queue.ts';
 import { webUrlFor } from '../src/lib/web-app.ts';
+import { todayIso } from '../src/lib/wiki.ts';
 import { checker } from './check.ts';
 import { BIND_FIXTURE_STORAGE } from './fixture-storage.ts';
 import { orgStorage } from '../src/lib/storage-connections.ts';
@@ -1017,6 +1018,90 @@ try {
 		inv.text
 	);
 	await tools.close();
+
+	// ══ commitments: the write reply prompts, validate lists what is coming due ═══
+	const inDays = (n: number) =>
+		new Date(Date.parse(todayIso()) + n * 86_400_000).toISOString().slice(0, 10);
+	const comingBlock = (text: string) =>
+		/Commitments coming due[^\n]*\n(?:- [^\n]*\n?)+/.exec(text)?.[0] ?? '';
+	r = await call('validate', {});
+	check(
+		'validate omits the coming-due list when nothing is due',
+		!/coming due/i.test(r.text),
+		r.text
+	);
+	r = await call('write_page', {
+		path: 'wiki/decisions/pricing.md',
+		title: 'Raise the price',
+		type: 'Decision',
+		content: 'We raise the price in the spring.'
+	});
+	check(
+		'creating a Decision page prompts for check_at',
+		/check_at: YYYY-MM-DD/.test(r.text),
+		r.text
+	);
+	check(
+		'the create reply offers the record view',
+		/does not already show its record/.test(r.text) && r.text.includes('kind: backlinks'),
+		r.text
+	);
+	r = await call('write_page', {
+		path: 'wiki/decisions/pricing.md',
+		fields: { expected: 'Churn stays under 5%', check_at: inDays(3) }
+	});
+	check('setting check_at silences the prompt', !/check_at: YYYY-MM-DD/.test(r.text), r.text);
+	await call('write_page', {
+		path: 'wiki/decisions/hiring.md',
+		title: 'Hire a designer',
+		type: 'Decision',
+		content: 'Hire one.',
+		fields: { expected: 'Offer accepted', check_at: inDays(30) }
+	});
+	await call('write_page', {
+		path: 'wiki/notes/standup.md',
+		title: 'Standup',
+		type: 'Meeting',
+		content: 'Notes.'
+	});
+	r = await call('write_page', {
+		path: 'wiki/notes/standup.md',
+		append: 'Pat sends the draft by Friday.'
+	});
+	check(
+		'a deadline in appended text prompts for its own page',
+		/reads like a commitment/.test(r.text),
+		r.text
+	);
+	r = await call('write_page', { path: 'wiki/notes/standup.md', append: 'Lunch was fine.' });
+	check(
+		'an append with no deadline gets no prompt',
+		!/reads like a commitment/.test(r.text),
+		r.text
+	);
+	await settledHead();
+	r = await call('validate', {});
+	check(
+		'validate lists a commitment due in 3 days',
+		comingBlock(r.text).includes(
+			'wiki/decisions/pricing.md: check due ' + inDays(3) + ' (in 3 days)'
+		) && comingBlock(r.text).includes('Churn stays under 5%'),
+		r.text
+	);
+	check(
+		'validate leaves out a commitment due in 30 days',
+		comingBlock(r.text) !== '' && !comingBlock(r.text).includes('wiki/decisions/hiring.md'),
+		r.text
+	);
+	check(
+		'the coming-due list carries no finding key',
+		!/\[[a-z-]+:[^\]]*\]/.test(comingBlock(r.text)),
+		r.text
+	);
+	await call('write_page', { path: 'wiki/decisions/pricing.md', fields: { outcome: 'held' } });
+	await settledHead();
+	r = await call('validate', {});
+	check('an outcome removes it from the list', comingBlock(r.text) === '', r.text);
 
 	// ══ findings: validate surfaces, resolve records, validate stops re-raising ═══
 	// The whole point of keying findings. Driven end to end because the ledger is a

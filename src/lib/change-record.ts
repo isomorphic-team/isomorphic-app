@@ -15,7 +15,9 @@ import { logPathOf } from './brain-policy.ts';
 import type { CommitAuthor, CommitOrPROpts, FileWrite } from './brain-repo.ts';
 import { MAX_SCAN_PAGES } from './brain-repo.ts';
 import { isToolPagePath } from './custom-tools.ts';
-import { insertLogEntry } from './wiki.ts';
+import { RECORD_VIEW } from './view-directives.ts';
+import type { Frontmatter } from './wiki.ts';
+import { insertLogEntry, listOf } from './wiki.ts';
 
 // ---------- the commit-options preamble ----------
 
@@ -69,6 +71,61 @@ export function toolRosterNote(...paths: string[]): string {
 		: '';
 }
 
+/** What `expectationNote` reads about a write. */
+export interface ExpectationInput {
+	kind: 'create' | 'update';
+	/** The page's frontmatter after the write. */
+	frontmatter: Frontmatter;
+	/** The `fields` patch the call sent, if any. */
+	patch?: Record<string, unknown> | null;
+	/** The text this write added: the new body, the appended text, the new side of each edit. */
+	added?: string[];
+}
+
+const COMMITMENT_TYPE_RE = /decision|commitment/i;
+const WEEKDAY = '(?:mon|tues?|wed(?:nes)?|thu(?:rs?)?|fri|sat(?:ur)?|sun)(?:day)?';
+const MONTH =
+	'(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|june?|july?|aug(?:ust)?|sept?(?:ember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)';
+const DEADLINE_RE = new RegExp(
+	`\\b(?:by|before|until|due)\\s+(?:${WEEKDAY}|${MONTH}|\\d{4}-\\d{2}-\\d{2}|next\\s+week)\\b`,
+	'i'
+);
+
+/** Does the text carry a deadline: by, before, until or due, then a weekday, month, ISO date or "next week"? */
+export function hasDeadlinePhrase(text: string): boolean {
+	return DEADLINE_RE.test(text);
+}
+
+const hasValue = (fm: Frontmatter, key: string) => listOf(fm[key]).some((v) => v.trim() !== '');
+
+/**
+ * The prompt to record a commitment with its check date, at most one per write. A new
+ * page typed Decision or Commitment with no `check_at` and no `outcome` gets it; an
+ * update gets it when the call set `expected` and the page still has no `check_at`.
+ * Failing those, a page of another type gets a second, narrower note when the text this
+ * write added carries a deadline phrase. Empty otherwise.
+ */
+export function expectationNote(input: ExpectationInput): string {
+	const fm = input.frontmatter;
+	if (hasValue(fm, 'check_at')) return '';
+	const commitmentPage = COMMITMENT_TYPE_RE.test(listOf(fm.type)[0] ?? '');
+	if (input.kind === 'create') {
+		if (commitmentPage) return hasValue(fm, 'outcome') ? '' : `${EXPECTATION_TEXT} ${RECORD_TEXT}`;
+	} else if (input.patch != null && input.patch.expected != null && hasValue(fm, 'expected')) {
+		return EXPECTATION_TEXT;
+	}
+	if (commitmentPage || hasValue(fm, 'outcome')) return '';
+	return (input.added ?? []).some(hasDeadlinePhrase) ? DEADLINE_TEXT : '';
+}
+
+const RECORD_TEXT = `If this page links to the page whose claim it tests and that page does not already show its record (read it first), offer to append this there with write_page append:\n${RECORD_VIEW}\none yes completes it. Then tell the person that page now shows its record.`;
+
+const EXPECTATION_TEXT =
+	'If the person gave a date, use it as check_at; otherwise ask. Tell the person the check date you set. One commitment per page: a second gets its own page. write_page fields {expected, check_at: YYYY-MM-DD}.';
+
+const DEADLINE_TEXT =
+	'This reads like a commitment. Left on this page it will not appear in validate or in a what-is-due answer. Create it now as its own page (write_page, type Commitment, fields {expected, check_at: YYYY-MM-DD}), linked from here, and keep your own follow-up field too. Tell the person the check date you set. (If you already made it, ignore this.)';
+
 export const MAX_REFS_LISTED = 20;
 
 /**
@@ -95,7 +152,15 @@ export function refNote(
 type Refs = { path: string; count: number }[];
 
 export type Change =
-	| { kind: 'create'; path: string; title: string; status?: string; description?: string }
+	| {
+			kind: 'create';
+			path: string;
+			title: string;
+			status?: string;
+			description?: string;
+			/** Set for a write that may need the commitment prompt. */
+			expectation?: Omit<ExpectationInput, 'kind'>;
+	  }
 	| {
 			kind: 'update';
 			path: string;
@@ -107,6 +172,7 @@ export type Change =
 			retitledFrom?: string;
 			/** What the write did, in the caller's reply: a patch summary, a clobber size, a field summary. */
 			notes: string[];
+			expectation?: Omit<ExpectationInput, 'kind'>;
 	  }
 	| {
 			kind: 'move-page';
@@ -149,7 +215,8 @@ export function describeChange(c: Change): ChangeRecord {
 	switch (c.kind) {
 		case 'create': {
 			const statusNote = c.status ? ` with status ${c.status}` : '';
-			const tools = toolRosterNote(c.path);
+			const exp = c.expectation ? expectationNote({ kind: 'create', ...c.expectation }) : '';
+			const tools = toolRosterNote(c.path) + (exp ? `\n\n${exp}` : '');
 			return {
 				bullet: `Created "${c.title}" (\`${c.path}\`).`,
 				commit: {
@@ -163,7 +230,9 @@ export function describeChange(c: Change): ChangeRecord {
 			};
 		}
 		case 'update': {
-			const notes = c.notes.length ? c.notes.join('; ') + '. ' : '';
+			const exp = c.expectation ? expectationNote({ kind: 'update', ...c.expectation }) : '';
+			const all = exp ? [...c.notes, exp.replace(/\.$/, '')] : c.notes;
+			const notes = all.length ? all.join('; ') + '. ' : '';
 			return {
 				bullet: c.statusChanged
 					? `Updated "${c.label}" (\`${c.path}\`), status: ${c.statusChanged}.`
