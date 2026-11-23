@@ -57,6 +57,24 @@ check(
 	`${SERVER_INSTRUCTIONS.length} characters`
 );
 
+console.log('\ncommitments');
+{
+	const line =
+		SERVER_INSTRUCTIONS.split('\n').find((l) => l.startsWith('- DECISIONS AND COMMITMENTS')) ?? '';
+	check(
+		'a commitment is its own page',
+		/own page/.test(line) && /Decision or Commitment/.test(line)
+	);
+	check(
+		'it names expected and check_at',
+		line.includes('`expected`') && line.includes('`check_at`')
+	);
+	check(
+		'it sends what-is-due questions to validate',
+		/what is due/.test(line) && /run validate/.test(line)
+	);
+}
+
 console.log('\ntool names');
 {
 	const registered = new Set(

@@ -84,6 +84,12 @@ are in the list, with keys.
   fields, so a brain whose `indexedFields` omits `check_at`, or a page whose `check_at` sits
   past `MAX_FIELD_KEYS_PER_PAGE`, is never raised. The Review screen (`view_review`) shows only
   policy findings, so this appears in `validate` alone.
+  **`predictionSoonFindings`** is the same read for a `check_at` after today and within
+  `PREDICTION_SOON_DAYS` (7). Key `prediction-soon:<path>@<date>`, weight 2, a separate prefix
+  so dismissing it leaves `prediction-due`; a page is never in both lists. The create reply
+  of `write_page` carries `expectationNote` (`change-record.ts`) for a Decision or Commitment
+  page with no `check_at` or `outcome`, and an update reply carries it when the call set
+  `expected` and the page has no `check_at`.
 - **`src/lib/consolidate.ts`** (pure, `pnpm test:consolidate`) detects where a brain's cheap
   surface disagrees with its content: islands, orphans, note-less and hollow folder notes,
   mixed conventions, folder-echo pages, near-duplicates (bigram Jaccard with each folder's

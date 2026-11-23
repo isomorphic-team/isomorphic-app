@@ -175,6 +175,8 @@ export interface ComposedCreate {
 	content: string;
 	title: string;
 	status?: string;
+	/** The page's frontmatter as written. */
+	frontmatter: Frontmatter;
 }
 
 /** A brand-new page: fresh frontmatter, managed keys first. */
@@ -224,7 +226,8 @@ export function composeCreate(
 		ok: true,
 		content: withFrontmatter(fm, provided.body),
 		title,
-		status: typeof fm.status === 'string' ? fm.status : undefined
+		status: typeof fm.status === 'string' ? fm.status : undefined,
+		frontmatter: fm
 	};
 }
 
@@ -239,6 +242,8 @@ export interface ComposedUpdate {
 	statusChanged?: string;
 	/** What the write did, in the order the reply lists it. */
 	notes: string[];
+	/** The page's frontmatter after this write; empty when the page has none. */
+	frontmatter: Frontmatter;
 }
 
 /**
@@ -290,6 +295,7 @@ export function composeUpdate(
 	}
 
 	let content = provided.body;
+	let resultFm: Frontmatter = old.frontmatter ?? {};
 	if (manageFm) {
 		let fm: Frontmatter = {
 			...(old.frontmatter ?? {}),
@@ -314,6 +320,7 @@ export function composeUpdate(
 				);
 		}
 		content = withFrontmatter(fm, provided.body);
+		resultFm = fm;
 	}
 
 	return {
@@ -322,6 +329,7 @@ export function composeUpdate(
 		label: newTitle ?? path,
 		retitledFrom: args.title && oldTitle && args.title !== oldTitle ? oldTitle : undefined,
 		statusChanged: args.status && args.status !== old.frontmatter?.status ? args.status : undefined,
-		notes
+		notes,
+		frontmatter: resultFm
 	};
 }

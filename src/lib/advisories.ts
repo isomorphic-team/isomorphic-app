@@ -389,14 +389,37 @@ export function wikilinkPortabilityNote(edges: { kind: 'md' | 'wiki'; cnt: numbe
 	];
 }
 
+const EXPECTED_MAX_CHARS = 120;
+
+/** How many days ahead of its `check_at` a commitment is raised as `prediction-soon`. */
+export const PREDICTION_SOON_DAYS = 7;
+
+// The expectation text and check date of a page with no recorded outcome, or null.
+function openCheck(
+	fields: PageFields | undefined
+): { date: string; shown: string | undefined } | null {
+	if (!fields) return null;
+	if (fields.get('outcome')?.some((v) => v.trim() !== '')) return null;
+	const raw = fields.get('check_at')?.[0];
+	const date = raw === undefined ? undefined : datePart(raw);
+	if (date === undefined) return null;
+	const expected = fields
+		.get('expected')
+		?.map((v) => v.trim())
+		.find((v) => v !== '');
+	const shown =
+		expected && expected.length > EXPECTED_MAX_CHARS
+			? expected.slice(0, EXPECTED_MAX_CHARS) + '...'
+			: expected;
+	return { date, shown };
+}
+
 // A commitment whose check date has come: a concept page whose first `check_at` value
 // (a date or datetime, read by its date part like `okf-view` filters; unparseable values
 // are ignored) is on or before `today` and that has no non-empty `outcome`. `pages` is the
 // caller's concept-page filter (no folder notes, no tool-maintained pages). The key carries
 // the date, so a dismissal covers that date only and re-dating raises the item again.
 // Nothing is stored: the page is the state.
-const EXPECTED_MAX_CHARS = 120;
-
 export function predictionDueFindings(
 	pages: { path: string }[],
 	fieldsByPath: Map<string, PageFields>,
@@ -404,24 +427,39 @@ export function predictionDueFindings(
 ): Finding[] {
 	const out: Finding[] = [];
 	for (const p of pages) {
-		const fields = fieldsByPath.get(p.path);
-		if (!fields) continue;
-		if (fields.get('outcome')?.some((v) => v.trim() !== '')) continue;
-		const raw = fields.get('check_at')?.[0];
-		const date = raw === undefined ? undefined : datePart(raw);
-		if (date === undefined || date > today) continue;
-		const expected = fields
-			.get('expected')
-			?.map((v) => v.trim())
-			.find((v) => v !== '');
-		const shown =
-			expected && expected.length > EXPECTED_MAX_CHARS
-				? expected.slice(0, EXPECTED_MAX_CHARS) + '...'
-				: expected;
+		const c = openCheck(fieldsByPath.get(p.path));
+		if (!c || c.date > today) continue;
 		out.push({
-			key: findingKey('prediction-due', `${p.path}@${date}`),
+			key: findingKey('prediction-due', `${p.path}@${c.date}`),
 			weight: 3,
-			headline: `- ${p.path}: check due ${date}${shown ? `. Expected: ${shown}` : ''}. No outcome is recorded. Record it with write_page fields {outcome: ...}, or dismiss with resolve and a reason.`
+			headline: `- ${p.path}: check due ${c.date}${c.shown ? `. Expected: ${c.shown}` : ''}. No outcome is recorded. Record it with write_page fields {outcome: ...}, or dismiss with resolve and a reason.`
+		});
+	}
+	return out;
+}
+
+const DAY_MS = 86_400_000;
+const dayNumber = (iso: string): number => Date.parse(`${iso}T00:00:00Z`) / DAY_MS;
+
+// A commitment whose check date is after `today` and within PREDICTION_SOON_DAYS of it,
+// with no outcome. Its own key prefix, so dismissing it never silences `prediction-due`;
+// a page is never in both lists, since this one needs a date after `today`.
+export function predictionSoonFindings(
+	pages: { path: string }[],
+	fieldsByPath: Map<string, PageFields>,
+	today: string
+): Finding[] {
+	const out: Finding[] = [];
+	const t = dayNumber(today);
+	for (const p of pages) {
+		const c = openCheck(fieldsByPath.get(p.path));
+		if (!c || c.date <= today) continue;
+		const days = Math.round(dayNumber(c.date) - t);
+		if (!(days <= PREDICTION_SOON_DAYS)) continue;
+		out.push({
+			key: findingKey('prediction-soon', `${p.path}@${c.date}`),
+			weight: 2,
+			headline: `- ${p.path}: check due ${c.date} (in ${days} day${days === 1 ? '' : 's'})${c.shown ? `. Expected: ${c.shown}` : ''}. No outcome is recorded yet.`
 		});
 	}
 	return out;

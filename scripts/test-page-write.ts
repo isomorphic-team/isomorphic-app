@@ -31,6 +31,7 @@ import {
 	type PageWriteArgs
 } from '../src/lib/page-write.ts';
 import { parsePaths } from '../src/lib/brain-config.ts';
+import { describeChange, expectationNote } from '../src/lib/change-record.ts';
 
 import { checker } from './check.ts';
 
@@ -762,6 +763,100 @@ const TODAY = '2026-09-23';
 		f.ok && !f.notes.some((n) => n.startsWith('heads up:'))
 	);
 	check('update: a bad field is refused', !up({ fields: { title: 'x' } }).ok);
+}
+
+console.log('\nwrite_page: the commitment prompt (expectationNote)');
+{
+	const NOTE = 'check_at: YYYY-MM-DD';
+	const create = (args: Parameters<typeof composeCreate>[1]) => {
+		const c = composeCreate('wiki/decisions/pricing.md', args, TODAY);
+		if (!c.ok) throw new Error('compose failed');
+		return describeChange({
+			kind: 'create',
+			path: 'wiki/decisions/pricing.md',
+			title: c.title,
+			expectation: { frontmatter: c.frontmatter }
+		});
+	};
+	const dec = create({ content: 'Raise the price.', title: 'Pricing', type: 'Decision' });
+	check(
+		'create: a Decision page without check_at carries the prompt in done',
+		dec.done.includes(NOTE)
+	);
+	check('create: ... and in proposed', dec.proposed.includes(NOTE));
+	check(
+		'create: a Commitment type matches too, any case',
+		create({ content: 'x', title: 'T', type: 'commitment' }).done.includes(NOTE)
+	);
+	check(
+		'create: another type gets none',
+		!create({ content: 'x', title: 'T', type: 'Meeting' }).done.includes(NOTE) &&
+			!create({ content: 'x', title: 'T', type: 'Meeting' }).proposed.includes(NOTE)
+	);
+	check('create: no type gets none', !create({ content: 'x', title: 'T' }).done.includes(NOTE));
+	check(
+		'create: a check_at already set silences it',
+		!create({
+			content: 'x',
+			title: 'T',
+			type: 'Decision',
+			fields: { check_at: '2026-12-01' }
+		}).done.includes(NOTE)
+	);
+	check(
+		'create: an outcome already set silences it',
+		!create({
+			content: 'x',
+			title: 'T',
+			type: 'Decision',
+			fields: { outcome: 'held' }
+		}).done.includes(NOTE)
+	);
+
+	const up = (
+		fields: Record<string, string | null>,
+		existing: Frontmatter = { type: 'Decision' }
+	) => {
+		const c = composeUpdate(
+			'wiki/decisions/pricing.md',
+			withFrontmatter(existing, 'Body.'),
+			{ fields },
+			TODAY,
+			24
+		);
+		if (!c.ok) throw new Error('compose failed');
+		return describeChange({
+			kind: 'update',
+			path: 'wiki/decisions/pricing.md',
+			label: c.label,
+			notes: c.notes,
+			expectation: { frontmatter: c.frontmatter, patch: fields }
+		});
+	};
+	check(
+		'update: setting expected without check_at carries the prompt',
+		up({ expected: 'Churn under 5%' }).done.includes(NOTE)
+	);
+	check(
+		'update: expected with check_at set in the same call gets none',
+		!up({ expected: 'Churn under 5%', check_at: '2026-12-01' }).done.includes(NOTE)
+	);
+	check(
+		'update: a page that already has check_at gets none',
+		!up({ expected: 'x' }, { type: 'Decision', check_at: '2026-12-01' }).done.includes(NOTE)
+	);
+	check(
+		'update: a write that does not touch expected gets none',
+		!up({ owner: 'pat' }).done.includes(NOTE)
+	);
+	check(
+		'update: removing expected gets none',
+		!up({ expected: null }, { type: 'Decision', expected: 'x' }).done.includes(NOTE)
+	);
+	check(
+		'update: expectationNote is empty with no patch',
+		expectationNote({ kind: 'update', frontmatter: { expected: 'x' } }) === ''
+	);
 }
 
 done();

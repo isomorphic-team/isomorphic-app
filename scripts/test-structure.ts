@@ -12,6 +12,8 @@ import {
 	inlinedConceptSuggestions,
 	typeFieldSuggestions,
 	predictionDueFindings,
+	predictionSoonFindings,
+	PREDICTION_SOON_DAYS,
 	ambiguousTitleSuggestions,
 	wikilinkPortabilityNote,
 	folderNoteSuggestions
@@ -713,6 +715,70 @@ console.log('\nfolder-note advisory: a note-less folder holding its own overview
 		TODAY
 	);
 	check('prediction: two pages, two findings', pair.length === 2);
+
+	// prediction-soon: the week before the check date
+	const soon = (rows: Record<string, string[]>, today = TODAY) =>
+		predictionSoonFindings(
+			[{ path: 'decisions/pricing.md' }],
+			new Map([['decisions/pricing.md', fields(rows)]]),
+			today
+		);
+	check('soon: the window is seven days', PREDICTION_SOON_DAYS === 7);
+	check('soon: today is not soon', soon({ check_at: ['2026-11-23'] }).length === 0);
+	check('soon: tomorrow is', soon({ check_at: ['2026-11-24'] }).length === 1);
+	const edge = soon({ check_at: ['2026-11-30'] });
+	check(
+		'soon: seven days ahead is the last day in',
+		edge.length === 1 && edge[0]!.headline.includes('check due 2026-11-30 (in 7 days)'),
+		edge[0]?.headline
+	);
+	check('soon: eight days ahead is out', soon({ check_at: ['2026-12-01'] }).length === 0);
+	check(
+		'soon: one day reads singular',
+		soon({ check_at: ['2026-11-24'] })[0]!.headline.includes('(in 1 day)')
+	);
+	check(
+		'soon: the window crosses a month end',
+		soon({ check_at: ['2026-12-02'] }, '2026-11-28').length === 1
+	);
+	check(
+		'soon: an outcome silences it',
+		soon({ check_at: ['2026-11-25'], outcome: ['held'] }).length === 0
+	);
+	check('soon: unparseable check_at is ignored', soon({ check_at: ['next week'] }).length === 0);
+	check(
+		'soon: its key prefix is its own',
+		soon({ check_at: ['2026-11-25'] })[0]!.key ===
+			findingKey('prediction-soon', 'decisions/pricing.md@2026-11-25') &&
+			soon({ check_at: ['2026-11-25'] })[0]!.key !==
+				findingKey('prediction-due', 'decisions/pricing.md@2026-11-25')
+	);
+	check(
+		'soon: the headline quotes the expectation',
+		soon({ check_at: ['2026-11-25'], expected: ['Churn under 5%'] })[0]!.headline.includes(
+			'Churn under 5%'
+		)
+	);
+	for (const d of ['2026-11-20', '2026-11-23', '2026-11-24', '2026-11-30', '2026-12-05']) {
+		const rows = { check_at: [d] };
+		check(`soon: ${d} is never both soon and due`, soon(rows).length + due(rows).length <= 1);
+	}
+	const soonKey = soon({ check_at: ['2026-11-25'] })[0]!.key;
+	const soonLedger: ReviewLedger = {
+		version: 1,
+		dismissed: [{ key: soonKey, why: 'known', at: '2026-11-22' }]
+	};
+	check(
+		'soon: dismissing it hides it',
+		filterDismissed(soon({ check_at: ['2026-11-25'] }), soonLedger).length === 0
+	);
+	check(
+		'soon: dismissing it leaves due for the same date',
+		filterDismissed(
+			due({ check_at: ['2026-11-25'] }, 'decisions/pricing.md', '2026-11-26'),
+			soonLedger
+		).length === 1
+	);
 
 	const typed = typeFieldSuggestions(
 		[{ path: 'a.md' }, { path: 'b.md' }],

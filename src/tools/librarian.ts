@@ -77,6 +77,7 @@ import {
 	inlinedConceptSuggestions,
 	typeFieldSuggestions,
 	predictionDueFindings,
+	predictionSoonFindings,
 	ambiguousTitleSuggestions,
 	brokenLinkReport,
 	wikilinkPortabilityNote,
@@ -459,7 +460,8 @@ async function createPageWrite(
 		path: target,
 		title: composed.title,
 		status: composed.status,
-		description: args.description
+		description: args.description,
+		expectation: { frontmatter: composed.frontmatter }
 	});
 	const writes = [{ path: target, content: newContent }];
 	const entry = changelogWrite(config, log, today, rec.bullet);
@@ -522,7 +524,8 @@ async function updatePageWrite(
 		label: composed.label,
 		statusChanged: composed.statusChanged,
 		retitledFrom: composed.retitledFrom,
-		notes
+		notes,
+		expectation: { frontmatter: composed.frontmatter, patch: args.fields }
 	});
 	const entry = changelogWrite(config, log, today, rec.bullet);
 	if (entry) writes.push(entry);
@@ -1365,7 +1368,7 @@ export function registerLibrarianTools(
 		{
 			...toolAnnotations('Check the brain for problems', 'read'),
 			description:
-				'`validate` checks a brain and reports what needs attention. Two kinds of result, deliberately separate. DEFECTS: broken links — markdown links to missing pages and [[wikilinks]] that match no page. Those have one right answer and cannot be silenced. FINDINGS: everything advisory, each carrying a `[key]` — pending import decisions, Open Knowledge Format structure notes (concepts written as sections inside a folder note instead of getting their own page, pages missing a `type:`, names two pages both answer to), consolidation tensions (a page nothing links to, a folder note that lists none of its pages, two pages telling the same story), and commitments whose `check_at` date has passed with no `outcome` recorded. Nothing advisory blocks a save, and any finding can be answered or permanently silenced with `resolve` using its key, so a deliberate choice stops being re-reported. For brain admins it also lists sensitive data found in writes (pages and kinds, never the values). Run after big changes or restructures, or when asked to tidy a brain up.',
+				'`validate` checks a brain and reports what needs attention. It is also the way to see which commitments are due or coming due. Two kinds of result, deliberately separate. DEFECTS: broken links — markdown links to missing pages and [[wikilinks]] that match no page. Those have one right answer and cannot be silenced. FINDINGS: everything advisory, each carrying a `[key]` — pending import decisions, Open Knowledge Format structure notes (concepts written as sections inside a folder note instead of getting their own page, pages missing a `type:`, names two pages both answer to), consolidation tensions (a page nothing links to, a folder note that lists none of its pages, two pages telling the same story), and commitments whose `check_at` date has passed, or comes within a week, with no `outcome` recorded. Nothing advisory blocks a save, and any finding can be answered or permanently silenced with `resolve` using its key, so a deliberate choice stops being re-reported. For brain admins it also lists sensitive data found in writes (pages and kinds, never the values). Run after big changes or restructures, when asked to tidy a brain up, or when asked what is due or overdue.',
 			inputSchema: z.object({ brain: brainArg })
 		},
 		async ({ brain }) => {
@@ -1510,6 +1513,7 @@ export function registerLibrarianTools(
 					),
 					...typeFieldSuggestions(conceptPages, fieldsByPath),
 					...predictionDueFindings(conceptPages, fieldsByPath, todayIso()),
+					...predictionSoonFindings(conceptPages, fieldsByPath, todayIso()),
 					...ambiguousTitleSuggestions(resolved.pages),
 					...wikilinkPortabilityNote(resolved.edges),
 					...folderNotes,

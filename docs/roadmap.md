@@ -589,7 +589,7 @@ large brain work).
 # TODO: the self and the executive
 
 [`design/self-and-executive.md`](design/self-and-executive.md). Proposed. Built so far: the
-`prediction-due` item, raised on the check date as a finding `validate` computes from
+`prediction-due` item, raised on the check date (and `prediction-soon`, in the week before) as a finding `validate` computes from
 frontmatter (`expected`, `check_at`, `outcome`); the records tables are not.
 [`design/roles-self-and-world-model.md`](design/roles-self-and-world-model.md) gives each brain
 a role and computes an org view over facts. A computed view cannot hold goals, priorities or

@@ -15,7 +15,8 @@ import { logPathOf } from './brain-policy.ts';
 import type { CommitAuthor, CommitOrPROpts, FileWrite } from './brain-repo.ts';
 import { MAX_SCAN_PAGES } from './brain-repo.ts';
 import { isToolPagePath } from './custom-tools.ts';
-import { insertLogEntry } from './wiki.ts';
+import type { Frontmatter } from './wiki.ts';
+import { insertLogEntry, listOf } from './wiki.ts';
 
 // ---------- the commit-options preamble ----------
 
@@ -69,6 +70,40 @@ export function toolRosterNote(...paths: string[]): string {
 		: '';
 }
 
+/** What `expectationNote` reads about a write. */
+export interface ExpectationInput {
+	kind: 'create' | 'update';
+	/** The page's frontmatter after the write. */
+	frontmatter: Frontmatter;
+	/** The `fields` patch the call sent, if any. */
+	patch?: Record<string, unknown> | null;
+}
+
+const COMMITMENT_TYPE_RE = /decision|commitment/i;
+const hasValue = (fm: Frontmatter, key: string) => listOf(fm[key]).some((v) => v.trim() !== '');
+
+/**
+ * The prompt to record when a commitment is checked. A new page typed Decision or
+ * Commitment with no `check_at` and no `outcome` gets it; an update gets it only when
+ * the call set `expected` and the page still has no `check_at`. Empty otherwise.
+ */
+export function expectationNote(input: ExpectationInput): string {
+	const fm = input.frontmatter;
+	const fires =
+		input.kind === 'create'
+			? COMMITMENT_TYPE_RE.test(listOf(fm.type)[0] ?? '') &&
+				!hasValue(fm, 'check_at') &&
+				!hasValue(fm, 'outcome')
+			: input.patch != null &&
+				input.patch.expected != null &&
+				hasValue(fm, 'expected') &&
+				!hasValue(fm, 'check_at');
+	return fires ? EXPECTATION_TEXT : '';
+}
+
+const EXPECTATION_TEXT =
+	'If the person gave a date, use it as check_at; otherwise ask. Tell the person the check date you set. One commitment per page: a second gets its own page. write_page fields {expected, check_at: YYYY-MM-DD}.';
+
 export const MAX_REFS_LISTED = 20;
 
 /**
@@ -95,7 +130,15 @@ export function refNote(
 type Refs = { path: string; count: number }[];
 
 export type Change =
-	| { kind: 'create'; path: string; title: string; status?: string; description?: string }
+	| {
+			kind: 'create';
+			path: string;
+			title: string;
+			status?: string;
+			description?: string;
+			/** Set for a write that may need the commitment prompt. */
+			expectation?: Omit<ExpectationInput, 'kind'>;
+	  }
 	| {
 			kind: 'update';
 			path: string;
@@ -107,6 +150,7 @@ export type Change =
 			retitledFrom?: string;
 			/** What the write did, in the caller's reply: a patch summary, a clobber size, a field summary. */
 			notes: string[];
+			expectation?: Omit<ExpectationInput, 'kind'>;
 	  }
 	| {
 			kind: 'move-page';
@@ -149,7 +193,8 @@ export function describeChange(c: Change): ChangeRecord {
 	switch (c.kind) {
 		case 'create': {
 			const statusNote = c.status ? ` with status ${c.status}` : '';
-			const tools = toolRosterNote(c.path);
+			const exp = c.expectation ? expectationNote({ kind: 'create', ...c.expectation }) : '';
+			const tools = toolRosterNote(c.path) + (exp ? `\n\n${exp}` : '');
 			return {
 				bullet: `Created "${c.title}" (\`${c.path}\`).`,
 				commit: {
@@ -163,7 +208,9 @@ export function describeChange(c: Change): ChangeRecord {
 			};
 		}
 		case 'update': {
-			const notes = c.notes.length ? c.notes.join('; ') + '. ' : '';
+			const exp = c.expectation ? expectationNote({ kind: 'update', ...c.expectation }) : '';
+			const all = exp ? [...c.notes, exp.replace(/\.$/, '')] : c.notes;
+			const notes = all.length ? all.join('; ') + '. ' : '';
 			return {
 				bullet: c.statusChanged
 					? `Updated "${c.label}" (\`${c.path}\`), status: ${c.statusChanged}.`

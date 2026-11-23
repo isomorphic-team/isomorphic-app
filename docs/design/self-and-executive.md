@@ -210,17 +210,18 @@ when an expectation covered it.
 `prediction-due` needs only a check date. The core raises it for any brain, with or without a
 self ([`roles-self-and-world-model.md`](roles-self-and-world-model.md), section 8). The
 compare pass is a pass type on `brain_passes` (`src/lib/brain-pass.ts`) and raises the other
-three. `prediction-due` is a finding `validate` computes on each call from the page's own
+three. `prediction-due` (and `prediction-soon`, in the 7 days before) is a finding `validate` computes on each call from the page's own
 frontmatter (`predictionDueFindings`, `src/lib/advisories.ts`), keyed on the path and the
 check date, so the page is the state and nothing is stored. The other three are items in the
 review queue (`src/lib/review-queue.ts`):
 
-| Kind             | Raised when                                                           |
-| ---------------- | --------------------------------------------------------------------- |
-| `prediction-due` | An expectation's check date arrives with no outcome recorded          |
-| `surprise`       | An outcome or an observation departs from what was expected           |
-| `question`       | The cause of a surprise is ambiguous and one answer would settle it   |
-| `arbitration`    | Inside brains or authors disagree; shows what each side would predict |
+| Kind              | Raised when                                                            |
+| ----------------- | ---------------------------------------------------------------------- |
+| `prediction-due`  | An expectation's check date arrives with no outcome recorded           |
+| `prediction-soon` | An expectation's check date is within 7 days, with no outcome recorded |
+| `surprise`        | An outcome or an observation departs from what was expected            |
+| `question`        | The cause of a surprise is ambiguous and one answer would settle it    |
+| `arbitration`     | Inside brains or authors disagree; shows what each side would predict  |
 
 Two signals need no outcome at all:
 
