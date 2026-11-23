@@ -63,13 +63,11 @@ import {
 import { isMediaPath, mediaTypeOf } from '../lib/media.ts';
 import { tryRenderViews, type ViewDeps } from '../lib/views.ts';
 import { isToolPagePath, planCustomTools } from '../lib/custom-tools.ts';
-import { importFindings, type Finding } from '../lib/findings.ts';
 import { openFindings, renderOpenFindings } from '../lib/open-findings.ts';
-import { folderNoteSuggestions, brokenLinkReport, describeProbe } from '../lib/advisories.ts';
+import { brokenLinkReport, describeProbe } from '../lib/advisories.ts';
 import { scoreProbe } from '../lib/probe.ts';
 import { OKF_PAGE_STATUSES } from '../lib/page-patch.ts';
 import { elisionNote } from '../lib/search.ts';
-import { parseLedger } from '../lib/brain-import.ts';
 import { dedupeWrite, writeFingerprint, secondsSince } from '../lib/write-dedupe.ts';
 import { d1WriteLedger } from '../lib/write-dedupe-store.ts';
 import { detectionSection } from '../lib/policy-guard.ts';
@@ -1376,43 +1374,6 @@ export function registerLibrarianTools(
 			const problemCount = resolved.broken.length;
 			const pageCount = resolved.pages.length;
 
-			// Pending import decisions: the last sync's unanswered questions, persisted
-			// per source in its ledger (.isomorphic/imports/<source>.json). Validate is
-			// the "anything need attention?" surface; deciding happens via `resolve`,
-			// and a decision stays listed here until someone answers it.
-			const pendingSections: string[] = [];
-			const importFindingsList: Finding[] = [];
-			try {
-				const rev = await store.getRevision(locator, config.defaultBranch);
-				// listTree defaults to .md — ledgers are .json.
-				const tree = await store.listTree(locator, rev, { extension: '.json' });
-				const ledgers = tree.filter((e) => /^\.isomorphic\/imports\/[^/]+\.json$/.test(e.path));
-				for (const entry of ledgers) {
-					const source = entry.path
-						.split('/')
-						.pop()!
-						.replace(/\.json$/, '');
-					const file = await store.readFile(locator, entry.path);
-					let ledger;
-					try {
-						ledger = parseLedger(file?.content ?? null);
-					} catch {
-						pendingSections.push(
-							`Import ledger for "${source}" is corrupt (${entry.path}) — fix it before the next sync.`
-						);
-						continue;
-					}
-					if (!ledger.pending.length) continue;
-					importFindingsList.push(...importFindings(source, ledger.pending));
-					pendingSections.push(
-						`${ledger.pending.length} import decision(s) pending for "${source}".`
-					);
-				}
-			} catch {
-				// Surfacing pending questions is best-effort; link validation stands alone.
-			}
-			const pendingText = pendingSections.length ? `\n\n${pendingSections.join('\n\n')}` : '';
-
 			// Custom tools: report tool pages (under tools/) that can't register — a
 			// malformed ```tool block, an unknown op, a duplicate name — so an author
 			// sees why a tool didn't show up in the list. Best-effort; the tool blobs are
@@ -1437,15 +1398,11 @@ export function registerLibrarianTools(
 				? `\n\n${toolNotes.length} custom tool page(s) won't register — fix them, then reconnect:\n${toolNotes.join('\n')}`
 				: '';
 
-			// Folders whose overview page isn't named index.md, so the app can't open
-			// them from the folder. Advisory, not a problem, and pure over the index's
-			// page list (no extra fetch).
-			const folderNotes = folderNoteSuggestions(resolved.pages);
-
 			// Advisory only, and best-effort: a failure here never takes link validation with it.
 			let findingsText = '';
 			let comingDueText = '';
 			let openPolicy: number | null = null;
+			let pendingText = '';
 			try {
 				const open = await openFindings({
 					store,
@@ -1460,12 +1417,11 @@ export function registerLibrarianTools(
 					orgId,
 					orgRole,
 					policySecret,
-					importFindings: importFindingsList,
-					folderNotes,
 					reachable: (ids) => reachableBrains(ids, deps, openIndex)
 				});
 				({ findingsText, comingDueText } = renderOpenFindings(open));
 				openPolicy = open.openPolicy;
+				pendingText = open.importNotes.length ? `\n\n${open.importNotes.join('\n\n')}` : '';
 			} catch {
 				// Advisory only; link validation stands alone.
 			}

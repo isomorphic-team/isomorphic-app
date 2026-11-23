@@ -7,6 +7,7 @@ import {
 	ambiguousTitleSuggestions,
 	comingDueLines,
 	dueBlock,
+	folderNoteSuggestions,
 	inlinedConceptSuggestions,
 	MAX_FINDINGS_SHOWN,
 	otherDueBlock,
@@ -19,11 +20,13 @@ import {
 import type { BrainStore, BrainLocator } from './brain-repo.ts';
 import { isContentPath, isToolMaintained, type BrainConfig } from './brain-config.ts';
 import type { BrainIndex, ResolvedGraph } from './brain-index.ts';
+import { parseLedger } from './brain-import.ts';
 import { computeTensions, MAX_DUP_PAGES, tensionFindings } from './consolidate.ts';
 import { FEATURES, hasFeature } from './entitlements.ts';
 import { offerContext, pickOffer } from './feature-offers.ts';
 import {
 	filterDismissed,
+	importFindings,
 	parseReviewLedger,
 	renderFindings,
 	renderValidateFindings,
@@ -58,9 +61,6 @@ export interface OpenFindingsInput {
 	orgId: string | undefined;
 	orgRole: Role | null | undefined;
 	policySecret: string | undefined;
-	/** Pending import decisions and folder-note suggestions, gathered by the caller. */
-	importFindings: Finding[];
-	folderNotes: Finding[];
 	/** The other brains the stored queue quotes, as far as the caller can open them. */
 	reachable: (brainIds: readonly string[]) => Promise<Map<string, ReachableBrain>>;
 }
@@ -72,6 +72,8 @@ export interface OpenFindings {
 	findings: { list: Finding[]; silenced: number; staleCount: number };
 	/** Dates under other deadline-named keys, nearest first, at most `MAX_OTHER_DUE_LINES`. */
 	otherDates: string[];
+	/** One line per source with import decisions pending, and per unreadable import ledger. */
+	importNotes: string[];
 	/** The one feature offer, or null. */
 	offer: Finding | null;
 	/** Open policy findings, for the admin section. */
@@ -97,8 +99,51 @@ export function renderOpenFindings(open: OpenFindings): {
 	};
 }
 
+/**
+ * Pending import decisions: each source's unanswered questions, persisted in its ledger
+ * (`.isomorphic/imports/<source>.json`) until someone answers them with `resolve`. Best-effort:
+ * a failed read costs this part only.
+ */
+async function readImportLedgers(
+	store: BrainStore,
+	locator: BrainLocator,
+	config: BrainConfig
+): Promise<{ findings: Finding[]; notes: string[] }> {
+	const findings: Finding[] = [];
+	const notes: string[] = [];
+	try {
+		const rev = await store.getRevision(locator, config.defaultBranch);
+		// listTree defaults to .md; ledgers are .json.
+		const tree = await store.listTree(locator, rev, { extension: '.json' });
+		const ledgers = tree.filter((e) => /^\.isomorphic\/imports\/[^/]+\.json$/.test(e.path));
+		for (const entry of ledgers) {
+			const source = entry.path
+				.split('/')
+				.pop()!
+				.replace(/\.json$/, '');
+			const file = await store.readFile(locator, entry.path);
+			let ledger;
+			try {
+				ledger = parseLedger(file?.content ?? null);
+			} catch {
+				notes.push(
+					`Import ledger for "${source}" is corrupt (${entry.path}) — fix it before the next sync.`
+				);
+				continue;
+			}
+			if (!ledger.pending.length) continue;
+			findings.push(...importFindings(source, ledger.pending));
+			notes.push(`${ledger.pending.length} import decision(s) pending for "${source}".`);
+		}
+	} catch {
+		// Surfacing pending questions is best-effort; link validation stands alone.
+	}
+	return { findings, notes };
+}
+
 export async function openFindings(input: OpenFindingsInput): Promise<OpenFindings> {
 	const { store, locator, config, index, graph: resolved } = input;
+	const imports = await readImportLedgers(store, locator, config);
 	const notePaths = resolved.pages
 		.filter((p) => isFolderNoteName(p.path.slice(p.path.lastIndexOf('/') + 1)))
 		.map((p) => p.path);
@@ -137,7 +182,7 @@ export async function openFindings(input: OpenFindingsInput): Promise<OpenFindin
 	}
 
 	const all: Finding[] = [
-		...input.importFindings,
+		...imports.findings,
 		...queued.open,
 		...inlinedConceptSuggestions(
 			[...noteContents].map(([path, content]) => ({ path, content })),
@@ -148,7 +193,7 @@ export async function openFindings(input: OpenFindingsInput): Promise<OpenFindin
 		...undatedCommitmentFindings(conceptPages, fieldsByPath),
 		...ambiguousTitleSuggestions(resolved.pages),
 		...wikilinkPortabilityNote(resolved.edges),
-		...input.folderNotes,
+		...folderNoteSuggestions(resolved.pages),
 		...tensionFindings(
 			computeTensions({
 				pages: resolved.pages,
@@ -198,6 +243,7 @@ export async function openFindings(input: OpenFindingsInput): Promise<OpenFindin
 		due: { commitments, coming },
 		findings: { list: rest, silenced: all.length - kept.length, staleCount: keptStale.length },
 		otherDates: otherDueLines(conceptPages, fieldsByPath, todayIso()),
+		importNotes: imports.notes,
 		offer,
 		openPolicy: kept.filter((f) => isPolicyKey(f.key)).length
 	};
