@@ -532,6 +532,31 @@ export function predictionDueFindings(
 	return out;
 }
 
+/** The most pages `dueSummary` names. */
+export const DUE_SUMMARY_LISTED = 3;
+
+/**
+ * How many commitments have reached their check date (on or before `today`, the same test
+ * as `predictionDueFindings`, so `validate` lists exactly these) with no `outcome`, and
+ * the first few by date. `pages` is the caller's concept-page filter.
+ */
+export function dueSummary(
+	pages: { path: string; title?: string }[],
+	fieldsByPath: Map<string, PageFields>,
+	today: string
+): { count: number; top: { path: string; title?: string }[] } {
+	const due: { path: string; title?: string; date: string }[] = [];
+	for (const p of pages) {
+		const c = openCheck(fieldsByPath.get(p.path));
+		if (c && c.date <= today) due.push({ path: p.path, title: p.title, date: c.date });
+	}
+	due.sort((a, b) => a.date.localeCompare(b.date) || a.path.localeCompare(b.path));
+	return {
+		count: due.length,
+		top: due.slice(0, DUE_SUMMARY_LISTED).map(({ path, title }) => ({ path, title }))
+	};
+}
+
 const DAY_MS = 86_400_000;
 const dayNumber = (iso: string): number => Date.parse(`${iso}T00:00:00Z`) / DAY_MS;
 

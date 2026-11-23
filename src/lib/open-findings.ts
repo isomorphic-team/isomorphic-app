@@ -147,6 +147,13 @@ export async function readImportLedgers(
 	return { findings, notes };
 }
 
+/** A page `validate` reads as a concept: not a folder note, not tool-maintained. */
+export function isConceptPage(path: string, config: BrainConfig): boolean {
+	return (
+		!isFolderNoteName(path.slice(path.lastIndexOf('/') + 1)) && !isToolMaintained(path, config)
+	);
+}
+
 export async function openFindings(input: OpenFindingsInput): Promise<OpenFindings> {
 	const { store, locator, config, index, graph: resolved } = input;
 	const imports = input.imports ?? (await readImportLedgers(store, locator, config));
@@ -155,11 +162,7 @@ export async function openFindings(input: OpenFindingsInput): Promise<OpenFindin
 		.map((p) => p.path);
 	const noteContents = await index.pageContents(notePaths);
 	const fieldsByPath = await index.allFields();
-	const conceptPages = resolved.pages.filter(
-		(p) =>
-			!isFolderNoteName(p.path.slice(p.path.lastIndexOf('/') + 1)) &&
-			!isToolMaintained(p.path, config)
-	);
+	const conceptPages = resolved.pages.filter((p) => isConceptPage(p.path, config));
 
 	// Tension detection needs page bodies only for near-duplicates, and loading a whole brain's
 	// content is the expensive step, so above the cap that check is skipped.

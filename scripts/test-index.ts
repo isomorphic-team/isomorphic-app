@@ -21,6 +21,7 @@ import {
 	ensureFresh,
 	INDEX_SCHEMA_VERSION,
 	listIndexedPages,
+	loadDatedPages,
 	indexDatabase,
 	resetIndex,
 	writeThroughIndex as writeThroughWithTags,
@@ -1093,6 +1094,57 @@ console.log('\nDerived state keyed by brain_id: the 0011 re-key');
 		JSON.stringify(keys('usage_daily')) === JSON.stringify(['', 'brain-acme-wiki']),
 		JSON.stringify(keys('usage_daily'))
 	);
+}
+
+// ---------------------------------------------------------------- dated pages
+// loadDatedPages answers only from a current index and never reindexes.
+{
+	console.log('\ndated pages: current index only');
+	resetDb();
+	const dated = (check_at: string): FakePage => ({
+		path: 'wiki/d.md',
+		sha: 'sha-d-' + check_at,
+		content: `---\ntype: Decision\ncheck_at: ${check_at}\n---\n\n# Dated\n`
+	});
+	gh.pages = [...makePages(3), dated('2026-11-01')];
+	gh.head = 'commit-dated';
+	check(
+		'never built: nothing, and nothing is built',
+		(await loadDatedPages(db, store, repo, brainId, config)) === null && meta() === undefined
+	);
+	await readUntilConverged(5);
+	const got = await loadDatedPages(db, store, repo, brainId, config);
+	check(
+		'current: the dated page with its fields',
+		got?.length === 1 &&
+			got[0].path === 'wiki/d.md' &&
+			got[0].fields.get('check_at')?.[0] === '2026-11-01',
+		JSON.stringify(got)
+	);
+	gh.head = 'commit-dated-2';
+	const rows = () =>
+		(sqlite.prepare('SELECT COUNT(*) AS n FROM brain_pages').get() as { n: number }).n;
+	const before = rows();
+	check(
+		'behind the branch tip: dropped',
+		(await loadDatedPages(db, store, repo, brainId, config)) === null
+	);
+	check(
+		'and the index is left as it was',
+		rows() === before && meta()?.indexed_commit_sha === 'commit-dated'
+	);
+	gh.head = 'commit-dated';
+	sqlite.prepare('UPDATE brain_index_meta SET schema_version = 0 WHERE brain_id = ?').run(brainId);
+	check(
+		'behind the row shape: dropped',
+		(await loadDatedPages(db, store, repo, brainId, config)) === null
+	);
+	sqlite
+		.prepare(
+			'UPDATE brain_index_meta SET schema_version = ?, rebuild_cursor = ? WHERE brain_id = ?'
+		)
+		.run(INDEX_SCHEMA_VERSION, 'wiki/p-0001.md', brainId);
+	check('mid-rebuild: dropped', (await loadDatedPages(db, store, repo, brainId, config)) === null);
 }
 
 // ---------- the offline report loader (scripts/local-brain.ts) ----------

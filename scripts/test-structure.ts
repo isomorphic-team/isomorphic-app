@@ -11,6 +11,7 @@ import { folderMoveCollisions } from '../src/tools/librarian.ts';
 import {
 	inlinedConceptSuggestions,
 	typeFieldSuggestions,
+	dueSummary,
 	predictionDueFindings,
 	comingDueLines,
 	checkDateOf,
@@ -629,6 +630,51 @@ console.log('\nfolder-note advisory: a note-less folder holding its own overview
 }
 
 // ---------- prediction due ----------
+
+// dueSummary is the handshake's count; it must agree with predictionDueFindings.
+{
+	const TODAY = '2026-11-23';
+	const rows: Record<string, Record<string, string[]>> = {
+		'd/none.md': { type: ['Decision'] },
+		'd/future.md': { check_at: ['2026-12-01'] },
+		'd/closed.md': { check_at: ['2026-11-01'], outcome: ['shipped'] },
+		'd/late-b.md': { check_at: ['2026-11-10'] },
+		'd/late-a.md': { check_at: ['2026-11-10'] },
+		'd/today.md': { check_at: ['2026-11-23'] },
+		'd/older.md': { check_at: ['2026-10-01'] },
+		'd/due-only.md': { due: ['2026-11-02'] },
+		'd/due-closed.md': { due: ['2026-11-02'], status: ['done'] }
+	};
+	const pages = Object.keys(rows).map((path) => ({ path, title: `T ${path}` }));
+	const byPath = new Map(Object.entries(rows).map(([p, r]) => [p, fields(r)]));
+	const s = dueSummary(pages, byPath, TODAY);
+	check(
+		'dueSummary: counts past and today, not future, closed, undated',
+		s.count === 5,
+		`${s.count}`
+	);
+	check(
+		'dueSummary: the first three by date then path',
+		s.top.map((p) => p.path).join() === 'd/older.md,d/due-only.md,d/late-a.md',
+		s.top.map((p) => p.path).join()
+	);
+	check(
+		'dueSummary: the same pages predictionDueFindings raises',
+		s.count === predictionDueFindings(pages, byPath, TODAY).length
+	);
+	check(
+		'dueSummary: nothing overdue is empty',
+		dueSummary([{ path: 'd/future.md' }], byPath, TODAY).count === 0
+	);
+	check(
+		'dueSummary: a `due` date counts when there is no check_at',
+		dueSummary([{ path: 'd/due-only.md' }], byPath, TODAY).count === 1
+	);
+	check(
+		'dueSummary: a closed status drops the `due` fallback',
+		dueSummary([{ path: 'd/due-closed.md' }], byPath, TODAY).count === 0
+	);
+}
 
 {
 	const TODAY = '2026-11-23';

@@ -244,13 +244,13 @@ Open seams:
 
 A decision or commitment is made, with a result that can be checked later.
 
-| Step        | Today                                                                                      | Surface                                  |
-| ----------- | ------------------------------------------------------------------------------------------ | ---------------------------------------- |
-| Trigger     | Someone commits to something, or a decision expects a result                               | The conversation                         |
-| Record      | A Decision or Commitment page with `expected` and `check_at`, linked to the claim it tests | `write_page` (its reply asks for a date) |
-| Be reminded | The person asks what is due or on their plate                                              | `validate`, its due area                 |
-| Close       | The outcome is recorded on the page                                                        | `write_page`                             |
-| Learn       | The claim's page shows the decisions that tested it                                        | `RECORD_VIEW` on the claim's page        |
+| Step        | Today                                                                                                                | Surface                                                   |
+| ----------- | -------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------- |
+| Trigger     | Someone commits to something, or a decision expects a result                                                         | The conversation                                          |
+| Record      | A Decision or Commitment page with `expected` and `check_at`, linked to the claim it tests                           | `write_page` (its reply asks for a date)                  |
+| Be reminded | The session opens with the count of commitments past their check date; the person asks what is due or on their plate | Handshake instructions (hosted), `validate`, its due area |
+| Close       | The outcome is recorded on the page                                                                                  | `write_page`                                              |
+| Learn       | The claim's page shows the decisions that tested it                                                                  | `RECORD_VIEW` on the claim's page                         |
 
 Where the vision takes it:
 
@@ -270,7 +270,10 @@ Open seams:
   doing a level-3 job, and each improvement to reminders so far has been a change to `validate`.
   Whether reminders move to the single list of what is open, or get their own surface, is an
   open product decision.
-- Nothing brings a due commitment back to the person unless they ask.
+- A due commitment reaches the person only when the agent acts on the handshake line: it names
+  the active brain's past-due count and the first few pages, and is dropped when the index is not
+  current or the lookup is late. It is absent under `pnpm try`, and nothing reminds a person
+  outside a session.
 - Dates under other deadline-named keys are listed in the same reply but are not expectations
   and cannot be closed with an outcome, so the due area holds two kinds of date with two ways to
   clear them.
