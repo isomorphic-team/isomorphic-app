@@ -1,9 +1,11 @@
-# Design: roles, the org self, and the world model
+# Design: roles, the org view, and the world model
 
-Status: **proposed** (2026-11-15). Step 3 of section 11 is built in a first form; nothing else
-in this document is. It is a vision document:
-it names how pieces that are already built or already designed fit together, and the small
-number of new pieces that join them.
+Status: **proposed** (2026-11-15). Steps 3 and 7 of section 11 are built in a first form;
+nothing else in this document is. Amended 2026-11-21: the org view holds facts, and intentions
+belong to a self declared outside brains and organizations
+([`self-and-executive.md`](self-and-executive.md)). Sections 4.3, 5, 6, 10, 12 and 13 carry
+the amendments. It is a vision document: it names how pieces that are already built or already
+designed fit together, and the small number of new pieces that join them.
 
 - Author: Jon Hansing (via Claude)
 - Audience: anyone deciding what to build next, and the sessions that pick up the work items
@@ -11,8 +13,8 @@ number of new pieces that join them.
   [`multi-agent-surface.md`](multi-agent-surface.md), [`brain-seams.md`](brain-seams.md),
   [`derived-views-and-sync-prd.md`](derived-views-and-sync-prd.md),
   [`records-tables-prd.md`](records-tables-prd.md),
-  [`brain-level-permissions.md`](brain-level-permissions.md),
-  [`self-and-executive.md`](self-and-executive.md), [`../roadmap.md`](../roadmap.md)
+  [`brain-level-permissions.md`](brain-level-permissions.md), [`../roadmap.md`](../roadmap.md),
+  [`self-and-executive.md`](self-and-executive.md)
 
 ## 1. Summary
 
@@ -23,8 +25,10 @@ organization as one thing.
 This document proposes three ideas, in order of size:
 
 1. **A brain has a role.** It declares what it owns and what it watches.
-2. **An org has a self.** A view computed from those declarations: who owns what, what is
-   unresolved, what the organization has committed to, and what it believes.
+2. **An org has a view.** Computed from those declarations: who owns what, what is
+   unresolved, what the organization has committed to, and what it believes. Intentions
+   belong to a self, declared outside brains and organizations
+   ([`self-and-executive.md`](self-and-executive.md)).
 3. **The brains together are a world model.** State and theory are already there. Dated
    events and outcomes are the missing layer, and with them the organization can state what
    it expects and learn from what happened.
@@ -59,7 +63,7 @@ instead.
 | ------------ | ---------------------------------------------------------------------------------------- |
 | Brain        | A set of pages in one store (a git repository, a Drive folder, or held by the platform)  |
 | Role         | What a brain is for: the facts it owns, the brains it watches, its standards, its stance |
-| Org self     | A computed view over an org's brains: ownership, open items, commitments, beliefs        |
+| Org view     | A computed view over an org's brains: ownership, open items, commitments, beliefs        |
 | World model  | Everything the org's brains say about the world, in three layers: state, theory, events  |
 | Derivation   | A declared link saying this content has its home somewhere else                          |
 | Open item    | Something unresolved, with an owner and a source                                         |
@@ -120,6 +124,10 @@ several brains and write one. That makes "write only to the brain you serve" a p
 the grant, not a sentence in a prompt. The guard at `BrainStore.commitOrPR` stays the backstop
 for content.
 
+A self's executive is the one actor with a wider grant: it reads its inside brains and sensed
+sources, and writes records into every brain inside its blanket
+([`self-and-executive.md`](self-and-executive.md), section 11).
+
 ## 5. A brain has a role
 
 A role has four parts:
@@ -139,14 +147,20 @@ concrete:
 - A proposed patch targets the copy, never the owner.
 - `validate` can report a subject two brains both claim, and one that none claims.
 
+Ownership here is by subject. A self adds a second axis, the observer: expectations,
+calibration and models of counterparties belong to the self that holds them, whatever they are
+about, and never land in the subject's brain
+([`self-and-executive.md`](self-and-executive.md), section 5).
+
 A role is not a self. A brain makes no promises in its own name and cannot change what it is
 for. Its stance is still worth having: a legal brain that leans cautious and a delivery brain
-that leans toward yes disagree usefully, and the org decides between them.
+that leans toward yes disagree usefully, and the self's executive surfaces the disagreement
+for a person to decide.
 
-## 6. An org has a self
+## 6. An org has a view
 
-An org today is members, brains and entitlements. It has no content of its own. The org self
-is a view, computed on read, with five parts:
+An org today is members, brains and entitlements. It has no content of its own. The org view
+is computed on read, with five parts:
 
 | Part                                         | Computed from                                                         |
 | -------------------------------------------- | --------------------------------------------------------------------- |
@@ -156,19 +170,20 @@ is a view, computed on read, with five parts:
 | Commitments                                  | Pages of the types a role declares as commitments, such as agreements |
 | Beliefs, with their record                   | Theory pages and the outcomes that link to them (section 8)           |
 
-It also has one authored part: a short charter page saying what the organization is and what
-it will not do. That page lives in an existing brain, and the org setting points at it.
+The view holds facts. It cannot hold intentions: goals, attention, expectations and models of
+others are choices and perspectives that no brain's content derives. Those belong to a self,
+declared outside brains and organizations, with an authored charter of values, intent and set
+points ([`self-and-executive.md`](self-and-executive.md)). An organization is a permission
+boundary and a self is a boundary of intent, and the two diverge as soon as a firm's client
+work lives in another organization's brains.
 
-This view holds facts. Goals, priorities and expectations are choices, and
-[`self-and-executive.md`](self-and-executive.md) proposes a declared self to hold them: a
-boundary over brains from any organization, with its charter stored on the self and not on a
-page. That document calls the view described here the org view.
+Three rules follow from what the view is:
 
-Three rules follow from what the self is:
-
-- **It is a view, never a brain.** A written-down self would drift like any other copy.
-- **It owns no facts and writes none.** It reads every brain and raises open items. The
-  failure to design against is the story overwriting the record.
+- **It is a view, never a brain.** A written-down view would drift like any other copy. The
+  self is not a brain either; it is declared on the platform.
+- **It owns no subject facts and writes none.** It reads every brain and raises open items.
+  The failure to design against is the story overwriting the record. A self's executive
+  writes records inside its own blanket and proposals everywhere else.
 - **It answers by audience.** It is the one place where material at different disclosure
   levels meets, so every answer is filtered by what the asker can already read. A finding
   that spans two brains quotes only the side its reader can open, and points at the other.
@@ -198,7 +213,8 @@ Records are what answer world-against-brain staleness. A page models a concept; 
 dated occurrence that points at concepts through wikilinks, so backlinks and the graph cover
 it with no new machinery.
 
-The org self is the part of the world model that is about the organization.
+The org view is the part of the world model that is about the organization. A self's
+expectations and observations are records too, held in the brains inside its blanket.
 
 ## 8. Predictions and learning
 
@@ -242,7 +258,7 @@ can contradict is a self-image: the loop only works if outcomes are written down
 | Data-policy guard           | [`privacy-checks.md`](privacy-checks.md)                                       | Built                  | Standards, and the backstop for the boundary           |
 | Consolidation               | [`consistency-checks.md`](consistency-checks.md), `ee/review/consolidation.ts` | Built, between two too | Drift detection inside a brain and between two         |
 | Review queue                | `src/lib/review-queue.ts`                                                      | Built                  | The open-item list                                     |
-| Passes                      | `src/lib/brain-pass.ts`                                                        | Built                  | How the self runs; extended to an org                  |
+| Passes                      | `src/lib/brain-pass.ts`                                                        | Built                  | How the view runs; extended to an org                  |
 | Live views                  | [`derived-views-and-sync-prd.md`](derived-views-and-sync-prd.md)               | Built                  | Derivation inside a brain; scorecards                  |
 | `sync_records`              | Same                                                                           | Built                  | Derivation from outside; the planner publishing reuses |
 | Cross-brain search          | [`brain-seams.md`](brain-seams.md)                                             | Built                  | Candidate pairs across brains                          |
@@ -269,6 +285,10 @@ coordinator with cheap readers, not peers messaging each other. A hosted agent r
 run it. It should reach brains through the MCP server with a read-mostly grant, not through
 a copy of the content, since a copy is one more thing to drift.
 
+That coordinator is a self's executive ([`self-and-executive.md`](self-and-executive.md),
+section 11). It needs an identity after all, the self's, because it acts for one boundary of
+intent across brains in more than one organization.
+
 ## 11. Order of work
 
 Each step is useful without the ones after it.
@@ -284,7 +304,7 @@ Each step is useful without the ones after it.
    by the organization and not by one brain, so a pair is checked once, and the owner
    deciding which side stands, which needs step 2.
 4. **The org view.** Review and open questions across an org's brains. The first visible
-   form of the self.
+   form of the view.
 5. **More kinds of open item:** question, obligation, prediction due.
 6. **Prevention.** Cross-brain wikilinks, then publishing.
 7. **A scheduled org pass.** Built in a first form: an hourly run checks each brain that
@@ -295,19 +315,15 @@ Each step is useful without the ones after it.
 9. **A grant that reads many brains and writes one.**
 10. **A coordinator with judgment,** only if the queue shows it is needed.
 
-Steps 1 to 4 deliver roles and the self. Steps 5 to 7 make them maintain themselves. Steps
+Steps 1 to 4 deliver roles and the view. Steps 5 to 7 make them maintain themselves. Steps
 8 to 10 add learning and autonomy.
-
-[`self-and-executive.md`](self-and-executive.md) continues from here. Its order of work
-starts with the expectation fields of step 8 and the cross-brain wikilinks of step 6, its
-compare pass adds item kinds beyond those of step 5, and its executive is the coordinator of
-step 10.
 
 ## 12. Decided against
 
 - **An agent per brain, messaging its peers.** More traffic than content at the size of org
   this serves, and no rule for who is right. Ownership plus open items does the same job.
-- **A brain for the org self.** It would be a fifth copy.
+- **A brain for the org view.** It would be a fifth copy. The self is not a brain either: it
+  is declared on the platform ([`self-and-executive.md`](self-and-executive.md), section 4).
 - **Brains with selves.** A brain that cares about its own continuity defends its scope
   where it should defer to the ownership map.
 - **A registry of individual claims.** Ownership at the grain of a subject is enough to
@@ -325,6 +341,8 @@ step 10.
   copy's brain is the better home, with the other side pointed at and not quoted.
 - Should a brain cut by audience own anything, or only receive publications?
 - Which page types count as commitments, and is that per brain or per org?
-- Does the charter page need its own protection, given it steers every pass?
+- Does the charter need its own protection, given it steers every pass? It now lives on the
+  self, edited only by its authors ([`self-and-executive.md`](self-and-executive.md),
+  section 6).
 - How often should the belief loop run? Consistency is nightly work; revising beliefs is
   monthly at most.
