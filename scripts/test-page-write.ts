@@ -880,7 +880,7 @@ console.log('\nwrite_page: the commitment prompt (expectationNote)');
 
 console.log('\nwrite_page: the compare note (outcome set on a page with expected)');
 {
-	const COMPARE = 'Compare it with the outcome';
+	const COMPARE = 'Did the result meet it or depart from it';
 	const note = (
 		frontmatter: Frontmatter,
 		patch?: Record<string, unknown>,
@@ -894,7 +894,9 @@ console.log('\nwrite_page: the compare note (outcome set on a page with expected
 	check(
 		'compare: outcome in this call on a page with expected fires, quoting expected',
 		note(dec, { outcome: 'Churn was 5%' }).includes(COMPARE) &&
-			note(dec, { outcome: 'Churn was 5%' }).includes('Expected: Churn falls below 3%.')
+			note(dec, { outcome: 'Churn was 5%' }).includes(
+				'Expected: Churn falls below 3%. Happened: Churn was 5%.'
+			)
 	);
 	{
 		// The real create path: composeCreate, then describeChange with no patch.
@@ -951,9 +953,17 @@ console.log('\nwrite_page: the compare note (outcome set on a page with expected
 	);
 	check(
 		'compare: names the revise branch, the no-linked-claim branch and the yes gate',
-		['offer to revise the page', 'else name the page', 'Never edit that page without a yes'].every(
-			(t) => dec.expected && note(dec, { outcome: 'z' }).includes(t)
-		)
+		[
+			'ONE question offering to revise that page',
+			'do not edit it in this reply',
+			'no claim page is linked and ask which page',
+			'open a new commitment for the new date; this one stays closed'
+		].every((t) => dec.expected && note(dec, { outcome: 'z' }).includes(t))
+	);
+	const longOut = note(dec, { outcome: 'y'.repeat(300) });
+	check(
+		'compare: outcome is capped',
+		longOut.includes('Happened: ' + 'y'.repeat(120) + '...') && !longOut.includes('y'.repeat(121))
 	);
 	check('compare: never says surprise', !/surprise/i.test(note(dec, { outcome: 'z' })));
 }

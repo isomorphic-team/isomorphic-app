@@ -63,6 +63,12 @@ check(
 	`${SERVER_INSTRUCTIONS.length} characters`
 );
 
+check(
+	'the compare clause did not grow the instructions (at most 3,079 characters)',
+	SERVER_INSTRUCTIONS.length <= 3079,
+	`${SERVER_INSTRUCTIONS.length} characters`
+);
+
 console.log('\ncommitments');
 {
 	const line =
@@ -77,10 +83,11 @@ console.log('\ncommitments');
 		line
 	);
 	check(
-		'it says dates under other deadline-named keys are listed apart, not tracked',
-		/other deadline-named keys are listed apart, not tracked/.test(line),
+		'it says to compare a reported result with expected and offer to record it as outcome',
+		/compare it with `expected` and offer to record it as `outcome`/.test(line),
 		line
 	);
+	check('it does not tell the agent to record without asking', !/no need to ask/.test(line), line);
 	check(
 		'it links a commitment to the page whose claim it tests',
 		/linking to the page whose claim it tests/.test(line),

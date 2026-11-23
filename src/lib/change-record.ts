@@ -128,15 +128,15 @@ const firstValue = (v: unknown): string =>
 		.find((x) => x !== '') ?? '';
 
 // Asks the agent to compare a result it just recorded with what the page expected, and to
-// offer revising the page the decision tested. Empty unless this call set a non-empty
+// offer revising the page the decision tested, never to edit it in the same reply. Empty unless this call set a non-empty
 // `outcome` and the page has a non-empty `expected`.
 function compareNote(fm: Frontmatter, patch: Record<string, unknown> | null | undefined): string {
 	if (!patch || firstValue(patch.outcome) === '') return '';
 	const expected = firstValue(fm.expected);
 	if (expected === '') return '';
-	const shown =
-		expected.length > EXPECTED_MAX_CHARS ? expected.slice(0, EXPECTED_MAX_CHARS) + '...' : expected;
-	return `Expected: ${shown}. Compare it with the outcome you just recorded: did the result meet it or depart from it? If it met it, say so in one line and stop. If it departed, tell the person in one line what was expected and what happened, and offer to revise the page this decision tested: the page this one links to, else name the page you think it was tested against and ask which. Never edit that page without a yes.`;
+	const clip = (v: string) =>
+		v.length > EXPECTED_MAX_CHARS ? v.slice(0, EXPECTED_MAX_CHARS) + '...' : v;
+	return `Expected: ${clip(expected)}. Happened: ${clip(firstValue(patch.outcome))}. Did the result meet it or depart from it? If it met it, say so in one line and stop. If it departed: when the page this one links to asserts something the result contradicts, ask the person ONE question offering to revise that page, and do not edit it in this reply. When no linked page asserts anything, say no claim page is linked and ask which page, if any, it tested. If the result also sets a new date, open a new commitment for the new date; this one stays closed.`;
 }
 
 const RECORD_TEXT = `If this page links to the page whose claim it tests and that page does not already show its record (read it first), offer to append this there with write_page append:\n${RECORD_VIEW}\none yes completes it. Then tell the person that page now shows its record.`;
