@@ -588,7 +588,9 @@ large brain work).
 
 # TODO: the self and the executive
 
-[`design/self-and-executive.md`](design/self-and-executive.md). Proposed, nothing built.
+[`design/self-and-executive.md`](design/self-and-executive.md). Proposed. Built so far: the
+`prediction-due` item, raised on the check date as a finding `validate` computes from
+frontmatter (`expected`, `check_at`, `outcome`); the records tables are not.
 [`design/roles-self-and-world-model.md`](design/roles-self-and-world-model.md) gives each brain
 a role and computes an org view over facts. A computed view cannot hold goals, priorities or
 expectations, so this adds a **self**: a boundary declared over brains from any organization,
@@ -604,7 +606,8 @@ self off, every brain still reads, validates and renders, and still states expec
 asked what happened.
 
 In order, each useful alone: records with the expectation fields and an item raised on the
-check date, both core (the records tables item above); cross-brain wikilinks; the self
+check date, both core (the item is built as a computed finding; the records tables item above
+is still to do); cross-brain wikilinks; the self
 declaration and the charter; the compare pass and its item kinds; the ranking pass;
 calibration shown on theory pages.
 

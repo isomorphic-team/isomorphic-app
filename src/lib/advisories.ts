@@ -12,7 +12,7 @@
 import type { BrokenLink, PageFields } from './brain-index.ts';
 import { type Finding, findingKey } from './findings.ts';
 import type { ProbeResult } from './probe.ts';
-import { isFolderNoteName } from './view-directives.ts';
+import { datePart, isFolderNoteName } from './view-directives.ts';
 import { parseFrontmatter, slugOf, slugify, wikilinkKey, wikilinkTargetName } from './wiki.ts';
 
 // Folder-note advisory for validate. A folder's overview page has to be named index.md
@@ -387,4 +387,42 @@ export function wikilinkPortabilityNote(edges: { kind: 'md' | 'wiki'; cnt: numbe
 			headline: `- ${wiki} of ${total} resolved links are [[wikilinks]]. They resolve here, but they are not Open Knowledge Format links — an outside reader of this brain follows plain markdown links and sees these as literal text.`
 		}
 	];
+}
+
+// A commitment whose check date has come: a concept page whose first `check_at` value
+// (a date or datetime, read by its date part like `okf-view` filters; unparseable values
+// are ignored) is on or before `today` and that has no non-empty `outcome`. `pages` is the
+// caller's concept-page filter (no folder notes, no tool-maintained pages). The key carries
+// the date, so a dismissal covers that date only and re-dating raises the item again.
+// Nothing is stored: the page is the state.
+const EXPECTED_MAX_CHARS = 120;
+
+export function predictionDueFindings(
+	pages: { path: string }[],
+	fieldsByPath: Map<string, PageFields>,
+	today: string
+): Finding[] {
+	const out: Finding[] = [];
+	for (const p of pages) {
+		const fields = fieldsByPath.get(p.path);
+		if (!fields) continue;
+		if (fields.get('outcome')?.some((v) => v.trim() !== '')) continue;
+		const raw = fields.get('check_at')?.[0];
+		const date = raw === undefined ? undefined : datePart(raw);
+		if (date === undefined || date > today) continue;
+		const expected = fields
+			.get('expected')
+			?.map((v) => v.trim())
+			.find((v) => v !== '');
+		const shown =
+			expected && expected.length > EXPECTED_MAX_CHARS
+				? expected.slice(0, EXPECTED_MAX_CHARS) + '...'
+				: expected;
+		out.push({
+			key: findingKey('prediction-due', `${p.path}@${date}`),
+			weight: 3,
+			headline: `- ${p.path}: check due ${date}${shown ? `. Expected: ${shown}` : ''}. No outcome is recorded. Record it with write_page fields {outcome: ...}, or dismiss with resolve and a reason.`
+		});
+	}
+	return out;
 }

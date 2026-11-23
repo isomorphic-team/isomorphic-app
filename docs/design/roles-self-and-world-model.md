@@ -1,7 +1,8 @@
 # Design: roles, the org view, and the world model
 
-Status: **proposed** (2026-11-15). Steps 3 and 7 of section 11 are built in a first form;
-nothing else in this document is. Amended 2026-11-21: the org view holds facts, and intentions
+Status: **proposed** (2026-11-15). Steps 3 and 7 of section 11 are built in a first form, and
+the first part of step 8 (the expectation and outcome fields and the item raised on the check
+date); nothing else in this document is. Amended 2026-11-21: the org view holds facts, and intentions
 belong to a self declared outside brains and organizations
 ([`self-and-executive.md`](self-and-executive.md)). Sections 4.3, 5, 6, 10, 12 and 13 carry
 the amendments. It is a vision document: it names how pieces that are already built or already
@@ -105,7 +106,7 @@ The product has four partial versions of the same thing:
 
 Each is something unresolved, with a source and someone who should answer it. The queue is
 the one with keys, visibility rules and a `resolve` path, so it is the one to extend: more
-kinds (a question, an obligation, a prediction due), and a read across every brain in an org.
+kinds (a question, an obligation, neither built; a prediction due is a finding `validate` computes, not a queue kind), and a read across every brain in an org.
 A page convention can stay as the human-readable face of the same items.
 
 Open items are also the only channel between brains. A pass or an agent that finds something
@@ -226,14 +227,15 @@ be checked. A decision record already does half of that. The rest is three field
 - when to check
 - what happened
 
-These work today as frontmatter on a decision page, because every scalar frontmatter key is
-indexed. They move to a records table when records exist.
+These work as frontmatter on a decision page (`expected`, `check_at`, `outcome`), because
+every scalar frontmatter key is indexed. They move to a records table when records exist.
 
 The loop:
 
 1. A decision is recorded with its expectation and a check date, linked to the theory page
    it applies.
-2. On the check date, a pass raises an open item for the owning brain: what happened?
+2. On the check date, `validate` lists the page as a `prediction-due` finding: what happened?
+   It is computed from the frontmatter on each call, with no pass and no table.
 3. The answer is recorded as the outcome.
 4. Each theory page shows its record, as a live view over the outcomes that link to it.
 5. When the record turns against a belief, a pass proposes a revision as an open item. A
@@ -313,7 +315,7 @@ Each step is useful without the ones after it.
    deciding which side stands, which needs step 2.
 4. **The org view.** Review and open questions across an org's brains. The first visible
    form of the view.
-5. **More kinds of open item:** question, obligation, prediction due.
+5. **More kinds of open item:** question and obligation, not built. Prediction due is built as a finding `validate` computes, not as a queue kind.
 6. **Prevention.** Cross-brain wikilinks, then publishing.
 7. **A scheduled org pass.** Built in a first form: an hourly run checks each brain that
    takes part against the others, as the organization and not as a person. Taking part is
@@ -321,6 +323,7 @@ Each step is useful without the ones after it.
    ahead of the owns and watches declarations of step 2. The key is named `charter`; in
    prose, charter means a self's.
 8. **Expectation and outcome fields,** then records tables, then scorecards on theory pages.
+   The fields and the `prediction-due` finding are built; records tables and scorecards are not.
 9. **A grant that reads many brains and writes one.**
 10. **A coordinator with judgment,** only if the queue shows it is needed.
 
