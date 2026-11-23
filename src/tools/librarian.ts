@@ -446,7 +446,7 @@ async function createPageWrite(
 	const { store, locator, config, author } = ctx;
 	const today = todayIso();
 	const composed = composeCreate(target, args, today);
-	if (!composed.ok) return fail(composed.error);
+	if (!composed.ok) return fail(composed.error, composed.reason);
 	// The snapshot refresh (which may touch the index) and the changelog read are
 	// independent, so they run together rather than back to back.
 	const [newContent, log] = await Promise.all([
@@ -490,7 +490,7 @@ async function updatePageWrite(
 	logPromise.catch(() => {});
 	const today = todayIso();
 	const composed = composeUpdate(path, existing.content, args, today, MAX_FIELD_KEYS_PER_PAGE);
-	if (!composed.ok) return fail(composed.error);
+	if (!composed.ok) return fail(composed.error, composed.reason);
 	const newContent = await withFreshSnapshots(ctx, path, composed.content);
 
 	const writes = [{ path, content: newContent }];
@@ -958,7 +958,7 @@ export function registerLibrarianTools(
 		{
 			...toolAnnotations('Write a brain page', 'destructive'),
 			description:
-				'Create a new page, or change an existing one, at a content path you choose (folders are free-form). ONE PAGE = ONE CONCEPT: anything another page should be able to link to — a person, vendor, system, event series, project — gets its own file, never a section inside a bigger page. If you are about to write a heading per item, write a page per item instead. To change PART of a page use `edits` (exact find/replace; each anchor must match exactly once) or `append` (add to the end): both leave the rest of the page untouched, so you do not have to read it first and cannot destroy text you have not seen. To change METADATA rather than page text, use `fields` (set or remove any frontmatter key the brain tracks, e.g. done/owner/due) or the title/type/description/status arguments: those leave the body untouched. `content` REPLACES the entire body, so pass it only for a new page or a deliberate full rewrite, and read the page first (read_page) if you did not just write it. OKF lifecycle status is optional: absent means stable; set draft, stable, or deprecated only when the distinction should be explicit. On an existing page frontmatter is preserved and merged, the "updated" date is bumped, a retitle repoints inbound links, and passing none of content/edits/append changes only metadata. Every change is logged. Pass mode: "create" to require a new path (fails if it exists) or "update" to require an existing one. If this call FAILS WITHOUT A RESULT — a timeout, a 502 or any other gateway error, a dropped connection — its outcome is ambiguous and the write may still have landed. Retrying the IDENTICAL call is the safe move: a repeat with the same arguments within a few minutes is recognised as a retry and answered from the first attempt rather than applied twice. Change anything about the call and that no longer holds, so read the page before retrying a changed one: a repeated create fails if the first attempt landed, and a repeated append would duplicate the text.',
+				'Create a new page, or change an existing one, at a content path you choose (folders are free-form). ONE PAGE = ONE CONCEPT: anything another page should be able to link to — a person, vendor, system, event series, project — gets its own file, never a section inside a bigger page. If you are about to write a heading per item, write a page per item instead. To change PART of a page use `edits` (exact find/replace; each anchor must match exactly once, so keep it to a short phrase) or `append` (add to the end): both leave the rest of the page untouched, so you do not have to read it first and cannot destroy text you have not seen. To change METADATA rather than page text, use `fields` (set or remove any frontmatter key the brain tracks, e.g. done/owner/due) or the title/type/description/status arguments: those leave the body untouched. `content` REPLACES the entire body, so pass it only for a new page or a deliberate full rewrite, and read the page first (read_page) if you did not just write it. OKF lifecycle status is optional: absent means stable; set draft, stable, or deprecated only when the distinction should be explicit. On an existing page frontmatter is preserved and merged, the "updated" date is bumped, a retitle repoints inbound links, and passing none of content/edits/append changes only metadata. Every change is logged. Pass mode: "create" to require a new path (fails if it exists) or "update" to require an existing one. If this call FAILS WITHOUT A RESULT — a timeout, a 502 or any other gateway error, a dropped connection — its outcome is ambiguous and the write may still have landed. Retrying the IDENTICAL call is the safe move: a repeat with the same arguments within a few minutes is recognised as a retry and answered from the first attempt rather than applied twice. Change anything about the call and that no longer holds, so read the page before retrying a changed one: a repeated create fails if the first attempt landed, and a repeated append would duplicate the text.',
 			inputSchema: z.object({
 				brain: brainArg,
 				path: z
@@ -984,7 +984,7 @@ export function registerLibrarianTools(
 							find: z
 								.string()
 								.describe(
-									'Exact text to replace, copied verbatim from the page (whitespace included). Must occur exactly once, or the call fails and nothing is written; include surrounding lines to disambiguate.'
+									'Exact text to replace, copied verbatim from the page (whitespace included). Keep it SHORT: the smallest phrase that occurs exactly once, never a whole paragraph or table row, since every character must match. To insert, anchor on a short phrase next to the insertion point and repeat it in `replace` with the new text before or after it. If it occurs zero times or more than once the call fails and nothing is written; then add a few words to disambiguate.'
 								),
 							replace: z.string().describe('Text to put in its place (empty string deletes it).')
 						})
@@ -1040,7 +1040,7 @@ export function registerLibrarianTools(
 				const { store, locator, config } = ctx;
 				// Refusals that need no page are answered before a round trip is spent.
 				const checked = checkPageWrite(args, config);
-				if (!checked.ok) return fail(checked.error);
+				if (!checked.ok) return fail(checked.error, checked.reason);
 				const { target } = checked;
 
 				// Capture the commit base before reading authoritative content. If the
@@ -1049,7 +1049,7 @@ export function registerLibrarianTools(
 				const base = await writeBase(ctx);
 				const existing = await store.readFile(locator, target, base.id);
 				const plan = planPageWrite(args, target, existing, config);
-				if (!plan.ok) return fail(plan.error);
+				if (!plan.ok) return fail(plan.error, plan.reason);
 				if (plan.kind === 'create')
 					return createPageWrite(ctx, base, target, {
 						content,

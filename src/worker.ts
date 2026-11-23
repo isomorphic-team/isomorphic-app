@@ -127,6 +127,7 @@ import { registerFeedbackTools } from './tools/feedback.ts';
 import { registerAnalyticsTools } from './tools/analytics.ts';
 import { recordUsage } from './lib/usage-store.ts';
 import { dayKey, countedCall } from './lib/usage.ts';
+import type { FailureReason } from './lib/failure-reason.ts';
 import { loadCustomToolDefs, registerCustomTools, type CustomToolLoad } from './tools/custom.ts';
 import { resolveInstallationOrg, connectCustomerOrg } from './lib/org-connect.ts';
 import { loadBrainConfig, type BrainConfig } from './lib/brain-config.ts';
@@ -737,7 +738,7 @@ class McpSession {
 	// Records nothing without BOTH a product identity and a resolved org, so the
 	// single-tenant paths and calls that failed before resolution write no
 	// rows rather than writing anonymous ones.
-	private recordCall(tool: string, ok: boolean): void {
+	private recordCall(tool: string, ok: boolean, reason?: FailureReason): void {
 		if (!this.usageEnabled()) return;
 		const userId = this.props?.user_id;
 		const scope = this._resolvedScope;
@@ -749,7 +750,8 @@ class McpSession {
 				brainId: scope.brainId,
 				userId,
 				tool,
-				ok
+				ok,
+				reason
 			}).catch(() => {})
 		);
 	}
@@ -1106,7 +1108,7 @@ class McpSession {
 				before: () => {
 					this._resolvedScope = undefined;
 				},
-				after: (ok) => this.recordCall(name, ok)
+				after: (ok, reason) => this.recordCall(name, ok, reason)
 			})
 		);
 	}

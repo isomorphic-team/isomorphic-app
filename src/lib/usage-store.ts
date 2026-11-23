@@ -6,11 +6,13 @@
 
 import type { D1Database } from '@cloudflare/workers-types';
 import type { UsageRow } from './usage.ts';
+import type { FailureReason } from './failure-reason.ts';
 
 /**
- * Bump today's counter for one tool call.
+ * Bump today's counter for one tool call, and for a failed one its reason's
+ * counter in `usage_failures` (migration 0031).
  *
- * ONE STATEMENT, AND IT MUST NEVER BLOCK THE CALL. Callers run this through
+ * IT MUST NEVER BLOCK THE CALL. Callers run this through
  * ctx.waitUntil after the handler has already returned its result, and swallow
  * failures: analytics is the least important thing this Worker does, and a D1
  * hiccup turning into a failed read_page would be an absurd trade. The counter
@@ -29,17 +31,35 @@ export async function recordUsage(
 		userId: string;
 		tool: string;
 		ok: boolean;
+		/** Why it failed; ignored when `ok`. A failure without one records `other`. */
+		reason?: FailureReason;
 	}
 ): Promise<void> {
-	await db
+	const key = [entry.day, entry.orgId, entry.brainId, entry.userId, entry.tool] as const;
+	const counter = db
 		.prepare(
 			`INSERT INTO usage_daily (day, org_id, brain_id, user_id, tool, calls, errors)
 			 VALUES (?1, ?2, ?3, ?4, ?5, 1, ?6)
 			 ON CONFLICT (day, org_id, brain_id, user_id, tool)
 			 DO UPDATE SET calls = calls + 1, errors = errors + excluded.errors`
 		)
-		.bind(entry.day, entry.orgId, entry.brainId, entry.userId, entry.tool, entry.ok ? 0 : 1)
-		.run();
+		.bind(...key, entry.ok ? 0 : 1);
+	if (entry.ok) {
+		await counter.run();
+		return;
+	}
+	// A failure is one batch, so its reason row and its error count land together.
+	await db.batch([
+		counter,
+		db
+			.prepare(
+				`INSERT INTO usage_failures (day, org_id, brain_id, user_id, tool, reason, failures)
+				 VALUES (?1, ?2, ?3, ?4, ?5, ?6, 1)
+				 ON CONFLICT (day, org_id, brain_id, user_id, tool, reason)
+				 DO UPDATE SET failures = failures + 1`
+			)
+			.bind(...key, entry.reason ?? 'other')
+	]);
 }
 
 /**

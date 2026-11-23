@@ -9,6 +9,7 @@
 // on" is not "which brain to open"), so only the SHAPE is shared here.
 
 import { z } from 'zod';
+import { tagFailure, type FailureReason } from '../lib/failure-reason.ts';
 
 // A normal tool result. `structuredContent` rides along only when a caller passes
 // one, so this stays byte-identical to the text-only form it replaces.
@@ -20,9 +21,12 @@ export function ok(text: string, structuredContent?: Record<string, unknown>) {
 }
 
 // An error result. `isError` is what the host reads to render a failure, and what
-// countedCall (src/lib/usage.ts) counts as an error rather than a success.
-export function fail(text: string) {
-	return { isError: true as const, content: [{ type: 'text' as const, text }] };
+// countedCall (src/lib/usage.ts) counts as an error rather than a success. A
+// `reason` is what the usage counters record for it; without one they record
+// `other`.
+export function fail(text: string, reason?: FailureReason) {
+	const result = { isError: true as const, content: [{ type: 'text' as const, text }] };
+	return reason ? tagFailure(result, reason) : result;
 }
 
 // What most suites say when the argument only routes to a brain.

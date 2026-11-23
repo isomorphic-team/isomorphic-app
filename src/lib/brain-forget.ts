@@ -61,10 +61,11 @@ export const BRAIN_REFERENCING_TABLES = [
 ] as const;
 
 /**
- * Kept: `usage_daily` holds only counters and is the analytics history;
- * `feedback_reports` is a report about the product, not brain data.
+ * Kept: `usage_daily` and `usage_failures` hold only counters and categories and
+ * are the analytics history; `feedback_reports` is a report about the product, not
+ * brain data.
  */
-export const BRAIN_KEPT_TABLES = ['usage_daily', 'feedback_reports'] as const;
+export const BRAIN_KEPT_TABLES = ['usage_daily', 'usage_failures', 'feedback_reports'] as const;
 
 /**
  * Statements deleting every brain `brainIds` selects (a subquery) with its purged
