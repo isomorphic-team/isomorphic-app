@@ -468,6 +468,17 @@ export function checkDateOf(
 	return undefined;
 }
 
+// How a line names a page: "<title> (<path>), owner <x>", or the bare path with no title.
+// The owner is the first non-empty `owner` value, left out when there is none.
+function pageLabel(page: { path: string; title?: string }, fields: PageFields | undefined): string {
+	const owner = fields
+		?.get('owner')
+		?.map((v) => v.trim())
+		.find((v) => v !== '');
+	const title = page.title?.trim();
+	return `${title ? `${title} (${page.path})` : page.path}${owner ? `, owner ${owner}` : ''}`;
+}
+
 // The expectation text and check date of a page with no recorded outcome, or null.
 function openCheck(
 	fields: PageFields | undefined
@@ -501,7 +512,7 @@ const expectedClause = (shown: string | undefined): string => (shown ? ` Expecte
 // the date, so a dismissal covers that date only and re-dating raises the item again.
 // Nothing is stored: the page is the state.
 export function predictionDueFindings(
-	pages: { path: string }[],
+	pages: { path: string; title?: string }[],
 	fieldsByPath: Map<string, PageFields>,
 	today: string
 ): Finding[] {
@@ -514,8 +525,8 @@ export function predictionDueFindings(
 			weight: 3,
 			headline:
 				c.key === 'check_at'
-					? `- ${p.path}: check due ${c.date}${c.shown ? `. Expected: ${c.shown}` : ''}. No outcome is recorded. Record it with write_page fields {outcome: ...}, or dismiss with resolve and a reason.`
-					: `- ${p.path}: due ${c.date} (from \`${c.key}\`), nothing recorded.${expectedClause(c.shown)} ${aliasHint(c.key)}; or dismiss with resolve and a reason.`
+					? `- ${pageLabel(p, fieldsByPath.get(p.path))}: check due ${c.date}${c.shown ? `. Expected: ${c.shown}` : ''}. No outcome is recorded. Record it with write_page fields {outcome: ...}, or dismiss with resolve and a reason.`
+					: `- ${pageLabel(p, fieldsByPath.get(p.path))}: due ${c.date} (from \`${c.key}\`), nothing recorded.${expectedClause(c.shown)} ${aliasHint(c.key)}; or dismiss with resolve and a reason.`
 		});
 	}
 	return out;
@@ -530,18 +541,32 @@ const dayNumber = (iso: string): number => Date.parse(`${iso}T00:00:00Z`) / DAY_
 // so no page is in both. Earliest first; past MAX_COMING_DUE_LINES the last line counts
 // the rest.
 export function comingDueLines(
-	pages: { path: string }[],
+	pages: { path: string; title?: string }[],
 	fieldsByPath: Map<string, PageFields>,
 	today: string
 ): string[] {
 	const t = dayNumber(today);
-	const rows: { path: string; date: string; days: number; shown?: string; key: string }[] = [];
+	const rows: {
+		path: string;
+		label: string;
+		date: string;
+		days: number;
+		shown?: string;
+		key: string;
+	}[] = [];
 	for (const p of pages) {
 		const c = openCheck(fieldsByPath.get(p.path));
 		if (!c || c.date <= today) continue;
 		const days = Math.round(dayNumber(c.date) - t);
 		if (!(days <= COMING_DUE_DAYS)) continue;
-		rows.push({ path: p.path, date: c.date, days, shown: c.shown, key: c.key });
+		rows.push({
+			path: p.path,
+			label: pageLabel(p, fieldsByPath.get(p.path)),
+			date: c.date,
+			days,
+			shown: c.shown,
+			key: c.key
+		});
 	}
 	return capLines(
 		rows,
@@ -550,8 +575,8 @@ export function comingDueLines(
 		(r) => {
 			const inDays = `in ${r.days} day${r.days === 1 ? '' : 's'}`;
 			return r.key === 'check_at'
-				? `- ${r.path}: check due ${r.date} (${inDays})${r.shown ? `. Expected: ${r.shown}` : ''}. Record it with write_page fields {outcome: ...}.`
-				: `- ${r.path}: due ${r.date} (from \`${r.key}\`, ${inDays}).${expectedClause(r.shown)} ${aliasHint(r.key)}.`;
+				? `- ${r.label}: check due ${r.date} (${inDays})${r.shown ? `. Expected: ${r.shown}` : ''}. Record it with write_page fields {outcome: ...}.`
+				: `- ${r.label}: due ${r.date} (from \`${r.key}\`, ${inDays}).${expectedClause(r.shown)} ${aliasHint(r.key)}.`;
 		},
 		(rest) => `...and ${rest.length} more.`
 	);
@@ -583,12 +608,12 @@ export const MAX_OTHER_DUE_LINES = 8;
 // days first, then the most recently passed, so the stalest fall into the count. A page and
 // key are never in this list and the due block.
 export function otherDueLines(
-	pages: { path: string }[],
+	pages: { path: string; title?: string }[],
 	fieldsByPath: Map<string, PageFields>,
 	today: string
 ): string[] {
 	const t = dayNumber(today);
-	const rows: { path: string; key: string; date: string; days: number }[] = [];
+	const rows: { path: string; label: string; key: string; date: string; days: number }[] = [];
 	for (const p of pages) {
 		const fields = fieldsByPath.get(p.path);
 		if (!fields) continue;
@@ -602,7 +627,7 @@ export function otherDueLines(
 			if (date === undefined) continue;
 			const days = Math.round(dayNumber(date) - t);
 			if (days > COMING_DUE_DAYS) continue;
-			rows.push({ path: p.path, key, date, days });
+			rows.push({ path: p.path, label: pageLabel(p, fields), key, date, days });
 		}
 	}
 	return capLines(
@@ -620,7 +645,7 @@ export function otherDueLines(
 					: r.days > 0
 						? `in ${r.days} day${r.days === 1 ? '' : 's'}`
 						: `${-r.days} day${r.days === -1 ? '' : 's'} ago`;
-			return `- ${r.path}: ${r.key} ${r.date} (${when}). If the step moved, set a new date: write_page fields {${r.key}: ...}.`;
+			return `- ${r.label}: ${r.key} ${r.date} (${when}). If the step moved, set a new date: write_page fields {${r.key}: ...}.`;
 		},
 		(rest) => `...and ${rest.length} more, further from today than these.`
 	);
@@ -633,18 +658,21 @@ export function otherDueBlock(lines: string[]): string {
 }
 
 /**
- * The block `validate` opens with: what is due or coming due, or one line saying nothing is,
- * so a person is never told "nothing else is due" while a date sits in a field it does not
- * read. `coming` is `comingDueLines`; `overdue` is the count of `prediction-due` findings
- * still open, which are listed in the findings.
+ * The block `validate` opens with, and the one place the due area is built. `commitments` is
+ * the rendered commitment findings (`prediction-due` and `undated-commitment`, each with its
+ * key so it can be dismissed; empty when there are none), `coming` is `comingDueLines`. The
+ * header is the instruction the reader acts on: answer from these lines, give the findings
+ * further down one line, and say what is not read.
  */
-export function dueBlock(coming: string[], overdue: number): string {
-	if (coming.length === 0 && overdue === 0)
-		return '\n\nNothing due or coming due from `check_at` or `due`; dates in other deadline-named fields are listed separately, dates under other field names are not read.';
-	const lines = [...coming];
-	if (overdue > 0) lines.push(`${overdue} overdue (prediction-due findings).`);
-	return `\n\nDue and coming due (read from \`check_at\` or \`due\`; dates in other deadline-named fields are listed separately, dates under other field names are not read):\n${lines.join('\n')}`;
+export function dueBlock(commitments: string, coming: string[]): string {
+	if (commitments === '' && coming.length === 0)
+		return `\n\nNothing due or coming due. Tell the person that ${NOT_READ}`;
+	const lines = [...(commitments === '' ? [] : [commitments]), ...coming];
+	return `\n\nDue and coming due. Answer from these lines first, give the findings further down one line, and tell the person that ${NOT_READ} For each open one with no date, ask the person which: set a check date, record what was decided, or dismiss it.\n${lines.join('\n')}`;
 }
+
+const NOT_READ =
+	'dates kept under other field names (not `check_at`, `due`, or a key ending in `_due`, `-due`, `_due_date` or `-due-date`) are not read.';
 
 // A decision or commitment page that is still open by its own status field and has no date to
 // check it by. Raised only when the page says it is open: a `state` value, or a `status`
@@ -653,7 +681,7 @@ export function dueBlock(coming: string[], overdue: number): string {
 // The key is the path alone, so a dismissal survives edits. Weight 2, below prediction-due
 // (3), so a due date outranks a missing one. Nothing is stored: the page is the state.
 export function undatedCommitmentFindings(
-	pages: { path: string }[],
+	pages: { path: string; title?: string }[],
 	fieldsByPath: Map<string, PageFields>
 ): Finding[] {
 	const out: Finding[] = [];
@@ -684,7 +712,7 @@ export function undatedCommitmentFindings(
 		out.push({
 			key: findingKey('undated-commitment', p.path),
 			weight: 2,
-			headline: `- ${p.path}: open (${open.key} ${open.value}), no check date${found.length ? `; ${found.join(', ')}` : ''}. Give it a check date (write_page fields {check_at: YYYY-MM-DD}), record what was decided ({outcome: ...}), or close it in the field the page uses for its state; or dismiss with resolve and a reason.`
+			headline: `- ${pageLabel(p, fields)}: open (${open.key} ${open.value}), no check date${found.length ? `; ${found.join(', ')}` : ''}. Give it a check date (write_page fields {check_at: YYYY-MM-DD}), record what was decided ({outcome: ...}), or close it in the field the page uses for its state; or dismiss with resolve and a reason.`
 		});
 	}
 	return out;
