@@ -1534,7 +1534,7 @@ console.log('\nfeature offers: one line for a feature the brain does not use');
 		) &&
 			(offer?.headline ?? '').includes('none has a date validate raises') &&
 			(offer?.headline ?? '').includes('none records `expected`') &&
-			!/check date|due-named/.test(offer?.headline ?? ''),
+			!/check date|due-named|cannot ask what happened/.test(offer?.headline ?? ''),
 		offer?.headline
 	);
 	check(

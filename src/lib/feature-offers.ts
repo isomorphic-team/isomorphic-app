@@ -103,7 +103,7 @@ export const FEATURE_OFFERS: FeatureOffer[] = [
 				: `none has a date validate raises`;
 			return (
 				`Tell the person: this brain holds ${paths.length} decisions or commitments, ${split}, and none records \`expected\`, ` +
-				'so validate cannot ask what happened. ' +
+				'so validate cannot compare what happened with what was expected. ' +
 				'Only if yes: ask which of the 3 to 5 most recently updated undated decisions are still waiting on a result, then call write_page with fields `expected` and `check_at` (YYYY-MM-DD) on only those; none waiting counts as no. ' +
 				'If no: resolve with dismiss and their reason.'
 			);
