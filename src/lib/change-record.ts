@@ -109,7 +109,7 @@ export function expectationNote(input: ExpectationInput): string {
 	if (hasValue(fm, 'check_at')) return '';
 	const commitmentPage = COMMITMENT_TYPE_RE.test(listOf(fm.type)[0] ?? '');
 	if (input.kind === 'create') {
-		if (commitmentPage) return hasValue(fm, 'outcome') ? '' : EXPECTATION_TEXT;
+		if (commitmentPage) return hasValue(fm, 'outcome') ? '' : `${EXPECTATION_TEXT} ${RECORD_TEXT}`;
 	} else if (input.patch != null && input.patch.expected != null && hasValue(fm, 'expected')) {
 		return EXPECTATION_TEXT;
 	}
@@ -117,11 +117,29 @@ export function expectationNote(input: ExpectationInput): string {
 	return (input.added ?? []).some(hasDeadlinePhrase) ? DEADLINE_TEXT : '';
 }
 
+/**
+ * The view that shows a page its record: the pages linking to it that carry a check
+ * date, with what was expected and what happened. It filters on `check_at`, not on
+ * `type`, so a page typed Bet or ADR counts and a page that links without a date does not.
+ */
+export const RECORD_VIEW = [
+	'```okf-view',
+	'kind: backlinks',
+	'filter: { check_at: ">= 2000-01-01" }',
+	'as: table',
+	'columns: [title, expected, check_at, outcome]',
+	'sort: check_at',
+	'order: desc',
+	'```'
+].join('\n');
+
+const RECORD_TEXT = `If the page whose claim this tests does not already show its record (read it first), offer to append this there with write_page append:\n${RECORD_VIEW}\none yes completes it. Then tell the person that page now shows its record.`;
+
 const EXPECTATION_TEXT =
 	'If the person gave a date, use it as check_at; otherwise ask. Tell the person the check date you set. One commitment per page: a second gets its own page. write_page fields {expected, check_at: YYYY-MM-DD}.';
 
 const DEADLINE_TEXT =
-	'This reads like a commitment. Left on this page it will not appear in validate or in a what-is-due answer. Create it now as its own page (write_page, type Commitment, fields {expected, check_at: YYYY-MM-DD}), linked from here, and keep your own follow-up field too. Tell the person the check date you set.';
+	'This reads like a commitment. Left on this page it will not appear in validate or in a what-is-due answer. Create it now as its own page (write_page, type Commitment, fields {expected, check_at: YYYY-MM-DD}), linked from here, and keep your own follow-up field too. Tell the person the check date you set. (If you already made it, ignore this.)';
 
 export const MAX_REFS_LISTED = 20;
 

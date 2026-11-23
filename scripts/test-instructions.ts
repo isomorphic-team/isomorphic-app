@@ -77,6 +77,11 @@ console.log('\ncommitments');
 		line
 	);
 	check(
+		'it links a commitment from the page whose claim it tests',
+		/from the page whose claim it tests/.test(line),
+		line
+	);
+	check(
 		'it names expected and check_at',
 		line.includes('`expected`') && line.includes('`check_at`')
 	);

@@ -34,6 +34,7 @@ import {
 } from '../src/lib/views.ts';
 import type { PageFields } from '../src/lib/brain-index.ts';
 
+import { RECORD_VIEW } from '../src/lib/change-record.ts';
 import { checker } from './check.ts';
 
 const { check, done } = checker('view checks');
@@ -707,6 +708,97 @@ async function main() {
 			u('### Prospect') < u('### Won') &&
 			u('### Won') < u('### (none)')
 	);
+
+	// ---------- the record view ----------
+	console.log('record view:');
+	{
+		const body = RECORD_VIEW.split('\n').slice(1, -1).join('\n');
+		check(
+			'RECORD_VIEW parses with no error',
+			!parseViewSpec(body).error,
+			parseViewSpec(body).error
+		);
+		const claim = 'theory/pricing.md';
+		const recFields = new Map<string, PageFields>([
+			[
+				'decisions/raise.md',
+				new Map([
+					['type', ['Decision']],
+					['expected', ['Churn under 5%']],
+					['check_at', ['2026-10-01']],
+					['outcome', ['held']]
+				])
+			],
+			[
+				'decisions/pending.md',
+				new Map([
+					['type', ['Decision']],
+					['expected', ['Win two renewals']],
+					['check_at', ['2026-12-15']]
+				])
+			],
+			[
+				'bets/annual.md',
+				new Map([
+					['type', ['Bet']],
+					['expected', ['Annual plans sell']],
+					['check_at', ['2026-11-20']]
+				])
+			],
+			['notes/standup.md', new Map([['type', ['Meeting']]])]
+		]);
+		const recCtx: ViewContext = {
+			resolved: {
+				pages: [
+					{ path: claim, title: 'Pricing claim' },
+					{ path: 'decisions/raise.md', title: 'Raise the price' },
+					{ path: 'decisions/pending.md', title: 'Renewal push' },
+					{ path: 'bets/annual.md', title: 'Annual plans' },
+					{ path: 'notes/standup.md', title: 'Standup' }
+				],
+				edges: [
+					'decisions/raise.md',
+					'decisions/pending.md',
+					'bets/annual.md',
+					'notes/standup.md'
+				].map((source) => ({ source, target: claim, kind: 'md' as const, cnt: 1 })),
+				fileEdges: [],
+				broken: []
+			},
+			fieldsFor: async (paths) => new Map([...recFields].filter(([p]) => paths.includes(p)))
+		};
+		const out = await renderViews(`# Pricing claim\n\n${RECORD_VIEW}\n`, claim, recCtx);
+		const rows = out.display.split('\n').filter((l) => l.startsWith('|') && !/^\|\s*-/.test(l));
+		check(
+			'the record shows the three expectation rows and a header',
+			rows.length === 4,
+			out.display
+		);
+		check(
+			'the columns are title, expected, check date and outcome, with the expectation text',
+			out.display.includes('| Title | Expected | Check at | Outcome |') &&
+				out.display.includes('Win two renewals'),
+			out.display
+		);
+		check(
+			'a pending decision shows with an empty outcome',
+			/Renewal push[^\n]*\|\s*\|\s*$/m.test(out.display),
+			out.display
+		);
+		check('a filled outcome shows', /Raise the price[^\n]*held/.test(out.display), out.display);
+		check('a page typed Bet stays in', out.display.includes('Annual plans'), out.display);
+		check(
+			'a page that links with no check_at stays out',
+			!out.display.includes('Standup'),
+			out.display
+		);
+		check(
+			'newest check date first',
+			out.display.indexOf('Renewal push') < out.display.indexOf('Annual plans') &&
+				out.display.indexOf('Annual plans') < out.display.indexOf('Raise the price'),
+			out.display
+		);
+	}
 
 	done();
 }

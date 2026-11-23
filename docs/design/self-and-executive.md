@@ -305,7 +305,9 @@ Each step is useful without the ones after it. Steps 1, 2 and 6 are core.
 4. **The compare pass and its three item kinds.**
 5. **The ranking pass.**
 6. **Calibration:** each theory page shows its record, as a live view over the outcomes that
-   link to it.
+   link to it. Built as a convention: `RECORD_VIEW` (`src/lib/change-record.ts`), an `okf-view`
+   the create reply of a Decision or Commitment page offers to append to the page whose claim
+   it tests.
 
 ## 15. Decided against
 

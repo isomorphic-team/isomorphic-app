@@ -1041,6 +1041,11 @@ try {
 		/check_at: YYYY-MM-DD/.test(r.text),
 		r.text
 	);
+	check(
+		'the create reply offers the record view',
+		/does not already show its record/.test(r.text) && r.text.includes('kind: backlinks'),
+		r.text
+	);
 	r = await call('write_page', {
 		path: 'wiki/decisions/pricing.md',
 		fields: { expected: 'Churn stays under 5%', check_at: inDays(3) }
