@@ -80,8 +80,6 @@ export interface OpenFindings {
 	findings: { list: Finding[]; silenced: number; staleCount: number };
 	/** Dates under other deadline-named keys, nearest first, at most `MAX_OTHER_DUE_LINES`. */
 	otherDates: string[];
-	/** One line per source with import decisions pending, and per unreadable import ledger. */
-	importNotes: string[];
 	/** The one feature offer, or null. */
 	offer: Finding | null;
 	/** Open policy findings, for the admin section. */
@@ -251,7 +249,6 @@ export async function openFindings(input: OpenFindingsInput): Promise<OpenFindin
 		due: { commitments, coming },
 		findings: { list: rest, silenced: all.length - kept.length, staleCount: keptStale.length },
 		otherDates: otherDueLines(conceptPages, fieldsByPath, todayIso()),
-		importNotes: imports.notes,
 		offer,
 		openPolicy: kept.filter((f) => isPolicyKey(f.key)).length
 	};
