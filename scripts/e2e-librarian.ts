@@ -45,6 +45,7 @@ import { registerLibrarianTools } from '../src/tools/librarian.ts';
 import { registerBrainTools } from '../src/tools/brains.ts';
 import { countOrgChecks } from '../src/lib/org-pass.ts';
 import { FEATURES, hasFeature } from '../src/lib/entitlements.ts';
+import { entitlementSql } from '../ee/entitlements.ts';
 import type { ConsolidationStep } from '../src/lib/review-checks.ts';
 import { savePass } from '../src/lib/brain-pass.ts';
 import {
@@ -161,7 +162,10 @@ const server = new McpServer({ name: 'librarian-e2e', version: '0.0.0' });
 // request, and a write tool that skips it plans against the default branch instead.
 let writeHeadCalls = 0;
 // The brain role every tool sees; flipped to prove a gate through the tool itself.
-let callerRole: 'owner' | 'editor' = 'owner';
+let callerRole: 'owner' | 'editor' | 'viewer' = 'owner';
+// The caller's organization role and id; set only where a section proves an organization gate.
+let callerOrgRole: 'owner' | 'admin' | 'editor' = 'owner';
+let callerOrgId: string | undefined;
 // The Worker wires the enterprise consolidation pass in only when it holds a model key.
 let consolidate: ConsolidationStep | undefined;
 // Wrapped in the guard as the Worker and the local runtime wrap it, so writes here raise
@@ -185,7 +189,8 @@ const getContext = async () => {
 		),
 		locator,
 		role: callerRole,
-		orgRole: 'owner' as const,
+		orgRole: callerOrgRole,
+		orgId: callerOrgId,
 		config,
 		author: undefined,
 		db,
@@ -1274,6 +1279,139 @@ try {
 		!r.text.includes('wiki/deals/northwind.md): next_step_due'),
 		r.text
 	);
+
+	// ══ feature offers: one line after the due area, dismissed through resolve ═══
+	// The earlier sections leave dated decisions behind; clear them so the brain is the
+	// motivating shape: many decisions, none with a check date or outcome.
+	for (const name of ['hiring', 'pricing', 'ship', 'vendor-review', 'vendor'])
+		await call('delete_page', { path: `wiki/decisions/${name}.md` });
+	for (let i = 1; i <= 6; i++)
+		await call('write_page', {
+			path: `wiki/offers/d${i}.md`,
+			title: `Offer decision ${i}`,
+			type: 'Decision',
+			content: `Decision ${i}.`,
+			fields: { next_step_due: inDays(90) }
+		});
+	await settledHead();
+	const OFFER_KEY = '[feature-offer:commitments]';
+	r = await call('validate', {});
+	const offerAt = r.text.indexOf(OFFER_KEY);
+	check(
+		'validate offers the commitments feature right after the due area',
+		offerAt > r.text.indexOf('Nothing due or coming due') &&
+			r.text.slice(0, offerAt).includes('Tell the person:') &&
+			r.text.includes('Only if yes:') &&
+			r.text.split(OFFER_KEY).length === 2 &&
+			(!r.text.includes('need a decision') || offerAt < r.text.indexOf('need a decision')),
+		r.text
+	);
+	check(
+		'the offer is not counted in the findings intro',
+		!/\n\d+ finding\(s\) need a decision/.test(r.text) ||
+			!r.text.slice(r.text.indexOf('need a decision')).includes(OFFER_KEY),
+		r.text
+	);
+	// Each wire from the caller and the findings to the offer, driven through validate.
+	callerRole = 'viewer';
+	r = await call('validate', {});
+	check('a viewer is shown no offer', !r.text.includes('[feature-offer:'), r.text);
+	callerRole = 'owner';
+	await call('write_page', {
+		path: 'wiki/offers/open.md',
+		title: 'Open decision',
+		type: 'Decision',
+		content: 'Still open.',
+		fields: { state: 'proposed' }
+	});
+	await settledHead();
+	r = await call('validate', {});
+	check(
+		'commitment findings suppress the offer and the due header says what a check date gets',
+		r.text.includes('[undated-commitment:wiki/offers/open.md]') &&
+			!r.text.includes('[feature-offer:') &&
+			r.text.includes('A check date puts a commitment in this list when it comes due.'),
+		r.text
+	);
+	await call('delete_page', { path: 'wiki/offers/open.md' });
+	await settledHead();
+
+	r = await call('resolve', {
+		decisions: [
+			{ finding: 'feature-offer:commitments', action: 'dismiss', why: 'tracked elsewhere' }
+		]
+	});
+	check('resolve dismisses an offer by its key', !r.isError, r.text);
+	await settledHead();
+	r = await call('validate', {});
+	check('a dismissed offer is gone from validate', !r.text.includes(OFFER_KEY), r.text);
+	await call('write_page', {
+		path: 'wiki/offers/d1.md',
+		fields: { expected: 'Done', check_at: inDays(3) }
+	});
+	await settledHead();
+
+	// The enterprise offer: a tension this run, an organization admin, no entitlement.
+	const EE_OFFER = 'enterprise edition can check';
+	const OFFER_ORG = 'org-e2e-offers';
+	callerOrgId = OFFER_ORG;
+	callerOrgRole = 'admin';
+	r = await call('validate', {});
+	check('no tension, no enterprise offer', !r.text.includes(EE_OFFER), r.text);
+	const twin =
+		'The vendor review covers security posture, data residency, uptime history, support response times, pricing tiers, renewal terms, exit provisions and audit rights for the supplier.';
+	for (const n of [1, 2])
+		await call('write_page', {
+			path: `wiki/twins/twin-${n}.md`,
+			title: `Twin ${n}`,
+			content: twin
+		});
+	await settledHead();
+	r = await call('validate', {});
+	check(
+		'a near-duplicate tension, an org admin and no entitlement shows the enterprise offer',
+		/\[near-duplicate:/.test(r.text) &&
+			r.text.includes(EE_OFFER) &&
+			r.text.includes('[feature-offer:consolidation]') &&
+			r.text.indexOf('[feature-offer:consolidation]') < r.text.indexOf('need a decision'),
+		r.text
+	);
+	callerOrgRole = 'editor';
+	r = await call('validate', {});
+	check('an organization editor is shown no enterprise offer', !r.text.includes(EE_OFFER), r.text);
+	callerOrgRole = 'admin';
+	callerOrgId = undefined;
+	r = await call('validate', {});
+	check(
+		'a brain with no organization is shown no enterprise offer',
+		!r.text.includes(EE_OFFER),
+		r.text
+	);
+	callerOrgId = OFFER_ORG;
+	await db
+		.prepare(
+			entitlementSql({
+				kind: 'grant',
+				orgId: OFFER_ORG,
+				feature: FEATURES.enterprise,
+				source: 'manual',
+				now: Date.now()
+			})
+		)
+		.run();
+	r = await call('validate', {});
+	check(
+		'an entitled organization is shown no enterprise offer',
+		!r.text.includes(EE_OFFER),
+		r.text
+	);
+	await db
+		.prepare(entitlementSql({ kind: 'revoke', orgId: OFFER_ORG, feature: FEATURES.enterprise }))
+		.run();
+	for (const n of [1, 2]) await call('delete_page', { path: `wiki/twins/twin-${n}.md` });
+	await settledHead();
+	callerOrgId = undefined;
+	callerOrgRole = 'owner';
 
 	// ══ findings: validate surfaces, resolve records, validate stops re-raising ═══
 	// The whole point of keying findings. Driven end to end because the ledger is a

@@ -70,8 +70,12 @@ import {
 	parseReviewLedger,
 	REVIEW_LEDGER_PATH,
 	importFindings,
-	type Finding
+	renderFindings,
+	type Finding,
+	type ReviewLedger
 } from '../lib/findings.ts';
+import { offerContext, pickOffer } from '../lib/feature-offers.ts';
+import { FEATURES, hasFeature } from '../lib/entitlements.ts';
 import {
 	folderNoteSuggestions,
 	inlinedConceptSuggestions,
@@ -1379,7 +1383,7 @@ export function registerLibrarianTools(
 		{
 			...toolAnnotations('Check the brain for problems', 'read'),
 			description:
-				'`validate` checks a brain and reports what needs attention. It is also the way to see which commitments are due or coming due. Two kinds of result, deliberately separate. DEFECTS: broken links — markdown links to missing pages and [[wikilinks]] that match no page. Those have one right answer and cannot be silenced. FINDINGS: everything advisory, each carrying a `[key]` — pending import decisions, Open Knowledge Format structure notes (concepts written as sections inside a folder note instead of getting their own page, pages missing a `type:`, names two pages both answer to), consolidation tensions (a page nothing links to, a folder note that lists none of its pages, two pages telling the same story), commitments whose check date has passed with no `outcome` recorded, and Decision or Commitment pages that are still open by their own `status` or `state` with no check date. To say how long a listed page has been quiet, call view_activity with its path. The check date is `check_at`, or a dated `due` when there is no `check_at`; a condition in a follow-up key is not a date and is not tracked; ask the person for a date and set `check_at` if they want it tracked. The result starts with a block of what is due or coming due within the next week, or a line saying nothing is; the overdue and undated commitment findings are listed there, with their keys, not in the findings list. A second block lists dates in other deadline-named fields (a key ending in `_due`, `-due`, `_due_date` or `-due-date`, such as a next-step date), nearest first and at most forty lines. Its header says how to move or remove a date and to ask the person first. They are not findings and have no outcome. A date under any other field name is not read: say so when answering what is due. Nothing advisory blocks a save, and any finding can be answered or permanently silenced with `resolve` using its key, so a deliberate choice stops being re-reported. For brain admins it also lists sensitive data found in writes (pages and kinds, never the values). Run after big changes or restructures, when asked to tidy a brain up, or when asked what is due or overdue.',
+				'`validate` checks a brain and reports what needs attention. It is also the way to see which commitments are due or coming due. Two kinds of result, deliberately separate. DEFECTS: broken links — markdown links to missing pages and [[wikilinks]] that match no page. Those have one right answer and cannot be silenced. FINDINGS: everything advisory, each carrying a `[key]` — pending import decisions, Open Knowledge Format structure notes (concepts written as sections inside a folder note instead of getting their own page, pages missing a `type:`, names two pages both answer to), consolidation tensions (a page nothing links to, a folder note that lists none of its pages, two pages telling the same story), commitments whose check date has passed with no `outcome` recorded, and Decision or Commitment pages that are still open by their own `status` or `state` with no check date. To say how long a listed page has been quiet, call view_activity with its path. The check date is `check_at`, or a dated `due` when there is no `check_at`; a condition in a follow-up key is not a date and is not tracked; ask the person for a date and set `check_at` if they want it tracked. The result starts with a block of what is due or coming due within the next week, or a line saying nothing is; the overdue and undated commitment findings are listed there, with their keys, not in the findings list. After that block, for editors and above, there may be one line offering a feature the brain does not use; it carries a `[feature-offer:...]` key and is dismissed with `resolve` like a finding. A second block lists dates in other deadline-named fields (a key ending in `_due`, `-due`, `_due_date` or `-due-date`, such as a next-step date), nearest first and at most forty lines. Its header says how to move or remove a date and to ask the person first. They are not findings and have no outcome. A date under any other field name is not read: say so when answering what is due. Nothing advisory blocks a save, and any finding can be answered or permanently silenced with `resolve` using its key, so a deliberate choice stops being re-reported. For brain admins it also lists sensitive data found in writes (pages and kinds, never the values). Run after big changes or restructures, when asked to tidy a brain up, or when asked what is due or overdue.',
 			inputSchema: z.object({ brain: brainArg })
 		},
 		async ({ brain }) => {
@@ -1392,6 +1396,8 @@ export function registerLibrarianTools(
 				index,
 				role,
 				actorUserId,
+				orgId,
+				orgRole,
 				policySecret,
 				consolidate,
 				openIndex
@@ -1547,9 +1553,10 @@ export function registerLibrarianTools(
 				// it just means nothing is filtered this run.
 				let kept = all;
 				let keptStale = queued.stale;
+				let ledger: ReviewLedger | null = null;
 				try {
 					const raw = await store.readFile(locator, REVIEW_LEDGER_PATH);
-					const ledger = parseReviewLedger(raw?.content ?? null);
+					ledger = parseReviewLedger(raw?.content ?? null);
 					kept = filterDismissed(all, ledger);
 					keptStale = filterDismissed(queued.stale, ledger);
 				} catch {
@@ -1565,8 +1572,25 @@ export function registerLibrarianTools(
 				);
 				findingsText = rendered.list + staleNote(keptStale.length);
 				const coming = comingDueLines(conceptPages, fieldsByPath, todayIso());
+				// One offer for a feature the brain does not use, right after the due area. It
+				// is not in `all`, so it never counts in the findings intro or the cap.
+				const offer = await pickOffer(
+					offerContext({
+						pages: conceptPages,
+						fields: fieldsByPath,
+						indexedFields: config.indexedFields,
+						role,
+						orgRole,
+						orgId,
+						keptKeys: kept.map((f) => f.key),
+						lacksEnterprise: async () =>
+							!(orgId && (await hasFeature(db, orgId, FEATURES.enterprise)))
+					}),
+					(offers) => (ledger ? filterDismissed(offers, ledger) : offers)
+				);
 				comingDueText =
 					dueBlock(rendered.due, coming) +
+					(offer ? `\n\n${renderFindings([offer], 1).text}` : '') +
 					otherDueBlock(otherDueLines(conceptPages, fieldsByPath, todayIso()));
 				openPolicy = kept.filter((f) => isPolicyKey(f.key)).length;
 			} catch {
