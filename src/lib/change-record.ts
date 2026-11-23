@@ -108,7 +108,7 @@ const hasValue = (fm: Frontmatter, key: string) => listOf(fm[key]).some((v) => v
  */
 export function expectationNote(input: ExpectationInput): string {
 	const fm = input.frontmatter;
-	const compare = compareNote(fm, input.patch);
+	const compare = compareNote(fm, input.kind === 'create' ? fm : input.patch);
 	if (compare) return compare;
 	if (hasValue(fm, 'check_at') || checkDateOf((k) => listOf(fm[k]))) return '';
 	const commitmentPage = COMMITMENT_TYPE_RE.test(listOf(fm.type)[0] ?? '');

@@ -897,8 +897,9 @@ console.log('\nwrite_page: the compare note (outcome set on a page with expected
 			note(dec, { outcome: 'Churn was 5%' }).includes('Expected: Churn falls below 3%.')
 	);
 	check(
-		'compare: fires on create too',
-		note(dec, { outcome: 'Churn was 5%' }, 'create').includes(COMPARE)
+		'compare: fires on create with expected and outcome, and no patch',
+		note(dec, undefined, 'create').includes(COMPARE) &&
+			!note({ type: 'Decision', expected: 'x' }, undefined, 'create').includes(COMPARE)
 	);
 	check(
 		'compare: no expected, none',
