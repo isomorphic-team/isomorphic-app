@@ -77,7 +77,8 @@ import {
 	inlinedConceptSuggestions,
 	typeFieldSuggestions,
 	predictionDueFindings,
-	comingDueSection,
+	comingDueLines,
+	COMING_DUE_DAYS,
 	ambiguousTitleSuggestions,
 	brokenLinkReport,
 	wikilinkPortabilityNote,
@@ -1560,8 +1561,9 @@ export function registerLibrarianTools(
 						` and each can be answered or silenced with resolve.${note}\n${text}`;
 				}
 				findingsText += staleNote(keptStale.length);
-				const coming = comingDueSection(conceptPages, fieldsByPath, todayIso());
-				if (coming) comingDueText = `\n\n${coming}`;
+				const coming = comingDueLines(conceptPages, fieldsByPath, todayIso());
+				if (coming.length)
+					comingDueText = `\n\nCommitments coming due in the next ${COMING_DUE_DAYS} days:\n${coming.join('\n')}`;
 				openPolicy = kept.filter((f) => isPolicyKey(f.key)).length;
 			} catch {
 				// Advisory only; link validation stands alone.

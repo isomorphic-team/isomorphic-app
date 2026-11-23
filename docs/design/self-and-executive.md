@@ -212,7 +212,8 @@ self ([`roles-self-and-world-model.md`](roles-self-and-world-model.md), section 
 compare pass is a pass type on `brain_passes` (`src/lib/brain-pass.ts`) and raises the other
 three. `prediction-due` is a finding `validate` computes on each call from the page's own
 frontmatter (`predictionDueFindings`, `src/lib/advisories.ts`), keyed on the path and the
-check date, so the page is the state and nothing is stored. The other three are items in the
+check date, so the page is the state and nothing is stored. `validate` also lists, unkeyed,
+the expectations due in the next 7 days (`comingDueLines`). The other three are items in the
 review queue (`src/lib/review-queue.ts`):
 
 | Kind             | Raised when                                                           |

@@ -394,7 +394,7 @@ const EXPECTED_MAX_CHARS = 120;
 /** How many days ahead of its `check_at` a commitment is listed as coming due. */
 export const COMING_DUE_DAYS = 7;
 
-/** The most coming-due lines `comingDueSection` prints. */
+/** The most coming-due lines `comingDueLines` returns. */
 export const MAX_COMING_DUE_LINES = 20;
 
 // The expectation text and check date of a page with no recorded outcome, or null.
@@ -445,14 +445,15 @@ const DAY_MS = 86_400_000;
 const dayNumber = (iso: string): number => Date.parse(`${iso}T00:00:00Z`) / DAY_MS;
 
 // The commitments whose check date is after `today` and within COMING_DUE_DAYS of it,
-// with no outcome, as a block of text for `validate`; empty when there are none. Not a
-// finding: no key, nothing to dismiss. A check date of `today` or earlier is
-// `predictionDueFindings`', so no page is in both. Earliest first, capped.
-export function comingDueSection(
+// with no outcome, as lines for `validate`; empty when there are none. Not a finding: no
+// key, nothing to dismiss. A check date of `today` or earlier is `predictionDueFindings`',
+// so no page is in both. Earliest first; past MAX_COMING_DUE_LINES the last line counts
+// the rest.
+export function comingDueLines(
 	pages: { path: string }[],
 	fieldsByPath: Map<string, PageFields>,
 	today: string
-): string {
+): string[] {
 	const t = dayNumber(today);
 	const rows: { path: string; date: string; days: number; shown?: string }[] = [];
 	for (const p of pages) {
@@ -462,17 +463,14 @@ export function comingDueSection(
 		if (!(days <= COMING_DUE_DAYS)) continue;
 		rows.push({ path: p.path, date: c.date, days, shown: c.shown });
 	}
-	if (rows.length === 0) return '';
 	rows.sort((a, b) => a.date.localeCompare(b.date) || a.path.localeCompare(b.path));
 	const lines = rows
 		.slice(0, MAX_COMING_DUE_LINES)
 		.map(
 			(r) =>
-				`- ${r.path}: check due ${r.date} (in ${r.days} day${r.days === 1 ? '' : 's'})${r.shown ? `. Expected: ${r.shown}` : ''}. No outcome is recorded. Record it with write_page fields {outcome: ...}.`
+				`- ${r.path}: check due ${r.date} (in ${r.days} day${r.days === 1 ? '' : 's'})${r.shown ? `. Expected: ${r.shown}` : ''}. Record it with write_page fields {outcome: ...}.`
 		);
-	const more =
-		rows.length > MAX_COMING_DUE_LINES
-			? `\n...and ${rows.length - MAX_COMING_DUE_LINES} more.`
-			: '';
-	return `${rows.length} commitment(s) coming due in the next ${COMING_DUE_DAYS} days:\n${lines.join('\n')}${more}`;
+	if (rows.length > MAX_COMING_DUE_LINES)
+		lines.push(`...and ${rows.length - MAX_COMING_DUE_LINES} more.`);
+	return lines;
 }

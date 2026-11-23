@@ -84,8 +84,8 @@ are in the list, with keys.
   fields, so a brain whose `indexedFields` omits `check_at`, or a page whose `check_at` sits
   past `MAX_FIELD_KEYS_PER_PAGE`, is never raised. The Review screen (`view_review`) shows only
   policy findings, so this appears in `validate` alone.
-  **`comingDueSection`** is the same read for a `check_at` after today and within
-  `COMING_DUE_DAYS` (7): an unkeyed block of text in the `validate` result (earliest first,
+  **`comingDueLines`** is the same read for a `check_at` after today and within
+  `COMING_DUE_DAYS` (7): an unkeyed list in the `validate` result (earliest first,
   at most `MAX_COMING_DUE_LINES`, absent when empty), not a finding, so there is nothing to
   dismiss, and a page is never in it and in `prediction-due`. The `write_page` reply carries
   `expectationNote` (`change-record.ts`), at most one per write: for a new Decision or

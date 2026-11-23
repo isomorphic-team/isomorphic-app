@@ -12,7 +12,7 @@ import {
 	inlinedConceptSuggestions,
 	typeFieldSuggestions,
 	predictionDueFindings,
-	comingDueSection,
+	comingDueLines,
 	COMING_DUE_DAYS,
 	MAX_COMING_DUE_LINES,
 	ambiguousTitleSuggestions,
@@ -718,12 +718,18 @@ console.log('\nfolder-note advisory: a note-less folder holding its own overview
 	check('prediction: two pages, two findings', pair.length === 2);
 
 	// coming due: the week before the check date, an unkeyed section
-	const coming = (rows: Record<string, string[]>, today = TODAY) =>
-		comingDueSection(
+	const comingList = (rows: Record<string, string[]>, today = TODAY) =>
+		comingDueLines(
 			[{ path: 'decisions/pricing.md' }],
 			new Map([['decisions/pricing.md', fields(rows)]]),
 			today
 		);
+	const coming = (rows: Record<string, string[]>, today = TODAY) =>
+		comingList(rows, today).join('\n');
+	check(
+		'coming due: empty gives an empty list',
+		comingList({ check_at: ['2026-12-25'] }).length === 0 && comingList({}).length === 0
+	);
 	check('coming due: the window is seven days', COMING_DUE_DAYS === 7);
 	check(
 		'coming due: a check_at of today is prediction-due, not coming due',
@@ -763,19 +769,18 @@ console.log('\nfolder-note advisory: a note-less folder holding its own overview
 		);
 	}
 	const many = Array.from({ length: MAX_COMING_DUE_LINES + 5 }, (_, i) => `p${i}.md`);
-	const manySection = comingDueSection(
+	const manyLines = comingDueLines(
 		many.map((path) => ({ path })),
 		new Map(many.map((path) => [path, fields({ check_at: ['2026-11-25'] })])),
 		TODAY
 	);
 	check(
 		'coming due: the line cap holds and the rest is counted',
-		manySection.split('\n').filter((l) => l.startsWith('- ')).length === MAX_COMING_DUE_LINES &&
-			manySection.includes('...and 5 more.') &&
-			manySection.startsWith(`${MAX_COMING_DUE_LINES + 5} commitment(s)`),
-		manySection
+		manyLines.filter((l) => l.startsWith('- ')).length === MAX_COMING_DUE_LINES &&
+			manyLines.at(-1) === '...and 5 more.',
+		manyLines.join('\n')
 	);
-	const ordered = comingDueSection(
+	const ordered = comingDueLines(
 		[{ path: 'b.md' }, { path: 'a.md' }],
 		new Map([
 			['a.md', fields({ check_at: ['2026-11-26'] })],
@@ -783,7 +788,7 @@ console.log('\nfolder-note advisory: a note-less folder holding its own overview
 		]),
 		TODAY
 	);
-	check('coming due: earliest first', ordered.indexOf('b.md') < ordered.indexOf('a.md'));
+	check('coming due: earliest first', ordered[0]!.includes('b.md') && ordered[1]!.includes('a.md'));
 
 	const typed = typeFieldSuggestions(
 		[{ path: 'a.md' }, { path: 'b.md' }],
