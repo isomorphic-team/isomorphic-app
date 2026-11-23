@@ -575,7 +575,7 @@ function capLines<T>(
 /** The most lines `otherDueLines` returns. */
 export const MAX_OTHER_DUE_LINES = 8;
 
-// A page's dates in deadline-named fields (`next_step_due`, `follow_up_due_date`: DUE_KEY)
+// A page's dates in deadline-named fields (`next_step_due`, `follow_up_due_date`: keys matching DUE_KEY, ending in `_due`, `-due`, `_due_date` or `-due-date`)
 // other than the follow-up keys, `check_at` and `due`, which the due block reads. Listed for a
 // date that is today or past, or within COMING_DUE_DAYS, on a concept page that is not
 // imported, has no `outcome` and has no closed `status`, `state` or `stage`. Not a finding:
@@ -622,15 +622,14 @@ export function otherDueLines(
 						: `${-r.days} day${r.days === -1 ? '' : 's'} ago`;
 			return `- ${r.path}: ${r.key} ${r.date} (${when}). If the step moved, set a new date: write_page fields {${r.key}: ...}.`;
 		},
-		(rest) =>
-			`...and ${rest.length} more, the oldest ${rest.map((r) => r.date).sort()[0]}: likely stale, ask whether to re-date or clear them.`
+		(rest) => `...and ${rest.length} more, further from today than these.`
 	);
 }
 
 /** The block after the due block: `otherDueLines` under a header, or nothing when empty. */
 export function otherDueBlock(lines: string[]): string {
 	if (lines.length === 0) return '';
-	return `\n\nDates in other deadline-named fields (a key ending in due), nearest first:\n${lines.join('\n')}`;
+	return `\n\nDates in other deadline-named fields (keys ending in _due, -due, _due_date or -due-date), nearest first:\n${lines.join('\n')}`;
 }
 
 /**

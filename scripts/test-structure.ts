@@ -947,6 +947,12 @@ console.log('\nfolder-note advisory: a note-less folder holding its own overview
 			)
 		);
 		check(
+			'other due: a *_due_date key is listed under its own name',
+			other({ renewal_due_date: ['2026-11-20'] })[0]?.startsWith(
+				'- deals/northwind.md: renewal_due_date 2026-11-20'
+			) === true
+		);
+		check(
 			"other due: due and check_at are the due block's, and other names are not read",
 			other({ due: ['2026-11-20'] }).length === 0 &&
 				other({ check_at: ['2026-11-20'] }).length === 0 &&
@@ -1032,19 +1038,18 @@ console.log('\nfolder-note advisory: a note-less folder holding its own overview
 			TODAY
 		);
 		check(
-			'other due: the cap is 8, the nearest are kept, and the tail names the oldest date',
+			'other due: the cap is 8, the nearest are kept, and the tail counts the rest without calling them stale',
 			MAX_OTHER_DUE_LINES === 8 &&
 				manyOther.filter((l) => l.startsWith('- ')).length === 8 &&
 				manyOther[0]!.includes('p10.md') &&
-				manyOther.at(-1) ===
-					'...and 3 more, the oldest 2026-10-10: likely stale, ask whether to re-date or clear them.',
+				manyOther.at(-1) === '...and 3 more, further from today than these.',
 			manyOther.join('\n')
 		);
 		check(
 			'other due: the block is empty when nothing is listed, and headed otherwise',
 			otherDueBlock([]) === '' &&
 				otherDueBlock(one).startsWith(
-					'\n\nDates in other deadline-named fields (a key ending in due), nearest first:\n- deals'
+					'\n\nDates in other deadline-named fields (keys ending in _due, -due, _due_date or -due-date), nearest first:\n- deals'
 				)
 		);
 		// the shared helper still caps coming due at 20 and the rest are counted
