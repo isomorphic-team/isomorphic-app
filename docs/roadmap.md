@@ -586,6 +586,25 @@ pressure) and **raising `MAX_SCAN_PAGES`**, which the PRD scopes in §8.1 (the c
 sanity bound, not a platform limit; the resumable rebuild budgets are what actually make a
 large brain work).
 
+# TODO: the self and the executive
+
+[`design/self-and-executive.md`](design/self-and-executive.md). Proposed, nothing built.
+[`design/roles-self-and-world-model.md`](design/roles-self-and-world-model.md) gives each brain
+a role and computes an org view over facts. A computed view cannot hold goals, priorities or
+expectations, so this adds a **self**: a boundary declared over brains from any organization,
+with a charter people write and an **executive** that reads declared sources, records dated
+observations and expectations in the brains inside the boundary, compares expectation with
+outcome, and raises items or drafts actions for a person to send.
+
+It goes in `ee/`, on core primitives that stay AGPL: records, the review queue and `resolve`,
+live views and the deterministic detectors. With the self off, every brain still reads,
+validates and renders.
+
+In order, each useful alone: records with the expectation fields (the records tables item
+above); cross-brain wikilinks; the self declaration and its `validate` checks; staging and the
+reconciler, measured against a hand-labeled set; the compare pass and its item kinds; executive
+ranking and drafted proposals; calibration shown on theory pages.
+
 # TODO: folder notes and OKF conformance (split the listing from the overview)
 
 Full PRD: [`design/folder-notes-and-okf-conformance.md`](design/folder-notes-and-okf-conformance.md).

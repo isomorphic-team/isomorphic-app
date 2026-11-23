@@ -11,7 +11,8 @@ number of new pieces that join them.
   [`multi-agent-surface.md`](multi-agent-surface.md), [`brain-seams.md`](brain-seams.md),
   [`derived-views-and-sync-prd.md`](derived-views-and-sync-prd.md),
   [`records-tables-prd.md`](records-tables-prd.md),
-  [`brain-level-permissions.md`](brain-level-permissions.md), [`../roadmap.md`](../roadmap.md)
+  [`brain-level-permissions.md`](brain-level-permissions.md),
+  [`self-and-executive.md`](self-and-executive.md), [`../roadmap.md`](../roadmap.md)
 
 ## 1. Summary
 
@@ -158,6 +159,11 @@ is a view, computed on read, with five parts:
 It also has one authored part: a short charter page saying what the organization is and what
 it will not do. That page lives in an existing brain, and the org setting points at it.
 
+This view holds facts. Goals, priorities and expectations are choices, and
+[`self-and-executive.md`](self-and-executive.md) proposes a declared self to hold them: a
+boundary over brains from any organization, with its charter stored on the self and not on a
+page. That document calls the view described here the org view.
+
 Three rules follow from what the self is:
 
 - **It is a view, never a brain.** A written-down self would drift like any other copy.
@@ -291,6 +297,11 @@ Each step is useful without the ones after it.
 
 Steps 1 to 4 deliver roles and the self. Steps 5 to 7 make them maintain themselves. Steps
 8 to 10 add learning and autonomy.
+
+[`self-and-executive.md`](self-and-executive.md) continues from here. Its order of work
+starts with the expectation fields of step 8 and the cross-brain wikilinks of step 6, its
+compare pass adds item kinds beyond those of step 5, and its executive is the coordinator of
+step 10.
 
 ## 12. Decided against
 
