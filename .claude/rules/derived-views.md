@@ -24,13 +24,14 @@ operator, `!=` included. Parsed into `ViewSpec.conditions` and matched by `match
 Rendering: column headers and lowercase group values are humanized (`next_step_due` becomes
 "Next step due"); `group-by` on a key that is also a list filter orders groups by that list,
 otherwise alphabetically, with "(none)" last. In `display` only, `YYYY-MM-DD` cells read
-"Oct 16 · in 12 days" (or "N days overdue" under a `due` / `*_due` / `*_due_date` key); the
+"Oct 16 · in 12 days" (or "N days overdue" under a `due` / `*_due` / `*_due_date` key, `DUE_KEY` in `view-directives.ts`); the
 snapshot keeps the raw value so a saved file does not change from day to day.
 `FOLDER_NOTE_NAMES` lives here as the single source of truth.
 
 - **The record view.** `RECORD_VIEW` (`src/lib/view-directives.ts`) is the fence a claim's page
   carries to show the decisions that test it: backlinks filtered on `check_at` being a date,
-  not on `type`, so a Bet or ADR counts and a page that links without a date does not. It lists the pages that link to the claim's page, so a decision must link to it. The create reply of a Decision or Commitment page offers it.
+  not on `type`, so a Bet or ADR counts and a page that links without a date does not. It lists
+  `check_at` pages only: a page whose date is in `due` is raised by `validate` but not shown here. It lists the pages that link to the claim's page, so a decision must link to it. The create reply of a Decision or Commitment page offers it.
 - **Three renderings from one source.** `display` (fence replaced by the live result; what
   `view_page` serves), `snapshotted` (fence + cached rendering between `okf-view:snapshot`
   markers; what is written to the file and what `read_page` serves), `stripSnapshots` (what

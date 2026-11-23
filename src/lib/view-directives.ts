@@ -22,6 +22,7 @@
  * The view that shows a page its record: the pages linking to it that carry a check
  * date, with what was expected and what happened. It filters on `check_at`, not on
  * `type`, so a page typed Bet or ADR counts and a page that links without a date does not.
+ * A page whose date is only in `due` is not listed here, though `validate` reads it.
  */
 export const RECORD_VIEW = [
 	'```okf-view',
@@ -33,6 +34,9 @@ export const RECORD_VIEW = [
 	'order: desc',
 	'```'
 ].join('\n');
+
+/** A key that names a deadline: `due`, `*_due`, `*-due`, `*_due_date`, `*-due-date`. */
+export const DUE_KEY = /(^|[_-])due([_-]date)?$/i;
 
 export const FOLDER_NOTE_NAMES = ['index.md', 'README.md'];
 export const isFolderNoteName = (name: string): boolean => FOLDER_NOTE_NAMES.includes(name);

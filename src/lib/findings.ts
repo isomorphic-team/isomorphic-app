@@ -88,6 +88,53 @@ export function findingKey(kind: string, identity: string | string[]): string {
 	return `${kind}:${parts.join('|')}`;
 }
 
+/** Whether a finding key is a commitment: a check date has come, or a decision has none. */
+export const isCommitmentKey = (key: string): boolean =>
+	key.startsWith('prediction-due:') || key.startsWith('undated-commitment:');
+
+/**
+ * The line that opens the findings list. `count` is the findings that need a decision, `silenced` the
+ * dismissed ones withheld; the dismissed count prints whenever it is above zero, including
+ * when nothing else is listed.
+ */
+export function findingsIntro(count: number, silenced: number): string {
+	const note = silenced > 0 ? ` ${silenced} previously dismissed and not shown.` : '';
+	if (count === 0) return silenced > 0 ? `\n\n${note.trim()}` : '';
+	return (
+		`\n\n${count} finding(s) need a decision — advisory, nothing here is broken,` +
+		` and each can be answered or silenced with resolve.${note}\n`
+	);
+}
+
+/** Splits findings into commitment findings and the rest, each in its original order. */
+export function partitionCommitments(findings: readonly Finding[]): {
+	commitments: Finding[];
+	rest: Finding[];
+} {
+	const commitments: Finding[] = [];
+	const rest: Finding[] = [];
+	for (const f of findings) (isCommitmentKey(f.key) ? commitments : rest).push(f);
+	return { commitments, rest };
+}
+
+/**
+ * The two texts `validate` builds from its kept findings: `due`, the commitment findings
+ * rendered for the due area (empty when there are none), and `list`, the intro and the other
+ * findings. Each is capped at `limit` on its own, and no finding is in both.
+ */
+export function renderValidateFindings(
+	findings: readonly Finding[],
+	silenced: number,
+	limit: number
+): { due: string; list: string } {
+	const { commitments, rest } = partitionCommitments(findings);
+	return {
+		due: commitments.length ? renderFindings(commitments, limit).text : '',
+		list:
+			findingsIntro(rest.length, silenced) + (rest.length ? renderFindings(rest, limit).text : '')
+	};
+}
+
 // ---------- the ledger ----------
 
 export function parseReviewLedger(raw: string | null): ReviewLedger {

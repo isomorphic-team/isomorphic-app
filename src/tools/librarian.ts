@@ -66,8 +66,8 @@ import { isToolPagePath, planCustomTools } from '../lib/custom-tools.ts';
 import { isFolderNoteName } from '../lib/view-directives.ts';
 import {
 	filterDismissed,
+	renderValidateFindings,
 	parseReviewLedger,
-	renderFindings,
 	REVIEW_LEDGER_PATH,
 	importFindings,
 	type Finding
@@ -77,8 +77,11 @@ import {
 	inlinedConceptSuggestions,
 	typeFieldSuggestions,
 	predictionDueFindings,
+	undatedCommitmentFindings,
 	comingDueLines,
-	COMING_DUE_DAYS,
+	otherDueBlock,
+	otherDueLines,
+	dueBlock,
 	ambiguousTitleSuggestions,
 	brokenLinkReport,
 	wikilinkPortabilityNote,
@@ -1376,7 +1379,7 @@ export function registerLibrarianTools(
 		{
 			...toolAnnotations('Check the brain for problems', 'read'),
 			description:
-				'`validate` checks a brain and reports what needs attention. It is also the way to see which commitments are due or coming due. Two kinds of result, deliberately separate. DEFECTS: broken links — markdown links to missing pages and [[wikilinks]] that match no page. Those have one right answer and cannot be silenced. FINDINGS: everything advisory, each carrying a `[key]` — pending import decisions, Open Knowledge Format structure notes (concepts written as sections inside a folder note instead of getting their own page, pages missing a `type:`, names two pages both answer to), consolidation tensions (a page nothing links to, a folder note that lists none of its pages, two pages telling the same story), and commitments whose `check_at` date has passed with no `outcome` recorded. A separate list shows those due within the next week. Nothing advisory blocks a save, and any finding can be answered or permanently silenced with `resolve` using its key, so a deliberate choice stops being re-reported. For brain admins it also lists sensitive data found in writes (pages and kinds, never the values). Run after big changes or restructures, when asked to tidy a brain up, or when asked what is due or overdue.',
+				'`validate` checks a brain and reports what needs attention. It is also the way to see which commitments are due or coming due. Two kinds of result, deliberately separate. DEFECTS: broken links — markdown links to missing pages and [[wikilinks]] that match no page. Those have one right answer and cannot be silenced. FINDINGS: everything advisory, each carrying a `[key]` — pending import decisions, Open Knowledge Format structure notes (concepts written as sections inside a folder note instead of getting their own page, pages missing a `type:`, names two pages both answer to), consolidation tensions (a page nothing links to, a folder note that lists none of its pages, two pages telling the same story), commitments whose check date has passed with no `outcome` recorded, and Decision or Commitment pages that are still open by their own `status` or `state` with no check date. To say how long a listed page has been quiet, call view_activity with its path. The check date is `check_at`, or a dated `due` when there is no `check_at`; a condition in a follow-up key is not a date and is not tracked; ask the person for a date and set `check_at` if they want it tracked. The result starts with a block of what is due or coming due within the next week, or a line saying nothing is; the overdue and undated commitment findings are listed there, with their keys, not in the findings list. A second block lists dates in other deadline-named fields (a key ending in `_due`, `-due`, `_due_date` or `-due-date`, such as a next-step date), nearest first and at most eight lines, naming the key to reset; they are not findings and have no outcome. A date under any other field name is not read: say so when answering what is due. Nothing advisory blocks a save, and any finding can be answered or permanently silenced with `resolve` using its key, so a deliberate choice stops being re-reported. For brain admins it also lists sensitive data found in writes (pages and kinds, never the values). Run after big changes or restructures, when asked to tidy a brain up, or when asked what is due or overdue.',
 			inputSchema: z.object({ brain: brainArg })
 		},
 		async ({ brain }) => {
@@ -1522,6 +1525,7 @@ export function registerLibrarianTools(
 					),
 					...typeFieldSuggestions(conceptPages, fieldsByPath),
 					...predictionDueFindings(conceptPages, fieldsByPath, todayIso()),
+					...undatedCommitmentFindings(conceptPages, fieldsByPath),
 					...ambiguousTitleSuggestions(resolved.pages),
 					...wikilinkPortabilityNote(resolved.edges),
 					...folderNotes,
@@ -1552,18 +1556,18 @@ export function registerLibrarianTools(
 					// An unparseable ledger filters nothing rather than failing the read.
 				}
 
-				if (kept.length) {
-					const { text } = renderFindings(clusterFindings(kept), MAX_FINDINGS_SHOWN);
-					const silenced = all.length - kept.length;
-					const note = silenced ? ` ${silenced} previously dismissed and not shown.` : '';
-					findingsText =
-						`\n\n${kept.length} finding(s) need a decision — advisory, nothing here is broken,` +
-						` and each can be answered or silenced with resolve.${note}\n${text}`;
-				}
-				findingsText += staleNote(keptStale.length);
+				// Commitment findings render in the due area, capped apart from the rest, so a
+				// full report of housekeeping cannot hide them.
+				const rendered = renderValidateFindings(
+					clusterFindings(kept),
+					all.length - kept.length,
+					MAX_FINDINGS_SHOWN
+				);
+				findingsText = rendered.list + staleNote(keptStale.length);
 				const coming = comingDueLines(conceptPages, fieldsByPath, todayIso());
-				if (coming.length)
-					comingDueText = `\n\nCommitments coming due in the next ${COMING_DUE_DAYS} days:\n${coming.join('\n')}`;
+				comingDueText =
+					dueBlock(rendered.due, coming) +
+					otherDueBlock(otherDueLines(conceptPages, fieldsByPath, todayIso()));
 				openPolicy = kept.filter((f) => isPolicyKey(f.key)).length;
 			} catch {
 				// Advisory only; link validation stands alone.
@@ -1588,7 +1592,7 @@ export function registerLibrarianTools(
 				// Advisory only; link validation stands alone.
 			}
 
-			const extras = `${truncationNote(truncated)}${pendingText}${toolText}${findingsText}${comingDueText}${policyText}`;
+			const extras = `${truncationNote(truncated)}${comingDueText}${pendingText}${toolText}${findingsText}${policyText}`;
 			if (problemCount === 0) {
 				return ok(`Checked ${pageCount} page(s) — no broken links.${extras}`);
 			}

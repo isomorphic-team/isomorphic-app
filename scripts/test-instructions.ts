@@ -76,6 +76,7 @@ console.log('\ncommitments');
 		/another way[^\n]*only a page with `check_at`/.test(line),
 		line
 	);
+	check('it says a dated due counts too', /`check_at` \(or a dated `due`\)/.test(line), line);
 	check(
 		'it links a commitment to the page whose claim it tests',
 		/linking to the page whose claim it tests/.test(line),

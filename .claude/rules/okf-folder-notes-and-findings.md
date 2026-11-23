@@ -76,23 +76,53 @@ are in the list, with keys.
   tuned against false positives), `typeFieldSuggestions` (inconsistency, not absence),
   `ambiguousTitleSuggestions`, `wikilinkPortabilityNote`, plus `brokenLinkReport`. Anything
   needing a `BrainContext` belongs back in the tool.
-- **`predictionDueFindings`** (`advisories.ts`, pure) lists a concept page whose first
-  `check_at` is on or before today (read with `datePart`; unparseable values are ignored) and
-  that has no non-empty `outcome`, quoting `expected`. Key `prediction-due:<path>@<date>`, so a
-  dismissal covers that date and re-dating raises it again. Computed on each `validate` call
+- **`predictionDueFindings`** (`advisories.ts`, pure) lists a concept page whose check date
+  is on or before today and that has no non-empty `outcome`. `checkDateOf` reads the date: the
+  first `check_at` (via `datePart`; unparseable values are ignored), else the first dated `due`,
+  unless the page has `source_key` or `source_keys` or a closed `status`,
+  `state` or `stage` (`CLOSED_STATUSES`, which includes `lost` and `won`). A page's `check_at` closes only on `outcome`. A follow-up date gets a neutral line
+  ("due D (from `due`), nothing recorded") offering an outcome or a new date. `RECORD_VIEW` still lists `check_at` pages only. The line quotes `expected`. Key
+  `prediction-due:<path>@<date>`, so a dismissal covers that date and re-dating raises it again. Computed on each `validate` call
   and never queued (the queue is for findings that take work to produce). It reads indexed
-  fields, so a brain whose `indexedFields` omits `check_at`, or a page whose `check_at` sits
+  fields, so a brain whose `indexedFields` omits `check_at` (or `due`), or a page whose `check_at` sits
   past `MAX_FIELD_KEYS_PER_PAGE`, is never raised. The Review screen (`view_review`) shows only
   policy findings, so this appears in `validate` alone.
-  **`comingDueLines`** is the same read for a `check_at` after today and within
-  `COMING_DUE_DAYS` (7): an unkeyed list in the `validate` result (earliest first,
-  at most `MAX_COMING_DUE_LINES`, absent when empty), not a finding, so there is nothing to
-  dismiss, and a page is never in it and in `prediction-due`. The `write_page` reply carries
+  **`comingDueLines`** is the same read for a check date after today and within
+  `COMING_DUE_DAYS` (7): an unkeyed list opening the `validate` result (earliest first,
+  at most `MAX_COMING_DUE_LINES`), not a finding, so there is nothing to
+  dismiss, and a page is never in it and in `prediction-due`.
+  **`dueBlock`** is the one function that builds the due area `validate` opens with. Its header
+  is the instruction the reader acts on (answer from these lines first, give the findings
+  below one line, say what is not read); with nothing due it is one line saying the same.
+  `librarian.ts` only partitions: `partitionCommitments` (`findings.ts`, by the kind in the
+  key) splits `prediction-due` and `undated-commitment` from the other findings after
+  clustering, each group goes through `renderFindings` with its own cap, and the commitment
+  group renders in the due area ahead of the coming-due lines, keyed and dismissable. The
+  lines of both groups and the other-dates block name a page "title (path), owner x" (owner
+  only when the page has one; the bare path when there is no title). The `write_page` reply carries
   `expectationNote` (`change-record.ts`), at most one per write: for a new Decision or
-  Commitment page with no `check_at` or `outcome`, for an update that set `expected` on a page
-  with no `check_at`, or, on a page of another type with no `check_at` or `outcome`, when the
+  Commitment page with no check date or `outcome`, for an update that set `expected` on a page
+  with no check date, or, on a page of another type with no check date or `outcome`, when the
   text the write added matches `hasDeadlinePhrase` (by, before, until or due, then a weekday,
   month, ISO date or "next week").
+- **`otherDueLines`** (`advisories.ts`, pure) lists, unkeyed and after the due block, the dates
+  kept under any other deadline-named key (`DUE_KEY` in `view-directives.ts`: a key ending in
+  `_due`, `-due`, `_due_date` or `-due-date`, shared with the `display` rendering; never `check_at` or a `FOLLOW_UP_DATE_KEYS` key) that are today, past or
+  within `COMING_DUE_DAYS`, on a concept page with no `outcome`, `source_key` or closed value.
+  Next days first, then the most recently passed; `MAX_OTHER_DUE_LINES` (8), then a tail line
+  counting the rest, which are further from today. Not a finding: these dates recur, so an outcome does not fit. Both
+  lists share `capLines`.
+- **`undatedCommitmentFindings`** (`advisories.ts`, pure) is the absence half of a commitment:
+  a concept page whose first `type` matches `COMMITMENT_TYPE_RE` (decision or commitment),
+  that says it is open (a `state` value, or a `status` value that is neither closed nor one of
+  `OKF_PAGE_STATUSES`, which describe the page, not the commitment) and has no closed value in
+  either key, with no `checkDateOf` date,
+  no non-empty `outcome` or `revisit`, and no `source_key` or `source_keys`. A page with no
+  status field raises nothing, because a brain whose decisions are records would otherwise be
+  flooded. Key `undated-commitment:<path>` (the path alone, so a dismissal survives edits),
+  weight 2, below `prediction-due`. The headline names the key and value the page uses and,
+  when present, its `raised` date as found; nothing is computed from it. `updated` is not shown:
+  it is stamped on every save. Commitment findings and the rest are each capped separately by `renderFindings`.
 - **`src/lib/consolidate.ts`** (pure, `pnpm test:consolidate`) detects where a brain's cheap
   surface disagrees with its content: islands, orphans, note-less and hollow folder notes,
   mixed conventions, folder-echo pages, near-duplicates (bigram Jaccard with each folder's

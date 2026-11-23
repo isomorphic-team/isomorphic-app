@@ -46,6 +46,7 @@ import {
 	SNAPSHOT_BEGIN,
 	SNAPSHOT_END,
 	hasViews,
+	DUE_KEY,
 	matchesCondition,
 	segmentViews
 } from './view-directives.ts';
@@ -238,9 +239,6 @@ export function humanizeLabel(value: string): string {
 	const words = value.replace(/[_-]+/g, ' ').trim();
 	return words ? words[0].toUpperCase() + words.slice(1) : value;
 }
-
-// A key that names a deadline: `due`, `*_due`, `*-due`, `*_due_date`, `*-due-date`.
-const DUE_KEY = /(^|[_-])due([_-]date)?$/i;
 
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 const ISO_DAY = /^(\d{4})-(\d{2})-(\d{2})$/;

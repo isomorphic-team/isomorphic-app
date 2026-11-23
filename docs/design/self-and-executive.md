@@ -207,7 +207,7 @@ when an expectation covered it.
 
 ## 10. Compare, and the items it raises
 
-`prediction-due` needs only a check date. The core raises it for any brain, with or without a
+`prediction-due` needs only a check date: `check_at`, or a dated `due` on a page that has no `check_at`. The core raises it for any brain, with or without a
 self ([`roles-self-and-world-model.md`](roles-self-and-world-model.md), section 8). The
 compare pass is a pass type on `brain_passes` (`src/lib/brain-pass.ts`) and raises the other
 three. `prediction-due` is a finding `validate` computes on each call from the page's own
@@ -226,9 +226,12 @@ review queue (`src/lib/review-queue.ts`):
 Two signals need no outcome at all:
 
 - **Absence.** A commitment that no later record mentions. Nothing contradicts it, so no
-  consistency check sees it.
+  consistency check sees it. Built in part, as a finding `validate` computes
+  (`undatedCommitmentFindings`, `src/lib/advisories.ts`): a Decision or Commitment page that
+  is open by its own `status` or `state` and has no check date. It is not "no later record
+  mentions it", which would need a history pass.
 - **Re-dating.** A commitment given a new date. Each revision is recorded, and the count is
-  data about the owner.
+  data about the owner. Not built.
 
 ## 11. The passes
 

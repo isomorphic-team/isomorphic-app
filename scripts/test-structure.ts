@@ -13,8 +13,15 @@ import {
 	typeFieldSuggestions,
 	predictionDueFindings,
 	comingDueLines,
+	checkDateOf,
+	undatedCommitmentFindings,
+	otherDueLines,
+	otherDueBlock,
+	MAX_OTHER_DUE_LINES,
+	dueBlock,
 	COMING_DUE_DAYS,
 	MAX_COMING_DUE_LINES,
+	MAX_FINDINGS_SHOWN,
 	ambiguousTitleSuggestions,
 	wikilinkPortabilityNote,
 	folderNoteSuggestions
@@ -23,6 +30,11 @@ import {
 	findingKey,
 	filterDismissed,
 	importFindings,
+	findingsIntro,
+	renderValidateFindings,
+	partitionCommitments,
+	renderFindings,
+	type Finding,
 	type ReviewLedger
 } from '../src/lib/findings.ts';
 import {
@@ -789,6 +801,576 @@ console.log('\nfolder-note advisory: a note-less folder holding its own overview
 		TODAY
 	);
 	check('coming due: earliest first', ordered[0]!.includes('b.md') && ordered[1]!.includes('a.md'));
+
+	// the follow-up date keys: due stands in when there is no check_at
+	{
+		const alias = (rows: Record<string, string[]>) => due(rows)[0];
+		const viaDue = alias({ due: ['2026-11-10'], expected: ['Draft sent'] });
+		check(
+			'follow-up: a dated due raises with the usual key',
+			viaDue?.key === findingKey('prediction-due', 'decisions/pricing.md@2026-11-10'),
+			viaDue?.key
+		);
+		check(
+			'follow-up: the headline and hint are pinned and do not say prediction',
+			viaDue?.headline ===
+				'- decisions/pricing.md: due 2026-11-10 (from `due`), nothing recorded. Expected: Draft sent. If done, record what happened with write_page fields {outcome: ...}; if it moved, set a new date with write_page fields {due: ...}; or dismiss with resolve and a reason.',
+			viaDue?.headline
+		);
+		check(
+			'follow-up: a check_at page keeps its wording',
+			!due({ check_at: ['2026-11-10'] })[0]!.headline.includes('date from') &&
+				due({ check_at: ['2026-11-10'] })[0]!.headline.includes('Record it with write_page')
+		);
+		check(
+			'follow-up: check_at wins over due',
+			due({ check_at: ['2026-12-25'], due: ['2026-11-10'] }).length === 0 &&
+				alias({ check_at: ['2026-11-10'], due: ['2026-11-01'] })?.key.endsWith('@2026-11-10') ===
+					true
+		);
+		check(
+			'follow-up: a condition is ignored, a later date in the list is not',
+			due({ due: ['when the audit lands'] }).length === 0 &&
+				due({ due: ['after launch', '2026-11-10'] }).length === 1
+		);
+		check(
+			'follow-up: an unparseable check_at is not replaced by due',
+			due({ check_at: ['next week'], due: ['2026-11-10'] }).length === 0
+		);
+		check('follow-up: a future due does not raise', due({ due: ['2026-12-25'] }).length === 0);
+		check(
+			'follow-up: an outcome closes it',
+			due({ due: ['2026-11-10'], outcome: ['sent'] }).length === 0
+		);
+		for (const closed of [
+			'done',
+			'closed',
+			'complete',
+			'completed',
+			'resolved',
+			'decided',
+			'cancelled',
+			'canceled',
+			'dropped',
+			'superseded',
+			'archived',
+			'deprecated'
+		])
+			check(
+				`follow-up: status "${closed}" skips the alias path`,
+				due({ due: ['2026-11-10'], status: [closed] }).length === 0
+			);
+		for (const [k, v] of [
+			['status', 'Done'],
+			['status', ' superseded '],
+			['state', 'closed'],
+			['state', 'ARCHIVED']
+		] as const)
+			check(
+				`follow-up: ${k} "${v.trim()}" skips the alias path`,
+				due({ due: ['2026-11-10'], [k]: [v] }).length === 0
+			);
+		check(
+			'follow-up: a deprecated page with a past due is not raised',
+			due({ due: ['2026-11-10'], status: ['deprecated'] }).length === 0 &&
+				due({ due: ['2026-11-10'], state: ['Deprecated'] }).length === 0 &&
+				due({ due: ['2026-11-10'], status: ['stable'] }).length === 1
+		);
+		check(
+			'follow-up: an open status does not skip',
+			due({ due: ['2026-11-10'], status: ['in progress'] }).length === 1
+		);
+		check(
+			'follow-up: a closed status does not close a page with check_at',
+			due({ check_at: ['2026-11-10'], status: ['done'] }).length === 1
+		);
+		check(
+			'follow-up: source_key and source_keys skip the alias path',
+			due({ due: ['2026-11-10'], source_key: ['crm-1'] }).length === 0 &&
+				due({ due: ['2026-11-10'], source_keys: ['crm-1'] }).length === 0 &&
+				due({ check_at: ['2026-11-10'], source_key: ['crm-1'] }).length === 1
+		);
+		check(
+			'follow-up: coming due includes the alias, naming the key',
+			coming({ due: ['2026-11-25'], expected: ['Draft sent'] }) ===
+				'- decisions/pricing.md: due 2026-11-25 (from `due`, in 2 days). Expected: Draft sent. If done, record what happened with write_page fields {outcome: ...}; if it moved, set a new date with write_page fields {due: ...}.' &&
+				coming({ due: ['2026-11-25'], status: ['done'] }) === ''
+		);
+		check(
+			'follow-up: checkDateOf reports the key and handles a missing page',
+			checkDateOf((k) => ({ due: ['2026-11-10T09:00Z'] })[k])?.key === 'due' &&
+				checkDateOf(() => undefined) === undefined
+		);
+	}
+
+	// the block validate opens with
+	{
+		const NOT_READ =
+			'dates kept under other field names (not `check_at`, `due`, or a key ending in `_due`, `-due`, `_due_date` or `-due-date`) are not read.';
+		const nothing = dueBlock('', []);
+		check(
+			'due block: nothing due is one imperative sentence naming what is not read',
+			nothing === `\n\nNothing due or coming due. Tell the person that ${NOT_READ}`,
+			nothing
+		);
+		const coming1 = dueBlock('', ['- a.md: due 2026-11-25 (from `due`, in 2 days).']);
+		check(
+			'due block: the header is the imperative and the coming lines sit under it',
+			coming1 ===
+				`\n\nDue and coming due. Answer from these lines first, give the findings further down one line, and tell the person that ${NOT_READ} For each open one with no date, ask the person which: set a check date, record what was decided, or dismiss it.\n- a.md: due 2026-11-25 (from \`due\`, in 2 days).`,
+			coming1
+		);
+		const withFindings = dueBlock('- b.md: finding\n  [prediction-due:b.md@2026-11-01]', [
+			'- a.md: coming'
+		]);
+		check(
+			'due block: commitment findings come before the coming-due lines, keys intact',
+			withFindings.indexOf('- b.md: finding') < withFindings.indexOf('- a.md: coming') &&
+				withFindings.includes('[prediction-due:b.md@2026-11-01]') &&
+				!withFindings.includes('overdue (prediction-due findings)'),
+			withFindings
+		);
+		check(
+			'due block: findings alone still print the header, not the nothing-due line',
+			dueBlock('- b.md: finding', []).includes('Due and coming due.') &&
+				!dueBlock('- b.md: finding', []).includes('Nothing due')
+		);
+	}
+
+	// the commitment group: partitioned from the rest, capped apart
+	{
+		const f = (key: string, weight: number): Finding => ({ key, weight, headline: `- ${key}` });
+		const noise = Array.from({ length: 14 }, (_, i) =>
+			f(`island:p${String(i).padStart(2, '0')}.md`, 4)
+		);
+		const all = [
+			...noise,
+			...predictionDueFindings(
+				[{ path: 'decisions/pricing.md' }],
+				new Map([['decisions/pricing.md', fields({ check_at: ['2026-11-01'] })]]),
+				TODAY
+			),
+			...undatedCommitmentFindings(
+				[{ path: 'decisions/vendor.md' }],
+				new Map([['decisions/vendor.md', fields({ type: ['Decision'], state: ['open'] })]])
+			)
+		];
+		const { commitments, rest } = partitionCommitments(all);
+		check(
+			'partition: prediction-due and undated-commitment split from the rest, by kind',
+			commitments.length === 2 &&
+				rest.length === 14 &&
+				commitments.every((c) => /^(prediction-due|undated-commitment):/.test(c.key)),
+			JSON.stringify(commitments.map((c) => c.key))
+		);
+		const crowded = renderFindings(all, MAX_FINDINGS_SHOWN);
+		check(
+			'partition: in one capped list 14 heavier findings hide both commitment findings',
+			!crowded.text.includes('decisions/pricing.md') &&
+				!crowded.text.includes('decisions/vendor.md')
+		);
+		const shownCommit = renderFindings(commitments, MAX_FINDINGS_SHOWN);
+		const shownRest = renderFindings(rest, MAX_FINDINGS_SHOWN);
+		check(
+			'partition: each group caps on its own, and the commitment group shows both',
+			shownCommit.shown === 2 &&
+				shownCommit.hidden === 0 &&
+				shownRest.shown === MAX_FINDINGS_SHOWN &&
+				shownRest.hidden === 2 &&
+				shownCommit.text.indexOf('decisions/pricing.md') <
+					shownCommit.text.indexOf('decisions/vendor.md'),
+			shownCommit.text
+		);
+		check(
+			'partition: a dismissed commitment finding is absent',
+			partitionCommitments(
+				filterDismissed(all, {
+					version: 1,
+					dismissed: [{ key: commitments[0]!.key, why: 'deferred', at: '2026-11-23' }]
+				})
+			).commitments.length === 1
+		);
+		{
+			const mk = (key: string, weight: number): Finding => ({ key, weight, headline: `- ${key}` });
+			const few = renderValidateFindings(
+				[
+					mk('island:a.md', 1),
+					mk('prediction-due:b.md@2026-11-01', 3),
+					mk('undated-commitment:c.md', 2)
+				],
+				0,
+				12
+			);
+			const crowd = Array.from({ length: 14 }, (_, i) => mk(`island:p${i}.md`, 5));
+			const full = renderValidateFindings(
+				[...crowd, mk('prediction-due:b.md@2026-11-01', 3), mk('undated-commitment:c.md', 2)],
+				0,
+				12
+			);
+			check(
+				'validate findings: each commitment finding is in the due text only, once, however many others there are',
+				few.due.split('prediction-due:b.md').length === 3 &&
+					few.due.includes('- prediction-due:b.md@2026-11-01') &&
+					few.due.includes('- undated-commitment:c.md') &&
+					!few.list.includes('prediction-due') &&
+					!few.list.includes('undated-commitment') &&
+					few.list.includes('island:a.md') &&
+					full.due.includes('- prediction-due:b.md@2026-11-01') &&
+					full.due.includes('- undated-commitment:c.md') &&
+					!full.list.includes('commitment') &&
+					!full.list.includes('prediction-due') &&
+					full.list.includes('…and 2 more') &&
+					renderValidateFindings([], 0, 12).due === ''
+			);
+		}
+		check(
+			'findings intro: the dismissed count prints with nothing else listed, and not at zero',
+			findingsIntro(0, 2) === '\n\n2 previously dismissed and not shown.' &&
+				findingsIntro(0, 0) === '' &&
+				findingsIntro(3, 2).includes('3 finding(s) need a decision') &&
+				findingsIntro(3, 2).includes(' 2 previously dismissed and not shown.') &&
+				!findingsIntro(3, 0).includes('previously dismissed')
+		);
+		check(
+			'partition: a kind is matched with its colon, so a longer kind name is not a commitment',
+			partitionCommitments([f('prediction-duel:x', 1)]).commitments.length === 0
+		);
+	}
+
+	// title and owner on the lines
+	{
+		const page = { path: 'decisions/pricing.md', title: 'Raise the price' };
+		const flds = (rows: Record<string, string[]>) => new Map([[page.path, fields(rows)]]);
+		const pd = predictionDueFindings(
+			[page],
+			flds({ check_at: ['2026-11-01'], owner: ['Pat'] }),
+			TODAY
+		)[0]!;
+		check(
+			'labels: a prediction-due line reads title (path), owner',
+			pd.headline.startsWith(
+				'- Raise the price (decisions/pricing.md), owner Pat: check due 2026-11-01'
+			),
+			pd.headline
+		);
+		check(
+			'labels: no owner, no owner clause; a blank owner counts as none',
+			!predictionDueFindings(
+				[page],
+				flds({ check_at: ['2026-11-01'] }),
+				TODAY
+			)[0]!.headline.includes('owner') &&
+				!predictionDueFindings(
+					[page],
+					flds({ check_at: ['2026-11-01'], owner: ['  '] }),
+					TODAY
+				)[0]!.headline.includes('owner')
+		);
+		check(
+			'labels: no title gives the bare path',
+			predictionDueFindings(
+				[{ path: page.path }],
+				flds({ check_at: ['2026-11-01'] }),
+				TODAY
+			)[0]!.headline.startsWith('- decisions/pricing.md: check due')
+		);
+		check(
+			'labels: coming-due, undated and other-date lines carry them too',
+			comingDueLines(
+				[page],
+				flds({ check_at: ['2026-11-25'], owner: ['Pat'] }),
+				TODAY
+			)[0]!.startsWith('- Raise the price (decisions/pricing.md), owner Pat: check due') &&
+				undatedCommitmentFindings(
+					[page],
+					flds({ type: ['Decision'], state: ['open'], owner: ['Pat'] })
+				)[0]!.headline.startsWith('- Raise the price (decisions/pricing.md), owner Pat: open') &&
+				otherDueLines(
+					[page],
+					flds({ next_step_due: ['2026-11-20'], owner: ['Pat'] }),
+					TODAY
+				)[0]!.startsWith('- Raise the price (decisions/pricing.md), owner Pat: next_step_due')
+		);
+	}
+
+	// other deadline-named fields: next-step dates and the like, listed unkeyed
+	{
+		const other = (rows: Record<string, string[]>, today = TODAY) =>
+			otherDueLines(
+				[{ path: 'deals/northwind.md' }],
+				new Map([['deals/northwind.md', fields(rows)]]),
+				today
+			);
+		const one = other({ next_step_due: ['2026-11-20'] });
+		check(
+			'other due: a past next_step_due is listed with its key to reset',
+			one.length === 1 &&
+				one[0] ===
+					'- deals/northwind.md: next_step_due 2026-11-20 (3 days ago). If the step moved, set a new date: write_page fields {next_step_due: ...}.',
+			one.join('\n')
+		);
+		check(
+			'other due: the key patterns of the platform deadline predicate match',
+			['next_move_due', 'next-step-due', 'renewal_due_date', 'go-live-due-date'].every(
+				(k) => other({ [k]: ['2026-11-20'] }).length === 1
+			)
+		);
+		check(
+			'other due: a *_due_date key is listed under its own name',
+			other({ renewal_due_date: ['2026-11-20'] })[0]?.startsWith(
+				'- deals/northwind.md: renewal_due_date 2026-11-20'
+			) === true
+		);
+		check(
+			"other due: due and check_at are the due block's, and other names are not read",
+			other({ due: ['2026-11-20'] }).length === 0 &&
+				other({ check_at: ['2026-11-20'] }).length === 0 &&
+				other({ next_step: ['2026-11-20'] }).length === 0 &&
+				other({ duet: ['2026-11-20'] }).length === 0 &&
+				other({ due_soon: ['2026-11-20'] }).length === 0
+		);
+		check(
+			'other due: a page and key are never in both blocks',
+			['next_step_due', 'due', 'check_at'].every((k) => {
+				const rows = { [k]: ['2026-11-25'] };
+				const inOther = other(rows).length;
+				const inDue = coming(rows) !== '' || due(rows).length > 0 ? 1 : 0;
+				return inOther + inDue <= 1;
+			})
+		);
+		check(
+			'other due: the window is the next seven days and everything past',
+			other({ next_step_due: ['2026-11-30'] })[0]?.includes('(in 7 days)') === true &&
+				other({ next_step_due: ['2026-11-24'] })[0]?.includes('(in 1 day)') === true &&
+				other({ next_step_due: ['2026-11-23'] })[0]?.includes('(today)') === true &&
+				other({ next_step_due: ['2026-11-22'] })[0]?.includes('(1 day ago)') === true &&
+				other({ next_step_due: ['2026-12-01'] }).length === 0 &&
+				other({ next_step_due: ['2025-01-01'] }).length === 1
+		);
+		check(
+			'other due: a non-date value is ignored, a later date in the list is used',
+			other({ next_step_due: ['call back'] }).length === 0 &&
+				other({ next_step_due: ['call back', '2026-11-20T09:00Z'] }).length === 1
+		);
+		for (const [k, v] of [
+			['status', 'done'],
+			['state', 'Closed'],
+			['stage', 'lost'],
+			['stage', 'won'],
+			['status', 'archived'],
+			['status', 'deprecated']
+		])
+			check(
+				`other due: ${k} "${v}" skips the page`,
+				other({ next_step_due: ['2026-11-20'], [k]: [v] }).length === 0
+			);
+		check(
+			'other due: an open stage, an outcome or an import skips nothing but the last two',
+			other({ next_step_due: ['2026-11-20'], stage: ['negotiation'] }).length === 1 &&
+				other({ next_step_due: ['2026-11-20'], outcome: ['signed'] }).length === 0 &&
+				other({ next_step_due: ['2026-11-20'], source_key: ['crm-1'] }).length === 0 &&
+				other({ next_step_due: ['2026-11-20'], source_keys: ['crm-1'] }).length === 0
+		);
+		check(
+			'other due: two keys on a page are two lines',
+			other({ next_step_due: ['2026-11-20'], renewal_due: ['2026-11-21'] }).length === 2
+		);
+		const ordered2 = otherDueLines(
+			['a', 'b', 'c', 'd', 'e'].map((n) => ({ path: `${n}.md` })),
+			new Map(
+				(
+					[
+						['a', '2026-11-01'],
+						['b', '2026-11-22'],
+						['c', '2026-11-25'],
+						['d', '2026-11-24'],
+						['e', '2026-11-10']
+					] as const
+				).map(([n, d]) => [`${n}.md`, fields({ next_step_due: [d] })])
+			),
+			TODAY
+		);
+		check(
+			'other due: next days first, then the most recently passed',
+			ordered2.map((l) => l.slice(2, 3)).join('') === 'dcbea',
+			ordered2.join('\n')
+		);
+		const many = Array.from({ length: MAX_OTHER_DUE_LINES + 3 }, (_, i) => `p${i}.md`);
+		const manyOther = otherDueLines(
+			many.map((path) => ({ path })),
+			new Map(
+				many.map((path, i) => [
+					path,
+					fields({ next_step_due: [`2026-10-${String(10 + i).padStart(2, '0')}`] })
+				])
+			),
+			TODAY
+		);
+		check(
+			'other due: the cap is 8, the nearest are kept, and the tail counts the rest without calling them stale',
+			MAX_OTHER_DUE_LINES === 8 &&
+				manyOther.filter((l) => l.startsWith('- ')).length === 8 &&
+				manyOther[0]!.includes('p10.md') &&
+				manyOther.at(-1) === '...and 3 more, further from today than these.',
+			manyOther.join('\n')
+		);
+		check(
+			'other due: the block is empty when nothing is listed, and headed otherwise',
+			otherDueBlock([]) === '' &&
+				otherDueBlock(one).startsWith(
+					'\n\nDates in other deadline-named fields (keys ending in _due, -due, _due_date or -due-date), nearest first:\n- deals'
+				)
+		);
+		// the shared helper still caps coming due at 20 and the rest are counted
+		const c25 = Array.from({ length: 25 }, (_, i) => `q${i}.md`);
+		const comingMany = comingDueLines(
+			c25.map((path) => ({ path })),
+			new Map(c25.map((path) => [path, fields({ check_at: ['2026-11-25'] })])),
+			TODAY
+		);
+		check(
+			'other due: coming due still caps at 20 through the shared helper',
+			comingMany.length === 21 && comingMany.at(-1) === '...and 5 more.'
+		);
+		// the closed list now reads stage, lost and won on the earlier paths too
+		check(
+			'closed values: stage, lost and won close item 1 and item 2 as well',
+			due({ due: ['2026-11-10'], stage: ['lost'] }).length === 0 &&
+				due({ due: ['2026-11-10'], status: ['won'] }).length === 0 &&
+				due({ due: ['2026-11-10'], stage: ['negotiation'] }).length === 1 &&
+				undatedCommitmentFindings(
+					[{ path: 'd.md' }],
+					new Map([['d.md', fields({ type: ['Decision'], state: ['open'], stage: ['won'] })]])
+				).length === 0
+		);
+	}
+
+	// undated-commitment: an open decision with nothing to check it by
+	{
+		const undated = (rows: Record<string, string[]>, path = 'decisions/pricing.md') =>
+			undatedCommitmentFindings([{ path }], new Map([[path, fields(rows)]]));
+		const open = { type: ['Decision'], state: ['proposed'] };
+		const base = undated(open);
+		check(
+			'undated: an open decision with no date raises, keyed on the path alone',
+			base.length === 1 &&
+				base[0]!.key === findingKey('undated-commitment', 'decisions/pricing.md'),
+			JSON.stringify(base)
+		);
+		check(
+			'undated: the headline is pinned',
+			base[0]?.headline ===
+				'- decisions/pricing.md: open (state proposed), no check date. Give it a check date (write_page fields {check_at: YYYY-MM-DD}), record what was decided ({outcome: ...}), or close it in the field the page uses for its state; or dismiss with resolve and a reason.',
+			base[0]?.headline
+		);
+		check(
+			'undated: raised is shown as found; updated is not, and a non-date raised is omitted',
+			undated({ ...open, updated: ['2026-06-10'], raised: ['2026-03-01'] })[0]?.headline.includes(
+				'no check date; raised 2026-03-01. Give it'
+			) === true &&
+				!undated({ ...open, updated: ['2026-06-10'] })[0]!.headline.includes('updated') &&
+				!base[0]!.headline.includes('raised') &&
+				!undated({ ...open, raised: ['sometime'] })[0]!.headline.includes('raised')
+		);
+		check(
+			'undated: the headline names the key the page uses',
+			undated({ type: ['Commitment'], status: ['open'] })[0]?.headline.includes('(status open)') ===
+				true &&
+				undated({ type: ['Commitment'], state: ['open'] })[0]?.headline.includes('(state open)') ===
+					true
+		);
+		check(
+			'undated: type matching is the commitment pattern, first type only',
+			undated({ ...open, type: ['Adopted Decision Record'] }).length === 1 &&
+				undated({ ...open, type: ['Note'] }).length === 0 &&
+				undated({ ...open, type: ['Note', 'Decision'] }).length === 0
+		);
+		check(
+			'undated: no state or status raises nothing',
+			undated({ type: ['Decision'] }).length === 0 &&
+				undated({ type: ['Decision'], status: [' '] }).length === 0 &&
+				undated({ type: ['Decision'], state: [''] }).length === 0
+		);
+		check(
+			'undated: the page statuses draft and stable say nothing about the commitment',
+			undated({ type: ['Decision'], status: ['draft'] }).length === 0 &&
+				undated({ type: ['Decision'], status: ['stable'] }).length === 0 &&
+				undated({ type: ['Decision'], status: ['Stable'] }).length === 0
+		);
+		check(
+			'undated: a status that is not a page status raises, and so does any state',
+			undated({ type: ['Decision'], status: ['open'] }).length === 1 &&
+				undated({ type: ['Decision'], status: ['stable'], state: ['open'] }).length === 1 &&
+				undated({
+					type: ['Decision'],
+					status: ['draft'],
+					state: ['proposed']
+				})[0]?.headline.includes('(state proposed)') === true
+		);
+		check(
+			'undated: a state of draft or stable is still a state, so it raises',
+			undated({ type: ['Decision'], state: ['draft'] }).length === 1 &&
+				undated({ type: ['Decision'], state: ['stable'] }).length === 1
+		);
+		for (const closed of [
+			'done',
+			'Closed',
+			'complete',
+			'completed',
+			'resolved',
+			'decided',
+			'cancelled',
+			'canceled',
+			'dropped',
+			'superseded',
+			'archived',
+			'deprecated'
+		])
+			check(
+				`undated: status "${closed}" raises nothing`,
+				undated({ type: ['Decision'], status: [closed] }).length === 0 &&
+					undated({ type: ['Decision'], state: [closed] }).length === 0
+			);
+		check(
+			'undated: a closed state beats an open status',
+			undated({ type: ['Decision'], status: ['open'], state: ['decided'] }).length === 0
+		);
+		check(
+			'undated: check_at or due (even past) raises nothing',
+			undated({ ...open, check_at: ['2026-12-01'] }).length === 0 &&
+				undated({ ...open, due: ['2026-01-01'] }).length === 0
+		);
+		check(
+			'undated: a due that is not a date does not count as a date',
+			undated({ ...open, due: ['when the audit lands'] }).length === 1
+		);
+		check(
+			'undated: an outcome raises nothing',
+			undated({ ...open, outcome: ['held'] }).length === 0
+		);
+		check('undated: an empty outcome does not', undated({ ...open, outcome: [''] }).length === 1);
+		check(
+			'undated: a non-empty revisit raises nothing',
+			undated({ ...open, revisit: ['after launch'] }).length === 0
+		);
+		check(
+			'undated: source_key and source_keys raise nothing',
+			undated({ ...open, source_key: ['crm-1'] }).length === 0 &&
+				undated({ ...open, source_keys: ['crm-1'] }).length === 0
+		);
+		check(
+			'undated: editing the page keeps the key',
+			undated({ ...open, state: ['in progress'], updated: ['2026-07-01'] })[0]?.key === base[0]!.key
+		);
+		check(
+			'undated: it ranks below prediction-due',
+			base[0]!.weight < due({ check_at: ['2026-11-01'] })[0]!.weight
+		);
+		check(
+			'undated: only the pages passed in are considered',
+			undatedCommitmentFindings([], new Map([['a.md', fields(open)]])).length === 0
+		);
+	}
 
 	const typed = typeFieldSuggestions(
 		[{ path: 'a.md' }, { path: 'b.md' }],
