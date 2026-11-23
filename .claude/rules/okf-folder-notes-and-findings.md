@@ -109,8 +109,9 @@ are in the list, with keys.
   kept under any other deadline-named key (`DUE_KEY` in `view-directives.ts`: a key ending in
   `_due`, `-due`, `_due_date` or `-due-date`, shared with the `display` rendering; never `check_at` or a `FOLLOW_UP_DATE_KEYS` key) that are today, past or
   within `COMING_DUE_DAYS`, on a concept page with no `outcome`, `source_key` or closed value.
-  Next days first, then the most recently passed; `MAX_OTHER_DUE_LINES` (8), then a tail line
-  counting the rest, which are further from today. Not a finding: these dates recur, so an outcome does not fit. Both
+  Next days first, then the most recently passed; `MAX_OTHER_DUE_LINES` (40), then a tail line
+  counting the rest, which are further from today. Each line is label, key, date and when; the
+  header (`otherDueBlock`) states once how to move a date, how to remove one with `{key: null}`, and to ask the person first. Not a finding: these dates recur, so an outcome does not fit. Both
   lists share `capLines`.
 - **`undatedCommitmentFindings`** (`advisories.ts`, pure) is the absence half of a commitment:
   a concept page whose first `type` matches `COMMITMENT_TYPE_RE` (decision or commitment),

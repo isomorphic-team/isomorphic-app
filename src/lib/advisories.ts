@@ -598,7 +598,7 @@ function capLines<T>(
 }
 
 /** The most lines `otherDueLines` returns. */
-export const MAX_OTHER_DUE_LINES = 8;
+export const MAX_OTHER_DUE_LINES = 40;
 
 // A page's dates in deadline-named fields (`next_step_due`, `follow_up_due_date`: keys matching DUE_KEY, ending in `_due`, `-due`, `_due_date` or `-due-date`)
 // other than the follow-up keys, `check_at` and `due`, which the due block reads. Listed for a
@@ -645,7 +645,7 @@ export function otherDueLines(
 					: r.days > 0
 						? `in ${r.days} day${r.days === 1 ? '' : 's'}`
 						: `${-r.days} day${r.days === -1 ? '' : 's'} ago`;
-			return `- ${r.label}: ${r.key} ${r.date} (${when}). If the step moved, set a new date: write_page fields {${r.key}: ...}.`;
+			return `- ${r.label}: ${r.key} ${r.date} (${when}).`;
 		},
 		(rest) => `...and ${rest.length} more, further from today than these.`
 	);
@@ -654,7 +654,7 @@ export function otherDueLines(
 /** The block after the due block: `otherDueLines` under a header, or nothing when empty. */
 export function otherDueBlock(lines: string[]): string {
 	if (lines.length === 0) return '';
-	return `\n\nDates in other deadline-named fields (keys ending in _due, -due, _due_date or -due-date), nearest first:\n${lines.join('\n')}`;
+	return `\n\nDates in other deadline-named fields (keys ending in _due, -due, _due_date or -due-date), nearest first. Some of these may be finished: ask the person which are still live before removing any date, once per client or owner and not per page, and never decide for them. Moved: write_page fields {key: YYYY-MM-DD}. No longer applies: write_page fields {key: null}.\n${lines.join('\n')}`;
 }
 
 /**

@@ -1258,9 +1258,10 @@ try {
 		otherAt > r.text.indexOf('Due and coming due') &&
 			otherAt > r.text.indexOf('Nothing due or coming due') &&
 			(!r.text.includes('need a decision') || otherAt < r.text.indexOf('need a decision')) &&
-			r.text.includes(
-				'wiki/deals/northwind.md): next_step_due ' + inDays(-4) + ' (4 days ago). If the step moved'
-			),
+			r.text.includes('wiki/deals/northwind.md): next_step_due ' + inDays(-4) + ' (4 days ago).') &&
+			r.text.includes('{key: YYYY-MM-DD}') &&
+			r.text.includes('{key: null}') &&
+			!r.text.includes('If the step moved'),
 		r.text
 	);
 	await call('write_page', { path: 'wiki/deals/northwind.md', fields: { stage: 'lost' } });
