@@ -74,8 +74,8 @@ import {
 	type Finding,
 	type ReviewLedger
 } from '../lib/findings.ts';
-import { pickOffer } from '../lib/feature-offers.ts';
-import { hasFeature } from '../lib/entitlements.ts';
+import { offerContext, pickOffer } from '../lib/feature-offers.ts';
+import { FEATURES, hasFeature } from '../lib/entitlements.ts';
 import {
 	folderNoteSuggestions,
 	inlinedConceptSuggestions,
@@ -110,13 +110,7 @@ import {
 	staleNote,
 	type ReachableBrain
 } from '../lib/review-queue.ts';
-import {
-	brainLabel,
-	roleAtLeast,
-	type TenantOpts,
-	type Role,
-	type AccessibleBrain
-} from '../lib/orgs.ts';
+import { brainLabel, type TenantOpts, type Role, type AccessibleBrain } from '../lib/orgs.ts';
 import { brainArg, fail, ok } from './shared.ts';
 import {
 	addedText,
@@ -1581,16 +1575,17 @@ export function registerLibrarianTools(
 				// One offer for a feature the brain does not use, right after the due area. It
 				// is not in `all`, so it never counts in the findings intro or the cap.
 				const offer = await pickOffer(
-					{
+					offerContext({
 						pages: conceptPages,
 						fields: fieldsByPath,
 						indexedFields: config.indexedFields,
-						canEdit: roleAtLeast(role, 'editor'),
-						commitmentFindings: rendered.due !== '',
-						tension: kept.some((f) => /^(near-duplicate|same-identifier):/.test(f.key)),
-						orgAdmin: !!orgId && !!orgRole && roleAtLeast(orgRole, 'admin'),
-						lacksEnterprise: async () => !(orgId && (await hasFeature(db, orgId, 'enterprise')))
-					},
+						role,
+						orgRole,
+						orgId,
+						keptKeys: kept.map((f) => f.key),
+						lacksEnterprise: async () =>
+							!(orgId && (await hasFeature(db, orgId, FEATURES.enterprise)))
+					}),
 					(offers) => (ledger ? filterDismissed(offers, ledger) : offers)
 				);
 				comingDueText =

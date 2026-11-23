@@ -45,12 +45,15 @@ import {
 } from '../src/lib/wiki.ts';
 import type { PageFields } from '../src/lib/brain-index.ts';
 
-import { FEATURE_OFFERS, pickOffer, type OfferContext } from '../src/lib/feature-offers.ts';
-import { readdirSync, readFileSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
+import {
+	FEATURE_OFFERS,
+	offerContext,
+	pickOffer,
+	type OfferContext
+} from '../src/lib/feature-offers.ts';
 
 import { checker } from './check.ts';
-import { registeredToolNames } from './doc-refs.ts';
+import { registeredToolNames, toolRegistrationSources } from './doc-refs.ts';
 
 const { check, done } = checker('structure checks');
 
@@ -1475,14 +1478,9 @@ console.log('\nfeature offers: one line for a feature the brain does not use');
 	const exempt = new Set(Object.values(NO_OFFER).flat());
 	const used = new Set(FEATURE_OFFERS.flatMap((o) => o.uses));
 
-	const dir = fileURLToPath(new URL('../src/tools/', import.meta.url));
-	const files = [
-		...readdirSync(dir)
-			.filter((f) => f.endsWith('.ts'))
-			.map((f) => dir + f),
-		fileURLToPath(new URL('../src/worker.ts', import.meta.url))
-	];
-	const registered = new Set(files.flatMap((f) => registeredToolNames(readFileSync(f, 'utf8'))));
+	const registered = new Set(
+		toolRegistrationSources().flatMap(({ src }) => registeredToolNames(src))
+	);
 	const undecided = [...registered].filter((n) => !used.has(n) && !exempt.has(n)).sort();
 	check(
 		'coverage: every registered tool is used by an offer or exempt with a reason',
@@ -1632,6 +1630,45 @@ console.log('\nfeature offers: one line for a feature the brain does not use');
 	);
 	const many = await pickOffer(eeCtx, keepAll);
 	check('cap: one offer is returned', !Array.isArray(many) && many !== null);
+
+	// the gating, derived from roles and the kept finding keys
+	{
+		const base: Parameters<typeof offerContext>[0] = {
+			pages: [],
+			fields: new Map(),
+			indexedFields: null,
+			role: 'editor',
+			orgRole: 'admin',
+			orgId: 'org-1',
+			keptKeys: [],
+			lacksEnterprise: async () => true
+		};
+		const c = (over: Partial<typeof base>) => offerContext({ ...base, ...over });
+		check(
+			'context: an editor can act, a viewer cannot',
+			c({}).canEdit && !c({ role: 'viewer' }).canEdit
+		);
+		check(
+			'context: org admin and owner are admins, an editor, no org role or no org is not',
+			c({}).orgAdmin &&
+				c({ orgRole: 'owner' }).orgAdmin &&
+				!c({ orgRole: 'editor' }).orgAdmin &&
+				!c({ orgRole: null }).orgAdmin &&
+				!c({ orgId: undefined }).orgAdmin
+		);
+		check(
+			'context: prediction-due and undated-commitment keys are commitment findings, others are not',
+			c({ keptKeys: ['prediction-due:a.md@2026-11-01'] }).commitmentFindings &&
+				c({ keptKeys: ['undated-commitment:a.md'] }).commitmentFindings &&
+				!c({ keptKeys: ['island:a.md', 'near-duplicate:a.md|b.md'] }).commitmentFindings
+		);
+		check(
+			'context: near-duplicate and same-identifier keys are the tension evidence, others are not',
+			c({ keptKeys: ['near-duplicate:a.md|b.md'] }).tension &&
+				c({ keptKeys: ['same-identifier:a.md|b.md'] }).tension &&
+				!c({ keptKeys: ['island:a.md', 'orphan:a.md', 'conflict:x'] }).tension
+		);
+	}
 
 	// text hygiene
 	const texts = [

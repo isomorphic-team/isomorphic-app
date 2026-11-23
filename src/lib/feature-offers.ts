@@ -4,7 +4,8 @@
 // tool gathers the context and renders the pick.
 import { checkDateOf, COMMITMENT_TYPE_RE } from './advisories.ts';
 import type { PageFields } from './brain-index.ts';
-import { findingKey, type Finding } from './findings.ts';
+import { findingKey, isCommitmentKey, type Finding } from './findings.ts';
+import { roleAtLeast, type Role } from './orgs.ts';
 import { DUE_KEY } from './view-directives.ts';
 
 /** What an entry reads. `pages` are concept pages only. */
@@ -34,6 +35,37 @@ export interface FeatureOffer {
 	/** True when the brain does not use the feature. */
 	unused: (ctx: OfferContext) => boolean;
 	text: (ctx: OfferContext) => string;
+}
+
+/** Whether a finding key is a consolidation tension that evidences the enterprise check. */
+export const isTensionEvidenceKey = (key: string): boolean =>
+	key.startsWith('near-duplicate:') || key.startsWith('same-identifier:');
+
+/**
+ * The context from what `validate` already holds: the caller's roles and the keys of the
+ * findings kept this run (after dismissals). `lacksEnterprise` is the one lookup, left to the
+ * caller so it runs only when an enterprise entry is the pick.
+ */
+export function offerContext(input: {
+	pages: { path: string }[];
+	fields: Map<string, PageFields>;
+	indexedFields: string[] | null;
+	role: Role;
+	orgRole: Role | null | undefined;
+	orgId: string | undefined;
+	keptKeys: readonly string[];
+	lacksEnterprise: () => Promise<boolean>;
+}): OfferContext {
+	return {
+		pages: input.pages,
+		fields: input.fields,
+		indexedFields: input.indexedFields,
+		canEdit: roleAtLeast(input.role, 'editor'),
+		commitmentFindings: input.keptKeys.some(isCommitmentKey),
+		tension: input.keptKeys.some(isTensionEvidenceKey),
+		orgAdmin: !!input.orgId && !!input.orgRole && roleAtLeast(input.orgRole, 'admin'),
+		lacksEnterprise: input.lacksEnterprise
+	};
 }
 
 /** Decisions and commitments, as the page type `undatedCommitmentFindings` reads. */
@@ -83,7 +115,7 @@ export const FEATURE_OFFERS: FeatureOffer[] = [
 		applies: (ctx) => ctx.tension && ctx.orgAdmin,
 		unused: () => true,
 		text: () =>
-			"Tell the person: the enterprise edition can check this brain against the organization's other brains for contradictions. " +
+			"Tell the person: the enterprise edition can check this brain's pages against each other and the organization's other brains for contradictions. " +
 			'Only if yes: ask whoever runs this deployment about turning it on. ' +
 			'If no: resolve with dismiss and their reason.'
 	}
