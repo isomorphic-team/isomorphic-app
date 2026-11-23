@@ -107,6 +107,9 @@ every conversation. The Worker applies the same rule to single-user deployments 
 
 ## Where to look next
 
+[`concepts.md`](concepts.md) lists every concept the product has, with its one meaning and
+where it lives.
+
 | Changing…                   | Read                                                                              |
 | --------------------------- | --------------------------------------------------------------------------------- |
 | A write tool                | `src/tools/librarian.ts`, then run `pnpm test:e2e-librarian`                      |
