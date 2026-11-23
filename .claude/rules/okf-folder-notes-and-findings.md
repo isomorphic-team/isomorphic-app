@@ -81,10 +81,10 @@ are in the list, with keys.
   first `check_at` (via `datePart`; unparseable values are ignored), else the first dated `due`
   or `revisit`, unless the page has `source_key` or `source_keys` or a closed `status` or
   `state`. A page's `check_at` closes only on `outcome`. A follow-up date adds "(date from
-  `due`)" to the line and a neutral next step. `RECORD_VIEW` still lists `check_at` pages only, quoting `expected`. Key `prediction-due:<path>@<date>`, so a
-  dismissal covers that date and re-dating raises it again. Computed on each `validate` call
+  `due`)" to the line and a neutral next step. `RECORD_VIEW` still lists `check_at` pages only. The line quotes `expected`. Key
+  `prediction-due:<path>@<date>`, so a dismissal covers that date and re-dating raises it again. Computed on each `validate` call
   and never queued (the queue is for findings that take work to produce). It reads indexed
-  fields, so a brain whose `indexedFields` omits `check_at`, or a page whose `check_at` sits
+  fields, so a brain whose `indexedFields` omits `check_at` (or `due`), or a page whose `check_at` sits
   past `MAX_FIELD_KEYS_PER_PAGE`, is never raised. The Review screen (`view_review`) shows only
   policy findings, so this appears in `validate` alone.
   **`comingDueLines`** is the same read for a check date after today and within
