@@ -24,7 +24,7 @@ operator, `!=` included. Parsed into `ViewSpec.conditions` and matched by `match
 Rendering: column headers and lowercase group values are humanized (`next_step_due` becomes
 "Next step due"); `group-by` on a key that is also a list filter orders groups by that list,
 otherwise alphabetically, with "(none)" last. In `display` only, `YYYY-MM-DD` cells read
-"Oct 16 · in 12 days" (or "N days overdue" under a `due` / `*_due` / `*_due_date` key); the
+"Oct 16 · in 12 days" (or "N days overdue" under a `due` / `*_due` / `*_due_date` key, `DUE_KEY` in `view-directives.ts`); the
 snapshot keeps the raw value so a saved file does not change from day to day.
 `FOLDER_NOTE_NAMES` lives here as the single source of truth.
 

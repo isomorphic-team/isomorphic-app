@@ -79,8 +79,8 @@ are in the list, with keys.
 - **`predictionDueFindings`** (`advisories.ts`, pure) lists a concept page whose check date
   is on or before today and that has no non-empty `outcome`. `checkDateOf` reads the date: the
   first `check_at` (via `datePart`; unparseable values are ignored), else the first dated `due`,
-  unless the page has `source_key` or `source_keys` or a closed `status` or
-  `state`. A page's `check_at` closes only on `outcome`. A follow-up date gets a neutral line
+  unless the page has `source_key` or `source_keys` or a closed `status`,
+  `state` or `stage` (`CLOSED_STATUSES`, which includes `lost` and `won`). A page's `check_at` closes only on `outcome`. A follow-up date gets a neutral line
   ("due D (from `due`), nothing recorded") offering an outcome or a new date. `RECORD_VIEW` still lists `check_at` pages only. The line quotes `expected`. Key
   `prediction-due:<path>@<date>`, so a dismissal covers that date and re-dating raises it again. Computed on each `validate` call
   and never queued (the queue is for findings that take work to produce). It reads indexed
@@ -97,6 +97,13 @@ are in the list, with keys.
   with no check date, or, on a page of another type with no check date or `outcome`, when the
   text the write added matches `hasDeadlinePhrase` (by, before, until or due, then a weekday,
   month, ISO date or "next week").
+- **`otherDueLines`** (`advisories.ts`, pure) lists, unkeyed and after the due block, the dates
+  kept under any other deadline-named key (`DUE_KEY` in `view-directives.ts`, shared with the
+  `display` rendering; never `check_at` or a `FOLLOW_UP_DATE_KEYS` key) that are today, past or
+  within `COMING_DUE_DAYS`, on a concept page with no `outcome`, `source_key` or closed value.
+  Next days first, then the most recently passed; `MAX_OTHER_DUE_LINES` (8), then a tail line
+  naming the oldest date. Not a finding: these dates recur, so an outcome does not fit. Both
+  lists share `capLines`.
 - **`undatedCommitmentFindings`** (`advisories.ts`, pure) is the absence half of a commitment:
   a concept page whose first `type` matches `COMMITMENT_TYPE_RE` (decision or commitment),
   that says it is open (a `state` value, or a `status` value that is neither closed nor one of

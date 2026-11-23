@@ -35,6 +35,9 @@ export const RECORD_VIEW = [
 	'```'
 ].join('\n');
 
+/** A key that names a deadline: `due`, `*_due`, `*-due`, `*_due_date`, `*-due-date`. */
+export const DUE_KEY = /(^|[_-])due([_-]date)?$/i;
+
 export const FOLDER_NOTE_NAMES = ['index.md', 'README.md'];
 export const isFolderNoteName = (name: string): boolean => FOLDER_NOTE_NAMES.includes(name);
 
