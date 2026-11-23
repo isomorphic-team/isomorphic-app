@@ -265,10 +265,11 @@ Where the vision takes it:
 
 Open seams:
 
-- "What is on my plate" is answered by `validate`, the tool whose other job is tidying (job 3).
-  This is a level-1 surface doing a level-3 job, and each improvement to reminders so far has
-  been a change to `validate`. Whether reminders move to the single list of what is open, or get
-  their own surface, is an open product decision.
+- "What is on my plate" is answered by `validate`, the tool whose other jobs are tidying (job 3)
+  and offering a feature the brain does not use (`FEATURE_OFFERS`). This is a level-1 surface
+  doing a level-3 job, and each improvement to reminders so far has been a change to `validate`.
+  Whether reminders move to the single list of what is open, or get their own surface, is an
+  open product decision.
 - Nothing brings a due commitment back to the person unless they ask.
 - Dates under other deadline-named keys are listed in the same reply but are not expectations
   and cannot be closed with an outcome, so the due area holds two kinds of date with two ways to
