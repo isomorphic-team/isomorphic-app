@@ -889,8 +889,9 @@ console.log('\nfolder-note advisory: a note-less folder holding its own overview
 		);
 		const overdueOnly = dueBlock([], 2);
 		check(
-			'due block: overdue alone still prints the header and points to the findings',
-			overdueOnly.includes('Due and coming due') && overdueOnly.includes('2 overdue'),
+			'due block: overdue alone still prints the header and the count',
+			overdueOnly.includes('Due and coming due') &&
+				overdueOnly.endsWith('\n2 overdue (prediction-due findings).'),
 			overdueOnly
 		);
 	}

@@ -548,7 +548,6 @@ export function dueBlock(coming: string[], overdue: number): string {
 	if (coming.length === 0 && overdue === 0)
 		return '\n\nNothing due or coming due from `check_at` or `due`; dates kept in other fields are not listed.';
 	const lines = [...coming];
-	if (overdue > 0)
-		lines.push(`${overdue} overdue, listed as prediction-due in the findings below.`);
+	if (overdue > 0) lines.push(`${overdue} overdue (prediction-due findings).`);
 	return `\n\nDue and coming due (read from \`check_at\` or \`due\`; dates kept in other fields are not listed):\n${lines.join('\n')}`;
 }
