@@ -43,6 +43,10 @@ import {
 } from '../src/lib/usage.ts';
 import { recordUsage, readUsage } from '../src/lib/usage-store.ts';
 import { registeredTools, wrapToolHandler } from '../src/lib/registered-tools.ts';
+import { FAILURE_REASONS, failureReason } from '../src/lib/failure-reason.ts';
+import { assertRole } from '../src/lib/orgs.ts';
+import { WriteConflictError } from '../src/lib/brain-repo.ts';
+import { fail } from '../src/tools/shared.ts';
 
 import { checker } from './check.ts';
 import { registeredToolNames } from './doc-refs.ts';
@@ -354,6 +358,76 @@ console.log('\ncountedCall: the tool-handler wrapper');
 	check('arguments are forwarded', args(1, 'x') === '1x');
 }
 
+console.log('\ncountedCall: why a call failed');
+{
+	const seen: string[] = [];
+	const hooks = {
+		after: (ok: boolean, reason?: string) => seen.push(ok ? `ok:${reason ?? ''}` : `err:${reason}`)
+	};
+	const run = async (handler: () => unknown) => {
+		seen.length = 0;
+		try {
+			await countedCall(handler, hooks)();
+		} catch {
+			// rethrown by design; only the reason matters here
+		}
+		return seen.join(',');
+	};
+
+	check('a success carries no reason', (await run(() => ({ content: [] }))) === 'ok:');
+	check(
+		'an untagged error result is `other`',
+		(await run(() => ({ isError: true, content: [] }))) === 'err:other'
+	);
+	check(
+		'a tagged error result carries its tag',
+		(await run(() => fail('no match', 'anchor'))) === 'err:anchor'
+	);
+	check(
+		'an async tagged result carries its tag',
+		(await run(async () => fail('gone', 'not_found'))) === 'err:not_found'
+	);
+	check(
+		'an untagged throw is `thrown`',
+		(await run(() => {
+			throw new Error('boom');
+		})) === 'err:thrown'
+	);
+	check(
+		'a role refusal is `permission`',
+		(await run(async () => assertRole('viewer', 'editor'))) === 'err:permission'
+	);
+	check(
+		'a write conflict is `conflict`',
+		(await run(async () => {
+			throw new WriteConflictError('wiki/a.md');
+		})) === 'err:conflict'
+	);
+	check(
+		'a role refusal keeps its message',
+		(() => {
+			try {
+				assertRole('viewer', 'editor');
+				return false;
+			} catch (e) {
+				return (
+					(e as Error).message ===
+					'This action requires editor access or higher, but your role is viewer.'
+				);
+			}
+		})()
+	);
+	check(
+		'the tag never reaches the wire: a tagged result serializes like an untagged one',
+		JSON.stringify(fail('x', 'anchor')) === JSON.stringify(fail('x'))
+	);
+	check(
+		'a tag that is not a known reason is ignored',
+		failureReason({ [Symbol.for('isomorphic.failureReason')]: 'made-up' }, false) === 'other'
+	);
+	check('the reason list is closed', FAILURE_REASONS.length === 7);
+}
+
 console.log('\nSDK internals: the shape worker.ts reaches into');
 {
 	// worker.ts counts calls through `registeredTools` and `wrapToolHandler`. The
@@ -390,6 +464,30 @@ console.log('\nSDK internals: the shape worker.ts reaches into');
 		'...and the caller still gets the real result, arguments included',
 		out.content?.[0]?.text === 'real hi',
 		JSON.stringify(out.content)
+	);
+
+	// A refusal tagged by the handler reaches the wrapper with its reason, and the
+	// client receives the plain error result.
+	server.registerTool('refuse', { title: 'Refuse', inputSchema: z.object({}) }, async () =>
+		fail('no such anchor', 'anchor')
+	);
+	const reasons: string[] = [];
+	wrapToolHandler(registeredTools(server).refuse, (handler) =>
+		countedCall(handler, { after: (ok, reason) => reasons.push(ok ? 'ok' : `${reason}`) })
+	);
+	const refused = (await client.callTool({ name: 'refuse', arguments: {} })) as {
+		isError?: boolean;
+		content?: { text: string }[];
+	};
+	check(
+		'a real dispatch records the handler’s reason',
+		reasons.join() === 'anchor',
+		reasons.join()
+	);
+	check(
+		'...and the client still gets the error result',
+		refused.isError === true && refused.content?.[0]?.text === 'no such anchor',
+		JSON.stringify(refused)
 	);
 	await client.close();
 }
@@ -457,6 +555,38 @@ console.log('\nusage_daily: the real migration and the real statements');
 	);
 	check('the active-member tile reflects real rows', folded.totals.activeUsers === 1);
 	check('the brain row joins its label', folded.brains[0]?.label === 'Team brain');
+}
+
+console.log('\nusage_failures: one reason row per failure, beside its error count');
+{
+	const raw = localD1();
+	const db = raw.db as unknown as Parameters<typeof recordUsage>[0];
+	const base = { orgId: 'o1', userId: 'u1', tool: 'write_page', day: '2026-08-04', brainId: 'a/b' };
+	await recordUsage(db, { ...base, ok: true });
+	await recordUsage(db, { ...base, ok: false, reason: 'anchor' });
+	await recordUsage(db, { ...base, ok: false, reason: 'anchor' });
+	await recordUsage(db, { ...base, ok: false, reason: 'not_found' });
+	await recordUsage(db, { ...base, ok: false });
+	await recordUsage(db, { ...base, brainId: '', ok: false, reason: 'permission' });
+	await recordUsage(db, { ...base, brainId: '', ok: false, reason: 'permission' });
+
+	const rows = (await db
+		.prepare(`SELECT brain_id, reason, failures FROM usage_failures ORDER BY brain_id, reason`)
+		.all()) as { results: { brain_id: string; reason: string; failures: number }[] };
+	const shape = rows.results.map((r) => `${r.brain_id}|${r.reason}|${r.failures}`).join(', ');
+	check(
+		'each reason collapses to one row and counts; a failure without one is `other`; org scope is ""',
+		shape === '|permission|2, a/b|anchor|2, a/b|not_found|1, a/b|other|1',
+		shape
+	);
+	const errors = (await readUsage(db, 'o1', '2026-08-04', '2026-08-04')).rows
+		.filter((r) => r.brain_id === 'a/b')
+		.reduce((n, r) => n + r.errors, 0);
+	check(
+		'reason rows add up to the error count, and a success writes none',
+		errors === 4,
+		`errors ${errors}`
+	);
 }
 
 done();

@@ -20,14 +20,17 @@
 
 import { isFrontmatterBlock, type Frontmatter, type FrontmatterValue } from './wiki.ts';
 import { SNAPSHOT_BEGIN, SNAPSHOT_END } from './view-directives.ts';
+import type { FailureReason } from './failure-reason.ts';
 
 export interface PageEdit {
 	find: string;
 	replace: string;
 }
 
-export type PatchResult =
-	{ ok: true; body: string; summary: string } | { ok: false; error: string };
+/** A refusal, with the category the usage counters record for it. */
+export type PatchRefusal = { ok: false; error: string; reason: FailureReason };
+
+export type PatchResult = { ok: true; body: string; summary: string } | PatchRefusal;
 
 // Character ranges covered by okf-view snapshot regions (markers included).
 // Line-based, mirroring segmentContent's own marker scan in view-directives.ts.
@@ -75,6 +78,36 @@ function plural(n: number, one: string, many = `${one}s`): string {
 	return `${n} ${n === 1 ? one : many}`;
 }
 
+// Below this many matching characters a shared prefix says nothing about where the
+// caller meant to edit.
+const NEAR_MISS_MIN = 12;
+const NEAR_MISS_SHOW = 24;
+
+/**
+ * Where a `find` that matched nowhere goes wrong: the longest prefix of it that
+ * does occur on the page, and the text on each side of the first difference.
+ * Returns '' when no useful prefix occurs. JSON-quoted so a whitespace difference
+ * is visible.
+ */
+export function nearMiss(body: string, find: string): string {
+	// A prefix that occurs implies every shorter one does, so the longest is found
+	// by binary search over its length.
+	let lo = 0;
+	let hi = find.length - 1;
+	while (lo < hi) {
+		const mid = Math.ceil((lo + hi) / 2);
+		if (body.includes(find.slice(0, mid))) lo = mid;
+		else hi = mid - 1;
+	}
+	if (lo < NEAR_MISS_MIN) return '';
+	const at = body.indexOf(find.slice(0, lo)) + lo;
+	const before = find.slice(Math.max(0, lo - NEAR_MISS_SHOW), lo);
+	const page = body.slice(at, at + NEAR_MISS_SHOW);
+	const sent = find.slice(lo, lo + NEAR_MISS_SHOW);
+	const pageSide = page === '' ? 'the page ends' : `the page has ${JSON.stringify(page)}`;
+	return ` The first ${lo} of its ${find.length} characters match the page; after ${JSON.stringify(before)} ${pageSide} where you wrote ${JSON.stringify(sent)}.`;
+}
+
 // Apply `edits` in order, then `append`, to a page BODY (frontmatter already
 // stripped by the caller). Each edit sees the result of the previous one, so a
 // caller can make several related changes in a single save.
@@ -91,14 +124,16 @@ export function applyPageEdits(
 		if (edit.find === '') {
 			return {
 				ok: false,
-				error: `The "find" text of ${label} is empty; give the text to replace.`
+				error: `The "find" text of ${label} is empty; give the text to replace.`,
+				reason: 'invalid'
 			};
 		}
 		const hits = allIndexesOf(next, edit.find);
 		if (hits.length === 0) {
 			return {
 				ok: false,
-				error: `Couldn't find "${excerpt(edit.find)}" on the page, so nothing was changed. Read the page and copy the exact text (whitespace included) you want replaced.`
+				error: `Couldn't find "${excerpt(edit.find)}" on the page, so nothing was changed.${nearMiss(next, edit.find)} Use a short anchor: the smallest phrase that occurs once, copied exactly (whitespace included), rather than a whole line, row or paragraph.`,
+				reason: 'anchor'
 			};
 		}
 		const generated = snapshotRanges(next);
@@ -108,13 +143,15 @@ export function applyPageEdits(
 		if (live.length === 0) {
 			return {
 				ok: false,
-				error: `"${excerpt(edit.find)}" only appears inside a generated okf-view snapshot, which is recomputed on every save, so editing it would have no effect. Edit the okf-view directive itself, or anchor on text outside the snapshot markers.`
+				error: `"${excerpt(edit.find)}" only appears inside a generated okf-view snapshot, which is recomputed on every save, so editing it would have no effect. Edit the okf-view directive itself, or anchor on text outside the snapshot markers.`,
+				reason: 'anchor'
 			};
 		}
 		if (live.length > 1) {
 			return {
 				ok: false,
-				error: `"${excerpt(edit.find)}" appears ${plural(live.length, 'time')} on the page, so ${label === 'that text' ? 'the edit' : label} is ambiguous and nothing was changed. Include more of the surrounding text to make it match exactly once.`
+				error: `"${excerpt(edit.find)}" appears ${plural(live.length, 'time')} on the page, so ${label === 'that text' ? 'the edit' : label} is ambiguous and nothing was changed. Include a few more words of the surrounding text to make it match exactly once.`,
+				reason: 'anchor'
 			};
 		}
 		const at = live[0];
@@ -125,7 +162,7 @@ export function applyPageEdits(
 	if (opts.append !== undefined) {
 		const addition = opts.append.replace(/\s+$/, '');
 		if (addition.trim() === '') {
-			return { ok: false, error: 'Nothing to append: "append" is empty.' };
+			return { ok: false, error: 'Nothing to append: "append" is empty.', reason: 'invalid' };
 		}
 		// One blank line between the old body and the addition, and exactly one
 		// trailing newline, so appending repeatedly can't stack blank lines.
@@ -137,7 +174,8 @@ export function applyPageEdits(
 	if (notes.length === 0) {
 		return {
 			ok: false,
-			error: 'Nothing to change: pass "append" or at least one entry in "edits".'
+			error: 'Nothing to change: pass "append" or at least one entry in "edits".',
+			reason: 'invalid'
 		};
 	}
 	return { ok: true, body: next, summary: notes.join(', ') };
@@ -194,8 +232,7 @@ export type FieldValue = string | number | boolean | Array<string | number> | nu
 export type FieldPatch = Record<string, FieldValue>;
 
 export type FieldPatchResult =
-	| { ok: true; frontmatter: Frontmatter; summary: string; changed: number }
-	| { ok: false; error: string };
+	{ ok: true; frontmatter: Frontmatter; summary: string; changed: number } | PatchRefusal;
 
 function normalize(value: Exclude<FieldValue, null>): FrontmatterValue {
 	return Array.isArray(value) ? value.map((v) => String(v)) : String(value);
@@ -244,7 +281,7 @@ export function validateFieldPatch(patch: FieldPatch): string | null {
  */
 export function applyFieldPatch(fm: Frontmatter, patch: FieldPatch): FieldPatchResult {
 	const invalid = validateFieldPatch(patch);
-	if (invalid) return { ok: false, error: invalid };
+	if (invalid) return { ok: false, error: invalid, reason: 'invalid' };
 
 	const next: Frontmatter = { ...fm };
 	const set: string[] = [];
@@ -254,7 +291,8 @@ export function applyFieldPatch(fm: Frontmatter, patch: FieldPatch): FieldPatchR
 		if (isFrontmatterBlock(fm[key])) {
 			return {
 				ok: false,
-				error: `"${key}" holds nested YAML on this page, which this tool keeps exactly as written rather than rewriting. Read the page and use "content" if you really mean to replace it.`
+				error: `"${key}" holds nested YAML on this page, which this tool keeps exactly as written rather than rewriting. Read the page and use "content" if you really mean to replace it.`,
+				reason: 'invalid'
 			};
 		}
 		if (value === null) {

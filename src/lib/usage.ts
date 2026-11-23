@@ -13,6 +13,8 @@
 // (see FOOTNOTE below), because the alternative is a "0 edits" row next to a
 // member who spent the week editing the brain on GitHub.
 
+import { failureReason, type FailureReason } from './failure-reason.ts';
+
 /** Whether a tool call was a read, a change to content, or an act of administration. */
 export type UsageKind = 'read' | 'write' | 'admin';
 
@@ -109,36 +111,40 @@ export function classifyTool(tool: string): UsageKind {
  *   • `before` runs first on every call, so the caller can reset per-call state
  *     (worker.ts clears the resolved scope, so a call that resolves no org records
  *     nothing rather than borrowing the previous call's org).
- *   • `after` runs exactly once per call, never twice, on every path.
+ *   • `after` runs exactly once per call, never twice, on every path, and gets a
+ *     FailureReason (src/lib/failure-reason.ts) whenever `ok` is false.
  */
 export function countedCall<A extends unknown[]>(
 	inner: (...args: A) => unknown,
-	hooks: { before?: () => void; after: (ok: boolean) => void }
+	hooks: { before?: () => void; after: (ok: boolean, reason?: FailureReason) => void }
 ): (...args: A) => unknown {
 	const isErrorResult = (r: unknown) =>
 		!!(r && typeof r === 'object' && 'isError' in r && (r as { isError?: unknown }).isError);
+	const settled = (r: unknown) =>
+		isErrorResult(r) ? hooks.after(false, failureReason(r, false)) : hooks.after(true);
+	const threw = (e: unknown) => hooks.after(false, failureReason(e, true));
 	return (...args: A) => {
 		hooks.before?.();
 		let result: unknown;
 		try {
 			result = inner(...args);
 		} catch (e) {
-			hooks.after(false);
+			threw(e);
 			throw e;
 		}
 		if (result instanceof Promise) {
 			return result.then(
 				(r) => {
-					hooks.after(!isErrorResult(r));
+					settled(r);
 					return r;
 				},
 				(e) => {
-					hooks.after(false);
+					threw(e);
 					throw e;
 				}
 			);
 		}
-		hooks.after(!isErrorResult(result));
+		settled(result);
 		return result;
 	};
 }

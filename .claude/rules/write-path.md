@@ -19,6 +19,10 @@ paths:
   order to the BODY; `append` adds at the end; `content` replaces the whole body and reports the
   size it replaced. **An anchor must match exactly once** (else the whole call aborts, so a
   batch is never half-applied), and **an anchor inside an `okf-view` snapshot is refused**.
+  A missed anchor's refusal carries `nearMiss`: how much of it matched and the first
+  difference, quoted, so the retry can be right. Long anchors (a re-quoted table row) are the
+  usual cause, which is why the tool, its `find` argument and `brain-template/AGENTS.md` all
+  say to keep anchors short.
   Patched bodies go through `composeUpdate`'s `rawBody` so a body starting with `---` is not
   re-parsed as frontmatter.
 - **`src/lib/write-target.ts`** (`pnpm test:policy`) is the one set of path rules every write
@@ -81,7 +85,7 @@ through `src/lib/write-dedupe.ts` (pure) + `write-dedupe-store.ts` (D1, migratio
   sha-guarded.
 
 Coverage: `pnpm test:page-write` pins every refusal `checkPageWrite`, `planPageWrite` and
-`applyFieldPatch` make, with its message. `pnpm test:e2e-librarian` drives every write tool
+`applyFieldPatch` make, with its message and its usage `reason` (`usage-analytics.md`). `pnpm test:e2e-librarian` drives every write tool
 against a real brain (offline by default) and takes one refusal per deciding function through
 its tool, proving nothing was committed; `pnpm test:scope` asserts the content writes gate on
 the BRAIN role at `editor`.
