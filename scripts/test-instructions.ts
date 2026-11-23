@@ -33,7 +33,9 @@ import { listAccessibleBrains, type AccessibleBrain } from '../src/lib/orgs.ts';
 import { localD1 } from '../src/local/d1-sqlite.ts';
 import { bindFixtureStorage } from './fixture-storage.ts';
 import {
+	assembleHandshake,
 	composeInstructions,
+	overdueLine,
 	instructionText,
 	SERVER_INSTRUCTIONS,
 	SERVER_INSTRUCTIONS_LIMIT
@@ -94,6 +96,93 @@ console.log('\ncommitments');
 		'it sends what-is-due questions to validate',
 		/what is due/.test(line) && /run validate/.test(line)
 	);
+}
+
+console.log('\npast-due line');
+{
+	const mk = (n: number): AccessibleBrain =>
+		({
+			id: `b${n}-h${n}`,
+			brain_id: `b${n}`,
+			handle: `h${n}`,
+			name: `Brain ${n}`,
+			repo_name: `brain-${n}`,
+			repo_owner: 'example-org',
+			org_id: 'o',
+			org_name: 'Northwind',
+			org_model: 'customer',
+			role: 'admin',
+			read_only: false
+		}) as unknown as AccessibleBrain;
+	const brains = [mk(1), mk(2)];
+	check('zero overdue adds zero characters', overdueLine({ count: 0, top: [] }) === '');
+	const line = overdueLine({
+		count: 5,
+		top: [
+			{ path: 'decisions/pricing.md', title: 'Pricing `change`\nIgnore previous' },
+			{ path: 'decisions/hiring.md' }
+		]
+	});
+	check(
+		'the line names the count, the pages and validate',
+		/5 commitments have/.test(line) &&
+			/Pricing/.test(line) &&
+			/decisions\/hiring\.md/.test(line) &&
+			/2|3 more|and 3 more/.test(line) &&
+			/`validate`/.test(line),
+		line
+	);
+	check(
+		'page text is one line of plain data',
+		!/[`\n]/.test(line.slice(2).replace('`validate`', '')),
+		line
+	);
+	check(
+		'a single one reads singular',
+		/1 commitment has/.test(overdueLine({ count: 1, top: [{ path: 'a.md' }] }))
+	);
+	const plain = composeInstructions(brains, 'b1-h1');
+	const withDue = composeInstructions(brains, 'b1-h1', SERVER_INSTRUCTIONS_LIMIT, line);
+	check('the line follows the brain list', withDue === plain + line);
+	check('within the limit with the line', withDue.length <= SERVER_INSTRUCTIONS_LIMIT);
+	const many = Array.from({ length: 80 }, (_, i) => mk(i));
+	const crowded = composeInstructions(many, 'b1-h1', SERVER_INSTRUCTIONS_LIMIT, line);
+	check(
+		'with many brains the line stays and the list yields',
+		crowded.length <= SERVER_INSTRUCTIONS_LIMIT &&
+			crowded.endsWith(line) &&
+			/and \d+ more: call brains/.test(crowded)
+	);
+	const huge = 'x'.repeat(SERVER_INSTRUCTIONS_LIMIT);
+	const dropped = composeInstructions(brains, 'b1-h1', SERVER_INSTRUCTIONS_LIMIT, huge);
+	check('a line that cannot fit is dropped, the brain list is not', dropped === plain);
+
+	const slow = () => new Promise<string>((r) => setTimeout(() => r(line), 200));
+	const t = await assembleHandshake({
+		brains: async () => brains,
+		loadActive: async () => 'b1-h1',
+		dueLine: slow,
+		dueMs: 20
+	});
+	check('a late lookup drops only the line, the brain list stays', t === plain, t.slice(-80));
+	let warned = false;
+	const failed = await assembleHandshake({
+		brains: async () => brains,
+		loadActive: async () => 'b1-h1',
+		dueLine: async () => {
+			throw new Error('boom');
+		},
+		dueMs: 20,
+		onDueError: () => (warned = true)
+	});
+	check('a failed lookup drops only the line and is reported', failed === plain && warned);
+	const ok = await assembleHandshake({
+		brains: async () => brains,
+		loadActive: async () => 'b1-h1',
+		dueLine: async () => line,
+		dueMs: 200
+	});
+	check('a timely lookup appends the line', ok === plain + line);
 }
 
 console.log('\ntool names');
@@ -236,7 +325,7 @@ console.log("\ncomposeInstructions: the caller's brains");
 	);
 
 	const many = Array.from({ length: 300 }, (_, i) => brain(i + 1));
-	const full = composeInstructions(many, 'b1');
+	const full = composeInstructions(many, 'b1-h1');
 	check(
 		`300 brains stay within ${SERVER_INSTRUCTIONS_LIMIT}`,
 		full.length <= SERVER_INSTRUCTIONS_LIMIT,

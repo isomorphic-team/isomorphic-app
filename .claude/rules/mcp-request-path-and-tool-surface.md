@@ -40,8 +40,12 @@ enableJsonResponse: true })`. The split uses the SDK's own `isLegacyRequest`.
   `composeInstructions` (`src/lib/server-instructions.ts`, `pnpm test:instructions`) appends
   those brains, active first, within `SERVER_INSTRUCTIONS_LIMIT`, with each name reduced to
   one line of data. `withFallback` bounds the lookup at `HANDSHAKE_LOOKUP_MS` and answers
-  with the static text on a timeout or error (`pnpm test:preamble`). The local runtime
-  serves the static text.
+  with the static text on a timeout or error (`pnpm test:preamble`). The active brain's
+  past-due commitments join as one line (`assembleHandshake`, `pastDueLine`, `dueSummary`; a dismissed `prediction-due` is not counted):
+  `BrainIndex.datedPages` answers only when the index is current for the branch tip and never
+  reindexes, and the line has its own `HANDSHAKE_DUE_MS` deadline, so a late lookup drops that
+  line and keeps the brain list. `pastDueLine` (`src/lib/open-findings.ts`) builds it for the Worker and for the local runtime,
+  which serves the static text plus that line for its default brain, after `ensureFresh`.
 - `loadActiveBrain` and `loadCustomTools` fail open.
 - **`describeRequest` logs** any `/mcp` answer at 4xx or over 5s: methods, message SHAPES (key
   names only, never values), protocol era, status, duration, transport error. A slow call

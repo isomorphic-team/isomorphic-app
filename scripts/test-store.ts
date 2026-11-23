@@ -800,6 +800,23 @@ for (const backend of BACKENDS) {
 			nul.content === b64([0x61, 0x00, 0x62])
 	);
 
+	{
+		const d = mkdtempSync(join(tmpdir(), 'iso-rev-'));
+		tmpDirs.push(d);
+		await ensureGitRepo(d);
+		const s = fsBrainStore({ dir: d });
+		const before = await s.branchRevision(repo, 'main');
+		mkdirSync(join(d, '.isomorphic'), { recursive: true });
+		for (const f of ['index.sqlite', 'index.sqlite-wal', 'index.sqlite-shm'])
+			writeFileSync(join(d, '.isomorphic', f), 'x');
+		check(
+			'fs: the local index database is not part of the revision',
+			(await s.branchRevision(repo, 'main')) === before
+		);
+		writeFileSync(join(d, '.isomorphic', 'review.json'), '{}');
+		check('fs: the review ledger beside it is', (await s.branchRevision(repo, 'main')) !== before);
+	}
+
 	const dir = mkdtempSync(join(tmpdir(), 'iso-copy-'));
 	tmpDirs.push(dir);
 	await ensureGitRepo(dir);
