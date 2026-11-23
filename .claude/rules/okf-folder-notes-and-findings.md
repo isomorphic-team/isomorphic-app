@@ -78,18 +78,19 @@ are in the list, with keys.
   needing a `BrainContext` belongs back in the tool.
 - **`predictionDueFindings`** (`advisories.ts`, pure) lists a concept page whose check date
   is on or before today and that has no non-empty `outcome`. `checkDateOf` reads the date: the
-  first `check_at` (via `datePart`; unparseable values are ignored), else the first dated `due`
-  or `revisit`, unless the page has `source_key` or `source_keys` or a closed `status` or
-  `state`. A page's `check_at` closes only on `outcome`. A follow-up date adds "(date from
-  `due`)" to the line and a neutral next step. `RECORD_VIEW` still lists `check_at` pages only. The line quotes `expected`. Key
+  first `check_at` (via `datePart`; unparseable values are ignored), else the first dated `due`,
+  unless the page has `source_key` or `source_keys` or a closed `status` or
+  `state`. A page's `check_at` closes only on `outcome`. A follow-up date gets a neutral line
+  ("due D (from `due`), nothing recorded") offering an outcome or a new date. `RECORD_VIEW` still lists `check_at` pages only. The line quotes `expected`. Key
   `prediction-due:<path>@<date>`, so a dismissal covers that date and re-dating raises it again. Computed on each `validate` call
   and never queued (the queue is for findings that take work to produce). It reads indexed
   fields, so a brain whose `indexedFields` omits `check_at` (or `due`), or a page whose `check_at` sits
   past `MAX_FIELD_KEYS_PER_PAGE`, is never raised. The Review screen (`view_review`) shows only
   policy findings, so this appears in `validate` alone.
   **`comingDueLines`** is the same read for a check date after today and within
-  `COMING_DUE_DAYS` (7): an unkeyed list in the `validate` result (earliest first,
-  at most `MAX_COMING_DUE_LINES`, absent when empty), not a finding, so there is nothing to
+  `COMING_DUE_DAYS` (7): an unkeyed list opening the `validate` result (earliest first,
+  at most `MAX_COMING_DUE_LINES`; `dueBlock` prints one line when nothing is due, so a person is
+  never told nothing else is due while a date sits in a field it does not read), not a finding, so there is nothing to
   dismiss, and a page is never in it and in `prediction-due`. The `write_page` reply carries
   `expectationNote` (`change-record.ts`), at most one per write: for a new Decision or
   Commitment page with no check date or `outcome`, for an update that set `expected` on a page

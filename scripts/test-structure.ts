@@ -14,6 +14,7 @@ import {
 	predictionDueFindings,
 	comingDueLines,
 	checkDateOf,
+	dueBlock,
 	COMING_DUE_DAYS,
 	MAX_COMING_DUE_LINES,
 	ambiguousTitleSuggestions,
@@ -791,7 +792,7 @@ console.log('\nfolder-note advisory: a note-less folder holding its own overview
 	);
 	check('coming due: earliest first', ordered[0]!.includes('b.md') && ordered[1]!.includes('a.md'));
 
-	// the follow-up date keys: due and revisit stand in when there is no check_at
+	// the follow-up date keys: due stands in when there is no check_at
 	{
 		const alias = (rows: Record<string, string[]>) => due(rows)[0];
 		const viaDue = alias({ due: ['2026-11-10'], expected: ['Draft sent'] });
@@ -801,25 +802,15 @@ console.log('\nfolder-note advisory: a note-less folder holding its own overview
 			viaDue?.key
 		);
 		check(
-			'follow-up: the headline names the key and does not call it a prediction',
-			viaDue?.headline.includes('(date from `due`)') === true &&
-				!/predict/i.test(viaDue.headline) &&
-				viaDue.headline.includes('mark it closed in the page') &&
-				viaDue.headline.includes('Draft sent'),
+			'follow-up: the headline and hint are pinned and do not say prediction',
+			viaDue?.headline ===
+				'- decisions/pricing.md: due 2026-11-10 (from `due`), nothing recorded. Expected: Draft sent. If done, record what happened with write_page fields {outcome: ...}; if it moved, set a new date with write_page fields {due: ...}; or dismiss with resolve and a reason.',
 			viaDue?.headline
 		);
 		check(
 			'follow-up: a check_at page keeps its wording',
 			!due({ check_at: ['2026-11-10'] })[0]!.headline.includes('date from') &&
 				due({ check_at: ['2026-11-10'] })[0]!.headline.includes('Record it with write_page')
-		);
-		check(
-			'follow-up: a dated revisit raises',
-			alias({ revisit: ['2026-11-10'] })?.headline.includes('(date from `revisit`)') === true
-		);
-		check(
-			'follow-up: due is read before revisit',
-			alias({ due: ['2026-11-10'], revisit: ['2026-11-01'] })?.key.endsWith('@2026-11-10') === true
 		);
 		check(
 			'follow-up: check_at wins over due',
@@ -829,8 +820,8 @@ console.log('\nfolder-note advisory: a note-less folder holding its own overview
 		);
 		check(
 			'follow-up: a condition is ignored, a later date in the list is not',
-			due({ revisit: ['when the audit lands'] }).length === 0 &&
-				due({ revisit: ['after launch', '2026-11-10'] }).length === 1
+			due({ due: ['when the audit lands'] }).length === 0 &&
+				due({ due: ['after launch', '2026-11-10'] }).length === 1
 		);
 		check(
 			'follow-up: an unparseable check_at is not replaced by due',
@@ -868,13 +859,39 @@ console.log('\nfolder-note advisory: a note-less folder holding its own overview
 		);
 		check(
 			'follow-up: coming due includes the alias, naming the key',
-			coming({ due: ['2026-11-25'] }).includes('(in 2 days) (date from `due`)') &&
+			coming({ due: ['2026-11-25'], expected: ['Draft sent'] }) ===
+				'- decisions/pricing.md: due 2026-11-25 (from `due`, in 2 days). Expected: Draft sent. If done, record what happened with write_page fields {outcome: ...}; if it moved, set a new date with write_page fields {due: ...}.' &&
 				coming({ due: ['2026-11-25'], status: ['done'] }) === ''
 		);
 		check(
 			'follow-up: checkDateOf reports the key and handles a missing page',
-			checkDateOf((k) => ({ revisit: ['2026-11-10T09:00Z'] })[k])?.key === 'revisit' &&
+			checkDateOf((k) => ({ due: ['2026-11-10T09:00Z'] })[k])?.key === 'due' &&
 				checkDateOf(() => undefined) === undefined
+		);
+	}
+
+	// the block validate opens with
+	{
+		const nothing = dueBlock([], 0);
+		check(
+			'due block: nothing due prints one line naming the keys read and the gap',
+			nothing ===
+				'\n\nNothing due or coming due from `check_at` or `due`; dates kept in other fields are not listed.',
+			nothing
+		);
+		const coming1 = dueBlock(['- a.md: due 2026-11-25 (from `due`, in 2 days).'], 0);
+		check(
+			'due block: coming lines sit under the header',
+			coming1.startsWith(
+				'\n\nDue and coming due (read from `check_at` or `due`; dates kept in other fields are not listed):\n- a.md'
+			),
+			coming1
+		);
+		const overdueOnly = dueBlock([], 2);
+		check(
+			'due block: overdue alone still prints the header and points to the findings',
+			overdueOnly.includes('Due and coming due') && overdueOnly.includes('2 overdue'),
+			overdueOnly
 		);
 	}
 

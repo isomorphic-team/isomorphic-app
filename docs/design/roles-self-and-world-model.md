@@ -234,7 +234,7 @@ The loop:
 
 1. A decision is recorded with its expectation and a check date, linked to the theory page
    it applies.
-2. On the check date (`check_at`, or a dated `due` or `revisit` on a page with no `check_at`), `validate` lists the page as a `prediction-due` finding: what happened?
+2. On the check date (`check_at`, or a dated `due` on a page with no `check_at`), `validate` lists the page as a `prediction-due` finding: what happened?
    It is computed from the frontmatter on each call, with no pass and no table. `validate`
    also lists the pages due in the next 7 days, outside the findings.
 3. The answer is recorded as the outcome.

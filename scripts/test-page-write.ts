@@ -970,12 +970,8 @@ console.log('\nwrite_page: the deadline-phrase note');
 			!prompts({ type: 'Decision', due: '2026-12-01' })
 		);
 		check(
-			'follow-up date: a dated revisit on a Commitment gets no check_at prompt',
-			!prompts({ type: 'Commitment', revisit: '2026-12-01' })
-		);
-		check(
-			'follow-up date: a conditional revisit still gets the prompt',
-			prompts({ type: 'Decision', revisit: 'when the audit lands' })
+			'follow-up date: a due that is not a date still gets the prompt',
+			prompts({ type: 'Decision', due: 'when the audit lands' })
 		);
 		check(
 			'follow-up date: a closed status brings the prompt back',

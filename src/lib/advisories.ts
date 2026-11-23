@@ -399,11 +399,11 @@ export const COMING_DUE_DAYS = 7;
 export const MAX_COMING_DUE_LINES = 20;
 
 // Keys a page may carry its own follow-up date in when it has no `check_at`. A name joins
-// when a real brain shows it.
-const FOLLOW_UP_DATE_KEYS = ['due', 'revisit'];
+// when a real brain shows a dated one.
+const FOLLOW_UP_DATE_KEYS = ['due'];
 
-// A `status` or `state` value that means the page is finished, so a date left in `due` or
-// `revisit` is history. Applies on the follow-up path only: `check_at` closes on `outcome`.
+// A `status` or `state` value that means the page is finished, so a date left in `due` is
+// history. Applies on the follow-up path only: `check_at` closes on `outcome`.
 const CLOSED_STATUSES = new Set([
 	'done',
 	'closed',
@@ -420,7 +420,7 @@ const CLOSED_STATUSES = new Set([
 
 /**
  * The date a page is to be checked, and the key it came from. `check_at` when it holds a
- * date; otherwise the first date in `due` or `revisit` (a condition is not a date and is
+ * date; otherwise the first date in `due` (a condition is not a date and is
  * ignored). The follow-up keys are not read on a page that carries `source_key` or
  * `source_keys` (imported records), or whose `status` or `state` says it is closed.
  * `get` returns a key's values, or undefined. Whether an `outcome` closes the page is the
@@ -470,18 +470,15 @@ function openCheck(
 	return { date: found.date, shown, key: found.key };
 }
 
-// What the date came from, when it is not `check_at`.
-const viaNote = (key: string): string => (key === 'check_at' ? '' : ` (date from \`${key}\`)`);
-
-// The next step: a page carrying `check_at` was a prediction, so it is asked for an
-// outcome; any other page may be a decision or a piece of work.
-const nextStep = (key: string, withDismiss: boolean): string =>
-	key === 'check_at'
-		? `${withDismiss ? 'Record it with write_page fields {outcome: ...}, or dismiss with resolve and a reason.' : 'Record it with write_page fields {outcome: ...}.'}`
-		: `Record what happened with write_page fields {outcome: ...}, move the date, or mark it closed in the page's own status field${withDismiss ? ', or dismiss with resolve and a reason' : ''}.`;
+// The wording for a page whose date is in a follow-up key. It may be a decision or a piece of
+// work, so it neither says "prediction" nor asks only for an outcome. `check_at` pages keep
+// the prediction wording.
+const aliasHint = (key: string): string =>
+	`If done, record what happened with write_page fields {outcome: ...}; if it moved, set a new date with write_page fields {${key}: ...}`;
+const expectedClause = (shown: string | undefined): string => (shown ? ` Expected: ${shown}.` : '');
 
 // A commitment whose check date has come: a concept page whose check date (`checkDateOf`:
-// the first `check_at`, else a dated `due` or `revisit`; read by its date part like
+// the first `check_at`, else a dated `due`; read by its date part like
 // `okf-view` filters; unparseable values are ignored) is on or before `today` and that has no non-empty `outcome`. `pages` is the
 // caller's concept-page filter (no folder notes, no tool-maintained pages). The key carries
 // the date, so a dismissal covers that date only and re-dating raises the item again.
@@ -498,7 +495,10 @@ export function predictionDueFindings(
 		out.push({
 			key: findingKey('prediction-due', `${p.path}@${c.date}`),
 			weight: 3,
-			headline: `- ${p.path}: check due ${c.date}${viaNote(c.key)}${c.shown ? `. Expected: ${c.shown}` : ''}. No outcome is recorded. ${nextStep(c.key, true)}`
+			headline:
+				c.key === 'check_at'
+					? `- ${p.path}: check due ${c.date}${c.shown ? `. Expected: ${c.shown}` : ''}. No outcome is recorded. Record it with write_page fields {outcome: ...}, or dismiss with resolve and a reason.`
+					: `- ${p.path}: due ${c.date} (from \`${c.key}\`), nothing recorded.${expectedClause(c.shown)} ${aliasHint(c.key)}; or dismiss with resolve and a reason.`
 		});
 	}
 	return out;
@@ -527,13 +527,28 @@ export function comingDueLines(
 		rows.push({ path: p.path, date: c.date, days, shown: c.shown, key: c.key });
 	}
 	rows.sort((a, b) => a.date.localeCompare(b.date) || a.path.localeCompare(b.path));
-	const lines = rows
-		.slice(0, MAX_COMING_DUE_LINES)
-		.map(
-			(r) =>
-				`- ${r.path}: check due ${r.date} (in ${r.days} day${r.days === 1 ? '' : 's'})${viaNote(r.key)}${r.shown ? `. Expected: ${r.shown}` : ''}. ${nextStep(r.key, false)}`
-		);
+	const lines = rows.slice(0, MAX_COMING_DUE_LINES).map((r) => {
+		const inDays = `in ${r.days} day${r.days === 1 ? '' : 's'}`;
+		return r.key === 'check_at'
+			? `- ${r.path}: check due ${r.date} (${inDays})${r.shown ? `. Expected: ${r.shown}` : ''}. Record it with write_page fields {outcome: ...}.`
+			: `- ${r.path}: due ${r.date} (from \`${r.key}\`, ${inDays}).${expectedClause(r.shown)} ${aliasHint(r.key)}.`;
+	});
 	if (rows.length > MAX_COMING_DUE_LINES)
 		lines.push(`...and ${rows.length - MAX_COMING_DUE_LINES} more.`);
 	return lines;
+}
+
+/**
+ * The block `validate` opens with: what is due or coming due, or one line saying nothing is,
+ * so a person is never told "nothing else is due" while a date sits in a field it does not
+ * read. `coming` is `comingDueLines`; `overdue` is the count of `prediction-due` findings
+ * still open, which are listed in the findings.
+ */
+export function dueBlock(coming: string[], overdue: number): string {
+	if (coming.length === 0 && overdue === 0)
+		return '\n\nNothing due or coming due from `check_at` or `due`; dates kept in other fields are not listed.';
+	const lines = [...coming];
+	if (overdue > 0)
+		lines.push(`${overdue} overdue, listed as prediction-due in the findings below.`);
+	return `\n\nDue and coming due (read from \`check_at\` or \`due\`; dates kept in other fields are not listed):\n${lines.join('\n')}`;
 }

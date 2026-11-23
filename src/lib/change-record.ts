@@ -101,7 +101,7 @@ const hasValue = (fm: Frontmatter, key: string) => listOf(fm[key]).some((v) => v
 
 /**
  * The prompt to record a commitment with its check date, at most one per write. A new
- * page typed Decision or Commitment with no check date (`check_at`, or a dated `due` or `revisit`, `checkDateOf`) and no `outcome` gets it; an
+ * page typed Decision or Commitment with no check date (`check_at`, or a dated `due`, `checkDateOf`) and no `outcome` gets it; an
  * update gets it when the call set `expected` and the page still has no check date.
  * Failing those, a page of another type gets a second, narrower note when the text this
  * write added carries a deadline phrase. Empty otherwise.

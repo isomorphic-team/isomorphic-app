@@ -207,7 +207,7 @@ when an expectation covered it.
 
 ## 10. Compare, and the items it raises
 
-`prediction-due` needs only a check date: `check_at`, or a dated `due` or `revisit` on a page that has no `check_at`. The core raises it for any brain, with or without a
+`prediction-due` needs only a check date: `check_at`, or a dated `due` on a page that has no `check_at`. The core raises it for any brain, with or without a
 self ([`roles-self-and-world-model.md`](roles-self-and-world-model.md), section 8). The
 compare pass is a pass type on `brain_passes` (`src/lib/brain-pass.ts`) and raises the other
 three. `prediction-due` is a finding `validate` computes on each call from the page's own

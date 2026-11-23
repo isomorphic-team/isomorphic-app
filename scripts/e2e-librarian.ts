@@ -1023,11 +1023,11 @@ try {
 	const inDays = (n: number) =>
 		new Date(Date.parse(todayIso()) + n * 86_400_000).toISOString().slice(0, 10);
 	const comingBlock = (text: string) =>
-		/Commitments coming due[^\n]*\n(?:- [^\n]*\n?)+/.exec(text)?.[0] ?? '';
+		/Due and coming due[^\n]*\n(?:- [^\n]*\n?)+/.exec(text)?.[0] ?? '';
 	r = await call('validate', {});
 	check(
-		'validate omits the coming-due list when nothing is due',
-		!/coming due/i.test(r.text),
+		'validate says nothing is due when nothing is',
+		r.text.includes('Nothing due or coming due from `check_at` or `due`'),
 		r.text
 	);
 	r = await call('write_page', {
@@ -1101,7 +1101,7 @@ try {
 	check(
 		'the coming-due list comes before the findings',
 		!r.text.includes('need a decision') ||
-			r.text.indexOf('Commitments coming due') < r.text.indexOf('need a decision'),
+			r.text.indexOf('Due and coming due') < r.text.indexOf('need a decision'),
 		r.text
 	);
 	r = await call('write_page', {
@@ -1116,8 +1116,8 @@ try {
 	r = await call('validate', {});
 	check(
 		'validate lists a commitment kept in due, naming the key',
-		comingBlock(r.text).includes('wiki/decisions/vendor.md: check due ' + inDays(2)) &&
-			comingBlock(r.text).includes('(date from `due`)'),
+		comingBlock(r.text).includes('wiki/decisions/vendor.md: due ' + inDays(2)) &&
+			comingBlock(r.text).includes('(from `due`'),
 		r.text
 	);
 	await call('write_page', { path: 'wiki/decisions/pricing.md', fields: { outcome: 'held' } });
