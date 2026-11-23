@@ -26,6 +26,7 @@ import {
 	githubAppConnectionId,
 	type StorageConnection
 } from './storage-connections.ts';
+import { tagFailure } from './failure-reason.ts';
 
 // Four roles, ordered least → most privileged. Writes require `editor`+;
 // `viewer` is read-only. `admin`/`owner` add member-management powers. `owner`
@@ -203,15 +204,24 @@ export interface TenantOpts {
 // `actual` is nullable because a caller can reach a brain without holding any role in
 // the organization that owns it. A null has to read as "you are not a member", never
 // as "your role is undefined" or as "no gate".
+/** A role below what an action requires. Its usage reason is `permission`. */
+export class RoleError extends Error {
+	override readonly name = 'RoleError';
+	constructor(message: string) {
+		super(message);
+		tagFailure(this, 'permission');
+	}
+}
+
 export function assertRole(actual: Role | null, required?: Role): void {
 	if (!required) return;
 	if (!actual) {
-		throw new Error(
+		throw new RoleError(
 			`This action requires ${required} access in the organization, and you are not a member of it.`
 		);
 	}
 	if (!roleAtLeast(actual, required)) {
-		throw new Error(
+		throw new RoleError(
 			`This action requires ${required} access or higher, but your role is ${actual}.`
 		);
 	}

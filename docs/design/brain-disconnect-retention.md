@@ -49,6 +49,7 @@ Every table with a `brain_id` column, as of migration 0025:
 | `brain_memberships` | per-brain grants                                                     | Purged        |
 | `invitations`       | rows with `brain_id` set are pending brain invites, with the email   | Purged        |
 | `usage_daily`       | per-day call and error counts by org, brain, user, tool              | Kept          |
+| `usage_failures`    | per-day failure counts by the same keys and a reason category        | Kept          |
 | `feedback_reports`  | product feedback; `brain_id` records the active brain at report time | Kept          |
 
 Why each disposition:
@@ -58,7 +59,8 @@ Why each disposition:
 - **`policy_baseline`** is being replaced by `brain_passes` (0023 is the expand step), but current
   code still writes it, so both are purged until a later migration drops it.
 - **`write_attempts`** rows are pruned after 10 minutes, but only when another write starts.
-- **`usage_daily`** holds only integers and is the analytics history. Deleting one brain's rows
+- **`usage_daily`** and **`usage_failures`** hold only integers and categories, and are the
+  analytics history. Deleting one brain's rows
   would rewrite past totals. If keeping it becomes a problem, the fix is a retention window on
   the whole table.
 - **`feedback_reports`** is a report about the product, covered by its own privacy rules.

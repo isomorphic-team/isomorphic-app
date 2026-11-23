@@ -11,6 +11,8 @@
 // BrainFilesObject, for a brain the platform holds itself, and driveBrainStore
 // (brain-store-drive.ts) over a Google Drive folder.
 
+import { tagFailure } from './failure-reason.ts';
+
 // Where one brain's files live, within the backend its store talks to. A GitHub
 // repository today; a backend that is not addressed by owner and name adds its own
 // variant here. Type alias (not interface) so it picks up an implicit index signature
@@ -205,6 +207,7 @@ export class WriteConflictError extends Error {
 	override readonly name = 'WriteConflictError';
 	constructor(readonly path: string) {
 		super(`${path} changed since it was read. Read it again and retry the change.`);
+		tagFailure(this, 'conflict');
 	}
 }
 

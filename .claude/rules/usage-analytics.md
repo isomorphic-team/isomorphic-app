@@ -23,6 +23,13 @@ day, per brain, per person. UI: `app/views/AnalyticsView.tsx`, an ORG-scope dest
   swallows its own failures, counts `isError` results as errors, and clears `_resolvedScope`
   first so a call that resolves no org records nothing. The wrapping logic is `countedCall` in
   the pure lib: a mistake there breaks every tool, not a chart.
+- **A failed call also records WHY, as a category** (`usage_failures`, migration 0031, same
+  grain plus `reason`, written in one batch with the `usage_daily` bump). The reasons are
+  `FAILURE_REASONS` in `src/lib/failure-reason.ts`. A refusal is tagged where it is decided:
+  `fail(text, reason)`, a `reason` on the write path's refusals, and `tagFailure` in an error
+  class (`RoleError`, `WriteConflictError`). The tag is a non-enumerable symbol, so it never
+  reaches the wire. Untagged error results record `other`, untagged throws `thrown`. **Never
+  store the message**: a refusal can quote page text. No tool reads the table yet; query it with SQL.
 - **Two scopes:** org totals and per-brain rows are viewer+; the PEOPLE table is admin+ and is
   **withheld from the payload**, not hidden by the widget. Authorization reads `ctx.orgRole`.
 - **It measures the product, not the repository.** Edits made outside our tools are invisible

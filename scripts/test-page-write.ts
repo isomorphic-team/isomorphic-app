@@ -15,6 +15,7 @@
 import {
 	applyPageEdits,
 	applyFieldPatch,
+	nearMiss,
 	validateFieldPatch,
 	MANAGED_FIELD_KEYS,
 	OKF_PAGE_STATUSES
@@ -136,6 +137,71 @@ check(
 	'edit: empty find refused',
 	!applyPageEdits(BODY, { edits: [{ find: '', replace: 'x' }] }).ok
 );
+
+// ---------- why an edit failed: the usage reason, and the near-miss hint ----------
+{
+	const reasonOf = (r: ReturnType<typeof applyPageEdits>) => (r.ok ? 'ok' : r.reason);
+	check(
+		'reason: a missing anchor is `anchor`',
+		reasonOf(applyPageEdits(BODY, { edits: [{ find: 'nonexistent text', replace: 'x' }] })) ===
+			'anchor'
+	);
+	check(
+		'reason: an ambiguous anchor is `anchor`',
+		reasonOf(applyPageEdits(BODY, { edits: [{ find: 'which', replace: 'that' }] })) === 'anchor'
+	);
+	check(
+		'reason: an empty find is `invalid`, not an anchor miss',
+		reasonOf(applyPageEdits(BODY, { edits: [{ find: '', replace: 'x' }] })) === 'invalid'
+	);
+	check(
+		'reason: an empty append is `invalid`',
+		reasonOf(applyPageEdits(BODY, { append: ' ' })) === 'invalid'
+	);
+	check(
+		'reason: a field patch refusal is `invalid`',
+		(() => {
+			const r = applyFieldPatch({}, { 'bad key': 'x' });
+			return !r.ok && r.reason === 'invalid';
+		})()
+	);
+
+	// A whole table row re-quoted with one digit wrong: the failure the hint is for.
+	const table =
+		'| Date | Total |\n|---|---|\n| 2026-01-02 | 412,300 |\n| 2026-01-05 | 398,516 |\n\nFootnote.';
+	const r = applyPageEdits(table, {
+		edits: [{ find: '| 2026-01-05 | 398,561 |', replace: 'x' }]
+	});
+	const error = r.ok ? '' : r.error;
+	check(
+		'near miss: says how much of the anchor matched',
+		error.includes('The first 20 of its 24 characters match the page'),
+		error
+	);
+	check(
+		'near miss: shows the page side and the sent side of the difference',
+		error.includes('the page has "16 |') && error.includes('where you wrote "61 |"'),
+		error
+	);
+	check('near miss: advises a short anchor', error.includes('Use a short anchor'), error);
+
+	check(
+		'near miss: a whitespace difference is visible',
+		nearMiss('Ask the platform team for access.', 'Ask the platform team\nfor access.').includes(
+			'"\\nfor access."'
+		)
+	);
+	check(
+		'near miss: an anchor running past the end of the page says the page ends',
+		nearMiss('Ask the platform team.', 'Ask the platform team. Then wait.').includes(
+			'the page ends'
+		)
+	);
+	check(
+		'near miss: nothing when too little matches to point anywhere',
+		nearMiss(BODY, 'Completely different text') === ''
+	);
+}
 {
 	// An edit that fails leaves NOTHING applied, including earlier edits in the batch.
 	const r = applyPageEdits(BODY, {
@@ -357,18 +423,26 @@ console.log('\nwrite_page: what it decides before the repository is read (checkP
 // ---------------------------------------------------------------------------
 // wiki/ is content, raw/ is source, wiki/log.md is the changelog.
 const POLICY = { paths: parsePaths({}) };
-const refuses = (r: { ok: boolean; error?: string }, text: string) =>
-	!r.ok && (r as { error: string }).error.includes(text);
+// A refusal pins its message AND the category the usage counters record for it.
+const refuses = (
+	r: { ok: boolean; error?: string; reason?: string },
+	text: string,
+	reason: string
+) => !r.ok && (r as { error: string }).error.includes(text) && r.reason === reason;
 {
 	const ok = checkPageWrite({ path: ' /wiki/a.md', content: 'x' }, POLICY);
 	check('check: the target is normalized', ok.ok && ok.target === 'wiki/a.md');
 	check(
 		'check: a non-.md path',
-		refuses(checkPageWrite({ path: 'wiki/a' }, POLICY), 'must end in .md')
+		refuses(checkPageWrite({ path: 'wiki/a' }, POLICY), 'must end in .md', 'invalid')
 	);
 	check(
 		'check: content AND a patch is refused, not one silently dropped',
-		refuses(checkPageWrite({ path: 'wiki/a.md', content: 'x', append: 'y' }, POLICY), 'not both')
+		refuses(
+			checkPageWrite({ path: 'wiki/a.md', content: 'x', append: 'y' }, POLICY),
+			'not both',
+			'invalid'
+		)
 	);
 	check(
 		'check: an EMPTY edits list is not a patch, so content alone passes',
@@ -376,11 +450,11 @@ const refuses = (r: { ok: boolean; error?: string }, text: string) =>
 	);
 	check(
 		'check: source material',
-		refuses(checkPageWrite({ path: 'raw/a.md' }, POLICY), 'source material')
+		refuses(checkPageWrite({ path: 'raw/a.md' }, POLICY), 'source material', 'invalid')
 	);
 	check(
 		'check: the changelog',
-		refuses(checkPageWrite({ path: 'wiki/log.md' }, POLICY), 'maintained automatically')
+		refuses(checkPageWrite({ path: 'wiki/log.md' }, POLICY), 'maintained automatically', 'invalid')
 	);
 	check(
 		'check: outside content is NOT refused yet (an existing page there stays updatable)',
@@ -388,7 +462,11 @@ const refuses = (r: { ok: boolean; error?: string }, text: string) =>
 	);
 	check(
 		'check: a bad field patch is refused before any read',
-		refuses(checkPageWrite({ path: 'wiki/a.md', fields: { title: 'x' } }, POLICY), 'title')
+		refuses(
+			checkPageWrite({ path: 'wiki/a.md', fields: { title: 'x' } }, POLICY),
+			'title',
+			'invalid'
+		)
 	);
 	check('isPatching: append', isPatching({ append: '' }));
 	check('isPatching: edits', isPatching({ edits: [{ find: 'a', replace: 'b' }] }));
@@ -422,19 +500,19 @@ console.log('\nwrite_page: create, update, or refuse (planPageWrite)');
 	);
 	check(
 		'plan: mode update on a MISSING page is refused',
-		refuses(plan({ content: 'x', mode: 'update' }, null), 'does not exist')
+		refuses(plan({ content: 'x', mode: 'update' }, null), 'does not exist', 'not_found')
 	);
 	check(
 		'plan: append to a missing page is refused, naming the verb',
-		refuses(plan({ append: 'x' }, null), 'nothing to append to')
+		refuses(plan({ append: 'x' }, null), 'nothing to append to', 'not_found')
 	);
 	check(
 		'plan: edits to a missing page is refused, naming the verb',
-		refuses(plan({ edits: [{ find: 'a', replace: 'b' }] }, null), 'nothing to edit')
+		refuses(plan({ edits: [{ find: 'a', replace: 'b' }] }, null), 'nothing to edit', 'not_found')
 	);
 	check(
 		'plan: a new page OUTSIDE content is refused here',
-		refuses(plan({ content: 'x' }, null, 'README.md'), 'outside')
+		refuses(plan({ content: 'x' }, null, 'README.md'), 'outside', 'invalid')
 	);
 	check(
 		'plan: an existing page outside content is still updatable',
@@ -446,11 +524,15 @@ console.log('\nwrite_page: create, update, or refuse (planPageWrite)');
 
 	check(
 		'plan: mode create on an existing page is the clobber guard',
-		refuses(plan({ content: 'x', mode: 'create' }, PAGE_NOW), 'already exists')
+		refuses(plan({ content: 'x', mode: 'create' }, PAGE_NOW), 'already exists', 'conflict')
 	);
 	check(
 		'plan: a STALE sha is refused (the editor must not save over a newer version)',
-		refuses(plan({ content: 'x', sha: 'sha-old' }, PAGE_NOW), 'changed since you opened it')
+		refuses(
+			plan({ content: 'x', sha: 'sha-old' }, PAGE_NOW),
+			'changed since you opened it',
+			'conflict'
+		)
 	);
 	check(
 		'plan: the current sha passes',
@@ -462,12 +544,19 @@ console.log('\nwrite_page: create, update, or refuse (planPageWrite)');
 	check('plan: no sha is a conversational caller and passes', plan({ content: 'x' }, PAGE_NOW).ok);
 	check(
 		'plan: the clobber guard outranks the sha guard',
-		refuses(plan({ content: 'x', mode: 'create', sha: 'sha-old' }, PAGE_NOW), 'already exists')
+		refuses(
+			plan({ content: 'x', mode: 'create', sha: 'sha-old' }, PAGE_NOW),
+			'already exists',
+			'conflict'
+		)
 	);
-	check('plan: nothing to update is refused', refuses(plan({}, PAGE_NOW), 'Nothing to update'));
+	check(
+		'plan: nothing to update is refused',
+		refuses(plan({}, PAGE_NOW), 'Nothing to update', 'invalid')
+	);
 	check(
 		'plan: an empty edits list is still nothing',
-		refuses(plan({ edits: [] }, PAGE_NOW), 'Nothing to update')
+		refuses(plan({ edits: [] }, PAGE_NOW), 'Nothing to update', 'invalid')
 	);
 	for (const [label, args] of [
 		['title', { title: 'B' }],

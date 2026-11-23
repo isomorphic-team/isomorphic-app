@@ -29,6 +29,7 @@ import {
 } from './page-patch.ts';
 import { pageTitle, parseFrontmatter, withFrontmatter, type Frontmatter } from './wiki.ts';
 import { normPagePath, writeRefusal } from './write-target.ts';
+import type { FailureReason } from './failure-reason.ts';
 
 export interface PageWriteArgs {
 	path: string;
@@ -45,7 +46,8 @@ export interface PageWriteArgs {
 	sha?: string;
 }
 
-export type Refusal = { ok: false; error: string };
+/** A refusal, with the category the usage counters record for it. */
+export type Refusal = { ok: false; error: string; reason: FailureReason };
 
 /** A partial edit (append / edits) rather than a whole-body replacement. An empty edits list is not one. */
 export function isPatching(args: Pick<PageWriteArgs, 'append' | 'edits'>): boolean {
@@ -59,22 +61,27 @@ export function checkPageWrite(
 ): Refusal | { ok: true; target: string } {
 	const target = normPagePath(args.path);
 	if (!target.endsWith('.md'))
-		return { ok: false, error: 'Pages must end in .md, e.g. "wiki/research/notes.md".' };
+		return {
+			ok: false,
+			error: 'Pages must end in .md, e.g. "wiki/research/notes.md".',
+			reason: 'invalid'
+		};
 	// Partial edit and whole-body replace are different intents; taking both would
 	// mean silently dropping one of them.
 	if (isPatching(args) && args.content !== undefined)
 		return {
 			ok: false,
 			error:
-				'Pass either content (which replaces the whole body) or append/edits (which change part of it), not both.'
+				'Pass either content (which replaces the whole body) or append/edits (which change part of it), not both.',
+			reason: 'invalid'
 		};
 	// Whether the path is inside editable content is asked only of a NEW page, in
 	// planPageWrite: an existing page outside it is still updatable.
 	const refusal = writeRefusal(target, config, 'written', { content: false });
-	if (refusal) return { ok: false, error: refusal };
+	if (refusal) return { ok: false, error: refusal, reason: 'invalid' };
 	if (args.fields) {
 		const invalid = validateFieldPatch(args.fields);
-		if (invalid) return { ok: false, error: invalid };
+		if (invalid) return { ok: false, error: invalid, reason: 'invalid' };
 	}
 	return { ok: true, target };
 }
@@ -102,15 +109,17 @@ export function planPageWrite(
 		if (patching)
 			return {
 				ok: false,
-				error: `"${target}" does not exist yet, so there is nothing to ${args.append !== undefined ? 'append to' : 'edit'}. Create it first by passing content.`
+				error: `"${target}" does not exist yet, so there is nothing to ${args.append !== undefined ? 'append to' : 'edit'}. Create it first by passing content.`,
+				reason: 'not_found'
 			};
 		if (mode === 'update')
 			return {
 				ok: false,
-				error: `"${target}" does not exist. Use mode "create" or "upsert" (the default) to create it.`
+				error: `"${target}" does not exist. Use mode "create" or "upsert" (the default) to create it.`,
+				reason: 'not_found'
 			};
 		const outside = writeRefusal(target, config, 'written');
-		if (outside) return { ok: false, error: outside };
+		if (outside) return { ok: false, error: outside, reason: 'invalid' };
 		return { ok: true, kind: 'create' };
 	}
 
@@ -118,14 +127,16 @@ export function planPageWrite(
 	if (mode === 'create')
 		return {
 			ok: false,
-			error: `A page already exists at ${target}. Use mode "update" or "upsert" to change it, or pick a different path.`
+			error: `A page already exists at ${target}. Use mode "update" or "upsert" to change it, or pick a different path.`,
+			reason: 'conflict'
 		};
 	// The in-client editor passes the version it opened as `sha`; conversational callers pass none.
 	if (args.sha !== undefined && existing.version !== args.sha)
 		return {
 			ok: false,
 			error:
-				'This page changed since you opened it (someone else saved first). Reopen the editor to get the latest version (your unsaved text stays in the editor until you leave).'
+				'This page changed since you opened it (someone else saved first). Reopen the editor to get the latest version (your unsaved text stays in the editor until you leave).',
+			reason: 'conflict'
 		};
 	if (
 		args.content === undefined &&
@@ -139,7 +150,8 @@ export function planPageWrite(
 		return {
 			ok: false,
 			error:
-				'Nothing to update: pass append / edits (to change part of the page) or content (to replace the body), or a fields / title / type / description / status change.'
+				'Nothing to update: pass append / edits (to change part of the page) or content (to replace the body), or a fields / title / type / description / status change.',
+			reason: 'invalid'
 		};
 
 	if (!patching) return { ok: true, kind: 'update' };
