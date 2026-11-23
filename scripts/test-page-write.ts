@@ -33,6 +33,7 @@ import {
 } from '../src/lib/page-write.ts';
 import { parsePaths } from '../src/lib/brain-config.ts';
 import { describeChange, expectationNote, hasDeadlinePhrase } from '../src/lib/change-record.ts';
+import { RECORD_VIEW } from '../src/lib/view-directives.ts';
 
 import { checker } from './check.ts';
 
@@ -785,6 +786,23 @@ console.log('\nwrite_page: the commitment prompt (expectationNote)');
 		dec.done.includes(NOTE)
 	);
 	check('create: ... and in proposed', dec.proposed.includes(NOTE));
+	const GUARD = 'does not already show its record (read it first)';
+	check(
+		'create: the note offers the record view with its guard, in done and proposed',
+		[dec.done, dec.proposed].every((t) => t.includes(GUARD) && t.includes(RECORD_VIEW)),
+		dec.proposed
+	);
+	check(
+		'create: the note says the offer applies when this page links to the claim page',
+		[dec.done, dec.proposed].every((t) =>
+			t.includes('If this page links to the page whose claim it tests')
+		),
+		dec.done
+	);
+	check(
+		'create: the record offer appears once per write',
+		dec.done.split(RECORD_VIEW).length === 2 && dec.proposed.split(RECORD_VIEW).length === 2
+	);
 	check(
 		'create: a Commitment type matches too, any case',
 		create({ content: 'x', title: 'T', type: 'commitment' }).done.includes(NOTE)
@@ -929,6 +947,19 @@ console.log('\nwrite_page: the deadline-phrase note');
 			'keep your own follow-up field'
 		].every((t) => note(['by Friday']).includes(t)),
 		note(['by Friday'])
+	);
+	check(
+		'deadline: the note tells an agent that already made the page to ignore it',
+		note(['by Friday']).endsWith(' (If you already made it, ignore this.)')
+	);
+	check(
+		'deadline and update notes do not carry the record offer',
+		!note(['by Friday']).includes(RECORD_VIEW) &&
+			!expectationNote({
+				kind: 'update',
+				frontmatter: { type: 'Decision', expected: 'x' },
+				patch: { expected: 'x' }
+			}).includes(RECORD_VIEW)
 	);
 	check('deadline: hasDeadlinePhrase matches the plain case', hasDeadlinePhrase('due Tuesday'));
 

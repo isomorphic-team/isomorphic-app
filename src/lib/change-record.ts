@@ -15,6 +15,7 @@ import { logPathOf } from './brain-policy.ts';
 import type { CommitAuthor, CommitOrPROpts, FileWrite } from './brain-repo.ts';
 import { MAX_SCAN_PAGES } from './brain-repo.ts';
 import { isToolPagePath } from './custom-tools.ts';
+import { RECORD_VIEW } from './view-directives.ts';
 import type { Frontmatter } from './wiki.ts';
 import { insertLogEntry, listOf } from './wiki.ts';
 
@@ -109,7 +110,7 @@ export function expectationNote(input: ExpectationInput): string {
 	if (hasValue(fm, 'check_at')) return '';
 	const commitmentPage = COMMITMENT_TYPE_RE.test(listOf(fm.type)[0] ?? '');
 	if (input.kind === 'create') {
-		if (commitmentPage) return hasValue(fm, 'outcome') ? '' : EXPECTATION_TEXT;
+		if (commitmentPage) return hasValue(fm, 'outcome') ? '' : `${EXPECTATION_TEXT} ${RECORD_TEXT}`;
 	} else if (input.patch != null && input.patch.expected != null && hasValue(fm, 'expected')) {
 		return EXPECTATION_TEXT;
 	}
@@ -117,11 +118,13 @@ export function expectationNote(input: ExpectationInput): string {
 	return (input.added ?? []).some(hasDeadlinePhrase) ? DEADLINE_TEXT : '';
 }
 
+const RECORD_TEXT = `If this page links to the page whose claim it tests and that page does not already show its record (read it first), offer to append this there with write_page append:\n${RECORD_VIEW}\none yes completes it. Then tell the person that page now shows its record.`;
+
 const EXPECTATION_TEXT =
 	'If the person gave a date, use it as check_at; otherwise ask. Tell the person the check date you set. One commitment per page: a second gets its own page. write_page fields {expected, check_at: YYYY-MM-DD}.';
 
 const DEADLINE_TEXT =
-	'This reads like a commitment. Left on this page it will not appear in validate or in a what-is-due answer. Create it now as its own page (write_page, type Commitment, fields {expected, check_at: YYYY-MM-DD}), linked from here, and keep your own follow-up field too. Tell the person the check date you set.';
+	'This reads like a commitment. Left on this page it will not appear in validate or in a what-is-due answer. Create it now as its own page (write_page, type Commitment, fields {expected, check_at: YYYY-MM-DD}), linked from here, and keep your own follow-up field too. Tell the person the check date you set. (If you already made it, ignore this.)';
 
 export const MAX_REFS_LISTED = 20;
 

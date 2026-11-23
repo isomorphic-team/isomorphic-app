@@ -17,6 +17,23 @@
 // folder notes without a rename. Order matters — earlier names win. This is the
 // single source of truth; app/core/util.ts re-exports it so the browser tree and
 // the view engine can never disagree on what a folder note is.
+
+/**
+ * The view that shows a page its record: the pages linking to it that carry a check
+ * date, with what was expected and what happened. It filters on `check_at`, not on
+ * `type`, so a page typed Bet or ADR counts and a page that links without a date does not.
+ */
+export const RECORD_VIEW = [
+	'```okf-view',
+	'kind: backlinks',
+	'filter: { check_at: ">= 2000-01-01" }',
+	'as: table',
+	'columns: [title, expected, check_at, outcome]',
+	'sort: check_at',
+	'order: desc',
+	'```'
+].join('\n');
+
 export const FOLDER_NOTE_NAMES = ['index.md', 'README.md'];
 export const isFolderNoteName = (name: string): boolean => FOLDER_NOTE_NAMES.includes(name);
 
