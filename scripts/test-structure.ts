@@ -832,10 +832,26 @@ console.log('\nfolder-note advisory: a note-less folder holding its own overview
 			'follow-up: an outcome closes it',
 			due({ due: ['2026-11-10'], outcome: ['sent'] }).length === 0
 		);
+		for (const closed of [
+			'done',
+			'closed',
+			'complete',
+			'completed',
+			'resolved',
+			'decided',
+			'cancelled',
+			'canceled',
+			'dropped',
+			'superseded',
+			'archived'
+		])
+			check(
+				`follow-up: status "${closed}" skips the alias path`,
+				due({ due: ['2026-11-10'], status: [closed] }).length === 0
+			);
 		for (const [k, v] of [
 			['status', 'Done'],
 			['status', ' superseded '],
-			['status', 'cancelled'],
 			['state', 'closed'],
 			['state', 'ARCHIVED']
 		] as const)
@@ -891,7 +907,8 @@ console.log('\nfolder-note advisory: a note-less folder holding its own overview
 		check(
 			'due block: overdue alone still prints the header and the count',
 			overdueOnly.includes('Due and coming due') &&
-				overdueOnly.endsWith('\n2 overdue (prediction-due findings).'),
+				overdueOnly.endsWith('\n2 overdue (prediction-due findings).') &&
+				!/below|listed/.test(overdueOnly.split('\n').at(-1)!),
 			overdueOnly
 		);
 	}

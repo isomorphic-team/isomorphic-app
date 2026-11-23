@@ -1138,6 +1138,23 @@ try {
 		r.text
 	);
 
+	await call('write_page', {
+		path: 'wiki/decisions/ship.md',
+		title: 'Ship the draft',
+		type: 'Decision',
+		content: 'Ship it.',
+		fields: { expected: 'Draft out', due: inDays(-3) }
+	});
+	await settledHead();
+	r = await call('validate', {});
+	check(
+		'an overdue due is counted in the block (the finding itself can sit under the findings cap)',
+		r.text.includes('1 overdue (prediction-due findings).'),
+		r.text
+	);
+	await call('write_page', { path: 'wiki/decisions/ship.md', fields: { outcome: 'sent' } });
+	await settledHead();
+
 	// ══ findings: validate surfaces, resolve records, validate stops re-raising ═══
 	// The whole point of keying findings. Driven end to end because the ledger is a
 	// real file in the repo and the round trip is what a user actually performs: the
