@@ -269,11 +269,11 @@ Where the vision takes it:
 
 Open seams:
 
-- "What is on my plate" is answered by `validate`, the tool whose other jobs are tidying (job 3)
-  and offering a feature the brain does not use (`FEATURE_OFFERS`). This is a level-1 surface
-  doing a level-3 job, and each improvement to reminders so far has been a change to `validate`.
-  Whether reminders move to the single list of what is open, or get their own surface, is an
-  open product decision.
+- Reminders reach the person by two surfaces: the handshake line, which counts what is past
+  due when a session opens, and `validate`, whose due area answers "what is on my plate" and
+  whose other jobs are tidying (job 3) and offering a feature the brain does not use
+  (`FEATURE_OFFERS`). Both are level-1 surfaces doing a level-3 job. Whether reminders move to
+  the single list of what is open, or get their own surface, is an open product decision.
 - A due commitment reaches the person only when the agent acts on the handshake line: it names
   the active brain's past-due count (dismissals excluded, as in `validate`) and the first few
   pages, and is dropped when the index is not current or the lookup is late. Nothing reminds a
