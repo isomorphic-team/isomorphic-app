@@ -699,10 +699,11 @@ export function dueBlock(commitments: string, coming: string[]): string {
 		return `\n\nNothing due or coming due. Tell the person that ${NOT_READ}`;
 	const lines = [...(commitments === '' ? [] : [commitments]), ...coming];
 	const gets = commitments === '' ? '' : ` ${CHECK_DATE_GETS}`;
-	return `\n\nDue and coming due. Answer from these lines first, give the findings further down one line, and tell the person that ${NOT_READ} For each open one with no date, ask the person which: set a check date, record what was decided, or dismiss it.${gets}\n${lines.join('\n')}`;
+	return `\n\nDue and coming due. Answer from these lines first, give the findings further down one line, and tell the person that ${NOT_READ} For each open one with no date, ask the person to set a check date and say what they expect, or record it as decided, or dismiss it. Draft \`expected\` yourself, show it with a proposed date, and write only after a yes. Ask once per client or folder, not once per page.${gets}\n${lines.join('\n')}`;
 }
 
-const CHECK_DATE_GETS = 'A check date puts a commitment in this list when it comes due.';
+const CHECK_DATE_GETS =
+	'A check date puts a commitment in this list when it comes due; `expected` lets write_page compare the result with it when the outcome is recorded, and puts the record on the page of the claim it tests.';
 
 const NOT_READ =
 	'dates kept under other field names (not `check_at`, `due`, or a key ending in `_due`, `-due`, `_due_date` or `-due-date`) are not read.';
@@ -745,7 +746,7 @@ export function undatedCommitmentFindings(
 		out.push({
 			key: findingKey('undated-commitment', p.path),
 			weight: 2,
-			headline: `- ${pageLabel(p, fields)}: open (${open.key} ${open.value}), no check date${found.length ? `; ${found.join(', ')}` : ''}. Give it a check date (write_page fields {check_at: YYYY-MM-DD}), record what was decided ({outcome: ...}), or close it in the field the page uses for its state; or dismiss with resolve and a reason.`
+			headline: `- ${pageLabel(p, fields)}: open (${open.key} ${open.value}), no check date${found.length ? `; ${found.join(', ')}` : ''}. write_page fields {check_at: YYYY-MM-DD, expected: ...}.`
 		});
 	}
 	return out;

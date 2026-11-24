@@ -1046,7 +1046,7 @@ console.log('\nfolder-note advisory: a note-less folder holding its own overview
 		check(
 			'due block: the header is the imperative and the coming lines sit under it',
 			coming1 ===
-				`\n\nDue and coming due. Answer from these lines first, give the findings further down one line, and tell the person that ${NOT_READ} For each open one with no date, ask the person which: set a check date, record what was decided, or dismiss it.\n- a.md: due 2026-11-25 (from \`due\`, in 2 days).`,
+				`\n\nDue and coming due. Answer from these lines first, give the findings further down one line, and tell the person that ${NOT_READ} For each open one with no date, ask the person to set a check date and say what they expect, or record it as decided, or dismiss it. Draft \`expected\` yourself, show it with a proposed date, and write only after a yes. Ask once per client or folder, not once per page.\n- a.md: due 2026-11-25 (from \`due\`, in 2 days).`,
 			coming1
 		);
 		const withFindings = dueBlock('- b.md: finding\n  [prediction-due:b.md@2026-11-01]', [
@@ -1421,13 +1421,13 @@ console.log('\nfolder-note advisory: a note-less folder holding its own overview
 		check(
 			'undated: the headline is pinned',
 			base[0]?.headline ===
-				'- decisions/pricing.md: open (state proposed), no check date. Give it a check date (write_page fields {check_at: YYYY-MM-DD}), record what was decided ({outcome: ...}), or close it in the field the page uses for its state; or dismiss with resolve and a reason.',
+				'- decisions/pricing.md: open (state proposed), no check date. write_page fields {check_at: YYYY-MM-DD, expected: ...}.',
 			base[0]?.headline
 		);
 		check(
 			'undated: raised is shown as found; updated is not, and a non-date raised is omitted',
 			undated({ ...open, updated: ['2026-06-10'], raised: ['2026-03-01'] })[0]?.headline.includes(
-				'no check date; raised 2026-03-01. Give it'
+				'no check date; raised 2026-03-01. write_page'
 			) === true &&
 				!undated({ ...open, updated: ['2026-06-10'] })[0]!.headline.includes('updated') &&
 				!base[0]!.headline.includes('raised') &&
@@ -1721,13 +1721,40 @@ console.log('\nfeature offers: one line for a feature the brain does not use');
 			commitments.unused(ctxOf(six()))
 	);
 	check(
+		'due block: the header asks for a check date and what is expected, a draft shown first, once per client or folder',
+		/set a check date and say what they expect/.test(dueBlock('- b.md: finding', [])) &&
+			/Draft `expected` yourself, show it with a proposed date, and write only after a yes/.test(
+				dueBlock('- b.md: finding', [])
+			) &&
+			/Ask once per client or folder, not once per page/.test(dueBlock('- b.md: finding', []))
+	);
+	check(
+		'due block: what a check date gets names the compare on close and the claim page record',
+		/`expected` lets write_page compare the result/.test(dueBlock('- b.md: finding', [])) &&
+			/page of the claim it tests/.test(dueBlock('- b.md: finding', [])) &&
+			!/lets write_page compare/.test(dueBlock('', ['- a.md: coming']))
+	);
+	check(
+		'undated row: the call shape is {check_at, expected} with no other instruction',
+		(() => {
+			const h = undatedCommitmentFindings(
+				[{ path: 'd/a.md' }],
+				new Map([['d/a.md', fields({ type: ['Decision'], state: ['proposed'] })]])
+			)[0]!.headline;
+			return (
+				h.endsWith('write_page fields {check_at: YYYY-MM-DD, expected: ...}.') &&
+				!/outcome|dismiss|close it/.test(h)
+			);
+		})()
+	);
+	check(
 		'commitments: no offer line when commitment findings already fire',
 		(await pickOffer(ctxOf(six(), { commitmentFindings: true }), keepAll)) === null
 	);
 	check(
 		'commitments: dueBlock says what a check date gets when it lists commitment findings, not otherwise',
 		dueBlock('- b.md: finding', []).includes(
-			'A check date puts a commitment in this list when it comes due.'
+			'A check date puts a commitment in this list when it comes due; `expected` lets write_page compare the result with it when the outcome is recorded, and puts the record on the page of the claim it tests.'
 		) &&
 			!dueBlock('', ['- a.md: coming']).includes('A check date puts') &&
 			!dueBlock('', []).includes('A check date puts')

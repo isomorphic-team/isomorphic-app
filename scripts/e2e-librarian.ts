@@ -1122,7 +1122,7 @@ try {
 	check(
 		'the due block header is the instruction, with what is not read',
 		r.text.includes(
-			'Due and coming due. Answer from these lines first, give the findings further down one line, and tell the person that dates kept under other field names (not `check_at`, `due`, or a key ending in `_due`, `-due`, `_due_date` or `-due-date`) are not read. For each open one with no date, ask the person which: set a check date, record what was decided, or dismiss it.'
+			'Due and coming due. Answer from these lines first, give the findings further down one line, and tell the person that dates kept under other field names (not `check_at`, `due`, or a key ending in `_due`, `-due`, `_due_date` or `-due-date`) are not read. For each open one with no date, ask the person to set a check date and say what they expect, or record it as decided, or dismiss it. Draft `expected` yourself, show it with a proposed date, and write only after a yes. Ask once per client or folder, not once per page.'
 		),
 		r.text
 	);
@@ -1340,7 +1340,9 @@ try {
 		'commitment findings suppress the offer and the due header says what a check date gets',
 		r.text.includes('[undated-commitment:wiki/offers/open.md]') &&
 			!r.text.includes('[feature-offer:') &&
-			r.text.includes('A check date puts a commitment in this list when it comes due.'),
+			r.text.includes(
+				'A check date puts a commitment in this list when it comes due; `expected` lets write_page compare the result with it when the outcome is recorded, and puts the record on the page of the claim it tests.'
+			),
 		r.text
 	);
 	await call('delete_page', { path: 'wiki/offers/open.md' });

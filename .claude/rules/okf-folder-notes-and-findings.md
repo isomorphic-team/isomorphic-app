@@ -93,7 +93,8 @@ are in the list, with keys.
   dismiss, and a page is never in it and in `prediction-due`.
   **`dueBlock`** is the one function that builds the due area `validate` opens with. Its header
   is the instruction the reader acts on (answer from these lines first, give the findings
-  below one line, say what is not read); with nothing due it is one line saying the same.
+  below one line, say what is not read, and for each open undated one ask for a check date and
+  an `expected` the agent drafts, once per client or folder, writing after a yes); with nothing due it is one line saying the same.
   `openFindings` (`src/lib/open-findings.ts`) assembles everything open (pending imports, the advisory and queued
   findings, dismissals, the due area, the feature offer, the other-dates block) and returns it
   structured (`due`, `findings`, `otherDates`, `offer`); `renderOpenFindings` makes the two texts `validate` prints; `validate` adds only the
@@ -125,7 +126,7 @@ are in the list, with keys.
   status field raises nothing, because a brain whose decisions are records would otherwise be
   flooded. Key `undated-commitment:<path>` (the path alone, so a dismissal survives edits),
   weight 2, below `prediction-due`. The headline names the key and value the page uses and,
-  when present, its `raised` date as found; nothing is computed from it. `updated` is not shown:
+  when present, its `raised` date as found, then only the call shape `{check_at, expected}`; nothing is computed from it. `updated` is not shown:
   it is stamped on every save. Commitment findings and the rest are each capped separately by `renderFindings`.
 - **`FEATURE_OFFERS`** (`src/lib/feature-offers.ts`, pure) holds the features `validate` offers
   when a brain does not use them: at most one line (`pickOffer`), directly after the due area,
@@ -133,8 +134,9 @@ are in the list, with keys.
   It is rendered apart from the findings, so it never counts in the intro or the cap. Shown to
   editors and above. Core entries go first; an `ee` entry is offered only to an organization admin
   whose organization lacks the entitlement, and `hasFeature` is read only then. `commitments`
-  stays silent when commitment findings already fire (`dueBlock`'s header says what a check
-  date gets instead). Every registered tool is either in an entry's `uses` or in `NO_OFFER`
+  stays silent whenever commitment findings fire: the due area's header already asks for a
+  check date and `expected` on each open undated decision, and says what they get, so the offer
+  would repeat the ask. Every registered tool is either in an entry's `uses` or in `NO_OFFER`
   (`scripts/test-structure.ts`, with a reason), so a new tool forces the decision.
 - **`src/lib/consolidate.ts`** (pure, `pnpm test:consolidate`) detects where a brain's cheap
   surface disagrees with its content: islands, orphans, note-less and hollow folder notes,
