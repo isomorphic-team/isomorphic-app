@@ -1122,7 +1122,7 @@ try {
 	check(
 		'the due block header is the instruction, with what is not read',
 		r.text.includes(
-			'Due and coming due. Answer from these lines first, give the findings further down one line, and tell the person that dates kept under other field names (not `check_at`, `due`, or a key ending in `_due`, `-due`, `_due_date` or `-due-date`) are not read. For each open one with no date, ask the person to set a check date and say what they expect, or record it as decided, or dismiss it with resolve. Draft `expected` yourself, show it with a proposed date, and write only after a yes. Ask once for the pages in a folder or about the same subject, not once per page.'
+			'Due and coming due. Answer from these lines first, give the findings further down one line, and tell the person that dates kept under other field names (not `check_at`, `due`, or a key ending in `_due`, `-due`, `_due_date` or `-due-date`) are not read. For each open one with no date, ask the person to set a check date and say what they expect, or record it as decided, or dismiss it with resolve. Draft `expected` yourself, show it with a proposed date, and write only after a yes. Ask once for pages in a folder or about the same subject.'
 		),
 		r.text
 	);
@@ -1343,6 +1343,13 @@ try {
 			r.text.includes(
 				'A check date puts a commitment in this list when it comes due; with a link to the claim page it also lists the decision in the record on that page; `expected` is what write_page compares the result with when the outcome is recorded.'
 			),
+		r.text
+	);
+	check(
+		'validate opens the due area with the start-here ask for the first undated page',
+		r.text.indexOf('Start here, before any other fix') > -1 &&
+			r.text.indexOf('wiki/offers/open.md. Read the page') > r.text.indexOf('Start here') &&
+			r.text.indexOf('Start here') < r.text.indexOf('Answer from these lines first'),
 		r.text
 	);
 	await call('delete_page', { path: 'wiki/offers/open.md' });

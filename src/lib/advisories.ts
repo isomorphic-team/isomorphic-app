@@ -694,13 +694,32 @@ export function otherDueBlock(lines: string[]): string {
  * header is the instruction the reader acts on: answer from these lines, give the findings
  * further down one line, and say what is not read.
  */
-export function dueBlock(commitments: string, coming: string[]): string {
+export function dueBlock(commitments: string, coming: string[], start = ''): string {
 	if (commitments === '' && coming.length === 0)
 		return `\n\nNothing due or coming due. Tell the person that ${NOT_READ}`;
 	const lines = [...(commitments === '' ? [] : [commitments]), ...coming];
 	const gets = commitments === '' ? '' : ` ${CHECK_DATE_GETS}`;
-	return `\n\nDue and coming due. Answer from these lines first, give the findings further down one line, and tell the person that ${NOT_READ} For each open one with no date, ask the person to set a check date and say what they expect, or record it as decided, or dismiss it with resolve. Draft \`expected\` yourself, show it with a proposed date, and write only after a yes. Ask once for the pages in a folder or about the same subject, not once per page.${gets}\n${lines.join('\n')}`;
+	return `\n\nDue and coming due. ${start === '' ? '' : `${start} `}Answer from these lines first, give the findings further down one line, and tell the person that ${NOT_READ} For each open one with no date, ask the person to set a check date and say what they expect, or record it as decided, or dismiss it with resolve. Draft \`expected\` yourself, show it with a proposed date, and write only after a yes. Ask once for pages in a folder or about the same subject.${gets}\n${lines.join('\n')}`;
 }
+
+/**
+ * The first undated commitment, as one instruction to start the answer with: read the page,
+ * propose what it expects and a check date, ask, then write. Reads the key
+ * (`undated-commitment:<path>`), not the text. When an overdue commitment is also listed,
+ * the overdue lines come first. Empty when no undated commitment is listed. `dueBlock` puts
+ * it ahead of the header.
+ */
+export function startHere(commitments: Finding[]): string {
+	const first = commitments.find((f) => f.key.startsWith(UNDATED_KEY_PREFIX));
+	if (!first) return '';
+	const path = first.key.slice(UNDATED_KEY_PREFIX.length);
+	const lead = commitments.some((f) => f.key.startsWith('prediction-due:'))
+		? 'After the due lines, start here'
+		: 'Start here, before any other fix, and make it the first item of your answer, not after the structure fixes';
+	return `${lead}: ${path}. Read the page, then propose, for this page only, what it expects (one sentence you draft from the page) and a check date (from the page, or ask); show both and ask yes or change. After a yes write fields {check_at, expected}, then offer the next.`;
+}
+
+const UNDATED_KEY_PREFIX = 'undated-commitment:';
 
 const CHECK_DATE_GETS =
 	'A check date puts a commitment in this list when it comes due; with a link to the claim page it also lists the decision in the record on that page; `expected` is what write_page compares the result with when the outcome is recorded.';

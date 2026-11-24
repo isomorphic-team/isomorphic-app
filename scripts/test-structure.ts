@@ -20,6 +20,7 @@ import {
 	otherDueBlock,
 	MAX_OTHER_DUE_LINES,
 	dueBlock,
+	startHere,
 	COMING_DUE_DAYS,
 	MAX_COMING_DUE_LINES,
 	MAX_FINDINGS_SHOWN,
@@ -1046,7 +1047,7 @@ console.log('\nfolder-note advisory: a note-less folder holding its own overview
 		check(
 			'due block: the header is the imperative and the coming lines sit under it',
 			coming1 ===
-				`\n\nDue and coming due. Answer from these lines first, give the findings further down one line, and tell the person that ${NOT_READ} For each open one with no date, ask the person to set a check date and say what they expect, or record it as decided, or dismiss it with resolve. Draft \`expected\` yourself, show it with a proposed date, and write only after a yes. Ask once for the pages in a folder or about the same subject, not once per page.\n- a.md: due 2026-11-25 (from \`due\`, in 2 days).`,
+				`\n\nDue and coming due. Answer from these lines first, give the findings further down one line, and tell the person that ${NOT_READ} For each open one with no date, ask the person to set a check date and say what they expect, or record it as decided, or dismiss it with resolve. Draft \`expected\` yourself, show it with a proposed date, and write only after a yes. Ask once for pages in a folder or about the same subject.\n- a.md: due 2026-11-25 (from \`due\`, in 2 days).`,
 			coming1
 		);
 		const withFindings = dueBlock('- b.md: finding\n  [prediction-due:b.md@2026-11-01]', [
@@ -1727,7 +1728,7 @@ console.log('\nfeature offers: one line for a feature the brain does not use');
 			/Draft `expected` yourself, show it with a proposed date, and write only after a yes/.test(
 				dueBlock('- b.md: finding', [])
 			) &&
-			/Ask once for the pages in a folder or about the same subject, not once per page/.test(
+			/Ask once for pages in a folder or about the same subject/.test(
 				dueBlock('- b.md: finding', [])
 			)
 	);
@@ -1752,6 +1753,42 @@ console.log('\nfeature offers: one line for a feature the brain does not use');
 			);
 		})()
 	);
+	{
+		const f = (key: string): Finding => ({ key, weight: 2, headline: `- ${key}` });
+		const undated = [f('undated-commitment:d/first.md'), f('undated-commitment:d/second.md')];
+		const due = f('prediction-due:d/late.md@2026-11-01');
+		const text = (fs: Finding[]) => dueBlock('- x', [], startHere(fs));
+		const alone = text(undated);
+		check(
+			'start here: the ask names the first undated page and comes before the generic header',
+			alone.includes(
+				'Start here, before any other fix, and make it the first item of your answer'
+			) &&
+				alone.includes(': d/first.md. Read the page') &&
+				!alone.includes('d/second.md') &&
+				alone.includes('After a yes write fields {check_at, expected}') &&
+				alone.indexOf('Start here') < alone.indexOf('Answer from these lines first'),
+			alone
+		);
+		const withDue = text([due, ...undated]);
+		check(
+			'start here: with an overdue item it says "After the due lines" and drops the first-item demand',
+			withDue.includes('After the due lines, start here: d/first.md.') &&
+				!withDue.includes('Start here, before any other fix'),
+			withDue
+		);
+		check(
+			'start here: absent without an undated finding',
+			startHere([due]) === '' &&
+				startHere([]) === '' &&
+				!text([due]).includes('tart here') &&
+				dueBlock('- x', []) === text([due])
+		);
+		check(
+			'start here: the generic sentence remains',
+			alone.includes('Ask once for pages in a folder or about the same subject.')
+		);
+	}
 	check(
 		'commitments: no offer line when commitment findings already fire',
 		(await pickOffer(ctxOf(six(), { commitmentFindings: true }), keepAll)) === null

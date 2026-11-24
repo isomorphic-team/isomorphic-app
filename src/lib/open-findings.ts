@@ -14,6 +14,7 @@ import {
 	otherDueBlock,
 	otherDueLines,
 	predictionDueFindings,
+	startHere,
 	typeFieldSuggestions,
 	undatedCommitmentFindings,
 	wikilinkPortabilityNote
@@ -101,7 +102,7 @@ export function renderOpenFindings(open: OpenFindings): {
 	return {
 		findingsText: rendered.list + staleNote(open.findings.staleCount),
 		comingDueText:
-			dueBlock(rendered.due, open.due.coming) +
+			dueBlock(rendered.due, open.due.coming, startHere(open.due.commitments)) +
 			(open.offer ? `\n\n${renderFindings([open.offer], 1).text}` : '') +
 			otherDueBlock(open.otherDates)
 	};
