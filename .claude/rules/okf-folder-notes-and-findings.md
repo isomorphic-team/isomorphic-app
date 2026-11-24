@@ -85,8 +85,8 @@ are in the list, with keys.
   `prediction-due:<path>@<date>`, so a dismissal covers that date and re-dating raises it again. Computed on each `validate` call
   and never queued (the queue is for findings that take work to produce). It reads indexed
   fields, so a brain whose `indexedFields` omits `check_at` (or `due`), or a page whose `check_at` sits
-  past `MAX_FIELD_KEYS_PER_PAGE`, is never raised. The Review screen (`view_review`) shows only
-  policy findings, so this appears in `validate` alone.
+  past `MAX_FIELD_KEYS_PER_PAGE`, is never raised. The Review screen (`view_review`) lists the same open
+  findings and due area as rows.
   **`comingDueLines`** is the same read for a check date after today and within
   `COMING_DUE_DAYS` (7): an unkeyed list opening the `validate` result (earliest first,
   at most `MAX_COMING_DUE_LINES`), not a finding, so there is nothing to

@@ -35,7 +35,7 @@ import { MAX_SCAN_PAGES, type BrainLocator, type BrainStore } from '../lib/brain
 import { detectNeedsConfig, type BrainIndex } from '../lib/brain-index.ts';
 import { tryRenderViews, stripSnapshots } from '../lib/views.ts';
 import { browseSummary, treeFitsInline } from '../lib/browse.ts';
-import type { BrainContext } from './librarian.ts';
+import { reachableBrains, type BrainContext, type LibrarianDeps } from './librarian.ts';
 import {
 	type BrainConfig,
 	isContentPath,
@@ -48,6 +48,7 @@ import { roleAtLeast, type TenantOpts } from '../lib/orgs.ts';
 import { groupDetections, reviewSummary } from '../lib/policy-guard.ts';
 import { readCoverage } from '../lib/policy-store.ts';
 import { policyCounts, readReconciledFindings } from '../lib/review-queue.ts';
+import { openFindings, openListRows, openListSummary } from '../lib/open-findings.ts';
 import { brainArgFor, fail } from './shared.ts';
 import type {
 	PageViewWire,
@@ -179,7 +180,7 @@ async function buildGraph(
 export function registerBrainApp(
 	server: McpServer,
 	getContext: (opts?: TenantOpts) => Promise<BrainContext>,
-	opts: { webBaseUrl?: string } = {}
+	opts: { webBaseUrl?: string; deps?: LibrarianDeps } = {}
 ) {
 	// THE LINK IN THE CHAT. Each widget result carries the page's web URL when this
 	// deployment serves the web app, so the model can hand the user a link ("here's
@@ -410,58 +411,81 @@ export function registerBrainApp(
 	);
 
 	// ---------- view_review ----------
-	// A tool of its own rather than a mode of `validate`: validate is the agent's
-	// whole-brain check and costs a full index pass, while this reads the findings queue
-	// and the app opens it as a screen. Admin-only: a path and a kind say where sensitive
-	// data sits.
+	// A tool of its own rather than a mode of `validate`: validate is the agent's whole-brain
+	// check and its reply is text, while this answers the Review screen with the same open
+	// list (`openFindings`) as rows. Any reader gets the list; only a brain admin gets the
+	// data-policy block, since a path and a kind say where sensitive data sits.
 	registerAppTool(
 		server,
 		'view_review',
 		{
 			...toolAnnotations('Open the review screen', 'read'),
 			description:
-				"view_review: open a brain's Review screen in Isomorphic, for brain admins. It shows what the data-policy guard recorded: which pages hold sensitive data (API tokens, connection strings, private keys, card numbers, Social Security numbers, medical record numbers, dates of birth) and how many of each kind, from writes and from the latest baseline scan of existing content, leaving out what has been fixed or dismissed, and it states what the checks have and have not covered. Values are never shown or stored. Use when an admin asks whether sensitive or confidential data has landed in the brain, or wants to review data-policy activity.",
+				'view_review: show the person what is open in the brain: what is due, what needs attention (findings validate would list, pending import decisions, undated commitments), other dates, and a feature the brain does not use. Use when the person asked to see or review what is open. Brain admins also get what the data-policy guard recorded: which pages hold sensitive data (API tokens, connection strings, private keys, card numbers, Social Security numbers, medical record numbers, dates of birth) and how many of each kind, from writes and from the latest baseline scan of existing content, leaving out what has been fixed or dismissed, and what the checks have and have not covered. Values are never shown or stored.',
 			inputSchema: { brain: brainArg },
 			_meta: { ui: { resourceUri: BRAIN_APP_URI } }
 		},
 		async ({ brain }) => {
-			const { config, db, brainId, role, activeBrain, store, locator, policySecret } =
-				await getContext({ brain });
-			if (!roleAtLeast(role, 'admin')) {
-				return fail(
-					'Review is for admins of this brain: it says where sensitive data sits. Ask a brain admin.'
+			const ctx = await getContext({ brain });
+			const { config, db, brainId, role, activeBrain, store, locator, policySecret, index } = ctx;
+			await index.ensureFresh(store, locator, config);
+			const resolved = await index.graph(config);
+			let list;
+			try {
+				list = openListRows(
+					await openFindings({
+						store,
+						locator,
+						config,
+						db,
+						brainId,
+						index,
+						graph: resolved,
+						role,
+						actorUserId: ctx.actorUserId,
+						orgId: ctx.orgId,
+						orgRole: ctx.orgRole,
+						policySecret,
+						reachable: (ids) => reachableBrains(ids, opts.deps, ctx.openIndex)
+					})
 				);
+			} catch {
+				return fail('Could not read what is open in this brain. Try again.');
 			}
-			const rows = await readReconciledFindings({
-				db,
-				store,
-				repo: locator,
-				defaultBranch: config.defaultBranch,
-				brainId,
-				secret: policySecret
-			});
-			const grouped = groupDetections(policyCounts(rows));
-			const coverage = await readCoverage(db, brainId, config.policyMode);
+			const isAdmin = roleAtLeast(role, 'admin');
+			let policy: ReviewViewWire['policy'];
+			let text = openListSummary(list);
+			if (isAdmin) {
+				const rows = await readReconciledFindings({
+					db,
+					store,
+					repo: locator,
+					defaultBranch: config.defaultBranch,
+					brainId,
+					secret: policySecret
+				});
+				const grouped = groupDetections(policyCounts(rows));
+				const coverage = await readCoverage(db, brainId, config.policyMode);
+				text += `\n\n${reviewSummary(config.policyMode, grouped, coverage)}`;
+				policy = {
+					mode: config.policyMode,
+					total: grouped.total,
+					pages: grouped.pages,
+					coverage: { baseline: coverage.baseline, text: coverage.text }
+				};
+			}
 			return {
 				content: [
 					{
 						type: 'text' as const,
-						text: withLink(
-							reviewSummary(config.policyMode, grouped, coverage),
-							'view_review',
-							activeBrain.id
-						)
+						text: withLink(text, 'view_review', activeBrain.id)
 					}
 				],
 				structuredContent: {
 					view: 'review',
 					...webUrl('view_review', activeBrain.id),
-					policy: {
-						mode: config.policyMode,
-						total: grouped.total,
-						pages: grouped.pages,
-						coverage: { baseline: coverage.baseline, text: coverage.text }
-					},
+					open: list,
+					...(policy ? { policy } : {}),
 					config: editPolicy(config),
 					activeBrain
 				} satisfies ReviewViewWire

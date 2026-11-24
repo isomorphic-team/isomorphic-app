@@ -48,6 +48,7 @@ import {
 } from './review-queue.ts';
 import { isFolderNoteName } from './view-directives.ts';
 import { overdueLine } from './server-instructions.ts';
+import type { OpenListWire, OpenRowWire } from './tool-payloads.ts';
 import { todayIso } from './wiki.ts';
 
 /** Pending import findings and the lines `validate` prints about them. */
@@ -105,6 +106,32 @@ export function renderOpenFindings(open: OpenFindings): {
 			(open.offer ? `\n\n${renderFindings([open.offer], 1).text}` : '') +
 			otherDueBlock(open.otherDates)
 	};
+}
+
+/**
+ * The rows a screen lists for an `OpenFindings`, by bucket. Policy findings are dropped: an
+ * admin's `openFindings` includes the queued ones, and the Review screen's own policy block
+ * lists them from `groupDetections`. The unkeyed due-area lines get positional keys.
+ */
+export function openListRows(open: OpenFindings): OpenListWire {
+	const rows = (fs: Finding[]): OpenRowWire[] =>
+		fs.filter((f) => !isPolicyKey(f.key)).map((f) => ({ key: f.key, headline: f.headline }));
+	const lines = (prefix: string, ls: string[]): OpenRowWire[] =>
+		ls.map((headline, i) => ({ key: `${prefix}:${i}`, headline }));
+	const due = rows(open.due.commitments);
+	const findings = rows(open.findings.list);
+	return {
+		due,
+		coming: lines('coming', open.due.coming),
+		findings,
+		otherDates: lines('other-date', open.otherDates),
+		offer: open.offer ? { key: open.offer.key, headline: open.offer.headline } : null
+	};
+}
+
+/** The line the Review tool replies with: items awaiting action (due and findings), and how many are due. */
+export function openListSummary(list: OpenListWire): string {
+	return `${list.due.length + list.findings.length} open, ${list.due.length} due; shown on the Review screen.`;
 }
 
 /**

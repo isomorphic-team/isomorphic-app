@@ -139,14 +139,6 @@ function activeBrainCanManage(): boolean {
 	return !!brainList?.find((b) => b.id === activeBrain?.id)?.canManage;
 }
 
-// Whether the caller is admin+ ON the brain being shown (`canShare` is exactly that),
-// which is who `view_review` answers. A single-user deployment has no brain list and
-// no one but its operator, who owns every brain.
-function activeBrainIsAdmin(): boolean {
-	if (!features.people) return true;
-	return !!brainList?.find((b) => b.id === activeBrain?.id)?.canShare;
-}
-
 // The brain the widget is currently SHOWING (activeBrain tracks it via
 // applyBrainContext on every result). Every widget-initiated tool call passes this
 // explicitly so its actions hit the displayed brain, not the connection's ambient
@@ -501,7 +493,6 @@ export {
 	webLinkFor,
 	setFeatures,
 	activeBrainCanManage,
-	activeBrainIsAdmin,
 	setBrainClosed,
 	shownBrainClosed,
 	brainArgs,

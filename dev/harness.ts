@@ -1015,6 +1015,23 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
 				...r,
 				structuredContent: {
 					view: 'review',
+					open: {
+						due: [
+							{
+								key: 'prediction-due:wiki/decisions/pricing.md@2026-11-01',
+								headline: 'Pricing review: expected churn below 3%, check date 2026-11-01'
+							}
+						],
+						coming: [{ key: 'coming:0', headline: 'Vendor renewal is due 2026-12-01' }],
+						findings: [
+							{
+								key: 'folder-note:wiki/playbooks',
+								headline: 'wiki/playbooks has no index.md folder note'
+							}
+						],
+						otherDates: [],
+						offer: null
+					},
 					policy: {
 						mode: 'shadow',
 						total: 4,

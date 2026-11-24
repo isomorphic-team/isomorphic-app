@@ -195,6 +195,8 @@ test.describe('the ⋯', () => {
 		await go(app, 'More').click();
 		await app.getByRole('button', { name: /Review/ }).click();
 		await expectView(app, 'review');
+		await expect(app.getByText('What validate found')).toBeVisible();
+		await expect(app.getByText('Pricing review: expected churn below 3%')).toBeVisible();
 		await expect(app.getByText('wiki/open-questions.md')).toBeVisible();
 		await expect(go(app, 'More')).toHaveAttribute('aria-current', 'page');
 	});

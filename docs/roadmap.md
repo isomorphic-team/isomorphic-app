@@ -64,7 +64,7 @@ Order:
 1. **Guard in shadow mode, deterministic detectors only.** Built: `guardStore` plus the
    detectors, recording to D1 `policy_detections` without blocking, on for every brain by
    default (`"mode": "off"` opts out), and raised as policy findings that `validate` and the
-   app's Review screen (`view_review`) report and `resolve` answers.
+   app's Review screen (`view_review`, for brain admins) report and `resolve` answers.
    Left: turn it on for real brains and measure false positives before anything enforces.
 2. **Foundation.**
    - Built: the open-core split. [`design/open-source-boundary.md`](design/open-source-boundary.md)

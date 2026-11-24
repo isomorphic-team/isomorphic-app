@@ -868,6 +868,10 @@ async function deleteFolderWrite(
 // It is the same dep the brain tools already take (worker.ts), and it is absent in the
 // local runtime and in single-tenant mode, where one brain means `scope: "all"` is the
 // same search as the default.
+// The last line of every `validate` reply: the way to show the same open list as a screen.
+export const VIEW_REVIEW_HINT =
+	'\n\nIf the person asked to see or review what is open, call view_review.';
+
 export interface LibrarianDeps {
 	listBrains?: () => Promise<AccessibleBrain[]>;
 	// Runs a step of an organization's checks now. Absent without a model key.
@@ -1447,7 +1451,7 @@ export function registerLibrarianTools(
 				// Advisory only; link validation stands alone.
 			}
 
-			const extras = `${truncationNote(truncated)}${comingDueText}${pendingText}${toolText}${findingsText}${policyText}`;
+			const extras = `${truncationNote(truncated)}${comingDueText}${pendingText}${toolText}${findingsText}${policyText}${VIEW_REVIEW_HINT}`;
 			if (problemCount === 0) {
 				return ok(`Checked ${pageCount} page(s) — no broken links.${extras}`);
 			}

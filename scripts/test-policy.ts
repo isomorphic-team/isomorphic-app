@@ -424,14 +424,12 @@ console.log('\nnav destinations');
 		analytics: true,
 		canManageBrains: true,
 		people: true,
-		brainAdmin: true,
 		brainOpen: true
 	};
 	const bare = {
 		analytics: false,
 		canManageBrains: false,
 		people: true,
-		brainAdmin: false,
 		brainOpen: true
 	};
 	// A single-user deployment: nobody else signs in, so none of the people, sharing
@@ -441,7 +439,6 @@ console.log('\nnav destinations');
 		analytics: true,
 		canManageBrains: true,
 		people: false,
-		brainAdmin: true,
 		brainOpen: true
 	};
 
@@ -458,13 +455,8 @@ console.log('\nnav destinations');
 		isMorePlace('review') && !isMorePlace('activity')
 	);
 	check(
-		'…and only Review is gated by ROLE: the rest are open to anyone who can reach the brain',
-		destinationsIn('brain', bare).join() === 'files,graph,search,activity,sharing'
-	);
-	check(
-		'Review follows the brain role alone, not org admin or the deployment',
-		destinationsIn('brain', { ...bare, brainAdmin: true }).includes('review') &&
-			!destinationsIn('brain', { ...full, brainAdmin: false }).includes('review')
+		'…and Review is offered to every role: it lists what is open, and only its policy block is for admins',
+		destinationsIn('brain', bare).join() === 'files,graph,search,activity,sharing,review'
 	);
 	check(
 		'a stewarded brain the caller cannot open offers Sharing and nothing else',
