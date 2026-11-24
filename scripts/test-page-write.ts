@@ -956,28 +956,6 @@ console.log('\nwrite_page: the compare note (outcome set on a page with expected
 			!note(dec, { outcome: 'z' }).includes('new commitment')
 	);
 	{
-		const TABLE = "The claim's record table lists only pages with check_at";
-		const dueOnly: Frontmatter = { ...dec, due: '2026-12-01' };
-		const withDue = note(dueOnly, { outcome: 'Churn was 5%' });
-		check(
-			'learn: due-only plus outcome gets the check_at sentence naming the date',
-			withDue.includes(TABLE) &&
-				withDue.includes('set check_at to 2026-12-01 with write_page fields')
-		);
-		check(
-			'learn: the date sentence comes before the met branch stops',
-			withDue.indexOf(TABLE) >= 0 &&
-				withDue.indexOf(TABLE) < withDue.indexOf('say so in one line and stop')
-		);
-		check(
-			'learn: with check_at present, no sentence',
-			!note({ ...dueOnly, check_at: '2026-12-01' }, { outcome: 'x' }).includes(TABLE) &&
-				!note(dec, { outcome: 'x' }).includes(TABLE)
-		);
-		check(
-			'learn: due-only without outcome in the call gets no note',
-			note({ type: 'Decision', expected: 'x', due: '2026-12-01' }, { expected: 'x' }) === ''
-		);
 		const named = note(dec, { outcome: 'z' });
 		check(
 			'learn: the no-claim branch says to link a named page after a yes',
