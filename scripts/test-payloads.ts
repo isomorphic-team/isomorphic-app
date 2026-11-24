@@ -16,6 +16,7 @@
 //
 //   pnpm test:payloads
 
+import { openListRows, openListSummary, type OpenFindings } from '../src/lib/open-findings.ts';
 import {
 	firstText,
 	structuredOf,
@@ -251,20 +252,20 @@ check(
 			total: 3,
 			pages: [{ path: 'a.md', count: 3, kinds: [{ kind: 'us-ssn', count: 3 }] }, { count: 1 }]
 		}
-	}).policy;
+	}).policy!;
 	check(
 		'parseReview: reads mode, total and pages',
 		r.mode === 'shadow' && r.total === 3 && r.pages[0]?.kinds[0]?.count === 3
 	);
 	check('parseReview: a page without a path is dropped', r.pages.length === 1);
-	const empty = parseReview({}).policy;
+	const empty = parseReview({ policy: {} }).policy!;
 	check(
 		'parseReview: an empty payload is the default (on) with nothing flagged',
 		empty.mode === 'shadow' && empty.total === 0 && empty.pages.length === 0
 	);
 	check(
 		'parseReview: coverage is read, and a missing one is no scan with no claim',
-		parseReview({ policy: { coverage: { baseline: 'done', text: 'x' } } }).policy.coverage
+		parseReview({ policy: { coverage: { baseline: 'done', text: 'x' } } }).policy!.coverage
 			.baseline === 'done' &&
 			empty.coverage.baseline === 'none' &&
 			empty.coverage.text === ''
@@ -278,8 +279,58 @@ check(
 	);
 	check(
 		'parseReview: only an explicit off reads as off',
-		parseReview({ policy: { mode: 'enforce' } }).policy.mode === 'shadow' &&
-			parseReview({ policy: { mode: 'off' } }).policy.mode === 'off'
+		parseReview({ policy: { mode: 'enforce' } }).policy!.mode === 'shadow' &&
+			parseReview({ policy: { mode: 'off' } }).policy!.mode === 'off'
+	);
+}
+{
+	console.log('\nthe open list (openListRows, parseReview)');
+	const f = (key: string, headline = key) => ({ key, headline, weight: 1 });
+	const open: OpenFindings = {
+		due: {
+			commitments: [f('prediction-due:wiki/a.md@2026-11-01', 'A is due')],
+			coming: ['B is due 2026-12-01']
+		},
+		findings: {
+			list: [f('folder-note:wiki'), f('policy:wiki/c.md:us-ssn')],
+			silenced: 0,
+			staleCount: 0
+		},
+		otherDates: ['D is due 2026-12-05'],
+		offer: f('offer:graph', 'Try the graph'),
+		openPolicy: 1
+	};
+	const rows = openListRows(open);
+	check(
+		'openListRows: due, coming, findings, other dates and the offer each get their rows',
+		rows.due[0]?.headline === 'A is due' &&
+			rows.coming[0]?.headline === 'B is due 2026-12-01' &&
+			rows.findings[0]?.key === 'folder-note:wiki' &&
+			rows.otherDates[0]?.headline === 'D is due 2026-12-05' &&
+			rows.offer?.headline === 'Try the graph'
+	);
+	check(
+		'openListRows: a policy finding is dropped, because the policy block lists it',
+		rows.findings.length === 1 && !JSON.stringify(rows).includes('policy:')
+	);
+	check(
+		'openListRows: no offer is null, and a due-area line gets a positional key',
+		openListRows({ ...open, offer: null }).offer === null && rows.coming[0]?.key === 'coming:0'
+	);
+	check(
+		'openListSummary: counts due and findings, not the policy row',
+		openListSummary(rows) === '2 open, 1 due; shown on the Review screen.'
+	);
+	const parsed = parseReview({ view: 'review', open: rows });
+	check(
+		'parseReview: reads the open list and gives a non-admin no policy',
+		parsed.open.due.length === 1 &&
+			parsed.open.offer?.key === 'offer:graph' &&
+			parsed.policy === undefined
+	);
+	check(
+		'parseReview: a result with no open list (an older server) reads as nothing open',
+		parseReview({ view: 'review', policy: { mode: 'shadow' } }).open.due.length === 0
 	);
 }
 check(

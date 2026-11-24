@@ -129,10 +129,9 @@ runtime hand to every tool, so it sees every write that reaches `commitOrPR` or 
   It reads every text file through the store, `BASELINE_FILE_BUDGET` paths per call from a
   cursor, with no model, and raises policy findings like a write does.
 - **The app's Review screen** (`view_review` in `src/tools/apps.ts`, `app/views/ReviewView.tsx`)
-  shows open policy findings through `groupDetections`, minus dismissed ones. The tool
-  refuses below brain admin, and More offers Review (never the rail) only when the active
-  brain's row says `canShare` (`activeBrainIsAdmin`), or on a single-user deployment, whose
-  operator owns it.
+  lists what is open (`openFindings` through `openListRows`, policy rows dropped) for any reader,
+  and for a brain admin also shows open policy findings through `groupDetections`, minus
+  dismissed ones. More offers Review (never the rail) to everyone.
 - **The detectors (`policy-detectors.ts`) favor precision.** Emails and phone numbers are
   deliberately not detected, and PHI detectors fire only on labelled values. Add a negative case
   to the battery with any new detector.

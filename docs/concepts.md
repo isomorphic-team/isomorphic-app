@@ -33,17 +33,18 @@ vision, not yet designed in detail). **Built in part** means the row's "Lives in
 
 ## Keeping brains true
 
-| Concept           | Means                                                                         | Lives in                                       | State |
-| ----------------- | ----------------------------------------------------------------------------- | ---------------------------------------------- | ----- |
-| Defect            | Something wrong with one right answer, such as a broken link. Never dismissed | `validate`                                     | Built |
-| Finding           | Something a person decides about, with a stable key and a recorded answer     | `src/lib/findings.ts`, `resolve`               | Built |
-| Tension           | A finding computed from structure alone, with no model                        | `computeTensions`, `src/lib/consolidate.ts`    | Built |
-| Review queue      | Findings stored in D1, by kind, with visibility per kind                      | `QueueKind`, `src/lib/review-queue.ts`         | Built |
-| Pass              | A budgeted, resumable sweep over content that produces findings               | `src/lib/brain-pass.ts`                        | Built |
-| Organization pass | A scheduled pass across an organization's brains, run as the organization     | `src/lib/org-pass.ts`, `ee/review/org-pass.ts` | Built |
-| Consolidation     | The pass that finds pages contradicting or duplicating each other             | `ee/review/consolidation.ts`                   | Built |
-| Guard             | The check on every write against the brain's data policy                      | `guardStore`, `src/lib/policy-guard.ts`        | Built |
-| Model gateway     | The only path from a pass to a model provider                                 | `ee/review/gateway.ts`                         | Built |
+| Concept           | Means                                                                         | Lives in                                       | State                                                 |
+| ----------------- | ----------------------------------------------------------------------------- | ---------------------------------------------- | ----------------------------------------------------- |
+| Defect            | Something wrong with one right answer, such as a broken link. Never dismissed | `validate`                                     | Built                                                 |
+| Finding           | Something a person decides about, with a stable key and a recorded answer     | `src/lib/findings.ts`, `resolve`               | Built                                                 |
+| Tension           | A finding computed from structure alone, with no model                        | `computeTensions`, `src/lib/consolidate.ts`    | Built                                                 |
+| Open list         | Everything open in a brain: findings, the due area, other dates and the offer | `openFindings`, `src/lib/open-findings.ts`     | Built in part (the open-questions page is outside it) |
+| Review queue      | Findings stored in D1, by kind, with visibility per kind                      | `QueueKind`, `src/lib/review-queue.ts`         | Built                                                 |
+| Pass              | A budgeted, resumable sweep over content that produces findings               | `src/lib/brain-pass.ts`                        | Built                                                 |
+| Organization pass | A scheduled pass across an organization's brains, run as the organization     | `src/lib/org-pass.ts`, `ee/review/org-pass.ts` | Built                                                 |
+| Consolidation     | The pass that finds pages contradicting or duplicating each other             | `ee/review/consolidation.ts`                   | Built                                                 |
+| Guard             | The check on every write against the brain's data policy                      | `guardStore`, `src/lib/policy-guard.ts`        | Built                                                 |
+| Model gateway     | The only path from a pass to a model provider                                 | `ee/review/gateway.ts`                         | Built                                                 |
 
 ## Roles, the org view and the self
 

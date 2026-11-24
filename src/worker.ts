@@ -1286,7 +1286,8 @@ class McpSession {
 		// so moving it from a view would retarget every other open conversation's bare
 		// calls as a side effect of looking at something.
 		registerBrainApp(server, (opts) => this.tenantContext(opts), {
-			webBaseUrl: this.webBase()
+			webBaseUrl: this.webBase(),
+			deps: { listBrains: () => this.listAccessibleBrainsForCaller() }
 		});
 
 		// Whether anyone besides the operator can sign in. Every deployment runs the

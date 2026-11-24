@@ -750,7 +750,7 @@ async function openActivity(path?: string) {
 }
 
 // Open the Review screen: what the data-policy guard recorded in this brain. Drives
-// the same view the view_review tool opens; brain admins only.
+// the same view the view_review tool opens (the open list, plus the policy block for brain admins).
 async function openReview() {
 	const live = startLoad({ kind: 'loading', label: 'Loading review…', task: 'review' });
 	try {

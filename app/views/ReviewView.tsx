@@ -1,9 +1,10 @@
 import { useState } from 'preact/hooks';
-import type { ReviewPolicy, ReviewPolicyPage } from '../core/types.ts';
+import type { OpenListWire, OpenRowWire, ReviewPolicy, ReviewPolicyPage } from '../core/types.ts';
 import { navigateTo, runBaselineScan } from '../core/actions.ts';
 import { defineView } from '../core/view-registry.ts';
 import { DETECTION_LABELS, type DetectionKind } from '../../src/lib/policy-detectors.ts';
 import { Button, List, ListRow, listRowTitle } from '../ui/index.ts';
+import { eyebrow, viewTitle } from '../ui/typography.ts';
 
 function kindsLine(p: ReviewPolicyPage): string {
 	return p.kinds
@@ -14,15 +15,54 @@ function kindsLine(p: ReviewPolicyPage): string {
 		.join(' · ');
 }
 
-// The data-policy guard's record for this brain. Admin-only: a path and a kind already
-// say where sensitive data sits.
+// The open list: what is due, what needs attention, other dates and the one feature offer,
+// the same assembly `validate` prints. Read-only: answering a finding is `resolve`.
+const OPEN_SECTIONS: { key: keyof Omit<OpenListWire, 'offer'>; label: string }[] = [
+	{ key: 'due', label: 'Due' },
+	{ key: 'coming', label: 'Coming due' },
+	{ key: 'findings', label: 'Needs attention' },
+	{ key: 'otherDates', label: 'Other dates' }
+];
+
+function OpenRows({ label, rows }: { label: string; rows: OpenRowWire[] }) {
+	if (rows.length === 0) return null;
+	return (
+		<div class="mb-4">
+			<div class={`mb-1 ${eyebrow}`}>{label}</div>
+			<List>
+				{rows.map((r) => (
+					<ListRow key={r.key}>
+						<div class="min-w-0 flex-1 whitespace-pre-line text-sm text-fg">{r.headline}</div>
+					</ListRow>
+				))}
+			</List>
+		</div>
+	);
+}
+
+function OpenList({ open }: { open: OpenListWire }) {
+	const empty = OPEN_SECTIONS.every((s) => open[s.key].length === 0) && !open.offer;
+	return (
+		<div class="mb-6">
+			<h2 class={`mb-3 ${viewTitle}`}>What validate found</h2>
+			{empty ? <div class="text-sm text-muted">Nothing is open.</div> : null}
+			{OPEN_SECTIONS.map((s) => (
+				<OpenRows key={s.key} label={s.label} rows={open[s.key]} />
+			))}
+			{open.offer ? <OpenRows label="Suggestion" rows={[open.offer]} /> : null}
+		</div>
+	);
+}
+
+// The data-policy guard's record for this brain. Brain admins only: a path and a kind
+// already say where sensitive data sits.
 const SCAN_LABEL = {
 	none: 'Scan existing content',
 	running: 'Continue scan',
 	done: 'Scan again'
 };
 
-function ReviewView({ policy }: { policy: ReviewPolicy }) {
+function PolicyBlock({ policy }: { policy: ReviewPolicy }) {
 	const [progress, setProgress] = useState<string | null>(null);
 	const { baseline, text } = policy.coverage;
 	const scan = async () => {
@@ -36,6 +76,7 @@ function ReviewView({ policy }: { policy: ReviewPolicy }) {
 	const scanning = progress?.startsWith('Scanning') ?? false;
 	return (
 		<div>
+			<h2 class={`mb-3 ${viewTitle}`}>Sensitive data</h2>
 			{policy.mode === 'off' ? (
 				<div class="mb-3 text-sm text-muted">Checks are off for this brain</div>
 			) : null}
@@ -80,12 +121,21 @@ function ReviewView({ policy }: { policy: ReviewPolicy }) {
 	);
 }
 
+function ReviewView({ open, policy }: { open: OpenListWire; policy?: ReviewPolicy }) {
+	return (
+		<div>
+			<OpenList open={open} />
+			{policy ? <PolicyBlock policy={policy} /> : null}
+		</div>
+	);
+}
+
 export { ReviewView };
 
 declare module '../core/view-registry.ts' {
 	interface ViewProps {
-		review: { policy: ReviewPolicy };
+		review: { open: OpenListWire; policy?: ReviewPolicy };
 	}
 }
 
-export default defineView('review', (v) => <ReviewView policy={v.policy} />);
+export default defineView('review', (v) => <ReviewView open={v.open} policy={v.policy} />);

@@ -68,7 +68,7 @@ export const DEST_META: Record<
 	review: {
 		label: 'Review',
 		scope: 'brain',
-		blurb: 'Sensitive data the data-policy guard found',
+		blurb: 'What is open in this brain, and sensitive data the guard found',
 		overflow: true
 	},
 	members: { label: 'Members', scope: 'org', blurb: 'Who is in your organization' },
@@ -96,11 +96,6 @@ export type NavCaps = {
 	/** Admin+ of at least one org — brain management is theirs alone. */
 	canManageBrains: boolean;
 	/**
-	 * Admin+ ON THE BRAIN BEING SHOWN. Review says where sensitive data sits, so
-	 * `view_review` refuses anyone below admin.
-	 */
-	brainAdmin: boolean;
-	/**
 	 * The shown brain is one the caller can open. An org admin on a private brain
 	 * they steward reaches its Sharing and nothing else: every other brain view
 	 * would be refused.
@@ -125,7 +120,6 @@ export function destinationsIn(scope: Scope, caps: NavCaps): DestKey[] {
 		if (k === 'sharing' || k === 'members') return caps.people;
 		if (k === 'analytics') return caps.people && caps.analytics;
 		if (k === 'brains') return caps.people && caps.canManageBrains;
-		if (k === 'review') return caps.brainAdmin;
 		return true;
 	});
 }

@@ -269,11 +269,27 @@ export interface ReviewPolicyPage {
 	kinds: { kind: string; count: number }[];
 }
 
-/** The Review screen (view_review in src/tools/apps.ts). Brain admins only. */
+/** One open item as the Review screen lists it: a finding's key and headline, or a due-area line. */
+export interface OpenRowWire {
+	key: string;
+	headline: string;
+}
+
+/** What is open in a brain, by bucket (`openListRows`, src/lib/open-findings.ts). */
+export interface OpenListWire {
+	due: OpenRowWire[];
+	coming: OpenRowWire[];
+	findings: OpenRowWire[];
+	otherDates: OpenRowWire[];
+	offer: OpenRowWire | null;
+}
+
+/** The Review screen (view_review in src/tools/apps.ts): what is open for any reader, plus the data-policy block for brain admins. */
 export interface ReviewViewWire extends InBrain {
 	view: 'review';
 	webUrl?: string;
-	policy: {
+	open: OpenListWire;
+	policy?: {
 		mode: 'off' | 'shadow';
 		total: number;
 		pages: ReviewPolicyPage[];
@@ -599,11 +615,33 @@ export interface ReviewPolicy {
 	coverage: { baseline: 'none' | 'running' | 'done'; text: string };
 }
 
-export function parseReview(sc: Payload): { policy: ReviewPolicy } {
-	const p = obj(wire<ReviewViewWire>(sc).policy);
+const EMPTY_OPEN: OpenListWire = { due: [], coming: [], findings: [], otherDates: [], offer: null };
+
+function parseRows(v: unknown): OpenRowWire[] {
+	return list<OpenRowWire>(v)
+		.filter((r) => typeof r?.key === 'string' && typeof r?.headline === 'string')
+		.map((r) => ({ key: r.key, headline: r.headline }));
+}
+
+/** The open list and, for brain admins, the policy block. A result without `open` (an older server) reads as nothing open. */
+export function parseReview(sc: Payload): { open: OpenListWire; policy?: ReviewPolicy } {
+	const w = wire<ReviewViewWire>(sc);
+	const o = obj(w.open);
+	const open: OpenListWire = w.open
+		? {
+				due: parseRows(o.due),
+				coming: parseRows(o.coming),
+				findings: parseRows(o.findings),
+				otherDates: parseRows(o.otherDates),
+				offer: parseRows(o.offer ? [o.offer] : [])[0] ?? null
+			}
+		: EMPTY_OPEN;
+	if (!w.policy) return { open };
+	const p = obj(w.policy);
 	const pages = list<ReviewPolicyPage>(p.pages).filter((x) => typeof x?.path === 'string');
 	const cov = obj(p.coverage);
 	return {
+		open,
 		policy: {
 			mode: p.mode === 'off' ? 'off' : 'shadow',
 			total: typeof p.total === 'number' ? p.total : 0,

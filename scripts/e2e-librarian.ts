@@ -2662,6 +2662,30 @@ try {
 			report.text
 		);
 		await call('write_page', { path: flagged, content: 'SSN 123-45-6789\n', mode: 'update' });
+		{
+			const rowsOf = (r: { sc: Record<string, unknown> }) =>
+				JSON.stringify((r.sc as { open?: unknown }).open ?? null);
+			callerRole = 'viewer';
+			const reader = await call('view_review', {});
+			callerRole = 'owner';
+			check(
+				'a non-admin gets the open list and no policy block',
+				!reader.isError &&
+					/\d+ open, \d+ due/.test(reader.text) &&
+					reader.sc.policy === undefined &&
+					!reader.text.includes(flagged) &&
+					!rowsOf(reader).includes(flaggedKey),
+				reader.text
+			);
+			const adminView = await call('view_review', {});
+			check(
+				'an admin gets both, and the policy finding only in the policy block',
+				adminView.sc.policy !== undefined &&
+					adminView.text.includes(flagged) &&
+					!rowsOf(adminView).includes(flaggedKey),
+				adminView.text
+			);
+		}
 		const dismissFlagged = {
 			decisions: [{ finding: flaggedKey, action: 'dismiss', why: 'test fixture' }]
 		};
@@ -2677,6 +2701,9 @@ try {
 				!(await call('view_review', {})).text.includes(flagged),
 			report.text
 		);
+		// The open list serves any reader; the policy block is the admin's.
+		const ending = 'If the person asked to see or review what is open, call view_review.';
+		check('validate ends by pointing at view_review', report.text.endsWith(ending), report.text);
 		// The admin section counts open policy findings, never dismissed ones.
 		const openPolicyCount = (text: string): number | null =>
 			/no open findings\. /.test(text)

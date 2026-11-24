@@ -232,9 +232,11 @@ Where the vision takes it:
 Open seams:
 
 - Findings live in three places: computed on each `validate` call, stored in the review queue,
-  and shown on the Review screen (`view_review`), which shows policy findings only. Since #256
-  `openFindings` (`src/lib/open-findings.ts`) joins the computed and queued findings into one
-  result; the Review screen and the open-questions page are still outside it.
+  and shown on the Review screen (`view_review`). `openFindings` (`src/lib/open-findings.ts`)
+  joins the computed and queued findings into one result, which `validate` prints and the Review
+  screen lists for any reader, with the policy block for brain admins. That screen also serves
+  job 4 (Be reminded, the due area) and job 5 (Rank, what is open). The open-questions page is
+  still outside it.
 - The single list of what is open is split across the review queue, the template's
   open-questions page (`brain-template/wiki-open-questions.md`) and brain-specific pages.
 - A contradiction between brains has no rule for which side stands, because no brain declares
