@@ -1759,7 +1759,7 @@ console.log('\nfeature offers: one line for a feature the brain does not use');
 	check(
 		'commitments: dueBlock says what a check date gets when it lists commitment findings, not otherwise',
 		dueBlock('- b.md: finding', []).includes(
-			'A check date puts a commitment in this list when it comes due; With a link to the claim page it also lists the decision in the record on that page; `expected` is what write_page compares the result with when the outcome is recorded.'
+			'A check date puts a commitment in this list when it comes due; with a link to the claim page it also lists the decision in the record on that page; `expected` is what write_page compares the result with when the outcome is recorded.'
 		) &&
 			!dueBlock('', ['- a.md: coming']).includes('A check date puts') &&
 			!dueBlock('', []).includes('A check date puts')

@@ -703,7 +703,7 @@ export function dueBlock(commitments: string, coming: string[]): string {
 }
 
 const CHECK_DATE_GETS =
-	'A check date puts a commitment in this list when it comes due; With a link to the claim page it also lists the decision in the record on that page; `expected` is what write_page compares the result with when the outcome is recorded.';
+	'A check date puts a commitment in this list when it comes due; with a link to the claim page it also lists the decision in the record on that page; `expected` is what write_page compares the result with when the outcome is recorded.';
 
 const NOT_READ =
 	'dates kept under other field names (not `check_at`, `due`, or a key ending in `_due`, `-due`, `_due_date` or `-due-date`) are not read.';

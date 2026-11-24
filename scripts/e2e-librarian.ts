@@ -1341,7 +1341,7 @@ try {
 		r.text.includes('[undated-commitment:wiki/offers/open.md]') &&
 			!r.text.includes('[feature-offer:') &&
 			r.text.includes(
-				'A check date puts a commitment in this list when it comes due; With a link to the claim page it also lists the decision in the record on that page; `expected` is what write_page compares the result with when the outcome is recorded.'
+				'A check date puts a commitment in this list when it comes due; with a link to the claim page it also lists the decision in the record on that page; `expected` is what write_page compares the result with when the outcome is recorded.'
 			),
 		r.text
 	);
