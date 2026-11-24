@@ -246,15 +246,15 @@ Open seams:
 
 A decision or commitment is made, with a result that can be checked later.
 
-| Step        | Today                                                                                                                                                                                                 | Surface                                          |
-| ----------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------ |
-| Trigger     | Someone commits to something, or a decision expects a result                                                                                                                                          | The conversation                                 |
-| Record      | A Decision or Commitment page with `expected` and `check_at`, linked to the claim it tests                                                                                                            | `write_page` (its reply asks for a date)         |
-| Be reminded | The session opens with the count of commitments past their check date; the person asks what is due or on their plate; the due area asks for a check date and `expected` on each open undated decision | Handshake instructions, `validate`, its due area |
-| Close       | The outcome is recorded on the page                                                                                                                                                                   | `write_page`                                     |
-| Compare     | The outcome is set on a page that has `expected`                                                                                                                                                      | `write_page` reply                               |
-| Revise      | The result departed from what was expected                                                                                                                                                            | `write_page` reply                               |
-| Learn       | The claim's page shows the decisions that tested it                                                                                                                                                   | `RECORD_VIEW` on the claim's page                |
+| Step        | Today                                                                                                                | Surface                                                                               |
+| ----------- | -------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------- |
+| Trigger     | Someone commits to something, or a decision expects a result                                                         | The conversation                                                                      |
+| Record      | A Decision or Commitment page with `expected` and `check_at`, linked to the claim it tests                           | `write_page` (its reply asks for a date); `validate`'s due area asks for undated ones |
+| Be reminded | The session opens with the count of commitments past their check date; the person asks what is due or on their plate | Handshake instructions, `validate`, its due area                                      |
+| Close       | The outcome is recorded on the page                                                                                  | `write_page`                                                                          |
+| Compare     | The outcome is set on a page that has `expected`                                                                     | `write_page` reply                                                                    |
+| Revise      | The result departed from what was expected                                                                           | `write_page` reply                                                                    |
+| Learn       | The claim's page shows the decisions that tested it                                                                  | `RECORD_VIEW` on the claim's page                                                     |
 
 Where the vision takes it:
 

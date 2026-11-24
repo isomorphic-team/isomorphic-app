@@ -94,7 +94,7 @@ are in the list, with keys.
   **`dueBlock`** is the one function that builds the due area `validate` opens with. Its header
   is the instruction the reader acts on (answer from these lines first, give the findings
   below one line, say what is not read, and for each open undated one ask for a check date and
-  an `expected` the agent drafts, once per client or folder, writing after a yes); with nothing due it is one line saying the same.
+  an `expected` the agent drafts, once per folder or subject, writing after a yes); with nothing due it is one line saying the same.
   `openFindings` (`src/lib/open-findings.ts`) assembles everything open (pending imports, the advisory and queued
   findings, dismissals, the due area, the feature offer, the other-dates block) and returns it
   structured (`due`, `findings`, `otherDates`, `offer`); `renderOpenFindings` makes the two texts `validate` prints; `validate` adds only the

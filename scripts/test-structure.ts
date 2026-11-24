@@ -1046,7 +1046,7 @@ console.log('\nfolder-note advisory: a note-less folder holding its own overview
 		check(
 			'due block: the header is the imperative and the coming lines sit under it',
 			coming1 ===
-				`\n\nDue and coming due. Answer from these lines first, give the findings further down one line, and tell the person that ${NOT_READ} For each open one with no date, ask the person to set a check date and say what they expect, or record it as decided, or dismiss it. Draft \`expected\` yourself, show it with a proposed date, and write only after a yes. Ask once per client or folder, not once per page.\n- a.md: due 2026-11-25 (from \`due\`, in 2 days).`,
+				`\n\nDue and coming due. Answer from these lines first, give the findings further down one line, and tell the person that ${NOT_READ} For each open one with no date, ask the person to set a check date and say what they expect, or record it as decided, or dismiss it with resolve. Draft \`expected\` yourself, show it with a proposed date, and write only after a yes. Ask once for the pages in a folder or about the same subject, not once per page.\n- a.md: due 2026-11-25 (from \`due\`, in 2 days).`,
 			coming1
 		);
 		const withFindings = dueBlock('- b.md: finding\n  [prediction-due:b.md@2026-11-01]', [
@@ -1721,18 +1721,23 @@ console.log('\nfeature offers: one line for a feature the brain does not use');
 			commitments.unused(ctxOf(six()))
 	);
 	check(
-		'due block: the header asks for a check date and what is expected, a draft shown first, once per client or folder',
+		'due block: the header asks for a check date and what is expected, a draft shown first, once per folder or subject',
 		/set a check date and say what they expect/.test(dueBlock('- b.md: finding', [])) &&
+			/dismiss it with resolve/.test(dueBlock('- b.md: finding', [])) &&
 			/Draft `expected` yourself, show it with a proposed date, and write only after a yes/.test(
 				dueBlock('- b.md: finding', [])
 			) &&
-			/Ask once per client or folder, not once per page/.test(dueBlock('- b.md: finding', []))
+			/Ask once for the pages in a folder or about the same subject, not once per page/.test(
+				dueBlock('- b.md: finding', [])
+			)
 	);
 	check(
 		'due block: what a check date gets names the compare on close and the claim page record',
-		/`expected` lets write_page compare the result/.test(dueBlock('- b.md: finding', [])) &&
-			/page of the claim it tests/.test(dueBlock('- b.md: finding', [])) &&
-			!/lets write_page compare/.test(dueBlock('', ['- a.md: coming']))
+		/`expected` is what write_page compares the result with/.test(
+			dueBlock('- b.md: finding', [])
+		) &&
+			/lists the decision in the record on that page/.test(dueBlock('- b.md: finding', [])) &&
+			!/what write_page compares/.test(dueBlock('', ['- a.md: coming']))
 	);
 	check(
 		'undated row: the call shape is {check_at, expected} with no other instruction',
@@ -1754,7 +1759,7 @@ console.log('\nfeature offers: one line for a feature the brain does not use');
 	check(
 		'commitments: dueBlock says what a check date gets when it lists commitment findings, not otherwise',
 		dueBlock('- b.md: finding', []).includes(
-			'A check date puts a commitment in this list when it comes due; `expected` lets write_page compare the result with it when the outcome is recorded, and puts the record on the page of the claim it tests.'
+			'A check date puts a commitment in this list when it comes due; With a link to the claim page it also lists the decision in the record on that page; `expected` is what write_page compares the result with when the outcome is recorded.'
 		) &&
 			!dueBlock('', ['- a.md: coming']).includes('A check date puts') &&
 			!dueBlock('', []).includes('A check date puts')
