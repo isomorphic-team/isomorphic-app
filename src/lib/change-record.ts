@@ -139,7 +139,7 @@ function compareNote(fm: Frontmatter, patch: Record<string, unknown> | null | un
 		found && found.key !== 'check_at'
 			? ` The claim's record table lists only pages with check_at: set check_at to ${found.date} with write_page fields.`
 			: '';
-	return `If it met what was expected, say so in one line and stop. If it departed: when the page this one links to asserts something the result contradicts, ask the person ONE question offering to revise that page, and do not edit it in this reply. When no linked page asserts anything, say no claim page is linked and ask which page, if any, it tested; if the person names the page, after a yes link it from this page, then: ${RECORD_TEXT}${dateText}`;
+	return `${dateText.trim()}${dateText ? ' ' : ''}If it met what was expected, say so in one line and stop. If it departed: when the page this one links to asserts something the result contradicts, ask the person ONE question offering to revise that page, and do not edit it in this reply. When no linked page asserts anything, say no claim page is linked and ask which page, if any, it tested; if the person names the page, after a yes link it from this page, then: ${RECORD_TEXT}`;
 }
 
 const RECORD_TEXT = `If this page links to the page whose claim it tests and that page does not already show its record (read it first), offer to append this there with write_page append:\n${RECORD_VIEW}\none yes completes it. Then tell the person that page now shows its record.`;

@@ -965,6 +965,11 @@ console.log('\nwrite_page: the compare note (outcome set on a page with expected
 				withDue.includes('set check_at to 2026-12-01 with write_page fields')
 		);
 		check(
+			'learn: the date sentence comes before the met branch stops',
+			withDue.indexOf(TABLE) >= 0 &&
+				withDue.indexOf(TABLE) < withDue.indexOf('say so in one line and stop')
+		);
+		check(
 			'learn: with check_at present, no sentence',
 			!note({ ...dueOnly, check_at: '2026-12-01' }, { outcome: 'x' }).includes(TABLE) &&
 				!note(dec, { outcome: 'x' }).includes(TABLE)
